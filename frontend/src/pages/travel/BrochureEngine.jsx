@@ -48,8 +48,9 @@ import { useNotify } from '../../utils/notify';
 const DEFAULT_SECTOR = 'travel';
 
 // Rewrite legacy `/brochure-assets/...` URLs (stored on older brochure rows) to
-// the proxy-friendly `/api/brochure-assets/...` form. The backend mounts the
-// static dir at both paths but Vite's dev proxy only forwards /api/*.
+// the proxy-friendly `/api/brochure-assets/...` form. S3/CloudFront URLs pass
+// through unchanged. The backend mounts the static dir at both local paths but
+// Vite's dev proxy only forwards /api/*.
 function normalizeBrochureUrl(url) {
   if (!url || typeof url !== 'string') return url;
   if (url.startsWith('/brochure-assets/')) return '/api' + url;
@@ -193,11 +194,16 @@ const STRATEGY_HINT = {
   custom: 'You choose each tier yourself below.',
 };
 // Rough token mix of one brochure run, per tier — for the cost estimate.
+// Per-tier token totals, CALIBRATED to a real "recommended" run on a rich 12-day brief
+// (captured via the engine's per-call usage events). The reasoning tier runs the Studio
+// Director CEO across ~3 looped delegation calls AND the Brochure Composer, so its total
+// is the SUM of both. The balanced tier is omitted — no travel agent runs on it. This is
+// representative of a full brief; a sparse brief costs proportionally less. The estimate
+// multiplies the result by the engine's BILLING_MARKUP so it shows the BILLED amount.
 const TIER_TOKENS = {
-  reasoning: { input: 16000, output: 7000 },
-  fast: { input: 8000, output: 3000 },
-  writing: { input: 5000, output: 2500 },
-  balanced: { input: 2000, output: 1000 },
+  reasoning: { input: 22900, output: 4700 }, // CEO (~3 calls) + brochure composer
+  fast: { input: 700, output: 2400 }, // destination researcher
+  writing: { input: 850, output: 1400 }, // copywriter
 };
 const ALL_TIERS = ['reasoning', 'balanced', 'fast', 'writing'];
 
@@ -215,8 +221,10 @@ function resolveStrategyAssignment(models, strategy) {
   )[0];
   if (strategy === 'cheapest') return { reasoning: cheapest.id, balanced: cheapest.id, fast: cheapest.id, writing: cheapest.id };
   if (strategy === 'smartest') return { reasoning: smartest.id, balanced: smartest.id, fast: smartest.id, writing: smartest.id };
-  // recommended
-  return { reasoning: balanced.id, balanced: balanced.id, fast: cheapest.id, writing: balanced.id };
+  // recommended — reasoning tier (Studio Director CEO + Brochure Composer) pinned to
+  // gpt-5.4-mini, else the computed balanced pick. Mirrors crm-bridge.ts strategyAssignment.
+  const reasoningPick = avail.find((m) => m.id === 'gpt-5.4-mini')?.id ?? balanced.id;
+  return { reasoning: reasoningPick, balanced: balanced.id, fast: cheapest.id, writing: balanced.id };
 }
 
 // Fold the raw SSE trace into per-agent cards + running totals (ported from
@@ -288,16 +296,32 @@ export default function BrochureEngine() {
   const [goal, setGoal] = useState('');
   const [brandOpen, setBrandOpen] = useState(false);
   const [brand, setBrand] = useState({
-    name: '', tagline: '', logoUrl: '', accent: '#122647',
-    contact: [], socials: [], custom: null,
+    // accentMode 'auto' (default) → DON'T send a colour; the AI picks one inferred
+    // from the destination (engine composer emits palette.accent). 'manual' → send
+    // the hand-picked `accent` below, which overrides the AI choice.
+    name: '', tagline: '', logoUrl: '', accentMode: 'auto', accent: '#122647',
+    contact: [], socials: [], qrUrl: '', custom: null,
+    // Unified image pool — every uploaded image lands here first, then the user
+    // selects which ones go on the front cover and/or inside pages.
+    imagePool: [],
+    // Additional front-cover logos beyond the primary — each { url, x, y, scale }.
+    coverLogos: [],
+    // Interior logo band — { band:'header'|'bottom', scale, items:[{url,x}] } | null.
+    interiorLogos: null,
   });
-  const [placerOpen, setPlacerOpen] = useState(false);
+  const [coverPlacerOpen, setCoverPlacerOpen] = useState(false); // front-cover logo placer
+  const [bandOpen, setBandOpen] = useState(false); // interior logo band placer open?
+  // Every uploaded image is available for the front cover and the interior band.
+  const logoPool = brand.imagePool || [];
+  // Saved brand profiles (server-persisted, tenant-scoped — shared across devices/team)
+  const [profiles, setProfiles] = useState([]);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileName, setProfileName] = useState(''); // current slot name — set on load so "Save current" UPDATES it
   // Model catalog + selection
-  const [catalog, setCatalog] = useState({ tiers: [], strategies: [], defaults: {}, models: [] });
+  const [catalog, setCatalog] = useState({ tiers: [], strategies: [], defaults: {}, markup: 1.5, models: [] });
   const [strategy, setStrategy] = useState('recommended');
   const [perTier, setPerTier] = useState({}); // advanced overrides { reasoning: id, ... }
   const [modelOpen, setModelOpen] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   // Run state
   const [running, setRunning] = useState(false);
   const [activeRunId, setActiveRunId] = useState(null);
@@ -333,6 +357,7 @@ export default function BrochureEngine() {
             tiers: Array.isArray(data.tiers) && data.tiers.length ? data.tiers : ALL_TIERS,
             strategies: Array.isArray(data.strategies) && data.strategies.length ? data.strategies : ['recommended', 'cheapest', 'smartest', 'custom'],
             defaults: data.defaults || {},
+            markup: Number(data.markup) > 0 ? Number(data.markup) : 1.5, // billing markup → estimate shows BILLED amount
             models: data.models,
           });
         }
@@ -342,6 +367,7 @@ export default function BrochureEngine() {
       }
     })();
     loadHistory();
+    loadProfiles();
     // Mount-once: the sector/model/history fetch should not re-run on callback identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -357,6 +383,77 @@ export default function BrochureEngine() {
       setHistoryLoading(false);
     }
   }, []);
+
+  // ─── Saved brand profiles ──────────────────────────────────────────────
+  const loadProfiles = useCallback(async () => {
+    try {
+      const data = await fetchApi('/api/travel/brochures/brand-profiles');
+      if (data && Array.isArray(data.profiles)) setProfiles(data.profiles);
+    } catch (e) {
+      console.warn('[brochures] profiles load failed', e);
+    }
+  }, []);
+
+  const saveProfile = useCallback(async (name) => {
+    const nm = (name || '').trim();
+    if (!nm) { notify.error('Give the brand profile a name.'); return; }
+    setProfileBusy(true);
+    try {
+      // Persist the brand-kit FORM snapshot so it round-trips straight back into the UI.
+      const form = {
+        name: brand.name || '', tagline: brand.tagline || '', accentMode: brand.accentMode || 'auto',
+        accent: brand.accent || '#122647', logoUrl: brand.logoUrl || '', contact: brand.contact || [],
+        socials: brand.socials || [], qrUrl: brand.qrUrl || '', custom: brand.custom || null,
+        imagePool: brand.imagePool || [],
+        coverLogos: brand.coverLogos || [],
+        interiorLogos: brand.interiorLogos || null,
+      };
+      await fetchApi('/api/travel/brochures/brand-profiles', {
+        method: 'POST',
+        body: JSON.stringify({ name: nm, brand: form }),
+      });
+      notify.success(`Brand profile “${nm}” saved.`);
+      await loadProfiles();
+    } catch (err) {
+      notify.error(err?.message || 'Failed to save brand profile.');
+    } finally {
+      setProfileBusy(false);
+    }
+  }, [brand, notify, loadProfiles]);
+
+  const applyProfile = useCallback((p) => {
+    const f = p?.brand || {};
+    // Back-compat: older profiles stored only logoUrl + coverLogos + interiorLogos.
+    // Merge any explicit pool with all URLs still referenced by cover/inside placements
+    // so nothing disappears after load.
+    const explicitPool = Array.isArray(f.imagePool) ? f.imagePool : [];
+    const legacyPool = [
+      f.logoUrl,
+      ...(Array.isArray(f.coverLogos) ? f.coverLogos.map((l) => l.url) : []),
+      ...(f.interiorLogos?.items ? f.interiorLogos.items.map((it) => it.url) : []),
+    ].filter(Boolean);
+    const imagePool = Array.from(new Set([...explicitPool, ...legacyPool])).filter(Boolean);
+    setBrand((b) => ({
+      ...b,
+      name: f.name || '', tagline: f.tagline || '', accentMode: f.accentMode || 'auto',
+      accent: f.accent || '#122647', logoUrl: f.logoUrl || '', contact: Array.isArray(f.contact) ? f.contact : [],
+      socials: Array.isArray(f.socials) ? f.socials : [], qrUrl: f.qrUrl || '', custom: f.custom || null,
+      imagePool,
+      coverLogos: Array.isArray(f.coverLogos) ? f.coverLogos : [],
+      interiorLogos: f.interiorLogos && Array.isArray(f.interiorLogos.items) ? f.interiorLogos : null,
+    }));
+    setProfileName(p?.name || ''); // prefill the slot name so "Save current" overwrites this profile
+    notify.info(`Loaded “${p?.name || 'profile'}”.`);
+  }, [notify]);
+
+  const deleteProfile = useCallback(async (id) => {
+    try {
+      await fetchApi(`/api/travel/brochures/brand-profiles/${id}`, { method: 'DELETE' });
+      setProfiles((list) => list.filter((p) => p.id !== id));
+    } catch (err) {
+      notify.error(err?.message || 'Failed to delete profile.');
+    }
+  }, [notify]);
 
   const currentSector = sectors.find((s) => s.key === sectorKey) || sectors[0];
 
@@ -376,29 +473,83 @@ export default function BrochureEngine() {
 
   const costEstimate = useMemo(() => {
     const byId = new Map(catalog.models.map((m) => [m.id, m]));
-    let cost = 0;
+    let raw = 0;
     let known = catalog.models.length > 0;
     for (const tier of Object.keys(TIER_TOKENS)) {
       const m = byId.get(resolvedSelection[tier] || '');
       if (!m) { known = false; continue; }
       const t = TIER_TOKENS[tier];
-      cost += (t.input / 1e6) * m.inputPer1M + (t.output / 1e6) * m.outputPer1M;
+      raw += (t.input / 1e6) * m.inputPer1M + (t.output / 1e6) * m.outputPer1M;
     }
-    return { cost, known };
-  }, [catalog.models, resolvedSelection]);
+    // Show the BILLED amount (raw provider cost × billing markup) so the estimate lands
+    // on the actual bill, not the un-marked-up provider cost.
+    const markup = Number(catalog.markup) > 0 ? Number(catalog.markup) : 1.5;
+    return { cost: raw * markup, known };
+  }, [catalog.models, catalog.markup, resolvedSelection]);
 
-  // ─── Brand-kit logo upload (→ data URI; server-side re-sanitized) ──────
-  const onLogoFile = useCallback((file) => {
-    if (!file) return;
-    if (file.size > 200 * 1024) { notify.error('Logo too large — max 200KB.'); return; }
-    if (!/^image\/(png|jpe?g|webp|gif)$/i.test(file.type)) {
-      notify.error('Logo must be PNG, JPEG, WebP, or GIF.');
-      return;
+  // ─── Unified image upload ──────────────────────────────────────────────
+  // One upload button feeds every logo use (front cover + inside pages). Files
+  // are uploaded to S3 (or base64-fallback when S3 is disabled) via the backend;
+  // the first returned URL becomes the primary logo and all URLs join the pool.
+  const onUploadImages = useCallback(async (files) => {
+    const list = files instanceof FileList || Array.isArray(files) ? Array.from(files) : (files ? [files] : []);
+    const valid = [];
+    for (const file of list) {
+      if (file.size > 10 * 1024 * 1024) { notify.error(`"${file.name}" too large — max 10MB.`); continue; }
+      if (!/^image\/(png|jpe?g|webp|gif)$/i.test(file.type)) { notify.error(`"${file.name}" must be PNG, JPEG, WebP, or GIF.`); continue; }
+      valid.push(file);
     }
-    const reader = new FileReader();
-    reader.onload = () => setBrand((b) => ({ ...b, logoUrl: String(reader.result) }));
-    reader.readAsDataURL(file);
+    if (!valid.length) return;
+    const formData = new FormData();
+    valid.forEach((f) => formData.append('images', f));
+    try {
+      const data = await fetchApi('/api/travel/brochures/brand-images/upload', { method: 'POST', body: formData });
+      const urls = Array.isArray(data?.urls) ? data.urls : [];
+      if (!urls.length) { notify.error('No images were uploaded.'); return; }
+      setBrand((b) => {
+        const imagePool = [...(b.imagePool || []), ...urls];
+        const next = { ...b, imagePool };
+        if (!b.logoUrl) next.logoUrl = urls[0];
+        return next;
+      });
+    } catch (_err) {
+      notify.error('Failed to upload brand images.');
+    }
   }, [notify]);
+
+  const removeImage = useCallback((url) => {
+    // Update UI state immediately; fire-and-forget the remote delete for S3 URLs.
+    setBrand((b) => {
+      const imagePool = (b.imagePool || []).filter((u) => u !== url);
+      const wasPrimary = b.logoUrl === url;
+      const logoUrl = wasPrimary ? (imagePool[0] || '') : b.logoUrl;
+      // Drop the removed URL from cover logos and the interior band.
+      let coverLogos = (b.coverLogos || []).filter((l) => l.url !== url);
+      // If the new primary was previously a cover logo, remove it from coverLogos
+      // (the primary is shown on the front cover automatically).
+      if (wasPrimary && logoUrl) {
+        coverLogos = coverLogos.filter((l) => l.url !== logoUrl);
+      }
+      let interiorLogos = b.interiorLogos;
+      if (interiorLogos?.items?.some((it) => it.url === url)) {
+        const items = interiorLogos.items.filter((it) => it.url !== url);
+        interiorLogos = items.length ? { ...interiorLogos, items } : null;
+      }
+      // Clear custom placement only when the primary itself was removed.
+      const custom = wasPrimary ? null : b.custom;
+      return { ...b, imagePool, logoUrl, coverLogos, interiorLogos, custom };
+    });
+    // Ask the backend to delete S3-hosted images; data-URIs / external URLs are
+    // ignored by the endpoint, so the call is safe for any URL shape.
+    if (url && !url.startsWith('data:')) {
+      fetchApi('/api/travel/brochures/brand-images/file', {
+        method: 'DELETE',
+        body: JSON.stringify({ url }),
+      }).catch((err) => {
+        console.warn('[brochures] failed to delete remote image', err);
+      });
+    }
+  }, []);
 
   // ─── Start a run ───────────────────────────────────────────────────────
   const handleSubmit = useCallback(async (e) => {
@@ -416,12 +567,24 @@ export default function BrochureEngine() {
     if (brand.name?.trim()) brandPayload.name = brand.name.trim();
     if (brand.tagline?.trim()) brandPayload.tagline = brand.tagline.trim();
     if (brand.logoUrl) brandPayload.logoUrl = brand.logoUrl;
-    if (/^#[0-9a-f]{6}$/i.test(brand.accent || '')) brandPayload.colors = { accent: brand.accent };
+    // Auto mode: omit colours entirely so the AI's destination-inferred accent wins.
+    // Manual mode: send the picked hex (overrides the AI choice in the engine).
+    if (brand.accentMode === 'manual' && /^#[0-9a-f]{6}$/i.test(brand.accent || '')) brandPayload.colors = { accent: brand.accent };
     const contacts = (brand.contact || []).map((c) => String(c).trim()).filter(Boolean);
     if (contacts.length) brandPayload.contact = contacts;
     const socials = (brand.socials || []).map((s) => String(s).trim()).filter(Boolean);
     if (socials.length) brandPayload.socials = socials;
+    // QR link — backend re-validates (http(s) only); the engine encodes it into the QR.
+    if (brand.qrUrl?.trim() && /^https?:\/\//i.test(brand.qrUrl.trim())) brandPayload.qrUrl = brand.qrUrl.trim();
     if (brand.logoUrl && brand.custom) brandPayload.custom = brand.custom;
+    // Additional cover logos (backend re-validates each + clamps placement).
+    const coverLogos = (brand.coverLogos || []).filter((l) => l && l.url);
+    if (coverLogos.length) brandPayload.coverLogos = coverLogos.map((l) => ({ url: l.url, x: l.x, y: l.y, scale: l.scale }));
+    // Interior logo band (backend re-validates each item + clamps).
+    if (brand.interiorLogos?.items?.length) brandPayload.interiorLogos = {
+      band: brand.interiorLogos.band, scale: brand.interiorLogos.scale,
+      items: brand.interiorLogos.items.map((it) => ({ url: it.url, x: it.x })),
+    };
 
     // Model selection: advanced per-tier overrides → `models`; else `strategy`.
     const modelPayload = {};
@@ -461,6 +624,28 @@ export default function BrochureEngine() {
     // openStream/pollOnce are stable closures declared below; omitted to avoid a TDZ on the dep array.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, goal, sectorKey, styleKey, brand, strategy, perTier, notify, loadHistory]);
+
+  // ─── Stop a running generation (hit Generate by mistake / changed your mind) ──
+  // Detach the SSE + free the UI immediately, then ask the backend to kill the
+  // engine subprocess. The UI never waits on the network — Stop is instant.
+  const handleStop = useCallback(async () => {
+    const runId = activeRunId;
+    if (esRef.current) {
+      try { esRef.current.close(); } catch { /* ignore */ }
+      esRef.current = null;
+    }
+    setRunning(false);
+    setRunError(null);
+    if (runId) {
+      try {
+        await fetchApi(`/api/travel/brochures/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' });
+        notify.info('Generation stopped.');
+      } catch {
+        notify.info('Generation stopped (the engine may finish in the background).');
+      }
+      loadHistory();
+    }
+  }, [activeRunId, notify, loadHistory]);
 
   const backfillPdfUrl = useCallback(async (brochureId, attempt = 0) => {
     if (!brochureId) return;
@@ -572,7 +757,13 @@ export default function BrochureEngine() {
     let objectUrl = null;
     (async () => {
       try {
-        const resp = await fetch(result.pdfUrl, { credentials: 'same-origin' });
+        // Local static URLs need same-origin credentials; S3/CloudFront public URLs
+        // use CORS without credentials to avoid preflight/credential mismatches.
+        const isAbsolute = /^https?:\/\//i.test(result.pdfUrl);
+        const resp = await fetch(result.pdfUrl, {
+          mode: isAbsolute ? 'cors' : 'same-origin',
+          credentials: isAbsolute ? 'omit' : 'same-origin',
+        });
         if (!resp.ok) throw new Error(`pdf fetch ${resp.status}`);
         const blob = await resp.blob();
         if (cancelled) return;
@@ -680,8 +871,18 @@ export default function BrochureEngine() {
               setOpen={setBrandOpen}
               running={running}
               fileInputRef={fileInputRef}
-              onLogoFile={onLogoFile}
-              onOpenPlacer={() => setPlacerOpen(true)}
+              onUploadImages={onUploadImages}
+              onRemoveImage={removeImage}
+              onOpenCoverPlacer={() => setCoverPlacerOpen(true)}
+              onOpenBand={() => setBandOpen(true)}
+              hasLogos={logoPool.length > 0}
+              profiles={profiles}
+              profileBusy={profileBusy}
+              profileName={profileName}
+              setProfileName={setProfileName}
+              onSaveProfile={saveProfile}
+              onApplyProfile={applyProfile}
+              onDeleteProfile={deleteProfile}
             />
 
             {/* Model picker (collapsible) */}
@@ -694,21 +895,36 @@ export default function BrochureEngine() {
               setPerTier={setPerTier}
               open={modelOpen}
               setOpen={setModelOpen}
-              advancedOpen={advancedOpen}
-              setAdvancedOpen={setAdvancedOpen}
               running={running}
               resolvedSelection={resolvedSelection}
               costEstimate={costEstimate}
             />
 
-            <button
-              type="submit"
-              disabled={running || !goal.trim()}
-              style={running ? disabledPrimaryBtn : primaryBtn}
-              data-testid="generate-brochure"
-            >
-              {running ? <><Loader size={16} className="anim-spin" /> Generating…</> : <><Sparkles size={16} /> Generate brochure</>}
-            </button>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                type="submit"
+                disabled={running || !goal.trim()}
+                style={running ? disabledPrimaryBtn : primaryBtn}
+                data-testid="generate-brochure"
+              >
+                {running ? <><Loader size={16} className="anim-spin" /> Generating…</> : <><Sparkles size={16} /> Generate brochure</>}
+              </button>
+              {running && (
+                <button
+                  type="button"
+                  onClick={handleStop}
+                  data-testid="stop-brochure"
+                  title="Stop generation"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0 18px', height: 44,
+                    borderRadius: 10, border: '1px solid #e06a5a', background: 'transparent',
+                    color: '#e06a5a', fontWeight: 700, fontSize: 14, cursor: 'pointer', flex: '0 0 auto',
+                  }}
+                >
+                  <X size={16} /> Stop
+                </button>
+              )}
+            </div>
           </form>
 
           {/* ─── Right: Trace + Result panel ──────────────────────────── */}
@@ -843,17 +1059,30 @@ export default function BrochureEngine() {
         </div>
       )}
 
-      {/* Visual logo placer modal */}
-      {placerOpen && brand.logoUrl && (
-        <LogoPlacer
+      {/* Front-cover logo placer — template preview + free placement + size. */}
+      {coverPlacerOpen && (
+        <CoverLogoPlacer
+          pool={logoPool}
+          value={brand.coverLogos}
           logoUrl={brand.logoUrl}
+          custom={brand.custom}
           family={placerFamily}
           templateName={styleKey || (placerFamily === 'editorial' ? 'editorial-sakura' : 'tmc-press')}
           accent={brand.accent}
           brandName={brand.name}
-          value={brand.custom}
-          onSave={(v) => { setBrand((b) => ({ ...b, custom: v })); setPlacerOpen(false); }}
-          onClose={() => setPlacerOpen(false)}
+          onSave={(v) => { setBrand((b) => ({ ...b, logoUrl: v.logoUrl, custom: v.custom, coverLogos: v.coverLogos })); setCoverPlacerOpen(false); }}
+          onClose={() => setCoverPlacerOpen(false)}
+        />
+      )}
+
+      {/* Interior logo band placer (pages after the cover) */}
+      {bandOpen && (
+        <InteriorBandPlacer
+          pool={logoPool}
+          value={brand.interiorLogos}
+          family={placerFamily}
+          onSave={(v) => { setBrand((b) => ({ ...b, interiorLogos: v })); setBandOpen(false); }}
+          onClose={() => setBandOpen(false)}
         />
       )}
     </div>
@@ -861,7 +1090,7 @@ export default function BrochureEngine() {
 }
 
 // ─── Brand kit panel ────────────────────────────────────────────────────────
-function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, onLogoFile, onOpenPlacer }) {
+function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, onUploadImages, onRemoveImage, onOpenCoverPlacer, onOpenBand, hasLogos = false, profiles = [], profileBusy = false, profileName = '', setProfileName, onSaveProfile, onApplyProfile, onDeleteProfile }) {
   const setContactLine = (i, v) => setBrand((b) => {
     const contact = [...(b.contact || [])];
     contact[i] = v;
@@ -886,6 +1115,50 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
       </button>
       {open && (
         <div style={collapsibleBody}>
+          {/* Saved brand profiles — server-persisted, shared across the agency's team */}
+          <div style={fieldLabel}>
+            <span>Saved brand profiles <span style={fieldHint}>(reuse your logo, accent, contacts & QR)</span></span>
+            {profiles.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '4px 0 6px' }}>
+                {profiles.map((p) => (
+                  <span key={p.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, border: '1px solid var(--border-color, #333)', borderRadius: 8, overflow: 'hidden' }}>
+                    <button type="button" onClick={() => onApplyProfile?.(p)} disabled={running} title={`Load “${p.name}”`} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary, #eee)', padding: '5px 9px', fontSize: 12, cursor: 'pointer', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {p.name}
+                    </button>
+                    <button type="button" onClick={() => onDeleteProfile?.(p.id)} disabled={running} aria-label={`Delete ${p.name}`} title="Delete" style={{ background: 'transparent', border: 'none', color: '#e06a5a', padding: '5px 7px', cursor: 'pointer', fontSize: 13, lineHeight: 1 }}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                type="text"
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+                placeholder="Profile name (e.g. Sakura Trails)"
+                style={inputStyle}
+                disabled={running || profileBusy}
+                data-testid="profile-name"
+              />
+              <button
+                type="button"
+                onClick={() => { onSaveProfile?.(profileName); }}
+                style={chipBtn}
+                disabled={running || profileBusy || !profileName.trim()}
+                data-testid="save-profile"
+                title="Saving with an existing profile's name overwrites it"
+              >
+                {profileBusy
+                  ? 'Saving…'
+                  : profiles.some((p) => p.name.toLowerCase() === profileName.trim().toLowerCase())
+                    ? 'Update'
+                    : 'Save current'}
+              </button>
+            </div>
+          </div>
+
           <label style={fieldLabel}>
             Agency name
             <input type="text" value={brand.name} onChange={(e) => setBrand((b) => ({ ...b, name: e.target.value }))} placeholder="Globus Travels" style={inputStyle} disabled={running} />
@@ -894,10 +1167,22 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
             Tagline
             <input type="text" value={brand.tagline} onChange={(e) => setBrand((b) => ({ ...b, tagline: e.target.value }))} placeholder="Crafted journeys, since 1998" style={inputStyle} disabled={running} />
           </label>
-          <label style={fieldLabel}>
-            Accent colour
-            <input type="color" value={brand.accent} onChange={(e) => setBrand((b) => ({ ...b, accent: e.target.value }))} style={{ ...inputStyle, padding: 2, height: 36, width: 60 }} disabled={running} />
-          </label>
+          <div style={fieldLabel}>
+            <span>Accent colour</span>
+            <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginTop: 2 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, cursor: 'pointer' }}>
+                <input type="radio" name="accentMode" checked={(brand.accentMode || 'auto') === 'auto'} onChange={() => setBrand((b) => ({ ...b, accentMode: 'auto' }))} disabled={running} />
+                Auto <span style={fieldHint}>(AI picks by destination)</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, cursor: 'pointer' }}>
+                <input type="radio" name="accentMode" checked={brand.accentMode === 'manual'} onChange={() => setBrand((b) => ({ ...b, accentMode: 'manual' }))} disabled={running} />
+                Manual
+              </label>
+              {brand.accentMode === 'manual' && (
+                <input type="color" value={brand.accent} onChange={(e) => setBrand((b) => ({ ...b, accent: e.target.value }))} style={{ ...inputStyle, padding: 2, height: 30, width: 48, marginLeft: 'auto' }} disabled={running} aria-label="Accent colour" />
+              )}
+            </div>
+          </div>
 
           {/* Contacts */}
           <div style={fieldLabel}>
@@ -928,24 +1213,58 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
           </div>
 
           <label style={fieldLabel}>
-            Logo (PNG / JPEG / WebP / GIF · ≤200KB)
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(e) => onLogoFile(e.target.files?.[0])} style={{ flex: 1 }} disabled={running} />
-              {brand.logoUrl && (
-                <button type="button" onClick={() => { setBrand((b) => ({ ...b, logoUrl: '', custom: null })); if (fileInputRef.current) fileInputRef.current.value = ''; }} style={iconBtn} aria-label="Remove logo" disabled={running}>
-                  <X size={14} />
-                </button>
-              )}
-            </div>
+            QR link <span style={fieldHint}>(any URL — booking page, website; shown as a scannable QR)</span>
+            <input type="url" value={brand.qrUrl} onChange={(e) => setBrand((b) => ({ ...b, qrUrl: e.target.value }))} placeholder="https://book.sakuratrails.in" style={inputStyle} disabled={running} />
           </label>
-          {brand.logoUrl && (
-            <>
-              <div style={logoPreview}><img src={brand.logoUrl} alt="Logo preview" style={{ maxHeight: 80, maxWidth: '100%' }} /></div>
-              <button type="button" onClick={onOpenPlacer} style={{ ...secondaryBtn, marginTop: 8, width: '100%', justifyContent: 'center' }} disabled={running} data-testid="open-placer">
-                <Move size={14} /> Place logo {brand.custom ? '(custom set)' : '(auto)'}
-              </button>
-            </>
-          )}
+
+          {/* Unified image upload — every uploaded image lands in the pool first. */}
+          <div style={fieldLabel}>
+            <span>Upload images <span style={fieldHint}>(PNG / JPEG / WebP / GIF · ≤10MB each · upload as many as you need)</span></span>
+            <input ref={fileInputRef} type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif" onChange={(e) => { onUploadImages(e.target.files); e.target.value = ''; }} style={{ flex: 1 }} disabled={running} />
+            {(brand.imagePool || []).length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                {(brand.imagePool || []).map((url, i) => (
+                  <div key={url} style={{ position: 'relative', border: '1px solid var(--border-color)', borderRadius: 8, padding: '8px 6px 6px', background: 'var(--surface-color)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, width: 86 }}>
+                    <img src={url} alt="" style={{ maxHeight: 38, maxWidth: 72, objectFit: 'contain' }} />
+                    <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Image {i + 1}</span>
+                    <button type="button" onClick={() => onRemoveImage(url)} aria-label="Remove image" title="Remove" style={{ position: 'absolute', top: -7, right: -7, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', height: 18, width: 18, borderRadius: '50%', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: '#e06a5a', cursor: 'pointer', padding: 0 }} disabled={running}><X size={11} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Front cover — opens the cover preview placer. */}
+          <div style={fieldLabel}>
+            <span>Front cover <span style={fieldHint}>(place logos freely on the cover preview)</span></span>
+            <button
+              type="button"
+              onClick={onOpenCoverPlacer}
+              style={{ ...secondaryBtn, width: '100%', justifyContent: 'center' }}
+              disabled={running || !hasLogos}
+              data-testid="open-cover-placer"
+              title={hasLogos ? '' : 'Upload images first'}
+            >
+              <Move size={14} /> {brand.logoUrl || brand.coverLogos?.length ? 'Edit front-cover logos' : 'Add logos to front cover'}
+            </button>
+          </div>
+
+          {/* Interior logo band — logos on pages after the cover */}
+          <div style={fieldLabel}>
+            <span>Logos on inside pages <span style={fieldHint}>(pick from your logos · header or bottom band · drag to place)</span></span>
+            <button
+              type="button"
+              onClick={onOpenBand}
+              style={{ ...secondaryBtn, marginTop: 6, width: '100%', justifyContent: 'center' }}
+              disabled={running || !hasLogos}
+              data-testid="open-band"
+              title={hasLogos ? '' : 'Upload a logo or cover logos first'}
+            >
+              <Move size={14} /> {brand.interiorLogos?.items?.length
+                ? `Inside-page logos (${brand.interiorLogos.items.length} · ${brand.interiorLogos.band === 'bottom' ? 'bottom' : 'header'})`
+                : 'Add logos to inside pages'}
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -955,7 +1274,7 @@ function BrandKitPanel({ brand, setBrand, open, setOpen, running, fileInputRef, 
 // ─── Model picker panel ──────────────────────────────────────────────────────
 function ModelPickerPanel({
   catalog, availableModels, strategy, setStrategy, perTier, setPerTier,
-  open, setOpen, advancedOpen, setAdvancedOpen, running, resolvedSelection, costEstimate,
+  open, setOpen, running, resolvedSelection, costEstimate,
 }) {
   const strategies = catalog.strategies && catalog.strategies.length ? catalog.strategies : ['recommended', 'cheapest', 'smartest', 'custom'];
   const byId = new Map(catalog.models.map((m) => [m.id, m]));
@@ -1032,25 +1351,28 @@ function ModelPickerPanel({
             </div>
           )}
 
-          {/* Show the resolved per-tier selection for non-custom strategies */}
+          {/* Resolved per-tier models for the presets — always shown, read-only, in the
+              same per-tier layout as Custom, so you can see exactly what Recommended /
+              Cheapest / Smartest picked for each tier (these are auto-chosen, not editable). */}
           {strategy !== 'custom' && availableModels.length > 0 && (
             <div style={{ marginTop: 8 }}>
-              <button type="button" onClick={() => setAdvancedOpen((v) => !v)} style={rawToggleBtn}>
-                {advancedOpen ? '− Hide' : '+ Show'} resolved per-tier models
-              </button>
-              {advancedOpen && (
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-                  {ALL_TIERS.map((tier) => {
-                    const m = byId.get(resolvedSelection[tier] || '');
-                    return (
-                      <div key={tier} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
-                        <span style={{ textTransform: 'capitalize' }}>{TIER_INFO[tier]?.label || tier}</span>
-                        <span>{m ? `${m.label} (${m.provider})` : (resolvedSelection[tier] || '—')}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              {ALL_TIERS.map((tier) => {
+                const info = TIER_INFO[tier] || { label: tier, hint: '' };
+                const m = byId.get(resolvedSelection[tier] || '');
+                return (
+                  <div key={tier} style={fieldLabel}>
+                    <span style={{ textTransform: 'capitalize' }}>{info.label} <span style={fieldHint}>— {info.hint}</span></span>
+                    <div style={staticField} data-testid={`resolved-${tier}`}>
+                      {m ? `${m.label} · ${m.provider} · $${m.inputPer1M}/$${m.outputPer1M}/1M` : (resolvedSelection[tier] || '—')}
+                    </div>
+                    {m && (
+                      <span style={fieldHint}>
+                        Smart {m.intelligence}/5 · Value {m.costEff}/5 — {m.blurb}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1059,40 +1381,28 @@ function ModelPickerPanel({
   );
 }
 
-// ─── Visual logo placer (port of LogoPlacer.tsx, plain JS + CRM tokens) ──────
+// ─── Logo placer constants (shared by cover + interior placers) ─────────────
 const COVER_BOUNDS = { min: 0.08, max: 0.5, dflt: 0.24 };
 const INNER_BOUNDS = { min: 0.06, max: 0.3, dflt: 0.12 };
-const COVER_DEFAULT = { x: 0.5, y: 0.3, scale: COVER_BOUNDS.dflt };
-const INNER_DEFAULT = { corner: 'top-left', scale: INNER_BOUNDS.dflt };
-const PLACER_CORNERS = [
-  { key: 'top-left', label: 'Top L' },
-  { key: 'top-center', label: 'Top C' },
-  { key: 'top-right', label: 'Top R' },
-  { key: 'bottom-left', label: 'Bot L' },
-  { key: 'bottom-center', label: 'Bot C' },
-  { key: 'bottom-right', label: 'Bot R' },
-];
 const clampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
-function cornerPos(corner) {
-  const [v, h] = corner.split('-');
-  const s = { position: 'absolute' };
-  if (v === 'top') s.top = 4; else s.bottom = 4;
-  if (h === 'left') s.left = 4;
-  else if (h === 'right') s.right = 4;
-  else { s.left = '50%'; s.transform = 'translateX(-50%)'; }
-  return s;
-}
-
-function LogoPlacer({ logoUrl, family, templateName, accent, brandName, value, onSave, onClose }) {
-  const insideZones = family === 'banded' ? PLACER_CORNERS.filter((z) => z.key.startsWith('top')) : PLACER_CORNERS;
-  const [showCover, setShowCover] = useState(value ? !!value.cover : true);
-  const [cover, setCover] = useState(value?.cover || COVER_DEFAULT);
-  const [showInner, setShowInner] = useState(!!value?.interior);
-  const [inner, setInner] = useState(value?.interior || INNER_DEFAULT);
-  const [backing, setBacking] = useState(value?.backing || 'none');
-  const plated = backing === 'plate';
-  const bareShadow = plated ? undefined : 'drop-shadow(0 2px 9px rgba(0,0,0,.55))';
+function CoverLogoPlacer({ pool, value, logoUrl, custom, family, templateName, accent, brandName, onSave, onClose }) {
+  const [items, setItems] = useState(() => {
+    const arr = [];
+    if (logoUrl && custom?.cover) {
+      arr.push({ url: logoUrl, ...custom.cover, backing: custom.backing || 'none' });
+    }
+    if (Array.isArray(value)) {
+      value.forEach((l) => arr.push({ url: l.url, x: l.x, y: l.y, scale: l.scale, backing: 'none' }));
+    }
+    return arr;
+  });
+  const [activeUrl, setActiveUrl] = useState(() => {
+    const arr = [];
+    if (logoUrl && custom?.cover) arr.push(logoUrl);
+    if (Array.isArray(value)) arr.push(...value.map((l) => l.url));
+    return arr[0] || null;
+  });
 
   const canvasRef = useRef(null);
   const gesture = useRef(null);
@@ -1104,47 +1414,87 @@ function LogoPlacer({ logoUrl, family, templateName, accent, brandName, value, o
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  useEffect(() => {
-    if (family === 'banded' && !inner.corner.startsWith('top')) {
-      setInner((s) => ({ ...s, corner: s.corner.endsWith('left') ? 'top-left' : s.corner.endsWith('right') ? 'top-right' : 'top-center' }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [family]);
-
   const norm = (e) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0.5, y: 0.5 };
     return { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height };
   };
-  const startMove = (e) => {
+
+  const activeItem = items.find((it) => it.url === activeUrl);
+
+  const toggle = (url) => {
+    setItems((arr) => {
+      const has = arr.some((it) => it.url === url);
+      if (has) {
+        const next = arr.filter((it) => it.url !== url);
+        if (activeUrl === url) setActiveUrl(next[0]?.url || null);
+        return next;
+      }
+      if (arr.length >= 8) return arr;
+      const x = arr.length === 0 ? 0.5 : clampN(0.15 + (arr.length % 3) * 0.35, 0.12, 0.88);
+      const y = arr.length === 0 ? 0.32 : clampN(0.22 + Math.floor(arr.length / 3) * 0.22, 0.15, 0.72);
+      const newItem = { url, x, y, scale: 0.24, backing: 'none' };
+      setActiveUrl(url);
+      return [...arr, newItem];
+    });
+  };
+
+  const startMove = (url, e) => {
     e.preventDefault();
+    setActiveUrl(url);
+    const it = items.find((i) => i.url === url);
     const { x, y } = norm(e);
-    dragOffset.current = { dx: cover.x - x, dy: cover.y - y };
-    gesture.current = 'move';
+    dragOffset.current = { dx: (it?.x || 0.5) - x, dy: (it?.y || 0.32) - y };
+    gesture.current = { type: 'move', url };
     canvasRef.current?.setPointerCapture(e.pointerId);
   };
-  const startResize = (e) => {
+
+  const startResize = (url, e) => {
     e.preventDefault();
     e.stopPropagation();
-    gesture.current = 'resize';
+    setActiveUrl(url);
+    gesture.current = { type: 'resize', url };
     canvasRef.current?.setPointerCapture(e.pointerId);
   };
+
   const onPointerMove = (e) => {
     if (!gesture.current) return;
     const { x, y } = norm(e);
-    if (gesture.current === 'move') {
-      setCover((c) => ({ ...c, x: clampN(x + dragOffset.current.dx, 0.05, 0.95), y: clampN(y + dragOffset.current.dy, 0.05, 0.95) }));
-    } else {
-      setCover((c) => ({ ...c, scale: clampN(Math.abs(x - c.x) * 2, COVER_BOUNDS.min, COVER_BOUNDS.max) }));
-    }
+    const { type, url } = gesture.current;
+    setItems((arr) => arr.map((it) => {
+      if (it.url !== url) return it;
+      if (type === 'move') {
+        return { ...it, x: clampN(x + dragOffset.current.dx, 0.05, 0.95), y: clampN(y + dragOffset.current.dy, 0.05, 0.95) };
+      }
+      return { ...it, scale: clampN(Math.abs(x - it.x) * 2, COVER_BOUNDS.min, COVER_BOUNDS.max) };
+    }));
   };
+
   const endGesture = (e) => {
     gesture.current = null;
     try { canvasRef.current?.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
   };
+
+  const setScale = (url, scale) => {
+    setItems((arr) => arr.map((it) => (it.url === url ? { ...it, scale: clampN(scale, COVER_BOUNDS.min, COVER_BOUNDS.max) } : it)));
+  };
+
+  const setBacking = (url, backing) => {
+    setItems((arr) => arr.map((it) => (it.url === url ? { ...it, backing } : it)));
+  };
+
   const save = () => {
-    const out = { cover: showCover ? cover : null, interior: showInner ? inner : null, backing };
-    onSave(out.cover || out.interior ? out : null);
+    const primary = items[0];
+    const nextCustom = custom ? { ...custom } : {};
+    if (primary) {
+      nextCustom.cover = { x: primary.x, y: primary.y, scale: primary.scale };
+      nextCustom.backing = primary.backing || 'none';
+    } else {
+      delete nextCustom.cover;
+      delete nextCustom.backing;
+    }
+    const coverLogos = items.slice(1).map(({ url, x, y, scale }) => ({ url, x, y, scale }));
+    onSave({ logoUrl: primary?.url || '', custom: Object.keys(nextCustom).length ? nextCustom : null, coverLogos });
   };
 
   const agencyText = (brandName || 'Agency').toUpperCase();
@@ -1154,140 +1504,282 @@ function LogoPlacer({ logoUrl, family, templateName, accent, brandName, value, o
       <div style={placerModal} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
           <div>
-            <h3 style={{ margin: 0, fontSize: 15 }}>Place your logo</h3>
-            <p style={{ ...fieldHint, marginTop: 2 }}>Previews the <strong>{templateName}</strong> template · drag &amp; resize on the cover, then optionally pin a corner mark inside.</p>
+            <h3 style={{ margin: 0, fontSize: 15 }}>Front cover logos</h3>
+            <p style={{ ...fieldHint, marginTop: 2 }}>Previews the <strong>{templateName}</strong> template · choose images, drag &amp; resize on the cover.</p>
           </div>
           <button type="button" onClick={onClose} style={iconBtn} aria-label="Close"><X size={16} /></button>
         </div>
 
-        <div style={placerGrid}>
-          {/* Cover canvas */}
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <span style={{ fontSize: 12, fontWeight: 600 }}>Cover</span>
-              <label style={{ ...fieldHint, display: 'flex', gap: 6, cursor: 'pointer' }}>
-                <input type="checkbox" checked={showCover} onChange={(e) => setShowCover(e.target.checked)} /> show logo on cover
-              </label>
+        <div style={{ ...fieldLabel, marginBottom: 8 }}>
+          <span>Choose logos <span style={fieldHint}>(tap to include — one, several, or all)</span></span>
+          {pool.length === 0 ? (
+            <p style={fieldHint}>Upload images first — they&apos;ll appear here to choose from.</p>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+              {pool.map((url) => {
+                const on = items.some((it) => it.url === url);
+                return (
+                  <button key={url} type="button" onClick={() => toggle(url)}
+                    style={{ position: 'relative', border: on ? '2px solid var(--primary-color, var(--accent-color))' : '1px solid var(--border-color)', borderRadius: 8, padding: 5, background: 'var(--surface-color)', cursor: 'pointer', width: 70, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <img src={url} alt="" style={{ maxHeight: 32, maxWidth: 58, objectFit: 'contain', opacity: on ? 1 : 0.55 }} />
+                    {on && <span style={{ position: 'absolute', top: -7, right: -7, height: 16, width: 16, borderRadius: '50%', background: 'var(--primary-color, var(--accent-color))', color: '#fff', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✓</span>}
+                  </button>
+                );
+              })}
             </div>
-            <div
-              ref={canvasRef}
-              onPointerMove={onPointerMove}
-              onPointerUp={endGesture}
-              onPointerCancel={endGesture}
-              style={{
-                position: 'relative', aspectRatio: '210 / 297', width: '100%', touchAction: 'none', userSelect: 'none',
-                overflow: 'hidden', borderRadius: 8, border: '1px solid var(--border-color)',
-                background: family === 'editorial'
-                  ? 'linear-gradient(to bottom, #78716c, #44403c, #1c1917)'
-                  : 'linear-gradient(to bottom, #475569, #0f172a, #000)',
-                opacity: showCover ? 1 : 0.4,
-              }}
-            >
-              {family === 'banded' && (
-                <div style={{ position: 'absolute', left: '50%', top: '46%', transform: 'translate(-50%,-50%)', width: '70%', aspectRatio: '1 / 1', borderRadius: '50%', background: accent, opacity: 0.82 }} />
-              )}
-              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, display: 'flex', justifyContent: 'space-between', padding: '6px 10px', fontSize: 6, letterSpacing: 2, textTransform: 'uppercase', color: 'rgba(255,255,255,0.75)' }}>
-                <span style={{ maxWidth: '55%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agencyText}</span>
-                <span>2026</span>
+          )}
+        </div>
+
+        <div
+          ref={canvasRef}
+          onPointerMove={onPointerMove}
+          onPointerUp={endGesture}
+          onPointerCancel={endGesture}
+          style={{
+            position: 'relative', aspectRatio: '210 / 297', width: '100%', maxWidth: 360, margin: '0 auto', touchAction: 'none', userSelect: 'none',
+            overflow: 'hidden', borderRadius: 8, border: '1px solid var(--border-color)',
+            background: family === 'editorial'
+              ? 'linear-gradient(to bottom, #78716c, #44403c, #1c1917)'
+              : 'linear-gradient(to bottom, #475569, #0f172a, #000)',
+          }}
+        >
+          {family === 'banded' && (
+            <div style={{ position: 'absolute', left: '50%', top: '46%', transform: 'translate(-50%,-50%)', width: '70%', aspectRatio: '1 / 1', borderRadius: '50%', background: accent, opacity: 0.82 }} />
+          )}
+
+          {/* Approximate text-region guides so logos can be placed to avoid them. */}
+          {family === 'editorial' ? (
+            <>
+              <div style={{ position: 'absolute', top: '4%', left: '8%', right: '8%', border: '1px dashed rgba(255,255,255,0.35)', background: 'rgba(0,0,0,0.18)', borderRadius: 3, padding: '3px 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'rgba(255,255,255,0.65)', fontSize: 6, letterSpacing: 1, textTransform: 'uppercase' }}>
+                <span>Agency / date</span>
+                <span>Season</span>
               </div>
-              <div style={{ position: 'absolute', left: 12, right: 12, bottom: 22 }}>
-                <div style={{ height: 9, width: '60%', borderRadius: 2, background: 'rgba(255,255,255,0.9)', marginBottom: 4 }} />
-                <div style={{ height: 9, width: '40%', borderRadius: 2, background: 'rgba(255,255,255,0.9)' }} />
+              <div style={{ position: 'absolute', right: '4%', top: '45%', transform: 'translateY(-50%) rotate(90deg)', transformOrigin: 'right center', border: '1px dashed rgba(255,255,255,0.35)', background: 'rgba(0,0,0,0.18)', borderRadius: 3, padding: '2px 6px', color: 'rgba(255,255,255,0.65)', fontSize: 6, letterSpacing: 1, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>Edition · Year</div>
+              <div style={{ position: 'absolute', left: '8%', right: '8%', bottom: '16%', border: '1px dashed rgba(255,255,255,0.35)', background: 'rgba(0,0,0,0.18)', borderRadius: 3, padding: 8, color: 'rgba(255,255,255,0.8)' }}>
+                <div style={{ fontSize: 6, letterSpacing: 1, textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)' }}>Kicker</div>
+                <div style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.1, margin: '2px 0' }}>Trip Title</div>
+                <div style={{ fontSize: 7, color: 'rgba(255,255,255,0.65)' }}>Subtitle / route line</div>
               </div>
-              {showCover && (
-                <div
-                  onPointerDown={startMove}
-                  style={{
-                    position: 'absolute', left: `${cover.x * 100}%`, top: `${cover.y * 100}%`, width: `${cover.scale * 100}%`,
-                    transform: 'translate(-50%, -50%)', cursor: 'grab', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    borderRadius: 2, padding: plated ? 4 : 0, background: plated ? 'rgba(255,255,255,0.9)' : 'transparent',
-                    boxShadow: plated ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
-                  }}
-                >
-                  <img src={logoUrl} alt="logo" style={{ pointerEvents: 'none', display: 'block', width: '100%', height: 'auto', objectFit: 'contain', filter: bareShadow }} />
-                  <span onPointerDown={startResize} title="Drag to resize" style={{ position: 'absolute', bottom: -7, right: -7, height: 14, width: 14, cursor: 'nwse-resize', borderRadius: '50%', border: '2px solid #fff', background: 'var(--primary-color, var(--accent-color))' }} />
-                </div>
-              )}
+              <div style={{ position: 'absolute', left: '8%', right: '8%', bottom: '5%', border: '1px dashed rgba(255,255,255,0.35)', background: 'rgba(0,0,0,0.18)', borderRadius: 3, padding: '4px 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'rgba(255,255,255,0.65)', fontSize: 6, letterSpacing: 1 }}>
+                <span>AGENCY</span>
+                <span>BADGE</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ position: 'absolute', top: '4%', left: '8%', right: '8%', border: '1px dashed rgba(255,255,255,0.35)', background: 'rgba(0,0,0,0.18)', borderRadius: 3, padding: '3px 6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'rgba(255,255,255,0.65)', fontSize: 6, letterSpacing: 1, textTransform: 'uppercase' }}>
+                <span>{agencyText}</span>
+                <span>Season</span>
+              </div>
+              <div style={{ position: 'absolute', left: '10%', right: '10%', top: '36%', border: '1px dashed rgba(255,255,255,0.35)', background: 'rgba(0,0,0,0.18)', borderRadius: 3, padding: 10, textAlign: 'center', color: 'rgba(255,255,255,0.8)' }}>
+                <div style={{ fontSize: 6, letterSpacing: 1, textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)' }}>Kicker</div>
+                <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.1, margin: '3px 0' }}>Trip Title</div>
+                <div style={{ fontSize: 7, color: 'rgba(255,255,255,0.65)' }}>Subtitle / route line</div>
+              </div>
+              <div style={{ position: 'absolute', left: '8%', right: '8%', bottom: '5%', display: 'flex', justifyContent: 'space-between' }}>
+                <div style={{ border: '1px dashed rgba(255,255,255,0.35)', background: 'rgba(0,0,0,0.18)', borderRadius: 3, padding: '4px 6px', color: 'rgba(255,255,255,0.65)', fontSize: 6, letterSpacing: 1 }}>AGENCY</div>
+                <div style={{ border: '1px dashed rgba(255,255,255,0.35)', background: 'rgba(0,0,0,0.18)', borderRadius: 12, padding: '4px 8px', color: 'rgba(255,255,255,0.65)', fontSize: 6, letterSpacing: 1 }}>BADGE</div>
+              </div>
+            </>
+          )}
+          {items.map((it) => {
+            const plated = it.backing === 'plate';
+            const bareShadow = plated ? undefined : 'drop-shadow(0 2px 9px rgba(0,0,0,.55))';
+            const isActive = activeUrl === it.url;
+            const shadows = [];
+            if (plated) shadows.push('0 2px 8px rgba(0,0,0,0.3)');
+            if (isActive) shadows.push('0 0 0 2px var(--primary-color, var(--accent-color))');
+            return (
+              <div
+                key={it.url}
+                onPointerDown={(e) => startMove(it.url, e)}
+                style={{
+                  position: 'absolute', left: `${it.x * 100}%`, top: `${it.y * 100}%`, width: `${it.scale * 100}%`,
+                  transform: 'translate(-50%, -50%)', cursor: 'grab', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  borderRadius: 2, padding: plated ? 4 : 0, background: plated ? 'rgba(255,255,255,0.9)' : 'transparent',
+                  boxShadow: shadows.join(', ') || 'none',
+                }}
+              >
+                <img src={it.url} alt="logo" style={{ pointerEvents: 'none', display: 'block', width: '100%', height: 'auto', objectFit: 'contain', filter: bareShadow }} />
+                <span onPointerDown={(e) => startResize(it.url, e)} title="Drag to resize" style={{ position: 'absolute', bottom: -7, right: -7, height: 14, width: 14, cursor: 'nwse-resize', borderRadius: '50%', border: '2px solid #fff', background: 'var(--primary-color, var(--accent-color))' }} />
+              </div>
+            );
+          })}
+        </div>
+
+        {activeItem && (
+          <div style={{ marginTop: 12, padding: 12, borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--subtle-bg)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <img src={activeItem.url} alt="" style={{ maxHeight: 28, maxWidth: 50, objectFit: 'contain' }} />
+              <span style={{ fontSize: 12, fontWeight: 600 }}>Selected logo</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-              <span style={{ width: 36, fontSize: 10, color: 'var(--text-secondary)' }}>Size</span>
-              <input type="range" min={COVER_BOUNDS.min} max={COVER_BOUNDS.max} step={0.01} value={cover.scale} disabled={!showCover} onChange={(e) => setCover((c) => ({ ...c, scale: Number(e.target.value) }))} style={{ flex: 1 }} />
-              <span style={{ width: 32, textAlign: 'right', fontSize: 10, color: 'var(--text-secondary)' }}>{Math.round(cover.scale * 100)}%</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ width: 40, fontSize: 11, color: 'var(--text-secondary)' }}>Size</span>
+              <input type="range" min={COVER_BOUNDS.min} max={COVER_BOUNDS.max} step={0.01} value={activeItem.scale} onChange={(e) => setScale(activeItem.url, Number(e.target.value))} style={{ flex: 1 }} />
+              <span style={{ width: 36, textAlign: 'right', fontSize: 10, color: 'var(--text-secondary)' }}>{Math.round(activeItem.scale * 100)}%</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-              <span style={{ width: 36, fontSize: 10, color: 'var(--text-secondary)' }}>Backing</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 40, fontSize: 11, color: 'var(--text-secondary)' }}>Backing</span>
               <div style={{ display: 'flex', overflow: 'hidden', borderRadius: 6, border: '1px solid var(--border-color)' }}>
                 {['none', 'plate'].map((b) => (
-                  <button key={b} type="button" onClick={() => setBacking(b)} style={{ padding: '4px 8px', fontSize: 10, border: 'none', cursor: 'pointer', background: backing === b ? 'var(--primary-color, var(--accent-color))' : 'var(--surface-color)', color: backing === b ? '#fff' : 'var(--text-secondary)' }}>
+                  <button key={b} type="button" onClick={() => setBacking(activeItem.url, b)} style={{ padding: '4px 8px', fontSize: 10, border: 'none', cursor: 'pointer', background: activeItem.backing === b ? 'var(--primary-color, var(--accent-color))' : 'var(--surface-color)', color: activeItem.backing === b ? '#fff' : 'var(--text-secondary)' }}>
                     {b === 'none' ? 'As uploaded' : 'White plate'}
                   </button>
                 ))}
               </div>
             </div>
-            <p style={{ ...fieldHint, marginTop: 6 }}>
-              {plated ? 'A white box sits behind the logo — helps a light/thin logo stay legible on busy photos.' : 'Logo used exactly as uploaded — transparency kept, no box (a soft shadow keeps it readable).'}
-            </p>
           </div>
-
-          {/* Inside pages */}
-          <div>
-            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, fontWeight: 600, marginBottom: 6, cursor: 'pointer' }}>
-              <input type="checkbox" checked={showInner} onChange={(e) => setShowInner(e.target.checked)} /> Also place a mark on inside pages
-            </label>
-            <p style={{ ...fieldHint, marginBottom: 8 }}>The inside mark snaps to a corner and the engine reserves that space, so content always reflows cleanly.</p>
-            <div style={{ opacity: showInner ? 1 : 0.4, pointerEvents: showInner ? 'auto' : 'none' }}>
-              <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-                <div style={{ position: 'relative', aspectRatio: '210 / 297', width: 120, flexShrink: 0, overflow: 'hidden', borderRadius: 6, border: '1px solid var(--border-color)', background: '#fff' }}>
-                  <div style={{ position: 'absolute', left: 12, right: 12, top: 16 }}>
-                    {['85%', '70%', '92%', '60%', '78%'].map((w, i) => (
-                      <div key={i} style={{ height: 4, borderRadius: 2, background: '#cbd5e1', width: w, marginBottom: 5 }} />
-                    ))}
-                  </div>
-                  {insideZones.map((cn) => {
-                    const selected = inner.corner === cn.key;
-                    return (
-                      <button key={cn.key} type="button" onClick={() => setInner((s) => ({ ...s, corner: cn.key }))} title={cn.key}
-                        style={{ ...cornerPos(cn.key), height: 20, width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 3, fontSize: 8, border: 'none', cursor: 'pointer', background: selected ? 'var(--primary-color, var(--accent-color))' : '#e2e8f0', color: selected ? '#fff' : '#64748b' }}>
-                        {cn.label.split(' ')[1] || cn.label}
-                      </button>
-                    );
-                  })}
-                  <div style={{ ...cornerPos(inner.corner), pointerEvents: 'none', width: `${inner.scale * 100}%`, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 2, padding: plated ? 2 : 0, background: plated ? 'rgba(255,255,255,0.9)' : 'transparent' }}>
-                    <img src={logoUrl} alt="" style={{ display: 'block', width: '100%', height: 'auto', objectFit: 'contain', filter: bareShadow }} />
-                  </div>
-                </div>
-                <div style={{ flex: 1 }}>
-                  <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>Position{family === 'banded' ? ' · header (L / C / R)' : ''}</span>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginTop: 4 }}>
-                    {insideZones.map((cn) => (
-                      <button key={cn.key} type="button" onClick={() => setInner((s) => ({ ...s, corner: cn.key }))}
-                        style={{ borderRadius: 6, padding: '4px 6px', fontSize: 10, cursor: 'pointer', border: inner.corner === cn.key ? '1px solid var(--primary-color, var(--accent-color))' : '1px solid var(--border-color)', background: inner.corner === cn.key ? 'var(--subtle-bg-3)' : 'var(--surface-color)', color: 'var(--text-primary)' }}>
-                        {cn.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
-                    <span style={{ width: 36, fontSize: 10, color: 'var(--text-secondary)' }}>Size</span>
-                    <input type="range" min={INNER_BOUNDS.min} max={INNER_BOUNDS.max} step={0.01} value={inner.scale} onChange={(e) => setInner((s) => ({ ...s, scale: Number(e.target.value) }))} style={{ flex: 1 }} />
-                    <span style={{ width: 32, textAlign: 'right', fontSize: 10, color: 'var(--text-secondary)' }}>{Math.round(inner.scale * 100)}%</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: 12, marginTop: 16 }}>
-          <button type="button" onClick={() => onSave(null)} style={{ ...chipBtn, textDecoration: 'underline' }} title="Clear custom placement — automatic placement takes over">Reset to automatic</button>
+          <button type="button" onClick={() => { setItems([]); setActiveUrl(null); }} style={{ ...chipBtn, textDecoration: 'underline' }} title="Remove all front-cover logos">Clear</button>
           <div style={{ display: 'flex', gap: 8 }}>
             <button type="button" onClick={onClose} style={secondaryBtn}>Cancel</button>
-            <button type="button" onClick={save} style={{ ...primaryBtn, width: 'auto' }} data-testid="placer-save">Save placement</button>
+            <button type="button" onClick={save} style={{ ...primaryBtn, width: 'auto' }} data-testid="cover-placer-save">Save</button>
           </div>
         </div>
       </div>
     </div>
   );
 }
+
+
+// ─── Interior logo band placer ──────────────────────────────────────────────
+// Mirrors the engine's customMarkH() so the preview is WYSIWYG-accurate to the PDF:
+// a horizontal band (header or bottom) of logos chosen from the uploaded pool, all at
+// one shared height, each dragged to its horizontal position. Banded honours header
+// only (full-bleed bottom can't reflow), so the preview shows header for TMC + bottom.
+function bandLogoHeightMm(scale, band, family) {
+  const top = family === 'banded' ? true : band !== 'bottom'; // banded clamps bottom→top
+  const maxH = family === 'editorial' ? (top ? 30 : 20) : 24;
+  const minH = 9;
+  const t = clampN((scale - 0.06) / (0.3 - 0.06), 0, 1);
+  return clampN(minH + t * (maxH - minH), minH, maxH);
+}
+
+function InteriorBandPlacer({ pool, value, family, onSave, onClose }) {
+  const [band, setBand] = useState(value?.band || 'header');
+  const [scale, setScale] = useState(value?.scale ?? 0.16);
+  const [items, setItems] = useState(() => (Array.isArray(value?.items) ? value.items.filter((it) => pool.includes(it.url)) : []));
+  const canvasRef = useRef(null);
+  const dragUrl = useRef(null);
+
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const effBand = family === 'banded' && band === 'bottom' ? 'header' : band; // banded → header
+  const hMm = bandLogoHeightMm(scale, effBand, family);
+  const hPct = (hMm / 297) * 100; // logo height as % of page height — WYSIWYG
+  const topPct = ((family === 'banded' ? 6 : 9) / 297) * 100;
+  const botPct = (8 / 297) * 100;
+
+  const toggle = (url) => setItems((arr) => {
+    const has = arr.some((it) => it.url === url);
+    if (has) return arr.filter((it) => it.url !== url);
+    if (arr.length >= 8) return arr;
+    const x = arr.length === 0 ? 0.5 : clampN(arr.length / (arr.length + 1), 0.08, 0.92);
+    return [...arr, { url, x }];
+  });
+  const normX = (e) => {
+    const r = canvasRef.current?.getBoundingClientRect();
+    if (!r) return 0.5;
+    return clampN((e.clientX - r.left) / r.width, 0.05, 0.95);
+  };
+  const onMove = (e) => {
+    if (!dragUrl.current) return;
+    const x = normX(e);
+    setItems((arr) => arr.map((it) => (it.url === dragUrl.current ? { ...it, x } : it)));
+  };
+  const endDrag = (e) => { dragUrl.current = null; try { canvasRef.current?.releasePointerCapture(e.pointerId); } catch { /* ignore */ } };
+
+  return (
+    <div style={placerOverlay} onClick={onClose}>
+      <div style={placerModal} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 15 }}>Logos on pages after the cover</h3>
+            <p style={{ ...fieldHint, marginTop: 2 }}>Pick logos from your kit, choose a band, then drag each across it. Page text reflows clear of it so nothing clashes.{family === 'banded' ? ' (TMC uses the header band.)' : ''}</p>
+          </div>
+          <button type="button" onClick={onClose} style={iconBtn} aria-label="Close"><X size={16} /></button>
+        </div>
+
+        {/* Pool selector */}
+        <div style={{ ...fieldLabel, marginBottom: 8 }}>
+          <span>Choose logos <span style={fieldHint}>(tap to include — one, several, or all)</span></span>
+          {pool.length === 0 ? (
+            <p style={fieldHint}>Upload a logo / cover logos first — they&rsquo;ll appear here to choose from.</p>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+              {pool.map((url) => {
+                const on = items.some((it) => it.url === url);
+                return (
+                  <button key={url} type="button" onClick={() => toggle(url)}
+                    style={{ position: 'relative', border: on ? '2px solid var(--primary-color, var(--accent-color))' : '1px solid var(--border-color)', borderRadius: 8, padding: 5, background: 'var(--surface-color)', cursor: 'pointer', width: 70, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <img src={url} alt="" style={{ maxHeight: 32, maxWidth: 58, objectFit: 'contain', opacity: on ? 1 : 0.55 }} />
+                    {on && <span style={{ position: 'absolute', top: -7, right: -7, height: 16, width: 16, borderRadius: '50%', background: 'var(--primary-color, var(--accent-color))', color: '#fff', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✓</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* WYSIWYG canvas */}
+        <div
+          ref={canvasRef}
+          onPointerMove={onMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          style={{ position: 'relative', aspectRatio: '210 / 297', width: 200, margin: '0 auto', touchAction: 'none', userSelect: 'none', overflow: 'hidden', borderRadius: 8, border: '1px solid var(--border-color)', background: '#fff' }}
+        >
+          <div style={{ position: 'absolute', left: '10%', right: '10%', top: `${topPct + (effBand === 'header' ? hPct + 3 : 0)}%`, bottom: `${effBand === 'bottom' ? hPct + 3 : 6}%` }}>
+            {['90%', '70%', '80%', '55%', '85%', '60%'].map((w, i) => (
+              <div key={i} style={{ height: 4, borderRadius: 2, background: '#cbd5e1', width: w, marginBottom: 7 }} />
+            ))}
+          </div>
+          {items.map((it) => (
+            <img
+              key={it.url}
+              src={it.url}
+              alt=""
+              onPointerDown={(e) => { e.preventDefault(); dragUrl.current = it.url; canvasRef.current?.setPointerCapture(e.pointerId); }}
+              style={{ position: 'absolute', left: `${it.x * 100}%`, [effBand === 'bottom' ? 'bottom' : 'top']: `${effBand === 'bottom' ? botPct : topPct}%`, height: `${hPct}%`, width: 'auto', maxWidth: '40%', objectFit: 'contain', transform: 'translateX(-50%)', cursor: 'grab', filter: 'drop-shadow(0 1px 5px rgba(0,0,0,.35))' }}
+            />
+          ))}
+        </div>
+
+        {/* Controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+          <span style={{ width: 50, fontSize: 11, color: 'var(--text-secondary)' }}>Band</span>
+          <div style={{ display: 'flex', overflow: 'hidden', borderRadius: 6, border: '1px solid var(--border-color)' }}>
+            {['header', 'bottom'].map((b) => (
+              <button key={b} type="button" onClick={() => setBand(b)} style={{ padding: '5px 12px', fontSize: 11, border: 'none', cursor: 'pointer', background: band === b ? 'var(--primary-color, var(--accent-color))' : 'var(--surface-color)', color: band === b ? '#fff' : 'var(--text-secondary)' }}>
+                {b === 'header' ? 'Header (top)' : 'Bottom'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <span style={{ width: 50, fontSize: 11, color: 'var(--text-secondary)' }}>Size</span>
+          <input type="range" min={INNER_BOUNDS.min} max={INNER_BOUNDS.max} step={0.01} value={scale} onChange={(e) => setScale(Number(e.target.value))} style={{ flex: 1 }} />
+          <span style={{ width: 32, textAlign: 'right', fontSize: 10, color: 'var(--text-secondary)' }}>{Math.round(scale * 100)}%</span>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-color)', paddingTop: 12, marginTop: 16 }}>
+          <button type="button" onClick={() => onSave(null)} style={{ ...chipBtn, textDecoration: 'underline' }} title="Remove the interior logo band">Clear band</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" onClick={onClose} style={secondaryBtn}>Cancel</button>
+            <button type="button" onClick={() => onSave(items.length ? { band, scale, items } : null)} style={{ ...primaryBtn, width: 'auto' }} data-testid="band-save">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 // ─── Sub-components ────────────────────────────────────────────────────────
 function AgentCard({ agent }) {
@@ -1369,7 +1861,6 @@ const chipBtn = { fontSize: 11, padding: '3px 8px', borderRadius: 12, border: '1
 const collapsible = { border: '1px solid var(--border-color)', borderRadius: 6, marginBottom: 12 };
 const collapsibleHeader = { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 12px', border: 'none', background: 'var(--subtle-bg)', color: 'var(--text-primary)', fontSize: 13, fontWeight: 600, cursor: 'pointer', borderRadius: 6 };
 const collapsibleBody = { padding: 12 };
-const logoPreview = { padding: 12, background: 'var(--subtle-bg)', borderRadius: 6, textAlign: 'center' };
 const primaryBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '10px 16px', borderRadius: 6, fontWeight: 600, fontSize: 14, background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', cursor: 'pointer', width: '100%', justifyContent: 'center' };
 const disabledPrimaryBtn = { ...primaryBtn, opacity: 0.6, cursor: 'not-allowed' };
 const secondaryBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 6, fontWeight: 600, fontSize: 12, background: 'var(--surface-color)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', cursor: 'pointer' };
@@ -1401,4 +1892,3 @@ const brandBadge = { padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeig
 const ellipsis2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis' };
 const placerOverlay = { position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.7)', padding: 16 };
 const placerModal = { maxHeight: '92vh', width: '100%', maxWidth: 760, overflowY: 'auto', borderRadius: 14, border: '1px solid var(--border-color)', background: 'var(--surface-color)', padding: 20 };
-const placerGrid = { display: 'grid', gap: 20, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', marginTop: 12 };

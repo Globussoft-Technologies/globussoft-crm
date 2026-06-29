@@ -211,8 +211,21 @@ brief leaves open (palette accent, photo queries, per-place character). Be compl
 include EVERY day of the itinerary and EVERY inclusion listed, and map EVERY labelled
 block from the brief (learning outcomes, inclusions, exclusions, important
 information, cancellation policy, about-us, call-to-action, etc.) into a fixed field
-or a "sections" entry — never omit provided content. Write specific photo-search
-queries (the engine fetches the photos from them) — do NOT output image URLs.
+or a "sections" entry — never omit content the USER provided. (Internal research /
+copywriter notes are NOT user content — see SOURCE MATERIAL below.) Write specific
+photo-search queries ONLY in the dedicated query fields ("heroQuery", and each card's
+"query") — the engine fetches the photos from them. NEVER output image URLs, and NEVER
+put the photo queries into a visible "sections" entry (no "Photo Guide" / "Image
+Searches" / "Render Engine Prompts" / "Photo Search" section) — those strings are
+engine directives the reader must never see.
+
+IDENTITY — NEVER invent the agency. If the brief gives no agency name, no contact
+details, no website and no social handles, LEAVE "agencyName", "agencyLine", "topLeft",
+"badge" and the footer's "contactLines"/"social" EMPTY. A separate brand kit supplies
+the agency's real logo, name, contacts and links at render time — so fabricating an
+agency name, an "<Agency> presents" line, a website URL, a phone number or an email is
+WRONG and will clash with the real brand. Compose the TRIP; let the brand kit own the
+agency identity.
 
 DIRECTIVES ≠ CONTENT. The MAP, LOGO PLACEMENT and DESIGN STYLE lines in the brief
 are RENDERING DIRECTIVES for the engine — the engine draws the route map and places
@@ -227,6 +240,17 @@ callout card per stop from these, so fill ALL four text fields for EVERY stop (m
 the day-by-day) — bare names make the map look empty. ALSO include "route.cities"
 ("City, Country" entries, 2+) as a fallback. Omitting routeLine + the stops means NO
 map renders. Never skip them when the brief names places or a route.
+
+SOURCE MATERIAL ≠ CONTENT. Your task may include a block labelled "SOURCE MATERIAL"
+(the destination researcher's notes, the copywriter's draft copy, and the user's raw
+brief, repeated verbatim). That block is INPUT for you to read and SYNTHESIZE into the
+structured fields below — it is NOT brochure content and the reader must NEVER see it.
+NEVER create a section (or any field) that reproduces or labels this scaffolding:
+no "Source Content" / "Source Material" / "Research Notes" / "Copywriter Copy" /
+"Raw User Details" / "…Verbatim" section, and never paste the notes or the raw brief
+back as a section body. Extract the real trip FACTS from it and place them in the
+proper fields (intro, highlights, itinerary, route, inclusions, pricing, footer);
+discard the wrapper. A brochure that shows its own working notes is a hard failure.
 
 ONLY REAL CONTENT — adapt to the brief, do not pad the template. Include a field ONLY
 when the brief actually provides that information. Omit any fixed field you have no real

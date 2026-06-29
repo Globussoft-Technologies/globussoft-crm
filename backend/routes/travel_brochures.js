@@ -28,6 +28,7 @@
  */
 const express = require("express");
 const crypto = require("crypto");
+const multer = require("multer");
 const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
@@ -35,6 +36,7 @@ const { requireTravelTenant } = require("../middleware/travelGuards");
 const prisma = require("../lib/prisma");
 const brochureEngine = require("../services/brochureEngineBridge");
 const { sanitizeBrandKit } = require("../lib/brochureBrandKit");
+const brochureS3Store = require("../lib/brochureS3Store");
 
 // SSE note: EventSource (the browser SSE client) intentionally rejects
 // custom request headers, so the operator UI passes the JWT on the URL as
@@ -177,6 +179,7 @@ router.post(
       brochureEngine
         .startRun({
           runId,
+          tenantId,
           sectorKey,
           goal,
           styleKey,
@@ -222,15 +225,19 @@ router.post(
           }
         })
         .catch(async (err) => {
+          // RUN_CANCELLED comes from cancelRun() killing the subprocess (Stop button).
+          // Treat it as a clean cancellation, not an engine failure.
+          const cancelled = (err.message || "") === "RUN_CANCELLED";
+          const msg = cancelled ? "Cancelled by user" : err.message || String(err);
           const state = RUN_STATE.get(runId);
           if (state) {
-            state.status = "failed";
-            state.error = err.message || String(err);
+            state.status = cancelled ? "cancelled" : "failed";
+            state.error = msg;
             state.settledAt = Date.now();
           }
           pushEvent(runId, {
-            type: "run.failed",
-            data: { error: err.message || String(err) },
+            type: cancelled ? "run.cancelled" : "run.failed",
+            data: { error: msg },
           });
           if (state) {
             for (const sub of state.subscribers) {
@@ -246,8 +253,8 @@ router.post(
             await prisma.travelBrochure.update({
               where: { id: initial.id },
               data: {
-                status: "failed",
-                errorMessage: (err.message || String(err)).slice(0, 1000),
+                status: cancelled ? "cancelled" : "failed",
+                errorMessage: msg.slice(0, 1000),
                 completedAt: new Date(),
               },
             });
@@ -296,6 +303,29 @@ router.get(
       errorMessage: row.errorMessage,
       events: state ? state.events : [],
     });
+  },
+);
+
+// ─── POST /brochures/runs/:runId/cancel ───────────────────────────────────
+// Stop an in-flight run (operator hit Generate by mistake). Ownership-checked,
+// then kills the engine subprocess; startRun's promise rejects RUN_CANCELLED and
+// its .catch marks the run/DB row "cancelled" + closes SSE subscribers. Idempotent:
+// a run that already settled (or an unknown live child) returns cancelled:false.
+router.post(
+  "/brochures/runs/:runId/cancel",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("marketing", "write"),
+  async (req, res) => {
+    const { runId } = req.params;
+    const row = await prisma.travelBrochure.findFirst({
+      where: { runId, tenantId: req.travelTenant.id },
+    });
+    if (!row) {
+      return res.status(404).json({ error: "Run not found", code: "RUN_NOT_FOUND" });
+    }
+    const cancelled = brochureEngine.cancelRun(runId);
+    return res.json({ runId, cancelled, status: cancelled ? "cancelling" : row.status });
   },
 );
 
@@ -458,6 +488,269 @@ router.get(
   },
 );
 
+// ─── Brand profiles (saved Brand Kits) ────────────────────────────────────
+// Tenant-scoped, server-persisted brand presets so an agency saves its logo /
+// accent / contacts / socials / QR link once and reuses them across devices and
+// team members (NOT browser-local). The stored `payload` is the brand-kit FORM
+// snapshot (round-trips straight back into the UI); it is re-sanitized by
+// sanitizeBrandKit on every actual run, so this store only guards size/shape.
+const PROFILE_LIMIT = 50;
+
+function safeParseJson(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return {};
+  }
+}
+
+// Validate the brand-kit FORM for storage (cap sizes, keep only a sane logo data-URI,
+// valid hex, http(s) QR). Returns null when there's nothing usable.
+function sanitizeProfileForm(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const cap = (v, n) => (typeof v === "string" ? v.slice(0, n) : "");
+  const form = {
+    name: cap(raw.name, 80),
+    tagline: cap(raw.tagline, 140),
+    accentMode: raw.accentMode === "manual" ? "manual" : "auto",
+    accent:
+      typeof raw.accent === "string" && /^#[0-9a-fA-F]{3,8}$/.test(raw.accent.trim())
+        ? raw.accent.trim()
+        : "#122647",
+    qrUrl: typeof raw.qrUrl === "string" ? raw.qrUrl.slice(0, 500) : "",
+    contact: Array.isArray(raw.contact)
+      ? raw.contact.filter((x) => typeof x === "string").map((x) => x.slice(0, 120)).slice(0, 4)
+      : [],
+    socials: Array.isArray(raw.socials)
+      ? raw.socials.filter((x) => typeof x === "string").map((x) => x.slice(0, 60)).slice(0, 6)
+      : [],
+    logoUrl: "",
+    imagePool: [],
+    custom: raw.custom && typeof raw.custom === "object" ? raw.custom : null,
+    coverLogos: [],
+    interiorLogos: null,
+  };
+  const okLogo = (u) => {
+    if (typeof u !== "string") return false;
+    if (u.length > 14_000_000) return false;
+    // Legacy base64-inlined images (existing presets) keep working.
+    if (/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(u)) return true;
+    // S3-hosted images from the configured bucket.
+    if (brochureS3Store.isS3Url(u)) return true;
+    return false;
+  };
+  const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  // Keep only a reasonable raster data:image logo (base64 of a ≤200KB image ≈ 270KB).
+  if (okLogo(raw.logoUrl)) form.logoUrl = raw.logoUrl;
+  // Unified image pool — every uploaded image the user can select from for front / inside.
+  if (Array.isArray(raw.imagePool)) {
+    form.imagePool = raw.imagePool.filter((u) => okLogo(u)).slice(0, 8);
+  }
+  // Additional cover logos — keep valid data-URIs with numeric placement, capped at 8.
+  if (Array.isArray(raw.coverLogos)) {
+    form.coverLogos = raw.coverLogos
+      .filter((l) => l && typeof l === "object" && okLogo(l.url))
+      .slice(0, 8)
+      .map((l) => ({ url: l.url, x: num(l.x, 0.5), y: num(l.y, 0.32), scale: num(l.scale, 0.24) }));
+  }
+  // Interior logo band — band enum + shared scale + items (valid data-URI + x), capped.
+  if (raw.interiorLogos && typeof raw.interiorLogos === "object" && Array.isArray(raw.interiorLogos.items)) {
+    const items = raw.interiorLogos.items
+      .filter((l) => l && typeof l === "object" && okLogo(l.url))
+      .slice(0, 8)
+      .map((l) => ({ url: l.url, x: num(l.x, 0.5) }));
+    if (items.length) {
+      form.interiorLogos = {
+        band: raw.interiorLogos.band === "bottom" ? "bottom" : "header",
+        scale: num(raw.interiorLogos.scale, 0.16),
+        items,
+      };
+    }
+  }
+  return form;
+}
+
+/** Collect every image URL stored in a brand-kit payload so we can diff or delete them. */
+function collectBrandImageUrls(payload) {
+  const urls = new Set();
+  const form = safeParseJson(payload);
+  if (form.logoUrl) urls.add(form.logoUrl);
+  if (Array.isArray(form.imagePool)) form.imagePool.forEach((u) => urls.add(u));
+  if (Array.isArray(form.coverLogos)) form.coverLogos.forEach((l) => l?.url && urls.add(l.url));
+  if (form.interiorLogos?.items) form.interiorLogos.items.forEach((it) => it?.url && urls.add(it.url));
+  return urls;
+}
+
+/** Multer instance for brand-image uploads: keep files in memory and pass buffers to S3. */
+const brandImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (/^image\/(png|jpe?g|webp|gif)$/i.test(file.mimetype)) cb(null, true);
+    else cb(new Error("Only PNG, JPEG, WebP, or GIF images are allowed"));
+  },
+});
+
+router.post(
+  "/brochures/brand-images/upload",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("marketing", "write"),
+  brandImageUpload.array("images", 8),
+  async (req, res) => {
+    try {
+      const files = Array.isArray(req.files) ? req.files : [];
+      if (!files.length) {
+        return res.status(400).json({ error: "No images uploaded", code: "NO_IMAGES" });
+      }
+      const tenantId = req.travelTenant.id;
+
+      // S3 path
+      if (brochureS3Store.isEnabled()) {
+        const urls = await Promise.all(files.map((f) => brochureS3Store.uploadBrandImage(tenantId, f)));
+        return res.json({ urls, storage: "s3" });
+      }
+
+      // Zero-config fallback: return base64 data URIs so the UI still works without S3.
+      const urls = files.map((f) => `data:${f.mimetype};base64,${f.buffer.toString("base64")}`);
+      return res.json({ urls, storage: "inline" });
+    } catch (e) {
+      console.error("[brand-images] upload error:", e);
+      return res.status(500).json({ error: "Failed to upload brand images", code: "UPLOAD_FAILED" });
+    }
+  },
+);
+
+router.delete(
+  "/brochures/brand-images/file",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("marketing", "write"),
+  async (req, res) => {
+    try {
+      const url = typeof req.body?.url === "string" ? req.body.url : "";
+      if (!url) return res.status(400).json({ error: "url is required", code: "URL_REQUIRED" });
+      const result = await brochureS3Store.deleteBrandImage(req.travelTenant.id, url);
+      return res.json({ ok: true, ...result });
+    } catch (e) {
+      console.error("[brand-images] delete error:", e);
+      return res.status(500).json({ error: "Failed to delete brand image", code: "DELETE_FAILED" });
+    }
+  },
+);
+
+router.get(
+  "/brochures/brand-profiles",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("marketing", "read"),
+  async (req, res) => {
+    try {
+      const rows = await prisma.travelBrandProfile.findMany({
+        where: { tenantId: req.travelTenant.id },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+      });
+      const profiles = rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        createdAt: r.createdAt,
+        brand: safeParseJson(r.payload),
+      }));
+      return res.json({ profiles });
+    } catch (e) {
+      console.error("[brand-profiles] list error:", e);
+      return res.status(500).json({ error: "Failed to load brand profiles" });
+    }
+  },
+);
+
+router.post(
+  "/brochures/brand-profiles",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("marketing", "write"),
+  async (req, res) => {
+    try {
+      const name = typeof req.body.name === "string" ? req.body.name.trim().slice(0, 120) : "";
+      if (!name) {
+        return res.status(400).json({ error: "Profile name is required", code: "NAME_REQUIRED" });
+      }
+      const form = sanitizeProfileForm(req.body.brand);
+      if (!form) {
+        return res.status(400).json({ error: "brand is required", code: "BRAND_REQUIRED" });
+      }
+      const payload = JSON.stringify(form);
+      // Re-saving the same name overwrites (so a profile is a stable named slot).
+      const existing = await prisma.travelBrandProfile.findFirst({
+        where: { tenantId: req.travelTenant.id, name },
+      });
+      if (!existing) {
+        const count = await prisma.travelBrandProfile.count({
+          where: { tenantId: req.travelTenant.id },
+        });
+        if (count >= PROFILE_LIMIT) {
+          return res
+            .status(400)
+            .json({ error: `Profile limit reached (${PROFILE_LIMIT}). Delete one first.`, code: "LIMIT" });
+        }
+      }
+      const row = existing
+        ? await prisma.travelBrandProfile.update({ where: { id: existing.id }, data: { payload } })
+        : await prisma.travelBrandProfile.create({
+            data: { tenantId: req.travelTenant.id, userId: req.user?.userId ?? null, name, payload },
+          });
+
+      // Clean up S3 images that were dropped during the update (name-based overwrite).
+      if (existing && brochureS3Store.isEnabled()) {
+        const oldUrls = collectBrandImageUrls(existing.payload);
+        const newUrls = collectBrandImageUrls(payload);
+        for (const url of oldUrls) {
+          if (!newUrls.has(url)) {
+            await brochureS3Store.deleteBrandImage(req.travelTenant.id, url);
+          }
+        }
+      }
+
+      return res.json({ id: row.id, name: row.name, createdAt: row.createdAt, brand: form });
+    } catch (e) {
+      console.error("[brand-profiles] create error:", e);
+      return res.status(500).json({ error: "Failed to save brand profile" });
+    }
+  },
+);
+
+router.delete(
+  "/brochures/brand-profiles/:id",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("marketing", "write"),
+  async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "Invalid id", code: "INVALID_ID" });
+    }
+    try {
+      const row = await prisma.travelBrandProfile.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!row) {
+        return res.status(404).json({ error: "Profile not found", code: "NOT_FOUND" });
+      }
+      if (brochureS3Store.isEnabled()) {
+        for (const url of collectBrandImageUrls(row.payload)) {
+          await brochureS3Store.deleteBrandImage(req.travelTenant.id, url);
+        }
+      }
+      await prisma.travelBrandProfile.delete({ where: { id } });
+      return res.json({ deleted: true, id });
+    } catch (e) {
+      console.error("[brand-profiles] delete error:", e);
+      return res.status(500).json({ error: "Failed to delete brand profile" });
+    }
+  },
+);
+
 // ─── GET /brochures/:id ───────────────────────────────────────────────────
 router.get(
   "/brochures/:id",
@@ -506,5 +799,6 @@ router.delete(
     }
   },
 );
+
 
 module.exports = router;

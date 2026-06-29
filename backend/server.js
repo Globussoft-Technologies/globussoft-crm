@@ -216,12 +216,12 @@ app.use((req, _res, next) => {
 
 app.use("/api/whatsapp/webhook", require("./routes/whatsapp_webhook"));
 
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "25mb" }));
 // Twilio voice/telephony/SMS webhooks and Mailgun/Razorpay form posts send
 // `application/x-www-form-urlencoded`. Without this parser req.body is empty
 // and every webhook 400s on a missing-field check. Found by the e2e smoke
 // suite — every voice/telephony webhook test failed for the same reason.
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
 // Security middleware
 const cookieParser = require("cookie-parser");

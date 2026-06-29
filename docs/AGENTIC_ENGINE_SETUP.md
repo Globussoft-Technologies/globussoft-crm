@@ -118,6 +118,36 @@ pm2 restart globussoft-crm-backend
 
 ---
 
+## Database schema sync
+
+The brochure engine stores saved brand presets in `TravelBrandProfile` and run history in `TravelBrochure`. Both models live in `backend/prisma/schema.prisma`. This repo does not ship Prisma migration files — it relies on `prisma db push` — so the tables must be synced after cloning or before first use.
+
+```bash
+cd backend
+# 1. Ensure backend/.env exists and DATABASE_URL is set:
+cp .env.example .env
+# edit .env  (SQLite dev default: DATABASE_URL="file:./prisma/globussoft.db")
+
+# 2. Sync the schema:
+npm run db:sync
+# or directly:
+# npx prisma db push --skip-generate
+```
+
+## S3 asset storage (optional but recommended)
+
+Generated PDFs and uploaded brand-kit images are stored in S3 when the following env vars are set in `backend/.env`:
+
+```ini
+AWS_REGION=your-region
+AWS_S3_BUCKET_NAME=your-bucket
+AWS_ACCESS_KEY_ID=your-key
+AWS_SECRET_ACCESS_KEY=your-secret
+AWS_S3_URL=https://your-bucket.s3.your-region.amazonaws.com
+```
+
+If these are omitted, the engine falls back to local disk (`agentic-orchcrm/public/generated/`) for PDFs and base64-inline images for brand kits. The bucket should allow public read for the marketing assets and a CORS rule allowing `GET` from the CRM origin if you want the inline PDF preview to work.
+
 ## Verifying the install
 
 Quick smoke test from the bridge's perspective:

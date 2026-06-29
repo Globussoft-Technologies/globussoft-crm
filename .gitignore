@@ -217,6 +217,7 @@ agentic-orchcrm/public/generated/
 agentic-orchcrm/apps/web/public/generated/
 agentic-orchcrm/**/temp/
 agentic-orchcrm/**/prompt_ref/
+prompt_ref/
 agentic-orchcrm/packages/db/drizzle/
 agentic-orchcrm/**/.model-routing.json
 agentic-orchcrm/brochure-run_*.pdf

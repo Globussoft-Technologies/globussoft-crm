@@ -22,7 +22,9 @@
  * is responsible for translating to HTTP status codes.
  */
 const path = require("path");
+const fs = require("fs");
 const { spawn } = require("child_process");
+const brochureS3Store = require("../lib/brochureS3Store");
 
 // Resolve once at module load — the engine workspace must sit at the repo
 // root as a sibling of backend/. INTEGRATION.md vendored as a clone (not
@@ -59,6 +61,7 @@ const GENERATED_DIR = process.env.GENERATED_DIR
  * @param {object} args
  * @param {string} args.runId         Run id (caller-supplied so the route can
  *                                    return it before the subprocess starts).
+ * @param {number} args.tenantId      Tenant owning this brochure (for S3 key prefix).
  * @param {string} args.sectorKey     "travel" | "report-writing" | ...
  * @param {string} args.goal          The brief.
  * @param {string} [args.styleKey]    Optional template key.
@@ -70,7 +73,12 @@ const GENERATED_DIR = process.env.GENERATED_DIR
  * @param {(e: object) => void} [args.onEvent]  Called for each engine event.
  * @returns {Promise<{ runId: string, result: unknown, billedUsd: number, pdfUrl: string | null }>}
  */
-function startRun({ runId, sectorKey, goal, styleKey, brand, models, strategy, onEvent }) {
+// Live engine subprocesses keyed by runId, so an operator who hit Generate by
+// mistake can cancel a run (see cancelRun + the route's /cancel endpoint). Cleared
+// on the child's "close" so the map never leaks PIDs.
+const RUNNING_CHILDREN = new Map();
+
+function startRun({ runId, tenantId, sectorKey, goal, styleKey, brand, models, strategy, onEvent }) {
   return new Promise((resolve, reject) => {
     const brief = JSON.stringify({ runId, sectorKey, goal, styleKey, brand, models, strategy });
     const child = spawn(process.execPath, [TSX_CLI, BRIDGE_SCRIPT], {
@@ -79,6 +87,7 @@ function startRun({ runId, sectorKey, goal, styleKey, brand, models, strategy, o
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
+    if (runId) RUNNING_CHILDREN.set(runId, child);
 
     let stdoutBuf = "";
     let stderrBuf = "";
@@ -111,7 +120,13 @@ function startRun({ runId, sectorKey, goal, styleKey, brand, models, strategy, o
       reject(new Error(`Engine subprocess failed to start: ${err.message}`));
     });
 
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
+      if (runId) RUNNING_CHILDREN.delete(runId);
+      // Operator cancelled the run (Stop button) — the child was killed, so there's
+      // no JSON result to parse. Surface a clean, detectable CANCELLED rejection.
+      if (child.__cancelled) {
+        return reject(new Error("RUN_CANCELLED"));
+      }
       // Flush any trailing stderr bytes that didn't end with \n.
       if (stderrBuf.trim() && typeof onEvent === "function") {
         try {
@@ -156,6 +171,42 @@ function startRun({ runId, sectorKey, goal, styleKey, brand, models, strategy, o
       } else if (result && typeof result.url === "string" && result.url.startsWith("/generated/")) {
         // Fallback if a future engine version returns the structured shape.
         pdfUrl = "/api/brochure-assets/" + result.url.slice("/generated/".length);
+      }
+
+      // If S3 is configured, promote the local file to S3 and remove the staging
+      // copy so the server disk doesn't fill up. Failures are logged but never
+      // break the run — the local URL remains valid.
+      if (brochureS3Store.isEnabled() && pdfUrl) {
+        try {
+          const fileName = pdfUrl.replace("/api/brochure-assets/", "");
+          const pdfPath = path.join(GENERATED_DIR, fileName);
+          const htmlPath = pdfPath.replace(/\.pdf$/i, ".html");
+          const pdfBuffer = await fs.promises.readFile(pdfPath);
+          const htmlExists = await fs.promises
+            .access(htmlPath)
+            .then(() => true)
+            .catch(() => false);
+          const [s3PdfUrl] = await Promise.all([
+            brochureS3Store.uploadBrochurePdf(tenantId, runId, pdfBuffer),
+            htmlExists
+              ? brochureS3Store.uploadBrochureHtml(
+                  tenantId,
+                  runId,
+                  await fs.promises.readFile(htmlPath),
+                )
+              : Promise.resolve(null),
+          ]);
+          pdfUrl = s3PdfUrl;
+          await fs.promises.unlink(pdfPath).catch(() => {});
+          if (htmlExists) await fs.promises.unlink(htmlPath).catch(() => {});
+        } catch (s3Err) {
+          console.error(
+            "[brochureEngineBridge] S3 upload failed for run",
+            runId,
+            "— keeping local PDF:",
+            s3Err.message,
+          );
+        }
       }
 
       resolve({
@@ -217,6 +268,7 @@ function listModels() {
         tiers: Array.isArray(parsed.tiers) ? parsed.tiers : [],
         strategies: Array.isArray(parsed.strategies) ? parsed.strategies : [],
         defaults: parsed.defaults || {},
+        markup: Number(parsed.markup) > 0 ? Number(parsed.markup) : 1.5, // billing markup → estimate
         models: Array.isArray(parsed.models) ? parsed.models : [],
       });
     });
@@ -266,8 +318,35 @@ function listSectors() {
   ]);
 }
 
+/**
+ * Cancel an in-flight run by killing its engine subprocess. Returns true if a live
+ * child was found and signalled, false otherwise (already finished / unknown runId).
+ * The killed child's "close" handler rejects startRun's promise with RUN_CANCELLED.
+ */
+function cancelRun(runId) {
+  const child = RUNNING_CHILDREN.get(runId);
+  if (!child) return false;
+  child.__cancelled = true;
+  try {
+    child.kill("SIGTERM");
+    // Hard-stop after a grace period if the process ignores SIGTERM (tsx + Chromium
+    // can hold on). unref so this timer never keeps the backend alive.
+    setTimeout(() => {
+      try {
+        if (!child.killed) child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }, 2000).unref?.();
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 module.exports = {
   startRun,
+  cancelRun,
   listModels,
   listSectors,
   ENGINE_ROOT,

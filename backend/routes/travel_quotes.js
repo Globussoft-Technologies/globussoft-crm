@@ -2915,7 +2915,7 @@ router.post(
           const totalDue = Number(created.totalAmount || 0);
           const invoiceStatus = totalDue > 0 && totalPaid >= totalDue ? "Paid" : "Partial";
           if (invoiceStatus !== created.status) {
-            created = await prisma.travelInvoice.update({
+            await prisma.travelInvoice.update({
               where: { id: created.id },
               data: {
                 status: invoiceStatus,

@@ -25,7 +25,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
-import { ShieldCheck, CheckCircle2, AlertCircle, Loader2, Plane, Mail, Phone } from "lucide-react";
+import { ShieldCheck, CheckCircle2, AlertCircle, Loader2, Plane, Mail, Phone, UserCheck } from "lucide-react";
 import { DestinationBanner } from "../../components/DestinationVisuals";
 
 const KYC_MICROSITE_UUID_KEY = "kycMicrositeUuid";
@@ -65,7 +65,16 @@ async function publicFetch(path, { method = "GET", body } = {}) {
 
 export default function PublicTripMicrosite() {
   const { publicUuid } = useParams();
-  const justVerified = new URLSearchParams(window.location.search).get("verified") === "1";
+  const queryParams = new URLSearchParams(window.location.search);
+  const justVerified = queryParams.get("verified") === "1";
+  // Phase 7 — hybrid registration confirmation. When the user is
+  // redirected here from a landing-page registration submission, the
+  // URL carries an opaque draftToken (no PII). We surface a
+  // RegistrationConfirmPanel above the existing content that walks
+  // the user through phone OTP verification and binds the verified
+  // OTP to the draft. After verification, the draft sits in the CRM's
+  // Participants queue waiting for operator approval.
+  const draftToken = queryParams.get("draftToken");
 
   const [info, setInfo] = useState(null);
   const [participants, setParticipants] = useState([]);
@@ -186,11 +195,33 @@ export default function PublicTripMicrosite() {
           </section>
         )}
 
-        {info?.itineraryHtml && (
+        {/* Phase 7 — hybrid registration confirmation panel. Only
+            rendered when the user landed here via the landing-page
+            wizard (URL carries ?draftToken=...). The panel is
+            self-contained — it manages its own OTP request/verify
+            state and reports its terminal state via the headline. */}
+        {draftToken && (
           <section style={S.section}>
+            <RegistrationConfirmPanel
+              publicUuid={publicUuid}
+              draftToken={draftToken}
+              accentBg={palette.headerBg}
+            />
+          </section>
+        )}
+
+        {info?.itineraryHtml && info.itineraryHtml.trim() && (
+          <section style={S.section} data-testid="microsite-itinerary">
+            <h2 style={S.h2}>Itinerary</h2>
             {/* itineraryHtml is sanitised server-side (sanitizeBody strips
-                dangerous tags) before it is ever stored. */}
-            <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(info.itineraryHtml) }} />
+                dangerous tags) before it is ever stored. Force a visible
+                text colour so the content shows correctly even if a parent
+                browser has dark-mode prefs that would otherwise apply
+                white-on-white to the .section's white background. */}
+            <div
+              style={{ color: "#1e293b", lineHeight: 1.6, fontSize: 14 }}
+              dangerouslySetInnerHTML={{ __html: sanitizeHtml(info.itineraryHtml) }}
+            />
           </section>
         )}
 
@@ -297,6 +328,282 @@ function fmtDate(d) {
   try { return new Date(d).toLocaleDateString(); } catch { return "—"; }
 }
 
+// ─── Phase 7 — RegistrationConfirmPanel ──────────────────────────────
+//
+// Lightweight 3-state OTP confirmation surfaced above the rest of the
+// microsite when the URL carries ?draftToken=... The user (a parent
+// who just submitted the multi-step wizard on the landing page)
+// enters the phone number they used in the wizard, receives an OTP
+// via the existing /request-otp endpoint, and the existing /verify-otp
+// endpoint atomically marks the PendingTripRegistration as
+// OTP_VERIFIED (Phase 4). After success, the panel shows a brief
+// "awaiting review" message — operator decisioning happens in the
+// CRM Participants tab (Phase 5).
+//
+// Errors map to the explicit codes returned by the backend per
+// decision #9 — DRAFT_NOT_FOUND / DRAFT_WRONG_TRIP / DRAFT_EXPIRED /
+// OTP_INVALID — so the visitor sees a deterministic next-action
+// instead of a generic "something went wrong".
+export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
+  const [step, setStep] = useState("idle"); // idle | sending | otp_sent | verifying | verified | error
+  const [phone, setPhone] = useState("");
+  const [code, setCode] = useState("");
+  const [error, setError] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [summaryError, setSummaryError] = useState(null);
+
+  // Phase 7+ — on mount, fetch the non-PII draft summary so we can
+  // greet the visitor by first name and show them the (masked)
+  // contact details we'll OTP. If the token is bogus / expired / for
+  // a different trip the panel surfaces a terminal error before any
+  // OTP is requested.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const data = await publicFetch(`/${publicUuid}/draft-summary?token=${encodeURIComponent(draftToken)}`);
+        if (!alive) return;
+        setSummary(data);
+        // If the draft is already verified, jump straight to the
+        // "submitted for review" terminal state on revisit.
+        if (data.otpVerified) {
+          setStep("verified");
+        }
+      } catch (err) {
+        if (!alive) return;
+        const copy = draftErrorCopy(err.code);
+        const terminal = err.code === "DRAFT_NOT_FOUND"
+          || err.code === "DRAFT_WRONG_TRIP"
+          || err.code === "DRAFT_EXPIRED";
+        setSummaryError({ code: err.code, text: copy || err.message, terminal });
+        if (terminal) setStep("error");
+      }
+    })();
+    return () => { alive = false; };
+  }, [publicUuid, draftToken]);
+
+  const draftErrorCopy = (codeStr) => {
+    switch (codeStr) {
+      case "DRAFT_NOT_FOUND":
+        return "We could not find your registration. Please re-submit the form on the landing page.";
+      case "DRAFT_WRONG_TRIP":
+        return "This confirmation link is for a different trip. Please use the link from your registration email or the landing page.";
+      case "DRAFT_EXPIRED":
+        return "Your confirmation link has expired. Please re-submit the registration form on the landing page.";
+      case "OTP_INVALID":
+        return "That code doesn't match. Please request a fresh code and try again.";
+      case "OTP_COOLDOWN":
+        return "Please wait a minute before requesting another code.";
+      default:
+        return null;
+    }
+  };
+
+  // Phase 7+ — request-otp now derives the phone from the draft when
+  // a draftToken is supplied, so the visitor doesn't have to retype
+  // what they already entered on the landing page.
+  const requestOtp = async (e) => {
+    e?.preventDefault?.();
+    setError(null);
+    setStep("sending");
+    try {
+      await publicFetch(`/${publicUuid}/request-otp`, {
+        method: "POST",
+        body: { purpose: "registration", draftToken },
+      });
+      setStep("otp_sent");
+    } catch (err) {
+      const copy = draftErrorCopy(err.code);
+      const terminal = err.code === "DRAFT_NOT_FOUND"
+        || err.code === "DRAFT_WRONG_TRIP"
+        || err.code === "DRAFT_EXPIRED";
+      setError({ code: err.code, text: copy || err.message, terminal });
+      setStep(terminal ? "error" : "idle");
+    }
+  };
+
+  const verifyOtp = async (e) => {
+    e?.preventDefault?.();
+    if (!code.trim()) {
+      setError({ text: "Please enter the code we sent you." });
+      return;
+    }
+    setError(null);
+    setStep("verifying");
+    try {
+      const resp = await publicFetch(`/${publicUuid}/verify-otp`, {
+        method: "POST",
+        body: {
+          purpose: "registration",
+          code: code.trim(),
+          draftToken,
+        },
+      });
+      if (resp.verified) {
+        setStep("verified");
+      } else {
+        setError({ text: "Verification could not be completed. Please try again." });
+        setStep("error");
+      }
+    } catch (err) {
+      const copy = draftErrorCopy(err.code);
+      const terminal = err.code === "DRAFT_NOT_FOUND"
+        || err.code === "DRAFT_WRONG_TRIP"
+        || err.code === "DRAFT_EXPIRED";
+      setError({ code: err.code, text: copy || err.message, terminal });
+      setStep(terminal ? "error" : "otp_sent");
+    }
+  };
+
+  const buttonBg = accentBg || "#122647";
+  const buttonStyle = {
+    padding: "10px 16px", border: "none", borderRadius: 8,
+    background: buttonBg, color: "#fff", fontWeight: 600,
+    cursor: "pointer", fontSize: 14,
+  };
+  const inputStyle = {
+    width: "100%", padding: "10px 12px", border: "1px solid #cbd5e1",
+    borderRadius: 8, fontSize: 14, boxSizing: "border-box",
+  };
+
+  const greeting = summary?.parentFirstName ? `Hi ${summary.parentFirstName},` : "Hello,";
+  const terminalErr = (step === "error" && error?.terminal) || summaryError?.terminal;
+  const terminalCopy = error?.text || summaryError?.text;
+
+  return (
+    <div data-testid="registration-confirm-panel">
+      <h2 style={S.h2}><UserCheck size={18} aria-hidden /> Confirm your registration</h2>
+
+      {step === "verified" ? (
+        <div data-testid="registration-confirmed">
+          <div style={{ ...S.okBanner, padding: "14px 16px", fontSize: 14, marginBottom: 12 }}>
+            <CheckCircle2 size={18} aria-hidden />
+            <span>
+              Phone verified — your registration is being reviewed. We&apos;ll be in touch shortly.
+            </span>
+          </div>
+          {summary && (
+            <div style={S.summaryCard}>
+              <div style={S.summaryTitle}>What we received</div>
+              <div style={S.summaryRow}>
+                <span style={S.summaryLabel}>Student</span>
+                <span>{summary.studentFirstName}</span>
+              </div>
+              <div style={S.summaryRow}>
+                <span style={S.summaryLabel}>Parent</span>
+                <span>{summary.parentFirstName}</span>
+              </div>
+              <div style={S.summaryRow}>
+                <span style={S.summaryLabel}>Phone</span>
+                <span>{summary.parentPhoneMasked}</span>
+              </div>
+              {summary.parentEmailMasked && (
+                <div style={S.summaryRow}>
+                  <span style={S.summaryLabel}>Email</span>
+                  <span>{summary.parentEmailMasked}</span>
+                </div>
+              )}
+              <div style={S.summaryRow}>
+                <span style={S.summaryLabel}>Passport</span>
+                <span>{summary.hasPassport ? "Provided" : "Not provided"}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : terminalErr ? (
+        <div style={{ ...S.msg, color: "#dc2626", padding: "10px 0" }} data-testid="registration-error">
+          <AlertCircle size={16} aria-hidden /> <span>{terminalCopy}</span>
+        </div>
+      ) : !summary ? (
+        <div style={{ color: "#475569", fontSize: 14 }}>Loading your registration…</div>
+      ) : (
+        <>
+          <p style={S.help}>
+            {greeting} we&apos;ve received your registration for this trip. To finish, verify the
+            phone number you provided — we&apos;ll send a one-time code.
+          </p>
+
+          <div style={S.summaryCard}>
+            <div style={S.summaryRow}>
+              <span style={S.summaryLabel}>Student</span>
+              <span>{summary.studentFirstName}</span>
+            </div>
+            <div style={S.summaryRow}>
+              <span style={S.summaryLabel}>Parent</span>
+              <span>{summary.parentFirstName}</span>
+            </div>
+            <div style={S.summaryRow}>
+              <span style={S.summaryLabel}>We&apos;ll send a code to</span>
+              <span style={{ fontWeight: 600 }}>{summary.parentPhoneMasked}</span>
+            </div>
+          </div>
+
+          {(step === "idle" || step === "sending" || (step === "error" && !error?.terminal)) && (
+            <button
+              type="button"
+              onClick={requestOtp}
+              disabled={step === "sending"}
+              style={{ ...buttonStyle, marginTop: 14 }}
+              data-testid="registration-request-otp-btn"
+            >
+              {step === "sending" ? "Sending code…" : "Send verification code"}
+            </button>
+          )}
+
+          {(step === "otp_sent" || step === "verifying") && (
+            <form onSubmit={verifyOtp} data-testid="registration-otp-verify-form" style={{ marginTop: 16 }}>
+              <p style={{ fontSize: 13, color: "#475569", margin: "10px 0" }}>
+                We sent a 4-digit code to <strong>{summary.parentPhoneMasked}</strong>. Enter it below.
+              </p>
+              <label htmlFor="reg-code" style={{ display: "block", fontSize: 13, color: "#475569", marginBottom: 6 }}>
+                Verification code
+              </label>
+              <input
+                id="reg-code"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={6}
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/[^0-9]/g, ""))}
+                style={inputStyle}
+                autoComplete="one-time-code"
+                data-testid="registration-code-input"
+                autoFocus
+              />
+              <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+                <button
+                  type="submit"
+                  disabled={step === "verifying"}
+                  style={buttonStyle}
+                  data-testid="registration-verify-otp-btn"
+                >
+                  {step === "verifying" ? "Verifying…" : "Verify and confirm"}
+                </button>
+                <button
+                  type="button"
+                  onClick={requestOtp}
+                  disabled={step === "verifying"}
+                  style={{ ...buttonStyle, background: "transparent", color: buttonBg, border: `1px solid ${buttonBg}` }}
+                  data-testid="registration-resend-otp-btn"
+                >
+                  Resend code
+                </button>
+              </div>
+            </form>
+          )}
+
+          {error && !error?.terminal && (
+            <div style={{ ...S.msg, color: "#dc2626" }} data-testid="registration-otp-error">
+              <AlertCircle size={16} aria-hidden /> <span>{error.text}</span>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 const S = {
   wrap: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#f1f5f9" },
   card: { background: "#fff", borderRadius: 16, padding: "36px 32px", maxWidth: 420, textAlign: "center", boxShadow: "0 10px 30px rgba(0,0,0,0.08)" },
@@ -329,5 +636,33 @@ const S = {
     padding: 24,
     margin: "20px 16px",
     boxShadow: "0 4px 14px rgba(0,0,0,0.05)",
+  },
+  summaryCard: {
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    borderRadius: 10,
+    padding: "14px 16px",
+    marginTop: 12,
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  summaryTitle: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: "#475569",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 6,
+  },
+  summaryRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    fontSize: 13,
+    color: "#1e293b",
+    gap: 12,
+  },
+  summaryLabel: {
+    color: "#64748b",
   },
 };

@@ -1,29 +1,24 @@
 // TripsResolver — the dynamic /trips entry point.
 //
 // Why: marketing sites (Travel Stall, RFU, etc.) link "Discover Trips"
-// to /trips and never to a specific /p/<slug>. This component asks the
-// backend which landing page is currently flagged as "featured" and
-// navigates the browser to it. Admin can re-feature a different page
-// at any time and /trips will follow without any marketing-site code
-// change.
+// to /trips and never to a specific /p/<slug>. The backend now serves
+// /trips as the server-rendered HTML of the currently featured published
+// landing page. This component only runs for client-side navigations
+// inside the SPA; it forces a full-page load to /trips so the backend
+// renderer is used instead of React Router. If no page is featured, it
+// falls back to the hardcoded TripsLanding.jsx.
 //
 // Resolution flow:
 //   1. GET /api/landing-pages/public/featured (no auth — wired into
 //      server.js openPaths). Returns { slug, … } or 404 NO_FEATURED_PAGE.
-//   2. On 200 → <Navigate replace to={`/p/${slug}`} />. The
-//      backend's existing /p/:slug renderer takes over.
-//   3. On 404 → fall back to the hardcoded TripsLanding.jsx so the
-//      old Japan-only experience keeps working until an operator
-//      Features a landing page. This fallback is the safety net that
-//      lets us ship the featured concept without breaking /trips for
-//      tenants that haven't featured a page yet.
-//   4. On network/5xx → same fallback; we never break /trips.
+//   2. On 200 → force `window.location.replace('/trips')`. The backend's
+//      /trips route renders the featured page and keeps the URL as /trips.
+//   3. On 404 / network/5xx → fall back to TripsLanding.jsx.
 //
 // The resolver is intentionally lightweight: no AuthContext, no global
 // state, no router-context guards. /trips is a public marketing surface,
 // so we keep its dependency surface minimal.
 import { useEffect, useState, lazy, Suspense } from "react";
-import { Navigate } from "react-router-dom";
 
 // Hardcoded Japan fallback. Lazy-imported so the small fast-path
 // (featured page is set → immediate redirect) doesn't pull the whole
@@ -75,7 +70,10 @@ export default function TripsResolver() {
   }
 
   if (state === STATES.REDIRECT && slug) {
-    return <Navigate to={`/p/${slug}`} replace />;
+    // Full-page load so the backend's /trips route serves the rendered
+    // landing page HTML. Returning null prevents any React render flash.
+    window.location.replace("/trips");
+    return null;
   }
 
   // Fallback path — render the hardcoded Japan landing page. Once UAT

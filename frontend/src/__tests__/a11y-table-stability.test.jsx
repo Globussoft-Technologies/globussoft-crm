@@ -29,16 +29,16 @@
  *     mocking AuthContext + fetchApi + 5+ data shapes per page. A source
  *     grep is a strict superset assertion at zero setup cost.
  */
-import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SRC_ROOT = path.resolve(__dirname, '..');
+const SRC_ROOT = path.resolve(__dirname, "..");
 
 function readSrc(...rel) {
-  return readFileSync(path.join(SRC_ROOT, ...rel), 'utf8');
+  return readFileSync(path.join(SRC_ROOT, ...rel), "utf8");
 }
 
 // ── #632 — aria-label on icon-only buttons ──────────────────────────────────
@@ -48,53 +48,125 @@ function readSrc(...rel) {
 // announcement.
 const ICON_BUTTON_SITES = [
   // Contacts — row delete + 2 modal close-X
-  { file: ['pages', 'Contacts.jsx'], substr: 'aria-label={`Delete contact ${contact.name' },
-  { file: ['pages', 'Contacts.jsx'], substr: 'aria-label="Close import dialog"' },
-  { file: ['pages', 'Contacts.jsx'], substr: 'aria-label="Close duplicates dialog"' },
+  {
+    file: ["pages", "Contacts.jsx"],
+    substr: "aria-label={`Delete contact ${contact.name",
+  },
+  {
+    file: ["pages", "Contacts.jsx"],
+    substr: 'aria-label="Close import dialog"',
+  },
+  {
+    file: ["pages", "Contacts.jsx"],
+    substr: 'aria-label="Close duplicates dialog"',
+  },
   // Pipeline — kanban card icons + modal close
-  { file: ['pages', 'Pipeline.jsx'], substr: 'aria-label={`Generate deal score for' },
-  { file: ['pages', 'Pipeline.jsx'], substr: 'aria-label={`Delete deal ${deal.title}`}' },
-  { file: ['pages', 'Pipeline.jsx'], substr: 'aria-label="Close deal score dialog"' },
+  {
+    file: ["pages", "Pipeline.jsx"],
+    substr: "aria-label={`Generate deal score for",
+  },
+  {
+    file: ["pages", "Pipeline.jsx"],
+    substr: "aria-label={`Delete deal ${deal.title}`}",
+  },
+  {
+    file: ["pages", "Pipeline.jsx"],
+    substr: 'aria-label="Close deal score dialog"',
+  },
   // Invoices — payment modal X
-  { file: ['pages', 'Invoices.jsx'], substr: 'aria-label="Close payment dialog"' },
+  {
+    file: ["pages", "Invoices.jsx"],
+    substr: 'aria-label="Close payment dialog"',
+  },
   // AbTests — both modal close-X
-  { file: ['pages', 'AbTests.jsx'], substr: 'aria-label="Close create A/B test dialog"' },
-  { file: ['pages', 'AbTests.jsx'], substr: 'aria-label="Close A/B test details"' },
+  {
+    file: ["pages", "AbTests.jsx"],
+    substr: 'aria-label="Close create A/B test dialog"',
+  },
+  {
+    file: ["pages", "AbTests.jsx"],
+    substr: 'aria-label="Close A/B test details"',
+  },
   // Currencies — add-currency modal X
-  { file: ['pages', 'Currencies.jsx'], substr: 'aria-label="Close add currency dialog"' },
+  {
+    file: ["pages", "Currencies.jsx"],
+    substr: 'aria-label="Close add currency dialog"',
+  },
   // Territories — territory modal X
-  { file: ['pages', 'Territories.jsx'], substr: 'aria-label="Close territory dialog"' },
+  {
+    file: ["pages", "Territories.jsx"],
+    substr: 'aria-label="Close territory dialog"',
+  },
   // LeadRouting — routing rule modal X
-  { file: ['pages', 'LeadRouting.jsx'], substr: 'aria-label="Close routing rule dialog"' },
+  {
+    file: ["pages", "LeadRouting.jsx"],
+    substr: 'aria-label="Close routing rule dialog"',
+  },
   // Chatbots — node-reorder controls (move up/down/remove)
-  { file: ['pages', 'Chatbots.jsx'], substr: 'aria-label={`Move node ${idx + 1} up`}' },
-  { file: ['pages', 'Chatbots.jsx'], substr: 'aria-label={`Move node ${idx + 1} down`}' },
-  { file: ['pages', 'Chatbots.jsx'], substr: 'aria-label={`Remove node ${idx + 1}`}' },
+  {
+    file: ["pages", "Chatbots.jsx"],
+    substr: "aria-label={`Move node ${idx + 1} up`}",
+  },
+  {
+    file: ["pages", "Chatbots.jsx"],
+    substr: "aria-label={`Move node ${idx + 1} down`}",
+  },
+  {
+    file: ["pages", "Chatbots.jsx"],
+    substr: "aria-label={`Remove node ${idx + 1}`}",
+  },
   // CustomReports — filter remove + save modal close
-  { file: ['pages', 'CustomReports.jsx'], substr: 'aria-label={`Remove filter ${i + 1}`}' },
-  { file: ['pages', 'CustomReports.jsx'], substr: 'aria-label="Close save report dialog"' },
+  {
+    file: ["pages", "CustomReports.jsx"],
+    substr: "aria-label={`Remove filter ${i + 1}`}",
+  },
+  {
+    file: ["pages", "CustomReports.jsx"],
+    substr: 'aria-label="Close save report dialog"',
+  },
   // Dashboards — widget-remove + generic modal close
-  { file: ['pages', 'Dashboards.jsx'], substr: 'aria-label="Remove widget"' },
-  { file: ['pages', 'Dashboards.jsx'], substr: 'aria-label={`Close ${title} dialog`}' },
+  { file: ["pages", "Dashboards.jsx"], substr: 'aria-label="Remove widget"' },
+  {
+    file: ["pages", "Dashboards.jsx"],
+    substr: "aria-label={`Close ${title} dialog`}",
+  },
   // wellness/Services — service edit + deactivate. The 815a8783 refactor split
   // Services.jsx into services/*.jsx subcomponents; the per-row edit/deactivate
   // buttons (and their aria-labels) now live in services/ServiceCard.jsx.
-  { file: ['pages', 'wellness', 'services', 'ServiceCard.jsx'], substr: 'aria-label={`Edit service ${service.name}`}' },
-  { file: ['pages', 'wellness', 'services', 'ServiceCard.jsx'], substr: 'aria-label={`Deactivate service ${service.name}`}' },
+  {
+    file: ["pages", "wellness", "services", "ServiceCard.jsx"],
+    substr: "aria-label={`Edit service ${service.name}`}",
+  },
+  {
+    file: ["pages", "wellness", "services", "ServiceCard.jsx"],
+    substr: "aria-label={`Deactivate service ${service.name}`}",
+  },
   // #632 follow-up — Surveys + Loyalty (skipped from original sweep due to
   // peer-agent file contention; closed by the wave1-a-aria-632 dispatch).
   // Surveys — send-survey modal X, list-card delete X (per-survey context),
   // create-survey modal X.
-  { file: ['pages', 'Surveys.jsx'], substr: 'aria-label="Close send survey dialog"' },
-  { file: ['pages', 'Surveys.jsx'], substr: 'aria-label={`Delete survey ${s.name}`}' },
-  { file: ['pages', 'Surveys.jsx'], substr: 'aria-label="Close create survey dialog"' },
+  {
+    file: ["pages", "Surveys.jsx"],
+    substr: 'aria-label="Close send survey dialog"',
+  },
+  {
+    file: ["pages", "Surveys.jsx"],
+    substr: "aria-label={`Delete survey ${s.name}`}",
+  },
+  {
+    file: ["pages", "Surveys.jsx"],
+    substr: 'aria-label="Close create survey dialog"',
+  },
   // wellness/Loyalty — patient-search submit (icon-only Search button).
-  { file: ['pages', 'wellness', 'Loyalty.jsx'], substr: 'aria-label="Search patients"' },
+  {
+    file: ["pages", "wellness", "Loyalty.jsx"],
+    substr: 'aria-label="Search patients"',
+  },
 ];
 
-describe('#632 — icon-only buttons have aria-label', () => {
+describe("#632 — icon-only buttons have aria-label", () => {
   for (const { file, substr } of ICON_BUTTON_SITES) {
-    it(`${file.join('/')} — ${substr.slice(0, 60)}…`, () => {
+    it(`${file.join("/")} — ${substr.slice(0, 60)}…`, () => {
       const src = readSrc(...file);
       expect(src).toContain(substr);
     });
@@ -108,21 +180,23 @@ describe('#632 — icon-only buttons have aria-label', () => {
     for (const { file } of ICON_BUTTON_SITES) {
       const src = readSrc(...file);
       // Match aria-label="" or aria-label={''} or aria-label={``}
-      expect(src).not.toMatch(/aria-label=(?:""|'\s*'|\{\s*['"`]\s*['"`]\s*\})/);
+      expect(src).not.toMatch(
+        /aria-label=(?:""|'\s*'|\{\s*['"`]\s*['"`]\s*\})/,
+      );
     }
   });
 });
 
 // ── #633 — table-layout fixed + hover-stability CSS rule ────────────────────
-describe('#633 — .stable-table CSS contract', () => {
-  const css = readSrc('index.css');
+describe("#633 — .stable-table CSS contract", () => {
+  const css = readSrc("index.css");
 
-  it('declares the .stable-table utility with table-layout: fixed', () => {
+  it("declares the .stable-table utility with table-layout: fixed", () => {
     // Use a regex that tolerates whitespace + any property order.
     expect(css).toMatch(/table\.stable-table\s*\{[^}]*table-layout:\s*fixed/);
   });
 
-  it('hover state changes background-color but NOT padding/border-width/font-weight', () => {
+  it("hover state changes background-color but NOT padding/border-width/font-weight", () => {
     // Extract every rule whose selector contains `.stable-table` AND `:hover`,
     // then assert each rule body uses only safe properties (background,
     // background-color, color, box-shadow, transition) — never the
@@ -146,20 +220,20 @@ describe('#633 — .stable-table CSS contract', () => {
     for (const [, selector, body] of rules) {
       // Strip CSS comments so the "padding / border-width" mention in the
       // hover-rule's explanatory comment doesn't trip the regex.
-      const noComments = body.replace(/\/\*[\s\S]*?\*\//g, '');
+      const noComments = body.replace(/\/\*[\s\S]*?\*\//g, "");
       for (const forbidden of FORBIDDEN_HOVER_DECLS) {
         for (const m of noComments.matchAll(forbidden)) {
           const value = m[1].trim();
           expect(
             value,
-            `selector "${selector.trim()}" sets ${m[0].split(':')[0].trim()} to "${value}" — must be omitted or "inherit" (reflow-causing on hover)`,
-          ).toBe('inherit');
+            `selector "${selector.trim()}" sets ${m[0].split(":")[0].trim()} to "${value}" — must be omitted or "inherit" (reflow-causing on hover)`,
+          ).toBe("inherit");
         }
       }
     }
   });
 
-  it('hover transition list excludes width/padding (transition only background/color/shadow)', () => {
+  it("hover transition list excludes width/padding (transition only background/color/shadow)", () => {
     // The transition declaration on .stable-table tbody tr must enumerate
     // properties that don't reflow. A future edit to "transition: all" would
     // re-introduce smooth-but-reflowing animation on hover; pin it out.
@@ -176,19 +250,37 @@ describe('#633 — .stable-table CSS contract', () => {
   });
 });
 
-describe('#633 — canonical tables adopt .stable-table className', () => {
+describe("#633 — canonical tables adopt .stable-table className", () => {
   // Pin the class onto a representative subset of canonical list pages so
   // a future "tableLayout: auto" regression on any of them is caught.
   const TABLES = [
-    { file: ['pages', 'Contacts.jsx'], substr: '<table className="stable-table"' },
-    { file: ['pages', 'Tickets.jsx'], substr: '<table className="stable-table"' },
-    { file: ['pages', 'Invoices.jsx'], substr: '<table className="stable-table"' },
-    { file: ['pages', 'Currencies.jsx'], substr: '<table className="stable-table"' },
-    { file: ['pages', 'Territories.jsx'], substr: '<table className="stable-table"' },
-    { file: ['pages', 'wellness', 'Patients.jsx'], substr: 'className="stable-table"' },
+    {
+      file: ["pages", "Contacts.jsx"],
+      substr: '<table className="stable-table"',
+    },
+    {
+      file: ["pages", "Tickets.jsx"],
+      substr: '<table className="stable-table"',
+    },
+    {
+      file: ["pages", "Invoices.jsx"],
+      substr: '<table className="stable-table"',
+    },
+    {
+      file: ["pages", "Currencies.jsx"],
+      substr: '<table className="stable-table"',
+    },
+    {
+      file: ["pages", "Territories.jsx"],
+      substr: '<table className="stable-table"',
+    },
+    {
+      file: ["pages", "wellness", "Patients.jsx"],
+      substr: 'className="stable-table"',
+    },
   ];
   for (const { file, substr } of TABLES) {
-    it(`${file.join('/')} adopts stable-table`, () => {
+    it(`${file.join("/")} adopts stable-table`, () => {
       const src = readSrc(...file);
       expect(src).toContain(substr);
     });

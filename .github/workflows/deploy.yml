@@ -439,6 +439,7 @@ jobs:
             tests/landing-pages-api.spec.js \
             tests/landing-pages-travel-api.spec.js \
             tests/landing-pages-registration-form-api.spec.js \
+            tests/landing-page-pending-registration-api.spec.js \
             tests/landing-pages-versions-api.spec.js \
             tests/wanderlux-layout-api.spec.js \
             tests/portal-api.spec.js \
@@ -839,6 +840,15 @@ jobs:
               node prisma/seed-travel.js 2>&1 | tail -20
             fi
 
+            # One-shot RBAC permission backfill. Ensures canonical roles on
+            # existing tenants pick up new preset grants (e.g. the wellness
+            # appointments.assign permission added for the practitioner-
+            # assignment guard). Idempotent/additive only — operator edits are
+            # preserved. Runs automatically on every deploy so DevOps does not
+            # need a separate manual step.
+            echo "=== backfill role-preset permissions ==="
+            node scripts/backfill-role-preset-perms.js --apply 2>&1 | tail -20
+
             echo "=== pm2 restart ==="
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
 
@@ -1007,6 +1017,10 @@ jobs:
               echo "=== seed-travel (always) ==="
               node prisma/seed-travel.js 2>&1 | tail -20
             fi
+
+            # One-shot RBAC permission backfill — see production deploy step.
+            echo "=== backfill role-preset permissions ==="
+            node scripts/backfill-role-preset-perms.js --apply 2>&1 | tail -20
 
             echo "=== pm2 restart ==="
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3

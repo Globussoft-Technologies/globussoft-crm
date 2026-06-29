@@ -18,6 +18,7 @@ export default function CalendarDayGrid({
   grid,
   focusId,
   focusedRef,
+  canAssignDoctor,
   onEmptyCellClick,
   onAssignClick,
 }) {
@@ -160,7 +161,7 @@ export default function CalendarDayGrid({
                           </div>
                         );
                       })()}
-                      {isPending && (
+                      {isPending && canAssignDoctor && (
                         <div style={{ marginTop: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                           <span
                             data-testid={`pending-badge-${v.id}`}

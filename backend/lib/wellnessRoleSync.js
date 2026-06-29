@@ -22,6 +22,7 @@
  */
 
 const prisma = require("./prisma");
+const { seedDefaultsForTenant } = require("./wellnessRoleTypes");
 
 // Pick a single catalog key from the user's RBAC role set. RBAC keys
 // are uppercase ("DOCTOR"); catalog keys are lowercase ("doctor"). The
@@ -67,6 +68,19 @@ async function syncWellnessRoleFromRbacRoles(
     select: { vertical: true },
   });
   if (!tenant || tenant.vertical !== "wellness") return null;
+
+  // Defensive: a wellness tenant must have its default role catalog before
+  // we try to derive wellnessRole from RBAC. If the catalog is empty (fresh
+  // signup, restored backup, or data drift), seed it now so the mapping
+  // never silently no-ops. This is the root cause of the prod recurrence:
+  // the backfill script was running but couldn't map DOCTOR → "doctor"
+  // because WellnessRoleType had zero rows.
+  const catalogCount = await db.wellnessRoleType.count({
+    where: { tenantId, isActive: true },
+  });
+  if (catalogCount === 0) {
+    await seedDefaultsForTenant(tenantId);
+  }
 
   const [user, assignments, catalog] = await Promise.all([
     db.user.findUnique({

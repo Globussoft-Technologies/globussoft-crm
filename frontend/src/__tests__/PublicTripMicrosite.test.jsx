@@ -220,3 +220,210 @@ describe('<PublicTripMicrosite /> — Aadhaar verification', () => {
     }
   });
 });
+
+// ─── Phase 7 — RegistrationConfirmPanel (hybrid registration flow) ──
+
+describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
+  // The panel reads `?draftToken=...` from window.location.search; we
+  // override window.location for the duration of each test that needs
+  // the panel rendered. The legacy load-states / Aadhaar tests don't
+  // override window.location, so they continue to render WITHOUT the
+  // panel (back-compat verified separately below).
+  async function withDraftToken(token, body) {
+    const orig = Object.getOwnPropertyDescriptor(window, 'location');
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { search: `?draftToken=${token}`, origin: 'http://localhost', href: 'http://localhost' },
+    });
+    try {
+      // await — otherwise finally restores window.location BEFORE the
+      // async body runs, and the component never sees the draftToken.
+      return await body();
+    } finally {
+      if (orig) Object.defineProperty(window, 'location', orig);
+    }
+  }
+
+  function installMockWithOtp({
+    requestOtpResponse = jsonResponse(201, { sent: true, expiresAt: new Date(Date.now() + 600_000).toISOString() }),
+    verifyOtpResponse = jsonResponse(200, {
+      verified: true,
+      accessToken: 'jwt.access.token',
+      expiresIn: '30m',
+      draftBound: { id: 7001, status: 'OTP_VERIFIED', alreadyVerified: false },
+    }),
+    draftSummaryResponse = jsonResponse(200, {
+      id: 7001,
+      status: 'DRAFT',
+      otpVerified: false,
+      studentFirstName: 'Aarav',
+      parentFirstName: 'Rohan',
+      parentEmailMasked: 'ro••••@example.com',
+      parentPhoneMasked: '••••••3210',
+      parentPhoneLast4: '3210',
+      hasPassport: true,
+    }),
+  } = {}) {
+    global.fetch = vi.fn((url, opts = {}) => {
+      const method = opts.method || 'GET';
+      if (url === BASE && method === 'GET') {
+        return jsonResponse(infoResponse.status, infoResponse.body);
+      }
+      if (url === `${BASE}/participants` && method === 'GET') {
+        return jsonResponse(200, { participants: [] });
+      }
+      // Phase 7+ — draft-summary fires on panel mount when a
+      // ?draftToken is present.
+      if (url.startsWith(`${BASE}/draft-summary?token=`) && method === 'GET') {
+        return Promise.resolve(draftSummaryResponse);
+      }
+      if (url === `${BASE}/request-otp` && method === 'POST') {
+        return Promise.resolve(requestOtpResponse);
+      }
+      if (url === `${BASE}/verify-otp` && method === 'POST') {
+        return Promise.resolve(verifyOtpResponse);
+      }
+      return jsonResponse(404, { error: 'unexpected', code: 'X' });
+    });
+  }
+
+  it('renders the panel + greeting + masked phone when ?draftToken is in the URL', async () => {
+    installMockWithOtp();
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      expect(await screen.findByTestId('registration-confirm-panel')).toBeInTheDocument();
+      // Greeting derived from the draft summary's parentFirstName
+      expect(await screen.findByText(/Hi Rohan/)).toBeInTheDocument();
+      // Masked phone visible in the "we'll send to" row
+      expect(screen.getByText('••••••3210')).toBeInTheDocument();
+      // Single "Send verification code" button (no phone input — user
+      // doesn't have to retype what they entered on the landing page)
+      expect(screen.getByTestId('registration-request-otp-btn')).toBeInTheDocument();
+      expect(screen.queryByTestId('registration-phone-input')).not.toBeInTheDocument();
+    });
+  });
+
+  it('does NOT render the panel when ?draftToken is absent', async () => {
+    installMock();
+    renderPage();
+    await screen.findByText('Goa Ed Tour');
+    expect(screen.queryByTestId('registration-confirm-panel')).not.toBeInTheDocument();
+  });
+
+  it('happy path: send code → enter code → verify → "awaiting review" + receipt panel', async () => {
+    installMockWithOtp();
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      // Wait for summary to load + reveal the send button
+      const sendBtn = await screen.findByTestId('registration-request-otp-btn');
+      fireEvent.click(sendBtn);
+
+      // Verify form appears (no phone input)
+      const codeInput = await screen.findByTestId('registration-code-input');
+      fireEvent.change(codeInput, { target: { value: '1234' } });
+      fireEvent.click(screen.getByTestId('registration-verify-otp-btn'));
+
+      // Terminal "verified" state surfaces with the receipt summary
+      expect(await screen.findByTestId('registration-confirmed')).toBeInTheDocument();
+      expect(screen.getByText(/registration is being reviewed/i)).toBeInTheDocument();
+      expect(screen.getByText(/What we received/i)).toBeInTheDocument();
+
+      // request-otp body carries only purpose + draftToken (phone derived server-side)
+      const reqCall = global.fetch.mock.calls.find(([u]) => u === `${BASE}/request-otp`);
+      expect(JSON.parse(reqCall[1].body)).toEqual({ purpose: 'registration', draftToken: 'abc123' });
+
+      // verify-otp body carries draftToken + code (phone derived server-side)
+      const verifyCall = global.fetch.mock.calls.find(([u]) => u === `${BASE}/verify-otp`);
+      expect(JSON.parse(verifyCall[1].body)).toEqual({
+        purpose: 'registration',
+        code: '1234',
+        draftToken: 'abc123',
+      });
+    });
+  });
+
+  it('already-verified draft (otpVerified=true on summary) jumps straight to verified state', async () => {
+    installMockWithOtp({
+      draftSummaryResponse: jsonResponse(200, {
+        id: 7001, status: 'OTP_VERIFIED', otpVerified: true,
+        studentFirstName: 'Aarav', parentFirstName: 'Rohan',
+        parentPhoneMasked: '••••••3210', parentPhoneLast4: '3210',
+        parentEmailMasked: 'ro••••@example.com', hasPassport: true,
+      }),
+    });
+    await withDraftToken('already-verified', async () => {
+      renderPage();
+      expect(await screen.findByTestId('registration-confirmed')).toBeInTheDocument();
+      // No OTP flow surfaces — terminal verified state on revisit
+      expect(screen.queryByTestId('registration-request-otp-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('registration-code-input')).not.toBeInTheDocument();
+    });
+  });
+
+  it('OTP_INVALID on verify is retryable — panel stays on verify-form with error', async () => {
+    installMockWithOtp({
+      verifyOtpResponse: jsonResponse(400, { error: 'wrong code', code: 'OTP_INVALID' }),
+    });
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      fireEvent.click(await screen.findByTestId('registration-request-otp-btn'));
+      fireEvent.change(await screen.findByTestId('registration-code-input'), { target: { value: '9999' } });
+      fireEvent.click(screen.getByTestId('registration-verify-otp-btn'));
+
+      const err = await screen.findByTestId('registration-otp-error');
+      expect(err.textContent).toMatch(/code doesn't match/i);
+      expect(screen.getByTestId('registration-code-input')).toBeInTheDocument();
+      expect(screen.queryByTestId('registration-confirmed')).not.toBeInTheDocument();
+    });
+  });
+
+  it('DRAFT_NOT_FOUND on draft-summary fetch is TERMINAL — shows error, no OTP form', async () => {
+    installMockWithOtp({
+      draftSummaryResponse: jsonResponse(404, { error: 'draft not found', code: 'DRAFT_NOT_FOUND' }),
+    });
+    await withDraftToken('ghost', async () => {
+      renderPage();
+      const err = await screen.findByTestId('registration-error');
+      expect(err.textContent).toMatch(/could not find your registration/i);
+      expect(screen.queryByTestId('registration-request-otp-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('registration-code-input')).not.toBeInTheDocument();
+    });
+  });
+
+  it('DRAFT_WRONG_TRIP on draft-summary is TERMINAL — shows trip-mismatch copy', async () => {
+    installMockWithOtp({
+      draftSummaryResponse: jsonResponse(403, { error: 'wrong trip', code: 'DRAFT_WRONG_TRIP' }),
+    });
+    await withDraftToken('othertrip', async () => {
+      renderPage();
+      const err = await screen.findByTestId('registration-error');
+      expect(err.textContent).toMatch(/different trip/i);
+    });
+  });
+
+  it('DRAFT_EXPIRED on draft-summary is TERMINAL — asks user to re-submit form', async () => {
+    installMockWithOtp({
+      draftSummaryResponse: jsonResponse(400, { error: 'expired', code: 'DRAFT_EXPIRED' }),
+    });
+    await withDraftToken('expired', async () => {
+      renderPage();
+      const err = await screen.findByTestId('registration-error');
+      expect(err.textContent).toMatch(/expired/i);
+      expect(err.textContent).toMatch(/re-submit/i);
+    });
+  });
+
+  it('OTP_COOLDOWN on request-otp surfaces the wait-a-minute copy', async () => {
+    installMockWithOtp({
+      requestOtpResponse: jsonResponse(429, { error: 'cooldown', code: 'OTP_COOLDOWN' }),
+    });
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      fireEvent.click(await screen.findByTestId('registration-request-otp-btn'));
+      const err = await screen.findByTestId('registration-otp-error');
+      expect(err.textContent).toMatch(/wait a minute/i);
+      // Send button still visible — retryable
+      expect(screen.getByTestId('registration-request-otp-btn')).toBeInTheDocument();
+    });
+  });
+});

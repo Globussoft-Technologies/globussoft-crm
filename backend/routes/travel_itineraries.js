@@ -93,6 +93,10 @@ const { sendEmail } = require("../lib/emailSender");
 const { notify: notifyUser } = require("../lib/notificationService");
 const llmRouter = require("../lib/llmRouter");
 const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
+// Pricing engine — same module that backs the explicit POST /pricing/quote
+// route. The Add-item flow's preview-pricing endpoint reuses it so the
+// season-multiplier + markup-rule math is byte-identical across both surfaces.
+const { quote: composeQuote } = require("../lib/travelPricing");
 const listProjection = require("../lib/listProjection");
 const { writeAudit } = require("../lib/audit");
 // G124 (Master PRD A3 residual) — per-document view/download/share audit
@@ -2216,7 +2220,7 @@ async function loadItineraryWithGuard(req) {
   }
   const itin = await prisma.itinerary.findFirst({
     where: { id, tenantId: req.travelTenant.id },
-    select: { id: true, subBrand: true },
+    select: { id: true, subBrand: true, startDate: true },
   });
   if (!itin) {
     const err = new Error("Itinerary not found");
@@ -2656,6 +2660,191 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-itin] items search error:", e.message);
       res.status(500).json({ error: "Failed to search items" });
+    }
+  },
+);
+
+// ItemType → cost-master category mapper. Cost-master categories are the
+// 5-value enum from routes/travel_cost_master.js (hotel/flight/transport/
+// visa/insurance); the item-type enum is wider (12 values, includes
+// sightseeing/activity/meals/other) because line items capture trip
+// expenses that don't have a templated cost row. Returns null for the
+// no-template item types so the preview endpoint can degrade to "advisor
+// types it manually" without a 404.
+function mapItemTypeToCostCategory(itemType) {
+  switch (itemType) {
+    case "flight": return "flight";
+    case "train":
+    case "bus":
+    case "cab":
+    case "transfer": return "transport";
+    case "hotel": return "hotel";
+    case "visa": return "visa";
+    case "insurance": return "insurance";
+    default: return null; // sightseeing | activity | meals | other
+  }
+}
+
+// POST /api/travel/itineraries/:id/items/preview-pricing
+//
+// Pre-fill endpoint that bridges the Pricing Rules page (TravelPricing UI
+// + /api/travel/seasons + /api/travel/markup-rules + TravelCostMaster)
+// into the day-to-day Add-item workflow. Without this route the season
+// multiplier + markup rules sitting in the config UI had zero effect on
+// itinerary line totals — the advisor was doing the math in their head
+// and typing whatever unitCost + markup numbers they wanted. The route
+// resolves the best-matching TravelCostMaster row for the requested
+// itemType (+ optional supplier + optional routeOrSku narrowing), then
+// runs the existing pure quote() math from lib/travelPricing.js so the
+// numbers match byte-for-byte with the explicit /pricing/quote surface.
+//
+// The frontend Add-item form fires this on itemType / supplierId change
+// and pre-fills the unitCost + markup fields only when both are blank,
+// so the advisor's typed-over values are never clobbered.
+//
+// Body:
+//   itemType    required — one of VALID_ITEM_TYPES
+//   supplierId  optional — narrows cost-master lookup
+//   routeOrSku  optional — exact-match on TravelCostMaster.routeOrSku
+//   tripDate    optional ISO date — defaults to itinerary.startDate, then
+//               now() when neither is set. Used for season-window matching.
+//
+// Response (always 200 unless validation/auth fails):
+//   matched: true  → { matched, unitCost, markup, baseRate, seasonMultiplier,
+//                      matchedSeasonName, matchedMarkupRuleId, currency,
+//                      warnings, costMasterId }
+//   matched: false → { matched, reason, warnings }
+//
+// Reasons (HTTP 200 — pre-fill degradation is not an error and must not
+// alarm the advisor; the form just leaves the fields blank for manual entry):
+//   - NO_CATEGORY_MAPPING  itemType has no templated cost (sightseeing|activity|meals|other)
+//   - NO_COST_ROW          no TravelCostMaster row matches subBrand + category (+ supplier)
+//
+// Sub-brand access via loadItineraryWithGuard. Sub-path mounted BEFORE
+// POST /:id/items to follow this file's Express literal-before-parametric
+// convention (mirrors items/bulk-reorder, items/bulk-delete, items/search).
+router.post(
+  "/itineraries/:id/items/preview-pricing",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const { itemType, supplierId, routeOrSku, tripDate } = req.body || {};
+      if (!itemType) {
+        return res.status(400).json({ error: "itemType required", code: "MISSING_ITEM_TYPE" });
+      }
+      assertValidItemType(itemType);
+
+      const category = mapItemTypeToCostCategory(itemType);
+      if (!category) {
+        return res.json({
+          matched: false,
+          reason: "NO_CATEGORY_MAPPING",
+          warnings: [`itemType "${itemType}" has no cost-master template — enter rate manually`],
+        });
+      }
+
+      // Trip date: explicit body wins, then the itinerary's startDate, then
+      // today. Season-windows are matched against this date.
+      let tripDateParsed;
+      if (tripDate) {
+        tripDateParsed = new Date(tripDate);
+        if (!Number.isFinite(tripDateParsed.getTime())) {
+          return res.status(400).json({ error: "invalid tripDate", code: "INVALID_DATE" });
+        }
+      } else if (itin.startDate) {
+        tripDateParsed = new Date(itin.startDate);
+      } else {
+        tripDateParsed = new Date();
+      }
+
+      // Cost-master lookup — mirrors the /pricing/quote selection logic.
+      // Prefer the row whose validFrom/To brackets tripDate; fall back to
+      // the most-recent active row when none of them bracket the date.
+      const costWhere = {
+        tenantId: req.travelTenant.id,
+        subBrand: itin.subBrand,
+        category,
+        isActive: true,
+      };
+      if (supplierId != null && supplierId !== "") {
+        const sid = parseInt(supplierId, 10);
+        if (Number.isFinite(sid)) costWhere.supplierId = sid;
+      }
+      if (routeOrSku != null && routeOrSku !== "") {
+        costWhere.routeOrSku = String(routeOrSku);
+      }
+
+      const costRows = await prisma.travelCostMaster.findMany({
+        where: costWhere,
+        orderBy: { id: "desc" },
+        take: 20,
+      });
+      const cost = costRows.find((r) => {
+        const validFrom = r.validFrom ? new Date(r.validFrom) : null;
+        const validTo = r.validTo ? new Date(r.validTo) : null;
+        const afterFrom = !validFrom || tripDateParsed >= validFrom;
+        const beforeTo = !validTo || tripDateParsed <= validTo;
+        return afterFrom && beforeTo;
+      }) || costRows[0];
+
+      if (!cost) {
+        return res.json({
+          matched: false,
+          reason: "NO_COST_ROW",
+          warnings: [
+            `no TravelCostMaster row matches ${itin.subBrand}/${category}` +
+              (supplierId ? ` for supplier ${supplierId}` : ""),
+          ],
+        });
+      }
+
+      const seasons = await prisma.travelSeasonCalendar.findMany({
+        where: { tenantId: req.travelTenant.id, subBrand: itin.subBrand },
+        orderBy: { id: "asc" },
+      });
+      const rules = await prisma.travelMarkupRule.findMany({
+        where: { tenantId: req.travelTenant.id, subBrand: itin.subBrand, isActive: true },
+        orderBy: { priority: "asc" },
+      });
+
+      const result = composeQuote({
+        cost: {
+          baseRate: Number(cost.baseRate),
+          category: cost.category,
+          subBrand: cost.subBrand,
+          routeOrSku: cost.routeOrSku,
+        },
+        seasons,
+        rules,
+        subBrand: itin.subBrand,
+        tripDate: tripDateParsed,
+        ownerUserId: req.user.userId || null,
+      });
+
+      // Form-shape mapping: the Add-item form treats unitCost as the per-unit
+      // supplier rate and markup as a fixed amount on top. The engine returns
+      // subtotal (baseRate × seasonMultiplier) and markupAmount (rule-computed
+      // either pct-of-subtotal or flat). Map subtotal → unitCost so the form's
+      // own line-total formula (rate × qty + markup + gst) ends up matching
+      // the engine's grandTotal when qty=1 and no GST is set.
+      return res.json({
+        matched: true,
+        unitCost: result.subtotal,
+        markup: result.markupAmount,
+        baseRate: result.baseRate,
+        seasonMultiplier: result.seasonMultiplier,
+        matchedSeasonName: result.matchedSeasonName,
+        matchedMarkupRuleId: result.matchedMarkupRuleId,
+        currency: cost.currency,
+        warnings: result.warnings,
+        costMasterId: cost.id,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] preview-pricing error:", e.message);
+      return res.status(500).json({ error: "Failed to preview pricing" });
     }
   },
 );

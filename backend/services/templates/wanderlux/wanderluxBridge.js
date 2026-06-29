@@ -681,6 +681,11 @@ function mapBlocksToWanderluxConfig(blocks, input) {
       title: `Register — ${destination} ${tripYear}`,
       intro: "Tell us about you and we'll be in touch within one business day.",
       endpoint: null, // route fills this on persist (post-save)
+      // Phase 6 — hybrid registration-draft flow. Wizard submissions on
+      // trip-linked Wanderlux pages create a PendingTripRegistration and
+      // redirect to the trip microsite for phone OTP verification instead
+      // of falling back to the generic lead-capture path.
+      mode: 'registration-draft',
       // capacity: 50 (was 0) — the reference's "Registration Closed" gate
       // fires when `registered >= capacity`. With capacity=0 + registered=0
       // every fresh draft rendered as already-full despite the countdown

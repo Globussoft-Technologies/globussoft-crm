@@ -195,6 +195,15 @@ export default function ItineraryDetail() {
   // "Supplier ID" field). Fetched once; tolerant of failure (picker just
   // shows "— None —").
   const [suppliers, setSuppliers] = useState([]);
+  // Pricing-rule pre-fill for the Add-item form. The Pricing Rules page
+  // configures seasons + markup rules per sub-brand; before this wiring
+  // the rules had zero effect on itinerary line items because the advisor
+  // typed unitCost + markup by hand. Now: when itemType + supplier change,
+  // POST /items/preview-pricing returns the rule-computed numbers; we
+  // pre-fill the form only when unitCost AND markup are both blank so a
+  // typed override is never clobbered. Render a one-line hint near the
+  // form so the advisor knows what rule matched (and what to override).
+  const [pricingPreview, setPricingPreview] = useState(null);
   // Map state — client-side geocoded copy of itin.items (never saved to server
   // from here; the editor handles persistence). Items without lat/lng get
   // geocoded progressively so markers appear as they resolve.
@@ -219,6 +228,50 @@ export default function ItineraryDetail() {
       .then((res) => setSuppliers(Array.isArray(res) ? res : (res?.suppliers || [])))
       .catch(() => setSuppliers([]));
   }, []);
+
+  // Pre-fill unitCost + markup from the pricing engine whenever the advisor
+  // changes itemType or supplier inside the Add-item modal. Debounced 300ms
+  // so a rapid dropdown change doesn't fire two requests. Pre-fill is silent
+  // on failure (the form just stays as-is); the inline hint UI below picks
+  // up `pricingPreview` to surface what rule matched.
+  useEffect(() => {
+    if (!adding || !newItem.itemType) {
+      setPricingPreview(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const body = { itemType: newItem.itemType };
+        if (newItem.supplierId !== "" && newItem.supplierId != null) {
+          body.supplierId = Number(newItem.supplierId);
+        }
+        const res = await fetchApi(`/api/travel/itineraries/${id}/items/preview-pricing`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        if (cancelled) return;
+        setPricingPreview(res);
+        // Pre-fill ONLY when the advisor hasn't typed into either field —
+        // overriding a typed value would feel hostile. setNewItem callback
+        // form re-checks the latest state to dodge the obvious race with a
+        // concurrent keystroke.
+        if (res?.matched) {
+          setNewItem((prev) => {
+            if (prev.unitCost !== "" || prev.markup !== "") return prev;
+            return {
+              ...prev,
+              unitCost: String(res.unitCost ?? ""),
+              markup: String(res.markup ?? ""),
+            };
+          });
+        }
+      } catch (_e) {
+        if (!cancelled) setPricingPreview(null);
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [adding, newItem.itemType, newItem.supplierId, id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Geocode missing coordinates for map display. Runs whenever the itinerary
   // loads or changes. Uses the existing geocoder.js LRU + 1 req/sec rate limiter
@@ -452,6 +505,7 @@ export default function ItineraryDetail() {
       });
       notify.success("Item added");
       setNewItem(EMPTY_ITEM);
+      setPricingPreview(null);
       setAdding(false);
       load();
     } catch (e) {
@@ -770,6 +824,7 @@ export default function ItineraryDetail() {
 
         {adding && (
           <div style={{ background: "var(--surface-color)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 16 }}>
+            <PricingPreviewHint preview={pricingPreview} />
             <ItemFields values={newItem} suppliers={suppliers} onChange={(patch) => setNewItem({ ...newItem, ...patch })} />
             <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
               <button
@@ -780,7 +835,7 @@ export default function ItineraryDetail() {
               >
                 {geocoding ? "Resolving location…" : "Save item"}
               </button>
-              <button type="button" onClick={() => { setNewItem(EMPTY_ITEM); setAdding(false); }} style={secondaryBtn}>Cancel</button>
+              <button type="button" onClick={() => { setNewItem(EMPTY_ITEM); setPricingPreview(null); setAdding(false); }} style={secondaryBtn}>Cancel</button>
             </div>
           </div>
         )}

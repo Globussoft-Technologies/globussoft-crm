@@ -85,7 +85,7 @@ const MANAGER_PERMISSIONS = [
   'contracts.read', 'contracts.write', 'contracts.update',
   'estimates.read', 'estimates.write', 'estimates.update', 'estimates.export',
   'patients.read',
-  'appointments.read',
+  'appointments.read', 'appointments.assign',
   'services.read',
   'inventory.read',
   'pos.read',
@@ -171,7 +171,7 @@ const NURSE_PERMISSIONS = [
 
 const RECEPTIONIST_PERMISSIONS = [
   'patients.read', 'patients.write',
-  'appointments.read', 'appointments.write', 'appointments.update', 'appointments.delete',
+  'appointments.read', 'appointments.write', 'appointments.update', 'appointments.delete', 'appointments.assign',
   'book_appointment.write',
   'waitlist.read', 'waitlist.write',
   'my_appointments.read',
@@ -199,7 +199,7 @@ const RECEPTIONIST_PERMISSIONS = [
 const TELECALLER_PERMISSIONS = [
   'leads.read', 'leads.write', 'leads.update',
   'contacts.read', 'contacts.write',
-  'appointments.read', 'appointments.write',
+  'appointments.read', 'appointments.write', 'appointments.assign',
   'book_appointment.write',
   'waitlist.read', 'waitlist.write',
   'my_appointments.read',

@@ -165,6 +165,13 @@ function installFetchMock({
   trip = makeTrip(),
   rooming = { rooming: [] },
   participantPost = { id: 902, fullName: 'Test Add' },
+  // Phase 8 — pending registrations + landing-page mocks default to
+  // empty / not-linked so existing tests stay green.
+  pendingRegs = [],
+  landingPage = { status: 404, body: { code: 'NOT_LINKED' } }, // 404 = no page linked
+  landingPageCreate = null, // override to return a created page on POST
+  registrationDecide = null, // override per-test to assert approve/reject
+  itinerarySuggest = null, // override to return a custom AI suggestion
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -186,6 +193,48 @@ function installFetchMock({
     // DELETE participant
     if (method === 'DELETE' && /^\/api\/travel\/trips\/\d+\/participants\/\d+$/.test(url)) {
       return Promise.resolve({});
+    }
+    // Phase 8 — GET /api/travel/trips/:id/registrations (pending list)
+    if (method === 'GET' && /^\/api\/travel\/trips\/\d+\/registrations$/.test(url)) {
+      return Promise.resolve(pendingRegs);
+    }
+    // Phase 8 — POST /api/travel/trips/:id/registrations/:rid/(approve|reject)
+    if (method === 'POST' && /^\/api\/travel\/trips\/\d+\/registrations\/\d+\/(approve|reject)$/.test(url)) {
+      if (registrationDecide instanceof Error) return Promise.reject(registrationDecide);
+      return Promise.resolve(registrationDecide || { ok: true });
+    }
+    // Phase 8 — GET /api/travel/trips/:id/landing-page (404 = not linked)
+    if (method === 'GET' && /^\/api\/travel\/trips\/\d+\/landing-page$/.test(url)) {
+      if (landingPage instanceof Error) return Promise.reject(landingPage);
+      if (landingPage && landingPage.status === 404) {
+        const err = new Error('NOT_LINKED');
+        err.status = 404;
+        err.body = landingPage.body;
+        return Promise.reject(err);
+      }
+      return Promise.resolve(landingPage);
+    }
+    // Phase 8 — POST /api/travel/trips/:id/landing-page (lazy create)
+    if (method === 'POST' && /^\/api\/travel\/trips\/\d+\/landing-page$/.test(url)) {
+      if (landingPageCreate instanceof Error) return Promise.reject(landingPageCreate);
+      return Promise.resolve(landingPageCreate || {
+        id: 77, slug: 'trip-tmc-and-2026-mumbai-g7', status: 'DRAFT', tripId: 101,
+        title: 'Andaman Trip — TMC-AND-2026-MUMBAI-G7',
+      });
+    }
+    // Phase 8 — POST /api/travel/itineraries/suggest (AI itinerary generation)
+    if (method === 'POST' && url === '/api/travel/itineraries/suggest') {
+      if (itinerarySuggest instanceof Error) return Promise.reject(itinerarySuggest);
+      return Promise.resolve(itinerarySuggest || {
+        suggestion: {
+          daySplit: [
+            { day: 1, title: 'Arrival', items: [{ description: 'Airport transfer and hotel check-in' }] },
+            { day: 2, title: 'Local Sightseeing', items: [{ description: 'Guided city tour' }] },
+          ],
+        },
+        model: 'gemini-flash',
+        stub: false,
+      });
     }
     // Payment-plan + instalments (the Payment tab fires them on mount when
     // active, but we never switch to that tab; included for completeness so
@@ -308,7 +357,7 @@ describe('<TripDetail /> — tab strip', () => {
     expect(tabs).toHaveLength(5);
     const labels = tabs.map((t) => t.textContent.trim());
     expect(labels).toEqual(
-      expect.arrayContaining(['Overview', 'Participants', 'Rooming', 'Payment plan', 'Public page']),
+      expect.arrayContaining(['Overview', 'Participants', 'Rooming', 'Payment plan', 'Public Experience']),
     );
     // Overview is selected by default.
     const overview = screen.getByRole('tab', { name: /Overview/i });
@@ -326,12 +375,12 @@ describe('<TripDetail /> — Overview tab', () => {
     // KPI strip + summary bands keep these labels.
     expect(screen.getByText('Required docs')).toBeInTheDocument();
     expect(screen.getByText('Trip status')).toBeInTheDocument();
-    // 'Participants' / 'Public page' / 'Payment plan' all appear as both tab
+    // 'Participants' / 'Public Experience' / 'Payment plan' all appear as both tab
     // chrome AND in the overview (KPI card / summary band title). Scope via
     // getAllByText.
     expect(screen.getAllByText('Participants').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('Payment plan').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('Public page').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('Public Experience').length).toBeGreaterThanOrEqual(2);
     // Summary-band status pills (rendered uppercase via CSS; literal mixed-
     // case in DOM).
     expect(screen.getByText('Not set yet')).toBeInTheDocument();
@@ -486,7 +535,7 @@ describe('<TripDetail /> — Microsite tab', () => {
   it('un-published trip renders MicrositeCreate copy + subdomain default seeded from trip-{tripCode}', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public page/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
     expect(
       await screen.findByText(/Create a public registration page/i),
     ).toBeInTheDocument();
@@ -515,7 +564,7 @@ describe('<TripDetail /> — Microsite tab', () => {
     // Scope tab click via getAllByRole + label filter to dodge the regex
     // ambiguity ("Microsite" appears as tab + Overview card label).
     const tabs = screen.getAllByRole('tab');
-    const micrositeTab = tabs.find((t) => /Public page/.test(t.textContent));
+    const micrositeTab = tabs.find((t) => /Public Experience/.test(t.textContent));
     expect(micrositeTab).toBeTruthy();
     fireEvent.click(micrositeTab);
     // The full public URL renders in the live-link hero card; the publicUuid
@@ -534,6 +583,61 @@ describe('<TripDetail /> — Microsite tab', () => {
       '/p/tripmicrosite/abc-123-def-456',
     );
     expect(openLink.getAttribute('href')).not.toContain('/api/travel/microsites/public/');
+  });
+});
+
+describe('<TripDetail /> — Microsite Create enhancements', () => {
+  it('pre-fills itinerary from linked landing-page itineraryTimeline block', async () => {
+    installFetchMock({
+      landingPage: {
+        id: 77,
+        slug: 'trip-tmc-and-2026-mumbai-g7',
+        status: 'PUBLISHED',
+        tripId: 101,
+        title: 'Andaman Trip',
+        content: JSON.stringify([
+          {
+            type: 'itineraryTimeline',
+            props: {
+              days: [
+                { day: 1, title: 'Arrival', bullets: ['Airport pickup', 'Hotel check-in'] },
+                { day: 2, title: 'Island hopping', bullets: ['Boat ride', 'Snorkelling'] },
+              ],
+            },
+          },
+        ]),
+      },
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
+    expect(await screen.findByText(/Prefilled from “Andaman Trip”/i)).toBeInTheDocument();
+    // The editor receives the landing-page HTML, not the placeholder.
+    expect(screen.getByText('Day 1 — Arrival')).toBeInTheDocument();
+    expect(screen.getByText('Airport pickup')).toBeInTheDocument();
+    expect(screen.getByText('Day 2 — Island hopping')).toBeInTheDocument();
+  });
+
+  it('AI Generate itinerary calls /itineraries/suggest and replaces editor content', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
+    const aiBtn = await screen.findByRole('button', { name: /AI Generate itinerary/i });
+    fetchApiMock.mockClear();
+    fireEvent.click(aiBtn);
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.destination).toBe('Andaman');
+      expect(body.days).toBe(8);
+    });
+    // Generated day content lands in the editor.
+    expect(await screen.findByText('Day 1 — Arrival')).toBeInTheDocument();
+    expect(screen.getByText('Airport transfer and hotel check-in')).toBeInTheDocument();
+    expect(screen.getByText('Day 2 — Local Sightseeing')).toBeInTheDocument();
   });
 });
 
@@ -744,7 +848,7 @@ describe('<TripDetail /> — Microsite Create flow', () => {
   it('Publish POSTs /api/travel/trips/:id/microsite with subdomain + itineraryHtml', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public page/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
     await screen.findByText(/Create a public registration page/i);
     fetchApiMock.mockClear();
     installFetchMock();
@@ -767,7 +871,7 @@ describe('<TripDetail /> — Microsite Create flow', () => {
   it('Publish with blank itineraryHtml surfaces notify.error + no POST', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public page/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
     // The RichTextEditor is contenteditable — direct DOM patching for an
     // empty payload. The SUT's itineraryHtml state seed is the placeholder,
     // so we have to mutate it via the editor's onInput hook. Easier path:
@@ -805,7 +909,7 @@ describe('<TripDetail /> — Microsite Editor preview toggle', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Public page/.test(t.textContent)));
+    fireEvent.click(tabs.find((t) => /Public Experience/.test(t.textContent)));
     await screen.findByText((c) => c.includes('abc-123-def-456'));
     // Click Preview button — label flips to Edit.
     fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
@@ -1104,7 +1208,7 @@ describe('<TripDetail /> — Microsite Create POST error', () => {
     });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Public page/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
     await screen.findByText(/Create a public registration page/i);
     fireEvent.click(screen.getByRole('button', { name: /Publish public page/i }));
     await waitFor(() => {
@@ -1136,7 +1240,7 @@ describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Public page/.test(t.textContent)));
+    fireEvent.click(tabs.find((t) => /Public Experience/.test(t.textContent)));
     await screen.findByText((c) => c.includes('abc-123-def-456'));
     fetchApiMock.mockClear();
     // Re-install with PATCH support.
@@ -1176,7 +1280,7 @@ describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Public page/.test(t.textContent)));
+    fireEvent.click(tabs.find((t) => /Public Experience/.test(t.textContent)));
     await screen.findByText((c) => c.includes('abc-123-def-456'));
     fireEvent.click(screen.getByRole('button', { name: /^Unpublish$/i }));
     await waitFor(() => {
@@ -1195,7 +1299,7 @@ describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Public page/.test(t.textContent)));
+    fireEvent.click(tabs.find((t) => /Public Experience/.test(t.textContent)));
     await screen.findByText((c) => c.includes('abc-123-def-456'));
     // Type non-JSON into the FAQ textarea.
     const faqInput = screen.getByLabelText(/Microsite FAQ JSON/i);
@@ -1458,5 +1562,206 @@ describe('<TripDetail /> — Participants passport upload', () => {
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith('Failed to process passport upload');
     });
+  });
+});
+
+// ─── Phase 8 — Unified Participants list + Public Experience section ──
+
+describe('<TripDetail /> — Phase 8 unified Participants list', () => {
+  function makePendingReg(overrides = {}) {
+    return {
+      id: 9001,
+      tripId: 101,
+      tenantId: 1,
+      status: 'OTP_VERIFIED',
+      studentName: 'Aarav Iyer',
+      parentName: 'Rohan Iyer',
+      parentEmail: 'rohan@example.com',
+      parentPhone: '+919876543210',
+      otpVerified: true,
+      otpVerifiedAt: '2026-05-10T10:00:00.000Z',
+      createdAt: '2026-05-10T09:55:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('Participants tab fetches pending registrations on mount', async () => {
+    installFetchMock({ pendingRegs: [makePendingReg()] });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/trips/101/registrations' && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+    expect(await screen.findByTestId('pending-registrations-list')).toBeInTheDocument();
+    expect(screen.getByText('Aarav Iyer')).toBeInTheDocument();
+    expect(screen.getByText(/AWAITING REVIEW/)).toBeInTheDocument();
+  });
+
+  it('shows "X awaiting review" count next to participants total', async () => {
+    installFetchMock({
+      pendingRegs: [makePendingReg(), makePendingReg({ id: 9002, status: 'OTP_VERIFIED', studentName: 'Priya' })],
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    const counter = await screen.findByTestId('awaiting-review-count');
+    expect(counter.textContent).toMatch(/2 awaiting review/);
+  });
+
+  it('DRAFT registration shows "Awaiting verification" pill with no action buttons', async () => {
+    installFetchMock({
+      pendingRegs: [makePendingReg({ id: 9003, status: 'DRAFT', studentName: 'Sara' })],
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Sara');
+    expect(screen.getByText(/AWAITING VERIFICATION/)).toBeInTheDocument();
+    // No approve button (DRAFT can't be approved — only OTP_VERIFIED can)
+    expect(screen.queryByTestId('approve-registration-9003')).not.toBeInTheDocument();
+    // Reject IS available (operator can dismiss un-verified spam)
+    expect(screen.getByTestId('reject-registration-9003')).toBeInTheDocument();
+  });
+
+  it('CONVERTED registrations are filtered out of the pending list', async () => {
+    installFetchMock({
+      pendingRegs: [
+        makePendingReg({ id: 9001, status: 'OTP_VERIFIED', studentName: 'StillPending' }),
+        makePendingReg({ id: 9002, status: 'CONVERTED', studentName: 'AlreadyConverted', convertedToParticipantId: 555 }),
+      ],
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('StillPending');
+    // CONVERTED row must NOT appear in pending list (it shows up as a real participant instead)
+    expect(screen.queryByText('AlreadyConverted')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pending-reg-row-9002')).not.toBeInTheDocument();
+  });
+
+  it('clicking Approve fires POST /registrations/:rid/approve and refreshes lists', async () => {
+    installFetchMock({
+      pendingRegs: [makePendingReg()],
+      registrationDecide: { approved: true, participant: { id: 555 }, registration: { id: 9001, status: 'CONVERTED' } },
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    const approveBtn = await screen.findByTestId('approve-registration-9001');
+    fireEvent.click(approveBtn);
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/trips/101/registrations/9001/approve' && o?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/added as a participant/i));
+    });
+  });
+
+  it('clicking Reject prompts confirm then fires POST /registrations/:rid/reject', async () => {
+    installFetchMock({
+      pendingRegs: [makePendingReg()],
+      registrationDecide: { rejected: true, registration: { id: 9001, status: 'REJECTED' } },
+    });
+    notifyConfirm.mockResolvedValueOnce(true);
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    const rejectBtn = await screen.findByTestId('reject-registration-9001');
+    fireEvent.click(rejectBtn);
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'Reject registration',
+        destructive: true,
+      }));
+    });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/trips/101/registrations/9001/reject' && o?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('Reject cancel does NOT fire the endpoint', async () => {
+    installFetchMock({ pendingRegs: [makePendingReg()] });
+    notifyConfirm.mockResolvedValueOnce(false);
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    const rejectBtn = await screen.findByTestId('reject-registration-9001');
+    fireEvent.click(rejectBtn);
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled());
+    expect(fetchApiMock.mock.calls.find(
+      ([u]) => /\/registrations\/9001\/reject/.test(u),
+    )).toBeFalsy();
+  });
+
+  it('no pending registrations → pending list is not rendered, participants list still shows', async () => {
+    installFetchMock({ pendingRegs: [] });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Anaya Sharma'); // existing participant still shows
+    expect(screen.queryByTestId('pending-registrations-list')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('awaiting-review-count')).not.toBeInTheDocument();
+  });
+});
+
+describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => {
+  it('renders "No landing page linked yet" empty state with a link to the Landing Pages module', async () => {
+    installFetchMock({ landingPage: { status: 404, body: { code: 'NOT_LINKED' } } });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
+    expect(await screen.findByTestId('landing-page-card')).toBeInTheDocument();
+    expect(screen.getByText(/No landing page linked yet/i)).toBeInTheDocument();
+    // Redirect-only — no lazy-create button on the trip detail surface.
+    expect(screen.queryByTestId('create-landing-page-btn')).not.toBeInTheDocument();
+    const gotoLink = screen.getByTestId('goto-landing-pages-link');
+    expect(gotoLink.getAttribute('href')).toBe('/landing-pages');
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  it('renders existing linked landing page with single "Manage in Landing Pages" link to the existing module', async () => {
+    installFetchMock({
+      landingPage: {
+        id: 77, slug: 'trip-bali2026', status: 'PUBLISHED', tripId: 101,
+        title: 'Bali Trip — bali2026',
+      },
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
+    expect(await screen.findByText('Bali Trip — bali2026')).toBeInTheDocument();
+    const manageLink = screen.getByTestId('manage-landing-page-link');
+    expect(manageLink.getAttribute('href')).toBe('/landing-pages/builder/77');
+    // No duplicate Edit/Open/Copy buttons embedded in the trip detail.
+    expect(screen.queryByTestId('open-landing-page-link')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('copy-landing-page-url-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('create-landing-page-btn')).not.toBeInTheDocument();
+  });
+
+  it('Public Experience tab renders BOTH landing-page card AND microsite section', async () => {
+    installFetchMock({
+      landingPage: {
+        id: 77, slug: 'trip-bali2026', status: 'PUBLISHED', tripId: 101,
+        title: 'Bali Trip',
+      },
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Public Experience/i }));
+    // Landing page card present
+    expect(await screen.findByTestId('landing-page-card')).toBeInTheDocument();
+    // Microsite section also present (MicrositeCreate "No microsite" copy
+    // shows since the default trip fixture has microsite: null)
+    expect(screen.getByText(/Create a public registration page/i)).toBeInTheDocument();
   });
 });

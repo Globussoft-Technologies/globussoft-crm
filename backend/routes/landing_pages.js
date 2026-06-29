@@ -1229,7 +1229,7 @@ router.put("/:id", verifyToken, async (req, res) => {
   try {
     const existing = await prisma.landingPage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Page not found" });
-    const { title, content, cssOverrides, metaTitle, metaDescription, slug, destination, subBrand, templateType } = req.body;
+    const { title, content, cssOverrides, metaTitle, metaDescription, slug, destination, subBrand, templateType, tripId } = req.body;
     const data = {};
     if (title !== undefined) data.title = title;
     if (content !== undefined) data.content = typeof content === "string" ? content : JSON.stringify(content);
@@ -1251,6 +1251,52 @@ router.put("/:id", verifyToken, async (req, res) => {
         });
       }
       data.subBrand = subBrand === "" ? null : subBrand;
+    }
+    // tripId — links the landing page to a specific TMC trip so the
+    // registration-draft branch of /api/pages/:slug/submit fires for
+    // wizard submissions. The schema enforces 1:1 via LandingPage.tripId
+    // @unique — if another page already claims the same trip, Prisma
+    // surfaces P2002 which we translate to 409 here. Accepts:
+    //   tripId: 42   → link this page to trip 42
+    //   tripId: null → explicitly unlink (parents' wizard reverts to lead-capture)
+    if (tripId !== undefined) {
+      if (tripId === null) {
+        data.tripId = null;
+      } else {
+        const parsed = parseInt(tripId, 10);
+        if (!Number.isFinite(parsed)) {
+          return res.status(400).json({ error: "tripId must be a number or null", code: "INVALID_TRIP_ID" });
+        }
+        // Verify the trip exists in this tenant — prevents cross-tenant
+        // tripId stuffing and surfaces a clean 404 instead of a P2003
+        // foreign-key error.
+        const trip = await prisma.tmcTrip.findFirst({
+          where: { id: parsed, tenantId: req.user.tenantId },
+          select: { id: true },
+        });
+        if (!trip) {
+          return res.status(404).json({ error: "Trip not found in this tenant", code: "TRIP_NOT_FOUND" });
+        }
+        data.tripId = parsed;
+
+        // Phase 6 — linking a Wanderlux page to a trip should flip the
+        // registration block to registration-draft mode when no explicit
+        // mode is set. Without this, AI-generated pages default to lead
+        // capture even after linking and the hybrid OTP flow never fires.
+        if (existing.templateType === "wanderlux-v1") {
+          try {
+            const cfg = typeof existing.content === "string"
+              ? JSON.parse(existing.content || "{}")
+              : (existing.content || {});
+            if (cfg && cfg.register && !cfg.register.mode) {
+              cfg.register.mode = "registration-draft";
+              data.content = JSON.stringify(cfg);
+            }
+          } catch (_e) {
+            // Malformed content — leave it alone; don't block the link.
+          }
+        }
+      }
     }
     if (slug !== undefined) {
       // #378: reject invalid slugs on update too — same rules as create.
@@ -1294,7 +1340,22 @@ router.put("/:id", verifyToken, async (req, res) => {
       data.slug = slug;
     }
 
-    const updated = await prisma.landingPage.update({ where: { id: existing.id }, data });
+    let updated;
+    try {
+      updated = await prisma.landingPage.update({ where: { id: existing.id }, data });
+    } catch (updateErr) {
+      // P2002 on tripId @unique — another landing page already claims
+      // this trip. Translate to a clean 409 so the picker UI can
+      // surface "this trip already has a page" instead of leaking the
+      // raw Prisma error.
+      if (updateErr.code === "P2002" && Array.isArray(updateErr.meta?.target) && updateErr.meta.target.includes("tripId")) {
+        return res.status(409).json({
+          error: "Another landing page is already linked to this trip. Unlink it first or pick a different trip.",
+          code: "TRIP_ALREADY_LINKED",
+        });
+      }
+      throw updateErr;
+    }
     // Snapshot on MANUAL_SAVE only when content/title/slug changed —
     // avoids flooding the version list with no-op autosaves that only
     // touched metaTitle / metaDescription / templateType.
@@ -2500,6 +2561,71 @@ function parseDateOrNull(v) {
   return Number.isFinite(d.getTime()) ? d : null;
 }
 
+// Auto-enrol a student as a TripParticipant when a trip-linked landing page
+// captures a student registration in lead-capture mode. This keeps the TMC
+// Trips participants tab in sync with the inbound lead/deal pipeline.
+async function createParticipantFromLeadSubmission(tripId, tenantId, formFields, body) {
+  const pick = (key) =>
+    (formFields && typeof formFields === "object" && formFields[key]) ||
+    (body && typeof body === "object" && body[key]) ||
+    null;
+
+  const studentName = pick("student_name") || pick("studentName");
+  if (!studentName) return null;
+
+  const parentName = pick("parent_name") || pick("parentName") || pick("name") || null;
+  const parentEmail = pick("parent_email") || pick("parentEmail") || pick("email") || null;
+  const parentPhone = pick("parent_phone") || pick("parentPhone") || pick("phone") || null;
+  const grade = pick("student_grade") || pick("grade") || pick("student_class") || pick("studentClass") || null;
+  const school = pick("student_school") || pick("school") || pick("studentSchool") || pick("student_school") || null;
+  const city = pick("city") || pick("student_city") || pick("studentCity") || null;
+  const passportStatus = pick("passport_status") || pick("passportStatus") || null;
+
+  const notes = [];
+  if (grade) notes.push(`Grade: ${grade}`);
+  if (school) notes.push(`School: ${school}`);
+  if (city) notes.push(`City: ${city}`);
+  if (passportStatus) notes.push(`Passport status: ${passportStatus}`);
+  const medicalNotes = notes.length ? notes.join("\n") : null;
+
+  // Deduplicate against recent double-submits or page refreshes.
+  const existingWhere = { tripId, fullName: String(studentName) };
+  const orClauses = [];
+  if (parentEmail) orClauses.push({ parentEmail });
+  if (parentPhone) orClauses.push({ parentPhone });
+  if (orClauses.length) existingWhere.OR = orClauses;
+
+  const existing = await prisma.tripParticipant.findFirst({
+    where: existingWhere,
+    orderBy: { id: "desc" },
+  });
+
+  if (existing) {
+    return prisma.tripParticipant.update({
+      where: { id: existing.id },
+      data: {
+        parentName: parentName || existing.parentName || null,
+        parentEmail: parentEmail || existing.parentEmail || null,
+        parentPhone: parentPhone || existing.parentPhone || null,
+        medicalNotes: medicalNotes || existing.medicalNotes || null,
+      },
+    });
+  }
+
+  return prisma.tripParticipant.create({
+    data: {
+      tripId,
+      fullName: String(studentName),
+      parentName,
+      parentEmail,
+      parentPhone,
+      medicalNotes,
+      applicationStatus: "pending",
+      consentCapturedAt: new Date(),
+    },
+  });
+}
+
 publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
   try {
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
@@ -2601,6 +2727,16 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
     await prisma.deal.create({
       data: { title: `LP Inbound: ${page.title}`, amount: 0, stage: "lead", contactId: contact.id, tenantId },
     });
+
+    // Trip-linked student registrations should also appear on the TMC Trips
+    // participants tab, not just as a lead/deal.
+    if (page.tripId) {
+      try {
+        await createParticipantFromLeadSubmission(page.tripId, tenantId, formFields, req.body);
+      } catch (err) {
+        console.error("[LandingPage] participant auto-enrol error:", err.message);
+      }
+    }
 
     await prisma.landingPage.update({ where: { id: page.id }, data: { submissions: { increment: 1 } } });
     await prisma.landingPageAnalytics.create({

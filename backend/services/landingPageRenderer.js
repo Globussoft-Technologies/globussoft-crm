@@ -793,11 +793,18 @@ function renderComponent(component, slug) {
       // Submission flow matches brochureDownload: posts to the same
       // /api/pages/<slug>/submit endpoint, which honours per-form
       // leadRoutingRuleId + enableCaptcha + audience tagging.
+      //
+      // Phase 6 — when props.mode === "registration-draft" the inline
+      // submit script wraps the form values in `fields:` (which the
+      // backend's handleRegistrationDraft expects) and follows
+      // response.redirect.url on success. Non-draft blocks keep the
+      // original "show thank-you message" behaviour.
       const title = escapeHtml(props.title || "Register your interest");
       const subtitle = escapeHtml(props.subtitle || "");
       const submitText = escapeHtml(props.submitText || "Submit");
       const audience = escapeHtml(props.audience || "inquiry");
       const subBrand = props.subBrand ? escapeHtml(props.subBrand) : "";
+      const isDraftMode = props.mode === "registration-draft";
       const blockId = travelBlockId("reg");
       const fields = Array.isArray(props.fields) && props.fields.length > 0
         ? props.fields
@@ -819,7 +826,7 @@ function renderComponent(component, slug) {
         <div class="t-wrap t-narrow">
           ${title ? `<h2 class="t-center">${title}</h2>` : ""}
           ${subtitle ? `<p class="t-center t-section-sub">${subtitle}</p>` : ""}
-          <form id="${blockId}" class="t-reg-form" onsubmit="return false;" data-audience="${audience}"${subBrand ? ` data-sub-brand="${subBrand}"` : ""}>
+          <form id="${blockId}" class="t-reg-form" onsubmit="return false;" data-audience="${audience}"${subBrand ? ` data-sub-brand="${subBrand}"` : ""}${isDraftMode ? ' data-mode="registration-draft"' : ""}>
             <input type="hidden" name="audience" value="${audience}" />
             ${subBrand ? `<input type="hidden" name="subBrand" value="${subBrand}" />` : ""}
             ${fieldsHtml}
@@ -830,17 +837,44 @@ function renderComponent(component, slug) {
         <script>(function(){
           var form=document.getElementById('${blockId}');
           if(!form)return;
+          var isDraft=${isDraftMode ? "true" : "false"};
           form.addEventListener('submit',function(e){
             e.preventDefault();
             var data={registrationForm:true};
             form.querySelectorAll('input').forEach(function(i){if(i.name)data[i.name]=i.value;});
+            // Phase 6 - registration-draft mode wraps values in
+            // a fields object so handleRegistrationDraft can
+            // pluck student_name / parent_phone / etc. out of the
+            // expected shape. Audience + subBrand stay at top level
+            // so pickFormFromContent can still disambiguate the form
+            // block. Lead-capture mode keeps the original flat shape.
+            var body=isDraft
+              ? Object.assign({},data,{fields:data,mode:'registration-draft'})
+              : data;
             fetch('/api/pages/${escapeHtml(slug)}/submit',{
               method:'POST',
               headers:{'Content-Type':'application/json'},
-              body:JSON.stringify(data)
-            }).then(function(r){return r.json();}).then(function(){
+              body:JSON.stringify(body)
+            }).then(function(r){return r.json().then(function(j){return{status:r.status,body:j};});}).then(function(resp){
+              if(resp.body && resp.body.error){alert(resp.body.error);return;}
+              // Phase 6 — when the backend returns a microsite redirect
+              // (registration-draft path), navigate there. The URL
+              // carries only the opaque draftToken; no PII leaks via
+              // query string. Fallback when no redirect → show the
+              // thank-you panel.
+              var redirect=resp.body && resp.body.redirect;
+              if(redirect && redirect.type==='microsite' && redirect.url){
+                window.location.href=redirect.url;
+                return;
+              }
               form.querySelectorAll('input, button').forEach(function(el){el.style.display='none';});
-              document.getElementById('${blockId}_thanks').style.display='block';
+              var thanksEl=document.getElementById('${blockId}_thanks');
+              if(thanksEl){
+                if(redirect && redirect.type==='thanks' && resp.body.message){
+                  thanksEl.textContent=resp.body.message;
+                }
+                thanksEl.style.display='block';
+              }
             }).catch(function(){alert('Something went wrong. Please try again.');});
           });
         })();</script>

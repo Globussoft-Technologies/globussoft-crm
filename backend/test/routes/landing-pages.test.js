@@ -102,8 +102,16 @@ prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 // the lead-capture path leaves them untouched (assert with not.toHaveBeenCalled).
 prisma.pendingTripRegistration = prisma.pendingTripRegistration || {};
 prisma.pendingTripRegistration.create = vi.fn();
+prisma.tripParticipant = prisma.tripParticipant || {};
+prisma.tripParticipant.create = vi.fn().mockResolvedValue({ id: 1 });
+prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
+prisma.tripParticipant.update = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tripMicrosite = prisma.tripMicrosite || {};
 prisma.tripMicrosite.findUnique = vi.fn();
+// Phase 11 — PUT /:id can set tripId, which validates the trip exists
+// in the requester's tenant before persisting the link.
+prisma.tmcTrip = prisma.tmcTrip || {};
+prisma.tmcTrip.findFirst = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -148,7 +156,11 @@ beforeEach(() => {
   prisma.user.findFirst.mockReset().mockResolvedValue(null);
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.pendingTripRegistration.create.mockReset();
+  prisma.tripParticipant.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tripParticipant.update.mockReset().mockResolvedValue({ id: 1 });
   prisma.tripMicrosite.findUnique.mockReset();
+  prisma.tmcTrip.findFirst.mockReset();
 });
 
 // ─── Authentication gate ──────────────────────────────────────────────
@@ -431,6 +443,97 @@ describe('PUT /api/landing-pages/:id (update)', () => {
       .send({ slug: 'new-promo' });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ slug: 'new-promo' });
+  });
+
+  // Phase 11 — tripId support on PUT lets the operator link/unlink a
+  // landing page to a TMC trip from the existing Landing Pages module.
+  // No parallel UI on /travel/trips per decision.
+
+  test('Phase 11 — tripId=42 verifies trip exists in tenant + persists the link', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, slug: 'trip-page', status: 'DRAFT',
+    });
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 42 });
+    prisma.landingPage.update.mockImplementation(async (args) => ({ id: 50, ...args.data, tenantId: 1 }));
+
+    const res = await request(makeApp())
+      .put('/api/landing-pages/50')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ tripId: 42 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ tripId: 42 });
+    expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith({
+      where: { id: 42, tenantId: 1 },
+      select: { id: true },
+    });
+    expect(prisma.landingPage.update.mock.calls[0][0].data).toMatchObject({ tripId: 42 });
+  });
+
+  test('Phase 11 — tripId=null explicitly unlinks (no trip lookup required)', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, slug: 'trip-page', status: 'DRAFT',
+    });
+    prisma.landingPage.update.mockImplementation(async (args) => ({ id: 50, ...args.data, tenantId: 1 }));
+
+    const res = await request(makeApp())
+      .put('/api/landing-pages/50')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ tripId: null });
+
+    expect(res.status).toBe(200);
+    expect(prisma.tmcTrip.findFirst).not.toHaveBeenCalled();
+    expect(prisma.landingPage.update.mock.calls[0][0].data).toMatchObject({ tripId: null });
+  });
+
+  test('Phase 11 — tripId pointing at a non-existent / cross-tenant trip → 404 TRIP_NOT_FOUND', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, slug: 'trip-page', status: 'DRAFT',
+    });
+    prisma.tmcTrip.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .put('/api/landing-pages/50')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ tripId: 999 });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'TRIP_NOT_FOUND' });
+    expect(prisma.landingPage.update).not.toHaveBeenCalled();
+  });
+
+  test('Phase 11 — non-numeric tripId → 400 INVALID_TRIP_ID', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, slug: 'trip-page', status: 'DRAFT',
+    });
+    const res = await request(makeApp())
+      .put('/api/landing-pages/50')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ tripId: 'not-a-number' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_TRIP_ID' });
+    expect(prisma.tmcTrip.findFirst).not.toHaveBeenCalled();
+    expect(prisma.landingPage.update).not.toHaveBeenCalled();
+  });
+
+  test('Phase 11 — Prisma P2002 on tripId @unique surfaces as 409 TRIP_ALREADY_LINKED', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, slug: 'trip-page', status: 'DRAFT',
+    });
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 42 });
+    const conflictErr = Object.assign(new Error('Unique constraint failed'), {
+      code: 'P2002',
+      meta: { target: ['tripId'] },
+    });
+    prisma.landingPage.update.mockRejectedValue(conflictErr);
+
+    const res = await request(makeApp())
+      .put('/api/landing-pages/50')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ tripId: 42 });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'TRIP_ALREADY_LINKED' });
   });
 });
 
@@ -820,6 +923,61 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
         data: expect.objectContaining({
           eventType: 'FORM_SUBMIT',
           tenantId: 1,
+        }),
+      }),
+    );
+  });
+
+  test('trip-linked student registration in lead mode also creates a TripParticipant', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 51, slug: 'australia-2026', status: 'PUBLISHED', title: 'Australia 7-Day Tour',
+      content: '[]', templateType: 'travel_destination',
+      tenantId: 1, tripId: 7,
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 500, email: 'parent@example.com', tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 51, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/australia-2026/submit')
+      .send({
+        fields: {
+          student_name: 'Aarav Iyer',
+          student_grade: '8th Grade',
+          student_school: 'DPS North',
+          name: 'Ravi Iyer',
+          email: 'parent@example.com',
+          phone: '+919876543210',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(prisma.deal.create).toHaveBeenCalled();
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+
+    expect(prisma.tripParticipant.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tripId: 7,
+          fullName: 'Aarav Iyer',
+          OR: [
+            { parentEmail: 'parent@example.com' },
+            { parentPhone: '+919876543210' },
+          ],
+        }),
+        orderBy: { id: 'desc' },
+      }),
+    );
+    expect(prisma.tripParticipant.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tripId: 7,
+          fullName: 'Aarav Iyer',
+          parentName: 'Ravi Iyer',
+          parentEmail: 'parent@example.com',
+          parentPhone: '+919876543210',
+          medicalNotes: 'Grade: 8th Grade\nSchool: DPS North',
+          applicationStatus: 'pending',
         }),
       }),
     );

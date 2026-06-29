@@ -41,7 +41,7 @@ prisma.visit.create = vi.fn();
 prisma.visit.findFirst = prisma.visit.findFirst || vi.fn();
 prisma.visit.findMany = prisma.visit.findMany || vi.fn();
 prisma.visit.findUnique = prisma.visit.findUnique || vi.fn();
-prisma.visit.update = prisma.visit.update || vi.fn();
+prisma.visit.update = vi.fn();
 
 prisma.patient = prisma.patient || {};
 prisma.patient.update = vi.fn();
@@ -245,5 +245,77 @@ describe("POST /api/wellness/visits — S94 denorm-hook", () => {
       where: { id: 99 },
       data: { lastVisitDate: visitDate },
     });
+  });
+});
+
+
+describe("Practitioner assignment guard", () => {
+  beforeEach(() => {
+    prisma.visit.update.mockReset();
+    prisma.visit.update.mockResolvedValue({ id: 1, doctorId: 99 });
+  });
+
+  test("doctor cannot POST a visit assigned to another practitioner", async () => {
+    const res = await request(
+      makeApp({ role: "USER", wellnessRole: "doctor", userId: 7 }),
+    )
+      .post("/api/wellness/visits")
+      .send({
+        patientId: 42,
+        serviceId: 10,
+        doctorId: 99,
+        visitDate: "2026-06-10T11:00:00Z",
+        status: "completed",
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("ASSIGN_PRACTITIONER_DENIED");
+    expect(prisma.visit.create).not.toHaveBeenCalled();
+  });
+
+  test("doctor cannot PUT a visit to reassign it to another practitioner", async () => {
+    prisma.visit.findFirst.mockResolvedValueOnce({
+      id: 1,
+      tenantId: 1,
+      patientId: 42,
+      doctorId: 7,
+      status: "booked",
+      visitDate: new Date("2026-06-10T11:00:00Z"),
+    });
+
+    const res = await request(
+      makeApp({ role: "USER", wellnessRole: "doctor", userId: 7 }),
+    )
+      .put("/api/wellness/visits/1")
+      .send({ doctorId: 99 });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("ASSIGN_PRACTITIONER_DENIED");
+    expect(prisma.visit.update).not.toHaveBeenCalled();
+  });
+
+  test("doctor cannot PATCH assign-doctor on a pending visit", async () => {
+    const res = await request(
+      makeApp({ role: "USER", wellnessRole: "doctor", userId: 7 }),
+    )
+      .patch("/api/wellness/visits/1/assign-doctor")
+      .send({ doctorId: 99 });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("ASSIGN_PRACTITIONER_DENIED");
+  });
+
+  test("admin can still POST a visit assigned to any practitioner", async () => {
+    const res = await request(makeApp({ role: "ADMIN", userId: 1 }))
+      .post("/api/wellness/visits")
+      .send({
+        patientId: 42,
+        serviceId: 10,
+        doctorId: 99,
+        visitDate: "2026-06-10T11:00:00Z",
+        status: "completed",
+      });
+
+    expect(res.status).toBe(201);
   });
 });

@@ -62,7 +62,7 @@ const MANAGER_PERMISSIONS = [
   // / POS to triage and report, but no clinical-mutation rights (that's
   // Doctor / Nurse / Receptionist). Spec §2 MANAGER row.
   'patients.read',
-  'appointments.read',
+  'appointments.read', 'appointments.assign',
   'services.read',
   'inventory.read',
   'pos.read',
@@ -244,7 +244,7 @@ const NURSE_PERMISSIONS = [
 
 const RECEPTIONIST_PERMISSIONS = [
   'patients.read', 'patients.write',
-  'appointments.read', 'appointments.write', 'appointments.update', 'appointments.delete',
+  'appointments.read', 'appointments.write', 'appointments.update', 'appointments.delete', 'appointments.assign',
   // Post-split (v3.8.x): receptionist runs the booking workflow end-to-
   // end. `book_appointment.write` for the booking form, `waitlist.*` for
   // queue management (promote / disposition), `my_appointments.read` for
@@ -286,7 +286,7 @@ const RECEPTIONIST_PERMISSIONS = [
 const TELECALLER_PERMISSIONS = [
   'leads.read', 'leads.write', 'leads.update',
   'contacts.read', 'contacts.write',
-  'appointments.read', 'appointments.write',
+  'appointments.read', 'appointments.write', 'appointments.assign',
   // Post-split (v3.8.x): telecaller books from outbound calls and works
   // the waitlist queue. `book_appointment.write` for the booking form,
   // `waitlist.*` for queue dispositioning (their primary surface).

@@ -21,13 +21,18 @@ import { useNotify } from "../../utils/notify";
 
 const TABS = [
   { key: "overview", label: "Overview", icon: Luggage },
+  // Per decision #7, Participants is the SINGLE home for both
+  // PendingTripRegistration drafts (DRAFT / OTP_VERIFIED / REJECTED)
+  // AND actual TripParticipant rows (pending / approved / rejected /
+  // waitlisted). No separate "Pending Registrations" tab.
   { key: "participants", label: "Participants", icon: Users },
   { key: "rooming", label: "Rooming", icon: BedDouble },
   { key: "payment", label: "Payment plan", icon: Wallet },
-  // Renamed from "Microsite" so it reads naturally to operators + clients —
-  // same underlying tab `key` (and same TripMicrosite table) so no route /
-  // public-URL change. The body of the tab is unchanged.
-  { key: "microsite", label: "Public page", icon: Globe },
+  // Per decision #10, the Trip is the single owner of the public
+  // experience — the tab now surfaces BOTH the LandingPage (marketing
+  // + registration draft collection) AND the Microsite (secure
+  // operational portal). Tab key stays "microsite" for URL back-compat.
+  { key: "microsite", label: "Public Experience", icon: Globe },
 ];
 
 function fmt(d) {
@@ -277,10 +282,12 @@ function OverviewTab({ trip, onJump }) {
         )}
       </SummaryBand>
 
-      {/* Public page band (was: Microsite — renamed in-place; same data, same tab) */}
+      {/* Public Experience band — landing page + microsite live under
+          one tab per decision #10; the Overview band keeps the existing
+          status pill (driven by microsite presence) for back-compat. */}
       <SummaryBand
         icon={Globe}
-        title="Public page"
+        title="Public Experience"
         onClick={() => onJump?.("microsite")}
         status={trip.microsite ? "Published" : "Not published"}
         statusTone={trip.microsite ? "good" : "muted"}
@@ -547,6 +554,28 @@ function ParticipantsTab({ trip, onChange, notify }) {
   // flight so we can disable BOTH buttons on that row (avoid double-click
   // races) without disabling everyone else's controls.
   const [decidingId, setDecidingId] = useState(null);
+  // Phase 8 — pending registrations (PendingTripRegistration rows
+  // surfaced alongside participants per decision #7). Fetched on
+  // mount + after every approve/reject so the unified list stays
+  // current. The composite row key uses a "reg:" / "participant:"
+  // prefix so React doesn't collide on id since the two tables share
+  // an autoincrement keyspace.
+  const [pendingRegs, setPendingRegs] = useState([]);
+  const [decidingRegId, setDecidingRegId] = useState(null);
+
+  const loadPendingRegs = useCallback(async () => {
+    try {
+      const rows = await fetchApi(`/api/travel/trips/${trip.id}/registrations`);
+      setPendingRegs(Array.isArray(rows) ? rows : []);
+    } catch (_e) {
+      // Non-fatal — the unified list still shows participants
+      setPendingRegs([]);
+    }
+  }, [trip.id]);
+
+  useEffect(() => {
+    loadPendingRegs();
+  }, [loadPendingRegs]);
 
   const add = async () => {
     if (!form.fullName.trim()) {
@@ -625,12 +654,62 @@ function ParticipantsTab({ trip, onChange, notify }) {
     }
   };
 
+  // Phase 8 — approve / reject a PendingTripRegistration. Uses the
+  // /registrations/:rid/approve|reject endpoints from Phase 5. Approve
+  // creates a TripParticipant{applicationStatus:"approved"} server-
+  // side (decision #8 — no second approval workflow), so we refresh
+  // BOTH the parent trip (to get the new participant row) AND the
+  // pending-registration list (to reflect status=CONVERTED).
+  const decideRegistration = async (rid, action) => {
+    if (action === "reject") {
+      const ok = await notify.confirm({
+        title: "Reject registration",
+        message: "Mark this registration as rejected? It will be removed from the review queue.",
+        confirmText: "Reject",
+        destructive: true,
+      });
+      if (!ok) return;
+    }
+    setDecidingRegId(rid);
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}/registrations/${rid}/${action}`, {
+        method: "POST",
+      });
+      notify.success(
+        action === "approve"
+          ? "Registration approved — added as a participant"
+          : "Registration rejected",
+      );
+      // Refresh both lists in parallel
+      await Promise.all([loadPendingRegs(), Promise.resolve(onChange?.())]);
+    } catch (e) {
+      notify.error(e?.body?.error || `Failed to ${action} registration`);
+    } finally {
+      setDecidingRegId(null);
+    }
+  };
+
+  // Phase 8 — filter pending registrations to those still in the
+  // review queue. CONVERTED drafts have already become participants;
+  // they show up in trip.participants and shouldn't double-render here.
+  // REJECTED drafts are kept visible so operators can see what got
+  // declined (separately styled in the list).
+  const reviewableRegs = pendingRegs.filter((r) => r.status !== "CONVERTED");
+  const awaitingReviewCount = reviewableRegs.filter((r) => r.status === "OTP_VERIFIED").length;
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-        <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-          {trip.participants?.length || 0} participant{(trip.participants?.length || 0) === 1 ? "" : "s"}
-        </span>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", gap: 12, color: "var(--text-secondary)", fontSize: 13, flexWrap: "wrap" }}>
+          <span>
+            {trip.participants?.length || 0} participant{(trip.participants?.length || 0) === 1 ? "" : "s"}
+          </span>
+          {awaitingReviewCount > 0 && (
+            <span data-testid="awaiting-review-count" style={{ color: "#9A6F2E", fontWeight: 600 }}>
+              · {awaitingReviewCount} awaiting review
+            </span>
+          )}
+        </div>
         {!adding && (
           <button type="button" onClick={() => setAdding(true)} style={addBtn}>
             <Plus size={14} /> Add participant
@@ -649,6 +728,104 @@ function ParticipantsTab({ trip, onChange, notify }) {
             <button type="button" onClick={add} style={primaryBtn}>Add</button>
             <button type="button" onClick={() => setAdding(false)} style={secondaryBtn}>Cancel</button>
           </div>
+        </div>
+      )}
+
+      {/* Phase 8 — pending registrations from the landing-page wizard
+          render above the participants list. Each row gets a status-
+          aware presentation:
+            DRAFT          → "Awaiting verification" (no actions; we're
+                              still waiting on the parent's phone OTP)
+            OTP_VERIFIED   → "Awaiting review" + Approve / Reject CTAs
+            REJECTED       → grayed out; can be re-approved
+          The list shares the same listShell + row styles as
+          participants so they read as one continuous review surface. */}
+      {reviewableRegs.length > 0 && (
+        <div style={{ ...listShell, marginBottom: 12 }} data-testid="pending-registrations-list">
+          <div style={{ padding: "8px 12px", fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4, borderBottom: "1px solid var(--border-color)" }}>
+            Pending registrations
+          </div>
+          {reviewableRegs.map((r) => {
+            const busy = decidingRegId === r.id;
+            const isOtpVerified = r.status === "OTP_VERIFIED";
+            const isRejected = r.status === "REJECTED";
+            const pillStyle = isRejected
+              ? { bg: "rgba(168,50,63,0.14)", color: "#A8323F", label: "REJECTED" }
+              : isOtpVerified
+                ? { bg: "rgba(154,111,46,0.18)", color: "#9A6F2E", label: "AWAITING REVIEW" }
+                : { bg: "rgba(100,116,139,0.18)", color: "#64748b", label: "AWAITING VERIFICATION" };
+            return (
+              <div key={`reg:${r.id}`} style={{ ...row, opacity: isRejected ? 0.6 : 1 }} data-testid={`pending-reg-row-${r.id}`}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{r.studentName}</strong>
+                    <span
+                      style={{
+                        background: pillStyle.bg, color: pillStyle.color,
+                        fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
+                        padding: "2px 8px", borderRadius: 999, textTransform: "uppercase",
+                      }}
+                    >
+                      {pillStyle.label}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
+                    {r.parentName && (
+                      <span>
+                        <span style={{ opacity: 0.7 }}>Parent</span> · {r.parentName}
+                      </span>
+                    )}
+                    {r.parentPhone && <span style={{ fontVariantNumeric: "tabular-nums" }}>{r.parentPhone}</span>}
+                    {r.parentEmail && <span style={{ opacity: 0.85 }}>{r.parentEmail}</span>}
+                  </div>
+                  {r.reviewNotes && (
+                    <div style={{ fontSize: 11, color: "var(--text-secondary)", fontStyle: "italic", marginTop: 2 }}>
+                      Note: {r.reviewNotes}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
+                  {/* Approve is only available once the parent's phone
+                      OTP has been verified — operators can't approve
+                      an unverified draft (the server enforces this with
+                      409 INVALID_STATE; we hide the button to keep the
+                      UI deterministic). */}
+                  {isOtpVerified && (
+                    <button
+                      type="button"
+                      onClick={() => decideRegistration(r.id, "approve")}
+                      disabled={busy}
+                      data-testid={`approve-registration-${r.id}`}
+                      style={{
+                        ...secondaryBtn, padding: "5px 10px", fontSize: 12,
+                        color: "#2F7A4D", borderColor: "rgba(47,122,77,0.4)",
+                        opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
+                      }}
+                      aria-label={`Approve registration for ${r.studentName}`}
+                    >
+                      <CheckCircle2 size={13} aria-hidden /> Approve
+                    </button>
+                  )}
+                  {!isRejected && (
+                    <button
+                      type="button"
+                      onClick={() => decideRegistration(r.id, "reject")}
+                      disabled={busy}
+                      data-testid={`reject-registration-${r.id}`}
+                      style={{
+                        ...secondaryBtn, padding: "5px 10px", fontSize: 12,
+                        color: "#A8323F", borderColor: "rgba(168,50,63,0.4)",
+                        opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
+                      }}
+                      aria-label={`Reject registration for ${r.studentName}`}
+                    >
+                      <AlertCircle size={13} aria-hidden /> Reject
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -1606,10 +1783,229 @@ const ITINERARY_PLACEHOLDER = `<h2>Day 1 — Arrival</h2>
 <h2>Day 2 — Excursion</h2>
 <p>Full-day guided tour.</p>`;
 
+// Convert a LandingPage content payload (block-array or template object)
+// into a pre-filled itinerary HTML string for the microsite editor.
+// Prioritises explicit itineraryTimeline blocks; returns null when nothing
+// usable is found so the caller can fall back to the placeholder.
+function extractItineraryHtmlFromLandingPage(page) {
+  if (!page) return null;
+  let content;
+  try {
+    content = typeof page.content === "string" ? JSON.parse(page.content || "{}") : (page.content || {});
+  } catch {
+    return null;
+  }
+
+  // Block-based pages (legacy manual builder): array of components.
+  if (Array.isArray(content)) {
+    const timeline = content.find((c) => c?.type === "itineraryTimeline");
+    const days = Array.isArray(timeline?.props?.days) ? timeline.props.days : [];
+    if (days.length === 0) return null;
+    return days
+      .map((d) => {
+        const bullets = Array.isArray(d.bullets) ? d.bullets.filter(Boolean) : [];
+        const body = bullets.length ? `<ul>${bullets.map((b) => `<li>${escapeHtml(String(b))}</li>`).join("")}</ul>` : "<p>—</p>";
+        return `<h2>Day ${Number(d.day) || 1}${d.title ? ` — ${escapeHtml(String(d.title))}` : ""}</h2>\n${body}`;
+      })
+      .join("\n");
+  }
+
+  // Template-driven pages (wanderlux-v1 and registered templates): object
+  // with a sections[] array. Look for any section that carries days.
+  const sections = Array.isArray(content.sections) ? content.sections : [];
+  const fromSection = sections.find((s) => s?.type === "itinerary" || Array.isArray(s?.days));
+  const sectionDays = Array.isArray(fromSection?.days) ? fromSection.days : [];
+  if (sectionDays.length > 0) {
+    return sectionDays
+      .map((d) => {
+        const bullets = Array.isArray(d.bullets) ? d.bullets.filter(Boolean) : [d.description].filter(Boolean);
+        const body = bullets.length ? `<ul>${bullets.map((b) => `<li>${escapeHtml(String(b))}</li>`).join("")}</ul>` : "<p>—</p>";
+        return `<h2>Day ${Number(d.day) || 1}${d.title ? ` — ${escapeHtml(String(d.title))}` : ""}</h2>\n${body}`;
+      })
+      .join("\n");
+  }
+
+  return null;
+}
+
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// Convert the structured suggestion returned by POST /itineraries/suggest
+// into the HTML shape the microsite editor stores.
+function suggestionToHtml(suggestion, destination) {
+  const daySplit = Array.isArray(suggestion?.daySplit) ? suggestion.daySplit : [];
+  if (daySplit.length === 0) return "";
+  return daySplit
+    .map((day, idx) => {
+      const items = Array.isArray(day?.items) ? day.items : [];
+      const title = day?.title || (idx === 0 ? `Arrival in ${destination || ""}` : `Day ${idx + 1}`);
+      const body = items.length
+        ? `<ul>${items.map((it) => `<li>${escapeHtml(String(it.description || it.name || ""))}</li>`).join("")}</ul>`
+        : "<p>—</p>";
+      return `<h2>Day ${idx + 1} — ${escapeHtml(String(title))}</h2>\n${body}`;
+    })
+    .join("\n");
+}
+
+function tripDurationDays(trip) {
+  if (!trip?.departDate || !trip?.returnDate) return 7;
+  const ms = new Date(trip.returnDate) - new Date(trip.departDate);
+  const days = Math.max(1, Math.floor(ms / 86400000) + 1);
+  return days > 30 ? 30 : days;
+}
+
+async function generateItineraryHtml(trip, notify) {
+  const destination = trip?.destination;
+  if (!destination) {
+    notify.error("Trip destination is required to generate an itinerary.");
+    return null;
+  }
+  const days = tripDurationDays(trip);
+  try {
+    const res = await fetchApi(`/api/travel/itineraries/suggest`, {
+      method: "POST",
+      body: JSON.stringify({ destination, days, tier: "primary" }),
+    });
+    const html = suggestionToHtml(res?.suggestion, destination);
+    if (!html) {
+      notify.info("AI returned an empty itinerary — try editing the trip dates or destination.");
+      return null;
+    }
+    return html;
+  } catch (e) {
+    notify.error(e?.body?.error || e?.message || "Failed to generate itinerary");
+    return null;
+  }
+}
+
+// Phase 8 — Public Experience tab. Per decision #10 the Trip owns
+// BOTH the landing page (marketing + registration draft collection)
+// AND the microsite (secure operational portal), so this tab now
+// surfaces them as two stacked cards. The microsite card is the
+// existing MicrositeTab content (no UX changes); the landing-page
+// card is new and lets operators edit / preview / publish / copy URL
+// from one place.
 function MicrositeTab({ trip, onChange, notify }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <LandingPageCard trip={trip} notify={notify} />
+      <MicrositeCard trip={trip} onChange={onChange} notify={notify} />
+    </div>
+  );
+}
+
+function MicrositeCard({ trip, onChange, notify }) {
   const ms = trip.microsite;
   if (ms) return <MicrositeEditor trip={trip} ms={ms} onChange={onChange} notify={notify} />;
   return <MicrositeCreate trip={trip} onChange={onChange} notify={notify} />;
+}
+
+// LandingPageCard — read-only summary + jump-out to the existing
+// Landing Pages module. Per operator feedback we do NOT create,
+// edit, AI-generate, or publish landing pages from this trip-detail
+// surface — those flows all live in the existing /landing-pages
+// module (sidebar). This card is a single source of truth for
+// "which page (if any) is linked to this trip" plus a redirect.
+//
+// To link a landing page to a trip, the operator uses the
+// "Link to TMC trip" picker in the Landing Pages builder. The schema
+// link (LandingPage.tripId @unique) is what makes the
+// registration-draft branch fire — without it the wizard submission
+// falls back to the legacy lead-capture path.
+function LandingPageCard({ trip, notify }) {
+  const [page, setPage] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const p = await fetchApi(`/api/travel/trips/${trip.id}/landing-page`);
+      setPage(p);
+    } catch (e) {
+      if (e?.status === 404 || e?.body?.code === "NOT_LINKED") {
+        setPage(null);
+      } else {
+        notify.error(e?.body?.error || "Failed to load landing page");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [trip.id, notify]);
+
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div data-testid="landing-page-card">
+      <h3 style={{ margin: "0 0 12px", fontSize: 15, display: "flex", alignItems: "center", gap: 8 }}>
+        <Globe size={16} aria-hidden /> Landing page
+      </h3>
+      {loading ? (
+        <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>Loading…</div>
+      ) : !page ? (
+        <div style={{
+          background: "linear-gradient(135deg, rgba(38,88,85,0.10), rgba(38,88,85,0.02))",
+          border: "1px solid var(--border-color)", borderRadius: 10, padding: 14,
+          display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+        }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 8,
+            background: "var(--primary-color)", color: "#fff",
+            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+          }}>
+            <Sparkles size={18} aria-hidden />
+          </div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>
+              No landing page linked yet
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Generate, edit, and publish landing pages in the Landing Pages module.
+              Then use the &ldquo;Link to TMC trip&rdquo; picker on the page&apos;s editor
+              to point it at <strong>{trip.tripCode}</strong>.
+            </div>
+          </div>
+          <Link
+            to="/landing-pages"
+            data-testid="goto-landing-pages-link"
+            style={{ ...primaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            <ExternalLink size={14} aria-hidden /> Go to Landing Pages
+          </Link>
+        </div>
+      ) : (
+        <div style={{
+          border: "1px solid var(--border-color)", borderRadius: 10, padding: 14,
+          background: "var(--surface-color)",
+          display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+        }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+              <strong style={{ fontSize: 14 }}>{page.title}</strong>
+              <StatusBadge status={page.status} />
+            </div>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Edit, preview, publish, AI-generate — everything for this page happens in the Landing Pages module.
+              Published landing pages appear at <code style={{ fontSize: 11 }}>/trips</code>.
+            </div>
+          </div>
+          <Link
+            to={`/landing-pages/builder/${page.id}`}
+            data-testid="manage-landing-page-link"
+            style={{ ...primaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            <Edit3 size={14} aria-hidden /> Manage in Landing Pages
+          </Link>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Create form (no microsite yet) ──────────────────────────────────
@@ -1618,6 +2014,26 @@ function MicrositeCreate({ trip, onChange, notify }) {
   const [subdomain, setSubdomain] = useState(`trip-${trip.tripCode}`);
   const [itineraryHtml, setItineraryHtml] = useState(ITINERARY_PLACEHOLDER);
   const [saving, setSaving] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [prefillSource, setPrefillSource] = useState(null);
+
+  // Pre-fill itinerary from the linked landing page when available.
+  useEffect(() => {
+    let cancelled = false;
+    fetchApi(`/api/travel/trips/${trip.id}/landing-page`, { silent: true })
+      .then((page) => {
+        if (cancelled) return;
+        const html = extractItineraryHtmlFromLandingPage(page);
+        if (html) {
+          setItineraryHtml(html);
+          setPrefillSource(page.title ? `Prefilled from “${page.title}”` : "Prefilled from linked landing page");
+        }
+      })
+      .catch(() => {
+        // No linked landing page → keep placeholder.
+      });
+    return () => { cancelled = true; };
+  }, [trip.id]);
 
   const submit = async () => {
     if (!itineraryHtml.trim()) {
@@ -1639,27 +2055,52 @@ function MicrositeCreate({ trip, onChange, notify }) {
     }
   };
 
+  const handleAiGenerate = async () => {
+    setAiBusy(true);
+    const html = await generateItineraryHtml(trip, notify);
+    if (html) {
+      setItineraryHtml(html);
+      setPrefillSource("Generated by AI");
+    }
+    setAiBusy(false);
+  };
+
   return (
-    <div>
-      <div style={{
-        background: "linear-gradient(135deg, rgba(38,88,85,0.10), rgba(38,88,85,0.02))",
-        border: "1px solid var(--border-color)", borderRadius: 10, padding: 14, marginBottom: 16,
-        display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
-      }}>
+    <div style={{ background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
         <div style={{
-          width: 36, height: 36, borderRadius: 8,
+          width: 40, height: 40, borderRadius: 10,
           background: "var(--primary-color)", color: "#fff",
           display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
         }}>
-          <Sparkles size={18} aria-hidden />
+          <Sparkles size={20} aria-hidden />
         </div>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>Create a public registration page</div>
+          <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 2 }}>Create a public registration page</div>
           <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
             Pick a subdomain, fill the editor below, and hit Publish — parents and teachers get a shareable link where they can read the trip plan and register students.
           </div>
+          {prefillSource && (
+            <div style={{ fontSize: 11, color: "var(--primary-color)", marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
+              <CheckCircle2 size={11} aria-hidden /> {prefillSource}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={handleAiGenerate}
+            disabled={aiBusy}
+            style={{ ...secondaryBtn, color: "var(--primary-color)", borderColor: "rgba(18,38,71,0.35)" }}
+          >
+            <Sparkles size={14} /> {aiBusy ? "Generating…" : "AI Generate itinerary"}
+          </button>
+          <button type="button" onClick={submit} disabled={saving} style={saving ? primaryBtnDisabled : primaryBtn}>
+            <Save size={14} /> {saving ? "Publishing…" : "Publish public page"}
+          </button>
         </div>
       </div>
+
       <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
         Subdomain
       </label>
@@ -1680,11 +2121,6 @@ function MicrositeCreate({ trip, onChange, notify }) {
         tripId={trip.id}
         notify={notify}
       />
-      <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-        <button type="button" onClick={submit} disabled={saving} style={saving ? primaryBtnDisabled : primaryBtn}>
-          <Save size={14} /> {saving ? "Publishing…" : "Publish public page"}
-        </button>
-      </div>
     </div>
   );
 }
@@ -1699,6 +2135,7 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
   const [saving, setSaving] = useState(false);
   const [unpublishing, setUnpublishing] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
 
   // Public-facing microsite is the rendered PAGE (PublicTripMicrosite, routed
   // at /p/tripmicrosite/:publicUuid) — NOT the raw JSON API endpoint. The page
@@ -1757,9 +2194,18 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
     }
   };
 
+  const handleAiGenerate = async () => {
+    setAiBusy(true);
+    const html = await generateItineraryHtml(trip, notify);
+    if (html) setItineraryHtml(html);
+    setAiBusy(false);
+  };
+
   return (
-    <div>
-      {/* Live-link hero: promotes the public URL so operators can copy/share at a glance. */}
+    <div style={{ background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
+      {/* Live-link hero: promotes the public URL and hosts the primary
+          action buttons (Save / Unpublish / AI Generate) at the TOP of the
+          card so operators don't have to scroll to the bottom to act. */}
       <div style={{
         background: "linear-gradient(135deg, rgba(38,88,85,0.12), rgba(38,88,85,0.04))",
         border: "1px solid var(--border-color)", borderRadius: 12, padding: 14,
@@ -1775,7 +2221,7 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
           <Globe size={20} aria-hidden />
         </div>
         <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2, flexWrap: "wrap" }}>
             <span style={{
               display: "inline-flex", alignItems: "center", gap: 4,
               background: "rgba(47,122,77,0.14)", color: "#2F7A4D",
@@ -1803,6 +2249,14 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={handleAiGenerate}
+            disabled={aiBusy || previewing}
+            style={{ ...secondaryBtn, color: "var(--primary-color)", borderColor: "rgba(18,38,71,0.35)", opacity: aiBusy || previewing ? 0.5 : 1 }}
+          >
+            <Sparkles size={14} /> {aiBusy ? "Generating…" : "AI Generate itinerary"}
+          </button>
           <button type="button" onClick={() => setPreviewing((p) => !p)} style={secondaryBtn}>
             {previewing ? <><Edit3 size={14} /> Edit</> : <><Eye size={14} /> Preview</>}
           </button>
@@ -1812,6 +2266,12 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
           <a href={publicUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryBtn, textDecoration: "none" }}>
             <ExternalLink size={14} /> Open
           </a>
+          <button type="button" onClick={save} disabled={saving || previewing} style={(saving || previewing) ? primaryBtnDisabled : primaryBtn}>
+            <Save size={14} /> {saving ? "Saving…" : "Save changes"}
+          </button>
+          <button type="button" onClick={unpublish} disabled={unpublishing} style={dangerBtn}>
+            <Trash2 size={14} /> {unpublishing ? "Unpublishing…" : "Unpublish"}
+          </button>
         </div>
       </div>
 
@@ -1877,15 +2337,6 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
           />
         </>
       )}
-
-      <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "space-between", flexWrap: "wrap" }}>
-        <button type="button" onClick={save} disabled={saving || previewing} style={(saving || previewing) ? primaryBtnDisabled : primaryBtn}>
-          <Save size={14} /> {saving ? "Saving…" : "Save changes"}
-        </button>
-        <button type="button" onClick={unpublish} disabled={unpublishing} style={dangerBtn}>
-          <Trash2 size={14} /> {unpublishing ? "Unpublishing…" : "Unpublish"}
-        </button>
-      </div>
     </div>
   );
 }

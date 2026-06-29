@@ -1120,6 +1120,109 @@ router.get("/microsites/public/:publicUuid", async (req, res) => {
   }
 });
 
+// ─── PUBLIC draft summary (Phase 7 hybrid-registration UX) ───────────
+//
+// GET /api/travel/microsites/public/:publicUuid/draft-summary?token=...
+//
+// Returns a NON-PII summary of a PendingTripRegistration so the
+// microsite UI can:
+//   - confirm the visitor "we have your registration" without leaking PII
+//   - pre-populate the OTP form's phone field (masked → revealed only
+//     after OTP verify via the /full endpoint)
+//   - tell the visitor what status their draft is in (DRAFT / OTP_VERIFIED
+//     / REJECTED / CONVERTED) so a re-visit shows the right CTA
+//
+// Same explicit error codes as verify-otp (decision #9):
+//   404 DRAFT_NOT_FOUND   — token does not match any draft
+//   403 DRAFT_WRONG_TRIP  — draft belongs to a different microsite's trip
+//   400 DRAFT_EXPIRED     — draftTokenExpiresAt has passed
+router.get("/microsites/public/:publicUuid/draft-summary", async (req, res) => {
+  try {
+    const uuid = String(req.params.publicUuid);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
+      return res.status(400).json({ error: "publicUuid must be a UUID", code: "INVALID_UUID" });
+    }
+    const draftToken = typeof req.query.token === "string" ? req.query.token : "";
+    if (!draftToken) {
+      return res.status(400).json({ error: "token query parameter is required", code: "MISSING_TOKEN" });
+    }
+    const ms = await prisma.tripMicrosite.findUnique({
+      where: { publicUuid: uuid },
+      select: { id: true, tripId: true },
+    });
+    if (!ms) return res.status(404).json({ error: "Microsite not found", code: "NOT_FOUND" });
+
+    const draft = await prisma.pendingTripRegistration.findUnique({
+      where: { draftToken },
+      select: {
+        id: true, tripId: true, status: true,
+        otpVerified: true, draftTokenExpiresAt: true,
+        // Fields used to build the masked summary
+        studentName: true, parentName: true,
+        parentEmail: true, parentPhone: true,
+        passportNumber: true,
+        createdAt: true,
+      },
+    });
+    if (!draft) {
+      return res.status(404).json({
+        error: "Registration draft not found for this token",
+        code: "DRAFT_NOT_FOUND",
+      });
+    }
+    if (draft.tripId !== ms.tripId) {
+      return res.status(403).json({
+        error: "Draft token belongs to a different trip's microsite",
+        code: "DRAFT_WRONG_TRIP",
+      });
+    }
+    if (draft.draftTokenExpiresAt < new Date()) {
+      return res.status(400).json({
+        error: "Draft token has expired — please re-submit the registration form",
+        code: "DRAFT_EXPIRED",
+      });
+    }
+
+    // Mask PII for the pre-OTP view. Phone keeps last 4 visible so the
+    // visitor recognises "yes that's mine" without exposing the full
+    // number to anyone who has the URL.
+    const maskPhone = (p) => {
+      if (!p) return "";
+      const s = String(p);
+      if (s.length <= 4) return "•".repeat(s.length);
+      return "•".repeat(s.length - 4) + s.slice(-4);
+    };
+    const maskEmail = (e) => {
+      if (!e) return "";
+      const [local, domain] = String(e).split("@");
+      if (!domain) return "•".repeat(e.length);
+      const visible = local.slice(0, Math.min(2, local.length));
+      return `${visible}${"•".repeat(Math.max(local.length - visible.length, 1))}@${domain}`;
+    };
+    const firstNameOnly = (n) => {
+      if (!n) return "";
+      return String(n).split(/\s+/)[0];
+    };
+
+    res.json({
+      id: draft.id,
+      status: draft.status,
+      otpVerified: draft.otpVerified,
+      createdAt: draft.createdAt,
+      // Non-PII summary
+      studentFirstName: firstNameOnly(draft.studentName),
+      parentFirstName: firstNameOnly(draft.parentName),
+      parentEmailMasked: maskEmail(draft.parentEmail),
+      parentPhoneMasked: maskPhone(draft.parentPhone),
+      parentPhoneLast4: draft.parentPhone ? String(draft.parentPhone).slice(-4) : null,
+      hasPassport: !!draft.passportNumber,
+    });
+  } catch (e) {
+    console.error("[travel-microsite] draft-summary error:", e.message);
+    res.status(500).json({ error: "Failed to load draft summary" });
+  }
+});
+
 // ─── PUBLIC OTP flow (PRD §4.5) ──────────────────────────────────────
 //
 // Three endpoints fronting the PII reveal:
@@ -1160,9 +1263,10 @@ router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
       return res.status(400).json({ error: "publicUuid must be a UUID", code: "INVALID_UUID" });
     }
-    const { phone, purpose } = req.body || {};
-    if (!phone || !purpose) {
-      return res.status(400).json({ error: "phone + purpose required", code: "MISSING_FIELDS" });
+    let { phone, purpose } = req.body || {};
+    const { draftToken } = req.body || {};
+    if (!purpose) {
+      return res.status(400).json({ error: "purpose required", code: "MISSING_FIELDS" });
     }
     if (!validOtpPurpose(purpose)) {
       return res.status(400).json({
@@ -1176,11 +1280,47 @@ router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
     // dispatch stub log line (Q9 cut-over plumbing).
     const ms = await prisma.tripMicrosite.findUnique({
       where: { publicUuid: uuid },
-      select: { id: true, expiresAt: true, tenantId: true },
+      select: { id: true, tripId: true, expiresAt: true, tenantId: true },
     });
     if (!ms) return res.status(404).json({ error: "Microsite not found", code: "NOT_FOUND" });
     if (ms.expiresAt && new Date(ms.expiresAt) < new Date()) {
       return res.status(410).json({ error: "This microsite has expired", code: "GONE" });
+    }
+
+    // Phase 7+ — if the caller didn't supply a phone but DID supply a
+    // draftToken (microsite hybrid-registration UX), derive the phone
+    // from the draft so the visitor doesn't have to retype what they
+    // already entered on the landing page. Same explicit error codes
+    // as verify-otp (decision #9) — mismatches DON'T silently fall back
+    // to whatever the body might have contained.
+    if (!phone && purpose === "registration" && draftToken) {
+      const draft = await prisma.pendingTripRegistration.findUnique({
+        where: { draftToken: String(draftToken) },
+        select: { tripId: true, parentPhone: true, draftTokenExpiresAt: true },
+      });
+      if (!draft) {
+        return res.status(404).json({
+          error: "Registration draft not found for this token",
+          code: "DRAFT_NOT_FOUND",
+        });
+      }
+      if (draft.tripId !== ms.tripId) {
+        return res.status(403).json({
+          error: "Draft token belongs to a different trip's microsite",
+          code: "DRAFT_WRONG_TRIP",
+        });
+      }
+      if (draft.draftTokenExpiresAt < new Date()) {
+        return res.status(400).json({
+          error: "Draft token has expired — please re-submit the registration form",
+          code: "DRAFT_EXPIRED",
+        });
+      }
+      phone = draft.parentPhone;
+    }
+
+    if (!phone) {
+      return res.status(400).json({ error: "phone required", code: "MISSING_FIELDS" });
     }
 
     // Cool-down: reject if we issued an OTP for the same tuple inside
@@ -1243,9 +1383,9 @@ router.post("/microsites/public/:publicUuid/verify-otp", async (req, res) => {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
       return res.status(400).json({ error: "publicUuid must be a UUID", code: "INVALID_UUID" });
     }
-    const { phone, purpose, code } = req.body || {};
-    if (!phone || !purpose || !code) {
-      return res.status(400).json({ error: "phone + purpose + code required", code: "MISSING_FIELDS" });
+    let { phone, purpose, code } = req.body || {};
+    if (!purpose || !code) {
+      return res.status(400).json({ error: "purpose + code required", code: "MISSING_FIELDS" });
     }
     if (!validOtpPurpose(purpose)) {
       return res.status(400).json({
@@ -1258,6 +1398,40 @@ router.post("/microsites/public/:publicUuid/verify-otp", async (req, res) => {
       select: { id: true, tripId: true, expiresAt: true },
     });
     if (!ms) return res.status(404).json({ error: "Microsite not found", code: "NOT_FOUND" });
+
+    // Phase 7+ — derive phone from draftToken when not explicitly
+    // supplied (microsite hybrid-registration UX where the visitor
+    // already entered it on the landing page). Mirrors request-otp's
+    // explicit-error model — mismatches surface as deterministic
+    // codes, never silent fallbacks.
+    if (!phone && purpose === "registration" && req.body.draftToken) {
+      const draft = await prisma.pendingTripRegistration.findUnique({
+        where: { draftToken: String(req.body.draftToken) },
+        select: { tripId: true, parentPhone: true, draftTokenExpiresAt: true },
+      });
+      if (!draft) {
+        return res.status(404).json({
+          error: "Registration draft not found for this token",
+          code: "DRAFT_NOT_FOUND",
+        });
+      }
+      if (draft.tripId !== ms.tripId) {
+        return res.status(403).json({
+          error: "Draft token belongs to a different trip's microsite",
+          code: "DRAFT_WRONG_TRIP",
+        });
+      }
+      if (draft.draftTokenExpiresAt < new Date()) {
+        return res.status(400).json({
+          error: "Draft token has expired — please re-submit the registration form",
+          code: "DRAFT_EXPIRED",
+        });
+      }
+      phone = draft.parentPhone;
+    }
+    if (!phone) {
+      return res.status(400).json({ error: "phone required", code: "MISSING_FIELDS" });
+    }
 
     // Find the latest unused, unexpired OTP for the tuple.
     const otp = await prisma.tripMicrositeOtp.findFirst({

@@ -4,6 +4,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { tenantLocale } from '../../utils/date';
 import { AuthContext } from '../../App';
+import { usePermissions } from '../../hooks/usePermissions';
 
 import {
   displayStatus,
@@ -34,8 +35,16 @@ export { displayStatus, hoursForVisits, isHolidayForColumn, AssignDoctorModal };
 export default function CalendarGrid() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
+  const { hasPermission } = usePermissions();
   // Only regular users (patients) can book appointments, not staff/admins/doctors
   const canBookAppointment = user?.role === 'USER';
+  // Assignment/reassignment of practitioners is gated on the appointments.assign
+  // permission (or admin/manager). Doctors can see pending visits but cannot
+  // assign them to other doctors.
+  const canAssignDoctor =
+    user?.role === 'ADMIN' ||
+    user?.role === 'MANAGER' ||
+    hasPermission('appointments', 'assign');
   // Appointments + MyAppointments link here as `?focus=<visitId>&date=<yyyy-mm-dd>`.
   // `date` lets us snap the from/to filter without an extra round-trip; `focus`
   // is the chip we highlight + scroll into view once visits load.
@@ -493,6 +502,7 @@ export default function CalendarGrid() {
           grid={grid}
           focusId={focusId}
           focusedRef={focusedRef}
+          canAssignDoctor={canAssignDoctor}
           onEmptyCellClick={(columnId, hour) => setNewVisit({ columnId, hour })}
           onAssignClick={(visit) => setAssignTarget(visit)}
         />

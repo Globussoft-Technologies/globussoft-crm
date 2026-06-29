@@ -95,7 +95,10 @@ const { verifyRole } = require("../middleware/auth");
 // see GET /api/wellness/my-prescriptions below. Lets any role granted
 // `my_prescriptions.read` view their OWN linked Patient's Rx without
 // needing the tenant-wide `prescriptions.read`.
-const { requirePermission } = require("../middleware/requirePermission");
+const {
+  requirePermission,
+  userHasPermission,
+} = require("../middleware/requirePermission");
 // #920 slice S59 — canonical PHI-read gate factory. The original inline
 // declaration of `phiReadGate` (which lived just below the `phiReadGate`
 // JSDoc block ~line 365) has been replaced with this factory call so the
@@ -391,6 +394,44 @@ const tenantWhere = (req, extra = {}) => ({
 // middleware module documents the policy contents. All 30+ callsites of
 // `phiReadGate` below continue to work unchanged.
 const phiReadGate = makePhiReadGate();
+
+// Permission check for practitioner-assignment surfaces (drag-to-reassign,
+// "Assign doctor" modal, PATCH /visits/:id/assign-doctor). Doctors must be
+// able to edit their OWN visits (vitals, notes, status) but must NOT be able
+// to assign/reassign visits to OTHER practitioners. Assignment is reserved
+// for admin / manager / receptionist / telecaller, OR any role explicitly
+// granted the new `appointments.assign` permission.
+async function canAssignPractitioner(req) {
+  if (!req.user) return false;
+  if (req.user.role === "ADMIN" || req.user.role === "MANAGER") return true;
+  const wr = String(req.user.wellnessRole || "").toLowerCase();
+  if (wr === "receptionist" || wr === "telecaller") return true;
+  // Clinical practitioners are never assignment operators, even if they
+  // somehow hold broad `appointments.write` / `calendar.write` grants.
+  if (wr === "doctor" || wr === "professional") return false;
+
+  try {
+    // Primary gate: the new granular permission.
+    const hasAssign = await userHasPermission(req.user, "appointments", "assign");
+    if (hasAssign) return true;
+
+    // Fallback for existing tenants before the appointments.assign backfill
+    // runs: non-doctor staff who already have booking + calendar write perms
+    // (receptionists, telecallers) can assign. Doctors are excluded by their
+    // clinical wellnessRole even though they also hold those perms.
+    if (wr !== "doctor" && wr !== "professional") {
+      const [hasApptWrite, hasCalWrite] = await Promise.all([
+        userHasPermission(req.user, "appointments", "write"),
+        userHasPermission(req.user, "calendar", "write"),
+      ]);
+      if (hasApptWrite && hasCalWrite) return true;
+    }
+  } catch (_e) {
+    // Fail-closed: any permission lookup error degrades to deny.
+  }
+  return false;
+}
+
 const phiWriteGate = verifyWellnessRole(
   ["clinical", "doctor", "professional", "admin", "manager"],
   {
@@ -2764,6 +2805,22 @@ router.post("/visits", phiWriteGate, async (req, res) => {
       });
     }
 
+    // Doctors can only create visits for themselves unless they explicitly
+    // hold the practitioner-assignment permission (or are admin/manager/
+    // receptionist/telecaller). This closes the "doctor books another doctor"
+    // loophole on the New Visit / empty-slot flow.
+    const requestedDoctorId = doctorId ? parseInt(doctorId, 10) : null;
+    if (
+      requestedDoctorId &&
+      requestedDoctorId !== req.user.userId &&
+      !(await canAssignPractitioner(req))
+    ) {
+      return res.status(403).json({
+        error: "You do not have permission to assign this visit to another practitioner.",
+        code: "ASSIGN_PRACTITIONER_DENIED",
+      });
+    }
+
     // Wave 11 Agent GG: 4-class booking conflict gate.
     const slotCheck = await assertVisitSlotAvailable({
       tenantId: req.user.tenantId,
@@ -2910,6 +2967,12 @@ router.post("/visits", phiWriteGate, async (req, res) => {
 // notification needed for Phase 1).
 router.patch("/visits/:id/assign-doctor", phiWriteGate, async (req, res) => {
   try {
+    if (!(await canAssignPractitioner(req))) {
+      return res.status(403).json({
+        error: "You do not have permission to assign practitioners.",
+        code: "ASSIGN_PRACTITIONER_DENIED",
+      });
+    }
     const { visit } = await appointmentService.assignDoctor({
       tenantId: req.user.tenantId,
       visitId: req.params.id,
@@ -2955,6 +3018,19 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
       if (req.body[k] !== undefined) data[k] = req.body[k];
     if (data.doctorId !== undefined)
       data.doctorId = data.doctorId ? parseInt(data.doctorId, 10) : null;
+    // Doctors may edit their own visits (vitals, notes, status) but may not
+    // reassign visits to other practitioners unless they hold the assignment
+    // permission or an explicit assigner wellnessRole / admin-manager role.
+    if (
+      data.doctorId !== undefined &&
+      data.doctorId !== existing.doctorId &&
+      !(await canAssignPractitioner(req))
+    ) {
+      return res.status(403).json({
+        error: "You do not have permission to reassign practitioners.",
+        code: "ASSIGN_PRACTITIONER_DENIED",
+      });
+    }
     if (data.resourceId !== undefined)
       data.resourceId = data.resourceId ? parseInt(data.resourceId, 10) : null;
     if (data.locationId !== undefined)
@@ -4737,13 +4813,22 @@ const {
   ensureRoleKey,
   ensureRoleLabel,
   listForTenant: listRoleTypes,
+  seedDefaultsForTenant,
 } = require("../lib/wellnessRoleTypes");
 
 router.get("/role-types", async (req, res) => {
   try {
     const activeOnly =
       req.query.activeOnly === "1" || req.query.activeOnly === "true";
-    const rows = await listRoleTypes(req.user.tenantId, { activeOnly });
+    let rows = await listRoleTypes(req.user.tenantId, { activeOnly });
+    // Defensive auto-seed: if the tenant has no wellness role catalog yet
+    // (fresh signup, restored backup, or data drift), plant the defaults
+    // before returning so the Staff form + backend sync can map DOCTOR →
+    // "doctor" instead of returning an empty dropdown.
+    if (rows.length === 0) {
+      await seedDefaultsForTenant(req.user.tenantId);
+      rows = await listRoleTypes(req.user.tenantId, { activeOnly });
+    }
     res.json(rows);
   } catch (e) {
     console.error("[wellness] list role-types error:", e.message);

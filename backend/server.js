@@ -609,6 +609,7 @@ const {
   router: landingPagesRoutes,
   publicRouter: landingPagesPublic,
 } = require("./routes/landing_pages");
+const { renderPage } = require("./services/landingPageRenderer");
 const tenantsRoutes = require("./routes/tenants");
 const tenantSettingsRoutes = require("./routes/tenant_settings");
 // #870 — per-user preference surface (theme persistence for cross-device roaming).
@@ -824,26 +825,6 @@ app.use(
   }),
 );
 
-// #917 slice S119 (FR-3.X) — wire S35's cspNonceStaticMiddleware. Mounted
-// here (AFTER swagger-ui's `/api-docs` mount) because the middleware's
-// fall-through rules (GET + non-`/api/` prefix + no dot) match `/api-docs`
-// and `/api-docs/` — placing it BEFORE swagger-ui (S115's mount position)
-// caused the SPA index.html to be served instead of Swagger UI's HTML,
-// reding the e2e api-docs spec and the api_tests deploy gate.
-//
-// Positional constraints (all still satisfied at this site):
-//   - AFTER `attachNonce`                    (line ~205 — populates res.locals.cspNonce)
-//   - AFTER `helmetStrictReportOnlyMiddleware` (line ~211 — sets the CSP header)
-//   - AFTER swagger-ui mount                 (line ~666 — swagger-ui wins /api-docs)
-//   - BEFORE `app.get("/", ...)`             (line ~1110 — SPA shell fallback)
-//   - BEFORE `/uploads` static mounts        (line ~1060 — static asset paths
-//     contain dots and so fall through the middleware's own rules anyway)
-//
-// Express routes are first-match-wins on mount order — moving the mount to
-// AFTER swagger-ui means `/api-docs` requests reach swagger-ui's handler
-// before this middleware can intercept them.
-app.use(cspNonceStaticMiddleware);
-
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
   // /portal/set-password was previously in openPaths — that's a real
@@ -930,6 +911,9 @@ app.use("/api", (req, res, next) => {
     "/landing-pages/public",
     "/landing-pages/wanderlux-static",
     "/brochure-assets",
+    // Public landing-page submit + tracking pixels are referenced by
+    // rendered pages as /api/pages/<slug>/submit and /api/pages/<slug>/track.
+    "/pages/",
   ];
   if (openPaths.some((p) => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
@@ -1054,6 +1038,11 @@ app.use("/api/me", meRouter);
 app.use("/api/permissions", permissionsRouter);
 app.use("/api/widgets", widgetsRoutes);
 app.use("/api/pages", pagesRoutes);
+// Public landing-page submit + tracking pixels referenced by rendered
+// pages as /api/pages/<slug>/submit and /api/pages/<slug>/track. Mounted
+// AFTER pagesRoutes so /api/pages/catalog and /api/pages/me stay with
+// the auth-gated catalog router.
+app.use("/api/pages", landingPagesPublic);
 app.use("/api/users", usersRoutes);
 app.use("/api/contacts", contactsRoutes);
 app.use("/api/deals", dealsRoutes);
@@ -1391,6 +1380,78 @@ app.use("/p", landingPagesPublic);
 
 // Public legal/policy pages — rendered from Markdown (no auth)
 app.use(require("./routes/legal"));
+
+// Public /trips marketing surface — always renders the currently
+// featured PUBLISHED landing page. The publish endpoint marks the page
+// as isFeatured, so /trips automatically follows the latest published
+// trip without marketing sites needing to know the slug.
+app.get("/trips", async (req, res) => {
+  try {
+    const prismaClient = require("./lib/prisma");
+    const page = await prismaClient.landingPage.findFirst({
+      where: { status: "PUBLISHED", isFeatured: true },
+      orderBy: { featuredAt: "desc" },
+    });
+    if (!page) return res.status(404).send("<h1>No featured trip found</h1>");
+
+    await prismaClient.landingPage.update({
+      where: { id: page.id },
+      data: { visits: { increment: 1 } },
+    });
+    await prismaClient.landingPageAnalytics.create({
+      data: {
+        landingPageId: page.id,
+        eventType: "VISIT",
+        visitorIp: req.ip,
+        userAgent: req.headers["user-agent"],
+        referrer: req.headers["referer"],
+        tenantId: page.tenantId || 1,
+      },
+    });
+
+    const html = renderPage(page);
+    res.set("Content-Type", "text/html");
+    if (page && page.templateType === "wanderlux-v1") {
+      res.set(
+        "Content-Security-Policy",
+        [
+          "default-src 'self'",
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net",
+          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
+          "font-src 'self' data: https://fonts.gstatic.com",
+          "img-src 'self' data: blob: https:",
+          "media-src 'self' https: blob:",
+          "connect-src 'self' https://image.pollinations.ai https://unpkg.com",
+          "frame-src 'self' https://*.wistia.net https://*.wistia.com https://fast.wistia.net https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.loom.com",
+          "frame-ancestors 'none'",
+          "base-uri 'self'",
+          "object-src 'none'",
+        ].join("; "),
+      );
+      res.removeHeader("Content-Security-Policy-Report-Only");
+    }
+    res.send(html);
+  } catch (err) {
+    console.error("[Trips] Render error:", err);
+    res.status(500).send("<h1>Server error</h1>");
+  }
+});
+
+// #917 slice S119 (FR-3.X) — CSP-nonce static-file middleware.
+// Substitutes `__CSP_NONCE__` placeholders in the SPA index.html with the
+// per-request nonce minted by attachNonce. Mounted AFTER the public landing
+// page route (`/p/*`) so server-rendered pages are served by the backend
+// renderer, not by this SPA shell fallback. It still intercepts all other
+// client-side routes (e.g. /login, /dashboard) because they have no Express
+// handler and need the nonce-substituted index.html.
+//
+// Positional constraints:
+//   - AFTER `attachNonce` and helmet (populate/set CSP nonce/header)
+//   - AFTER swagger-ui mount (/api-docs wins)
+//   - AFTER `/p` public landing-page route (rendered HTML must win)
+//   - AFTER `/legal` public Markdown pages
+//   - BEFORE the final SPA catch-all/static fallback (so we substitute nonce)
+app.use(cspNonceStaticMiddleware);
 
 // #921 slice S38 → S66 → S129 — wire the iframe-embedding override on /embed/*
 // BEFORE the lead-form gate handler. S4 (commit 6561bdc) made the global

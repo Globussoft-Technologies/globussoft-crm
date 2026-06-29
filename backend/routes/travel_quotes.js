@@ -2872,6 +2872,62 @@ router.post(
         });
       }
 
+      // Carry over any quote-advance payments that landed before conversion.
+      // Without this, the invoice stays Draft even though the customer already
+      // paid the advance via the quote acceptance link.
+      try {
+        const advancePayments = await prisma.payment.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            status: "SUCCESS",
+            metadata: { contains: `"quoteId":${quote.id}` },
+          },
+        });
+        const linkedPayments = [];
+        for (const p of advancePayments) {
+          let meta = {};
+          try { meta = JSON.parse(p.metadata || "{}"); } catch (_) {}
+          if (meta.type !== "travel-quote-advance" || p.invoiceId) continue;
+          await prisma.payment.update({
+            where: { id: p.id },
+            data: {
+              invoiceId: created.id,
+              metadata: JSON.stringify({ ...meta, travelInvoiceId: created.id }),
+            },
+          });
+          linkedPayments.push(p);
+        }
+        if (linkedPayments.length > 0) {
+          const paidAgg = await prisma.payment
+            .aggregate({
+              where: {
+                tenantId: req.travelTenant.id,
+                status: "SUCCESS",
+                OR: [
+                  { invoiceId: created.id },
+                  { metadata: { contains: `"travelInvoiceId":${created.id}` } },
+                ],
+              },
+              _sum: { amount: true },
+            })
+            .catch(() => ({ _sum: { amount: 0 } }));
+          const totalPaid = Number(paidAgg._sum.amount || 0);
+          const totalDue = Number(created.totalAmount || 0);
+          const invoiceStatus = totalDue > 0 && totalPaid >= totalDue ? "Paid" : "Partial";
+          if (invoiceStatus !== created.status) {
+            created = await prisma.travelInvoice.update({
+              where: { id: created.id },
+              data: {
+                status: invoiceStatus,
+                ...(invoiceStatus === "Paid" ? { paidAt: new Date() } : {}),
+              },
+            });
+          }
+        }
+      } catch (e) {
+        console.error("[travel-quotes] carry-over quote advance payments failed (non-fatal):", e.message);
+      }
+
       // Audit the source-side conversion. The newly-created invoice
       // gets its own CREATE audit row via writeAudit on the invoice
       // model so both rows appear in the audit-viewer surface.

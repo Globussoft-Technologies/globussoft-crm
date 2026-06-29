@@ -19,7 +19,6 @@ const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilt
 // route handler does the Prisma fetch + shape mapping then delegates.
 const { buildTallyXml } = require("../lib/tallyXmlExport");
 const { buildCaCsv } = require("../lib/caCsvExport");
-
 // ────────────────────────────────────────────────────────────────
 // Shared helpers for the two CA / Tally export endpoints below.
 // ────────────────────────────────────────────────────────────────
@@ -103,6 +102,15 @@ function mapInvoiceToExportShape(inv) {
     subBrand: inv.contact ? inv.contact.subBrand || "" : "",
     notes: inv.legalEntityCode || "",
   };
+}
+
+// Build a human-friendly payment description for quote-advance payments.
+function buildQuoteAdvanceDescription(quote, paidMajor, total) {
+  const cur = quote.currency || "INR";
+  const pct = total > 0 ? Math.round((paidMajor / total) * 100) : 0;
+  const isFull = paidMajor >= total;
+  if (isFull) return `Quote #${quote.id} — final payment received`;
+  return `Quote #${quote.id} — ${pct}% advance payment`;
 }
 
 // Build the Prisma where clause shared by both export endpoints.
@@ -866,7 +874,7 @@ router.put("/:id/pay", verifyToken, async (req, res) => {
 // routes/payments.js is the primary reconciler in production.
 router.post("/public/confirm-payment", async (req, res) => {
   const crypto = require("crypto");
-  const { getTenantRazorpayCreds } = require("../lib/tenantPaymentGateway");
+  const { getTenantRazorpayCreds, getTenantRazorpayClient } = require("../lib/tenantPaymentGateway");
   try {
     const {
       razorpay_payment_link_id,
@@ -876,7 +884,8 @@ router.post("/public/confirm-payment", async (req, res) => {
       razorpay_signature,
     } = req.body;
 
-    if (!razorpay_payment_link_id || razorpay_payment_link_status !== "paid") {
+    const completedPaymentLinkStatuses = new Set(["paid", "partially_paid"]);
+    if (!razorpay_payment_link_id || !completedPaymentLinkStatuses.has(razorpay_payment_link_status)) {
       return res.status(400).json({ error: "Payment not completed" });
     }
 
@@ -1017,7 +1026,182 @@ router.post("/public/confirm-payment", async (req, res) => {
       }
     }
 
-    res.json({ ok: true, plinkId: razorpay_payment_link_id });
+    // Travel quote advance reconciliation — mirrors the webhook path in
+    // routes/payments.js but runs on the Razorpay callback (localhost / dev
+    // boxes where webhooks cannot be delivered).
+    if (existingMeta.type === "travel-quote-advance" && existingMeta.quoteId) {
+      try {
+        const quoteId = Number(existingMeta.quoteId);
+        const tenantId = payment.tenantId;
+
+        // Authoritative amount from Razorpay (callback params don't include it).
+        let paidMajor = Number(payment.amount || 0);
+        if (razorpay_payment_id) {
+          const rp = await getTenantRazorpayClient(tenantId);
+          if (rp && rp.client) {
+            try {
+              const rpPayment = await rp.client.payments.fetch(razorpay_payment_id);
+              if (rpPayment && rpPayment.amount) {
+                paidMajor = Number(rpPayment.amount) / 100;
+              }
+            } catch (fErr) {
+              console.error("[PublicConfirmPayment] razorpay payments.fetch error (non-fatal):", fErr && fErr.message);
+            }
+          }
+        }
+
+        console.log(`[PublicConfirmPayment] quote advance reconcile start: quoteId=${quoteId}, plinkId=${razorpay_payment_link_id}`);
+        const quote = await prisma.travelQuote.findFirst({
+          where: { id: quoteId, tenantId },
+          select: { id: true, totalAmount: true, status: true, contactId: true, subBrand: true },
+        });
+        if (!quote) {
+          console.warn(`[PublicConfirmPayment] quote not found: quoteId=${quoteId}, tenantId=${tenantId}`);
+        }
+        if (quote) {
+          const newStatus =
+            paidMajor > 0 && Number(quote.totalAmount) > 0 && paidMajor >= Number(quote.totalAmount)
+              ? "fully_paid"
+              : "advance_paid";
+
+          await prisma.travelQuote.update({
+            where: { id: quote.id },
+            data: {
+              advancePaymentId: String(razorpay_payment_id || payment.gatewayId),
+              status: newStatus,
+            },
+          });
+
+          // If the quote has already been converted to an invoice, apply the
+          // advance against it so the invoice status reflects the payment.
+          let linkedInvoiceId = existingMeta.travelInvoiceId || null;
+          const travelInv = await prisma.travelInvoice.findFirst({
+            where: { quoteId: quote.id, tenantId },
+          });
+          console.log(`[PublicConfirmPayment] invoice lookup: quoteId=${quote.id}, tenantId=${tenantId}, found=${!!travelInv}, existingInvoiceId=${linkedInvoiceId}`);
+
+          const totalQuote = Number(quote.totalAmount || 0);
+          const description = buildQuoteAdvanceDescription(quote, paidMajor, totalQuote);
+
+          if (travelInv) {
+            linkedInvoiceId = travelInv.id;
+            await prisma.payment.update({
+              where: { id: payment.id },
+              data: {
+                invoiceId: travelInv.id,
+                amount: paidMajor,
+                description,
+                metadata: JSON.stringify({
+                  ...existingMeta,
+                  mode: "payment_link",
+                  plinkId: razorpay_payment_link_id,
+                  razorpayPaymentId: razorpay_payment_id,
+                  travelInvoiceId: travelInv.id,
+                }),
+              },
+            });
+
+            const paidAgg = await prisma.payment
+              .aggregate({
+                where: {
+                  tenantId,
+                  status: "SUCCESS",
+                  OR: [
+                    { invoiceId: travelInv.id },
+                    { metadata: { contains: `"travelInvoiceId":${travelInv.id}` } },
+                  ],
+                },
+                _sum: { amount: true },
+              })
+              .catch(() => ({ _sum: { amount: 0 } }));
+            const totalPaid = Number(paidAgg._sum.amount || 0);
+            const totalDue = Number(travelInv.totalAmount || 0);
+            const invoiceStatus = totalDue > 0 && totalPaid >= totalDue ? "Paid" : "Partial";
+            await prisma.travelInvoice.update({
+              where: { id: travelInv.id },
+              data: {
+                status: invoiceStatus,
+                ...(invoiceStatus === "Paid" ? { paidAt: new Date() } : {}),
+              },
+            });
+
+          } else if (paidMajor > 0 && paidMajor !== Number(payment.amount || 0)) {
+            await prisma.payment.update({
+              where: { id: payment.id },
+              data: { amount: paidMajor, description },
+            });
+          }
+
+          // Emit automation event so workflow rules and the travel payment
+          // admin notification listener can react.
+          try {
+            require("../lib/eventBus").emitEvent(
+              "payment.collected",
+              {
+                quoteId: quote.id,
+                paymentId: payment.id,
+                travelInvoiceId: linkedInvoiceId,
+                amount: paidMajor,
+                method: "razorpay",
+                currency: payment.currency,
+                paidAt: new Date(),
+                contactId: quote.contactId,
+                subBrand: quote.subBrand,
+              },
+              tenantId,
+              req.io
+            );
+          } catch (_e) {}
+        }
+      } catch (e) {
+        console.error("[PublicConfirmPayment] travel quote advance reconcile failed (non-fatal):", e.message);
+      }
+    }
+
+    // Build a summary for the success page (amount paid, balance due, invoice).
+    const summary = { amountPaid: 0, totalDue: 0, balanceDue: 0, invoiceNum: null, currency: payment.currency || "INR" };
+    try {
+      const refreshed = await prisma.payment.findFirst({
+        where: { id: payment.id },
+        select: { amount: true, currency: true, metadata: true },
+      });
+      if (refreshed) {
+        summary.amountPaid = Number(refreshed.amount || 0);
+        summary.currency = refreshed.currency || "INR";
+        let finalMeta = {};
+        try { finalMeta = JSON.parse(refreshed.metadata || "{}"); } catch (_) {}
+        const linkedInvoiceId = Number(finalMeta.travelInvoiceId);
+        if (Number.isFinite(linkedInvoiceId)) {
+          const linkedInv = await prisma.travelInvoice.findFirst({
+            where: { id: linkedInvoiceId },
+            select: { invoiceNum: true, totalAmount: true },
+          });
+          if (linkedInv) {
+            summary.invoiceNum = linkedInv.invoiceNum;
+            summary.totalDue = Number(linkedInv.totalAmount || 0);
+            const paidAgg = await prisma.payment
+              .aggregate({
+                where: {
+                  tenantId: payment.tenantId,
+                  status: "SUCCESS",
+                  OR: [
+                    { invoiceId: linkedInvoiceId },
+                    { metadata: { contains: `"travelInvoiceId":${linkedInvoiceId}` } },
+                  ],
+                },
+                _sum: { amount: true },
+              })
+              .catch(() => ({ _sum: { amount: 0 } }));
+            const totalPaid = Number(paidAgg._sum.amount || 0);
+            summary.balanceDue = Math.max(0, summary.totalDue - totalPaid);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[PublicConfirmPayment] summary build failed (non-fatal):", e.message);
+    }
+
+    res.json({ ok: true, plinkId: razorpay_payment_link_id, ...summary });
   } catch (err) {
     console.error("[PublicConfirmPayment] error:", err.message);
     res.status(500).json({ error: "Failed to confirm payment" });
@@ -1114,6 +1298,9 @@ router.get("/public/receipt", async (req, res) => {
         invoice: {
           ...travelInv,
           status: isFullyPaid ? "Paid" : travelInv.status,
+          amountPaid: totalPaid,
+          totalPaid,
+          balanceDue: Math.max(0, totalDue - totalPaid),
           contactName: contact?.name || null,
           contactEmail: contact?.email || null,
           contactPhone: contact?.phone || null,

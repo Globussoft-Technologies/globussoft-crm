@@ -7134,7 +7134,8 @@ router.get(
             ({ p, m }) =>
               (m.type === "travel-payment-schedule" && p.invoiceId === invoice.id) ||
               ((m.kind === "travel-milestone" || m.kind === "travel-invoice") &&
-                Number(m.travelInvoiceId) === invoice.id),
+                Number(m.travelInvoiceId) === invoice.id) ||
+              (m.type === "travel-quote-advance" && Number(m.travelInvoiceId) === invoice.id),
           )
           .map(({ p, m }) => ({
             id: p.id,

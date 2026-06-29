@@ -4,6 +4,7 @@ import { CheckCircle2, Download, Loader2 } from "lucide-react";
 export default function InvoicePaymentSuccess() {
   const [confirming, setConfirming] = useState(true);
   const [plinkId, setPlinkId] = useState(null);
+  const [summary, setSummary] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -11,7 +12,11 @@ export default function InvoicePaymentSuccess() {
     const plink = params.get("razorpay_payment_link_id");
     const status = params.get("razorpay_payment_link_status");
 
-    if (!plink || status !== "paid") {
+    // Razorpay payment links with accept_partial=true can return either
+    // "paid" (full amount) or "partially_paid" (advance / part payment).
+    // Both are successful completions and must be reconciled.
+    const isSuccess = status === "paid" || status === "partially_paid";
+    if (!plink || !isSuccess) {
       setConfirming(false);
       return;
     }
@@ -32,10 +37,13 @@ export default function InvoicePaymentSuccess() {
       .then((r) => r.json())
       .then((data) => {
         if (data.error) setError(data.error);
+        else setSummary(data);
       })
       .catch(() => {})
       .finally(() => setConfirming(false));
   }, []);
+
+  const isPartial = summary && summary.balanceDue > 0;
 
   return (
     <div style={pageStyle}>
@@ -50,9 +58,38 @@ export default function InvoicePaymentSuccess() {
             <CheckCircle2 size={56} color="#10b981" style={{ marginBottom: 20 }} />
             <h1 style={headingStyle}>Payment Successful</h1>
             <p style={subStyle}>
-              Thank you — your payment has been received and your invoice has been
-              updated. You may close this page.
+              Thank you — your payment has been received and recorded.
+              {!error && summary && (
+                isPartial
+                  ? " A balance remains on this booking; you can use the same link to pay the remainder."
+                  : " Your booking is fully paid."
+              )}
             </p>
+
+            {summary && (
+              <div style={summaryStyle}>
+                <div style={summaryRowStyle}>
+                  <span style={summaryLabelStyle}>Amount paid</span>
+                  <span style={summaryValueStyle}>
+                    {summary.currency || "INR"} {Number(summary.amountPaid || 0).toLocaleString("en-IN")}
+                  </span>
+                </div>
+                {summary.invoiceNum && (
+                  <div style={summaryRowStyle}>
+                    <span style={summaryLabelStyle}>Invoice</span>
+                    <span style={summaryValueStyle}>{summary.invoiceNum}</span>
+                  </div>
+                )}
+                {isPartial && (
+                  <div style={summaryRowStyle}>
+                    <span style={summaryLabelStyle}>Balance due</span>
+                    <span style={summaryValueStyle}>
+                      {summary.currency || "INR"} {Number(summary.balanceDue || 0).toLocaleString("en-IN")}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
 
             {plinkId && (
               <a
@@ -62,7 +99,7 @@ export default function InvoicePaymentSuccess() {
                 style={downloadBtnStyle}
               >
                 <Download size={16} style={{ marginRight: 8 }} />
-                Download Invoice PDF
+                Download Receipt / Invoice PDF
               </a>
             )}
 
@@ -108,6 +145,30 @@ const subStyle = {
   color: "#6b7280",
   lineHeight: 1.6,
   margin: 0,
+};
+
+const summaryStyle = {
+  marginTop: 24,
+  padding: 16,
+  background: "#f3f4f6",
+  borderRadius: 8,
+  textAlign: "left",
+};
+
+const summaryRowStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  marginBottom: 8,
+  fontSize: 14,
+};
+
+const summaryLabelStyle = {
+  color: "#6b7280",
+};
+
+const summaryValueStyle = {
+  fontWeight: 600,
+  color: "#111827",
 };
 
 const downloadBtnStyle = {

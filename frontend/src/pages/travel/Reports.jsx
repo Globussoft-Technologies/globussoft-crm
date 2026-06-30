@@ -11,7 +11,7 @@
 // grid. Sub-brand scoping happens server-side via the caller's
 // subBrandAccess — a TMC-ops user gets 403 on the RFU tab and vice versa.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle, BarChart3, Globe, MapPin, RefreshCw, School, Star, TrendingUp, Download,
 } from "lucide-react";
@@ -24,17 +24,63 @@ const TABS = [
   { key: "cross-brand", label: "Cross-brand", icon: BarChart3 },
 ];
 
+const DATE_PRESETS = [
+  { key: "all", label: "All time" },
+  { key: "today", label: "Today" },
+  { key: "last7", label: "Last 7 days" },
+  { key: "last28", label: "Last 28 days" },
+  { key: "custom", label: "Custom" },
+];
+
+function formatDateInput(d) {
+  return d.toISOString().split("T")[0];
+}
+
+function getPresetRange(key) {
+  const now = new Date();
+  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  switch (key) {
+    case "today": {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      return { from: formatDateInput(start), to: formatDateInput(endOfDay) };
+    }
+    case "last7": {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+      return { from: formatDateInput(start), to: formatDateInput(endOfDay) };
+    }
+    case "last28": {
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 27);
+      return { from: formatDateInput(start), to: formatDateInput(endOfDay) };
+    }
+    default:
+      return { from: "", to: "" };
+  }
+}
+
 export default function TravelReports() {
   const [tab, setTab] = useState("tmc");
+  const [datePreset, setDatePreset] = useState("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
   const notify = useNotify();
   const [exporting, setExporting] = useState(false);
+
+  const dateParams = useMemo(() => {
+    if (datePreset === "custom") {
+      return { from: customFrom, to: customTo };
+    }
+    return getPresetRange(datePreset);
+  }, [datePreset, customFrom, customTo]);
 
   // Download the ACTIVE tab as a branded, tabular PDF. Raw fetch (not fetchApi)
   // because we need the binary blob + auth header, mirroring Reports.jsx.
   const downloadPdf = () => {
     setExporting(true);
     const token = getAuthToken();
-    fetch(`/api/travel/reports/export-pdf?tab=${encodeURIComponent(tab)}`, { headers: { Authorization: `Bearer ${token}` } })
+    const q = new URLSearchParams({ tab });
+    if (dateParams.from) q.set("from", dateParams.from);
+    if (dateParams.to) q.set("to", dateParams.to);
+    fetch(`/api/travel/reports/export-pdf?${q.toString()}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((res) => { if (!res.ok) throw new Error("PDF export failed"); return res.blob(); })
       .then((blob) => {
         const link = document.createElement("a");
@@ -73,6 +119,46 @@ export default function TravelReports() {
         </button>
       </header>
 
+      <div style={filterBar}>
+        <div style={filterGroup}>
+          <label htmlFor="date-preset" style={filterLabel}>Date range</label>
+          <select
+            id="date-preset"
+            value={datePreset}
+            onChange={(e) => setDatePreset(e.target.value)}
+            style={filterSelect}
+          >
+            {DATE_PRESETS.map((p) => (
+              <option key={p.key} value={p.key}>{p.label}</option>
+            ))}
+          </select>
+        </div>
+        {datePreset === "custom" && (
+          <>
+            <div style={filterGroup}>
+              <label htmlFor="custom-from" style={filterLabel}>From</label>
+              <input
+                id="custom-from"
+                type="date"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                style={filterInput}
+              />
+            </div>
+            <div style={filterGroup}>
+              <label htmlFor="custom-to" style={filterLabel}>To</label>
+              <input
+                id="custom-to"
+                type="date"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+                style={filterInput}
+              />
+            </div>
+          </>
+        )}
+      </div>
+
       <div role="tablist" aria-label="Report tabs" style={tabStrip}>
         {TABS.map((t) => {
           const Icon = t.icon;
@@ -96,25 +182,33 @@ export default function TravelReports() {
         })}
       </div>
 
-      {tab === "tmc" && <TmcTab />}
-      {tab === "rfu" && <RfuTab />}
-      {tab === "cross-brand" && <CrossBrandTab />}
+      {tab === "tmc" && <TmcTab dateParams={dateParams} />}
+      {tab === "rfu" && <RfuTab dateParams={dateParams} />}
+      {tab === "cross-brand" && <CrossBrandTab dateParams={dateParams} />}
     </div>
   );
 }
 
 // ─── Shared loader + error chrome ──────────────────────────────────
 
-function useReport(path) {
+function useReport(path, params = null) {
   const notify = useNotify();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const url = useMemo(() => {
+    if (!params || (!params.from && !params.to)) return path;
+    const q = new URLSearchParams();
+    if (params.from) q.set("from", params.from);
+    if (params.to) q.set("to", params.to);
+    return `${path}?${q.toString()}`;
+  }, [path, params]);
+
   const load = () => {
     setLoading(true);
     setError(null);
-    fetchApi(path)
+    fetchApi(url)
       .then((res) => { setData(res); setError(null); })
       .catch((e) => {
         const msg = e?.body?.error || "Failed to load report";
@@ -125,7 +219,7 @@ function useReport(path) {
       })
       .finally(() => setLoading(false));
   };
-  useEffect(load, [path]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, [url]); // eslint-disable-line react-hooks/exhaustive-deps
   return { data, loading, error, reload: load };
 }
 
@@ -149,8 +243,8 @@ function StateShell({ loading, error, reload, children }) {
 
 // ─── TMC tab ───────────────────────────────────────────────────────
 
-function TmcTab() {
-  const { data, loading, error, reload } = useReport("/api/travel/reports/tmc");
+function TmcTab({ dateParams }) {
+  const { data, loading, error, reload } = useReport("/api/travel/reports/tmc", dateParams);
 
   return (
     <StateShell loading={loading} error={error} reload={reload}>
@@ -230,8 +324,8 @@ function TmcTab() {
 
 // ─── RFU tab ───────────────────────────────────────────────────────
 
-function RfuTab() {
-  const { data, loading, error, reload } = useReport("/api/travel/reports/rfu");
+function RfuTab({ dateParams }) {
+  const { data, loading, error, reload } = useReport("/api/travel/reports/rfu", dateParams);
 
   return (
     <StateShell loading={loading} error={error} reload={reload}>
@@ -307,8 +401,8 @@ function RfuTab() {
 
 // ─── Cross-brand tab ───────────────────────────────────────────────
 
-function CrossBrandTab() {
-  const { data, loading, error, reload } = useReport("/api/travel/reports/cross-brand");
+function CrossBrandTab({ dateParams }) {
+  const { data, loading, error, reload } = useReport("/api/travel/reports/cross-brand", dateParams);
 
   return (
     <StateShell loading={loading} error={error} reload={reload}>
@@ -427,6 +521,25 @@ function byKeyInline(obj) {
 
 // ─── Styles ─────────────────────────────────────────────────────────
 
+const filterBar = {
+  display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap",
+  marginBottom: 16, padding: "12px 16px", borderRadius: 12,
+  background: "var(--surface-color)", border: "1px solid var(--border-color)",
+};
+const filterGroup = { display: "flex", alignItems: "center", gap: 10, minWidth: 0 };
+const filterLabel = { fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-secondary)", whiteSpace: "nowrap" };
+const filterSelect = {
+  padding: "8px 28px 8px 10px", borderRadius: 6, fontSize: 13,
+  background: "var(--panel-bg, var(--bg-color))", color: "var(--text-primary)",
+  border: "1px solid var(--border-color)", outline: "none",
+  minWidth: 140, appearance: "menulist",
+};
+const filterInput = {
+  padding: "8px 10px", borderRadius: 6, fontSize: 13,
+  background: "var(--panel-bg, var(--bg-color))", color: "var(--text-primary)",
+  border: "1px solid var(--border-color)", outline: "none",
+  minWidth: 130,
+};
 const tabStrip = {
   display: "flex", gap: 4, borderBottom: "1px solid var(--border-color)",
   marginBottom: 16, flexWrap: "wrap",

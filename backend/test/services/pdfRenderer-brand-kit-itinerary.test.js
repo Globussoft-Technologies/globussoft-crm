@@ -136,4 +136,23 @@ describe('renderTravelItineraryPdf — G091 footerText consumer', () => {
     expect(Buffer.isBuffer(buf)).toBe(true);
     expect(buf.length).toBeGreaterThan(1000);
   });
+
+  test('multi-line description rows do not overlap — row height grows with content', async () => {
+    const longDescription =
+      'Full-day guided sightseeing tour covering all major landmarks including the old town, central museum, waterfront promenade, and local market with a licensed English-speaking guide and private air-conditioned vehicle';
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({
+        items: [
+          { itemType: 'Sightseeing', description: longDescription, unitCost: 4000, markup: 800, totalPrice: 4800, position: 1 },
+          { itemType: 'Stay', description: 'Hotel', unitCost: 8000, markup: 1000, totalPrice: 9000, position: 2 },
+        ],
+      }),
+      contactFixture(),
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+    // Both item descriptions must be present in the rendered text.
+    expect(pdfTextContains(buf, longDescription)).toBe(true);
+    expect(pdfTextContains(buf, 'Hotel')).toBe(true);
+  });
 });

@@ -49,7 +49,7 @@ const SUBMIT_RESPONSE = {
   classification: 'level_3',
   classificationLabel: 'Premium Family Concierge',
   recommendedTier: 'premium',
-  reportPdfUrl: '/uploads/diagnostics/diag-1-abc.pdf',
+  reportPdfUrl: '/api/uploads/diagnostics/diag-1-abc.pdf',
   message: "Thanks Aisha — our advisor will reach out to you on +919876543210 shortly.",
 };
 
@@ -163,7 +163,7 @@ describe('TravelStallQuiz — public wizard (PRD §4.7)', () => {
     expect(screen.getByText(/advisor will reach out/i)).toBeTruthy();
     expect(screen.getByRole('link', { name: /personalised report/i })).toHaveAttribute(
       'href',
-      '/uploads/diagnostics/diag-1-abc.pdf',
+      '/api/uploads/diagnostics/diag-1-abc.pdf',
     );
 
     // Verify the submit body shape.

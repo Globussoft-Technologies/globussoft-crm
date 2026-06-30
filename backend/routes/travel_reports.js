@@ -33,11 +33,13 @@ const inr = (n) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
 // pipeline (count + ₹ by status) for a sub-brand. Fail-soft: returns an empty
 // funnel if the model/query is unavailable (keeps existing tests that don't
 // mock travelQuote green).
-async function quoteFunnel(tenantId, subBrand) {
+async function quoteFunnel(tenantId, subBrand, dateRange = null) {
   try {
+    const where = { tenantId, subBrand };
+    if (dateRange) where.createdAt = dateRange;
     const [byStatus, amtByStatus] = await Promise.all([
-      prisma.travelQuote.groupBy({ by: ["status"], where: { tenantId, subBrand }, _count: { _all: true } }),
-      prisma.travelQuote.groupBy({ by: ["status"], where: { tenantId, subBrand }, _sum: { totalAmount: true } }),
+      prisma.travelQuote.groupBy({ by: ["status"], where, _count: { _all: true } }),
+      prisma.travelQuote.groupBy({ by: ["status"], where, _sum: { totalAmount: true } }),
     ]);
     return {
       byStatus: flattenGroupCount(byStatus, "status"),
@@ -110,10 +112,18 @@ function flattenGroupSum(rows, key, sumField) {
 // originating diagnostic, which TmcTrip doesn't link directly — we approximate
 // by Deal.subBrand='tmc' joined to Deal.diagnosticId.
 
-async function buildTmcReport(tenantId) {
+async function buildTmcReport(tenantId, dateRange = null) {
     // All trips, separated by status: active = confirmed | in-trip | completed.
     // cancelled trips are excluded from revenue totals.
     const ACTIVE_STATUSES = ["confirmed", "in-trip", "completed"];
+
+    const tripWhere = { tenantId };
+    if (dateRange) tripWhere.createdAt = dateRange;
+    const activeWhere = { ...tripWhere, status: { in: ACTIVE_STATUSES } };
+    const dealWhere = { tenantId, subBrand: "tmc", deletedAt: null };
+    if (dateRange) dealWhere.createdAt = dateRange;
+    const diagWhere = { tenantId, subBrand: "tmc" };
+    if (dateRange) diagWhere.createdAt = dateRange;
 
     const [
       tripsByStatus,
@@ -125,11 +135,11 @@ async function buildTmcReport(tenantId) {
     ] = await Promise.all([
       prisma.tmcTrip.groupBy({
         by: ["status"],
-        where: { tenantId },
+        where: tripWhere,
         _count: { _all: true },
       }),
       prisma.tmcTrip.findMany({
-        where: { tenantId, status: { in: ACTIVE_STATUSES } },
+        where: activeWhere,
         select: {
           id: true,
           destination: true,
@@ -143,17 +153,17 @@ async function buildTmcReport(tenantId) {
       }),
       prisma.deal.groupBy({
         by: ["stage"],
-        where: { tenantId, subBrand: "tmc", deletedAt: null },
+        where: dealWhere,
         _count: { _all: true },
       }),
       prisma.deal.groupBy({
         by: ["stage"],
-        where: { tenantId, subBrand: "tmc", deletedAt: null },
+        where: dealWhere,
         _sum: { amount: true },
       }),
       prisma.travelDiagnostic.groupBy({
         by: ["classification"],
-        where: { tenantId, subBrand: "tmc" },
+        where: diagWhere,
         _count: { _all: true },
       }),
     ]);
@@ -186,7 +196,7 @@ async function buildTmcReport(tenantId) {
 
     const schools = Object.keys(schoolTripCount).length;
     const repeatSchools = Object.values(schoolTripCount).filter((c) => c >= 2).length;
-    const quotes = await quoteFunnel(tenantId, "tmc");
+    const quotes = await quoteFunnel(tenantId, "tmc", dateRange);
 
     return {
       quotes,
@@ -221,7 +231,8 @@ router.get("/reports/tmc", verifyToken, requireTravelTenant, async (req, res) =>
     if (!canAccessSubBrand(allowed, "tmc")) {
       return res.status(403).json({ error: "TMC sub-brand access required", code: "SUB_BRAND_DENIED" });
     }
-    res.json(await buildTmcReport(req.travelTenant.id));
+    const dateRange = parseDateRange(req);
+    res.json(await buildTmcReport(req.travelTenant.id, dateRange));
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-reports] TMC error:", e.message);
@@ -236,7 +247,14 @@ router.get("/reports/tmc", verifyToken, requireTravelTenant, async (req, res) =>
 // link revenue to tier we'd need diagnostic→contact→itinerary joins; for
 // the first ship we group separately and let the frontend correlate.
 
-async function buildRfuReport(tenantId) {
+async function buildRfuReport(tenantId, dateRange = null) {
+    const itinWhere = { tenantId, subBrand: "rfu" };
+    if (dateRange) itinWhere.createdAt = dateRange;
+    const dealWhere = { tenantId, subBrand: "rfu", deletedAt: null };
+    if (dateRange) dealWhere.createdAt = dateRange;
+    const diagWhere = { tenantId, subBrand: "rfu" };
+    if (dateRange) diagWhere.createdAt = dateRange;
+
     const [
       itinByStatus,
       itinAmountByStatus,
@@ -248,44 +266,44 @@ async function buildRfuReport(tenantId) {
     ] = await Promise.all([
       prisma.itinerary.groupBy({
         by: ["status"],
-        where: { tenantId, subBrand: "rfu" },
+        where: itinWhere,
         _count: { _all: true },
       }),
       prisma.itinerary.groupBy({
         by: ["status"],
-        where: { tenantId, subBrand: "rfu" },
+        where: itinWhere,
         _sum: { totalAmount: true },
       }),
       prisma.deal.groupBy({
         by: ["stage"],
-        where: { tenantId, subBrand: "rfu", deletedAt: null },
+        where: dealWhere,
         _count: { _all: true },
       }),
       prisma.deal.groupBy({
         by: ["stage"],
-        where: { tenantId, subBrand: "rfu", deletedAt: null },
+        where: dealWhere,
         _sum: { amount: true },
       }),
       prisma.travelDiagnostic.groupBy({
         by: ["recommendedTier"],
-        where: { tenantId, subBrand: "rfu" },
+        where: diagWhere,
         _count: { _all: true },
       }),
       prisma.travelDiagnostic.groupBy({
         by: ["classification"],
-        where: { tenantId, subBrand: "rfu" },
+        where: diagWhere,
         _count: { _all: true },
       }),
       prisma.itinerary.groupBy({
         by: ["contactId"],
-        where: { tenantId, subBrand: "rfu" },
+        where: itinWhere,
         _count: { _all: true },
       }),
     ]);
 
     const customers = itinByContact.length;
     const repeatCustomers = itinByContact.filter((r) => (r._count?._all ?? 0) >= 2).length;
-    const quotes = await quoteFunnel(tenantId, "rfu");
+    const quotes = await quoteFunnel(tenantId, "rfu", dateRange);
 
     return {
       quotes,
@@ -317,7 +335,8 @@ router.get("/reports/rfu", verifyToken, requireTravelTenant, async (req, res) =>
     if (!canAccessSubBrand(allowed, "rfu")) {
       return res.status(403).json({ error: "RFU sub-brand access required", code: "SUB_BRAND_DENIED" });
     }
-    res.json(await buildRfuReport(req.travelTenant.id));
+    const dateRange = parseDateRange(req);
+    res.json(await buildRfuReport(req.travelTenant.id, dateRange));
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-reports] RFU error:", e.message);
@@ -331,12 +350,14 @@ router.get("/reports/rfu", verifyToken, requireTravelTenant, async (req, res) =>
 // only for revenue totals. Conversion = won / (won + lost) for stages
 // reached terminal state.
 
-async function buildCrossBrandReport(tenantId, allowed) {
+async function buildCrossBrandReport(tenantId, allowed, dateRange = null) {
     // Build the subBrand filter only when caller has restricted access.
     const dealWhere = { tenantId, deletedAt: null, subBrand: { not: null } };
     if (allowed !== null) dealWhere.subBrand = { in: [...allowed] };
+    if (dateRange) dealWhere.createdAt = dateRange;
     const diagWhere = { tenantId };
     if (allowed !== null) diagWhere.subBrand = { in: [...allowed] };
+    if (dateRange) diagWhere.createdAt = dateRange;
 
     const [dealsBySubBrandStage, dealAmountBySubBrandStage, diagBySubBrand] = await Promise.all([
       prisma.deal.groupBy({
@@ -399,6 +420,7 @@ async function buildCrossBrandReport(tenantId, allowed) {
     try {
       const qWhere = { tenantId };
       if (allowed !== null) qWhere.subBrand = { in: [...allowed] };
+      if (dateRange) qWhere.createdAt = dateRange;
       const [qCountRows, qAmtRows] = await Promise.all([
         prisma.travelQuote.groupBy({ by: ["subBrand", "status"], where: qWhere, _count: { _all: true } }),
         prisma.travelQuote.groupBy({ by: ["subBrand", "status"], where: qWhere, _sum: { totalAmount: true } }),
@@ -424,7 +446,8 @@ async function buildCrossBrandReport(tenantId, allowed) {
 router.get("/reports/cross-brand", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const allowed = await getSubBrandAccessSet(req.user.userId);
-    res.json(await buildCrossBrandReport(req.travelTenant.id, allowed));
+    const dateRange = parseDateRange(req);
+    res.json(await buildCrossBrandReport(req.travelTenant.id, allowed, dateRange));
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-reports] cross-brand error:", e.message);
@@ -442,6 +465,7 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
     const tab = ["tmc", "rfu", "cross-brand"].includes(String(req.query.tab)) ? String(req.query.tab) : "tmc";
     const allowed = await getSubBrandAccessSet(req.user.userId);
     const tenantId = req.travelTenant.id;
+    const dateRange = parseDateRange(req);
     if (tab === "tmc" && !canAccessSubBrand(allowed, "tmc")) {
       return res.status(403).json({ error: "TMC sub-brand access required", code: "SUB_BRAND_DENIED" });
     }
@@ -500,7 +524,7 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
     };
 
     if (tab === "tmc") {
-      const d = await buildTmcReport(tenantId);
+      const d = await buildTmcReport(tenantId, dateRange);
       kpiTable([
         ["Total revenue (active trips)", inr(d.revenue.total)],
         ["Active trips", String(d.trips.active)],
@@ -516,7 +540,7 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
       drawTravelTable(doc, [{ header: "Destination", width: 350 }, { header: "Revenue", width: 145, align: "right" }],
         d.revenue.topDestinations.map((r) => [r.destination, inr(r.revenue)]), { startY: doc.y });
     } else if (tab === "rfu") {
-      const d = await buildRfuReport(tenantId);
+      const d = await buildRfuReport(tenantId, dateRange);
       kpiTable([
         ["Itineraries", String(d.itineraries.total)],
         ["Customers", String(d.customers.unique)],
@@ -528,7 +552,7 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
       countTable("Diagnostics by tier", d.diagnostics.byTier, "Tier");
       countTable("Diagnostics by classification", d.diagnostics.byClassification, "Classification");
     } else {
-      const d = await buildCrossBrandReport(tenantId, allowed);
+      const d = await buildCrossBrandReport(tenantId, allowed, dateRange);
       section("Won-revenue + conversion by sub-brand");
       const cbRows = Object.entries(d.subBrands).map(([b, m]) => [SUB_BRAND_LABEL[b] || b, String(m.won), String(m.lost), inr(m.wonRevenue), `${m.conversionPct}%`, String(m.diagnostics)]);
       const tot = Object.values(d.subBrands).reduce((a, m) => ({ won: a.won + m.won, lost: a.lost + m.lost, rev: a.rev + Number(m.wonRevenue || 0), diag: a.diag + (m.diagnostics || 0) }), { won: 0, lost: 0, rev: 0, diag: 0 });

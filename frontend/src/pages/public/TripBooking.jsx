@@ -220,6 +220,13 @@ export default function TripBooking() {
           order_id: order.orderId,
           name: itin.tenantName || "Travel Stall",
           description: `${kind === "balance" ? "Balance payment" : "Advance payment"} — ${itin.destination || "Trip"}`,
+          // PRD §4.7 — redirect-based methods (Netbanking, UPI intent, some
+          // 3DS cards) cannot finish inside the modal. Provide a callback URL
+          // so Razorpay redirects back here after the bank page; the success
+          // page forwards the signature to verify-payment. Non-redirect card
+          // payments continue to use the handler below for an inline finish.
+          callback_url: `${window.location.origin}/p/itinerary/${encodeURIComponent(shareToken)}/payment-success`,
+          callback_method: "get",
           handler: async (resp) => {
             try {
               const vr = await fetch(

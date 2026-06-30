@@ -94,7 +94,9 @@ async function generateDiagnosticPdfBestEffort(diag, bank) {
     const filename = `diag-${diag.id}-${rand}.pdf`;
     const filepath = path.join(DIAG_PDF_DIR, filename);
     await fs.promises.writeFile(filepath, pdfBuf);
-    const url = `/uploads/diagnostics/${filename}`;
+    // Use the canonical /api/uploads prefix so the URL is routed to the backend
+    // in deployments where /uploads/* is handled by the frontend SPA.
+    const url = `/api/uploads/diagnostics/${filename}`;
     await prisma.travelDiagnostic.update({
       where: { id: diag.id },
       data: { reportPdfUrl: url },

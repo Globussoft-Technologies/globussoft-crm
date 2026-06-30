@@ -2903,6 +2903,7 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   } else {
     // Table header
     const colX = { type: 50, desc: 115, qty: 360, unit: 410, total: 480 };
+    const colW = { type: 60, desc: 240, qty: 50, unit: 65, total: 60 };
     const tableTop = doc.y;
     doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
     doc.text("Type", colX.type, tableTop);
@@ -2916,22 +2917,37 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     doc.font("Helvetica").fontSize(10).fillColor("#111");
 
     let y = tableTop + 22;
+    const rowGap = 4;
+    const pageBreakBottom = doc.page.height - doc.page.margins.bottom - 60;
     const sorted = [...items].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     for (const it of sorted) {
-      // Page-break headroom
-      if (y > doc.page.height - 120) {
-        doc.addPage();
-        y = 50;
-      }
-      doc.text(String(it.itemType || "—"), colX.type, y, { width: 60 });
-      doc.text(String(it.description || ""), colX.desc, y, { width: 240 });
+      const typeStr = String(it.itemType || "—");
+      const descStr = String(it.description || "");
       const markupStr = it.markup != null ? formatMoney(Number(it.markup), currency) : "—";
       const unitStr = it.unitCost != null ? formatMoney(Number(it.unitCost), currency) : "—";
       const totalStr = it.totalPrice != null ? formatMoney(Number(it.totalPrice), currency) : "—";
-      doc.text(markupStr, colX.qty, y, { width: 50, align: "right" });
-      doc.text(unitStr, colX.unit, y, { width: 65, align: "right" });
-      doc.text(totalStr, colX.total, y, { width: 60, align: "right" });
-      y += 24;
+
+      // Measure wrapped text so rows grow to fit multi-line descriptions
+      // and long item-type labels instead of colliding with the next row.
+      const typeH = doc.heightOfString(typeStr, { width: colW.type });
+      const descH = doc.heightOfString(descStr, { width: colW.desc });
+      const markupH = doc.heightOfString(markupStr, { width: colW.qty, align: "right" });
+      const unitH = doc.heightOfString(unitStr, { width: colW.unit, align: "right" });
+      const totalH = doc.heightOfString(totalStr, { width: colW.total, align: "right" });
+      const rowH = Math.max(18, typeH, descH, markupH, unitH, totalH) + 6;
+
+      // Page-break headroom — use the actual row height so a tall row
+      // starts on a new page instead of overflowing the footer.
+      if (y + rowH > pageBreakBottom) {
+        doc.addPage();
+        y = doc.page.margins.top;
+      }
+      doc.text(typeStr, colX.type, y, { width: colW.type });
+      doc.text(descStr, colX.desc, y, { width: colW.desc });
+      doc.text(markupStr, colX.qty, y, { width: colW.qty, align: "right" });
+      doc.text(unitStr, colX.unit, y, { width: colW.unit, align: "right" });
+      doc.text(totalStr, colX.total, y, { width: colW.total, align: "right" });
+      y += rowH + rowGap;
     }
     doc.y = y + 6;
   }
@@ -3097,7 +3113,11 @@ async function renderTravelStallPersonalisedPdf(payload) {
       doc.fillColor("#111");
       // Destination name + short prose
       doc.font("Helvetica-Bold").fontSize(11).fillColor("#111")
-        .text(dest, cardX + 78, cardY + 12, { width: cardWidth - 86 });
+        .text(dest, cardX + 78, cardY + 12, {
+          width: cardWidth - 86,
+          lineBreak: false,
+          ellipsis: true,
+        });
       doc.font("Helvetica").fontSize(9).fillColor("#444")
         .text(
           `Suggested for your ${diagnostic?.classificationLabel || diagnostic?.classification || "family"} profile.`,
@@ -4498,25 +4518,33 @@ async function renderTravelInvoicePdf(opts) {
       doc.moveTo(50, vy).lineTo(545, vy).lineWidth(0.4).strokeColor("#bbb").stroke();
       vy += 4;
       doc.font("Helvetica").fontSize(9).fillColor("#222");
+      const colVW = { subtype: 70, desc: 165, conf: 90, date: 140 };
       for (const line of voucherLines) {
-        if (vy > 720) {
-          doc.addPage();
-          vy = 60;
-        }
         const subtype = voucherSubtypeForLine(line.lineType);
         const confNum = line.bookingRef || line.pnr || "—";
         const range = formatVoucherServiceRange(
           line.serviceStartDate,
           line.serviceEndDate,
         );
-        doc.text(subtype, colVX.subtype, vy, { width: 70, align: "left" });
+        // Measure wrapped text so voucher rows grow to fit long descriptions
+        // or confirmation numbers instead of colliding with the next row.
+        const subtypeH = doc.heightOfString(String(subtype), { width: colVW.subtype });
+        const descH = doc.heightOfString(String(line.description || "—"), { width: colVW.desc });
+        const confH = doc.heightOfString(String(confNum), { width: colVW.conf });
+        const rangeH = doc.heightOfString(range, { width: colVW.date });
+        const rowH = Math.max(16, subtypeH, descH, confH, rangeH) + 6;
+        if (vy + rowH > 720) {
+          doc.addPage();
+          vy = 60;
+        }
+        doc.text(subtype, colVX.subtype, vy, { width: colVW.subtype, align: "left" });
         doc.text(String(line.description || "—"), colVX.desc, vy, {
-          width: 165,
+          width: colVW.desc,
           align: "left",
         });
-        doc.text(String(confNum), colVX.conf, vy, { width: 90, align: "left" });
-        doc.text(range, colVX.date, vy, { width: 140, align: "left" });
-        vy += 16;
+        doc.text(String(confNum), colVX.conf, vy, { width: colVW.conf, align: "left" });
+        doc.text(range, colVX.date, vy, { width: colVW.date, align: "left" });
+        vy += rowH;
       }
     }
     doc.y = vy + 6;

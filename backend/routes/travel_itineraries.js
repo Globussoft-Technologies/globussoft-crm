@@ -5085,6 +5085,7 @@ router.post("/itineraries/public/:shareToken/record-advance-payment", async (req
       advancePaidAt: updated.advancePaidAt,
       paymentReference: updated.paymentReference,
       balanceDue: Math.max(0, total - Number(updated.advancePaidAmount)),
+      currency: (itin.currency || "INR").toUpperCase(),
     });
   } catch (e) {
     console.error("[travel-itin-public] record-advance error:", e.message);
@@ -5365,6 +5366,7 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
       advancePaidAt: updated.advancePaidAt,
       paymentReference: updated.paymentReference,
       balanceDue: Math.max(0, total - Number(updated.advancePaidAmount)),
+      currency: (itin.currency || "INR").toUpperCase(),
     });
   } catch (e) {
     console.error("[travel-itin-public] verify-payment error:", e.message);

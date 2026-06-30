@@ -10,8 +10,27 @@ const { formatMoney } = require("../utils/formatMoney");
 // write, based on rows in the FieldPermission table (per-tenant, per-role).
 // Default (no rule in DB) is full access.
 const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
+const { canonicaliseChannel, CHANNEL_ALIASES } = require("../lib/intakePayloadValidators");
 
 const router = express.Router();
+
+/**
+ * Derive the canonical lead-capture channel from a Contact.source string.
+ * Travel inbound leads store source as "inbound:<channel>" (e.g.
+ * "inbound:webform" / "inbound:metaads"). Canonical renames map the legacy
+ * alias to the PRD-aligned name (web_form / meta_ad). Non-inbound sources
+ * (Organic, marketplace:..., etc.) return null so the UI can fall back to
+ * "manual".
+ */
+function channelFromContactSource(source) {
+  if (!source || typeof source !== "string") return null;
+  // Landing-page registration / brochure-request leads are posted through the
+  // web_form intake surface but carry a custom attribution source tag (e.g.
+  // "tmc_registration", "brochure_request"). They should roll up under Web.
+  if (source === "tmc_registration" || source === "brochure_request") return "web_form";
+  if (!source.startsWith("inbound:")) return null;
+  return canonicaliseChannel(source.slice("inbound:".length));
+}
 
 router.use(verifyToken);
 
@@ -38,7 +57,7 @@ async function audit(action, entityId, userId, tenantId, details) {
 // filtered (see follow-up note at end of file).
 router.get("/", async (req, res) => {
   try {
-    const { stage, ownerId, pipelineId, contactId, subBrand, from, to } = req.query;
+    const { stage, ownerId, pipelineId, contactId, subBrand, from, to, channel } = req.query;
     const where = { tenantId: req.user.tenantId };
 
     if (stage) where.stage = stage;
@@ -48,6 +67,28 @@ router.get("/", async (req, res) => {
     // Travel-vertical filter (v3.9.0 added Deal.subBrand). Tolerant of
     // missing column on legacy tenants — Prisma matches by exact value.
     if (subBrand) where.subBrand = String(subBrand);
+    // Travel-lead source filter (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.6.2).
+    // Channel is stored on the linked Contact as "inbound:<channel>". Match
+    // both canonical and legacy aliases (webform↔web_form, metaads↔meta_ad).
+    // "manual" matches deals whose contact has no inbound source.
+    if (channel) {
+      const canonical = canonicaliseChannel(channel);
+      if (canonical) {
+        if (canonical === "manual") {
+          where.OR = [
+            { contact: { is: null } },
+            { contact: { source: null } },
+            { contact: { source: { not: { startsWith: "inbound:" } } } },
+            { contact: { source: "inbound:manual" } },
+          ];
+        } else {
+          const prefixes = [`inbound:${canonical}`];
+          const legacyAlias = Object.keys(CHANNEL_ALIASES).find((k) => CHANNEL_ALIASES[k] === canonical);
+          if (legacyAlias) prefixes.push(`inbound:${legacyAlias}`);
+          where.contact = { source: { in: prefixes } };
+        }
+      }
+    }
     if (from || to) {
       where.createdAt = {};
       if (from) where.createdAt.gte = new Date(from);
@@ -96,7 +137,14 @@ router.get("/", async (req, res) => {
     // #464: strip fields the caller's role can't read (e.g. amount hidden
     // for USER if FieldPermission rule says canRead=false on Deal.amount).
     const filtered = await filterReadFields(deals, req.user.role, "Deal", req.user.tenantId);
-    res.json(filtered);
+    // Travel leads page renders per-channel chips from each deal's channel.
+    // Deal rows don't store channel directly; derive it from the linked
+    // Contact's source so the UI chip counts + filter state stay in sync.
+    const enriched = filtered.map((d) => ({
+      ...d,
+      channel: channelFromContactSource(d.contact?.source) || null,
+    }));
+    res.json(enriched);
   } catch (error) {
     console.error("[deals] list error:", error.message);
     res.status(500).json({ error: "Failed to fetch deals" });

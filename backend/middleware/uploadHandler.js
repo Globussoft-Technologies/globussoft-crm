@@ -83,14 +83,14 @@ const uploadImageMultiple = multer({
 const uploadDocumentSingle = multer({
   storage,
   fileFilter: documentFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
 }).single("document");
 
 // Document upload: multiple files
 const uploadDocumentMultiple = multer({
   storage,
   fileFilter: documentFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per file
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB per file
 }).array("documents", 5); // Max 5 files
 
 // Validation middleware for image

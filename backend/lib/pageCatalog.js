@@ -750,7 +750,7 @@ const PAGE_CATALOG = [
   },
   {
     path: '/travel/leads',
-    label: 'Travel Leads',
+    label: 'All Leads',
     description: 'Lead pipeline across all travel sub-brands',
     category: 'Travel Sales',
     requiredPermissions: [{ module: 'leads', action: 'read' }],
@@ -980,6 +980,23 @@ const PAGE_CATALOG = [
 
 const PAGES_BY_PATH = new Map(PAGE_CATALOG.map((p) => [p.path, p]));
 
+// Vertical-specific label overrides. Cross-vertical pages whose label should
+// differ per tenant vertical are adjusted here after the base catalog is
+// filtered, so search + wellness catalog-driven sidebars show the right name.
+const VERTICAL_LABEL_OVERRIDES = {
+  travel: {
+    '/leads': 'Travel Leads',
+    '/travel/leads': 'All Leads',
+  },
+};
+
+function applyVerticalLabel(page, vertical) {
+  const overrides = vertical && VERTICAL_LABEL_OVERRIDES[vertical];
+  const label = overrides && overrides[page.path];
+  if (!label) return page;
+  return { ...page, label };
+}
+
 function getCatalog() {
   return PAGE_CATALOG.map((p) => ({
     ...p,
@@ -1025,7 +1042,7 @@ function getCatalogForVertical(vertical) {
     if (isTravel) return vertical === 'travel';
     return true;
   }).map((p) => ({
-    ...p,
+    ...applyVerticalLabel(p, vertical),
     requiredPermissions: p.requiredPermissions.map((perm) => ({ ...perm })),
   }));
 }
@@ -1075,7 +1092,7 @@ function getAccessiblePages(permissionSet, opts = {}) {
     : PAGE_CATALOG;
   if (opts.isOwner) {
     return basePool.map((p) => ({
-      ...p,
+      ...applyVerticalLabel(p, opts.vertical),
       requiredPermissions: p.requiredPermissions.map((perm) => ({ ...perm })),
     }));
   }
@@ -1086,7 +1103,7 @@ function getAccessiblePages(permissionSet, opts = {}) {
       ({ module, action }) => permissionSet.has(`${module}.${action}`),
     );
   }).map((p) => ({
-    ...p,
+    ...applyVerticalLabel(p, opts.vertical),
     requiredPermissions: p.requiredPermissions.map((perm) => ({ ...perm })),
   }));
 }

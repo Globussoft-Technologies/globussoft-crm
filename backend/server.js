@@ -1381,18 +1381,22 @@ app.use("/p", landingPagesPublic);
 // Public legal/policy pages — rendered from Markdown (no auth)
 app.use(require("./routes/legal"));
 
-// Public /trips marketing surface — always renders the currently
-// featured PUBLISHED landing page. The publish endpoint marks the page
-// as isFeatured, so /trips automatically follows the latest published
-// trip without marketing sites needing to know the slug.
-app.get("/trips", async (req, res) => {
+// Public /trips marketing surface — renders the currently featured
+// PUBLISHED landing page when one exists. When no featured page is set,
+// falls through to the SPA shell so the frontend TripsResolver can show
+// the hardcoded Japan TripsLanding fallback instead of a bare 404.
+app.get("/trips", async (req, res, next) => {
   try {
     const prismaClient = require("./lib/prisma");
     const page = await prismaClient.landingPage.findFirst({
       where: { status: "PUBLISHED", isFeatured: true },
       orderBy: { featuredAt: "desc" },
     });
-    if (!page) return res.status(404).send("<h1>No featured trip found</h1>");
+    if (!page) {
+      // No featured page yet — fall through to the SPA shell so the frontend
+      // TripsResolver can render the hardcoded Japan TripsLanding fallback.
+      return next();
+    }
 
     await prismaClient.landingPage.update({
       where: { id: page.id },

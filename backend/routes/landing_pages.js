@@ -120,7 +120,7 @@ const videoUpload = multer({
 //
 // MIME allowlist is intentionally narrow — PDFs are the canonical
 // brochure format; DOC/DOCX/PPT/PPTX cover the small "ours is a Word
-// deck" cases. 10 MB cap fits the typical agency brochure (5-9 MB).
+// deck" cases. 50 MB cap fits the typical agency brochure (5-49 MB).
 // Larger files belong on a CDN; we serve from local disk to keep the
 // surface simple.
 //
@@ -136,7 +136,7 @@ const ALLOWED_DOC_MIMES = {
   "application/vnd.ms-powerpoint": ".ppt",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
 };
-const DOC_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+const DOC_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
 const docUpload = multer({
   storage: multer.diskStorage({
     destination: (req, _file, cb) => {
@@ -1279,17 +1279,20 @@ router.put("/:id", verifyToken, async (req, res) => {
         }
         data.tripId = parsed;
 
-        // Phase 6 — linking a Wanderlux page to a trip should flip the
-        // registration block to registration-draft mode when no explicit
-        // mode is set. Without this, AI-generated pages default to lead
-        // capture even after linking and the hybrid OTP flow never fires.
+        // Phase 6 — linking a Wanderlux page to a trip should default the
+        // registration block to lead mode when no explicit mode is set.
+        // Lead mode creates a Contact + Deal + TripParticipant immediately,
+        // so inbound registrations show up in the participants list with the
+        // full action set and keep the participant count in sync across
+        // views. Use explicit register.mode = "registration-draft" only when
+        // the OTP/hybrid staging flow is intentionally required.
         if (existing.templateType === "wanderlux-v1") {
           try {
             const cfg = typeof existing.content === "string"
               ? JSON.parse(existing.content || "{}")
               : (existing.content || {});
             if (cfg && cfg.register && !cfg.register.mode) {
-              cfg.register.mode = "registration-draft";
+              cfg.register.mode = "lead";
               data.content = JSON.stringify(cfg);
             }
           } catch (_e) {
@@ -2455,13 +2458,24 @@ async function applyLeadRouting(formProps, tenantId, contactId) {
 //   2. page.content.register.mode === "registration-draft"  → Wanderlux templatePayload path
 // Either being truthy opts the submission into the
 // PendingTripRegistration flow instead of Contact+Deal.
+//
+// Fallback: trip-linked Wanderlux pages that don't have an explicit
+// register.mode default to registration-draft. This fixes pages that
+// were created before the bridge started seeding the mode, without
+// requiring the operator to regenerate or manually relink the page.
 function resolveRegistrationMode(page, formProps) {
   if (formProps && formProps.mode === "registration-draft") return "registration-draft";
   if (page.templateType === "wanderlux-v1" && typeof page.content === "string") {
     try {
       const cfg = JSON.parse(page.content);
-      if (cfg && cfg.register && cfg.register.mode === "registration-draft") {
-        return "registration-draft";
+      if (cfg && cfg.register) {
+        if (cfg.register.mode === "registration-draft") return "registration-draft";
+        if (cfg.register.mode === "lead") return "lead";
+        // No explicit mode on a trip-linked Wanderlux page → default to
+        // lead mode so inbound registrations immediately create a
+        // Contact + Deal + TripParticipant. Use explicit
+        // register.mode = "registration-draft" for the OTP/hybrid flow.
+        if (page.tripId) return "lead";
       }
     } catch (_e) {
       // malformed wanderlux config — fall through to lead path
@@ -2540,6 +2554,40 @@ async function handleRegistrationDraft(req, res, page, formProps) {
     },
   });
 
+  // Sync the parent as a Lead + Deal so the registration is visible in the
+  // CRM leads and travel-leads lists, not just the TMC trip participants tab.
+  try {
+    const studentSchool = student.school || flat.student_school || null;
+    const submittedAudience = typeof req.body.audience === "string" ? req.body.audience : null;
+    const sourceSuffix = submittedAudience ? ` (${submittedAudience})` : "";
+    const attributionLabel = `Landing Page: ${page.title}${sourceSuffix}`;
+    // Landing-page registrations are web-form intake; use the canonical source
+    // so the travel leads page channel chips classify them under Web.
+    const contactSource = "tmc_registration";
+    const contact = await prisma.contact.upsert({
+      where: { email_tenantId: { email: parentEmail, tenantId } },
+      update: { source: contactSource, deletedAt: null },
+      create: {
+        name: parentName,
+        email: parentEmail,
+        phone: parentPhone || null,
+        company: studentSchool,
+        status: "Lead",
+        source: contactSource,
+        firstTouchSource: attributionLabel,
+        subBrand: page.subBrand || (typeof req.body.subBrand === "string" ? req.body.subBrand : null),
+        aiScore: 30,
+        tenantId,
+      },
+    });
+    await applyLeadRouting(formProps, tenantId, contact.id);
+    await prisma.deal.create({
+      data: { title: `LP Inbound: ${page.title}`, amount: 0, stage: "lead", contactId: contact.id, tenantId },
+    });
+  } catch (err) {
+    console.error("[LandingPage] draft lead sync error:", err.message);
+  }
+
   // Bump LandingPage.submissions + drop a FORM_SUBMIT analytics row so
   // operators still see funnel metrics on registration-draft pages.
   await prisma.landingPage.update({ where: { id: page.id }, data: { submissions: { increment: 1 } } });
@@ -2596,10 +2644,17 @@ async function createParticipantFromLeadSubmission(tripId, tenantId, formFields,
     (body && typeof body === "object" && body[key]) ||
     null;
 
+  // Prefer an explicit studentName, but fall back to the lead/contact name
+  // so forms that only capture a single name (e.g. simple registration forms
+  // or page-builder forms using `name`) still enrol a participant.
   const studentName = pick("student_name") || pick("studentName");
-  if (!studentName) return null;
+  const contactName = pick("name") || pick("parentName") || pick("parent_name") || pick("full_name") || pick("fullName");
+  const fullName = studentName || contactName;
+  if (!fullName) return null;
 
-  const parentName = pick("parent_name") || pick("parentName") || pick("name") || null;
+  // If we only have a contact name and no explicit parent info, treat the
+  // contact's email/phone as the parent's so the participant is reachable.
+  const parentName = pick("parent_name") || pick("parentName") || (studentName ? pick("name") : null) || null;
   const parentEmail = pick("parent_email") || pick("parentEmail") || pick("email") || null;
   const parentPhone = pick("parent_phone") || pick("parentPhone") || pick("phone") || null;
   const grade = pick("student_grade") || pick("grade") || pick("student_class") || pick("studentClass") || null;
@@ -2615,7 +2670,7 @@ async function createParticipantFromLeadSubmission(tripId, tenantId, formFields,
   const medicalNotes = notes.length ? notes.join("\n") : null;
 
   // Deduplicate against recent double-submits or page refreshes.
-  const existingWhere = { tripId, fullName: String(studentName) };
+  const existingWhere = { tripId, fullName: String(fullName) };
   const orClauses = [];
   if (parentEmail) orClauses.push({ parentEmail });
   if (parentPhone) orClauses.push({ parentPhone });
@@ -2641,7 +2696,7 @@ async function createParticipantFromLeadSubmission(tripId, tenantId, formFields,
   return prisma.tripParticipant.create({
     data: {
       tripId,
-      fullName: String(studentName),
+      fullName: String(fullName),
       parentName,
       parentEmail,
       parentPhone,
@@ -2665,7 +2720,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
     // The `audience` body field (set by registrationForm hidden input)
     // lets us pick the right form block when a page has multiple.
     const submittedAudience = typeof req.body.audience === "string" ? req.body.audience : null;
-    const isBrochureRequest = req.body.brochureRequest === true;
+    const isBrochureRequest = req.body.brochureRequest === true || req.body.type === "brochure";
     const formComp = await pickFormFromContent(page.content, submittedAudience, isBrochureRequest);
     const formProps = (formComp && formComp.props) || {};
 
@@ -2677,7 +2732,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
     // the CRM approval step (Phase 5) converts an OTP_VERIFIED draft
     // to a TripParticipant. Outside this branch the existing
     // Contact+Deal flow runs unchanged.
-    if (page.tripId && resolveRegistrationMode(page, formProps) === "registration-draft") {
+    if (page.tripId && !isBrochureRequest && resolveRegistrationMode(page, formProps) === "registration-draft") {
       // CAPTCHA still applies if the form-block configured it.
       if (formProps.enableCaptcha) {
         const ok = await verifyTurnstile(req.body.cfTurnstileToken, req.ip);
@@ -2707,20 +2762,30 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
     // Student programmes capture the PARENT as the lead contact (the
     // person we'll actually call back); student details land in the
     // contact's notes / source so the sales team has the full picture.
-    const email = pick("email") || pick("parent_email");
-    const name = pick("name") || pick("parent_name") || pick("full_name");
-    const full_name = pick("full_name");
-    const phone = pick("phone") || pick("parent_phone");
-    const company = pick("company") || pick("company_name") || pick("student_school");
-    const company_name = pick("company_name");
+    const email = pick("email") || pick("parentEmail") || pick("parent_email");
+    const name = pick("name") || pick("parentName") || pick("parent_name") || pick("full_name") || pick("fullName");
+    const full_name = pick("full_name") || pick("fullName");
+    const phone = pick("phone") || pick("parentPhone") || pick("parent_phone");
+    const company = pick("company") || pick("companyName") || pick("company_name") || pick("studentSchool") || pick("student_school") || pick("school");
+    const company_name = pick("company_name") || pick("companyName");
     const contactEmail = email || `lp-${page.slug}-${Date.now()}@anonymous.local`;
-    const contactName = name || full_name || pick("student_name") || "Landing Page Lead";
-    // Append the audience tag to the contact source so lead-routing
+    const contactName = name || full_name || pick("studentName") || pick("student_name") || "Landing Page Lead";
+    // Append the audience tag to the descriptive attribution so lead-routing
     // rules + manual triage can branch on it (e.g. "Landing Page: Bali
     // (tmc)" vs "Landing Page: Bali (rfu)"). Only appends when the body
     // came from a registrationForm.
     const sourceSuffix = submittedAudience ? ` (${submittedAudience})` : "";
-    const contactSource = `Landing Page: ${page.title}${sourceSuffix}`;
+    const attributionLabel = `Landing Page: ${page.title}${sourceSuffix}`;
+    // Canonical channel source so the travel leads page channel chips
+    // (Web / Manual / WhatsApp / ...) classify landing-page leads under Web.
+    //   - brochure_request  → Web filter
+    //   - tmc_registration  → Web filter (trip/student registration)
+    //   - inbound:webform   → Web filter (generic lead capture)
+    const contactSource = isBrochureRequest
+      ? "brochure_request"
+      : page.tripId
+        ? "tmc_registration"
+        : "inbound:webform";
 
     // Contact has @@unique([email, tenantId]) (schema.prisma:343) — Prisma's
     // upsert requires the where clause to match a unique constraint exactly,
@@ -2734,7 +2799,14 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
     // never reached real traffic until that landed.
     const contact = await prisma.contact.upsert({
       where: { email_tenantId: { email: contactEmail, tenantId } },
-      update: { source: contactSource },
+      update: {
+        source: contactSource,
+        // If this contact was previously soft-deleted, restoring it makes the
+        // new deal visible in leads lists. Without this, a visitor who registers,
+        // gets deleted, then re-registers with the same email would match the
+        // tombstoned row and the lead would stay hidden.
+        deletedAt: null,
+      },
       create: {
         name: contactName,
         email: contactEmail,
@@ -2742,6 +2814,8 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
         company: company || company_name || null,
         status: "Lead",
         source: contactSource,
+        firstTouchSource: attributionLabel,
+        subBrand: page.subBrand || (typeof req.body.subBrand === "string" ? req.body.subBrand : null),
         aiScore: 30,
         tenantId,
       },
@@ -2755,8 +2829,9 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
     });
 
     // Trip-linked student registrations should also appear on the TMC Trips
-    // participants tab, not just as a lead/deal.
-    if (page.tripId) {
+    // participants tab, not just as a lead/deal. Brochure requests only
+    // capture lead details, so they should not create participants.
+    if (page.tripId && !isBrochureRequest) {
       try {
         await createParticipantFromLeadSubmission(page.tripId, tenantId, formFields, req.body);
       } catch (err) {

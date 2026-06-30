@@ -319,6 +319,22 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     expect(source.label).not.toBe('TAMPERED');
     expect(source.requiredPermissions.some((p) => p.module === 'evil')).toBe(false);
   });
+
+  it('applies travel-vertical label overrides for leads pages', () => {
+    const travel = getCatalogForVertical('travel');
+    const leadsPage = travel.find((p) => p.path === '/leads');
+    const travelLeadsPage = travel.find((p) => p.path === '/travel/leads');
+    expect(leadsPage?.label).toBe('Travel Leads');
+    expect(travelLeadsPage?.label).toBe('All Leads');
+  });
+
+  it('keeps the base labels for non-travel verticals', () => {
+    for (const v of ['wellness', 'generic']) {
+      const pages = getCatalogForVertical(v);
+      const leadsPage = pages.find((p) => p.path === '/leads');
+      expect(leadsPage?.label).toBe('All Leads');
+    }
+  });
 });
 
 describe('getAccessiblePages', () => {

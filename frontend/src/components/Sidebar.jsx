@@ -1635,7 +1635,6 @@ function renderTravelNav({
       <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" requiredPermission={{ module: "suppliers", action: "read" }} />
       <Link to="/admin/ratehawk-search" icon={Hotel} label="RateHawk Search" requiredPermission={{ module: "suppliers", action: "read" }} />
       <Link to="/admin/booking-expedia-search" icon={BedDouble} label="Booking / Expedia" requiredPermission={{ module: "suppliers", action: "read" }} />
-      <Link to="/admin/voyagr-api-keys" icon={Key} label="Voyagr API Keys" requiredPermission={{ module: "integrations", action: "manage" }} />
       <Link to="/travel/commission-profiles" icon={Award} label="Commission Profiles" requiredPermission={{ module: "commission_profiles", action: "read" }} />
       <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />
       <Link to="/travel/flights/quote" icon={Plane} label="Flight quick-quote" requiredPermission={{ module: "flight_quotes", action: "read" }} />
@@ -1689,6 +1688,7 @@ function renderTravelNav({
       )}
 
       <Section label="Sales pipeline">
+        <Link to="/leads" icon={UserPlus} label="Travel Leads" requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/travel/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
         <Link to="/pipeline" icon={Briefcase} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />

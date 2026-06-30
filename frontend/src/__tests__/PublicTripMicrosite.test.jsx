@@ -98,8 +98,8 @@ afterEach(() => {
 describe('<PublicTripMicrosite /> — load states', () => {
   it('renders the trip destination + participants after load', async () => {
     renderPage();
-    expect(await screen.findByText('Goa Ed Tour')).toBeInTheDocument();
-    expect(screen.getByText(/Aadhaar verification/i)).toBeInTheDocument();
+    expect(await screen.findByTestId('microsite-destination-title')).toHaveTextContent('Goa Ed Tour');
+    expect(screen.getByTestId('microsite-aadhaar-section')).toBeInTheDocument();
     expect(await screen.findByText('Aarav Sharma')).toBeInTheDocument();
     expect(screen.getByText('Bina Patel')).toBeInTheDocument();
   });
@@ -144,9 +144,10 @@ describe('<PublicTripMicrosite /> — G095 brand-kit consumer', () => {
     };
     renderPage();
     // Brand logo image renders with the tagline embedded into alt.
-    const logo = await screen.findByAltText(/Travel that teaches/i);
+    const logo = await screen.findByTestId('microsite-brand-logo');
     expect(logo).toBeInTheDocument();
     expect(logo.tagName).toBe('IMG');
+    expect(logo).toHaveAttribute('alt', 'Travel that teaches logo');
     // Tagline copy ALSO shows in the header.
     expect(screen.getByText('Travel that teaches')).toBeInTheDocument();
   });
@@ -180,7 +181,7 @@ describe('<PublicTripMicrosite /> — G095 brand-kit consumer', () => {
   it('falls back to default Plane icon + no brand-footer when brandKit is null', async () => {
     // Default fixture already has brandKit:null — assert the fallback.
     renderPage();
-    await screen.findByText('Goa Ed Tour');
+    await screen.findByTestId('microsite-destination-title');
     // No brand-logo IMG and no brand-footer in fallback mode.
     expect(screen.queryByAltText(/Brand logo/i)).not.toBeInTheDocument();
     expect(screen.queryByTestId('microsite-brand-footer')).not.toBeInTheDocument();
@@ -306,7 +307,7 @@ describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
   it('does NOT render the panel when ?draftToken is absent', async () => {
     installMock();
     renderPage();
-    await screen.findByText('Goa Ed Tour');
+    await screen.findByTestId('microsite-destination-title');
     expect(screen.queryByTestId('registration-confirm-panel')).not.toBeInTheDocument();
   });
 

@@ -25,8 +25,11 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
-import { ShieldCheck, CheckCircle2, AlertCircle, Loader2, Plane, Mail, Phone, UserCheck } from "lucide-react";
-import { DestinationBanner } from "../../components/DestinationVisuals";
+import {
+  ShieldCheck, CheckCircle2, AlertCircle, Loader2, Plane, Mail, Phone, UserCheck,
+  CalendarDays, MapPin, IndianRupee, FileText, Users, Clock, Sparkles, ClipboardCheck,
+} from "lucide-react";
+import { DestinationHero, DestinationSideRails } from "../../components/DestinationVisuals";
 
 const KYC_MICROSITE_UUID_KEY = "kycMicrositeUuid";
 
@@ -160,40 +163,59 @@ export default function PublicTripMicrosite() {
   }
 
   const trip = info?.trip || {};
+  const itineraryDays = parseItineraryDays(info?.itineraryHtml);
+  const docs = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
+  const instalments = parseInstalments(trip.paymentPlan?.instalmentsJson);
+  const durationDays = tripDurationDays(trip);
+  const studentCount = trip?._count?.participants || participants.length || 0;
+  const price = formatMoney(trip.pricePerStudent, "INR");
 
   return (
     <div style={{ ...S.page, background: palette.bg }}>
+      <DestinationSideRails destination={trip.destination} />
       <div style={S.container}>
-        <header style={{ ...S.header, background: palette.headerBg, color: palette.headerFg }}>
+        <div style={S.brandStrip}>
           {brandKit?.logoUrl ? (
             <img
               src={brandKit.logoUrl}
               alt={brandKit.tagline ? `${brandKit.tagline} logo` : "Brand logo"}
-              style={{ width: 44, height: 44, objectFit: "contain", background: "#fff", borderRadius: 8, padding: 4 }}
+              style={S.logo}
+              data-testid="microsite-brand-logo"
             />
           ) : (
-            <Plane size={22} aria-hidden />
+            <span style={{ ...S.logoFallback, background: palette.headerBg, color: palette.headerFg }}>
+              <Plane size={18} aria-hidden />
+            </span>
           )}
           <div style={{ minWidth: 0 }}>
-            <h1 style={{ margin: 0, fontSize: 22 }}>{trip.destination || "Trip"}</h1>
-            <p style={{ margin: "2px 0 0", color: palette.headerMutedFg, fontSize: 13 }}>
+            <h1 data-testid="microsite-destination-title" style={{ margin: 0, fontSize: 18, color: "#0f172a" }}>{trip.destination || "Trip"}</h1>
+            <p style={{ margin: "2px 0 0", color: "#64748b", fontSize: 13 }}>
               {fmtDate(trip.departDate)} – {fmtDate(trip.returnDate)}
             </p>
             {brandKit?.tagline && (
-              <p style={{ margin: "4px 0 0", color: palette.headerMutedFg, fontSize: 12, fontStyle: "italic" }}>
+              <p style={{ margin: "4px 0 0", color: "#475569", fontSize: 12, fontStyle: "italic" }}>
                 {brandKit.tagline}
               </p>
             )}
           </div>
-        </header>
+        </div>
 
         {/* Destination photo banner — a real destination photo (Wikipedia,
             keyless) under the brand header; falls back to a themed gradient. */}
-        {trip.destination && (
-          <section style={S.section}>
-            <DestinationBanner destination={trip.destination} />
-          </section>
-        )}
+        <DestinationHero destination={trip.destination || "Trip"}>
+          <div style={S.heroMeta}>
+            <span><CalendarDays size={15} aria-hidden /> {fmtDate(trip.departDate)} to {fmtDate(trip.returnDate)}</span>
+            <span><Clock size={15} aria-hidden /> {durationDays} day{durationDays === 1 ? "" : "s"}</span>
+            {trip.tripCode && <span><ClipboardCheck size={15} aria-hidden /> {trip.tripCode}</span>}
+          </div>
+        </DestinationHero>
+
+        <section style={S.quickGrid} aria-label="Trip summary">
+          <InfoTile icon={MapPin} label="Destination" value={trip.destination || "To be announced"} />
+          <InfoTile icon={IndianRupee} label="Package price" value={price || "Shared by coordinator"} />
+          <InfoTile icon={Users} label="Registered travellers" value={studentCount ? String(studentCount) : "Open"} />
+          <InfoTile icon={FileText} label="Required documents" value={docs.length ? `${docs.length} item${docs.length === 1 ? "" : "s"}` : "Basic ID"} />
+        </section>
 
         {/* Phase 7 — hybrid registration confirmation panel. Only
             rendered when the user landed here via the landing-page
@@ -210,22 +232,69 @@ export default function PublicTripMicrosite() {
           </section>
         )}
 
-        {info?.itineraryHtml && info.itineraryHtml.trim() && (
-          <section style={S.section} data-testid="microsite-itinerary">
-            <h2 style={S.h2}>Itinerary</h2>
-            {/* itineraryHtml is sanitised server-side (sanitizeBody strips
-                dangerous tags) before it is ever stored. Force a visible
-                text colour so the content shows correctly even if a parent
-                browser has dark-mode prefs that would otherwise apply
-                white-on-white to the .section's white background. */}
-            <div
-              style={{ color: "#1e293b", lineHeight: 1.6, fontSize: 14 }}
-              dangerouslySetInnerHTML={{ __html: sanitizeHtml(info.itineraryHtml) }}
-            />
-          </section>
-        )}
+        <section style={S.section}>
+          <h2 style={S.h2}><Sparkles size={18} aria-hidden /> Package highlights</h2>
+          <div style={S.packageGrid}>
+            <PackageItem title="Included planning" text="Curated school-friendly schedule, destination coordination and pre-departure support." />
+            <PackageItem title="Travel readiness" text="OTP confirmation, Aadhaar verification and document checks before admin approval." />
+            <PackageItem title="Transparent package" text={price ? `${price} per student, with instalments shown below when configured.` : "Final package amount will be confirmed by the school coordinator."} />
+          </div>
+          {instalments.length > 0 && (
+            <div style={S.instalmentBox}>
+              <div style={S.miniTitle}>Payment schedule</div>
+              <div style={S.instalmentGrid}>
+                {instalments.map((it, idx) => (
+                  <div key={`${it.dueDate || "due"}-${idx}`} style={S.instalment}>
+                    <span>Instalment {idx + 1}</span>
+                    <strong>{formatMoney(it.amount, "INR") || "Amount TBA"}</strong>
+                    <small>{it.dueDate ? `Due ${fmtDate(it.dueDate)}` : "Due date TBA"}</small>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section style={S.section} data-testid="microsite-itinerary">
+          <h2 style={S.h2}><CalendarDays size={18} aria-hidden /> Itinerary</h2>
+          {itineraryDays.length > 0 ? (
+            <div style={S.timeline}>
+              {itineraryDays.map((day, idx) => (
+                <article key={`${day.title}-${idx}`} style={S.dayCard}>
+                  <div style={S.dayBadge}>Day {day.dayNumber || idx + 1}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <h3 style={S.dayTitle}>{day.title || `Explore ${trip.destination || "the destination"}`}</h3>
+                    {day.items.length > 0 ? (
+                      <ul style={S.dayList}>
+                        {day.items.map((item, itemIdx) => <li key={itemIdx}>{item}</li>)}
+                      </ul>
+                    ) : (
+                      <p style={S.dayText}>Details will be shared shortly.</p>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : info?.itineraryHtml && info.itineraryHtml.trim() ? (
+            <div style={S.htmlContent} dangerouslySetInnerHTML={{ __html: sanitizeHtml(info.itineraryHtml) }} />
+          ) : (
+            <p style={S.help}>The detailed day-by-day itinerary will appear here once the coordinator publishes it.</p>
+          )}
+        </section>
 
         <section style={S.section}>
+          <h2 style={S.h2}><FileText size={18} aria-hidden /> Documents to keep ready</h2>
+          <div style={S.docGrid}>
+            {(docs.length ? docs : DEFAULT_DOCUMENTS).map((doc) => (
+              <div key={doc.docType} style={S.docItem}>
+                <CheckCircle2 size={15} aria-hidden />
+                <span>{docLabel(doc.docType)}{doc.required === false ? " (optional)" : ""}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section style={S.section} data-testid="microsite-aadhaar-section">
           <h2 style={S.h2}><ShieldCheck size={18} aria-hidden /> Aadhaar verification</h2>
 
           {justVerified && (
@@ -344,9 +413,108 @@ function fmtDate(d) {
 // decision #9 — DRAFT_NOT_FOUND / DRAFT_WRONG_TRIP / DRAFT_EXPIRED /
 // OTP_INVALID — so the visitor sees a deterministic next-action
 // instead of a generic "something went wrong".
+function tripDurationDays(trip) {
+  if (!trip?.departDate || !trip?.returnDate) return 1;
+  const start = new Date(trip.departDate);
+  const end = new Date(trip.returnDate);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 1;
+  return Math.max(1, Math.floor((end - start) / 86400000) + 1);
+}
+
+function formatMoney(value, currency = "INR") {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  try {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 0,
+    }).format(n);
+  } catch {
+    return `₹${Math.round(n).toLocaleString("en-IN")}`;
+  }
+}
+
+function parseInstalments(raw) {
+  if (!raw || typeof raw !== "string") return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(Boolean).slice(0, 6) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseItineraryDays(raw) {
+  const clean = sanitizeHtml(raw);
+  if (!clean || typeof DOMParser === "undefined") return [];
+  const doc = new DOMParser().parseFromString(`<div>${clean}</div>`, "text/html");
+  const root = doc.body;
+  const headings = [...root.querySelectorAll("h1,h2,h3")];
+  if (headings.length === 0) {
+    const text = root.textContent?.trim();
+    return text ? [{ dayNumber: 1, title: "Trip plan", items: [text] }] : [];
+  }
+  return headings.map((heading, idx) => {
+    const rawTitle = heading.textContent?.trim() || `Day ${idx + 1}`;
+    const dayMatch = rawTitle.match(/day\s*(\d+)/i);
+    const title = rawTitle.replace(/^day\s*\d+\s*[-—:]\s*/i, "").trim() || rawTitle;
+    const items = [];
+    let node = heading.nextElementSibling;
+    while (node && !/^H[1-3]$/i.test(node.tagName)) {
+      if (node.matches("ul,ol")) {
+        items.push(...[...node.querySelectorAll("li")].map((li) => li.textContent?.trim()).filter(Boolean));
+      } else {
+        const text = node.textContent?.trim();
+        if (text) items.push(text);
+      }
+      node = node.nextElementSibling;
+    }
+    return { dayNumber: dayMatch ? Number(dayMatch[1]) : idx + 1, title, items: items.slice(0, 8) };
+  }).filter((day) => day.title || day.items.length > 0);
+}
+
+const DEFAULT_DOCUMENTS = [
+  { docType: "passport", required: true },
+  { docType: "aadhaar", required: true },
+  { docType: "consent-form", required: true },
+];
+
+function docLabel(docType) {
+  const labels = {
+    passport: "Passport",
+    aadhaar: "Aadhaar",
+    "medical-form": "Medical form",
+    "consent-form": "Parent consent form",
+    "school-id": "School ID",
+  };
+  return labels[docType] || String(docType || "Document").replace(/-/g, " ");
+}
+
+function InfoTile({ icon: Icon, label, value }) {
+  return (
+    <div style={S.infoTile}>
+      <span style={S.infoIcon}><Icon size={18} aria-hidden /></span>
+      <span style={S.infoLabel}>{label}</span>
+      <strong style={S.infoValue}>{value}</strong>
+    </div>
+  );
+}
+
+function PackageItem({ title, text }) {
+  return (
+    <div style={S.packageItem}>
+      <div style={S.packageDot} />
+      <div>
+        <div style={S.packageTitle}>{title}</div>
+        <p style={S.packageText}>{text}</p>
+      </div>
+    </div>
+  );
+}
+
 export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
   const [step, setStep] = useState("idle"); // idle | sending | otp_sent | verifying | verified | error
-  const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState(null);
   const [summary, setSummary] = useState(null);
@@ -608,7 +776,35 @@ const S = {
   wrap: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#f1f5f9" },
   card: { background: "#fff", borderRadius: 16, padding: "36px 32px", maxWidth: 420, textAlign: "center", boxShadow: "0 10px 30px rgba(0,0,0,0.08)" },
   page: { minHeight: "100vh", background: "#f1f5f9", padding: "0 0 40px" },
-  container: { maxWidth: 720, margin: "0 auto" },
+  container: { maxWidth: 920, margin: "0 auto", position: "relative", zIndex: 1, padding: "0 16px 40px" },
+  brandStrip: {
+    display: "flex", alignItems: "center", gap: 12,
+    padding: "16px 0 14px",
+    color: "#0f172a",
+  },
+  logo: { width: 42, height: 42, objectFit: "contain", background: "#fff", borderRadius: 8, padding: 4, boxShadow: "0 6px 18px rgba(15,23,42,0.08)" },
+  logoFallback: { width: 42, height: 42, display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: 10 },
+  brandName: { fontSize: 14, fontWeight: 800, color: "#0f172a" },
+  brandMeta: { fontSize: 12, color: "#64748b", marginTop: 2 },
+  heroMeta: { display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" },
+  quickGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 190px), 1fr))",
+    gap: 12,
+    margin: "16px 0 20px",
+  },
+  infoTile: {
+    background: "#fff",
+    border: "1px solid #e2e8f0",
+    borderRadius: 10,
+    padding: 14,
+    boxShadow: "0 8px 24px rgba(15,23,42,0.05)",
+    display: "grid",
+    gap: 6,
+  },
+  infoIcon: { color: "#C89A4E", display: "inline-flex" },
+  infoLabel: { fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 800 },
+  infoValue: { fontSize: 17, color: "#0f172a", lineHeight: 1.2 },
   header: {
     display: "flex", gap: 12, alignItems: "center", color: "#fff",
     background: "#122647", padding: "24px 24px", borderRadius: "0 0 16px 16px",
@@ -616,6 +812,25 @@ const S = {
   section: { background: "#fff", borderRadius: 14, padding: 24, margin: "20px 16px", boxShadow: "0 4px 14px rgba(0,0,0,0.05)" },
   h2: { display: "flex", alignItems: "center", gap: 8, fontSize: 17, margin: "0 0 12px" },
   help: { color: "#475569", fontSize: 14, marginTop: 0 },
+  registrationSection: { border: "1px solid rgba(200,154,78,0.4)", boxShadow: "0 12px 32px rgba(200,154,78,0.12)" },
+  packageGrid: { display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))" },
+  packageItem: { display: "flex", gap: 10, padding: 12, border: "1px solid #e2e8f0", borderRadius: 10, background: "#f8fafc" },
+  packageDot: { width: 9, height: 9, borderRadius: 99, background: "#C89A4E", marginTop: 5, flexShrink: 0 },
+  packageTitle: { fontSize: 13, fontWeight: 800, color: "#0f172a" },
+  packageText: { margin: "4px 0 0", fontSize: 12, lineHeight: 1.5, color: "#475569" },
+  miniTitle: { fontSize: 12, fontWeight: 800, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 },
+  instalmentBox: { marginTop: 16, paddingTop: 16, borderTop: "1px solid #e2e8f0" },
+  instalmentGrid: { display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))" },
+  instalment: { display: "grid", gap: 3, padding: 12, background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 10, color: "#7c2d12", fontSize: 12 },
+  timeline: { display: "grid", gap: 12 },
+  dayCard: { display: "grid", gridTemplateColumns: "86px 1fr", gap: 14, padding: 14, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12 },
+  dayBadge: { alignSelf: "start", textAlign: "center", padding: "8px 10px", borderRadius: 9, background: "#122647", color: "#fff", fontSize: 12, fontWeight: 800 },
+  dayTitle: { margin: "0 0 8px", color: "#0f172a", fontSize: 16, lineHeight: 1.3 },
+  dayList: { margin: 0, paddingLeft: 18, color: "#334155", fontSize: 13, lineHeight: 1.6 },
+  dayText: { margin: 0, color: "#475569", fontSize: 13 },
+  htmlContent: { color: "#1e293b", lineHeight: 1.6, fontSize: 14 },
+  docGrid: { display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 190px), 1fr))" },
+  docItem: { display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 10, background: "#f0fdf4", color: "#166534", fontSize: 13, fontWeight: 700 },
   participant: {
     display: "flex", alignItems: "center", justifyContent: "space-between",
     padding: "12px 0", borderBottom: "1px solid #e2e8f0", gap: 12,

@@ -6,7 +6,7 @@
  * (sibling to Trips / Itineraries / VisaApplications — the most-recent
  * travel-page tests, shipped commits 285ec18 / 874296d / 0609956):
  *
- *   1. Page chrome: heading "Travel Leads" + UserPlus icon + filter bar
+ *   1. Page chrome: heading "All Leads" + UserPlus icon + filter bar
  *      (sub-brand <select> + stage <select> + deal-count summary) + two
  *      header CTAs ("New Travel Lead" + "Refresh"). No RBAC gate in the SUT
  *      — both CTAs render for every authenticated user (backend handles
@@ -179,8 +179,9 @@ const DEALS_DEFAULT = [
     amount: 2500000,
     currency: 'INR',
     contactId: 5001,
-    contact: { id: 5001, name: 'Mumbai International School', email: 'admin@mis.example' },
+    contact: { id: 5001, name: 'Mumbai International School', email: 'admin@mis.example', source: 'inbound:webform' },
     diagnosticId: 11,
+    channel: 'web_form',
   }),
   makeDeal({
     id: 302,
@@ -190,8 +191,9 @@ const DEALS_DEFAULT = [
     amount: 450000,
     currency: 'INR',
     contactId: 5002,
-    contact: { id: 5002, name: 'Harpreet Singh', email: 'harpreet@example.com' },
+    contact: { id: 5002, name: 'Harpreet Singh', email: 'harpreet@example.com', source: 'inbound:whatsapp' },
     diagnosticId: null,
+    channel: 'whatsapp',
   }),
   makeDeal({
     id: 303,
@@ -203,6 +205,7 @@ const DEALS_DEFAULT = [
     contactId: null,
     contact: null,
     diagnosticId: null,
+    channel: null,
   }),
   makeDeal({
     id: 304,
@@ -212,8 +215,21 @@ const DEALS_DEFAULT = [
     amount: null,
     currency: null,
     contactId: 5004,
-    contact: { id: 5004, name: 'Anita Sharma', email: 'anita@example.com' },
+    contact: { id: 5004, name: 'Anita Sharma', email: 'anita@example.com', source: 'inbound:metaads' },
     diagnosticId: null,
+    channel: 'meta_ad',
+  }),
+  makeDeal({
+    id: 305,
+    title: 'LP Inbound: Australia 7-Day Tour',
+    subBrand: 'tmc',
+    stage: 'lead',
+    amount: 0,
+    currency: 'USD',
+    contactId: 5005,
+    contact: { id: 5005, name: 'Abir', email: 'abir@example.com', source: 'tmc_registration' },
+    diagnosticId: null,
+    channel: 'web_form',
   }),
 ];
 
@@ -279,10 +295,10 @@ afterEach(() => {
 });
 
 describe('<TravelLeads /> — page chrome', () => {
-  it('renders heading "Travel Leads" + filter bar + "New Travel Lead" + "Refresh" CTAs', async () => {
+  it('renders heading "All Leads" + filter bar + "New Travel Lead" + "Refresh" CTAs', async () => {
     renderPage();
     expect(
-      screen.getByRole('heading', { name: /Travel Leads/i }),
+      screen.getByRole('heading', { name: /All Leads/i }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by stage/i)).toBeInTheDocument();
@@ -691,10 +707,10 @@ function installFetchMockWithSettings({
       if (settings instanceof Error) return Promise.reject(settings);
       return Promise.resolve(
         settings || {
-          channels: { web_form: true, whatsapp: true, meta_ad: true },
+          channels: { web_form: true, whatsapp: true, meta_ad: true, manual: true },
           cooldowns: {},
           formRoutingMappings: [],
-          allowedChannels: ['web_form', 'whatsapp', 'meta_ad', 'voyagr', 'manual'],
+          allowedChannels: ['web_form', 'whatsapp', 'meta_ad', 'manual'],
           cooldownRange: { min: 0, max: 86400 },
         },
       );
@@ -730,11 +746,15 @@ describe('<TravelLeads /> — G010 channel chip filter', () => {
     // "All" chip always present
     const all = await screen.findByRole('button', { name: /^All/ });
     expect(all).toBeInTheDocument();
-    // Enabled channels render (web_form / whatsapp / meta_ad).
-    // The chip text is the short label "Web" / "WhatsApp" / "Meta".
+    // Enabled channels render (web_form / whatsapp / meta_ad / manual).
+    // Voyagr is intentionally not exposed (no live integration).
+    // The chip text is the short label "Web" / "WhatsApp" / "Meta" / "Manual".
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Filter by web_form' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Filter by whatsapp' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Filter by meta_ad' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Filter by manual' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Filter by voyagr' })).toBeNull();
     });
   });
 
@@ -742,13 +762,13 @@ describe('<TravelLeads /> — G010 channel chip filter', () => {
     renderPage();
     const whatsappChip = await screen.findByRole('button', { name: 'Filter by whatsapp' });
     fireEvent.click(whatsappChip);
-    // load() should re-fire with ?channel=whatsapp
+    // load() now fires both a filtered and an unfiltered GET; assert at least
+    // one /api/deals call carries ?channel=whatsapp.
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(
         ([u]) => typeof u === 'string' && u.startsWith('/api/deals'),
       );
-      const last = calls[calls.length - 1];
-      expect(last[0]).toMatch(/channel=whatsapp/);
+      expect(calls.some(([u]) => /channel=whatsapp/.test(u))).toBe(true);
     });
   });
 
@@ -763,6 +783,26 @@ describe('<TravelLeads /> — G010 channel chip filter', () => {
       expect(screen.getByRole('button', { name: 'Filter by web_form' })).toBeInTheDocument();
     });
   });
+
+  it('chip counts reflect each deal\'s channel', async () => {
+    renderPage();
+    await waitFor(() => {
+      // All chip shows total deal count.
+      expect(screen.getByRole('button', { name: /^All/ })).toHaveTextContent('All 5');
+    });
+    // Web chip shows 2 (deal 301 inbound:webform + deal 305 landing-page tmc_registration).
+    // Chip text has no literal space between label and count (the count span
+    // uses margin-left), so assert via regex.
+    const webChip = screen.getByRole('button', { name: 'Filter by web_form' });
+    expect(webChip).toHaveTextContent(/Web\s*2/);
+    // WhatsApp chip shows 1 (deal 302).
+    expect(screen.getByRole('button', { name: 'Filter by whatsapp' })).toHaveTextContent(/WhatsApp\s*1/);
+    // Meta chip shows 1 (deal 304).
+    expect(screen.getByRole('button', { name: 'Filter by meta_ad' })).toHaveTextContent(/Meta\s*1/);
+    // Manual chip shows 1 (deal 303 has no linked contact / inbound source).
+    expect(screen.getByRole('button', { name: 'Filter by manual' })).toHaveTextContent(/Manual\s*1/);
+  });
+
 });
 
 describe('<TravelLeads /> — G010 ?view=inbox layout switch', () => {

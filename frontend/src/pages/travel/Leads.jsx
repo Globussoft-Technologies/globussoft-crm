@@ -39,12 +39,12 @@ import {
 // G010 — canonical 17-channel allowlist, mirrors backend allowlist. Used as
 // a fallback when /api/settings/lead-capture is not reachable (USER role).
 const FALLBACK_CHANNELS = [
-  "voyagr", "web_form", "whatsapp", "ads", "adsgpt", "meta_ad", "manual",
+  "web_form", "whatsapp", "ads", "adsgpt", "meta_ad", "manual",
   "indiamart", "justdial", "tradeindia", "voice", "sms", "email",
   "google_ad", "linkedin_ad", "referral", "chat",
 ];
 const CHANNEL_SHORT_LABELS = {
-  voyagr: "Voyagr", web_form: "Web", whatsapp: "WhatsApp",
+  web_form: "Web", whatsapp: "WhatsApp",
   ads: "Ads", adsgpt: "AdsGPT", meta_ad: "Meta", manual: "Manual",
   indiamart: "IndiaMART", justdial: "JustDial", tradeindia: "TradeIndia",
   voice: "Voice", sms: "SMS", email: "Email",
@@ -87,6 +87,9 @@ export default function TravelLeads() {
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
   const [deals, setDeals] = useState([]);
+  // Unfiltered deal window used for chip counts. When a channel filter is
+  // active, `deals` is the filtered subset but counts must still reflect the
+  // full pipeline so empty tabs don't zero out every chip.
   // G-amount — a lead's own Deal.amount is almost always 0 for travel (the
   // pipeline value field is rarely set); the customer's REAL money lives in
   // their committed itineraries. We aggregate that here, keyed by contactId,
@@ -99,6 +102,7 @@ export default function TravelLeads() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [contacts, setContacts] = useState([]);
+  const [allDeals, setAllDeals] = useState([]);
   // G010 — URL-driven view + channel state. Default grid view (back-compat).
   const [searchParams, setSearchParams] = useSearchParams();
   const view = searchParams.get("view") === "inbox" ? "inbox" : "grid";
@@ -207,18 +211,35 @@ export default function TravelLeads() {
 
   const load = () => {
     setLoading(true);
-    const qs = new URLSearchParams();
-    if (subBrand) qs.set("subBrand", subBrand);
-    if (stage) qs.set("stage", stage);
-    if (channelFilter) qs.set("channel", channelFilter);
-    qs.set("limit", "200");
-    fetchApi(`/api/deals?${qs.toString()}`)
-      .then((res) => setDeals(Array.isArray(res) ? res : []))
+    const baseQs = new URLSearchParams();
+    if (subBrand) baseQs.set("subBrand", subBrand);
+    if (stage) baseQs.set("stage", stage);
+    baseQs.set("limit", "200");
+
+    // Filtered list for the active channel tab.
+    const filteredQs = new URLSearchParams(baseQs);
+    if (channelFilter) filteredQs.set("channel", channelFilter);
+    fetchApi(`/api/deals?${filteredQs.toString()}`)
+      .then((res) => {
+        const rows = Array.isArray(res) ? res : [];
+        setDeals(rows);
+        // When no channel filter is active the filtered list IS the full list.
+        if (!channelFilter) setAllDeals(rows);
+      })
       .catch((e) => {
         notify.error(e?.body?.error || "Failed to load leads");
         setDeals([]);
+        if (!channelFilter) setAllDeals([]);
       })
       .finally(() => setLoading(false));
+
+    // When a channel filter is active, fetch the unfiltered window separately
+    // so chip counts stay accurate across all tabs (not just the selected one).
+    if (channelFilter) {
+      fetchApi(`/api/deals?${baseQs.toString()}`)
+        .then((res) => setAllDeals(Array.isArray(res) ? res : []))
+        .catch(() => setAllDeals([]));
+    }
 
     // Best-effort: sum each customer's COMMITTED itinerary totals so the
     // AMOUNT column reflects their booking value (not the always-0 deal value).
@@ -259,18 +280,17 @@ export default function TravelLeads() {
     return { text: "—", booking: false };
   };
 
-  // G010 — per-channel counts from the currently-loaded deals window.
-  // Server-side count would be more accurate cross-paginated; the chip
-  // counts here reflect the loaded window (limit=200), which is fine for
-  // a directional ops UX. NB: deal.channel may be null for legacy rows.
+  // G010 — per-channel counts from the unfiltered deal window. Counts must
+  // not collapse to zero when the user selects an empty tab; they always
+  // reflect the full (sub-brand + stage scoped) pipeline.
   const channelCounts = useMemo(() => {
     const out = {};
-    for (const d of deals) {
+    for (const d of allDeals) {
       const c = d?.channel || "manual";
       out[c] = (out[c] || 0) + 1;
     }
     return out;
-  }, [deals]);
+  }, [allDeals]);
 
   // G010 — chips visible to the operator: prefer the explicitly-enabled
   // set if the settings GET succeeded, else show the full allowlist.
@@ -287,7 +307,7 @@ export default function TravelLeads() {
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
-            <UserPlus size={28} aria-hidden /> Travel Leads
+            <UserPlus size={28} aria-hidden /> All Leads
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4, marginBottom: 0 }}>
             Unified deal pipeline across all sub-brands. Server-scoped to the caller&apos;s sub-brand access.

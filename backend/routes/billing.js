@@ -14,7 +14,10 @@ const { formatMoney } = require("../utils/formatMoney");
 // #577 — wire fieldFilter into Invoice routes so the FieldPermissions UI
 // rules are actually enforced (not just stored). Mirrors the deals.js +
 // contacts.js adoption pattern from #464.
-const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
+const {
+  filterReadFields,
+  filterWriteFields,
+} = require("../middleware/fieldFilter");
 // PRD §4.4 — CA / Tally file-download exporters. Pure helpers; the
 // route handler does the Prisma fetch + shape mapping then delegates.
 const { buildTallyXml } = require("../lib/tallyXmlExport");
@@ -56,11 +59,13 @@ function parseDateRange(query) {
 // path separators into the Content-Disposition value where a browser may
 // refuse to save the file.
 function fileSlug(s) {
-  return String(s || "tenant")
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "tenant";
+  return (
+    String(s || "tenant")
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "tenant"
+  );
 }
 
 // Derive seller-state from tenant.country + locale. The schema doesn't
@@ -91,8 +96,8 @@ function mapInvoiceToExportShape(inv) {
     issueDate: inv.issuedDate || inv.createdAt,
     contactName: inv.contact ? inv.contact.name || "Unknown" : "Unknown",
     billingAddress: "", // schema has no billing-address column today
-    billingState: "",   // ditto for state
-    buyerState: "",     // helper defaults to sellerState (intrastate)
+    billingState: "", // ditto for state
+    buyerState: "", // helper defaults to sellerState (intrastate)
     subtotal: total,
     cgstAmount: 0,
     sgstAmount: 0,
@@ -146,7 +151,9 @@ router.get(
     try {
       const range = parseDateRange(req.query);
       if (!range) {
-        return res.status(400).json({ error: "invalid from/to date", code: "INVALID_DATE_RANGE" });
+        return res
+          .status(400)
+          .json({ error: "invalid from/to date", code: "INVALID_DATE_RANGE" });
       }
 
       const tenant = await prisma.tenant.findUnique({
@@ -160,7 +167,9 @@ router.get(
       const where = await buildInvoiceWhere(req, range);
       const invoices = await prisma.invoice.findMany({
         where,
-        include: { contact: { select: { name: true, email: true, subBrand: true } } },
+        include: {
+          contact: { select: { name: true, email: true, subBrand: true } },
+        },
         orderBy: { issuedDate: "asc" },
       });
 
@@ -174,13 +183,16 @@ router.get(
       const toIso = range.to.toISOString().slice(0, 10);
       const filename = `tally-export-${fileSlug(tenant.slug)}-${fromIso}-${toIso}.xml`;
       res.setHeader("Content-Type", "application/xml; charset=utf-8");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`,
+      );
       res.status(200).send(xml);
     } catch (err) {
       console.error("[billing/export/tally.xml]", err);
       res.status(500).json({ error: "Failed to generate Tally XML export" });
     }
-  }
+  },
 );
 
 // ────────────────────────────────────────────────────────────────
@@ -197,7 +209,9 @@ router.get(
     try {
       const range = parseDateRange(req.query);
       if (!range) {
-        return res.status(400).json({ error: "invalid from/to date", code: "INVALID_DATE_RANGE" });
+        return res
+          .status(400)
+          .json({ error: "invalid from/to date", code: "INVALID_DATE_RANGE" });
       }
 
       const tenant = await prisma.tenant.findUnique({
@@ -221,13 +235,16 @@ router.get(
       const toIso = range.to.toISOString().slice(0, 10);
       const filename = `ca-summary-${fileSlug(tenant.slug)}-${fromIso}-${toIso}.csv`;
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`,
+      );
       res.status(200).send(csv);
     } catch (err) {
       console.error("[billing/export/ca-summary.csv]", err);
       res.status(500).json({ error: "Failed to generate CA summary CSV" });
     }
-  }
+  },
 );
 
 // Fetch all ledgers for current tenant
@@ -255,7 +272,9 @@ router.get("/", verifyToken, async (req, res) => {
     // Matches invoices explicitly tagged with the brand OR (back-compat with
     // pre-subBrand rows) untagged invoices whose CONTACT is that brand. Other
     // verticals never pass ?subBrand, so this is a no-op for them.
-    const sb = req.query.subBrand ? String(req.query.subBrand).slice(0, 32) : null;
+    const sb = req.query.subBrand
+      ? String(req.query.subBrand).slice(0, 32)
+      : null;
     if (sb) {
       findManyArgs.where.OR = [
         { subBrand: sb },
@@ -294,7 +313,12 @@ router.get("/", verifyToken, async (req, res) => {
       }
     }
     // #577: strip read-restricted fields per the caller's role.
-    const filtered = await filterReadFields(invoices, req.user.role, "Invoice", req.user.tenantId);
+    const filtered = await filterReadFields(
+      invoices,
+      req.user.role,
+      "Invoice",
+      req.user.tenantId,
+    );
     res.json(filtered);
   } catch (_err) {
     res.status(500).json({ error: "Failed to locate invoice ledger" });
@@ -339,14 +363,18 @@ router.get("/stats", verifyToken, async (req, res) => {
     if (req.query.from !== undefined) {
       const fromDate = new Date(req.query.from);
       if (Number.isNaN(fromDate.getTime())) {
-        return res.status(400).json({ error: "invalid from date", code: "INVALID_DATE" });
+        return res
+          .status(400)
+          .json({ error: "invalid from date", code: "INVALID_DATE" });
       }
       createdAtClause.gte = fromDate;
     }
     if (req.query.to !== undefined) {
       const toDate = new Date(req.query.to);
       if (Number.isNaN(toDate.getTime())) {
-        return res.status(400).json({ error: "invalid to date", code: "INVALID_DATE" });
+        return res
+          .status(400)
+          .json({ error: "invalid to date", code: "INVALID_DATE" });
       }
       createdAtClause.lte = toDate;
     }
@@ -374,7 +402,12 @@ router.get("/stats", verifyToken, async (req, res) => {
     // their amounts from totalIssued. VOIDED + CREDIT_NOTE in particular
     // carry negative amounts (credit-note) or write-offs (void).
     const EXCLUDE_FROM_ISSUED = new Set(["VOIDED", "CREDIT_NOTE"]);
-    const NOT_OVERDUE_STATUSES = new Set(["PAID", "VOIDED", "REFUNDED", "CREDIT_NOTE"]);
+    const NOT_OVERDUE_STATUSES = new Set([
+      "PAID",
+      "VOIDED",
+      "REFUNDED",
+      "CREDIT_NOTE",
+    ]);
 
     for (const r of rows) {
       const status = r.status || "UNPAID";
@@ -386,10 +419,17 @@ router.get("/stats", verifyToken, async (req, res) => {
       if (status === "PAID") {
         paidSum += amt;
       }
-      if (r.dueDate && new Date(r.dueDate) < now && !NOT_OVERDUE_STATUSES.has(status)) {
+      if (
+        r.dueDate &&
+        new Date(r.dueDate) < now &&
+        !NOT_OVERDUE_STATUSES.has(status)
+      ) {
         overdueCount += 1;
       }
-      if (r.createdAt && (lastCreatedAt === null || new Date(r.createdAt) > lastCreatedAt)) {
+      if (
+        r.createdAt &&
+        (lastCreatedAt === null || new Date(r.createdAt) > lastCreatedAt)
+      ) {
         lastCreatedAt = new Date(r.createdAt);
       }
     }
@@ -427,15 +467,22 @@ router.get("/:id", verifyToken, async (req, res) => {
     // /mark-paid for consistency.
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id) || id <= 0) {
-      return res.status(400).json({ error: "invalid invoice id", code: "INVALID_ID" });
+      return res
+        .status(400)
+        .json({ error: "invalid invoice id", code: "INVALID_ID" });
     }
     const invoice = await prisma.invoice.findFirst({
       where: { id, tenantId: req.user.tenantId },
-      include: { contact: true, deal: true }
+      include: { contact: true, deal: true },
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
     // #577: strip read-restricted fields per the caller's role.
-    const filtered = await filterReadFields(invoice, req.user.role, "Invoice", req.user.tenantId);
+    const filtered = await filterReadFields(
+      invoice,
+      req.user.role,
+      "Invoice",
+      req.user.tenantId,
+    );
     res.json(filtered);
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch invoice" });
@@ -443,104 +490,158 @@ router.get("/:id", verifyToken, async (req, res) => {
 });
 
 // Draft new Invoice
-router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
-  try {
-    // #577: strip write-restricted fields BEFORE the field-level validation
-    // below so a denied field can't slip through into the create payload.
-    req.body = await filterWriteFields(req.body, req.user.role, "Invoice", req.user.tenantId);
-    const { amount, dueDate, contactId, dealId } = req.body;
-    // #158 #177: validate amount > 0 and within sane cap, dueDate >= today.
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt <= 0) {
-      return res.status(400).json({ error: "amount must be greater than 0", code: "INVALID_AMOUNT" });
-    }
-    if (amt > 1e10) {
-      return res.status(400).json({ error: "amount exceeds maximum allowed", code: "AMOUNT_TOO_HIGH" });
-    }
-    // #198: reject sub-paise precision. The smallest currency unit is 0.01 —
-    // anything finer drifts under aggregation and breaks GST filings. The
-    // 1e-9 epsilon swallows JS float noise (0.1+0.2 type artefacts) while
-    // still catching genuine 6-decimal inputs like 123.456789.
-    if (Math.abs(amt - Math.round(amt * 100) / 100) > 1e-9) {
-      return res.status(400).json({ error: "amount must have at most 2 decimal places", code: "INVALID_AMOUNT_PRECISION" });
-    }
-    const due = dueDate ? new Date(dueDate) : null;
-    if (!due || Number.isNaN(due.getTime())) {
-      return res.status(400).json({ error: "dueDate is required and must be a valid date", code: "INVALID_DUE_DATE" });
-    }
-    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-    if (due < todayStart) {
-      return res.status(400).json({ error: "dueDate cannot be in the past", code: "DUE_DATE_IN_PAST" });
-    }
-    if (!contactId) {
-      return res.status(400).json({ error: "contactId is required", code: "CONTACT_REQUIRED" });
-    }
-    const invNum = `INV-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
-
-    // Travel vertical — optional sub-brand tag (tmc | rfu | travelstall |
-    // visasure). Validated against the known set; anything else → null. Other
-    // verticals don't send it, so it stays null and behaviour is unchanged.
-    const subBrandRaw = typeof req.body.subBrand === "string" ? req.body.subBrand.trim().toLowerCase() : "";
-    const subBrand = ["tmc", "rfu", "travelstall", "visasure"].includes(subBrandRaw) ? subBrandRaw : null;
-
-    const baseData = {
-      invoiceNum: invNum,
-      amount: Math.round(amt * 100) / 100, // #198: store to-the-paise; reject was above
-      dueDate: due,
-      contactId: parseInt(contactId),
-      dealId: dealId ? parseInt(dealId) : null,
-      tenantId: req.user.tenantId,
-    };
-    let invoice;
+router.post(
+  "/",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
     try {
-      invoice = await prisma.invoice.create({
-        data: { ...baseData, subBrand },
-        include: { contact: true, deal: true },
-      });
-    } catch (e) {
-      // Graceful degrade: if the Invoice.subBrand column isn't migrated yet,
-      // create the invoice WITHOUT the tag so the flow still works (the contact
-      // still carries the brand). Re-run `npx prisma db push` to persist the tag.
-      if (/subBrand/i.test(String(e && e.message))) {
+      // #577: strip write-restricted fields BEFORE the field-level validation
+      // below so a denied field can't slip through into the create payload.
+      req.body = await filterWriteFields(
+        req.body,
+        req.user.role,
+        "Invoice",
+        req.user.tenantId,
+      );
+      const { amount, dueDate, contactId, dealId } = req.body;
+      // #158 #177: validate amount > 0 and within sane cap, dueDate >= today.
+      const amt = Number(amount);
+      if (!Number.isFinite(amt) || amt <= 0) {
+        return res
+          .status(400)
+          .json({
+            error: "amount must be greater than 0",
+            code: "INVALID_AMOUNT",
+          });
+      }
+      if (amt > 1e10) {
+        return res
+          .status(400)
+          .json({
+            error: "amount exceeds maximum allowed",
+            code: "AMOUNT_TOO_HIGH",
+          });
+      }
+      // #198: reject sub-paise precision. The smallest currency unit is 0.01 —
+      // anything finer drifts under aggregation and breaks GST filings. The
+      // 1e-9 epsilon swallows JS float noise (0.1+0.2 type artefacts) while
+      // still catching genuine 6-decimal inputs like 123.456789.
+      if (Math.abs(amt - Math.round(amt * 100) / 100) > 1e-9) {
+        return res
+          .status(400)
+          .json({
+            error: "amount must have at most 2 decimal places",
+            code: "INVALID_AMOUNT_PRECISION",
+          });
+      }
+      const due = dueDate ? new Date(dueDate) : null;
+      if (!due || Number.isNaN(due.getTime())) {
+        return res
+          .status(400)
+          .json({
+            error: "dueDate is required and must be a valid date",
+            code: "INVALID_DUE_DATE",
+          });
+      }
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      if (due < todayStart) {
+        return res
+          .status(400)
+          .json({
+            error: "dueDate cannot be in the past",
+            code: "DUE_DATE_IN_PAST",
+          });
+      }
+      if (!contactId) {
+        return res
+          .status(400)
+          .json({ error: "contactId is required", code: "CONTACT_REQUIRED" });
+      }
+      const invNum = `INV-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+
+      // Travel vertical — optional sub-brand tag (tmc | rfu | travelstall |
+      // visasure). Validated against the known set; anything else → null. Other
+      // verticals don't send it, so it stays null and behaviour is unchanged.
+      const subBrandRaw =
+        typeof req.body.subBrand === "string"
+          ? req.body.subBrand.trim().toLowerCase()
+          : "";
+      const subBrand = ["tmc", "rfu", "travelstall", "visasure"].includes(
+        subBrandRaw,
+      )
+        ? subBrandRaw
+        : null;
+
+      const baseData = {
+        invoiceNum: invNum,
+        amount: Math.round(amt * 100) / 100, // #198: store to-the-paise; reject was above
+        dueDate: due,
+        contactId: parseInt(contactId),
+        dealId: dealId ? parseInt(dealId) : null,
+        tenantId: req.user.tenantId,
+      };
+      let invoice;
+      try {
         invoice = await prisma.invoice.create({
-          data: baseData,
+          data: { ...baseData, subBrand },
           include: { contact: true, deal: true },
         });
-      } else {
-        throw e;
+      } catch (e) {
+        // Graceful degrade: if the Invoice.subBrand column isn't migrated yet,
+        // create the invoice WITHOUT the tag so the flow still works (the contact
+        // still carries the brand). Re-run `npx prisma db push` to persist the tag.
+        if (/subBrand/i.test(String(e && e.message))) {
+          invoice = await prisma.invoice.create({
+            data: baseData,
+            include: { contact: true, deal: true },
+          });
+        } else {
+          throw e;
+        }
       }
-    }
-    // #179: audit invoice creation.
-    await writeAudit('Invoice', 'CREATE', invoice.id, req.user.userId, req.user.tenantId, {
-      invoiceNum: invoice.invoiceNum,
-      amount: invoice.amount,
-      contactId: invoice.contactId,
-      dealId: invoice.dealId,
-      dueDate: invoice.dueDate,
-    });
-    // PRD Gap §13 wave-6a — emit invoice.created for downstream automations.
-    // Wrapped: workflow failures must NEVER fail the invoice creation.
-    try {
-      require("../lib/eventBus").emitEvent(
-        "invoice.created",
+      // #179: audit invoice creation.
+      await writeAudit(
+        "Invoice",
+        "CREATE",
+        invoice.id,
+        req.user.userId,
+        req.user.tenantId,
         {
-          invoiceId: invoice.id,
           invoiceNum: invoice.invoiceNum,
           amount: invoice.amount,
           contactId: invoice.contactId,
           dealId: invoice.dealId,
           dueDate: invoice.dueDate,
-          status: invoice.status,
         },
-        req.user.tenantId,
-        req.io
       );
-    } catch (_e) {}
-    res.status(201).json(invoice);
-  } catch (_err) {
-    res.status(500).json({ error: "Invoice compilation and issuance failed" });
-  }
-});
+      // PRD Gap §13 wave-6a — emit invoice.created for downstream automations.
+      // Wrapped: workflow failures must NEVER fail the invoice creation.
+      try {
+        require("../lib/eventBus").emitEvent(
+          "invoice.created",
+          {
+            invoiceId: invoice.id,
+            invoiceNum: invoice.invoiceNum,
+            amount: invoice.amount,
+            contactId: invoice.contactId,
+            dealId: invoice.dealId,
+            dueDate: invoice.dueDate,
+            status: invoice.status,
+          },
+          req.user.tenantId,
+          req.io,
+        );
+      } catch (_e) {}
+      res.status(201).json(invoice);
+    } catch (_err) {
+      res
+        .status(500)
+        .json({ error: "Invoice compilation and issuance failed" });
+    }
+  },
+);
 
 // #202: PATCH /:id — safe field updates on an invoice. Whitelist of mutable
 // fields only (the schema has flat `amount`, no line items / taxRate / discount
@@ -549,77 +650,115 @@ router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res)
 // INVALID_INVOICE_TRANSITION (also REFUNDED/CREDIT_NOTE for completeness).
 // `amount` is intentionally NOT in the whitelist — money corrections happen via
 // /refund or /credit-note so the audit trail records *why*, not just *what*.
-router.patch("/:id", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    if (!Number.isFinite(id) || id <= 0) {
-      return res.status(400).json({ error: "invalid invoice id", code: "INVALID_ID" });
-    }
-    // #577: strip write-restricted fields BEFORE applying the whitelist below.
-    req.body = await filterWriteFields(req.body, req.user.role, "Invoice", req.user.tenantId);
-    const before = await prisma.invoice.findFirst({ where: { id, tenantId: req.user.tenantId } });
-    if (!before) return res.status(404).json({ error: "Invoice not found" });
-
-    // Terminal-status guard. PAID + VOIDED + REFUNDED + CREDIT_NOTE are all
-    // immutable from the editor's perspective.
-    if (["PAID", "VOIDED", "REFUNDED", "CREDIT_NOTE"].includes(before.status)) {
-      return res.status(422).json({
-        error: `Cannot update invoice in status ${before.status}`,
-        code: "INVALID_INVOICE_TRANSITION",
-        currentStatus: before.status,
+router.patch(
+  "/:id",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res
+          .status(400)
+          .json({ error: "invalid invoice id", code: "INVALID_ID" });
+      }
+      // #577: strip write-restricted fields BEFORE applying the whitelist below.
+      req.body = await filterWriteFields(
+        req.body,
+        req.user.role,
+        "Invoice",
+        req.user.tenantId,
+      );
+      const before = await prisma.invoice.findFirst({
+        where: { id, tenantId: req.user.tenantId },
       });
-    }
+      if (!before) return res.status(404).json({ error: "Invoice not found" });
 
-    // Whitelist of mutable fields. Anything not here is silently ignored.
-    const data = {};
-    if (req.body.dueDate !== undefined) {
-      const due = new Date(req.body.dueDate);
-      if (Number.isNaN(due.getTime())) {
-        return res.status(400).json({ error: "dueDate is invalid", code: "INVALID_DUE_DATE" });
+      // Terminal-status guard. PAID + VOIDED + REFUNDED + CREDIT_NOTE are all
+      // immutable from the editor's perspective.
+      if (
+        ["PAID", "VOIDED", "REFUNDED", "CREDIT_NOTE"].includes(before.status)
+      ) {
+        return res.status(422).json({
+          error: `Cannot update invoice in status ${before.status}`,
+          code: "INVALID_INVOICE_TRANSITION",
+          currentStatus: before.status,
+        });
       }
-      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-      if (due < todayStart) {
-        return res.status(400).json({ error: "dueDate cannot be in the past", code: "DUE_DATE_IN_PAST" });
+
+      // Whitelist of mutable fields. Anything not here is silently ignored.
+      const data = {};
+      if (req.body.dueDate !== undefined) {
+        const due = new Date(req.body.dueDate);
+        if (Number.isNaN(due.getTime())) {
+          return res
+            .status(400)
+            .json({ error: "dueDate is invalid", code: "INVALID_DUE_DATE" });
+        }
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        if (due < todayStart) {
+          return res
+            .status(400)
+            .json({
+              error: "dueDate cannot be in the past",
+              code: "DUE_DATE_IN_PAST",
+            });
+        }
+        data.dueDate = due;
       }
-      data.dueDate = due;
-    }
-    if (req.body.isRecurring !== undefined) {
-      data.isRecurring = !!req.body.isRecurring;
-    }
-    if (req.body.recurFrequency !== undefined) {
-      const allowed = [null, "monthly", "quarterly", "yearly"];
-      const v = req.body.recurFrequency || null;
-      if (!allowed.includes(v)) {
-        return res.status(400).json({ error: "recurFrequency must be one of monthly/quarterly/yearly", code: "INVALID_RECUR_FREQUENCY" });
+      if (req.body.isRecurring !== undefined) {
+        data.isRecurring = !!req.body.isRecurring;
       }
-      data.recurFrequency = v;
-    }
-    // Reject attempts to mutate `amount` directly — money changes go through
-    // /refund or /credit-note (which write their own audit trail with reason).
-    if (req.body.amount !== undefined) {
-      return res.status(400).json({
-        error: "amount cannot be changed via PATCH — issue a credit-note or refund instead",
-        code: "AMOUNT_IMMUTABLE",
+      if (req.body.recurFrequency !== undefined) {
+        const allowed = [null, "monthly", "quarterly", "yearly"];
+        const v = req.body.recurFrequency || null;
+        if (!allowed.includes(v)) {
+          return res
+            .status(400)
+            .json({
+              error: "recurFrequency must be one of monthly/quarterly/yearly",
+              code: "INVALID_RECUR_FREQUENCY",
+            });
+        }
+        data.recurFrequency = v;
+      }
+      // Reject attempts to mutate `amount` directly — money changes go through
+      // /refund or /credit-note (which write their own audit trail with reason).
+      if (req.body.amount !== undefined) {
+        return res.status(400).json({
+          error:
+            "amount cannot be changed via PATCH — issue a credit-note or refund instead",
+          code: "AMOUNT_IMMUTABLE",
+        });
+      }
+      if (Object.keys(data).length === 0) {
+        return res
+          .status(400)
+          .json({ error: "no updatable fields supplied", code: "NO_UPDATES" });
+      }
+
+      const after = await prisma.invoice.update({
+        where: { id: before.id },
+        data,
+        include: { contact: true, deal: true },
       });
+      // #179: audit the update with a real diff so reviewers see what actually changed.
+      await writeAudit(
+        "Invoice",
+        "INVOICE_UPDATE",
+        after.id,
+        req.user.userId,
+        req.user.tenantId,
+        diffFields(before, after, Object.keys(data)),
+      );
+      res.json(after);
+    } catch (err) {
+      console.error("[billing] patch error:", err);
+      res.status(500).json({ error: "Failed to update invoice" });
     }
-    if (Object.keys(data).length === 0) {
-      return res.status(400).json({ error: "no updatable fields supplied", code: "NO_UPDATES" });
-    }
-
-    const after = await prisma.invoice.update({
-      where: { id: before.id },
-      data,
-      include: { contact: true, deal: true },
-    });
-    // #179: audit the update with a real diff so reviewers see what actually changed.
-    await writeAudit('Invoice', 'INVOICE_UPDATE', after.id, req.user.userId, req.user.tenantId,
-      diffFields(before, after, Object.keys(data)));
-    res.json(after);
-  } catch (err) {
-    console.error("[billing] patch error:", err);
-    res.status(500).json({ error: "Failed to update invoice" });
-  }
-});
+  },
+);
 
 // #202: POST /:id/mark-paid — explicit, idempotent payment marker. Sister
 // route to PUT/POST /:id/pay (kept for back-compat); this one accepts the
@@ -631,9 +770,14 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id) || id <= 0) {
-      return res.status(400).json({ error: "invalid invoice id", code: "INVALID_ID" });
+      return res
+        .status(400)
+        .json({ error: "invalid invoice id", code: "INVALID_ID" });
     }
-    const existing = await prisma.invoice.findFirst({ where: { id, tenantId: req.user.tenantId }, include: { contact: true } });
+    const existing = await prisma.invoice.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      include: { contact: true },
+    });
     if (!existing) return res.status(404).json({ error: "Invoice not found" });
 
     // Idempotency — re-marking a PAID invoice is a no-op success.
@@ -654,12 +798,20 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
     if (req.body && req.body.paidAt) {
       const p = new Date(req.body.paidAt);
       if (Number.isNaN(p.getTime())) {
-        return res.status(400).json({ error: "paidAt is invalid", code: "INVALID_PAID_AT" });
+        return res
+          .status(400)
+          .json({ error: "paidAt is invalid", code: "INVALID_PAID_AT" });
       }
       paidAt = p;
     }
-    const paymentMethod = (req.body && typeof req.body.paymentMethod === "string") ? req.body.paymentMethod.slice(0, 64) : null;
-    const transactionRef = (req.body && typeof req.body.transactionRef === "string") ? req.body.transactionRef.slice(0, 128) : null;
+    const paymentMethod =
+      req.body && typeof req.body.paymentMethod === "string"
+        ? req.body.paymentMethod.slice(0, 64)
+        : null;
+    const transactionRef =
+      req.body && typeof req.body.transactionRef === "string"
+        ? req.body.transactionRef.slice(0, 128)
+        : null;
 
     const invoice = await prisma.invoice.update({
       where: { id: existing.id },
@@ -684,7 +836,10 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
         },
       });
     } catch (e) {
-      console.warn("[billing] mark-paid: Payment row write skipped:", e.message);
+      console.warn(
+        "[billing] mark-paid: Payment row write skipped:",
+        e.message,
+      );
     }
 
     // Convention §6 — emit invoice.paid for downstream automations.
@@ -700,7 +855,7 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
           transactionRef,
         },
         req.user.tenantId,
-        req.io
+        req.io,
       );
     } catch (_e) {}
     // PRD Gap §13 wave-6a — invoice.completed mirrors invoice.paid for the
@@ -721,7 +876,7 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
           status: invoice.status,
         },
         req.user.tenantId,
-        req.io
+        req.io,
       );
     } catch (_e) {}
     // PRD Gap §13 wave-6a — emit payment.collected so downstream automations
@@ -741,19 +896,26 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
           paidAt: invoice.paidAt,
         },
         req.user.tenantId,
-        req.io
+        req.io,
       );
     } catch (_e) {}
 
     // #179: audit the transition.
-    await writeAudit('Invoice', 'MARK_PAID', invoice.id, req.user.userId, req.user.tenantId, {
-      invoiceNum: invoice.invoiceNum,
-      amount: invoice.amount,
-      paidAt: invoice.paidAt,
-      paymentMethod,
-      transactionRef,
-      paymentId: payment ? payment.id : null,
-    });
+    await writeAudit(
+      "Invoice",
+      "MARK_PAID",
+      invoice.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        invoiceNum: invoice.invoiceNum,
+        amount: invoice.amount,
+        paidAt: invoice.paidAt,
+        paymentMethod,
+        transactionRef,
+        paymentId: payment ? payment.id : null,
+      },
+    );
     res.json({ ...invoice, payment });
   } catch (err) {
     console.error("[billing] mark-paid error:", err);
@@ -765,45 +927,78 @@ router.post("/:id/mark-paid", verifyToken, async (req, res) => {
 // (and the bug reporter's POST attempts) work without the API contract gymnastics.
 router.post("/:id/pay", verifyToken, async (req, res) => {
   try {
-    const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    const existing = await prisma.invoice.findFirst({
+      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Invoice not found" });
     const wasPaid = existing.status === "PAID";
     const data = { status: "PAID" };
     if (!wasPaid) data.paidAt = new Date();
-    const invoice = await prisma.invoice.update({ where: { id: existing.id }, data, include: { contact: true } });
+    const invoice = await prisma.invoice.update({
+      where: { id: existing.id },
+      data,
+      include: { contact: true },
+    });
     if (!wasPaid) {
       try {
         require("../lib/eventBus").emitEvent(
           "invoice.paid",
-          { invoiceId: invoice.id, amount: invoice.amount, contactId: invoice.contactId, paidAt: invoice.paidAt },
+          {
+            invoiceId: invoice.id,
+            amount: invoice.amount,
+            contactId: invoice.contactId,
+            paidAt: invoice.paidAt,
+          },
           req.user.tenantId,
-          req.io
+          req.io,
         );
-      } catch(_e) {}
+      } catch (_e) {}
       // PRD Gap §13 wave-6a — invoice.completed + payment.collected mirror
       // the mark-paid path so all three "money in" routes emit the same trio.
       try {
         require("../lib/eventBus").emitEvent(
           "invoice.completed",
-          { invoiceId: invoice.id, invoiceNum: invoice.invoiceNum, amount: invoice.amount, contactId: invoice.contactId, dealId: invoice.dealId, paidAt: invoice.paidAt, status: invoice.status },
+          {
+            invoiceId: invoice.id,
+            invoiceNum: invoice.invoiceNum,
+            amount: invoice.amount,
+            contactId: invoice.contactId,
+            dealId: invoice.dealId,
+            paidAt: invoice.paidAt,
+            status: invoice.status,
+          },
           req.user.tenantId,
-          req.io
+          req.io,
         );
-      } catch(_e) {}
+      } catch (_e) {}
       try {
         require("../lib/eventBus").emitEvent(
           "payment.collected",
-          { invoiceId: invoice.id, paymentId: null, amount: Number(invoice.amount), method: "manual", currency: null, paidAt: invoice.paidAt },
+          {
+            invoiceId: invoice.id,
+            paymentId: null,
+            amount: Number(invoice.amount),
+            method: "manual",
+            currency: null,
+            paidAt: invoice.paidAt,
+          },
           req.user.tenantId,
-          req.io
+          req.io,
         );
-      } catch(_e) {}
+      } catch (_e) {}
       // #179: audit only on the actual UNPAID -> PAID transition.
-      await writeAudit('Invoice', 'MARK_PAID', invoice.id, req.user.userId, req.user.tenantId, {
-        invoiceNum: invoice.invoiceNum,
-        amount: invoice.amount,
-        paidAt: invoice.paidAt,
-      });
+      await writeAudit(
+        "Invoice",
+        "MARK_PAID",
+        invoice.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          invoiceNum: invoice.invoiceNum,
+          amount: invoice.amount,
+          paidAt: invoice.paidAt,
+        },
+      );
     }
     res.json(invoice);
   } catch (_err) {
@@ -814,7 +1009,9 @@ router.post("/:id/pay", verifyToken, async (req, res) => {
 // Reconcile Payment (Mark as Paid)
 router.put("/:id/pay", verifyToken, async (req, res) => {
   try {
-    const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    const existing = await prisma.invoice.findFirst({
+      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Invoice not found" });
     // #119: stamp paidAt so "Paid This Month" KPI can filter on it. Don't overwrite
     // if already paid (preserves the original payment date).
@@ -824,41 +1021,68 @@ router.put("/:id/pay", verifyToken, async (req, res) => {
     const invoice = await prisma.invoice.update({
       where: { id: existing.id },
       data,
-      include: { contact: true }
+      include: { contact: true },
     });
     if (!wasPaid) {
       try {
         require("../lib/eventBus").emitEvent(
           "invoice.paid",
-          { invoiceId: invoice.id, amount: invoice.amount, contactId: invoice.contactId, paidAt: invoice.paidAt },
+          {
+            invoiceId: invoice.id,
+            amount: invoice.amount,
+            contactId: invoice.contactId,
+            paidAt: invoice.paidAt,
+          },
           req.user.tenantId,
-          req.io
+          req.io,
         );
-      } catch(_e) {}
+      } catch (_e) {}
       // PRD Gap §13 wave-6a — invoice.completed + payment.collected mirror
       // the mark-paid path so all three "money in" routes emit the same trio.
       try {
         require("../lib/eventBus").emitEvent(
           "invoice.completed",
-          { invoiceId: invoice.id, invoiceNum: invoice.invoiceNum, amount: invoice.amount, contactId: invoice.contactId, dealId: invoice.dealId, paidAt: invoice.paidAt, status: invoice.status },
+          {
+            invoiceId: invoice.id,
+            invoiceNum: invoice.invoiceNum,
+            amount: invoice.amount,
+            contactId: invoice.contactId,
+            dealId: invoice.dealId,
+            paidAt: invoice.paidAt,
+            status: invoice.status,
+          },
           req.user.tenantId,
-          req.io
+          req.io,
         );
-      } catch(_e) {}
+      } catch (_e) {}
       try {
         require("../lib/eventBus").emitEvent(
           "payment.collected",
-          { invoiceId: invoice.id, paymentId: null, amount: Number(invoice.amount), method: "manual", currency: null, paidAt: invoice.paidAt },
+          {
+            invoiceId: invoice.id,
+            paymentId: null,
+            amount: Number(invoice.amount),
+            method: "manual",
+            currency: null,
+            paidAt: invoice.paidAt,
+          },
           req.user.tenantId,
-          req.io
+          req.io,
         );
-      } catch(_e) {}
+      } catch (_e) {}
       // #179: audit only on the actual UNPAID -> PAID transition.
-      await writeAudit('Invoice', 'MARK_PAID', invoice.id, req.user.userId, req.user.tenantId, {
-        invoiceNum: invoice.invoiceNum,
-        amount: invoice.amount,
-        paidAt: invoice.paidAt,
-      });
+      await writeAudit(
+        "Invoice",
+        "MARK_PAID",
+        invoice.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          invoiceNum: invoice.invoiceNum,
+          amount: invoice.amount,
+          paidAt: invoice.paidAt,
+        },
+      );
     }
     res.json(invoice);
   } catch (_err) {
@@ -874,7 +1098,10 @@ router.put("/:id/pay", verifyToken, async (req, res) => {
 // routes/payments.js is the primary reconciler in production.
 router.post("/public/confirm-payment", async (req, res) => {
   const crypto = require("crypto");
-  const { getTenantRazorpayCreds, getTenantRazorpayClient } = require("../lib/tenantPaymentGateway");
+  const {
+    getTenantRazorpayCreds,
+    getTenantRazorpayClient,
+  } = require("../lib/tenantPaymentGateway");
   try {
     const {
       razorpay_payment_link_id,
@@ -885,7 +1112,10 @@ router.post("/public/confirm-payment", async (req, res) => {
     } = req.body;
 
     const completedPaymentLinkStatuses = new Set(["paid", "partially_paid"]);
-    if (!razorpay_payment_link_id || !completedPaymentLinkStatuses.has(razorpay_payment_link_status)) {
+    if (
+      !razorpay_payment_link_id ||
+      !completedPaymentLinkStatuses.has(razorpay_payment_link_status)
+    ) {
       return res.status(400).json({ error: "Payment not completed" });
     }
 
@@ -905,13 +1135,17 @@ router.post("/public/confirm-payment", async (req, res) => {
         },
       });
     }
-    if (!payment) return res.status(404).json({ error: "Payment record not found" });
+    if (!payment)
+      return res.status(404).json({ error: "Payment record not found" });
 
     // Verify signature using tenant's own key secret
     const creds = await getTenantRazorpayCreds(payment.tenantId);
     if (creds && razorpay_signature) {
       const body = `${razorpay_payment_link_id}|${razorpay_payment_link_reference_id}|${razorpay_payment_link_status}|${razorpay_payment_id}`;
-      const expected = crypto.createHmac("sha256", creds.keySecret).update(body).digest("hex");
+      const expected = crypto
+        .createHmac("sha256", creds.keySecret)
+        .update(body)
+        .digest("hex");
       if (expected !== razorpay_signature) {
         return res.status(400).json({ error: "Signature verification failed" });
       }
@@ -920,7 +1154,9 @@ router.post("/public/confirm-payment", async (req, res) => {
     // Parse metadata once; we need it both for the Payment update and for the
     // travel-vertical reconciliation below.
     let existingMeta = {};
-    try { existingMeta = JSON.parse(payment.metadata || "{}"); } catch (_) {}
+    try {
+      existingMeta = JSON.parse(payment.metadata || "{}");
+    } catch (_) {}
 
     if (payment.status !== "SUCCESS") {
       // MERGE into existing metadata so travelInvoiceId / scheduleId set by
@@ -940,9 +1176,14 @@ router.post("/public/confirm-payment", async (req, res) => {
       });
       // Mark billing invoice paid (non-travel path)
       if (payment.invoiceId) {
-        const inv = await prisma.invoice.findFirst({ where: { id: payment.invoiceId } });
+        const inv = await prisma.invoice.findFirst({
+          where: { id: payment.invoiceId },
+        });
         if (inv && inv.status !== "PAID") {
-          await prisma.invoice.update({ where: { id: inv.id }, data: { status: "PAID" } });
+          await prisma.invoice.update({
+            where: { id: inv.id },
+            data: { status: "PAID" },
+          });
         }
       }
     }
@@ -968,14 +1209,22 @@ router.post("/public/confirm-payment", async (req, res) => {
               status: "SUCCESS",
               OR: [
                 { invoiceId: travelInvoiceId },
-                { metadata: { contains: `"travelInvoiceId":${travelInvoiceId}` } },
+                {
+                  metadata: {
+                    contains: `"travelInvoiceId":${travelInvoiceId}`,
+                  },
+                },
               ],
             },
             select: { amount: true },
           });
-          const totalPaid = paidRows.reduce((s, p) => s + Number(p.amount || 0), 0);
+          const totalPaid = paidRows.reduce(
+            (s, p) => s + Number(p.amount || 0),
+            0,
+          );
           const totalDue = Number(travelInv.totalAmount || 0);
-          const newStatus = totalDue > 0 && totalPaid >= totalDue ? "Paid" : "Partial";
+          const newStatus =
+            totalDue > 0 && totalPaid >= totalDue ? "Paid" : "Partial";
 
           await prisma.travelInvoice.update({
             where: { id: travelInv.id },
@@ -987,14 +1236,16 @@ router.post("/public/confirm-payment", async (req, res) => {
 
           if (newStatus === "Paid") {
             // Settle all remaining open milestones
-            await prisma.travelPaymentSchedule.updateMany({
-              where: {
-                invoiceId: travelInv.id,
-                tenantId: travelInv.tenantId,
-                status: { in: ["pending", "partial", "overdue"] },
-              },
-              data: { status: "paid", paidAt: new Date() },
-            }).catch(() => {});
+            await prisma.travelPaymentSchedule
+              .updateMany({
+                where: {
+                  invoiceId: travelInv.id,
+                  tenantId: travelInv.tenantId,
+                  status: { in: ["pending", "partial", "overdue"] },
+                },
+                data: { status: "paid", paidAt: new Date() },
+              })
+              .catch(() => {});
           } else {
             // Partial: mark the earliest pending milestone paid with this payment's amount
             const earliest = await prisma.travelPaymentSchedule.findFirst({
@@ -1006,10 +1257,16 @@ router.post("/public/confirm-payment", async (req, res) => {
               orderBy: { milestoneOrder: "asc" },
             });
             if (earliest) {
-              await prisma.travelPaymentSchedule.update({
-                where: { id: earliest.id },
-                data: { status: "paid", paidAt: new Date(), receivedAmount: String(payment.amount) },
-              }).catch(() => {});
+              await prisma.travelPaymentSchedule
+                .update({
+                  where: { id: earliest.id },
+                  data: {
+                    status: "paid",
+                    paidAt: new Date(),
+                    receivedAmount: String(payment.amount),
+                  },
+                })
+                .catch(() => {});
             }
           }
 
@@ -1019,23 +1276,30 @@ router.post("/public/confirm-payment", async (req, res) => {
           // (e.g. old metadata-corrupted links) but the operator already marked
           // that milestone paid separately.
           if (newStatus !== "Paid") {
-            const remaining = await prisma.travelPaymentSchedule.count({
-              where: {
-                invoiceId: travelInv.id,
-                tenantId: travelInv.tenantId,
-                status: { notIn: ["paid"] },
-              },
-            }).catch(() => 1);
+            const remaining = await prisma.travelPaymentSchedule
+              .count({
+                where: {
+                  invoiceId: travelInv.id,
+                  tenantId: travelInv.tenantId,
+                  status: { notIn: ["paid"] },
+                },
+              })
+              .catch(() => 1);
             if (remaining === 0) {
-              await prisma.travelInvoice.update({
-                where: { id: travelInv.id },
-                data: { status: "Paid", paidAt: new Date() },
-              }).catch(() => {});
+              await prisma.travelInvoice
+                .update({
+                  where: { id: travelInv.id },
+                  data: { status: "Paid", paidAt: new Date() },
+                })
+                .catch(() => {});
             }
           }
         }
       } catch (e) {
-        console.error("[PublicConfirmPayment] travel reconcile failed (non-fatal):", e.message);
+        console.error(
+          "[PublicConfirmPayment] travel reconcile failed (non-fatal):",
+          e.message,
+        );
       }
     }
 
@@ -1053,34 +1317,52 @@ router.post("/public/confirm-payment", async (req, res) => {
           const rp = await getTenantRazorpayClient(tenantId);
           if (rp && rp.client) {
             try {
-              const rpPayment = await rp.client.payments.fetch(razorpay_payment_id);
+              const rpPayment =
+                await rp.client.payments.fetch(razorpay_payment_id);
               if (rpPayment && rpPayment.amount) {
                 paidMajor = Number(rpPayment.amount) / 100;
               }
             } catch (fErr) {
-              console.error("[PublicConfirmPayment] razorpay payments.fetch error (non-fatal):", fErr && fErr.message);
+              console.error(
+                "[PublicConfirmPayment] razorpay payments.fetch error (non-fatal):",
+                fErr && fErr.message,
+              );
             }
           }
         }
 
-        console.log(`[PublicConfirmPayment] quote advance reconcile start: quoteId=${quoteId}, plinkId=${razorpay_payment_link_id}`);
+        console.log(
+          `[PublicConfirmPayment] quote advance reconcile start: quoteId=${quoteId}, plinkId=${razorpay_payment_link_id}`,
+        );
         const quote = await prisma.travelQuote.findFirst({
           where: { id: quoteId, tenantId },
-          select: { id: true, totalAmount: true, status: true, contactId: true, subBrand: true },
+          select: {
+            id: true,
+            totalAmount: true,
+            status: true,
+            contactId: true,
+            subBrand: true,
+          },
         });
         if (!quote) {
-          console.warn(`[PublicConfirmPayment] quote not found: quoteId=${quoteId}, tenantId=${tenantId}`);
+          console.warn(
+            `[PublicConfirmPayment] quote not found: quoteId=${quoteId}, tenantId=${tenantId}`,
+          );
         }
         if (quote) {
           const newStatus =
-            paidMajor > 0 && Number(quote.totalAmount) > 0 && paidMajor >= Number(quote.totalAmount)
+            paidMajor > 0 &&
+            Number(quote.totalAmount) > 0 &&
+            paidMajor >= Number(quote.totalAmount)
               ? "fully_paid"
               : "advance_paid";
 
           await prisma.travelQuote.update({
             where: { id: quote.id },
             data: {
-              advancePaymentId: String(razorpay_payment_id || payment.gatewayId),
+              advancePaymentId: String(
+                razorpay_payment_id || payment.gatewayId,
+              ),
               status: newStatus,
             },
           });
@@ -1091,10 +1373,16 @@ router.post("/public/confirm-payment", async (req, res) => {
           const travelInv = await prisma.travelInvoice.findFirst({
             where: { quoteId: quote.id, tenantId },
           });
-          console.log(`[PublicConfirmPayment] invoice lookup: quoteId=${quote.id}, tenantId=${tenantId}, found=${!!travelInv}, existingInvoiceId=${linkedInvoiceId}`);
+          console.log(
+            `[PublicConfirmPayment] invoice lookup: quoteId=${quote.id}, tenantId=${tenantId}, found=${!!travelInv}, existingInvoiceId=${linkedInvoiceId}`,
+          );
 
           const totalQuote = Number(quote.totalAmount || 0);
-          const description = buildQuoteAdvanceDescription(quote, paidMajor, totalQuote);
+          const description = buildQuoteAdvanceDescription(
+            quote,
+            paidMajor,
+            totalQuote,
+          );
 
           if (travelInv) {
             linkedInvoiceId = travelInv.id;
@@ -1121,7 +1409,11 @@ router.post("/public/confirm-payment", async (req, res) => {
                   status: "SUCCESS",
                   OR: [
                     { invoiceId: travelInv.id },
-                    { metadata: { contains: `"travelInvoiceId":${travelInv.id}` } },
+                    {
+                      metadata: {
+                        contains: `"travelInvoiceId":${travelInv.id}`,
+                      },
+                    },
                   ],
                 },
                 _sum: { amount: true },
@@ -1129,7 +1421,8 @@ router.post("/public/confirm-payment", async (req, res) => {
               .catch(() => ({ _sum: { amount: 0 } }));
             const totalPaid = Number(paidAgg._sum.amount || 0);
             const totalDue = Number(travelInv.totalAmount || 0);
-            const invoiceStatus = totalDue > 0 && totalPaid >= totalDue ? "Paid" : "Partial";
+            const invoiceStatus =
+              totalDue > 0 && totalPaid >= totalDue ? "Paid" : "Partial";
             await prisma.travelInvoice.update({
               where: { id: travelInv.id },
               data: {
@@ -1137,8 +1430,10 @@ router.post("/public/confirm-payment", async (req, res) => {
                 ...(invoiceStatus === "Paid" ? { paidAt: new Date() } : {}),
               },
             });
-
-          } else if (paidMajor > 0 && paidMajor !== Number(payment.amount || 0)) {
+          } else if (
+            paidMajor > 0 &&
+            paidMajor !== Number(payment.amount || 0)
+          ) {
             await prisma.payment.update({
               where: { id: payment.id },
               data: { amount: paidMajor, description },
@@ -1162,17 +1457,26 @@ router.post("/public/confirm-payment", async (req, res) => {
                 subBrand: quote.subBrand,
               },
               tenantId,
-              req.io
+              req.io,
             );
           } catch (_e) {}
         }
       } catch (e) {
-        console.error("[PublicConfirmPayment] travel quote advance reconcile failed (non-fatal):", e.message);
+        console.error(
+          "[PublicConfirmPayment] travel quote advance reconcile failed (non-fatal):",
+          e.message,
+        );
       }
     }
 
     // Build a summary for the success page (amount paid, balance due, invoice).
-    const summary = { amountPaid: 0, totalDue: 0, balanceDue: 0, invoiceNum: null, currency: payment.currency || "INR" };
+    const summary = {
+      amountPaid: 0,
+      totalDue: 0,
+      balanceDue: 0,
+      invoiceNum: null,
+      currency: payment.currency || "INR",
+    };
     try {
       const refreshed = await prisma.payment.findFirst({
         where: { id: payment.id },
@@ -1182,7 +1486,9 @@ router.post("/public/confirm-payment", async (req, res) => {
         summary.amountPaid = Number(refreshed.amount || 0);
         summary.currency = refreshed.currency || "INR";
         let finalMeta = {};
-        try { finalMeta = JSON.parse(refreshed.metadata || "{}"); } catch (_) {}
+        try {
+          finalMeta = JSON.parse(refreshed.metadata || "{}");
+        } catch (_) {}
         const linkedInvoiceId = Number(finalMeta.travelInvoiceId);
         if (Number.isFinite(linkedInvoiceId)) {
           const linkedInv = await prisma.travelInvoice.findFirst({
@@ -1199,7 +1505,11 @@ router.post("/public/confirm-payment", async (req, res) => {
                   status: "SUCCESS",
                   OR: [
                     { invoiceId: linkedInvoiceId },
-                    { metadata: { contains: `"travelInvoiceId":${linkedInvoiceId}` } },
+                    {
+                      metadata: {
+                        contains: `"travelInvoiceId":${linkedInvoiceId}`,
+                      },
+                    },
                   ],
                 },
                 _sum: { amount: true },
@@ -1211,7 +1521,10 @@ router.post("/public/confirm-payment", async (req, res) => {
         }
       }
     } catch (e) {
-      console.error("[PublicConfirmPayment] summary build failed (non-fatal):", e.message);
+      console.error(
+        "[PublicConfirmPayment] summary build failed (non-fatal):",
+        e.message,
+      );
     }
 
     res.json({ ok: true, plinkId: razorpay_payment_link_id, ...summary });
@@ -1234,20 +1547,22 @@ router.get("/public/receipt", async (req, res) => {
       where: {
         gateway: "razorpay",
         status: "SUCCESS",
-        OR: [
-          { gatewayId: plinkId },
-          { metadata: { contains: plinkId } },
-        ],
+        OR: [{ gatewayId: plinkId }, { metadata: { contains: plinkId } }],
       },
     });
-    if (!payment) return res.status(404).json({ error: "Paid payment not found for this link" });
+    if (!payment)
+      return res
+        .status(404)
+        .json({ error: "Paid payment not found for this link" });
 
     // Travel payments are tagged by a travelInvoiceId in metadata and have a
     // NULL Payment.invoiceId so the generic reconciler can't mis-fire. For those
     // we render the real Travel Invoice PDF (the same renderer the operator uses)
     // because a one-line receipt is not useful for a travel customer.
     let meta = {};
-    try { meta = JSON.parse(payment.metadata || "{}"); } catch (_) {}
+    try {
+      meta = JSON.parse(payment.metadata || "{}");
+    } catch (_) {}
     const travelInvoiceId = Number(meta.travelInvoiceId);
 
     if (Number.isFinite(travelInvoiceId)) {
@@ -1255,7 +1570,9 @@ router.get("/public/receipt", async (req, res) => {
         where: { id: travelInvoiceId },
       });
       if (!travelInv) {
-        return res.status(404).json({ error: "Invoice not found for this payment" });
+        return res
+          .status(404)
+          .json({ error: "Invoice not found for this payment" });
       }
 
       const [lines, contact, tenant, paidAgg] = await Promise.all([
@@ -1264,23 +1581,32 @@ router.get("/public/receipt", async (req, res) => {
           orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
         }),
         travelInv.contactId
-          ? prisma.contact.findFirst({
-              where: { id: travelInv.contactId, tenantId: travelInv.tenantId },
-              select: { name: true, email: true, phone: true },
-            }).catch(() => null)
+          ? prisma.contact
+              .findFirst({
+                where: {
+                  id: travelInv.contactId,
+                  tenantId: travelInv.tenantId,
+                },
+                select: { name: true, email: true, phone: true },
+              })
+              .catch(() => null)
           : null,
-        prisma.tenant.findUnique({ where: { id: travelInv.tenantId } }).catch(() => null),
-        prisma.payment.aggregate({
-          where: {
-            tenantId: travelInv.tenantId,
-            status: "SUCCESS",
-            OR: [
-              { invoiceId: travelInv.id },
-              { metadata: { contains: `"travelInvoiceId":${travelInv.id}` } },
-            ],
-          },
-          _sum: { amount: true },
-        }).catch(() => ({ _sum: { amount: 0 } })),
+        prisma.tenant
+          .findUnique({ where: { id: travelInv.tenantId } })
+          .catch(() => null),
+        prisma.payment
+          .aggregate({
+            where: {
+              tenantId: travelInv.tenantId,
+              status: "SUCCESS",
+              OR: [
+                { invoiceId: travelInv.id },
+                { metadata: { contains: `"travelInvoiceId":${travelInv.id}` } },
+              ],
+            },
+            _sum: { amount: true },
+          })
+          .catch(() => ({ _sum: { amount: 0 } })),
       ]);
 
       const totalPaid = Number(paidAgg._sum.amount || 0);
@@ -1292,19 +1618,21 @@ router.get("/public/receipt", async (req, res) => {
       const pdfLines = lines.length
         ? lines
         : totalDue > 0
-          ? [{
-              id: 0,
-              invoiceId: travelInv.id,
-              tenantId: travelInv.tenantId,
-              lineType: "other",
-              description: "Invoice amount",
-              quantity: 1,
-              unitPrice: travelInv.totalAmount,
-              amount: travelInv.totalAmount,
-              currency: travelInv.currency || "INR",
-              sortOrder: 0,
-              gstPercent: 0,
-            }]
+          ? [
+              {
+                id: 0,
+                invoiceId: travelInv.id,
+                tenantId: travelInv.tenantId,
+                lineType: "other",
+                description: "Invoice amount",
+                quantity: 1,
+                unitPrice: travelInv.totalAmount,
+                amount: travelInv.totalAmount,
+                currency: travelInv.currency || "INR",
+                sortOrder: 0,
+                gstPercent: 0,
+              },
+            ]
           : lines;
 
       const pdfBuffer = await pdfRenderer.generateTravelInvoicePdf({
@@ -1324,7 +1652,10 @@ router.get("/public/receipt", async (req, res) => {
 
       const filename = `${travelInv.invoiceNum || "TINV-" + travelInv.id}.pdf`;
       res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`,
+      );
       return res.status(200).end(pdfBuffer);
     }
 
@@ -1343,10 +1674,12 @@ router.get("/public/receipt", async (req, res) => {
       createdAt: payment.createdAt || payment.paidAt || new Date(),
       amount: payment.amount,
       contact: payment.contactId
-        ? await prisma.contact.findFirst({
-            where: { id: payment.contactId },
-            select: { name: true, email: true },
-          }).catch(() => null)
+        ? await prisma.contact
+            .findFirst({
+              where: { id: payment.contactId },
+              select: { name: true, email: true },
+            })
+            .catch(() => null)
         : null,
     };
 
@@ -1365,25 +1698,49 @@ router.get("/public/receipt", async (req, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     doc.on("error", (err) => {
       console.error("[PublicReceipt] PDF stream error:", err);
-      try { res.end(); } catch (_) {}
+      try {
+        res.end();
+      } catch (_) {}
     });
     doc.pipe(res);
 
     // Header
     doc.fontSize(24).font("Helvetica-Bold").text(tenantName, 50, 50);
-    doc.fontSize(10).font("Helvetica").fillColor("#666666").text("Payment Receipt", 50, 80);
+    doc
+      .fontSize(10)
+      .font("Helvetica")
+      .fillColor("#666666")
+      .text("Payment Receipt", 50, 80);
 
     // Invoice details
-    doc.fillColor("#000000").fontSize(14).font("Helvetica-Bold")
+    doc
+      .fillColor("#000000")
+      .fontSize(14)
+      .font("Helvetica-Bold")
       .text(`Invoice: ${receiptInvoice.invoiceNum || "N/A"}`, 50, 130);
     doc.fontSize(10).font("Helvetica").fillColor("#333333");
     doc.text(`Status: PAID`, 50, 155);
-    doc.text(`Issue Date: ${new Date(receiptInvoice.createdAt).toLocaleDateString()}`, 50, 172);
-    doc.text(`Paid On: ${new Date(payment.paidAt || Date.now()).toLocaleDateString()}`, 50, 189);
+    doc.text(
+      `Issue Date: ${new Date(receiptInvoice.createdAt).toLocaleDateString()}`,
+      50,
+      172,
+    );
+    doc.text(
+      `Paid On: ${new Date(payment.paidAt || Date.now()).toLocaleDateString()}`,
+      50,
+      189,
+    );
 
     // Contact
-    doc.fontSize(12).font("Helvetica-Bold").fillColor("#000000").text("Bill To:", 50, 225);
-    doc.fontSize(10).font("Helvetica").fillColor("#333333")
+    doc
+      .fontSize(12)
+      .font("Helvetica-Bold")
+      .fillColor("#000000")
+      .text("Bill To:", 50, 225);
+    doc
+      .fontSize(10)
+      .font("Helvetica")
+      .fillColor("#333333")
       .text(receiptInvoice.contact?.name || "Customer", 50, 245)
       .text(receiptInvoice.contact?.email || "", 50, 260);
 
@@ -1391,27 +1748,48 @@ router.get("/public/receipt", async (req, res) => {
 
     // Amount table
     doc.fillColor("#ffffff").rect(50, 315, 495, 30).fill("#10b981");
-    doc.fillColor("#ffffff").fontSize(10).font("Helvetica-Bold")
+    doc
+      .fillColor("#ffffff")
+      .fontSize(10)
+      .font("Helvetica-Bold")
       .text("Description", 60, 323)
       .text("Amount", 450, 323, { width: 85, align: "right" });
 
-    doc.fillColor("#333333").font("Helvetica").fontSize(10)
+    doc
+      .fillColor("#333333")
+      .font("Helvetica")
+      .fontSize(10)
       .text("Invoice Charge", 60, 360)
-      .text(formatMoney(receiptInvoice.amount, currency, locale), 450, 360, { width: 85, align: "right" });
+      .text(formatMoney(receiptInvoice.amount, currency, locale), 450, 360, {
+        width: 85,
+        align: "right",
+      });
 
     doc.moveTo(50, 390).lineTo(545, 390).strokeColor("#cccccc").stroke();
-    doc.font("Helvetica-Bold").fontSize(12).fillColor("#000000")
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .fillColor("#000000")
       .text("Total Paid:", 350, 405)
-      .text(formatMoney(receiptInvoice.amount, currency, locale), 450, 405, { width: 85, align: "right" });
+      .text(formatMoney(receiptInvoice.amount, currency, locale), 450, 405, {
+        width: 85,
+        align: "right",
+      });
 
-    doc.fontSize(8).font("Helvetica").fillColor("#999999")
+    doc
+      .fontSize(8)
+      .font("Helvetica")
+      .fillColor("#999999")
       .text("Thank you for your payment.", 50, 750, { align: "center" });
 
     doc.end();
   } catch (err) {
     console.error("[PublicReceipt] error:", err);
-    if (res.headersSent) { try { res.end(); } catch (_) {} }
-    else res.status(500).json({ error: "Failed to generate receipt" });
+    if (res.headersSent) {
+      try {
+        res.end();
+      } catch (_) {}
+    } else res.status(500).json({ error: "Failed to generate receipt" });
   }
 });
 
@@ -1443,29 +1821,53 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
     // response cleanly so the browser doesn't hang on a half-written body.
     doc.on("error", (err) => {
       console.error("[PDF Generation Error] (stream):", err);
-      try { res.end(); } catch (_) { /* already destroyed */ }
+      try {
+        res.end();
+      } catch (_) {
+        /* already destroyed */
+      }
     });
     doc.pipe(res);
 
     // Header
     doc.fontSize(24).font("Helvetica-Bold").text("Globussoft CRM", 50, 50);
-    doc.fontSize(10).font("Helvetica").fillColor("#666666")
+    doc
+      .fontSize(10)
+      .font("Helvetica")
+      .fillColor("#666666")
       .text("Enterprise Invoice", 50, 80);
 
     // Invoice details box
-    doc.fillColor("#000000").fontSize(14).font("Helvetica-Bold")
+    doc
+      .fillColor("#000000")
+      .fontSize(14)
+      .font("Helvetica-Bold")
       .text(`Invoice: ${invoice.invoiceNum || "N/A"}`, 50, 130);
 
     doc.fontSize(10).font("Helvetica").fillColor("#333333");
     const statusLabel = invoice.status || "UNPAID";
     doc.text(`Status: ${statusLabel}`, 50, 155);
-    doc.text(`Issue Date: ${new Date(invoice.createdAt).toLocaleDateString()}`, 50, 172);
-    doc.text(`Due Date: ${new Date(invoice.dueDate).toLocaleDateString()}`, 50, 189);
+    doc.text(
+      `Issue Date: ${new Date(invoice.createdAt).toLocaleDateString()}`,
+      50,
+      172,
+    );
+    doc.text(
+      `Due Date: ${new Date(invoice.dueDate).toLocaleDateString()}`,
+      50,
+      189,
+    );
 
     // Contact info
-    doc.fontSize(12).font("Helvetica-Bold").fillColor("#000000")
+    doc
+      .fontSize(12)
+      .font("Helvetica-Bold")
+      .fillColor("#000000")
       .text("Bill To:", 50, 225);
-    doc.fontSize(10).font("Helvetica").fillColor("#333333")
+    doc
+      .fontSize(10)
+      .font("Helvetica")
+      .fillColor("#333333")
       .text(invoice.contact?.name || "Unknown Contact", 50, 245)
       .text(invoice.contact?.email || "", 50, 260)
       .text(invoice.contact?.company || "", 50, 275);
@@ -1475,32 +1877,56 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
 
     // Amount table header
     doc.fillColor("#ffffff").rect(50, 325, 495, 30).fill("#3b82f6");
-    doc.fillColor("#ffffff").fontSize(10).font("Helvetica-Bold")
+    doc
+      .fillColor("#ffffff")
+      .fontSize(10)
+      .font("Helvetica-Bold")
       .text("Description", 60, 333)
       .text("Amount", 450, 333, { width: 85, align: "right" });
 
     // Amount row
-    doc.fillColor("#333333").font("Helvetica").fontSize(10)
+    doc
+      .fillColor("#333333")
+      .font("Helvetica")
+      .fontSize(10)
       .text("Invoice Charge", 60, 370)
-      .text(formatMoney(invoice.amount, currency, locale), 450, 370, { width: 85, align: "right" });
+      .text(formatMoney(invoice.amount, currency, locale), 450, 370, {
+        width: 85,
+        align: "right",
+      });
 
     // Total
     doc.moveTo(50, 400).lineTo(545, 400).strokeColor("#cccccc").stroke();
-    doc.font("Helvetica-Bold").fontSize(12).fillColor("#000000")
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(12)
+      .fillColor("#000000")
       .text("Total:", 350, 415)
-      .text(formatMoney(invoice.amount, currency, locale), 450, 415, { width: 85, align: "right" });
+      .text(formatMoney(invoice.amount, currency, locale), 450, 415, {
+        width: 85,
+        align: "right",
+      });
 
     // Footer
-    doc.fontSize(8).font("Helvetica").fillColor("#999999")
+    doc
+      .fontSize(8)
+      .font("Helvetica")
+      .fillColor("#999999")
       .text("Generated by Globussoft CRM", 50, 750, { align: "center" });
 
     doc.end();
   } catch (err) {
     console.error("[PDF Generation Error]:", err);
     if (res.headersSent) {
-      try { res.end(); } catch (_) { /* already destroyed */ }
+      try {
+        res.end();
+      } catch (_) {
+        /* already destroyed */
+      }
     } else {
-      res.status(500).json({ error: err?.message || "Failed to generate invoice PDF" });
+      res
+        .status(500)
+        .json({ error: err?.message || "Failed to generate invoice PDF" });
     }
   }
 });
@@ -1509,22 +1935,34 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
 router.put("/:id/recurring", verifyToken, async (req, res) => {
   try {
     const { isRecurring, recurFrequency } = req.body;
-    const invoice = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    const invoice = await prisma.invoice.findFirst({
+      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+    });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
 
     const nextDate = isRecurring ? new Date() : null;
     if (nextDate && recurFrequency) {
       switch (recurFrequency) {
-        case "monthly": nextDate.setMonth(nextDate.getMonth() + 1); break;
-        case "quarterly": nextDate.setMonth(nextDate.getMonth() + 3); break;
-        case "yearly": nextDate.setFullYear(nextDate.getFullYear() + 1); break;
+        case "monthly":
+          nextDate.setMonth(nextDate.getMonth() + 1);
+          break;
+        case "quarterly":
+          nextDate.setMonth(nextDate.getMonth() + 3);
+          break;
+        case "yearly":
+          nextDate.setFullYear(nextDate.getFullYear() + 1);
+          break;
       }
     }
 
     const updated = await prisma.invoice.update({
       where: { id: invoice.id },
-      data: { isRecurring: !!isRecurring, recurFrequency: recurFrequency || null, nextRecurDate: nextDate },
-      include: { contact: true }
+      data: {
+        isRecurring: !!isRecurring,
+        recurFrequency: recurFrequency || null,
+        nextRecurDate: nextDate,
+      },
+      include: { contact: true },
     });
     res.json(updated);
   } catch (_err) {
@@ -1536,23 +1974,39 @@ router.put("/:id/recurring", verifyToken, async (req, res) => {
 // This is what the UI's "Void" button calls.
 async function voidInvoiceHandler(req, res) {
   try {
-    const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
+    const existing = await prisma.invoice.findFirst({
+      where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+    });
     if (!existing) return res.status(404).json({ error: "Invoice not found" });
-    if (existing.status === "PAID") return res.status(400).json({ error: "Cannot void a paid invoice — use /refund instead", code: "INVOICE_ALREADY_PAID" });
-    if (existing.status === "VOIDED") return res.json({ ...existing, idempotent: true });
+    if (existing.status === "PAID")
+      return res
+        .status(400)
+        .json({
+          error: "Cannot void a paid invoice — use /refund instead",
+          code: "INVOICE_ALREADY_PAID",
+        });
+    if (existing.status === "VOIDED")
+      return res.json({ ...existing, idempotent: true });
     const invoice = await prisma.invoice.update({
       where: { id: existing.id },
       data: { status: "VOIDED" },
-      include: { contact: true, deal: true }
+      include: { contact: true, deal: true },
     });
     // #179: audit the void. reason is optional — accepted via body for the
     // POST/PUT /:id/void endpoints, omitted for the legacy DELETE /:id alias.
-    await writeAudit('Invoice', 'VOID', invoice.id, req.user?.userId || null, req.user.tenantId, {
-      invoiceNum: invoice.invoiceNum,
-      amount: invoice.amount,
-      reason: req.body?.reason || null,
-      via: req.method,
-    });
+    await writeAudit(
+      "Invoice",
+      "VOID",
+      invoice.id,
+      req.user?.userId || null,
+      req.user.tenantId,
+      {
+        invoiceNum: invoice.invoiceNum,
+        amount: invoice.amount,
+        reason: req.body?.reason || null,
+        via: req.method,
+      },
+    );
     // PRD Gap §13 wave-6a — emit invoice.voided so downstream automations
     // (write-off analytics, AR adjustments, accounting sync) can react.
     try {
@@ -1569,7 +2023,7 @@ async function voidInvoiceHandler(req, res) {
           status: invoice.status,
         },
         req.user.tenantId,
-        req.io
+        req.io,
       );
     } catch (_e) {}
     res.json(invoice);
@@ -1577,146 +2031,243 @@ async function voidInvoiceHandler(req, res) {
     res.status(500).json({ error: "Failed to void invoice" });
   }
 }
-router.put("/:id/void", verifyToken, verifyRole(["ADMIN", "MANAGER"]), voidInvoiceHandler);
+router.put(
+  "/:id/void",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  voidInvoiceHandler,
+);
 // #193: POST alias so callers that follow REST conventions (POST for actions) work.
-router.post("/:id/void", verifyToken, verifyRole(["ADMIN", "MANAGER"]), voidInvoiceHandler);
+router.post(
+  "/:id/void",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  voidInvoiceHandler,
+);
 
 // Generate a hosted Razorpay Payment Link for an invoice using the tenant's
 // own BYOK keys. Returns { url, gateway } the admin can copy and share.
-router.post("/:id/payment-link", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
-  const { createInvoicePaymentLink } = require("../lib/paymentLink");
-  try {
-    const tenantId = req.user.tenantId;
-    const [invoice, tenant] = await Promise.all([
-      prisma.invoice.findFirst({
-        where: { id: parseInt(req.params.id), tenantId },
-        include: { contact: { select: { name: true, email: true, phone: true } } },
-      }),
-      prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } }),
-    ]);
-    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
-    if (invoice.status === "PAID") return res.status(400).json({ error: "Invoice is already paid" });
-    if (invoice.status === "VOIDED") return res.status(400).json({ error: "Cannot generate a link for a voided invoice" });
+router.post(
+  "/:id/payment-link",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    const { createInvoicePaymentLink } = require("../lib/paymentLink");
+    try {
+      const tenantId = req.user.tenantId;
+      const [invoice, tenant] = await Promise.all([
+        prisma.invoice.findFirst({
+          where: { id: parseInt(req.params.id), tenantId },
+          include: {
+            contact: { select: { name: true, email: true, phone: true } },
+          },
+        }),
+        prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { name: true },
+        }),
+      ]);
+      if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+      if (invoice.status === "PAID")
+        return res.status(400).json({ error: "Invoice is already paid" });
+      if (invoice.status === "VOIDED")
+        return res
+          .status(400)
+          .json({ error: "Cannot generate a link for a voided invoice" });
 
-    const result = await createInvoicePaymentLink({
-      tenantId,
-      invoice: { id: invoice.id, invoiceNum: invoice.invoiceNum, amount: invoice.amount },
-      contact: invoice.contact || undefined,
-      currency: invoice.currency || "INR",
-      gatewayPref: "razorpay",
-      tenantName: tenant?.name || undefined,
-    });
+      const result = await createInvoicePaymentLink({
+        tenantId,
+        invoice: {
+          id: invoice.id,
+          invoiceNum: invoice.invoiceNum,
+          amount: invoice.amount,
+        },
+        contact: invoice.contact || undefined,
+        currency: invoice.currency || "INR",
+        gatewayPref: "razorpay",
+        tenantName: tenant?.name || undefined,
+      });
 
-    if (result.error) return res.status(502).json({ error: result.error, code: result.code });
-    res.json({ url: result.url, gateway: result.gateway });
-  } catch (err) {
-    console.error("[billing] payment-link error:", err.message);
-    res.status(500).json({ error: "Failed to generate payment link" });
-  }
-});
+      if (result.error)
+        return res.status(502).json({ error: result.error, code: result.code });
+      res.json({ url: result.url, gateway: result.gateway });
+    } catch (err) {
+      console.error("[billing] payment-link error:", err.message);
+      res.status(500).json({ error: "Failed to generate payment link" });
+    }
+  },
+);
 
 // #193: refund a PAID invoice. Status flips to REFUNDED; original paidAt
 // preserved so we still know when money came in. Partial refunds are not
 // supported here yet — for partial reversals issue a credit-note instead.
-router.post("/:id/refund", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
-  try {
-    const existing = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
-    if (!existing) return res.status(404).json({ error: "Invoice not found" });
-    if (existing.status !== "PAID") {
-      return res.status(400).json({ error: "Only PAID invoices can be refunded", code: "INVOICE_NOT_PAID" });
-    }
-    const invoice = await prisma.invoice.update({
-      where: { id: existing.id },
-      data: { status: "REFUNDED" },
-      include: { contact: true, deal: true }
-    });
-    // #179: audit refund. Original paidAt is preserved on the row, so we don't
-    // duplicate it here — caller can read it from the invoice row directly.
-    await writeAudit('Invoice', 'REFUND', invoice.id, req.user.userId, req.user.tenantId, {
-      invoiceNum: invoice.invoiceNum,
-      amount: invoice.amount,
-      reason: req.body?.reason || null,
-    });
-    // PRD Gap §13 wave-6a — emit invoice.refunded so downstream automations
-    // (refund-rate KPIs, accounting reversal sync, NPS dampening) can react.
+router.post(
+  "/:id/refund",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
     try {
-      require("../lib/eventBus").emitEvent(
-        "invoice.refunded",
+      const existing = await prisma.invoice.findFirst({
+        where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+      });
+      if (!existing)
+        return res.status(404).json({ error: "Invoice not found" });
+      if (existing.status !== "PAID") {
+        return res
+          .status(400)
+          .json({
+            error: "Only PAID invoices can be refunded",
+            code: "INVOICE_NOT_PAID",
+          });
+      }
+      const invoice = await prisma.invoice.update({
+        where: { id: existing.id },
+        data: { status: "REFUNDED" },
+        include: { contact: true, deal: true },
+      });
+      // #179: audit refund. Original paidAt is preserved on the row, so we don't
+      // duplicate it here — caller can read it from the invoice row directly.
+      await writeAudit(
+        "Invoice",
+        "REFUND",
+        invoice.id,
+        req.user.userId,
+        req.user.tenantId,
         {
-          invoiceId: invoice.id,
           invoiceNum: invoice.invoiceNum,
           amount: invoice.amount,
-          contactId: invoice.contactId,
-          dealId: invoice.dealId,
           reason: req.body?.reason || null,
-          status: invoice.status,
         },
-        req.user.tenantId,
-        req.io
       );
-    } catch (_e) {}
-    res.json(invoice);
-  } catch (err) {
-    console.error("[billing] refund error:", err);
-    res.status(500).json({ error: "Failed to refund invoice" });
-  }
-});
+      // PRD Gap §13 wave-6a — emit invoice.refunded so downstream automations
+      // (refund-rate KPIs, accounting reversal sync, NPS dampening) can react.
+      try {
+        require("../lib/eventBus").emitEvent(
+          "invoice.refunded",
+          {
+            invoiceId: invoice.id,
+            invoiceNum: invoice.invoiceNum,
+            amount: invoice.amount,
+            contactId: invoice.contactId,
+            dealId: invoice.dealId,
+            reason: req.body?.reason || null,
+            status: invoice.status,
+          },
+          req.user.tenantId,
+          req.io,
+        );
+      } catch (_e) {}
+      res.json(invoice);
+    } catch (err) {
+      console.error("[billing] refund error:", err);
+      res.status(500).json({ error: "Failed to refund invoice" });
+    }
+  },
+);
 
 // #193: GST-compliant credit note — creates a NEW invoice with a negative
 // amount, linked back to the original via parentInvoiceId. The original row
 // is left as-is (PAID stays PAID), the credit note carries its own CN- number
 // and shows up alongside the original in the ledger.
-router.post("/:id/credit-note", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
-  try {
-    const original = await prisma.invoice.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
-    if (!original) return res.status(404).json({ error: "Invoice not found" });
-    if (original.status === "VOIDED") return res.status(400).json({ error: "Cannot issue credit note against a voided invoice", code: "INVOICE_VOIDED" });
+router.post(
+  "/:id/credit-note",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const original = await prisma.invoice.findFirst({
+        where: { id: parseInt(req.params.id), tenantId: req.user.tenantId },
+      });
+      if (!original)
+        return res.status(404).json({ error: "Invoice not found" });
+      if (original.status === "VOIDED")
+        return res
+          .status(400)
+          .json({
+            error: "Cannot issue credit note against a voided invoice",
+            code: "INVOICE_VOIDED",
+          });
 
-    const requestedAmount = req.body.amount !== undefined ? Number(req.body.amount) : Number(original.amount);
-    if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
-      return res.status(400).json({ error: "credit-note amount must be greater than 0", code: "INVALID_AMOUNT" });
-    }
-    if (requestedAmount > Number(original.amount) + 1e-9) {
-      return res.status(400).json({ error: "credit-note amount cannot exceed the original invoice amount", code: "AMOUNT_EXCEEDS_ORIGINAL" });
-    }
-    const cnAmount = -1 * (Math.round(requestedAmount * 100) / 100);
-    const cnNum = `CN-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+      const requestedAmount =
+        req.body.amount !== undefined
+          ? Number(req.body.amount)
+          : Number(original.amount);
+      if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+        return res
+          .status(400)
+          .json({
+            error: "credit-note amount must be greater than 0",
+            code: "INVALID_AMOUNT",
+          });
+      }
+      if (requestedAmount > Number(original.amount) + 1e-9) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "credit-note amount cannot exceed the original invoice amount",
+            code: "AMOUNT_EXCEEDS_ORIGINAL",
+          });
+      }
+      const cnAmount = -1 * (Math.round(requestedAmount * 100) / 100);
+      const cnNum = `CN-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 
-    const creditNote = await prisma.invoice.create({
-      data: {
-        invoiceNum: cnNum,
-        amount: cnAmount,
-        dueDate: original.dueDate,
-        contactId: original.contactId,
-        dealId: original.dealId,
-        parentInvoiceId: original.id,
-        status: "CREDIT_NOTE",
-        tenantId: req.user.tenantId,
-      },
-      include: { contact: true, deal: true }
-    });
-    // #179: audit credit note issuance. Two-sided trail — the original gets a
-    // CREDIT_NOTE_ISSUED row pointing forward; the new credit-note row gets a
-    // CREATE row with via=credit-note so it's clearly distinguished from a
-    // standard manual invoice.
-    await writeAudit('Invoice', 'CREDIT_NOTE_ISSUED', original.id, req.user.userId, req.user.tenantId, {
-      creditNoteId: creditNote.id,
-      creditNoteNum: creditNote.invoiceNum,
-      amount: cnAmount,
-      reason: req.body.reason || null,
-    });
-    await writeAudit('Invoice', 'CREATE', creditNote.id, req.user.userId, req.user.tenantId, {
-      invoiceNum: creditNote.invoiceNum,
-      amount: cnAmount,
-      parentInvoiceId: original.id,
-      via: 'credit-note',
-    });
-    res.status(201).json({ creditNote, originalInvoiceId: original.id, reason: req.body.reason || null });
-  } catch (err) {
-    console.error("[billing] credit-note error:", err);
-    res.status(500).json({ error: "Failed to issue credit note" });
-  }
-});
+      const creditNote = await prisma.invoice.create({
+        data: {
+          invoiceNum: cnNum,
+          amount: cnAmount,
+          dueDate: original.dueDate,
+          contactId: original.contactId,
+          dealId: original.dealId,
+          parentInvoiceId: original.id,
+          status: "CREDIT_NOTE",
+          tenantId: req.user.tenantId,
+        },
+        include: { contact: true, deal: true },
+      });
+      // #179: audit credit note issuance. Two-sided trail — the original gets a
+      // CREDIT_NOTE_ISSUED row pointing forward; the new credit-note row gets a
+      // CREATE row with via=credit-note so it's clearly distinguished from a
+      // standard manual invoice.
+      await writeAudit(
+        "Invoice",
+        "CREDIT_NOTE_ISSUED",
+        original.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          creditNoteId: creditNote.id,
+          creditNoteNum: creditNote.invoiceNum,
+          amount: cnAmount,
+          reason: req.body.reason || null,
+        },
+      );
+      await writeAudit(
+        "Invoice",
+        "CREATE",
+        creditNote.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          invoiceNum: creditNote.invoiceNum,
+          amount: cnAmount,
+          parentInvoiceId: original.id,
+          via: "credit-note",
+        },
+      );
+      res
+        .status(201)
+        .json({
+          creditNote,
+          originalInvoiceId: original.id,
+          reason: req.body.reason || null,
+        });
+    } catch (err) {
+      console.error("[billing] credit-note error:", err);
+      res.status(500).json({ error: "Failed to issue credit note" });
+    }
+  },
+);
 
 // #122 reopen: DELETE was a hard delete that destroyed billing records. Now
 // it's a soft-void — same code path as PUT/POST /:id/void. The verb stays
@@ -1740,93 +2291,114 @@ router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), voidInvoiceHandler);
 function addInterval(date, frequency) {
   const d = new Date(date);
   switch (frequency) {
-    case "monthly": d.setMonth(d.getMonth() + 1); break;
-    case "quarterly": d.setMonth(d.getMonth() + 3); break;
-    case "yearly": d.setFullYear(d.getFullYear() + 1); break;
-    default: d.setMonth(d.getMonth() + 1);
+    case "monthly":
+      d.setMonth(d.getMonth() + 1);
+      break;
+    case "quarterly":
+      d.setMonth(d.getMonth() + 3);
+      break;
+    case "yearly":
+      d.setFullYear(d.getFullYear() + 1);
+      break;
+    default:
+      d.setMonth(d.getMonth() + 1);
   }
   return d;
 }
 
-router.post("/recurring/run", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
-  try {
-    const tenantId = req.user.tenantId;
-    const now = new Date();
-    // Mirror engine query but scoped to req.user.tenantId. Engine excludes
-    // status='VOID'; we follow that contract so paused/voided templates
-    // never re-generate. (Engine uses 'VOID' literal — schema supports
-    // 'VOIDED' as a synonym in /void route; we accept either by excluding
-    // BOTH so any state that the void route writes is honoured.)
-    const due = await prisma.invoice.findMany({
-      where: {
-        tenantId,
-        isRecurring: true,
-        status: { notIn: ["VOID", "VOIDED"] },
-        nextRecurDate: { lte: now },
-      },
-      include: { contact: true },
-    });
+router.post(
+  "/recurring/run",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const tenantId = req.user.tenantId;
+      const now = new Date();
+      // Mirror engine query but scoped to req.user.tenantId. Engine excludes
+      // status='VOID'; we follow that contract so paused/voided templates
+      // never re-generate. (Engine uses 'VOID' literal — schema supports
+      // 'VOIDED' as a synonym in /void route; we accept either by excluding
+      // BOTH so any state that the void route writes is honoured.)
+      const due = await prisma.invoice.findMany({
+        where: {
+          tenantId,
+          isRecurring: true,
+          status: { notIn: ["VOID", "VOIDED"] },
+          nextRecurDate: { lte: now },
+        },
+        include: { contact: true },
+      });
 
-    let generated = 0;
-    const errors = [];
-    for (const inv of due) {
-      try {
-        const invNum = `INV-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
-        const newDueDate = addInterval(now, inv.recurFrequency);
-        await prisma.invoice.create({
-          data: {
-            invoiceNum: invNum,
-            amount: inv.amount,
-            status: "UNPAID",
-            dueDate: newDueDate,
-            contactId: inv.contactId,
-            dealId: inv.dealId,
-            parentInvoiceId: inv.id,
-            tenantId,
-          },
-        });
-        // Advance nextRecurDate by the recurrence interval. Mirror the
-        // engine: advance OFF the existing nextRecurDate (not now), so
-        // a missed-tick recovery still lands on the correct schedule.
-        const nextDate = addInterval(inv.nextRecurDate, inv.recurFrequency);
-        await prisma.invoice.update({
-          where: { id: inv.id },
-          data: { nextRecurDate: nextDate },
-        });
-        // Audit, mirroring the engine's write so the manual + cron paths
-        // emit identical AuditLog rows.
-        await prisma.auditLog.create({
-          data: {
-            action: "CREATE",
-            entity: "Invoice",
-            entityId: inv.id,
-            details: JSON.stringify({
-              source: "Recurring",
-              parentInvoice: inv.invoiceNum,
-              newInvoice: invNum,
-              via: "manual",
-            }),
-            tenantId,
-            userId: req.user.userId || null,
-          },
-        }).catch(() => { /* best-effort */ });
-        generated++;
-      } catch (err) {
-        errors.push({ id: inv.id, error: err.message });
+      let generated = 0;
+      const errors = [];
+      for (const inv of due) {
+        try {
+          const invNum = `INV-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+          const newDueDate = addInterval(now, inv.recurFrequency);
+          await prisma.invoice.create({
+            data: {
+              invoiceNum: invNum,
+              amount: inv.amount,
+              status: "UNPAID",
+              dueDate: newDueDate,
+              contactId: inv.contactId,
+              dealId: inv.dealId,
+              parentInvoiceId: inv.id,
+              tenantId,
+            },
+          });
+          // Advance nextRecurDate by the recurrence interval. Mirror the
+          // engine: advance OFF the existing nextRecurDate (not now), so
+          // a missed-tick recovery still lands on the correct schedule.
+          const nextDate = addInterval(inv.nextRecurDate, inv.recurFrequency);
+          await prisma.invoice.update({
+            where: { id: inv.id },
+            data: { nextRecurDate: nextDate },
+          });
+          // Audit, mirroring the engine's write so the manual + cron paths
+          // emit identical AuditLog rows.
+          await prisma.auditLog
+            .create({
+              data: {
+                action: "CREATE",
+                entity: "Invoice",
+                entityId: inv.id,
+                details: JSON.stringify({
+                  source: "Recurring",
+                  parentInvoice: inv.invoiceNum,
+                  newInvoice: invNum,
+                  via: "manual",
+                }),
+                tenantId,
+                userId: req.user.userId || null,
+              },
+            })
+            .catch(() => {
+              /* best-effort */
+            });
+          generated++;
+        } catch (err) {
+          errors.push({ id: inv.id, error: err.message });
+        }
       }
-    }
 
-    res.json({
-      success: true,
-      tenantId,
-      processed: due.length,
-      generated,
-      errors,
-    });
-  } catch (err) {
-    console.error("[billing/recurring/run]", err);
-    res.status(500).json({ error: "Failed to run recurring invoice engine", detail: err.message });
-  }
-});
+      res.json({
+        success: true,
+        tenantId,
+        processed: due.length,
+        generated,
+        errors,
+      });
+    } catch (err) {
+      console.error("[billing/recurring/run]", err);
+      res
+        .status(500)
+        .json({
+          error: "Failed to run recurring invoice engine",
+          detail: err.message,
+        });
+    }
+  },
+);
 
 module.exports = router;

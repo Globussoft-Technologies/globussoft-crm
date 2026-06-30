@@ -319,6 +319,15 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getAllByText('Visa Sure').length).toBeGreaterThanOrEqual(1);
     });
 
+    it('renders both leads links under Sales pipeline with distinct labels', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      const leadsLinks = Array.from(document.querySelectorAll('a[href="/leads"], a[href="/travel/leads"]'));
+      expect(leadsLinks.map((a) => a.getAttribute('href'))).toContain('/leads');
+      expect(leadsLinks.map((a) => a.getAttribute('href'))).toContain('/travel/leads');
+      expect(screen.getByText('Travel Leads')).toBeTruthy();
+      expect(screen.getByText('Leads')).toBeTruthy();
+    });
+
     it('renders the sub-brand switcher when user has ≥2 sub-brand access', () => {
       renderSidebar({
         vertical: 'travel',

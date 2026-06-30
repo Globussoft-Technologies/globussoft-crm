@@ -792,7 +792,7 @@ jobs:
             echo "=== agentic-orchcrm npm install ==="
             npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
 
-            cd backend
+            cd ~/globussoft-crm/backend
             echo "=== npm install ==="
             npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
 

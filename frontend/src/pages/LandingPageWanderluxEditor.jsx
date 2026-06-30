@@ -234,11 +234,11 @@ function FileField({ label, value, onChange, placeholder, accept }) {
   const handleFile = async (e) => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
-    // 10 MB matches the backend's DOC_UPLOAD_SIZE_BYTES cap. Larger
+    // 50 MB matches the backend's DOC_UPLOAD_SIZE_BYTES cap. Larger
     // files fail at the multer layer with a friendly 400; the client-
     // side check just spares the round-trip.
-    if (f.size > 10 * 1024 * 1024) {
-      notify.error('Document too large (max 10 MB)');
+    if (f.size > 50 * 1024 * 1024) {
+      notify.error('Document too large (max 50 MB)');
       return;
     }
     setUploading(true);

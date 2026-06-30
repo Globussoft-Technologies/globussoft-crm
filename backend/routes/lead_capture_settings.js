@@ -78,12 +78,11 @@ const { sanitizeText } = require("../lib/sanitizeJson");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 
-// Canonical 17-channel allowlist per PRD FR-3.1.2 (post-rename: webform→web_form,
-// metaads→meta_ad). Mirrors the planned channel enum on Lead.channel — the
-// schema column lands in a sibling G004 slice (additive). Centralised here so
-// the admin UI and intake handlers read from the same source.
+// Canonical 16-channel allowlist per PRD FR-3.1.2 (post-rename: webform→web_form,
+// metaads→meta_ad). Voyagr has no live integration, so it is excluded from the
+// filter/admin surface. Centralised here so the admin UI and intake handlers
+// read from the same source.
 const ALLOWED_CHANNELS = [
-  "voyagr",
   "web_form",
   "whatsapp",
   "ads",

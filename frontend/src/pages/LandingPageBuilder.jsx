@@ -697,15 +697,17 @@ export default function LandingPageBuilder() {
         {/* Link-to-trip picker — only renders when the operator has at
             least one TMC trip available. Hidden on tenants without
             travel access. Saves immediately on change via the existing
-            PUT endpoint (tripId field, Phase 11). Linking is what
-            makes /api/pages/:slug/submit fire the registration-draft
-            branch — otherwise wizard submissions fall back to the
-            generic lead-capture path. */}
+            PUT endpoint (tripId field, Phase 11). Linking defaults the
+            registration block to lead mode, so wizard submissions create
+            a Contact + Deal + TripParticipant and show up immediately in
+            the trip participants list. Explicit register.mode =
+            "registration-draft" is required to use the OTP/hybrid draft
+            flow instead. */}
         {tmcTrips.length > 0 && (
           <select
             value={linkingTripId ?? ''}
             onChange={(e) => handleLinkToTrip(e.target.value)}
-            title="Link this landing page to a TMC trip so wizard submissions create PendingTripRegistration drafts"
+            title="Link this landing page to a TMC trip so wizard submissions enrol participants immediately"
             aria-label="Link landing page to TMC trip"
             data-testid="link-to-tmc-trip-picker"
             style={{ padding: '0.3rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.78rem', background: 'var(--surface-color)', color: 'var(--text-primary)', cursor: 'pointer', maxWidth: 180 }}

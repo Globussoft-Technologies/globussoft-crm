@@ -149,7 +149,7 @@ beforeEach(() => {
   prisma.$transaction.mockClear();
   prisma.landingPageAnalytics.findMany.mockReset().mockResolvedValue([]);
   prisma.landingPageAnalytics.create.mockReset().mockResolvedValue({ id: 1 });
-  prisma.contact.upsert.mockReset();
+  prisma.contact.upsert.mockReset().mockResolvedValue({ id: 1 });
   prisma.contact.update.mockReset();
   prisma.deal.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.leadRoutingRule.findFirst.mockReset().mockResolvedValue(null);
@@ -534,6 +534,25 @@ describe('PUT /api/landing-pages/:id (update)', () => {
 
     expect(res.status).toBe(409);
     expect(res.body).toMatchObject({ code: 'TRIP_ALREADY_LINKED' });
+  });
+
+  test('Phase 11 — linking a Wanderlux page to a trip defaults register.mode to lead', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, slug: 'wanderlux-trip', status: 'DRAFT',
+      templateType: 'wanderlux-v1',
+      content: JSON.stringify({ register: { steps: [{ id: 'student' }] } }),
+    });
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 42 });
+    prisma.landingPage.update.mockImplementation(async (args) => ({ id: 50, ...args.data, tenantId: 1 }));
+
+    const res = await request(makeApp())
+      .put('/api/landing-pages/50')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ tripId: 42 });
+
+    expect(res.status).toBe(200);
+    const updatedContent = prisma.landingPage.update.mock.calls[0][0].data.content;
+    expect(JSON.parse(updatedContent).register.mode).toBe('lead');
   });
 });
 
@@ -928,6 +947,74 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
     );
   });
 
+  test('generic landing-page lead uses canonical web-form source + preserves page attribution', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
+      content: '[]', tenantId: 1,
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 999, email: 'asha@example.com', tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/live-page/submit')
+      .send({ email: 'asha@example.com', name: 'Asha Iyer', phone: '+919876543210' });
+
+    expect(res.status).toBe(200);
+    const createArgs = prisma.contact.upsert.mock.calls[0][0].create;
+    expect(createArgs.source).toBe('inbound:webform');
+    expect(createArgs.firstTouchSource).toBe('Landing Page: Live Page');
+  });
+
+  test('trip-linked landing-page registration uses tmc_registration source', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 51, slug: 'australia-2026', status: 'PUBLISHED', title: 'Australia 7-Day Tour',
+      content: '[]', templateType: 'travel_destination',
+      tenantId: 1, tripId: 7,
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 500, email: 'parent@example.com', tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 51, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/australia-2026/submit')
+      .send({
+        fields: {
+          student_name: 'Aarav Iyer',
+          name: 'Ravi Iyer',
+          email: 'parent@example.com',
+          phone: '+919876543210',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    const createArgs = prisma.contact.upsert.mock.calls[0][0].create;
+    expect(createArgs.source).toBe('tmc_registration');
+    expect(createArgs.firstTouchSource).toBe('Landing Page: Australia 7-Day Tour');
+  });
+
+  test('brochure request uses brochure_request source so it maps to the Web channel', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
+      content: JSON.stringify({ register: { mode: 'registration-draft', steps: [{ id: 'student' }] } }),
+      templateType: 'wanderlux-v1',
+      tenantId: 1, tripId: 100, subBrand: 'tmc',
+    });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/trip-bali2026/submit')
+      .send({
+        brochureRequest: true,
+        parentName: 'Rohan Iyer',
+        email: 'rohan@example.com',
+        phone: '+919876543210',
+      });
+
+    expect(res.status).toBe(200);
+    const createArgs = prisma.contact.upsert.mock.calls[0][0].create;
+    expect(createArgs.source).toBe('brochure_request');
+    expect(createArgs.firstTouchSource).toBe('Landing Page: Bali Trip');
+  });
+
   test('trip-linked student registration in lead mode also creates a TripParticipant', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 51, slug: 'australia-2026', status: 'PUBLISHED', title: 'Australia 7-Day Tour',
@@ -983,6 +1070,43 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
     );
   });
 
+  test('trip-linked registration without explicit student_name still enrols a participant from the contact name', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 51, slug: 'australia-2026', status: 'PUBLISHED', title: 'Australia 7-Day Tour',
+      content: JSON.stringify([{ type: 'registrationForm', props: { audience: 'School students' } }]),
+      templateType: 'travel_destination',
+      tenantId: 1, tripId: 7, subBrand: 'tmc',
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 501, email: 'mrinal@demo.com', tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 51, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/australia-2026/submit')
+      .send({
+        audience: 'School students',
+        name: 'Mrinal',
+        email: 'mrinal@demo.com',
+        phone: '+919876543210',
+        school: 'DPS North',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(prisma.tripParticipant.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tripId: 7,
+          fullName: 'Mrinal',
+          parentName: null,
+          parentEmail: 'mrinal@demo.com',
+          parentPhone: '+919876543210',
+          medicalNotes: 'School: DPS North',
+          applicationStatus: 'pending',
+        }),
+      }),
+    );
+  });
+
   test('unknown slug → 404 (no contact/deal/analytics writes)', async () => {
     prisma.landingPage.findFirst.mockResolvedValue(null);
     const res = await request(makeApp())
@@ -1010,6 +1134,30 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
     const upsertArgs = prisma.contact.upsert.mock.calls[0][0];
     // Synthesised placeholder: "lp-<slug>-<ts>@anonymous.local".
     expect(upsertArgs.where.email_tenantId.email).toMatch(/^lp-live-page-\d+@anonymous\.local$/);
+  });
+
+  test('re-registration after contact deletion restores the soft-deleted contact', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
+      content: '[]', tenantId: 1,
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 999, email: 'returning@example.com', tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/live-page/submit')
+      .send({ email: 'returning@example.com', name: 'Returning User' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const upsertArgs = prisma.contact.upsert.mock.calls[0][0];
+    // The update branch must clear deletedAt so a previously-deleted contact
+    // becomes visible again and the newly-created deal shows up in leads lists.
+    expect(upsertArgs.update).toMatchObject({
+      source: 'inbound:webform',
+      deletedAt: null,
+    });
+    expect(prisma.deal.create).toHaveBeenCalled();
   });
 });
 
@@ -1039,6 +1187,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       expiresAt: null,
     });
     prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+    prisma.contact.upsert.mockResolvedValue({ id: 8001, tenantId: 1 });
 
     const res = await request(makeApp())
       .post('/p/trip-bali2026/submit')
@@ -1088,9 +1237,13 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     expect(ttlHours).toBeGreaterThan(70);
     expect(ttlHours).toBeLessThan(73);
 
-    // Contact + Deal must NOT be created on this path
-    expect(prisma.contact.upsert).not.toHaveBeenCalled();
-    expect(prisma.deal.create).not.toHaveBeenCalled();
+    // Contact + Deal are also created so the registration appears in leads
+    // and travel-leads lists, not just the TMC trip participants tab.
+    expect(prisma.contact.upsert).toHaveBeenCalled();
+    const draftContactCreate = prisma.contact.upsert.mock.calls[0][0].create;
+    expect(draftContactCreate.source).toBe('tmc_registration');
+    expect(draftContactCreate.firstTouchSource).toBe('Landing Page: Bali Trip');
+    expect(prisma.deal.create).toHaveBeenCalled();
 
     // Analytics still recorded for funnel reporting
     expect(prisma.landingPage.update).toHaveBeenCalledWith({
@@ -1263,6 +1416,50 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
   });
 
+  test('trip-linked Wanderlux page WITHOUT explicit register.mode defaults to lead mode and creates a TripParticipant', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
+      // Wanderlux templatePayload but no register.mode — should NOT default to draft
+      content: JSON.stringify({ register: { steps: [{ id: 'student' }] } }),
+      templateType: 'wanderlux-v1',
+      tenantId: 1, tripId: 100,
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 997, email: 'parent@example.com', tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/trip-bali2026/submit')
+      .send({
+        fields: {
+          student_name: 'Ananya Rao',
+          name: 'Ravi Rao',
+          email: 'parent@example.com',
+          phone: '+919876543210',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    // Must NOT create a PendingTripRegistration — that would show as a draft row
+    // with limited actions and would not be counted in the participant stat.
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+    // Must create a real TripParticipant so actions/counts stay in sync.
+    expect(prisma.contact.upsert).toHaveBeenCalled();
+    expect(prisma.deal.create).toHaveBeenCalled();
+    expect(prisma.tripParticipant.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tripId: 100,
+          fullName: 'Ananya Rao',
+          parentName: 'Ravi Rao',
+          parentEmail: 'parent@example.com',
+          parentPhone: '+919876543210',
+          applicationStatus: 'pending',
+        }),
+      }),
+    );
+  });
+
   test('explicit formProps.mode="registration-draft" on a generic block also triggers the draft branch', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'custom-trip', status: 'PUBLISHED', title: 'Custom Trip',
@@ -1280,6 +1477,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       tenantId: 1, tripId: 100,
     });
     prisma.pendingTripRegistration.create.mockResolvedValue({ id: 7006, draftToken: 't' });
+    prisma.contact.upsert.mockResolvedValue({ id: 8002, tenantId: 1 });
     prisma.tripMicrosite.findUnique.mockResolvedValue(null);
 
     const res = await request(makeApp())
@@ -1291,9 +1489,67 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       });
     expect(res.status).toBe(201);
     expect(prisma.pendingTripRegistration.create).toHaveBeenCalled();
-    expect(prisma.contact.upsert).not.toHaveBeenCalled();
+    expect(prisma.contact.upsert).toHaveBeenCalled();
+    expect(prisma.deal.create).toHaveBeenCalled();
     // Audience metadata flows through to the draft row
     expect(prisma.pendingTripRegistration.create.mock.calls[0][0].data.audience).toBe('tmc');
+  });
+
+  test('brochureRequest=true bypasses registration-draft and creates a lead instead', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
+      content: wanderluxContent, templateType: 'wanderlux-v1',
+      tenantId: 1, tripId: 100, subBrand: 'tmc',
+    });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/trip-bali2026/submit')
+      .send({
+        brochureRequest: true,
+        parentName: 'Rohan Iyer',
+        email: 'rohan@example.com',
+        phone: '+919876543210',
+      });
+
+    expect(res.status).toBe(200);
+    // Brochure requests should never create a PendingTripRegistration.
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+    // They should fall through to the lead-capture path.
+    expect(prisma.contact.upsert).toHaveBeenCalled();
+    expect(prisma.deal.create).toHaveBeenCalled();
+  });
+
+  test('type=brochure (Wanderlux payload) bypasses registration-draft and maps camelCase fields', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
+      content: wanderluxContent, templateType: 'wanderlux-v1',
+      tenantId: 1, tripId: 100, subBrand: 'tmc',
+    });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/trip-bali2026/submit')
+      .send({
+        type: 'brochure',
+        fields: {
+          parentName: 'Rohan Iyer',
+          email: 'rohan@example.com',
+          phone: '+919876543210',
+          school: 'DPS North',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(prisma.pendingTripRegistration.create).not.toHaveBeenCalled();
+    expect(prisma.contact.upsert).toHaveBeenCalled();
+    const upsertArgs = prisma.contact.upsert.mock.calls[0][0];
+    expect(upsertArgs.create.name).toBe('Rohan Iyer');
+    expect(upsertArgs.create.email).toBe('rohan@example.com');
+    expect(upsertArgs.create.phone).toBe('+919876543210');
+    expect(upsertArgs.create.company).toBe('DPS North');
+    expect(upsertArgs.create.subBrand).toBe('tmc');
+    expect(prisma.deal.create).toHaveBeenCalled();
   });
 });
 

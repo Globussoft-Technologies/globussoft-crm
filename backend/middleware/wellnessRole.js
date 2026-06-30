@@ -149,7 +149,8 @@ function verifyWellnessRole(allowed, opts = {}) {
       });
     }
     if (allowed.includes("admin") && req.user.role === "ADMIN") return next();
-    if (allowed.includes("manager") && req.user.role === "MANAGER") return next();
+    if (allowed.includes("manager") && req.user.role === "MANAGER")
+      return next();
     if (req.user.wellnessRole && allowed.includes(req.user.wellnessRole)) {
       return next();
     }
@@ -175,7 +176,10 @@ function verifyWellnessRole(allowed, opts = {}) {
     // physiotherapist, etc.) from Settings → Wellness Role Types and it
     // immediately becomes accepted by every clinical-gated route — no
     // code change required.
-    if (allowed.includes("clinical") && (await isCatalogClinical(req, req.user.wellnessRole))) {
+    if (
+      allowed.includes("clinical") &&
+      (await isCatalogClinical(req, req.user.wellnessRole))
+    ) {
       return next();
     }
     // RBAC-permission fallback: pass if the user's effective

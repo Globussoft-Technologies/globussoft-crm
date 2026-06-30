@@ -410,6 +410,21 @@ describe('GET /api/travel/microsites/public/:publicUuid (no auth)', () => {
         departDate: new Date('2026-06-01'),
         returnDate: new Date('2026-06-07'),
         tripCode: 'TMC-001',
+        legalEntity: 'Test Travels Pvt Ltd',
+        pricePerStudent: 24999,
+        status: 'confirmed',
+        documentRequirements: [
+          { docType: 'passport', required: true },
+          { docType: 'aadhaar', required: true },
+        ],
+        paymentPlan: {
+          instalmentsJson: JSON.stringify([
+            { dueDate: '2026-05-01', amount: 10000 },
+            { dueDate: '2026-05-15', amount: 14999 },
+          ]),
+          graceDays: 3,
+        },
+        _count: { participants: 12 },
       },
     });
     const res = await request(makeApp())
@@ -420,10 +435,24 @@ describe('GET /api/travel/microsites/public/:publicUuid (no auth)', () => {
       publicUuid: TEST_UUID,
       subdomain: 'trip-TMC-001',
     });
+    // Public-safe package fields are now surfaced for the microsite UI.
+    expect(res.body.trip).toMatchObject({
+      destination: 'Goa',
+      pricePerStudent: 24999,
+      status: 'confirmed',
+      documentRequirements: [
+        { docType: 'passport', required: true },
+        { docType: 'aadhaar', required: true },
+      ],
+      paymentPlan: {
+        instalmentsJson: expect.any(String),
+        graceDays: 3,
+      },
+      _count: { participants: 12 },
+    });
     // PUBLIC_SELECT must NOT leak PII fields.
     expect(res.body.participants).toBeUndefined();
     expect(res.body.rooming).toBeUndefined();
-    expect(res.body.paymentPlan).toBeUndefined();
     expect(res.body.tenantId).toBeUndefined();
     // Verify the prisma lookup used the PUBLIC_SELECT shape.
     expect(prisma.tripMicrosite.findUnique).toHaveBeenCalledWith(

@@ -166,12 +166,16 @@ describe('GET /api/deals — list with tenant + soft-delete + role scoping', () 
   test('happy path: list returns rows scoped to tenant, soft-deletes excluded by default', async () => {
     prisma.deal.findMany.mockResolvedValue([
       { id: 1, title: 'Acme Q3', stage: 'lead', amount: 1000, tenantId: 1, contact: null, owner: null },
-      { id: 2, title: 'Initech', stage: 'proposal', amount: 5000, tenantId: 1, contact: null, owner: null },
+      { id: 2, title: 'Initech', stage: 'proposal', amount: 5000, tenantId: 1, contact: { id: 5, source: 'Organic' }, owner: null },
     ]);
     const app = makeApp();
     const res = await request(app).get('/api/deals');
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
+    // Travel leads page derives the deal's channel from Contact.source;
+    // non-inbound sources surface as null so the UI falls back to "manual".
+    expect(res.body[0].channel).toBeNull();
+    expect(res.body[1].channel).toBeNull();
     const findArgs = prisma.deal.findMany.mock.calls[0][0];
     expect(findArgs.where.tenantId).toBe(1);
     // Soft-deleted exclusion is the default
@@ -190,6 +194,60 @@ describe('GET /api/deals — list with tenant + soft-delete + role scoping', () 
     const findArgs = prisma.deal.findMany.mock.calls[0][0];
     // Even though ?ownerId=999 was passed, USER scope overrides to 42.
     expect(findArgs.where.ownerId).toBe(42);
+  });
+});
+
+// ─── GET / — travel source/channel filter (PRD_TRAVEL_MULTICHANNEL_LEADS) ──
+
+describe('GET /api/deals — travel source/channel filter', () => {
+  test('?channel=web_form filters by Contact.source "inbound:webform" and "inbound:web_form"', async () => {
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 10, title: 'Web lead', stage: 'lead', tenantId: 1, contact: { id: 6, source: 'inbound:webform' }, owner: null },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/deals?channel=web_form');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].channel).toBe('web_form');
+    const findArgs = prisma.deal.findMany.mock.calls[0][0];
+    expect(findArgs.where.contact.source.in).toEqual(['inbound:web_form', 'inbound:webform']);
+  });
+
+  test('?channel=meta_ad normalises legacy "inbound:metaads" source and derives channel', async () => {
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 11, title: 'Meta lead', stage: 'lead', tenantId: 1, contact: { id: 7, source: 'inbound:metaads' }, owner: null },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/deals?channel=meta_ad');
+    expect(res.status).toBe(200);
+    expect(res.body[0].channel).toBe('meta_ad');
+    const findArgs = prisma.deal.findMany.mock.calls[0][0];
+    expect(findArgs.where.contact.source.in).toEqual(['inbound:meta_ad', 'inbound:metaads']);
+  });
+
+  test('?channel=manual matches deals with non-inbound or missing contact source', async () => {
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 12, title: 'Manual deal', stage: 'lead', tenantId: 1, contact: { id: 8, source: 'Organic' }, owner: null },
+      { id: 13, title: 'No contact', stage: 'lead', tenantId: 1, contact: null, owner: null },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/deals?channel=manual');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    const findArgs = prisma.deal.findMany.mock.calls[0][0];
+    expect(findArgs.where.OR).toBeDefined();
+  });
+
+  test('landing-page sources (tmc_registration / brochure_request) derive channel=web_form', async () => {
+    prisma.deal.findMany.mockResolvedValue([
+      { id: 14, title: 'LP reg', stage: 'lead', tenantId: 1, contact: { id: 9, source: 'tmc_registration' }, owner: null },
+      { id: 15, title: 'Brochure', stage: 'lead', tenantId: 1, contact: { id: 10, source: 'brochure_request' }, owner: null },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/deals');
+    expect(res.status).toBe(200);
+    expect(res.body[0].channel).toBe('web_form');
+    expect(res.body[1].channel).toBe('web_form');
   });
 });
 

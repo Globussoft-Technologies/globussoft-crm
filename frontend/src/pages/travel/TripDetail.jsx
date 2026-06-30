@@ -1840,7 +1840,9 @@ function escapeHtml(s) {
 // Convert the structured suggestion returned by POST /itineraries/suggest
 // into the HTML shape the microsite editor stores.
 function suggestionToHtml(suggestion, destination) {
-  const daySplit = Array.isArray(suggestion?.daySplit) ? suggestion.daySplit : [];
+  const daySplit = Array.isArray(suggestion?.daySplit)
+    ? suggestion.daySplit
+    : (Array.isArray(suggestion?.days) ? suggestion.days : []);
   if (daySplit.length === 0) return "";
   return daySplit
     .map((day, idx) => {

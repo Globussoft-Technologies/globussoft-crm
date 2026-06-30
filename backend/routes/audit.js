@@ -1,4 +1,4 @@
-const router = require('express').Router();
+const router = require("express").Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { computeHash, backfillTenantChain } = require("../lib/audit");
@@ -7,7 +7,7 @@ const { computeHash, backfillTenantChain } = require("../lib/audit");
 // rows include the `details` JSON column which carries PII for several
 // entity classes (Contact name+email on SOFT_DELETE, wellness Patient
 // writes carry richer attributes, etc.). Closes #408.
-router.get('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
+router.get("/", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { entity, action } = req.query;
     const where = { tenantId: req.user.tenantId };
@@ -17,7 +17,7 @@ router.get('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
 
     const logs = await prisma.auditLog.findMany({
       where,
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
       take: 100,
       include: {
         user: { select: { id: true, name: true, email: true } },
@@ -25,8 +25,8 @@ router.get('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
     });
     res.json(logs);
   } catch (err) {
-    console.error('[AuditLog] List error:', err);
-    res.status(500).json({ error: 'Failed to fetch audit logs' });
+    console.error("[AuditLog] List error:", err);
+    res.status(500).json({ error: "Failed to fetch audit logs" });
   }
 });
 
@@ -45,7 +45,7 @@ router.get('/', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
 // The earlier permissive walker silently skipped null-hash rows and
 // reported `chainLength: 0, integrityVerified: true` against a freshly-
 // minted tenant — a false-green that masked the chain having never run.
-router.get('/verify', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
+router.get("/verify", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
     const rows = await prisma.auditLog.findMany({
@@ -54,7 +54,7 @@ router.get('/verify', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
       // writeAudit calls in the same millisecond) are walked in a
       // deterministic order. Without the tiebreaker, two consecutive
       // /verify calls could disagree on `brokenAt` for the same chain.
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: {
         id: true,
         action: true,
@@ -81,14 +81,14 @@ router.get('/verify', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
       if (row.hash == null) {
         unhashedRows += 1;
         brokenAt = row.id;
-        reason = 'null hash — row was never chained (run backfill)';
+        reason = "null hash — row was never chained (run backfill)";
         break;
       }
 
       const expectedPrev = lastHash == null ? `GENESIS_${tenantId}` : lastHash;
       if (row.prevHash !== expectedPrev) {
         brokenAt = row.id;
-        reason = `prevHash mismatch (expected ${expectedPrev}, got ${row.prevHash || 'null'})`;
+        reason = `prevHash mismatch (expected ${expectedPrev}, got ${row.prevHash || "null"})`;
         break;
       }
 
@@ -104,7 +104,7 @@ router.get('/verify', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
 
       if (recomputed !== row.hash) {
         brokenAt = row.id;
-        reason = 'hash mismatch (row content tampered)';
+        reason = "hash mismatch (row content tampered)";
         break;
       }
 
@@ -131,8 +131,8 @@ router.get('/verify', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
       lastVerifiedAt: new Date().toISOString(),
     });
   } catch (err) {
-    console.error('[AuditLog] Verify error:', err);
-    res.status(500).json({ error: 'Failed to verify audit chain' });
+    console.error("[AuditLog] Verify error:", err);
+    res.status(500).json({ error: "Failed to verify audit chain" });
   }
 });
 
@@ -151,54 +151,63 @@ router.get('/verify', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
 // for ops use is `backend/scripts/backfill-audit-chain.js`.
 //
 // ADMIN-only. #558.
-router.post('/backfill', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
-  try {
-    const tenantId = req.user.tenantId;
-    // Run the backfill. Under concurrent writeAudit traffic from other
-    // requests, new rows may land between findMany() and the loop's last
-    // update — those rows may fork off a row whose hash gets re-stamped
-    // mid-walk. To converge, re-run the backfill up to 2 more times whenever
-    // the previous pass made writes. By pass 2, any racey concurrent write
-    // has either finished (with a prevHash that anchors on the stable
-    // post-pass-1 chain tail) or itself triggers the inline-repair in
-    // writeAudit. Pass 3 is a defensive ceiling — beyond that the system
-    // is under enough write pressure that the next caller can run /backfill
-    // again. The response reports the chain size + clean count from the
-    // FIRST pass (the canonical "what existed when the operator asked"),
-    // the total updates across all passes, and the head from the last pass.
-    const first = await backfillTenantChain(tenantId);
-    let totalUpdated = first.updatedRows;
-    let lastHead = first.head;
-    let lastResult = first;
-    for (let pass = 1; pass < 3 && lastResult.updatedRows > 0; pass++) {
-      const next = await backfillTenantChain(tenantId);
-      totalUpdated += next.updatedRows;
-      lastHead = next.head;
-      lastResult = next;
-    }
-    res.json({
-      tenantId,
-      walkedRows: first.walkedRows,
-      updatedRows: totalUpdated,
-      skippedRows: first.skippedRows,
-      head: lastHead,
-      backfilledAt: new Date().toISOString(),
-    });
-  } catch (err) {
-    // backfillTenantChain throws a tagged error with .conflictRowId when
-    // it detects post-hash tampering. Surface it as 409 so the UI can
-    // route the operator to incident-response instead of retrying.
-    if (err && err.conflictRowId != null) {
-      console.error(`[AuditLog] Backfill conflict at row ${err.conflictRowId}:`, err.message);
-      return res.status(409).json({
-        error: 'Backfill aborted — existing hash conflict (tampering suspected)',
-        conflictRowId: err.conflictRowId,
-        reason: err.message,
+router.post(
+  "/backfill",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const tenantId = req.user.tenantId;
+      // Run the backfill. Under concurrent writeAudit traffic from other
+      // requests, new rows may land between findMany() and the loop's last
+      // update — those rows may fork off a row whose hash gets re-stamped
+      // mid-walk. To converge, re-run the backfill up to 2 more times whenever
+      // the previous pass made writes. By pass 2, any racey concurrent write
+      // has either finished (with a prevHash that anchors on the stable
+      // post-pass-1 chain tail) or itself triggers the inline-repair in
+      // writeAudit. Pass 3 is a defensive ceiling — beyond that the system
+      // is under enough write pressure that the next caller can run /backfill
+      // again. The response reports the chain size + clean count from the
+      // FIRST pass (the canonical "what existed when the operator asked"),
+      // the total updates across all passes, and the head from the last pass.
+      const first = await backfillTenantChain(tenantId);
+      let totalUpdated = first.updatedRows;
+      let lastHead = first.head;
+      let lastResult = first;
+      for (let pass = 1; pass < 3 && lastResult.updatedRows > 0; pass++) {
+        const next = await backfillTenantChain(tenantId);
+        totalUpdated += next.updatedRows;
+        lastHead = next.head;
+        lastResult = next;
+      }
+      res.json({
+        tenantId,
+        walkedRows: first.walkedRows,
+        updatedRows: totalUpdated,
+        skippedRows: first.skippedRows,
+        head: lastHead,
+        backfilledAt: new Date().toISOString(),
       });
+    } catch (err) {
+      // backfillTenantChain throws a tagged error with .conflictRowId when
+      // it detects post-hash tampering. Surface it as 409 so the UI can
+      // route the operator to incident-response instead of retrying.
+      if (err && err.conflictRowId != null) {
+        console.error(
+          `[AuditLog] Backfill conflict at row ${err.conflictRowId}:`,
+          err.message,
+        );
+        return res.status(409).json({
+          error:
+            "Backfill aborted — existing hash conflict (tampering suspected)",
+          conflictRowId: err.conflictRowId,
+          reason: err.message,
+        });
+      }
+      console.error("[AuditLog] Backfill error:", err);
+      res.status(500).json({ error: "Failed to backfill audit chain" });
     }
-    console.error('[AuditLog] Backfill error:', err);
-    res.status(500).json({ error: 'Failed to backfill audit chain' });
-  }
-});
+  },
+);
 
 module.exports = router;

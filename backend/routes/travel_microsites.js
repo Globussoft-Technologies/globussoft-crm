@@ -185,6 +185,19 @@ const PUBLIC_SELECT = {
       departDate: true,
       returnDate: true,
       tripCode: true,
+      legalEntity: true,
+      pricePerStudent: true,
+      status: true,
+      documentRequirements: {
+        select: { docType: true, required: true },
+        orderBy: { id: "asc" },
+      },
+      paymentPlan: {
+        select: { instalmentsJson: true, graceDays: true },
+      },
+      _count: {
+        select: { participants: true },
+      },
     },
   },
 };

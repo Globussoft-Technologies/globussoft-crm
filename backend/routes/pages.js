@@ -48,11 +48,21 @@ router.get('/catalog', verifyToken, async (req, res) => {
 
 router.get('/me', verifyToken, async (req, res) => {
   try {
+    let vertical = null;
+    try {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: req.user.tenantId },
+        select: { vertical: true },
+      });
+      vertical = tenant?.vertical || null;
+    } catch (err) {
+      console.error('[pages/me] tenant vertical lookup failed:', err && err.message);
+    }
     if (req.user.isOwner) {
-      return res.json({ pages: getCatalog() });
+      return res.json({ pages: getCatalogForVertical(vertical) });
     }
     const perms = await getUserPermissions(req.user.tenantId, req.user.userId);
-    const pages = getAccessiblePages(perms, { isOwner: false });
+    const pages = getAccessiblePages(perms, { isOwner: false, vertical });
     res.json({ pages });
   } catch (err) {
     console.error('[pages/me] error:', err);

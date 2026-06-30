@@ -143,6 +143,26 @@ describe('cspNonceStaticMiddleware — fall-through cases', () => {
     expect(res.send).not.toHaveBeenCalled();
   });
 
+  test('GET /p/itinerary/abc123 → serves SPA shell (deep SPA route)', () => {
+    const req = makeReq({ path: '/p/itinerary/abc123' });
+    const res = makeRes({ locals: { cspNonce: 'nonce-itin' } });
+    const next = vi.fn();
+    cspNonceStaticMiddleware(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.send).toHaveBeenCalledTimes(1);
+    expect(res.getSentBody()).toContain('nonce="nonce-itin"');
+  });
+
+  test('GET /p/itinerary/abc123/payment-success → serves SPA shell', () => {
+    const req = makeReq({ path: '/p/itinerary/abc123/payment-success' });
+    const res = makeRes({ locals: { cspNonce: 'nonce-pay' } });
+    const next = vi.fn();
+    cspNonceStaticMiddleware(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.send).toHaveBeenCalledTimes(1);
+    expect(res.getSentBody()).toContain('nonce="nonce-pay"');
+  });
+
   test('GET /embed/lead-form → calls next() (dedicated embed route)', () => {
     const req = makeReq({ path: '/embed/lead-form' });
     const res = makeRes();

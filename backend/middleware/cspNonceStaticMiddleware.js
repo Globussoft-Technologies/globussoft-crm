@@ -109,9 +109,13 @@ function cspNonceStaticMiddleware(req, res, next) {
   if (req.path.includes('.')) return next();
 
   // Server-rendered public landing pages (/p/:slug) and the /embed lead-form
-  // surface have dedicated route handlers mounted later in server.js. Don't
-  // serve the SPA shell for those paths.
-  if (req.path.startsWith('/p/')) return next();
+  // surface have dedicated route handlers mounted earlier in server.js. Deeper
+  // /p/* paths (e.g. /p/itinerary/:token/payment-success) are SPA routes and
+  // must fall through to the shell below.
+  if (req.path.startsWith('/p/')) {
+    const rest = req.path.slice(3);
+    if (!rest.includes('/')) return next();
+  }
   if (req.path.startsWith('/embed/')) return next();
 
   try {

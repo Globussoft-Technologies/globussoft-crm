@@ -2250,6 +2250,32 @@ router.get("/:id/analytics", verifyToken, async (req, res) => {
 // ── Public routes (no auth) ───────────────────────────────────────
 // Pages are looked up by slug (globally unique). Inferred tenantId comes from the page itself.
 
+// Razorpay callback landing for itinerary redirect-based payment methods
+// (Netbanking / UPI intent / some 3DS cards). Razorpay may POST the signature
+// back to this URL; normalize any POST body into a GET query-string so the SPA
+// success page can read it. Requests that already have query params (or are
+// plain GETs) fall through to the SPA shell below.
+publicRouter.all(
+  "/itinerary/:shareToken/payment-success",
+  express.urlencoded({ extended: true }),
+  express.json(),
+  (req, res, next) => {
+    const token = req.params.shareToken;
+    const orderId = req.query.razorpay_order_id || (req.body && req.body.razorpay_order_id);
+    const paymentId = req.query.razorpay_payment_id || (req.body && req.body.razorpay_payment_id);
+    const signature = req.query.razorpay_signature || (req.body && req.body.razorpay_signature);
+    if (req.method === "POST" && orderId && paymentId && signature) {
+      const qs = new URLSearchParams({
+        razorpay_order_id: String(orderId),
+        razorpay_payment_id: String(paymentId),
+        razorpay_signature: String(signature),
+      }).toString();
+      return res.redirect(302, `/p/itinerary/${encodeURIComponent(token)}/payment-success?${qs}`);
+    }
+    return next();
+  },
+);
+
 publicRouter.get("/:slug", async (req, res) => {
   try {
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });

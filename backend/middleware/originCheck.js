@@ -168,6 +168,8 @@ function originCheck(req, res, next) {
     "/api/wellness/public",
     "/api/wellness/portal",
     "/api/attendance/biometric/webhook",
+    "/p/itinerary",
+    "/p/payment",
   ];
   if (PUBLIC_PATH_PREFIXES.some((p) => fullPath.startsWith(p))) {
     return next();

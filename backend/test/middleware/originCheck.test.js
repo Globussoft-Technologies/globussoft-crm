@@ -195,6 +195,16 @@ describe('originCheck — PUBLIC_PATH_PREFIXES unconditionally pass', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
+  test('POST /p/itinerary/:token/payment-success passes (Razorpay redirect callback)', () => {
+    const { req, res, next } = makeReqRes({
+      method: 'POST',
+      path: '/p/itinerary/abc123/payment-success',
+      headers: { origin: 'https://api.razorpay.com' },
+    });
+    originCheck(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
   test('POST /api/v1/external/leads passes (External Partner API)', () => {
     const { req, res, next } = makeReqRes({
       method: 'POST',

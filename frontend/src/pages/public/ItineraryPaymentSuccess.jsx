@@ -24,7 +24,21 @@ export default function ItineraryPaymentSuccess() {
     const paymentId = params.get("razorpay_payment_id");
     const signature = params.get("razorpay_signature");
 
-    if (!shareToken || !orderId || !paymentId || !signature) {
+    if (!shareToken) {
+      setError("Payment details are missing. Please return to the itinerary and try again.");
+      setConfirming(false);
+      return;
+    }
+
+    const razorpayError = params.get("error");
+    const razorpayErrorDesc = params.get("error_description");
+    if (razorpayError || razorpayErrorDesc) {
+      setError(razorpayErrorDesc || razorpayError || "Payment could not be completed. Please return to the itinerary and try again.");
+      setConfirming(false);
+      return;
+    }
+
+    if (!orderId || !paymentId || !signature) {
       setError("Payment details are missing. Please return to the itinerary and try again.");
       setConfirming(false);
       return;

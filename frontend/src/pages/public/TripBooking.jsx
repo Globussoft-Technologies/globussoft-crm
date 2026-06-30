@@ -223,10 +223,13 @@ export default function TripBooking() {
           // PRD §4.7 — redirect-based methods (Netbanking, UPI intent, some
           // 3DS cards) cannot finish inside the modal. Provide a callback URL
           // so Razorpay redirects back here after the bank page; the success
-          // page forwards the signature to verify-payment. Non-redirect card
-          // payments continue to use the handler below for an inline finish.
+          // page forwards the signature to verify-payment. `redirect: true`
+          // keeps the bank/OTP page in the same tab instead of opening an
+          // about:blank popup window. Non-redirect card payments also fall
+          // back to the callback URL when this flag is set.
           callback_url: `${window.location.origin}/p/itinerary/${encodeURIComponent(shareToken)}/payment-success`,
           callback_method: "get",
+          redirect: true,
           handler: async (resp) => {
             try {
               const vr = await fetch(

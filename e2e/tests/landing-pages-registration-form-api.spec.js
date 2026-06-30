@@ -180,8 +180,8 @@ test.describe('registrationForm block — round-trip + render', () => {
   });
 });
 
-test.describe('registrationForm block — submission tags lead source with audience', () => {
-  test('submitting with audience=tmc appends "(tmc)" to the Contact.source', async ({ request }) => {
+test.describe('registrationForm block — submission tags lead attribution with audience', () => {
+  test('submitting with audience=tmc appends "(tmc)" to Contact.firstTouchSource and keeps canonical Web source', async ({ request }) => {
     const page = await createPage(request, {
       content: JSON.stringify([
         {
@@ -207,16 +207,17 @@ test.describe('registrationForm block — submission tags lead source with audie
     const j = await r.json();
     expect(j.success).toBe(true);
 
-    // Verify the contact was created with the audience-tagged source.
+    // Verify the contact was created with the audience-tagged attribution.
     const listRes = await get(request, `/api/contacts?email=${encodeURIComponent(submitEmail)}`);
     expect(listRes.ok()).toBe(true);
     const list = await listRes.json();
     const contact = Array.isArray(list) ? list.find((c) => c.email === submitEmail) : null;
     expect(contact, 'contact not found by email').toBeTruthy();
-    expect(contact.source).toMatch(/\(tmc\)$/);
+    expect(contact.source).toBe('inbound:webform');
+    expect(contact.firstTouchSource).toMatch(/\(tmc\)$/);
   });
 
-  test('submitting without an audience field uses the un-tagged Landing Page source', async ({ request }) => {
+  test('submitting without an audience field uses the un-tagged Landing Page attribution', async ({ request }) => {
     const page = await createPage(request, {
       content: JSON.stringify([
         { type: 'form', props: { fields: [{ label: 'Email', name: 'email', type: 'email', required: true }] } },
@@ -234,8 +235,9 @@ test.describe('registrationForm block — submission tags lead source with audie
     const contact = Array.isArray(list) ? list.find((c) => c.email === submitEmail) : null;
     expect(contact, 'legacy form contact not found').toBeTruthy();
     // No audience suffix.
-    expect(contact.source).not.toMatch(/\(/);
-    expect(contact.source).toContain('Landing Page:');
+    expect(contact.source).toBe('inbound:webform');
+    expect(contact.firstTouchSource).not.toMatch(/\(/);
+    expect(contact.firstTouchSource).toContain('Landing Page:');
   });
 });
 

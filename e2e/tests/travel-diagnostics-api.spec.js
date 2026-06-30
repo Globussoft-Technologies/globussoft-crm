@@ -372,7 +372,7 @@ test.describe('Travel diagnostics API — submission + scoring', () => {
     // saved but reportPdfUrl stays null. Assert presence but tolerate null
     // for resilience; on demo this should always be populated.
     if (body.reportPdfUrl) {
-      expect(body.reportPdfUrl).toMatch(/^\/uploads\/diagnostics\/diag-\d+-[0-9a-f]{32}\.pdf$/);
+      expect(body.reportPdfUrl).toMatch(/^\/api\/uploads\/diagnostics\/diag-\d+-[0-9a-f]{32}\.pdf$/);
       expect(body.diagnostic.reportPdfUrl).toBe(body.reportPdfUrl);
     }
     created.diagnosticIds.push(body.diagnostic.id);

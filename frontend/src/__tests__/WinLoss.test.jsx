@@ -388,12 +388,14 @@ describe('<WinLoss /> — date filter refires', () => {
     fetchApiMock.mockClear();
 
     const dateInputs = document.querySelectorAll('input[type="date"]');
-    fireEvent.change(dateInputs[1], { target: { value: '2026-06-30' } });
+    // Pick a date that cannot collide with today's default `to` so the
+    // controlled input actually changes and the useEffect refires.
+    fireEvent.change(dateInputs[1], { target: { value: '2026-12-31' } });
 
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map(([u]) => u);
       expect(urls.some((u) =>
-        u.startsWith('/api/win-loss/analysis') && u.includes('to=2026-06-30'),
+        u.startsWith('/api/win-loss/analysis') && u.includes('to=2026-12-31'),
       )).toBe(true);
     });
   });

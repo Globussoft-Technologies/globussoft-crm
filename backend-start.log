@@ -59,101 +59,30 @@ Lead SLA Breach Engine initialized (cron: */2 * * * *)
 [Backend] Enterprise Express Server running securely on port 5000
 [LeadScoring] Scored 0 contacts across 3 tenants.
 [rbac-boot] RBAC state already compatible — no changes.
-[Sentiment] processed 0 messages
-[LeadSLABreach] tenants=3 checked=0 breached=0 (23ms)
-[MarketplaceEngine] Running sync cycle...
-[SLABreach] tenants=3 checked=0 breached=0 (39ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (19ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (12ms)
-[LeadScoring] Cron tick — rescoring all contacts...
-[MarketplaceEngine] Running sync cycle...
-[LeadScoring] Scored 0 contacts across 3 tenants.
-[SLABreach] tenants=3 checked=0 breached=0 (21ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (23ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (16ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (15ms)
+[wellness-role-boot] reverse — promoted 4 user(s) to matching RBAC role (scanned 18 tagged users across 1 tenant(s))
+[wellness-role-boot] forward — already in sync (scanned 22 users across 1 tenant(s)).
 [MarketplaceEngine] Running sync cycle...
 [Sentiment] processed 0 messages
+[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (11ms)
 [SLABreach] tenants=3 checked=0 breached=0 (17ms)
-[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (34ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
-[MarketplaceEngine] Running sync cycle...
-[LeadScoring] Cron tick — rescoring all contacts...
-[LeadScoring] Scored 0 contacts across 3 tenants.
-[SLABreach] tenants=3 checked=0 breached=0 (26ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (23ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (7ms)
-[MarketplaceEngine] Running sync cycle...
-[SLABreach] tenants=3 checked=0 breached=0 (17ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (9ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (9ms)
-[LeadScoring] Cron tick — rescoring all contacts...
-[MarketplaceEngine] Running sync cycle...
-[Report Engine] Checking for due scheduled reports...
 [Sentiment] processed 0 messages
-[LeadSLABreach] tenants=3 checked=0 breached=0 (37ms)
-[LeadScoring] Scored 0 contacts across 3 tenants.
-[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (15ms)
-[SLABreach] tenants=3 checked=0 breached=0 (47ms)
-[fxRateEngine] {
-  fetched: 6,
-  errors: [
-    {
-      base: 'INR',
-      quote: 'AED',
-      stage: 'fetch',
-      message: 'no rate returned'
-    },
-    {
-      base: 'INR',
-      quote: 'SAR',
-      stage: 'fetch',
-      message: 'no rate returned'
-    }
-  ]
-}
-[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (17ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (13ms)
+[LeadScoring] Cron tick — rescoring all contacts...
+[MarketplaceEngine] Running sync cycle...
 [LeadSLABreach] tenants=3 checked=0 breached=0 (20ms)
-[MarketplaceEngine] Running sync cycle...
-[SLABreach] tenants=3 checked=0 breached=0 (18ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (19ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
-[LeadScoring] Cron tick — rescoring all contacts...
-[MarketplaceEngine] Running sync cycle...
-[LeadSLABreach] tenants=3 checked=0 breached=0 (19ms)
-[LeadScoring] Scored 0 contacts across 3 tenants.
-[SLABreach] tenants=3 checked=0 breached=0 (23ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
-[MarketplaceEngine] Running sync cycle...
-[Sentiment] processed 0 messages
-[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (15ms)
-[SLABreach] tenants=3 checked=0 breached=0 (13ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (18ms)
-[WellnessOps] tenant enhanced-wellness: 35 NPS sent, 0 junk leads purged, 0 patients anonymized, 0 consents deleted, 0 call logs deleted, 0 memberships flagged expiring
-[LeadSLABreach] tenants=3 checked=0 breached=0 (12ms)
-[LeadScoring] Cron tick — rescoring all contacts...
-[MarketplaceEngine] Running sync cycle...
-[LeadScoring] Scored 0 contacts across 3 tenants.
-[SLABreach] tenants=3 checked=0 breached=0 (19ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (18ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (12ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (7ms)
-[MarketplaceEngine] Running sync cycle...
-[SLABreach] tenants=3 checked=0 breached=0 (17ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (12ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (16ms)
-[LeadScoring] Cron tick — rescoring all contacts...
-[MarketplaceEngine] Running sync cycle...
-[Sentiment] processed 0 messages
-[LeadSLABreach] tenants=3 checked=0 breached=0 (20ms)
-[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (14ms)
 [LeadScoring] Scored 0 contacts across 3 tenants.
 [SLABreach] tenants=3 checked=0 breached=0 (27ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (17ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (13ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (12ms)
 [MarketplaceEngine] Running sync cycle...
-[SLABreach] tenants=3 checked=0 breached=0 (12ms)
-[LeadSLABreach] tenants=3 checked=0 breached=0 (11ms)
+[SLABreach] tenants=3 checked=0 breached=0 (20ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (9ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (13ms)
+[LeadScoring] Cron tick — rescoring all contacts...
+[MarketplaceEngine] Running sync cycle...
+[Sentiment] processed 0 messages
+[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (20ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (20ms)
+[LeadScoring] Scored 0 contacts across 3 tenants.
+[SLABreach] tenants=3 checked=0 breached=0 (27ms)

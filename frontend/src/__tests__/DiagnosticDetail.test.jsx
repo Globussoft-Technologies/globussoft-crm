@@ -195,7 +195,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
       );
       expect(post).toBeTruthy();
     });
-    expect(openSpy).toHaveBeenCalledWith('/uploads/diagnostics/diag-42-new.pdf', '_blank', 'noopener,noreferrer');
+    expect(openSpy).toHaveBeenCalledWith('/api/uploads/diagnostics/diag-42-new.pdf', '_blank', 'noopener,noreferrer');
     openSpy.mockRestore();
   });
 
@@ -374,7 +374,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     expect(screen.getByText('premium')).toBeTruthy();
     // PDF link points at the diagnostic's reportPdfUrl.
     const pdfLink = screen.getByRole('link', { name: /Download report PDF/i });
-    expect(pdfLink.getAttribute('href')).toBe('/uploads/diagnostics/diag-42-abc.pdf');
+    expect(pdfLink.getAttribute('href')).toBe('/api/uploads/diagnostics/diag-42-abc.pdf');
   });
 
   it('renders the sub-brand label and classification chip in the header', async () => {

@@ -66,6 +66,7 @@ const TmcReadinessReport = lazy(() => import("./pages/public/TmcReadinessReport"
 const QuoteAcceptLanding = lazy(() => import("./pages/public/QuoteAcceptLanding"));
 const TravelReview = lazy(() => import("./pages/public/TravelReview"));
 const InvoicePaymentSuccess = lazy(() => import("./pages/public/InvoicePaymentSuccess"));
+const ItineraryPaymentSuccess = lazy(() => import("./pages/public/ItineraryPaymentSuccess"));
 // Public flyer share/embed viewer — /p/flyer/:slug?t=<jwt>[&embed=1].
 const FlyerView = lazy(() => import("./pages/public/FlyerView"));
 // Public marketing landing page entry point — /trips. Resolves the
@@ -1003,6 +1004,10 @@ export default function App() {
                       reviews the itinerary + pays the 50% advance here without
                       logging in. Backend openPath: /travel/itineraries/public. */}
                   <Route path="/p/itinerary/:shareToken" element={<TripBooking />} />
+                  {/* Razorpay standard-checkout callback for itinerary
+                      redirect-based payment methods (Netbanking, UPI intent,
+                      3DS cards). The modal handler covers non-redirect cards. */}
+                  <Route path="/p/itinerary/:shareToken/payment-success" element={<ItineraryPaymentSuccess />} />
                   {/* PRD §3.1 / slice T9 — public 12-Q readiness diagnostic. */}
                   <Route path="/p/tmc/readiness" element={<TmcReadiness />} />
                   {/* PRD §3.5 / slice T10 — public 10-section readiness report. */}

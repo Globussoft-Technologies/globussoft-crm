@@ -179,6 +179,18 @@ function formatAnswer(value) {
   return String(value);
 }
 
+// Back-compat: older diagnostics stored /uploads/diagnostics/... which is
+// served by the backend static mount, but in production the frontend SPA
+// catches /uploads/* before it reaches the backend. Rewrite to the canonical
+// /api/uploads/... path that the API proxy always forwards to the backend.
+function normalizeDiagnosticPdfUrl(url) {
+  if (!url || typeof url !== "string") return url;
+  if (url.startsWith("/uploads/diagnostics/")) {
+    return `/api/uploads/diagnostics/${url.slice("/uploads/diagnostics/".length)}`;
+  }
+  return url;
+}
+
 export default function DiagnosticDetail() {
   const { id } = useParams();
   const notify = useNotify();
@@ -250,9 +262,10 @@ export default function DiagnosticDetail() {
         body: JSON.stringify({}),
       });
       if (res?.reportPdfUrl) {
-        setDiag((d) => (d ? { ...d, reportPdfUrl: res.reportPdfUrl } : d));
+        const normalized = normalizeDiagnosticPdfUrl(res.reportPdfUrl);
+        setDiag((d) => (d ? { ...d, reportPdfUrl: normalized } : d));
         notify.success("Report PDF generated");
-        window.open(res.reportPdfUrl, "_blank", "noopener,noreferrer");
+        window.open(normalized, "_blank", "noopener,noreferrer");
       } else {
         notify.error("PDF generation returned no URL");
       }
@@ -510,7 +523,7 @@ export default function DiagnosticDetail() {
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
             {diag.reportPdfUrl && (
               <a
-                href={diag.reportPdfUrl}
+                href={normalizeDiagnosticPdfUrl(diag.reportPdfUrl)}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={pdfLink}

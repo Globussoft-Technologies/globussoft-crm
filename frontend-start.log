@@ -1,0 +1,28 @@
+
+> frontend@3.3.0 dev
+> vite
+
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m413[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+[2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[2m2:36:18 pm[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/travel/Reports.jsx[22m
+[2m3:10:40 pm[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/travel/DiagnosticDetail.jsx[22m
+[2m3:10:58 pm[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/travel/DiagnosticDetail.jsx[22m
+[2m3:58:54 pm[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/contacts?status=Lead[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m3:58:54 pm[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/tasks?status=PENDING[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m3:58:54 pm[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/tickets?status=OPEN[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m3:58:54 pm[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/email?unread=1[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)

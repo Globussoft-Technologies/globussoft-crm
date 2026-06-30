@@ -23,6 +23,17 @@ import { CheckCircle2, Globe, Sparkles, Send, RefreshCw } from "lucide-react";
 const DEFAULT_TENANT_SLUG = "travel-stall";
 const SUB_BRAND = "travelstall";
 
+// Back-compat: older diagnostics stored /uploads/diagnostics/... which the
+// frontend SPA may intercept in production. Rewrite to /api/uploads/... so
+// the request reaches the backend static mount.
+function normalizeDiagnosticPdfUrl(url) {
+  if (!url || typeof url !== "string") return url;
+  if (url.startsWith("/uploads/diagnostics/")) {
+    return `/api/uploads/diagnostics/${url.slice("/uploads/diagnostics/".length)}`;
+  }
+  return url;
+}
+
 export default function TravelStallQuiz() {
   const [searchParams] = useSearchParams();
   const tenantSlug = searchParams.get("tenant") || DEFAULT_TENANT_SLUG;
@@ -238,7 +249,7 @@ function ResultScreen({ result, onRestart }) {
       {result.reportPdfUrl && (
         <p style={{ marginTop: 16 }}>
           <a
-            href={result.reportPdfUrl}
+            href={normalizeDiagnosticPdfUrl(result.reportPdfUrl)}
             target="_blank"
             rel="noreferrer"
             style={{ color: "#122647", fontWeight: 600 }}

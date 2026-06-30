@@ -154,6 +154,7 @@ export default function Payments() {
       m &&
         (m.type === 'travel-quote-advance' ||
           m.type === 'travel-payment-schedule' ||
+          m.type === 'travel-itinerary' ||
           m.kind === 'travel-milestone' ||
           m.kind === 'travel-invoice'),
     );

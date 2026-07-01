@@ -334,12 +334,13 @@ describe('Sidebar — load-bearing render surface', () => {
         role: 'MANAGER', // Non-admin so subBrandAccess is honored
         subBrandAccess: ['tmc', 'rfu', 'travelstall'],
       });
-      // Switcher has aria-label="Switch active sub-brand"
+      // Switcher is a custom dropdown trigger button, aria-label="Switch active sub-brand"
       const switcher = screen.getByLabelText('Switch active sub-brand');
       expect(switcher).toBeTruthy();
-      expect(switcher.tagName).toBe('SELECT');
-      // The three accessible sub-brand options should be present (+ "All").
-      const optionLabels = Array.from(switcher.querySelectorAll('option')).map((o) => o.textContent);
+      expect(switcher.tagName).toBe('BUTTON');
+      // Open the popup to see the three accessible sub-brand options (+ "All").
+      fireEvent.click(switcher);
+      const optionLabels = screen.getAllByRole('option').map((o) => o.textContent);
       expect(optionLabels.some((l) => l.includes('TMC'))).toBe(true);
       expect(optionLabels.some((l) => l.includes('RFU'))).toBe(true);
       expect(optionLabels.some((l) => l.includes('Travel Stall'))).toBe(true);
@@ -615,7 +616,8 @@ describe('Sidebar — load-bearing render surface', () => {
         subBrandAccess: ['tmc'], // would restrict if respected
       });
       const switcher = screen.getByLabelText('Switch active sub-brand');
-      const labels = Array.from(switcher.querySelectorAll('option')).map((o) => o.textContent);
+      fireEvent.click(switcher);
+      const labels = screen.getAllByRole('option').map((o) => o.textContent);
       expect(labels.some((l) => l.includes('TMC'))).toBe(true);
       expect(labels.some((l) => l.includes('RFU'))).toBe(true);
       expect(labels.some((l) => l.includes('Travel Stall'))).toBe(true);
@@ -629,25 +631,25 @@ describe('Sidebar — load-bearing render surface', () => {
         subBrandAccess: ['tmc', 'rfu'],
       });
       const switcher = screen.getByLabelText('Switch active sub-brand');
-      const allOption = switcher.querySelector('option[value=""]');
-      expect(allOption).toBeTruthy();
+      fireEvent.click(switcher);
       // visibleSubBrands.length is 2 for this access list.
-      expect(allOption.textContent).toBe('All (2)');
+      expect(screen.getByRole('option', { name: 'All (2)' })).toBeTruthy();
     });
 
     it('switcher emits a change event when user picks a sub-brand', () => {
       // The setActiveSubBrand from useActiveSubBrand context is a default
-      // no-op (we don't wrap with ActiveSubBrandProvider). Pin that the
-      // <select> handles change events without throwing — the side-effect
+      // no-op (we don't wrap with ActiveSubBrandProvider). Pin that
+      // picking an option dispatches without throwing — the side-effect
       // sink is the context's setter, which the SUT's default is `()=>{}`.
       renderSidebar({
         vertical: 'travel',
         role: 'ADMIN',
       });
       const switcher = screen.getByLabelText('Switch active sub-brand');
+      fireEvent.click(switcher);
       // No throw on dispatch is the contract here.
       expect(() => {
-        fireEvent.change(switcher, { target: { value: 'tmc' } });
+        fireEvent.click(screen.getByRole('option', { name: /^TMC$/ }));
       }).not.toThrow();
     });
 
@@ -662,9 +664,10 @@ describe('Sidebar — load-bearing render surface', () => {
       });
       const switcher = screen.getByLabelText('Switch active sub-brand');
       expect(switcher).toBeTruthy();
-      const labels = Array.from(switcher.querySelectorAll('option')).map((o) => o.textContent);
+      fireEvent.click(switcher);
+      const labels = screen.getAllByRole('option').map((o) => o.textContent);
       // 4 sub-brands + the "All" placeholder = 5 options total.
-      expect(switcher.querySelectorAll('option').length).toBe(5);
+      expect(labels.length).toBe(5);
       expect(labels.some((l) => l.includes('Visa Sure'))).toBe(true);
     });
   });
@@ -1178,14 +1181,17 @@ describe('Sidebar — load-bearing render surface', () => {
   describe('Sub-brand active selection state', () => {
     it('binds the switcher value to the activeSubBrand context default (empty = All)', () => {
       // Without wrapping in ActiveSubBrandProvider, the default context
-      // returns activeSubBrand=null, which the SUT renders as value="".
+      // returns activeSubBrand=null, which the SUT renders as the "All N"
+      // trigger label and marks that option aria-selected.
       renderSidebar({
         vertical: 'travel',
         role: 'ADMIN',
       });
       const switcher = screen.getByLabelText('Switch active sub-brand');
-      // Default value should be empty string (= "All N").
-      expect(switcher.value).toBe('');
+      // Default trigger text should read "All (N)".
+      expect(switcher.textContent).toMatch(/^All \(\d+\)$/);
+      fireEvent.click(switcher);
+      expect(screen.getByRole('option', { name: /^All \(\d+\)$/ }).getAttribute('aria-selected')).toBe('true');
     });
 
     it('preserves nav structure when switching sub-brand value (no nav-link unmount)', () => {
@@ -1200,7 +1206,8 @@ describe('Sidebar — load-bearing render surface', () => {
       // Pre-change.
       expect(screen.getByText('Sales pipeline')).toBeTruthy();
       const switcher = screen.getByLabelText('Switch active sub-brand');
-      fireEvent.change(switcher, { target: { value: 'rfu' } });
+      fireEvent.click(switcher);
+      fireEvent.click(screen.getByRole('option', { name: /^RFU$/ }));
       // Post-change.
       expect(screen.getByText('Sales pipeline')).toBeTruthy();
       expect(screen.getByText('Customer comms')).toBeTruthy();
@@ -1420,7 +1427,7 @@ describe('Sidebar — load-bearing render surface', () => {
   });
 
   describe('Sub-brand switcher a11y label pairing', () => {
-    it('switcher select has id `travel-sub-brand-switcher` and a matching <label htmlFor>', () => {
+    it('switcher trigger has id `travel-sub-brand-switcher` and a matching <label htmlFor>', () => {
       // Pin the for/id pairing so a refactor that drops the <label> or
       // renames the id breaks the test (the aria-label is a separate
       // belt-and-braces a11y signal — both should hold).
@@ -1430,7 +1437,7 @@ describe('Sidebar — load-bearing render surface', () => {
       });
       const switcher = container.querySelector('#travel-sub-brand-switcher');
       expect(switcher).toBeTruthy();
-      expect(switcher.tagName).toBe('SELECT');
+      expect(switcher.tagName).toBe('BUTTON');
       const label = container.querySelector('label[for="travel-sub-brand-switcher"]');
       expect(label).toBeTruthy();
       expect(label.textContent).toMatch(/Sub-brand/i);

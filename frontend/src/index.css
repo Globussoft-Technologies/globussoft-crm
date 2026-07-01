@@ -978,3 +978,21 @@ html[data-theme="dark"][data-vertical="travel"] .travel-itin-suggest-modal {
 html[data-theme="dark"][data-vertical="wellness"] .travel-itin-suggest-modal {
   background-color: #1e2628 !important;
 }
+
+/* Travel sidebar sub-brand switcher popup (Sidebar.jsx TravelSubBrandSwitcher)
+ * — same "force an opaque panel" problem and fix as .travel-itin-suggest-modal
+ * above. `theme/travel.css`'s --surface-color overrides are NOT wired into
+ * the app (no `import "./theme/travel.css"` anywhere), so the popup was
+ * always resolving the BASE, intentionally-translucent --surface-color
+ * (light: rgba(255,255,255,0.7), dark: rgba(22,24,29,0.6)) meant for
+ * glassmorphism cards — bleeding the sidebar nav text through the floating
+ * dropdown in both themes. Explicit hex + !important sidesteps variable
+ * resolution entirely rather than depending on a theme file that isn't
+ * actually loaded. */
+.travel-subbrand-popup {
+  background-color: #ffffff !important;
+}
+[data-theme="dark"] .travel-subbrand-popup,
+html[data-theme="dark"] .travel-subbrand-popup {
+  background-color: #1a1d24 !important;
+}

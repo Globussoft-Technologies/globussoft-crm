@@ -204,7 +204,7 @@ describe('<QuotesAdmin /> — page chrome + filter bar', () => {
     // Filter chrome
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by status/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Filter by contact ID/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Filter by customer name/i)).toBeInTheDocument();
     // The "New Quote" CTA was intentionally removed — creation lives in the
     // Quote Builder, so even an ADMIN has no create button here.
     expect(screen.queryByRole('button', { name: /New Quote/i })).toBeNull();

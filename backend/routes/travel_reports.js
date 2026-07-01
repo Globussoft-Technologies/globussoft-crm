@@ -620,12 +620,18 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
 function parseDateRange(req) {
   const range = {};
   if (req.query.from) {
-    const d = new Date(req.query.from);
+    const d = new Date(String(req.query.from));
     if (!isNaN(d.getTime())) range.gte = d;
   }
   if (req.query.to) {
-    const d = new Date(req.query.to);
-    if (!isNaN(d.getTime())) range.lte = d;
+    const d = new Date(String(req.query.to));
+    if (!isNaN(d.getTime())) {
+      // Date-only strings (YYYY-MM-DD) should cover the full calendar day.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(String(req.query.to))) {
+        d.setHours(23, 59, 59, 999);
+      }
+      range.lte = d;
+    }
   }
   return Object.keys(range).length ? range : null;
 }

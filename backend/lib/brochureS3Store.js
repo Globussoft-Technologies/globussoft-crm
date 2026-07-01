@@ -15,7 +15,11 @@ function isEnabled() {
 }
 
 function isS3Url(url) {
-  return typeof url === 'string' && s3Service.S3_BASE_URL && url.startsWith(s3Service.S3_BASE_URL);
+  if (!url || typeof url !== 'string' || !s3Service.S3_BASE_URL) return false;
+  // Normalize URLs to handle trailing slashes consistently
+  const normalizedBaseUrl = s3Service.S3_BASE_URL.replace(/\/$/, '');
+  const normalizedUrl = url.replace(/\/$/, '');
+  return normalizedUrl.startsWith(normalizedBaseUrl + '/') || normalizedUrl === normalizedBaseUrl;
 }
 
 function tenantPrefix(tenantId, category) {
@@ -79,9 +83,25 @@ async function deleteBrandImage(tenantId, url) {
 }
 
 function extractBrochureKey(tenantId, url) {
-  if (!isS3Url(url)) return null;
+  if (!isS3Url(url)) {
+    console.log('[brochureS3Store] extractBrochureKey: not an S3 URL -', url);
+    return null;
+  }
   const key = s3Service.extractKeyFromUrl(url);
-  if (!key || !isTenantKey(tenantId, key, 'brochures')) return null;
+  if (!key) {
+    console.log('[brochureS3Store] extractBrochureKey: could not extract key from URL -', url);
+    return null;
+  }
+  if (!isTenantKey(tenantId, key, 'brochures')) {
+    console.log(
+      '[brochureS3Store] extractBrochureKey: key does not belong to tenant',
+      tenantId,
+      '— key:',
+      key,
+      'expected prefix: brochures/' + tenantId + '/'
+    );
+    return null;
+  }
   return key;
 }
 
@@ -96,7 +116,16 @@ function extractBrochureKey(tenantId, url) {
 async function streamBrochure(tenantId, url) {
   if (!isEnabled()) throw new Error('S3 not configured');
   const key = extractBrochureKey(tenantId, url);
-  if (!key) throw new Error('Not a valid S3 brochure URL for this tenant');
+  if (!key) {
+    // Log for debugging: the URL doesn't match the expected tenant brochure pattern
+    console.warn(
+      '[brochureS3Store] streamBrochure: invalid or mismatched URL for tenant',
+      tenantId,
+      '— url:',
+      url
+    );
+    throw new Error('Not a valid S3 brochure URL for this tenant');
+  }
   return s3Service.getObjectStream(key);
 }
 

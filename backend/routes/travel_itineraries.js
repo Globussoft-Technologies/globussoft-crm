@@ -461,7 +461,10 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
     if (isSummary) {
       findManyArgs.select = listProjection("Itinerary", false);
     } else {
-      findManyArgs.include = { items: { orderBy: { position: "asc" } } };
+      findManyArgs.include = {
+        items: { orderBy: { position: "asc" } },
+        contact: { select: { id: true, name: true, email: true } },
+      };
     }
     const [itineraries, total] = await Promise.all([
       prisma.itinerary.findMany(findManyArgs),

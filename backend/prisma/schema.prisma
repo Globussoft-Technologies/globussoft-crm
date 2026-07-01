@@ -842,6 +842,8 @@ model Contact {
   digilockerSessions        DigilockerSession[]
   // Travel customer-portal in-app notification inbox (2026-06-17).
   travelPortalNotifications TravelPortalNotification[]
+  // Travel itineraries (PRD Phase 1).
+  itineraries               Itinerary[]
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
@@ -5710,7 +5712,7 @@ model Itinerary {
   id                      Int             @id @default(autoincrement())
   tenantId                Int             @default(1)
   subBrand                String
-  contactId               Int
+  contactId               Int?
   leadId                  Int?
   // status enum extended for Phase 2 50%-advance booking:
   //   draft | sent | revised | accepted | rejected | advance_paid | fully_paid
@@ -5786,6 +5788,7 @@ model Itinerary {
   // layer — analytics queries read by templateId index instead.
   clonedFromTemplateId    Int?
   items                   ItineraryItem[]
+  contact                 Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
   tenant                  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt               DateTime        @default(now())
   updatedAt               DateTime        @updatedAt

@@ -821,22 +821,27 @@ router.get(
       const dispositionType = inline ? 'inline' : 'attachment';
 
       if (isS3) {
-        const { stream, contentType: s3Type, contentLength } = await brochureS3Store.streamBrochure(
-          req.travelTenant.id,
-          url,
-        );
-        res.setHeader("Content-Type", s3Type || contentType);
-        res.setHeader("Content-Disposition", `${dispositionType}; filename="${downloadName}"`);
-        if (contentLength) res.setHeader("Content-Length", contentLength);
-        stream.on("error", (err) => {
-          console.error(`[brochures] S3 stream error for ${id}:`, err.message);
-          if (!res.headersSent) {
-            return res.status(502).json({ error: "Failed to stream brochure file", code: "DOWNLOAD_FAILED" });
-          }
-          res.destroy();
-        });
-        stream.pipe(res);
-        return;
+        try {
+          const { stream, contentType: s3Type, contentLength } = await brochureS3Store.streamBrochure(
+            req.travelTenant.id,
+            url,
+          );
+          res.setHeader("Content-Type", s3Type || contentType);
+          res.setHeader("Content-Disposition", `${dispositionType}; filename="${downloadName}"`);
+          if (contentLength) res.setHeader("Content-Length", contentLength);
+          stream.on("error", (err) => {
+            console.error(`[brochures] S3 stream error for ${id}:`, err.message);
+            if (!res.headersSent) {
+              return res.status(502).json({ error: "Failed to stream brochure file", code: "DOWNLOAD_FAILED" });
+            }
+            res.destroy();
+          });
+          stream.pipe(res);
+          return;
+        } catch (s3Err) {
+          console.error(`[brochures] S3 validation/stream error for ${id}:`, s3Err.message);
+          return res.status(502).json({ error: "Failed to access brochure file", code: "S3_ACCESS_FAILED", details: s3Err.message });
+        }
       }
 
       if (isLocal) {

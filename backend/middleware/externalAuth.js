@@ -2,7 +2,10 @@
  * API-key authentication for the external partner API (/api/v1/external).
  *
  * Partner products (Callified.ai, Globus Phone, etc.) authenticate with:
- *   X-API-Key: glbs_<48-hex-chars>
+ *   X-API-Key: glbs_<hex> (CRM-generated, 48+ hex chars with prefix)
+ *   X-API-Key: <hex> (external-generated e.g. GlobusPhone, raw 48-96 hex chars)
+ *
+ * Both formats are accepted; validation looks up the key in the ApiKey table.
  *
  * On success, req.apiKey, req.tenant, and req.tenantId are populated.
  * We deliberately do NOT populate req.user — this isn't a human session —
@@ -36,7 +39,10 @@ module.exports = async function externalAuth(req, res, next) {
     if (!token) {
       return res.status(401).json({ error: "Missing X-API-Key header" });
     }
-    if (!/^glbs_[a-f0-9]{32,}$/i.test(token)) {
+    // Accept both glbs_<hex> (CRM-generated) and raw hex (GlobusPhone/external-generated).
+    // Format validation: either "glbs_<hex>" or raw 48-96 hex chars (24-48 bytes).
+    const isValidFormat = /^(glbs_)?[a-f0-9]{48,96}$/i.test(token);
+    if (!isValidFormat) {
       return res.status(401).json({ error: "Malformed API key" });
     }
 

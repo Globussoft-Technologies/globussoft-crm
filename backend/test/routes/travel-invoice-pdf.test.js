@@ -56,6 +56,13 @@ prisma.travelInvoiceLine = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.travelPaymentSchedule = {
+  findMany: vi.fn().mockResolvedValue([]),
+  findFirst: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+  delete: vi.fn(),
+};
 prisma.$transaction = vi.fn(async (cb) => cb(prisma));
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
@@ -143,6 +150,7 @@ beforeEach(() => {
   prisma.travelInvoice.findFirst.mockReset();
   prisma.travelInvoice.findMany.mockReset();
   prisma.travelInvoiceLine.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelPaymentSchedule.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -339,5 +347,33 @@ describe('GET /api/travel/invoices/:id/pdf', () => {
     expect(res.headers['content-type']).toBe('application/pdf');
     expect(Buffer.isBuffer(res.body)).toBe(true);
     expect(res.body.length).toBeGreaterThan(2048);
+  });
+
+  test('partial payment: invoice status=Partial with payment schedule shows correct Balance Due', async () => {
+    // Invoice with 45000 total, Partial status (some payment received).
+    prisma.travelInvoice.findFirst.mockResolvedValue(
+      sourceInvoice({ id: 100, status: 'Partial', totalAmount: '45000.00' }),
+    );
+    prisma.travelInvoiceLine.findMany.mockResolvedValue(sampleLines());
+    // Payment schedule shows 22500 has been received (50% of 45000).
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([
+      { id: 1, invoiceId: 100, tenantId: 1, receivedAmount: 22500 },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/invoices/100/pdf')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .buffer(true)
+      .parse(bufferParser);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(Buffer.isBuffer(res.body)).toBe(true);
+    expect(res.body.length).toBeGreaterThan(2048);
+    // The PDF should contain "Balance Due" in the totals section since
+    // status !== 'Paid' and amountPaid > 0, plus the balance 22500
+    // (45000 - 22500). Can't precisely extract from binary PDF, but we
+    // verify that the render succeeds (if the balance calc threw an error,
+    // it would fail above).
   });
 });

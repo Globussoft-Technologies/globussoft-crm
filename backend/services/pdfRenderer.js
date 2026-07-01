@@ -4636,6 +4636,9 @@ async function renderTravelInvoicePdf(opts) {
   const grandTotal = invoice.totalAmount != null
     ? Number(invoice.totalAmount)
     : computedSubtotal;
+  // amountPaid is passed by the caller (route layer) after summing
+  // TravelPaymentSchedule.receivedAmount. Fallback to invoice fields
+  // for other invoice types (wellness, etc.) that may store it directly.
   const amountPaid = Math.max(0, Number(
     invoice.amountPaid != null
       ? invoice.amountPaid

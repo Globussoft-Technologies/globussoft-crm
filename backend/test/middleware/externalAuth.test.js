@@ -332,4 +332,97 @@ describe('externalAuth', () => {
       code: 'SUB_BRAND_MISMATCH',
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Raw hex key support wave (+6 cases): accept raw hex keys from external
+  // partners (e.g. GlobusPhone) without glbs_ prefix. Both formats valid.
+  // -------------------------------------------------------------------------
+
+  test('accepts raw hex key (48 chars) without glbs_ prefix', async () => {
+    const rawKey = '83000168aabbccddeeff0011223344556677889900112233445566778899';
+    findUniqueMock.mockResolvedValueOnce({
+      id: 300,
+      tenantId: 9,
+      userId: 5,
+      keySecret: rawKey,
+      tenant: { id: 9, isActive: true },
+    });
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': rawKey },
+    });
+    await externalAuth(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+    expect(findUniqueMock).toHaveBeenCalledWith({
+      where: { keySecret: rawKey },
+      include: { tenant: true },
+    });
+  });
+
+  test('accepts raw hex key at maximum length (96 chars)', async () => {
+    const rawKey = 'a'.repeat(96);
+    findUniqueMock.mockResolvedValueOnce({
+      id: 301,
+      tenantId: 10,
+      userId: 6,
+      keySecret: rawKey,
+      tenant: { id: 10, isActive: true },
+    });
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': rawKey },
+    });
+    await externalAuth(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 malformed when raw hex is too short (< 48 chars)', async () => {
+    const tooShort = 'a'.repeat(47);
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': tooShort },
+    });
+    await externalAuth(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Malformed API key' });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 malformed when raw hex is too long (> 96 chars)', async () => {
+    const tooLong = 'b'.repeat(97);
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': tooLong },
+    });
+    await externalAuth(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Malformed API key' });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 invalid when raw hex key not found in database', async () => {
+    findUniqueMock.mockResolvedValueOnce(null);
+    const rawKey = 'c'.repeat(48);
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': rawKey },
+    });
+    await externalAuth(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid API key' });
+  });
+
+  test('accepts raw hex key with mixed case (A-F uppercase)', async () => {
+    const mixedKey = 'F'.repeat(24) + '0'.repeat(24);
+    findUniqueMock.mockResolvedValueOnce({
+      id: 302,
+      tenantId: 11,
+      userId: 7,
+      keySecret: mixedKey,
+      tenant: { id: 11, isActive: true },
+    });
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': mixedKey },
+    });
+    await externalAuth(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
+  });
 });

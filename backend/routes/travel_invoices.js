@@ -5489,6 +5489,19 @@ router.get(
         orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       });
 
+      // Fetch payment schedule to calculate actual amount paid.
+      // openValue = totalAmount - sum(schedule.receivedAmount). No schedule
+      // rows → entire totalAmount is outstanding.
+      const schedule = await prisma.travelPaymentSchedule.findMany({
+        where: { invoiceId: id, tenantId: req.travelTenant.id },
+        select: { receivedAmount: true },
+      });
+      let amountPaid = 0;
+      for (const s of schedule) {
+        const r = Number(s.receivedAmount);
+        if (Number.isFinite(r)) amountPaid += r;
+      }
+
       // Load the bill-to contact so the PDF "Bill To" block isn't blank.
       // TravelInvoice stores only contactId; the renderer reads contactName/
       // contactEmail/contactPhone off the invoice object, so we resolve them
@@ -5522,6 +5535,7 @@ router.get(
         pdfBuffer = await pdfRenderer.generateTravelInvoicePdf({
           invoice: {
             ...invoice,
+            amountPaid,
             contactName: contact?.name || null,
             contactEmail: contact?.email || null,
             contactPhone: contact?.phone || null,

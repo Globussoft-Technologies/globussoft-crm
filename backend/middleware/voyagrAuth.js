@@ -15,7 +15,9 @@
  *
  * voyagr server-to-server flow:
  *   voyagr Next.js API route → POST /api/v1/voyagr/leads
- *   headers: { 'X-API-Key': 'glbs_<48-hex-chars>' }
+ *   headers: { 'X-API-Key': 'glbs_<32+hex-chars>' OR raw <32+hex-chars> }
+ *
+ * Format: accepts either the legacy glbs_ prefix OR raw hex keys from partners.
  *
  * The voyagr browser NEVER sees the API key — it lives in voyagr's server
  * env vars only and is sent from voyagr's Next.js API route. This is why
@@ -53,7 +55,7 @@ module.exports = async function voyagrAuth(req, res, next) {
         .status(401)
         .json({ error: "Missing X-API-Key header", code: "MISSING_API_KEY" });
     }
-    if (!/^glbs_[a-f0-9]{32,}$/i.test(token)) {
+    if (!/^(glbs_)?[a-f0-9]{32,}$/i.test(token)) {
       return res
         .status(401)
         .json({ error: "Malformed API key", code: "MALFORMED_API_KEY" });

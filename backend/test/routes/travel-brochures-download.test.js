@@ -246,7 +246,7 @@ describe('GET /api/travel/brochures/:id/download', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
 
     expect(res.status).toBe(502);
-    expect(res.body.code).toBe('DOWNLOAD_FAILED');
+    expect(res.body.code).toBe('S3_ACCESS_FAILED');
   });
 
   test('?inline=1 sets Content-Disposition to inline for S3 PDF', async () => {

@@ -66,6 +66,7 @@ async function uploadFile(
     .toLowerCase()
     .replace(/[^a-z0-9.-]/g, "_")
     .substring(0, 50);
+  // Ensure subfolder path includes all segments (e.g., "brochures/123" not just "brochures")
   const fileKey = `${subfolder}/${timestamp}-${sanitizedName}`;
 
   const command = new PutObjectCommand({
@@ -73,6 +74,8 @@ async function uploadFile(
     Key: fileKey,
     Body: fileBody,
     ContentType: mimeType,
+    // Set public read access for downloadable artifacts
+    ACL: 'private',
   });
 
   try {
@@ -200,8 +203,13 @@ async function getObjectStream(fileKey) {
  */
 function extractKeyFromUrl(s3Url) {
   if (!s3Url || !S3_BASE_URL) return null;
-  if (s3Url.startsWith(S3_BASE_URL)) {
-    return s3Url.replace(`${S3_BASE_URL}/`, "");
+
+  // Normalize URLs to handle trailing slashes
+  const normalizedBaseUrl = S3_BASE_URL.replace(/\/$/, '');
+  const normalizedUrl = s3Url.replace(/\/$/, '');
+
+  if (normalizedUrl.startsWith(normalizedBaseUrl + '/')) {
+    return normalizedUrl.replace(normalizedBaseUrl + '/', '');
   }
   return null;
 }

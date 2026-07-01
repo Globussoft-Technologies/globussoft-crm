@@ -285,7 +285,7 @@ jobs:
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
-          password: ${{ secrets.SSH_PASSWORD }}
+          key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           # 4 min cap — scrub typically finishes in ~30s, dedup in <10s,
           # but headroom for a degenerate run that created 1000s of rows.

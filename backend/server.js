@@ -2127,6 +2127,19 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initWebCheckinSchedulerCron } = require("./cron/webCheckinScheduler");
   initWebCheckinSchedulerCron();
 
+  // Initialize Travel CRM web check-in AUTOMATION engine (every 15 min).
+  // PRD_AIRLINE_WEBCHECKIN_AUTOMATION FR-1 — picks up `reminded`/retry-eligible
+  // rows on PAID, non-Visa-Sure itineraries, resolves the per-airline adapter
+  // (services/airlineAdapters) and performs the check-in: success → done +
+  // boarding pass; captcha/not-implemented → fallback-agent; transient → 3x
+  // retry w/ 1/5/15-min backoff then fallback-agent. Adapters are stubbed
+  // (return not-implemented) until DC-1/DC-3/DC-5 land, so this is a
+  // safe no-op-to-fallback in prod; set WEBCHECKIN_AUTOMATION_STUB=1 to drive
+  // the full loop with the deterministic stub adapter. Per-attempt health rows
+  // land in WebCheckinAutomationRun (GET /api/travel/automation-health/per-airline).
+  const { initWebCheckinAutomationCron } = require("./cron/webCheckinAutomation");
+  initWebCheckinAutomationCron();
+
   // Initialize Travel CRM contact greetings (daily 08:13 IST) — Phase 2.
   // PRD §4.8 Phase 2 birthday/anniversary greetings. Year-agnostic
   // month+day match on Contact.birthDate + Contact.anniversary; one

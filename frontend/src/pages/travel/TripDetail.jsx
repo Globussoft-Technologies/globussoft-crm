@@ -695,7 +695,6 @@ function ParticipantsTab({ trip, onChange, notify }) {
   // REJECTED drafts are kept visible so operators can see what got
   // declined (separately styled in the list).
   const reviewableRegs = pendingRegs.filter((r) => r.status !== "CONVERTED");
-  const awaitingReviewCount = reviewableRegs.filter((r) => r.status === "OTP_VERIFIED").length;
 
   return (
     <div>
@@ -704,9 +703,9 @@ function ParticipantsTab({ trip, onChange, notify }) {
           <span>
             {trip.participants?.length || 0} participant{(trip.participants?.length || 0) === 1 ? "" : "s"}
           </span>
-          {awaitingReviewCount > 0 && (
-            <span data-testid="awaiting-review-count" style={{ color: "#9A6F2E", fontWeight: 600 }}>
-              · {awaitingReviewCount} awaiting review
+          {reviewableRegs.length > 0 && (
+            <span data-testid="pending-regs-count" style={{ color: "var(--text-secondary)" }}>
+              · {reviewableRegs.length} pending registration{reviewableRegs.length === 1 ? "" : "s"}
             </span>
           )}
         </div>
@@ -785,27 +784,26 @@ function ParticipantsTab({ trip, onChange, notify }) {
                   )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
-                  {/* Approve is only available once the parent's phone
-                      OTP has been verified — operators can't approve
-                      an unverified draft (the server enforces this with
-                      409 INVALID_STATE; we hide the button to keep the
-                      UI deterministic). */}
-                  {isOtpVerified && (
-                    <button
-                      type="button"
-                      onClick={() => decideRegistration(r.id, "approve")}
-                      disabled={busy}
-                      data-testid={`approve-registration-${r.id}`}
-                      style={{
-                        ...secondaryBtn, padding: "5px 10px", fontSize: 12,
-                        color: "#2F7A4D", borderColor: "rgba(47,122,77,0.4)",
-                        opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
-                      }}
-                      aria-label={`Approve registration for ${r.studentName}`}
-                    >
-                      <CheckCircle2 size={13} aria-hidden /> Approve
-                    </button>
-                  )}
+                  {/* Approve is available for every registration that is
+                      not already final. CONVERTED rows are filtered out
+                      above; REJECTED rows stay visible so they can be
+                      re-approved. The OTP gate was relaxed on the backend
+                      because production tenants collect consent outside
+                      the microsite OTP flow. */}
+                  <button
+                    type="button"
+                    onClick={() => decideRegistration(r.id, "approve")}
+                    disabled={busy}
+                    data-testid={`approve-registration-${r.id}`}
+                    style={{
+                      ...secondaryBtn, padding: "5px 10px", fontSize: 12,
+                      color: "#2F7A4D", borderColor: "rgba(47,122,77,0.4)",
+                      opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
+                    }}
+                    aria-label={`Approve registration for ${r.studentName}`}
+                  >
+                    <CheckCircle2 size={13} aria-hidden /> Approve
+                  </button>
                   {!isRejected && (
                     <button
                       type="button"

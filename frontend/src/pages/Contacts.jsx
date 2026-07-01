@@ -1,7 +1,7 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import React, { useState, useEffect, useContext } from 'react';
-import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge, EyeOff } from 'lucide-react';
+import { Search, Plus, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import DuplicateContactModal from '../components/DuplicateContactModal';
 import { AuthContext } from '../App';

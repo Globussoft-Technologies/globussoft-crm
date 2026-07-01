@@ -1881,13 +1881,14 @@ router.post(
   async (req, res) => {
     try {
       const { trip, draft } = await loadPendingRegistration(req);
-      // Per decision #8 the operator approves drafts that are
-      // OTP_VERIFIED. Drafts in DRAFT (no phone OTP yet) are blocked
-      // — let the user verify first. Drafts in REJECTED / CONVERTED
-      // are final; no re-conversion.
-      if (draft.status !== "OTP_VERIFIED") {
+      // Operators can approve any draft that is not already final.
+      // The original OTP_VERIFIED gate was relaxed because production
+      // tenants often collect consent outside the microsite OTP flow
+      // (in-person / phone), and blocking approval there left drafts
+      // permanently stuck. CONVERTED and REJECTED remain terminal.
+      if (draft.status === "CONVERTED" || draft.status === "REJECTED") {
         return res.status(409).json({
-          error: `cannot approve a draft in status=${draft.status}; only OTP_VERIFIED drafts are eligible`,
+          error: `cannot approve a draft in status=${draft.status}; it is already final`,
           code: "INVALID_STATE",
           currentStatus: draft.status,
         });

@@ -26,12 +26,11 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import {
-  ShieldCheck, CheckCircle2, AlertCircle, Loader2, Plane, Mail, Phone, UserCheck,
+  CheckCircle2, AlertCircle, Loader2, Plane, Mail, Phone, UserCheck,
   CalendarDays, MapPin, IndianRupee, FileText, Users, Clock, Sparkles, ClipboardCheck,
+  Upload, X,
 } from "lucide-react";
 import { DestinationHero, DestinationSideRails } from "../../components/DestinationVisuals";
-
-const KYC_MICROSITE_UUID_KEY = "kycMicrositeUuid";
 
 /** Lightweight client-side HTML sanitiser — strips scripts, event handlers,
  *  and javascript: URLs as defence-in-depth even though the server already
@@ -69,7 +68,6 @@ async function publicFetch(path, { method = "GET", body } = {}) {
 export default function PublicTripMicrosite() {
   const { publicUuid } = useParams();
   const queryParams = new URLSearchParams(window.location.search);
-  const justVerified = queryParams.get("verified") === "1";
   // Phase 7 — hybrid registration confirmation. When the user is
   // redirected here from a landing-page registration submission, the
   // URL carries an opaque draftToken (no PII). We surface a
@@ -80,16 +78,25 @@ export default function PublicTripMicrosite() {
   const draftToken = queryParams.get("draftToken");
 
   const [info, setInfo] = useState(null);
-  const [participants, setParticipants] = useState([]);
   const [loadErr, setLoadErr] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState(null); // { ok: boolean, text: string }
+  // Document-upload status for THIS registrant only, scoped by draftToken.
+  // We deliberately do NOT fetch a participant list — this is a public page
+  // and showing other families' names/verification would leak their data.
+  // docStatus drives the "Upload documents" button + the modal's checkmarks.
+  const [docStatus, setDocStatus] = useState(null);
+  const [docModalOpen, setDocModalOpen] = useState(false);
 
-  const refreshParticipants = useCallback(async () => {
-    const r = await publicFetch(`/${publicUuid}/participants`);
-    setParticipants(Array.isArray(r.participants) ? r.participants : []);
-  }, [publicUuid]);
+  const refreshDocStatus = useCallback(async () => {
+    if (!draftToken) return;
+    try {
+      const s = await publicFetch(`/${publicUuid}/draft-summary?token=${encodeURIComponent(draftToken)}`);
+      setDocStatus(s);
+    } catch {
+      // A bad / expired token is surfaced by RegistrationConfirmPanel; the
+      // upload button simply stays in its default (no-docs) state.
+    }
+  }, [publicUuid, draftToken]);
 
   useEffect(() => {
     let alive = true;
@@ -98,7 +105,6 @@ export default function PublicTripMicrosite() {
         const data = await publicFetch(`/${publicUuid}`);
         if (!alive) return;
         setInfo(data);
-        await refreshParticipants();
       } catch (e) {
         if (alive) setLoadErr(e.code === "GONE" ? "This trip page has expired." : "Trip page not found.");
       } finally {
@@ -106,36 +112,9 @@ export default function PublicTripMicrosite() {
       }
     })();
     return () => { alive = false; };
-  }, [publicUuid, refreshParticipants]);
+  }, [publicUuid]);
 
-  const verifyAadhaar = async (participantId) => {
-    setMsg(null);
-    setBusy(true);
-    try {
-      const r = await publicFetch(`/${publicUuid}/verify/aadhaar/start`, {
-        method: "POST",
-        body: { participantId },
-      });
-      if (r.mode === "stub") {
-        // No real DigiLocker configured — complete inline so dev/demo works.
-        await publicFetch(`/${publicUuid}/verify/aadhaar/callback`, {
-          method: "POST",
-          body: { state: r.state, code: "stub-code" },
-        });
-        await refreshParticipants();
-        setMsg({ ok: true, text: "Verified ✓ (demo / stub mode)" });
-      } else {
-        // Real mode — stash the uuid so the callback page can complete the
-        // return leg, then hand the browser off to DigiLocker for consent.
-        sessionStorage.setItem(KYC_MICROSITE_UUID_KEY, publicUuid);
-        window.location.href = r.oauthUrl;
-      }
-    } catch (e) {
-      setMsg({ ok: false, text: e.message });
-    } finally {
-      setBusy(false);
-    }
-  };
+  useEffect(() => { refreshDocStatus(); }, [refreshDocStatus]);
 
   // G095 — palette + chrome derived from the brandKit when present.
   // Hooks must run on EVERY render in the same order (React rules), so
@@ -167,7 +146,7 @@ export default function PublicTripMicrosite() {
   const docs = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
   const instalments = parseInstalments(trip.paymentPlan?.instalmentsJson);
   const durationDays = tripDurationDays(trip);
-  const studentCount = trip?._count?.participants || participants.length || 0;
+  const studentCount = trip?._count?.participants || 0;
   const price = formatMoney(trip.pricePerStudent, "INR");
 
   return (
@@ -283,7 +262,20 @@ export default function PublicTripMicrosite() {
         </section>
 
         <section style={S.section}>
-          <h2 style={S.h2}><FileText size={18} aria-hidden /> Documents to keep ready</h2>
+          <div style={S.sectionHeadRow}>
+            <h2 style={{ ...S.h2, margin: 0 }}><FileText size={18} aria-hidden /> Documents to keep ready</h2>
+            {draftToken && (
+              <button
+                type="button"
+                onClick={() => setDocModalOpen(true)}
+                style={{ ...S.uploadBtn, background: palette.headerBg }}
+                data-testid="microsite-upload-docs-btn"
+              >
+                <Upload size={15} aria-hidden />
+                {docStatus?.hasPassportDoc && docStatus?.hasAadhaarDoc ? "Update documents" : "Upload documents"}
+              </button>
+            )}
+          </div>
           <div style={S.docGrid}>
             {(docs.length ? docs : DEFAULT_DOCUMENTS).map((doc) => (
               <div key={doc.docType} style={S.docItem}>
@@ -292,49 +284,16 @@ export default function PublicTripMicrosite() {
               </div>
             ))}
           </div>
-        </section>
-
-        <section style={S.section} data-testid="microsite-aadhaar-section">
-          <h2 style={S.h2}><ShieldCheck size={18} aria-hidden /> Aadhaar verification</h2>
-
-          {justVerified && (
-            <div style={S.okBanner}>
-              <CheckCircle2 size={16} aria-hidden /> Aadhaar verified successfully.
-            </div>
-          )}
-
-          <p style={S.help}>
-            Choose a traveller to verify their Aadhaar through DigiLocker. You will sign in to
-            DigiLocker and approve sharing — we only ever store the last 4 digits, never the full
-            number.
-          </p>
-
-          {participants.length === 0 ? (
-            <p style={{ color: "#64748b", fontSize: 14 }}>No travellers have been added to this trip yet.</p>
+          {draftToken ? (
+            <p style={{ ...S.help, marginTop: 12, marginBottom: 0 }}>
+              {docStatus?.hasPassportDoc && docStatus?.hasAadhaarDoc
+                ? "Your documents have been received. You can re-upload above if anything needs to change."
+                : "Upload your Passport and Aadhaar and confirm parent consent using the button above."}
+            </p>
           ) : (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {participants.map((p) => (
-                <li key={p.id} style={S.participant}>
-                  <span style={{ fontWeight: 600 }}>{p.fullName}</span>
-                  {p.aadhaarLast4 ? (
-                    <span style={S.verified}>
-                      <CheckCircle2 size={14} aria-hidden /> Verified ••••{p.aadhaarLast4}
-                    </span>
-                  ) : (
-                    <button onClick={() => verifyAadhaar(p.id)} disabled={busy} style={S.btn}>
-                      {busy ? "Working…" : "Verify Aadhaar"}
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {msg && (
-            <div style={{ ...S.msg, color: msg.ok ? "#16a34a" : "#dc2626" }}>
-              {msg.ok ? <CheckCircle2 size={16} aria-hidden /> : <AlertCircle size={16} aria-hidden />}
-              <span>{msg.text}</span>
-            </div>
+            <p style={{ ...S.help, marginTop: 12, marginBottom: 0 }}>
+              To upload your documents, please open this page from the registration link we sent you.
+            </p>
           )}
         </section>
 
@@ -365,6 +324,17 @@ export default function PublicTripMicrosite() {
           </footer>
         )}
       </div>
+
+      {docModalOpen && draftToken && (
+        <DocumentUploadModal
+          publicUuid={publicUuid}
+          draftToken={draftToken}
+          status={docStatus}
+          accentBg={palette.headerBg}
+          onClose={() => setDocModalOpen(false)}
+          onUploaded={refreshDocStatus}
+        />
+      )}
       <style>{"@keyframes spin{to{transform:rotate(360deg)}}"}</style>
     </div>
   );
@@ -772,6 +742,196 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
   );
 }
 
+// ─── DocumentUploadModal ─────────────────────────────────────────────
+//
+// Parent-facing document capture, opened from the "Documents to keep
+// ready" section. Because this is a PUBLIC page, the modal is scoped
+// entirely to THIS registrant via the draftToken — it never lists or
+// touches other travellers. Requires Passport + Aadhaar (a doc already
+// stored on the draft counts, so a re-upload of just one is allowed) and
+// a mandatory parent-consent checkbox. Posts multipart/form-data to the
+// public /documents endpoint.
+function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose, onUploaded }) {
+  const [passport, setPassport] = useState(null);
+  const [aadhaar, setAadhaar] = useState(null);
+  const [consent, setConsent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
+
+  const hasPassportDoc = !!status?.hasPassportDoc;
+  const hasAadhaarDoc = !!status?.hasAadhaarDoc;
+
+  const ACCEPT = "image/jpeg,image/png,application/pdf";
+  const MAX_BYTES = 8 * 1024 * 1024;
+
+  // Close on Escape for keyboard users.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const pickFile = (setter) => (e) => {
+    setError(null);
+    const f = e.target.files?.[0] || null;
+    if (f && f.size > MAX_BYTES) {
+      setError("File too large — the maximum size is 8MB.");
+      e.target.value = "";
+      setter(null);
+      return;
+    }
+    setter(f);
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (!consent) {
+      setError("Please confirm parent consent to continue.");
+      return;
+    }
+    // Both docs must exist after this submit — a freshly-chosen file OR one
+    // already stored on the draft satisfies each requirement.
+    if ((!passport && !hasPassportDoc) || (!aadhaar && !hasAadhaarDoc)) {
+      setError("Both Passport and Aadhaar documents are required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("draftToken", draftToken);
+      fd.append("consent", "true");
+      if (passport) fd.append("passport", passport);
+      if (aadhaar) fd.append("aadhaar", aadhaar);
+      const res = await fetch(`/api/travel/microsites/public/${publicUuid}/documents`, {
+        method: "POST",
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`);
+      setDone(true);
+      onUploaded?.();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const accent = accentBg || "#122647";
+
+  return (
+    <div
+      style={S.overlay}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Upload your documents"
+      data-testid="microsite-doc-modal"
+    >
+      <div style={S.modal}>
+        <div style={S.modalHead}>
+          <h2 style={{ ...S.h2, margin: 0 }}><Upload size={18} aria-hidden /> Upload your documents</h2>
+          <button type="button" onClick={onClose} style={S.closeBtn} aria-label="Close" data-testid="microsite-doc-modal-close">
+            <X size={18} aria-hidden />
+          </button>
+        </div>
+
+        {done ? (
+          <div data-testid="microsite-doc-modal-done">
+            <div style={{ ...S.okBanner, padding: "14px 16px", fontSize: 14 }}>
+              <CheckCircle2 size={18} aria-hidden />
+              <span>Your documents were uploaded. Thank you — we&apos;ll review them shortly.</span>
+            </div>
+            <button type="button" onClick={onClose} style={{ ...S.primaryBtn, background: accent, marginTop: 16 }}>
+              Done
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={submit}>
+            <p style={{ ...S.help, marginTop: 0 }}>
+              Please upload a clear scan or photo of each document (JPEG, PNG or PDF, up to 8MB).
+              These are shared securely with the trip coordinator only.
+            </p>
+
+            <FileField
+              label="Passport"
+              testid="microsite-doc-passport"
+              file={passport}
+              alreadyUploaded={hasPassportDoc}
+              accept={ACCEPT}
+              onChange={pickFile(setPassport)}
+            />
+            <FileField
+              label="Aadhaar"
+              testid="microsite-doc-aadhaar"
+              file={aadhaar}
+              alreadyUploaded={hasAadhaarDoc}
+              accept={ACCEPT}
+              onChange={pickFile(setAadhaar)}
+            />
+
+            <label style={S.consentRow} data-testid="microsite-doc-consent">
+              <input
+                type="checkbox"
+                checked={consent}
+                onChange={(e) => { setConsent(e.target.checked); setError(null); }}
+                style={{ width: 18, height: 18, marginTop: 1, flexShrink: 0 }}
+              />
+              <span style={{ fontSize: 13, color: "#334155", lineHeight: 1.5 }}>
+                I am the parent / legal guardian and I consent to sharing these documents
+                with the school and trip coordinator for this trip.
+              </span>
+            </label>
+
+            {error && (
+              <div style={{ ...S.msg, color: "#dc2626" }} data-testid="microsite-doc-error">
+                <AlertCircle size={16} aria-hidden /> <span>{error}</span>
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, marginTop: 18, flexWrap: "wrap" }}>
+              <button type="submit" disabled={busy} style={{ ...S.primaryBtn, background: accent }} data-testid="microsite-doc-submit">
+                {busy ? "Uploading…" : "Upload documents"}
+              </button>
+              <button type="button" onClick={onClose} disabled={busy} style={S.secondaryBtn}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FileField({ label, testid, file, alreadyUploaded, accept, onChange }) {
+  return (
+    <div style={S.fileField}>
+      <div style={S.fileFieldHead}>
+        <span style={{ fontWeight: 700, fontSize: 14, color: "#0f172a" }}>{label}</span>
+        {(file || alreadyUploaded) && (
+          <span style={S.fileOk}>
+            <CheckCircle2 size={14} aria-hidden /> {file ? "Selected" : "Already uploaded"}
+          </span>
+        )}
+      </div>
+      <input
+        type="file"
+        accept={accept}
+        onChange={onChange}
+        data-testid={testid}
+        style={{ fontSize: 13, width: "100%" }}
+      />
+      {file && <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{file.name}</div>}
+      {!file && alreadyUploaded && (
+        <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>Choose a file to replace the one on record.</div>
+      )}
+    </div>
+  );
+}
+
 const S = {
   wrap: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#f1f5f9" },
   card: { background: "#fff", borderRadius: 16, padding: "36px 32px", maxWidth: 420, textAlign: "center", boxShadow: "0 10px 30px rgba(0,0,0,0.08)" },
@@ -831,20 +991,61 @@ const S = {
   htmlContent: { color: "#1e293b", lineHeight: 1.6, fontSize: 14 },
   docGrid: { display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 190px), 1fr))" },
   docItem: { display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 10, background: "#f0fdf4", color: "#166534", fontSize: 13, fontWeight: 700 },
-  participant: {
+  sectionHeadRow: {
     display: "flex", alignItems: "center", justifyContent: "space-between",
-    padding: "12px 0", borderBottom: "1px solid #e2e8f0", gap: 12,
+    gap: 12, flexWrap: "wrap", marginBottom: 12,
   },
-  verified: { display: "inline-flex", alignItems: "center", gap: 6, color: "#16a34a", fontWeight: 600, fontSize: 14 },
+  uploadBtn: {
+    display: "inline-flex", alignItems: "center", gap: 6,
+    padding: "9px 14px", border: "none", borderRadius: 8, background: "#122647",
+    color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 13,
+  },
   okBanner: {
     display: "flex", alignItems: "center", gap: 8, background: "#f0fdf4",
     color: "#16a34a", padding: "10px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12,
   },
-  btn: {
-    padding: "10px 16px", border: "none", borderRadius: 8, background: "#C89A4E",
-    color: "#122647", fontWeight: 600, cursor: "pointer", fontSize: 14,
-  },
   msg: { display: "flex", alignItems: "center", gap: 8, marginTop: 14, fontSize: 14 },
+  // Document upload modal
+  overlay: {
+    position: "fixed", inset: 0, background: "rgba(15,23,42,0.55)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    padding: 16, zIndex: 1000,
+  },
+  modal: {
+    background: "#fff", borderRadius: 16, padding: "22px 24px 24px",
+    width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto",
+    boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+  },
+  modalHead: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    gap: 12, marginBottom: 4,
+  },
+  closeBtn: {
+    display: "inline-flex", alignItems: "center", justifyContent: "center",
+    width: 32, height: 32, border: "none", borderRadius: 8, background: "#f1f5f9",
+    color: "#475569", cursor: "pointer",
+  },
+  fileField: {
+    border: "1px solid #e2e8f0", borderRadius: 10, padding: 12, marginTop: 12,
+    background: "#f8fafc",
+  },
+  fileFieldHead: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    gap: 8, marginBottom: 8,
+  },
+  fileOk: { display: "inline-flex", alignItems: "center", gap: 5, color: "#16a34a", fontWeight: 600, fontSize: 12 },
+  consentRow: {
+    display: "flex", alignItems: "flex-start", gap: 10, marginTop: 16,
+    padding: 12, border: "1px solid #e2e8f0", borderRadius: 10, cursor: "pointer",
+  },
+  primaryBtn: {
+    padding: "10px 18px", border: "none", borderRadius: 8, background: "#122647",
+    color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 14,
+  },
+  secondaryBtn: {
+    padding: "10px 18px", border: "1px solid #cbd5e1", borderRadius: 8,
+    background: "#fff", color: "#475569", fontWeight: 600, cursor: "pointer", fontSize: 14,
+  },
   brandFooter: {
     background: "#fff",
     borderRadius: 14,

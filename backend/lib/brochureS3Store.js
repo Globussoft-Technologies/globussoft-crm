@@ -28,16 +28,24 @@ function isTenantKey(tenantId, fileKey, category) {
   return typeof fileKey === 'string' && fileKey.startsWith(prefix);
 }
 
-async function uploadBrochurePdf(tenantId, runId, pdfBuffer) {
+function runFileName(runId, ext) {
+  const safeRunId = String(runId).replace(/[^a-zA-Z0-9_-]/g, '');
+  const safeExt = String(ext || 'pdf').replace(/[^a-z0-9]/gi, '');
+  return `${safeRunId}.${safeExt}`;
+}
+
+async function uploadBrochureArtifact(tenantId, runId, buffer, ext, contentType) {
   if (!isEnabled()) throw new Error('S3 not configured');
-  const fileName = `${String(runId).replace(/[^a-zA-Z0-9_-]/g, '')}.pdf`;
-  return s3Service.uploadFile(pdfBuffer, fileName, 'application/pdf', tenantPrefix(tenantId, 'brochures'));
+  const fileName = runFileName(runId, ext);
+  return s3Service.uploadFile(buffer, fileName, contentType, tenantPrefix(tenantId, 'brochures'));
+}
+
+async function uploadBrochurePdf(tenantId, runId, pdfBuffer) {
+  return uploadBrochureArtifact(tenantId, runId, pdfBuffer, 'pdf', 'application/pdf');
 }
 
 async function uploadBrochureHtml(tenantId, runId, htmlBuffer) {
-  if (!isEnabled()) throw new Error('S3 not configured');
-  const fileName = `${String(runId).replace(/[^a-zA-Z0-9_-]/g, '')}.html`;
-  return s3Service.uploadFile(htmlBuffer, fileName, 'text/html', tenantPrefix(tenantId, 'brochures'));
+  return uploadBrochureArtifact(tenantId, runId, htmlBuffer, 'html', 'text/html');
 }
 
 async function uploadBrandImage(tenantId, file) {
@@ -70,11 +78,36 @@ async function deleteBrandImage(tenantId, url) {
   }
 }
 
+function extractBrochureKey(tenantId, url) {
+  if (!isS3Url(url)) return null;
+  const key = s3Service.extractKeyFromUrl(url);
+  if (!key || !isTenantKey(tenantId, key, 'brochures')) return null;
+  return key;
+}
+
+/**
+ * Stream a brochure artifact back from S3. Validates that the URL belongs to
+ * the requesting tenant before streaming so one tenant can't probe another's
+ * S3 keys.
+ * @param {number} tenantId
+ * @param {string} url - Full S3 URL stored on the brochure row
+ * @returns {Promise<{ stream: import('stream').Readable, contentType?: string, contentLength?: number, contentDisposition?: string }>}
+ */
+async function streamBrochure(tenantId, url) {
+  if (!isEnabled()) throw new Error('S3 not configured');
+  const key = extractBrochureKey(tenantId, url);
+  if (!key) throw new Error('Not a valid S3 brochure URL for this tenant');
+  return s3Service.getObjectStream(key);
+}
+
 module.exports = {
   isEnabled,
   isS3Url,
   uploadBrochurePdf,
   uploadBrochureHtml,
+  uploadBrochureArtifact,
   uploadBrandImage,
   deleteBrandImage,
+  streamBrochure,
+  extractBrochureKey,
 };

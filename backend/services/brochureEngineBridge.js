@@ -154,6 +154,7 @@ function startRun({ runId, tenantId, sectorKey, goal, styleKey, brand, models, s
       // orchestrator.run() returns { runId, result: <string> }. For the
       // brochure path that string is shaped like:
       //   "Your document is ready (PDF).\nDownload: /generated/brochure-<id>.pdf"
+      //   "Your document is ready (HTML).\nDownload: /generated/brochure-<id>.html"
       // So we extract the /generated/<file> URL from the body and rewrite
       // it to /api/brochure-assets/<file> — server.js mounts the static
       // dir at BOTH /brochure-assets (legacy, prod-only) and
@@ -162,48 +163,55 @@ function startRun({ runId, tenantId, sectorKey, goal, styleKey, brand, models, s
       // form hit Vite's SPA fallback and rendered the React 404 page
       // (and the "downloaded PDF" was actually that 404 HTML).
       const result = parsed.result;
-      let pdfUrl = null;
+      let fileUrl = null;
+      let artifactFormat = "pdf";
       if (typeof result === "string") {
+        const fmtMatch = result.match(/\((PDF|HTML)\)/i);
         const m = result.match(/\/generated\/([^\s)]+\.(?:pdf|html))/i);
         if (m) {
-          pdfUrl = "/api/brochure-assets/" + m[1];
+          fileUrl = "/api/brochure-assets/" + m[1];
+          // Infer format from the explicit marker, falling back to the file extension
+          // so a future engine message change doesn't mis-upload HTML as PDF.
+          if (fmtMatch) {
+            artifactFormat = fmtMatch[1].toLowerCase();
+          } else if (/\.html?$/i.test(m[1])) {
+            artifactFormat = "html";
+          }
         }
       } else if (result && typeof result.url === "string" && result.url.startsWith("/generated/")) {
         // Fallback if a future engine version returns the structured shape.
-        pdfUrl = "/api/brochure-assets/" + result.url.slice("/generated/".length);
+        artifactFormat = result.format === "html" ? "html" : "pdf";
+        fileUrl = "/api/brochure-assets/" + result.url.slice("/generated/".length);
       }
 
       // If S3 is configured, promote the local file to S3 and remove the staging
       // copy so the server disk doesn't fill up. Failures are logged but never
       // break the run — the local URL remains valid.
-      if (brochureS3Store.isEnabled() && pdfUrl) {
+      if (brochureS3Store.isEnabled() && fileUrl) {
         try {
-          const fileName = pdfUrl.replace("/api/brochure-assets/", "");
-          const pdfPath = path.join(GENERATED_DIR, fileName);
-          const htmlPath = pdfPath.replace(/\.pdf$/i, ".html");
-          const pdfBuffer = await fs.promises.readFile(pdfPath);
-          const htmlExists = await fs.promises
-            .access(htmlPath)
-            .then(() => true)
-            .catch(() => false);
-          const [s3PdfUrl] = await Promise.all([
-            brochureS3Store.uploadBrochurePdf(tenantId, runId, pdfBuffer),
-            htmlExists
-              ? brochureS3Store.uploadBrochureHtml(
-                  tenantId,
-                  runId,
-                  await fs.promises.readFile(htmlPath),
-                )
-              : Promise.resolve(null),
-          ]);
-          pdfUrl = s3PdfUrl;
-          await fs.promises.unlink(pdfPath).catch(() => {});
-          if (htmlExists) await fs.promises.unlink(htmlPath).catch(() => {});
+          const fileName = fileUrl.replace("/api/brochure-assets/", "");
+          const localPath = path.join(GENERATED_DIR, fileName);
+          const buffer = await fs.promises.readFile(localPath);
+          const ext = artifactFormat === "html" ? "html" : "pdf";
+          const contentType = artifactFormat === "html" ? "text/html" : "application/pdf";
+          const s3Url = await brochureS3Store.uploadBrochureArtifact(
+            tenantId,
+            runId,
+            buffer,
+            ext,
+            contentType,
+          );
+          fileUrl = s3Url;
+          await fs.promises.unlink(localPath).catch(() => {});
+          // The engine always writes a companion HTML file; clean it up too.
+          const companionExt = artifactFormat === "html" ? "pdf" : "html";
+          const companionPath = localPath.replace(/\.(pdf|html)$/i, `.${companionExt}`);
+          await fs.promises.unlink(companionPath).catch(() => {});
         } catch (s3Err) {
           console.error(
             "[brochureEngineBridge] S3 upload failed for run",
             runId,
-            "— keeping local PDF:",
+            "— keeping local file:",
             s3Err.message,
           );
         }
@@ -213,7 +221,7 @@ function startRun({ runId, tenantId, sectorKey, goal, styleKey, brand, models, s
         runId: parsed.runId || runId,
         result,
         billedUsd: Number(parsed.billedUsd || 0),
-        pdfUrl,
+        pdfUrl: fileUrl,
       });
     });
   });

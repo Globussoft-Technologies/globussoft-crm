@@ -201,6 +201,34 @@ describe('s3Service — getSignedUrl', () => {
   });
 });
 
+describe('s3Service — getObjectStream', () => {
+  test('calls GetObjectCommand and returns stream + metadata', async () => {
+    const fakeStream = { pipe: vi.fn() };
+    sendMock.mockResolvedValueOnce({
+      Body: fakeStream,
+      ContentType: 'application/pdf',
+      ContentLength: 1234,
+      ContentDisposition: 'attachment; filename="x.pdf"',
+      LastModified: new Date('2026-01-01'),
+    });
+    const out = await s3.getObjectStream('brochures/1/br_abc.pdf');
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    const cmd = sendMock.mock.calls[0][0];
+    expect(cmd).toBeInstanceOf(clientS3.GetObjectCommand);
+    expect(cmd.input.Bucket).toBe('test-bucket');
+    expect(cmd.input.Key).toBe('brochures/1/br_abc.pdf');
+    expect(out.stream).toBe(fakeStream);
+    expect(out.contentType).toBe('application/pdf');
+    expect(out.contentLength).toBe(1234);
+    expect(out.contentDisposition).toBe('attachment; filename="x.pdf"');
+  });
+
+  test('wraps S3 errors in a "Failed to fetch" message', async () => {
+    sendMock.mockRejectedValueOnce(new Error('NoSuchKey'));
+    await expect(s3.getObjectStream('missing.pdf')).rejects.toThrow(/Failed to fetch file from S3: NoSuchKey/);
+  });
+});
+
 describe('s3Service — extractKeyFromUrl', () => {
   test('extracts key from a full S3 URL matching the base', () => {
     const url = 'https://test-bucket.s3.us-east-1.amazonaws.com/avatars/123-photo.jpg';

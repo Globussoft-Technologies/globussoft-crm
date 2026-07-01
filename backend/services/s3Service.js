@@ -6,7 +6,7 @@
  * should use this service.
  *
  * Exported functions:
- *   uploadFile(fileBuffer, fileName, mimeType, subfolder)
+ *   uploadFile(fileBody, fileName, mimeType, subfolder)
  *   uploadImage(fileBuffer, fileName, mimeType, subfolder)
  *   deleteFile(fileKey)
  *   getSignedUrl(fileKey, expiresIn)
@@ -43,14 +43,14 @@ if (!BUCKET_NAME) {
 
 /**
  * Upload a file to S3
- * @param {Buffer} fileBuffer - The file content as buffer
+ * @param {Buffer|import('stream').Readable} fileBody - File content as buffer or readable stream
  * @param {string} fileName - Original filename
  * @param {string} mimeType - MIME type (e.g. 'image/jpeg')
  * @param {string} subfolder - Subfolder in bucket (e.g. 'avatars', 'prescriptions')
  * @returns {Promise<string>} - Full S3 URL of uploaded file
  */
 async function uploadFile(
-  fileBuffer,
+  fileBody,
   fileName,
   mimeType,
   subfolder = "uploads",
@@ -71,7 +71,7 @@ async function uploadFile(
   const command = new PutObjectCommand({
     Bucket: BUCKET_NAME,
     Key: fileKey,
-    Body: fileBuffer,
+    Body: fileBody,
     ContentType: mimeType,
   });
 
@@ -163,6 +163,37 @@ async function getSignedUrl(fileKey, expiresIn = 3600) {
 }
 
 /**
+ * Stream an object from S3. Useful when the backend wants to proxy a private
+ * object to a client without making the bucket world-readable.
+ * @param {string} fileKey - S3 file key
+ * @returns {Promise<{ stream: import('stream').Readable, contentType?: string, contentLength?: number, contentDisposition?: string, lastModified?: Date }>}
+ */
+async function getObjectStream(fileKey) {
+  if (!BUCKET_NAME) {
+    throw new Error("S3 bucket not configured.");
+  }
+
+  const command = new GetObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: fileKey,
+  });
+
+  try {
+    const response = await s3Client.send(command);
+    return {
+      stream: response.Body,
+      contentType: response.ContentType,
+      contentLength: response.ContentLength,
+      contentDisposition: response.ContentDisposition,
+      lastModified: response.LastModified,
+    };
+  } catch (error) {
+    console.error("❌ S3 getObject error:", error.message);
+    throw new Error(`Failed to fetch file from S3: ${error.message}`);
+  }
+}
+
+/**
  * Extract S3 key from full S3 URL
  * @param {string} s3Url - Full S3 URL
  * @returns {string} - S3 key
@@ -180,6 +211,7 @@ module.exports = {
   uploadImage,
   deleteFile,
   getSignedUrl,
+  getObjectStream,
   extractKeyFromUrl,
   s3Client,
   BUCKET_NAME,

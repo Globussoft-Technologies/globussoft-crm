@@ -13,6 +13,7 @@
  */
 
 const express = require("express");
+const fs = require("fs");
 const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 const {
@@ -113,12 +114,14 @@ router.post(
   uploadDocumentSingle,
   validateDocument,
   async (req, res) => {
+    let file = req.file;
     try {
-      const file = req.file;
+      // Multer stores documents on disk so large files don't fill heap.
+      const buffer = await fs.promises.readFile(file.path);
 
       // Upload to S3
       const fileUrl = await uploadFile(
-        file.buffer,
+        buffer,
         file.originalname,
         file.mimetype,
         "documents"
@@ -136,6 +139,10 @@ router.post(
       res.status(500).json({
         error: error.message || "Failed to upload document",
       });
+    } finally {
+      if (file?.path) {
+        await fs.promises.unlink(file.path).catch(() => {});
+      }
     }
   }
 );
@@ -151,18 +158,18 @@ router.post(
   uploadDocumentMultiple,
   validateDocuments,
   async (req, res) => {
+    const files = req.files || [];
     try {
-      const files = req.files;
-
       // Upload all files to S3 in parallel
-      const uploadPromises = files.map((file) =>
-        uploadFile(
-          file.buffer,
+      const uploadPromises = files.map(async (file) => {
+        const buffer = await fs.promises.readFile(file.path);
+        return uploadFile(
+          buffer,
           file.originalname,
           file.mimetype,
           "documents"
-        )
-      );
+        );
+      });
 
       const urls = await Promise.all(uploadPromises);
 
@@ -180,6 +187,12 @@ router.post(
       res.status(500).json({
         error: error.message || "Failed to upload documents",
       });
+    } finally {
+      await Promise.all(
+        files
+          .filter((f) => f.path)
+          .map((f) => fs.promises.unlink(f.path).catch(() => {}))
+      );
     }
   }
 );

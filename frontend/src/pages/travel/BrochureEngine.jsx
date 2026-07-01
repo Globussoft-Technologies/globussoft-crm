@@ -57,6 +57,16 @@ function normalizeBrochureUrl(url) {
   return url;
 }
 
+// Auth-gated download/view proxy. This avoids relying on the S3 bucket being
+// world-readable and guarantees a sensible Content-Disposition filename.
+// ?inline=1 displays the file in the browser (used by "Open"); default is
+// attachment (used by "Download").
+function brochureProxyUrl(brochureId, { inline = false } = {}) {
+  if (!brochureId) return '';
+  const qs = inline ? '?inline=1' : '';
+  return `/api/travel/brochures/${encodeURIComponent(brochureId)}/download${qs}`;
+}
+
 // Ready-made prompts — clicking a chip pastes the full brief into the input box.
 const PROMPT_BRIEFS = [
   `Create a luxury travel brochure for my agency.
@@ -981,10 +991,10 @@ export default function BrochureEngine() {
                       {result.billedUsd != null && <span style={costBadge}>${Number(result.billedUsd).toFixed(4)}</span>}
                       {result.pdfUrl ? (
                         <>
-                          <a href={result.pdfUrl} target="_blank" rel="noopener noreferrer" style={{ ...secondaryBtn, marginLeft: 'auto', textDecoration: 'none' }} data-testid="brochure-open">
+                          <a href={brochureProxyUrl(activeBrochureIdRef.current, { inline: true })} target="_blank" rel="noopener noreferrer" style={{ ...secondaryBtn, marginLeft: 'auto', textDecoration: 'none' }} data-testid="brochure-open">
                             <ExternalLink size={14} /> Open
                           </a>
-                          <a href={result.pdfUrl} download style={{ ...secondaryBtn, textDecoration: 'none' }} data-testid="brochure-download">
+                          <a href={brochureProxyUrl(activeBrochureIdRef.current)} download style={{ ...secondaryBtn, textDecoration: 'none' }} data-testid="brochure-download">
                             <Download size={14} /> Download
                           </a>
                         </>
@@ -1045,8 +1055,8 @@ export default function BrochureEngine() {
                       <td style={td}>{row.billedUsd != null ? `$${Number(row.billedUsd).toFixed(4)}` : '—'}</td>
                       <td style={td}>
                         <div style={{ display: 'flex', gap: 4 }}>
-                          {row.pdfUrl && <a href={normalizeBrochureUrl(row.pdfUrl)} target="_blank" rel="noopener noreferrer" style={iconBtn} title="Open PDF"><ExternalLink size={14} /></a>}
-                          {row.pdfUrl && <a href={normalizeBrochureUrl(row.pdfUrl)} download style={iconBtn} title="Download"><Download size={14} /></a>}
+                          {row.pdfUrl && <a href={brochureProxyUrl(row.id, { inline: true })} target="_blank" rel="noopener noreferrer" style={iconBtn} title="Open PDF"><ExternalLink size={14} /></a>}
+                          {row.pdfUrl && <a href={brochureProxyUrl(row.id)} download style={iconBtn} title="Download"><Download size={14} /></a>}
                           <button type="button" onClick={() => handleArchive(row)} style={iconBtn} title="Archive"><Trash2 size={14} /></button>
                         </div>
                       </td>

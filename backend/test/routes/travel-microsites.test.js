@@ -1065,3 +1065,249 @@ describe('GET /api/travel/microsites/public/:publicUuid/full (token-gated PII)',
     expect(prisma.tripParticipant.findMany).not.toHaveBeenCalled();
   });
 });
+
+// ─── Document upload (PUBLIC, draftToken-scoped) ─────────────────────
+//
+// POST /microsites/public/:publicUuid/documents
+// Parent-facing document capture (Passport + Aadhaar + parent consent).
+// The uploader is identified ONLY by draftToken; no participant list shown.
+// Files stored via visaDocStore (S3 when configured, gated disk fallback).
+describe('Travel microsites API — document upload (public)', () => {
+  test('missing draftToken → 400 MISSING_TOKEN', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
+    });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('consent', 'true')
+      .expect(400);
+
+    expect(res.body.code).toBe('MISSING_TOKEN');
+  });
+
+  test('bogus draftToken → 404 DRAFT_NOT_FOUND', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'bogus-token')
+      .field('consent', 'true')
+      .expect(404);
+
+    expect(res.body.code).toBe('DRAFT_NOT_FOUND');
+  });
+
+  test('draft for wrong trip → 403 DRAFT_WRONG_TRIP', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 10, tripId: 999, // Wrong trip!
+      draftTokenExpiresAt: new Date(Date.now() + 3600_000),
+      extrasJson: null,
+    });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'token-for-trip-999')
+      .field('consent', 'true')
+      .expect(403);
+
+    expect(res.body.code).toBe('DRAFT_WRONG_TRIP');
+  });
+
+  test('expired draft → 400 DRAFT_EXPIRED', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 10, tripId: 100,
+      draftTokenExpiresAt: new Date(Date.now() - 1000), // Expired!
+      extrasJson: null,
+    });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'expired-token')
+      .field('consent', 'true')
+      .expect(400);
+
+    expect(res.body.code).toBe('DRAFT_EXPIRED');
+  });
+
+  test('missing consent → 400 CONSENT_REQUIRED', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 10, tripId: 100,
+      draftTokenExpiresAt: new Date(Date.now() + 3600_000),
+      extrasJson: null,
+    });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'ok-token')
+      .field('consent', 'false') // Explicit false
+      .expect(400);
+
+    expect(res.body.code).toBe('CONSENT_REQUIRED');
+  });
+
+  test('missing both files → 400 MISSING_FILES', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 10, tripId: 100,
+      draftTokenExpiresAt: new Date(Date.now() + 3600_000),
+      extrasJson: null, // No prior docs
+    });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'ok-token')
+      .field('consent', 'true')
+      // No files attached
+      .expect(400);
+
+    expect(res.body.code).toBe('MISSING_FILES');
+  });
+
+  test('invalid file type → 400 INVALID_FILE (multer rejection)', async () => {
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'ok-token')
+      .field('consent', 'true')
+      .attach('passport', Buffer.from('not pdf'), 'test.exe') // Invalid type
+      .expect(400);
+
+    expect(res.body.code).toBe('INVALID_FILE');
+  });
+
+  test('file too large → 400 INVALID_FILE (size limit)', async () => {
+    // Create a buffer > 8MB
+    const hugeBuffer = Buffer.alloc(9 * 1024 * 1024);
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'ok-token')
+      .field('consent', 'true')
+      .attach('passport', hugeBuffer, 'huge.pdf')
+      .expect(400);
+
+    expect(res.body.code).toBe('INVALID_FILE');
+  });
+
+  test('garbage UUID → 400 INVALID_UUID', async () => {
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/not-a-uuid/documents`)
+      .field('draftToken', 'ok-token')
+      .field('consent', 'true')
+      .expect(400);
+
+    expect(res.body.code).toBe('INVALID_UUID');
+  });
+
+  test('unknown microsite → 404 NOT_FOUND', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'ok-token')
+      .field('consent', 'true')
+      .expect(404);
+
+    expect(res.body.code).toBe('NOT_FOUND');
+  });
+
+  test('happy path: both files + consent → 200 with doc status booleans', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 10, tripId: 100,
+      draftTokenExpiresAt: new Date(Date.now() + 3600_000),
+      extrasJson: null, // No prior docs
+    });
+    prisma.pendingTripRegistration.update.mockResolvedValue({
+      id: 10, extrasJson: '{"documents":{"passport":{"storage":"s3","url":"..."},"aadhaar":{"storage":"s3","url":"..."},"consentCapturedAt":"2026-07-01T..."}}',
+    });
+
+    const passportBuffer = Buffer.from('PDF%PDF-1.4...');
+    const aadhaarBuffer = Buffer.from('PNG\x89PNG\r\n...');
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'ok-token')
+      .field('consent', 'true')
+      .attach('passport', passportBuffer, 'passport.pdf')
+      .attach('aadhaar', aadhaarBuffer, 'aadhaar.png')
+      .expect(200);
+
+    expect(res.body.ok).toBe(true);
+    expect(res.body.documents).toMatchObject({
+      passport: true,
+      aadhaar: true,
+      consentCapturedAt: expect.any(String),
+    });
+    // Verify the draft was updated with the new docs
+    expect(prisma.pendingTripRegistration.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 10 },
+        data: expect.objectContaining({
+          extrasJson: expect.stringContaining('"documents"'),
+        }),
+      }),
+    );
+  });
+
+  test('re-upload one file while one exists → happy path, both present', async () => {
+    // Simulate a draft that already has passport but not aadhaar
+    const existingExtras = JSON.stringify({
+      documents: {
+        passport: { storage: 's3', url: 'https://...', key: 'visa-docs/...' },
+        consentCapturedAt: '2026-07-01T00:00:00.000Z',
+      },
+    });
+
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 10, tripId: 100,
+      draftTokenExpiresAt: new Date(Date.now() + 3600_000),
+      extrasJson: existingExtras,
+    });
+    prisma.pendingTripRegistration.update.mockResolvedValue({
+      id: 10, extrasJson: JSON.stringify({
+        documents: {
+          passport: { storage: 's3', url: 'https://...' },
+          aadhaar: { storage: 's3', url: 'https://...', uploadedAt: '2026-07-01T...' },
+          consentCapturedAt: '2026-07-01T...',
+        },
+      }),
+    });
+
+    const aadhaarBuffer = Buffer.from('PNG\x89PNG\r\n...');
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'ok-token')
+      .field('consent', 'true')
+      .attach('aadhaar', aadhaarBuffer, 'aadhaar.png')
+      // No passport file — it's already on record
+      .expect(200);
+
+    expect(res.body.ok).toBe(true);
+    expect(res.body.documents).toMatchObject({
+      passport: true, // Carried over from prior upload
+      aadhaar: true,  // Newly uploaded
+      consentCapturedAt: expect.any(String),
+    });
+  });
+});

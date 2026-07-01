@@ -241,13 +241,20 @@ test.describe('Hybrid registration flow — happy path', () => {
     expect(row.draftToken).toBeUndefined();
   });
 
-  test('6) Phase 5 — admin cannot approve a DRAFT (returns 409 INVALID_STATE)', async ({ request }) => {
+  test('6) Phase 5 — admin can approve a DRAFT (relaxed gate)', async ({ request }) => {
     test.skip(!pendingRegistrationId, 'no pending registration available');
     const r = await post(request, travelAdminToken, `/api/travel/trips/${tripId}/registrations/${pendingRegistrationId}/approve`, {});
-    expect(r.status()).toBe(409);
+    expect(r.status()).toBe(200);
     const body = await r.json();
-    expect(body.code).toBe('INVALID_STATE');
-    expect(body.currentStatus).toBe('DRAFT');
+    expect(body.approved).toBe(true);
+    expect(body.registration.status).toBe('CONVERTED');
+    expect(body.participant).toBeTruthy();
+    // Once converted, the draft is terminal and cannot be re-approved.
+    const re = await post(request, travelAdminToken, `/api/travel/trips/${tripId}/registrations/${pendingRegistrationId}/approve`, {});
+    expect(re.status()).toBe(409);
+    const rebody = await re.json();
+    expect(rebody.code).toBe('INVALID_STATE');
+    expect(rebody.currentStatus).toBe('CONVERTED');
   });
 
   test('7) Phase 4 — verify-otp with bogus draftToken returns 404 DRAFT_NOT_FOUND (decision #9)', async ({ request }) => {

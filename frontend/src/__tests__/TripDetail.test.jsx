@@ -1601,18 +1601,22 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     expect(screen.getByText(/AWAITING REVIEW/)).toBeInTheDocument();
   });
 
-  it('shows "X awaiting review" count next to participants total', async () => {
+  it('shows "X pending registrations" count next to participants total', async () => {
     installFetchMock({
-      pendingRegs: [makePendingReg(), makePendingReg({ id: 9002, status: 'OTP_VERIFIED', studentName: 'Priya' })],
+      pendingRegs: [
+        makePendingReg(),
+        makePendingReg({ id: 9002, status: 'OTP_VERIFIED', studentName: 'Priya' }),
+        makePendingReg({ id: 9003, status: 'DRAFT', studentName: 'Sara' }),
+      ],
     });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
-    const counter = await screen.findByTestId('awaiting-review-count');
-    expect(counter.textContent).toMatch(/2 awaiting review/);
+    const counter = await screen.findByTestId('pending-regs-count');
+    expect(counter.textContent).toMatch(/3 pending registrations/);
   });
 
-  it('DRAFT registration shows "Awaiting verification" pill with no action buttons', async () => {
+  it('DRAFT registration shows "Awaiting verification" pill with Approve and Reject buttons', async () => {
     installFetchMock({
       pendingRegs: [makePendingReg({ id: 9003, status: 'DRAFT', studentName: 'Sara' })],
     });
@@ -1621,9 +1625,9 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Sara');
     expect(screen.getByText(/AWAITING VERIFICATION/)).toBeInTheDocument();
-    // No approve button (DRAFT can't be approved — only OTP_VERIFIED can)
-    expect(screen.queryByTestId('approve-registration-9003')).not.toBeInTheDocument();
-    // Reject IS available (operator can dismiss un-verified spam)
+    // Approve is now available for DRAFT registrations (OTP gate relaxed)
+    expect(screen.getByTestId('approve-registration-9003')).toBeInTheDocument();
+    // Reject is still available
     expect(screen.getByTestId('reject-registration-9003')).toBeInTheDocument();
   });
 
@@ -1710,7 +1714,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Anaya Sharma'); // existing participant still shows
     expect(screen.queryByTestId('pending-registrations-list')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('awaiting-review-count')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pending-regs-count')).not.toBeInTheDocument();
   });
 });
 

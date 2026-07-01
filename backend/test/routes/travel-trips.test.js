@@ -1455,22 +1455,43 @@ describe('POST /api/travel/trips/:id/registrations/:rid/approve', () => {
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
-  test('DRAFT (no OTP yet) cannot be approved → 409 INVALID_STATE', async () => {
+  test('DRAFT (no OTP yet) can be approved — OTP gate relaxed for operator approvals', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
     prisma.pendingTripRegistration.findFirst.mockResolvedValue({
       id: 9001, tripId: 100, tenantId: 1, status: 'DRAFT',
+      studentName: 'Sara No-Otp', parentName: 'Meera No-Otp',
+      parentEmail: 'meera@example.com', parentPhone: '+919876543210',
     });
+    prisma.tripParticipant.create.mockResolvedValue({
+      id: 4243, tripId: 100, fullName: 'Sara No-Otp',
+      applicationStatus: 'approved',
+    });
+    prisma.pendingTripRegistration.update.mockResolvedValue({
+      id: 9001, status: 'CONVERTED', convertedToParticipantId: 4243,
+    });
+
     const res = await request(makeApp())
       .post('/api/travel/trips/100/registrations/9001/approve')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
       .send({});
-    expect(res.status).toBe(409);
+
+    expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
-      code: 'INVALID_STATE',
-      currentStatus: 'DRAFT',
+      approved: true,
+      participant: { id: 4243, applicationStatus: 'approved' },
+      registration: { id: 9001, status: 'CONVERTED', convertedToParticipantId: 4243 },
     });
-    expect(prisma.tripParticipant.create).not.toHaveBeenCalled();
-    expect(prisma.pendingTripRegistration.update).not.toHaveBeenCalled();
+    expect(prisma.tripParticipant.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tripId: 100,
+        fullName: 'Sara No-Otp',
+        applicationStatus: 'approved',
+      }),
+    });
+    expect(prisma.pendingTripRegistration.update).toHaveBeenCalledWith({
+      where: { id: 9001 },
+      data: expect.objectContaining({ status: 'CONVERTED', convertedToParticipantId: 4243 }),
+    });
   });
 
   test('CONVERTED draft cannot be re-approved → 409 INVALID_STATE', async () => {

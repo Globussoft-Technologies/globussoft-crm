@@ -672,3 +672,67 @@ test.describe("Travel microsites API — Aadhaar verification (public)", () => {
     expect((await res.json()).code).toBe("INVALID_UUID");
   });
 });
+
+// ─── Public document upload (Passport + Aadhaar + parent consent) ────
+//
+// Draft-scoped: the uploader is identified ONLY by the draftToken they
+// arrive with from the landing-page registration — there is no public
+// participant list, so one family can never see or touch another's data.
+// This spec pins the reachable contract error paths (invalid UUID /
+// unknown microsite / missing + bogus token) + the openPath reachability.
+// The happy-path multipart store is covered by the frontend RTL suite +
+// backend/test visaDocStore unit tests, since minting a real draftToken
+// here would require driving the whole landing-page registration flow.
+const DOCUMENTS_PUBLIC = (uuid) => `${BASE_URL}/api/travel/microsites/public/${uuid}/documents`;
+
+test.describe("Travel microsites API — document upload (public)", () => {
+  test("garbage UUID → 400 INVALID_UUID", async ({ request }) => {
+    const res = await request.post(DOCUMENTS_PUBLIC("not-a-uuid"), {
+      multipart: { draftToken: "x", consent: "true" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_UUID");
+  });
+
+  test("unknown microsite → 404 NOT_FOUND", async ({ request }) => {
+    const res = await request.post(
+      DOCUMENTS_PUBLIC("00000000-0000-0000-0000-000000000000"),
+      { multipart: { draftToken: "x", consent: "true" }, timeout: REQUEST_TIMEOUT },
+    );
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("NOT_FOUND");
+  });
+
+  test("valid microsite, missing draftToken → 400 MISSING_TOKEN", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const res = await request.post(DOCUMENTS_PUBLIC(micrositeUuid), {
+      multipart: { consent: "true" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_TOKEN");
+  });
+
+  test("valid microsite, bogus draftToken → 404 DRAFT_NOT_FOUND", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const res = await request.post(DOCUMENTS_PUBLIC(micrositeUuid), {
+      multipart: { draftToken: `ghost-${Date.now()}`, consent: "true" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("DRAFT_NOT_FOUND");
+  });
+
+  test("route is publicly reachable — no Authorization header yields a contract error, never 401", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const res = await request.post(DOCUMENTS_PUBLIC(micrositeUuid), {
+      multipart: { draftToken: `ghost-${Date.now()}`, consent: "true" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    // A 404 DRAFT_NOT_FOUND (not 401) proves the openPath allowlist covers
+    // this endpoint — it's reached without any token.
+    expect([400, 404]).toContain(res.status());
+    expect(res.status()).not.toBe(401);
+  });
+});

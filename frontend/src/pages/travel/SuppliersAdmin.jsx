@@ -19,7 +19,19 @@
 // honors the #829 permission-denied vs no-rows distinction.
 
 import { useEffect, useState, useContext, Fragment } from "react";
-import { Building2, Plus, Pencil, Trash2, ChevronDown, ChevronRight, CheckCircle2, XCircle, Wallet, BarChart3, AlertTriangle } from "lucide-react";
+import {
+  Building2,
+  Plus,
+  Pencil,
+  Trash2,
+  ChevronDown,
+  ChevronRight,
+  CheckCircle2,
+  XCircle,
+  Wallet,
+  BarChart3,
+  AlertTriangle,
+} from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { usePermissions } from "../../hooks/usePermissions";
@@ -107,7 +119,10 @@ const CURRENCY_SYMBOL = {
 // PUT status='paid' auto-sets paidAt=now() server-side; no client-side dance
 // required.
 const PAYABLE_STATUS_STYLE = {
-  pending: { bg: "rgba(245, 158, 11, 0.18)", fg: "var(--warning-color, #f59e0b)" },
+  pending: {
+    bg: "rgba(245, 158, 11, 0.18)",
+    fg: "var(--warning-color, #f59e0b)",
+  },
   scheduled: { bg: "rgba(59, 130, 246, 0.18)", fg: "#3b82f6" },
   paid: { bg: "rgba(34, 197, 94, 0.18)", fg: "var(--success-color, #22c55e)" },
   cancelled: { bg: "rgba(148, 163, 184, 0.18)", fg: "var(--text-secondary)" },
@@ -126,11 +141,36 @@ const PAYABLE_STATUS_STYLE = {
 // numbers shift slowly enough that the operator can refresh by reloading
 // the page when they want fresh data).
 const AGING_BUCKETS = [
-  { key: "current", label: "Current",   bg: "rgba(34, 197, 94, 0.18)",  fg: "var(--success-color, #22c55e)" }, // green
-  { key: "1-30",    label: "1-30 days", bg: "rgba(234, 179, 8, 0.18)",  fg: "#eab308" },                       // yellow
-  { key: "31-60",   label: "31-60 days",bg: "rgba(249, 115, 22, 0.18)", fg: "#f97316" },                       // orange
-  { key: "61-90",   label: "61-90 days",bg: "rgba(244, 63, 94, 0.18)",  fg: "var(--danger-color, #f43f5e)" },  // red
-  { key: "90+",     label: "90+ days",  bg: "rgba(127, 29, 29, 0.28)",  fg: "#dc2626" },                       // dark red
+  {
+    key: "current",
+    label: "Current",
+    bg: "rgba(34, 197, 94, 0.18)",
+    fg: "var(--success-color, #22c55e)",
+  }, // green
+  {
+    key: "1-30",
+    label: "1-30 days",
+    bg: "rgba(234, 179, 8, 0.18)",
+    fg: "#eab308",
+  }, // yellow
+  {
+    key: "31-60",
+    label: "31-60 days",
+    bg: "rgba(249, 115, 22, 0.18)",
+    fg: "#f97316",
+  }, // orange
+  {
+    key: "61-90",
+    label: "61-90 days",
+    bg: "rgba(244, 63, 94, 0.18)",
+    fg: "var(--danger-color, #f43f5e)",
+  }, // red
+  {
+    key: "90+",
+    label: "90+ days",
+    bg: "rgba(127, 29, 29, 0.28)",
+    fg: "#dc2626",
+  }, // dark red
 ];
 
 // PRD_TRAVEL_SUPPLIER_MASTER #903 slice 12 — Credit Exposure panel.
@@ -151,10 +191,26 @@ const AGING_BUCKETS = [
 // filters drive this panel (same as the aging panel) so the operator sees
 // one consistent slice.
 const EXPOSURE_STATUS_STYLE = {
-  ok:           { bg: "rgba(34, 197, 94, 0.18)",  fg: "var(--success-color, #22c55e)", label: "OK" },
-  "near-limit": { bg: "rgba(245, 158, 11, 0.20)", fg: "var(--warning-color, #f59e0b)", label: "Near limit" },
-  "over-limit": { bg: "rgba(244, 63, 94, 0.20)",  fg: "var(--danger-color, #f43f5e)",  label: "Over limit" },
-  "no-limit":   { bg: "rgba(148, 163, 184, 0.18)",fg: "var(--text-secondary)",         label: "No limit" },
+  ok: {
+    bg: "rgba(34, 197, 94, 0.18)",
+    fg: "var(--success-color, #22c55e)",
+    label: "OK",
+  },
+  "near-limit": {
+    bg: "rgba(245, 158, 11, 0.20)",
+    fg: "var(--warning-color, #f59e0b)",
+    label: "Near limit",
+  },
+  "over-limit": {
+    bg: "rgba(244, 63, 94, 0.20)",
+    fg: "var(--danger-color, #f43f5e)",
+    label: "Over limit",
+  },
+  "no-limit": {
+    bg: "rgba(148, 163, 184, 0.18)",
+    fg: "var(--text-secondary)",
+    label: "No limit",
+  },
 };
 
 // Slice-4 add-payable form initial state. Empty strings normalise to null
@@ -213,7 +269,10 @@ export default function SuppliersAdmin() {
   const { activeSubBrand } = useActiveSubBrand();
   // G102: BrandKit lookup for primary-CTA tint.
   const { brandKit } = useBrandKit(activeSubBrand);
-  const primaryBtnBranded = { ...primaryBtn, background: brandPrimaryColor(brandKit) };
+  const primaryBtnBranded = {
+    ...primaryBtn,
+    background: brandPrimaryColor(brandKit),
+  };
   const myBrands = accessibleSubBrands(user);
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
 
@@ -241,9 +300,9 @@ export default function SuppliersAdmin() {
   // collapse churn.
   const [expandedSupplierId, setExpandedSupplierId] = useState(null);
   const [payablesBySupplier, setPayablesBySupplier] = useState({}); // { [supplierId]: [rows] }
-  const [payablesLoadingBy, setPayablesLoadingBy] = useState({});   // { [supplierId]: bool }
-  const [payableForm, setPayableForm] = useState({});               // { [supplierId]: form }
-  const [payableSaving, setPayableSaving] = useState({});           // { [supplierId]: bool }
+  const [payablesLoadingBy, setPayablesLoadingBy] = useState({}); // { [supplierId]: bool }
+  const [payableForm, setPayableForm] = useState({}); // { [supplierId]: form }
+  const [payableSaving, setPayableSaving] = useState({}); // { [supplierId]: bool }
   // Mark-as-paid confirmation dialog state.
   const [pendingPay, setPendingPay] = useState(null); // { supplierId, payable } | null
   const [payRefInput, setPayRefInput] = useState("");
@@ -313,7 +372,9 @@ export default function SuppliersAdmin() {
         // permission-denied empty state — duplicating it on the aging panel
         // would be noisy). All other failures get a notify.error.
         if (err?.status !== 403) {
-          notify.error(err?.body?.error || err?.message || "Failed to load payables aging");
+          notify.error(
+            err?.body?.error || err?.message || "Failed to load payables aging",
+          );
         }
       })
       .finally(() => setAgingLoading(false));
@@ -343,7 +404,11 @@ export default function SuppliersAdmin() {
         // 403 silently absorbed — the main suppliers-list permissionDenied
         // empty state is the canonical surface for that case.
         if (err?.status !== 403) {
-          notify.error(err?.body?.error || err?.message || "Failed to load credit exposure");
+          notify.error(
+            err?.body?.error ||
+              err?.message ||
+              "Failed to load credit exposure",
+          );
         }
       })
       .finally(() => setExposureLoading(false));
@@ -357,7 +422,10 @@ export default function SuppliersAdmin() {
   };
 
   const openCreate = () => {
-    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
+    setForm({
+      ...EMPTY_FORM,
+      subBrand: defaultSubBrandFor(user, activeSubBrand),
+    });
     setEditingId(null);
     setShowForm(true);
   };
@@ -375,7 +443,8 @@ export default function SuppliersAdmin() {
       // Slice 2 (#903) — prefill the new fields from the row. Coerce
       // numeric DB values back to strings so the controlled <input> stays
       // consistent (empty-string === unset).
-      paymentTermsDays: s.paymentTermsDays != null ? String(s.paymentTermsDays) : "",
+      paymentTermsDays:
+        s.paymentTermsDays != null ? String(s.paymentTermsDays) : "",
       creditLimit: s.creditLimit != null ? String(s.creditLimit) : "",
       creditCurrency: s.creditCurrency || "INR",
       taxRegimeCode: s.taxRegimeCode || "",
@@ -457,7 +526,12 @@ export default function SuppliersAdmin() {
   };
 
   const handleDelete = async (s) => {
-    if (!confirm(`Deactivate supplier "${s.name}"? (Soft-delete: row stays for referential integrity.)`)) return;
+    if (
+      !confirm(
+        `Deactivate supplier "${s.name}"? (Soft-delete: row stays for referential integrity.)`,
+      )
+    )
+      return;
     try {
       await fetchApi(`/api/travel/suppliers/${s.id}`, { method: "DELETE" });
       notify.success(`Supplier "${s.name}" deactivated`);
@@ -480,7 +554,9 @@ export default function SuppliersAdmin() {
       })
       .catch((err) => {
         setPayablesBySupplier((m) => ({ ...m, [supplierId]: [] }));
-        notify.error(err?.body?.error || err?.message || "Failed to load payables");
+        notify.error(
+          err?.body?.error || err?.message || "Failed to load payables",
+        );
       })
       .finally(() => {
         setPayablesLoadingBy((m) => ({ ...m, [supplierId]: false }));
@@ -559,14 +635,19 @@ export default function SuppliersAdmin() {
     if (!pendingPay) return;
     const { supplierId, payable } = pendingPay;
     try {
-      await fetchApi(`/api/travel/suppliers/${supplierId}/payables/${payable.id}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          status: "paid",
-          paymentReference: payRefInput.trim() || undefined,
-        }),
-      });
-      notify.success("Payable marked paid — expense record created automatically");
+      await fetchApi(
+        `/api/travel/suppliers/${supplierId}/payables/${payable.id}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            status: "paid",
+            paymentReference: payRefInput.trim() || undefined,
+          }),
+        },
+      );
+      notify.success(
+        "Payable marked paid — expense record created automatically",
+      );
       setPendingPay(null);
       setPayRefInput("");
       loadPayables(supplierId);
@@ -577,14 +658,19 @@ export default function SuppliersAdmin() {
 
   const handleCancelPayable = async (supplierId, payable) => {
     try {
-      await fetchApi(`/api/travel/suppliers/${supplierId}/payables/${payable.id}`, {
-        method: "PUT",
-        body: JSON.stringify({ status: "cancelled" }),
-      });
+      await fetchApi(
+        `/api/travel/suppliers/${supplierId}/payables/${payable.id}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ status: "cancelled" }),
+        },
+      );
       notify.success("Payable cancelled");
       loadPayables(supplierId);
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Failed to cancel payable");
+      notify.error(
+        err?.body?.error || err?.message || "Failed to cancel payable",
+      );
     }
   };
 
@@ -594,18 +680,30 @@ export default function SuppliersAdmin() {
     );
     if (!ok) return;
     try {
-      await fetchApi(`/api/travel/suppliers/${supplierId}/payables/${payable.id}`, {
-        method: "DELETE",
-      });
+      await fetchApi(
+        `/api/travel/suppliers/${supplierId}/payables/${payable.id}`,
+        {
+          method: "DELETE",
+        },
+      );
       notify.success("Payable deleted");
       loadPayables(supplierId);
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Failed to delete payable");
+      notify.error(
+        err?.body?.error || err?.message || "Failed to delete payable",
+      );
     }
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
+    <div
+      style={{
+        padding: 24,
+        maxWidth: 1200,
+        margin: "0 auto",
+        animation: "fadeIn 0.4s ease-out",
+      }}
+    >
       <header
         style={{
           display: "flex",
@@ -617,11 +715,27 @@ export default function SuppliersAdmin() {
         }}
       >
         <div>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
+          <h1
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              margin: 0,
+              fontSize: "1.75rem",
+              fontWeight: 600,
+            }}
+          >
             <Building2 size={26} aria-hidden /> Travel Suppliers
           </h1>
-          <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.9rem" }}>
-            Master list — Hotel / Flight / Transport / Visa Consul / Other. {total.toLocaleString()} supplier{total === 1 ? "" : "s"}.
+          <p
+            style={{
+              color: "var(--text-secondary)",
+              marginTop: 4,
+              fontSize: "0.9rem",
+            }}
+          >
+            Master list — Hotel / Flight / Transport / Visa Consul / Other.{" "}
+            {total.toLocaleString()} supplier{total === 1 ? "" : "s"}.
           </p>
         </div>
         {canCreate && (
@@ -642,13 +756,40 @@ export default function SuppliersAdmin() {
           flexWrap: "wrap",
         }}
       >
-        <select value={subBrand} onChange={(e) => setSubBrand(e.target.value)} style={selectStyle} aria-label="Filter by sub-brand">
-          {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+        <select
+          value={subBrand}
+          onChange={(e) => setSubBrand(e.target.value)}
+          style={selectStyle}
+          aria-label="Filter by sub-brand"
+        >
+          {SUB_BRANDS.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
         </select>
-        <select value={supplierCategory} onChange={(e) => setSupplierCategory(e.target.value)} style={selectStyle} aria-label="Filter by category">
-          {SUPPLIER_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+        <select
+          value={supplierCategory}
+          onChange={(e) => setSupplierCategory(e.target.value)}
+          style={selectStyle}
+          aria-label="Filter by category"
+        >
+          {SUPPLIER_CATEGORIES.map((c) => (
+            <option key={c.value} value={c.value}>
+              {c.label}
+            </option>
+          ))}
         </select>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-secondary)", cursor: "pointer" }}>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 13,
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+          }}
+        >
           <input
             type="checkbox"
             checked={includeInactive}
@@ -676,7 +817,11 @@ export default function SuppliersAdmin() {
             marginBottom: 12,
           }}
         >
-          <BarChart3 size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
+          <BarChart3
+            size={16}
+            aria-hidden
+            style={{ color: "var(--text-secondary)" }}
+          />
           <strong style={{ fontSize: 13 }}>Payables Aging</strong>
           <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
             Open invoices bucketed by days-overdue.
@@ -684,11 +829,17 @@ export default function SuppliersAdmin() {
         </div>
 
         {agingLoading ? (
-          <div data-testid="aging-loading" style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+          <div
+            data-testid="aging-loading"
+            style={{ fontSize: 13, color: "var(--text-secondary)" }}
+          >
             Loading aging&hellip;
           </div>
         ) : agingError ? (
-          <div data-testid="aging-error" style={{ fontSize: 13, color: "var(--danger-color, #f43f5e)" }}>
+          <div
+            data-testid="aging-error"
+            style={{ fontSize: 13, color: "var(--danger-color, #f43f5e)" }}
+          >
             Failed to load aging report.
           </div>
         ) : (
@@ -697,14 +848,22 @@ export default function SuppliersAdmin() {
               data-testid="aging-bucket-cards"
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(min(100%, 160px), 1fr))",
                 gap: 8,
               }}
             >
               {AGING_BUCKETS.map((b) => {
-                const slot = aging?.bucketTotals?.[b.key] || { count: 0, totalAmount: 0 };
-                const countVal = Number.isFinite(Number(slot.count)) ? Number(slot.count) : 0;
-                const amountVal = Number.isFinite(Number(slot.totalAmount)) ? Number(slot.totalAmount) : 0;
+                const slot = aging?.bucketTotals?.[b.key] || {
+                  count: 0,
+                  totalAmount: 0,
+                };
+                const countVal = Number.isFinite(Number(slot.count))
+                  ? Number(slot.count)
+                  : 0;
+                const amountVal = Number.isFinite(Number(slot.totalAmount))
+                  ? Number(slot.totalAmount)
+                  : 0;
                 return (
                   <div
                     key={b.key}
@@ -720,13 +879,30 @@ export default function SuppliersAdmin() {
                       gap: 4,
                     }}
                   >
-                    <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.85 }}>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.5,
+                        opacity: 0.85,
+                      }}
+                    >
                       {b.label}
                     </div>
-                    <div style={{ fontSize: 18, fontWeight: 700 }} data-testid={`aging-card-amount-${b.key}`}>
-                      ₹{amountVal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                    <div
+                      style={{ fontSize: 18, fontWeight: 700 }}
+                      data-testid={`aging-card-amount-${b.key}`}
+                    >
+                      ₹
+                      {amountVal.toLocaleString("en-IN", {
+                        maximumFractionDigits: 2,
+                      })}
                     </div>
-                    <div style={{ fontSize: 11, opacity: 0.85 }} data-testid={`aging-card-count-${b.key}`}>
+                    <div
+                      style={{ fontSize: 11, opacity: 0.85 }}
+                      data-testid={`aging-card-count-${b.key}`}
+                    >
                       {countVal} payable{countVal === 1 ? "" : "s"}
                     </div>
                   </div>
@@ -747,11 +923,17 @@ export default function SuppliersAdmin() {
               }}
             >
               <span data-testid="aging-grand-total">
-                <strong style={{ color: "var(--text-primary)" }}>Grand total:</strong>{" "}
-                ₹{(Number(aging?.grandTotal) || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                <strong style={{ color: "var(--text-primary)" }}>
+                  Grand total:
+                </strong>{" "}
+                ₹
+                {(Number(aging?.grandTotal) || 0).toLocaleString("en-IN", {
+                  maximumFractionDigits: 2,
+                })}
               </span>
               <span data-testid="aging-excluded-summary">
-                {Number(aging?.excludedCount) || 0} excluded (paid/cancelled/missing dueDate)
+                {Number(aging?.excludedCount) || 0} excluded
+                (paid/cancelled/missing dueDate)
               </span>
             </div>
           </>
@@ -778,7 +960,11 @@ export default function SuppliersAdmin() {
             flexWrap: "wrap",
           }}
         >
-          <AlertTriangle size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
+          <AlertTriangle
+            size={16}
+            aria-hidden
+            style={{ color: "var(--text-secondary)" }}
+          />
           <strong style={{ fontSize: 13 }}>Credit Exposure</strong>
           <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
             Open A/P vs supplier credit limit.
@@ -794,7 +980,9 @@ export default function SuppliersAdmin() {
               cursor: "pointer",
               padding: "4px 8px",
               borderRadius: 12,
-              background: exposureNearLimitOnly ? "rgba(245, 158, 11, 0.18)" : "var(--surface-color)",
+              background: exposureNearLimitOnly
+                ? "rgba(245, 158, 11, 0.18)"
+                : "var(--surface-color)",
               border: "1px solid var(--border-color)",
             }}
             data-testid="exposure-near-limit-chip"
@@ -810,11 +998,17 @@ export default function SuppliersAdmin() {
         </div>
 
         {exposureLoading ? (
-          <div data-testid="exposure-loading" style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+          <div
+            data-testid="exposure-loading"
+            style={{ fontSize: 13, color: "var(--text-secondary)" }}
+          >
             Loading exposure&hellip;
           </div>
         ) : exposureError ? (
-          <div data-testid="exposure-error" style={{ fontSize: 13, color: "var(--danger-color, #f43f5e)" }}>
+          <div
+            data-testid="exposure-error"
+            style={{ fontSize: 13, color: "var(--danger-color, #f43f5e)" }}
+          >
             Failed to load credit exposure.
           </div>
         ) : (
@@ -823,7 +1017,8 @@ export default function SuppliersAdmin() {
               data-testid="exposure-summary-tiles"
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
                 gap: 8,
                 marginBottom: 12,
               }}
@@ -841,13 +1036,29 @@ export default function SuppliersAdmin() {
                   gap: 4,
                 }}
               >
-                <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.85 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.5,
+                    opacity: 0.85,
+                  }}
+                >
                   Over limit
                 </div>
-                <div style={{ fontSize: 18, fontWeight: 700 }} data-testid="exposure-tile-over-limit-count">
+                <div
+                  style={{ fontSize: 18, fontWeight: 700 }}
+                  data-testid="exposure-tile-over-limit-count"
+                >
                   {Number(exposure?.summary?.overLimitCount) || 0}
                 </div>
-                <div style={{ fontSize: 11, opacity: 0.85 }}>supplier{(Number(exposure?.summary?.overLimitCount) || 0) === 1 ? "" : "s"}</div>
+                <div style={{ fontSize: 11, opacity: 0.85 }}>
+                  supplier
+                  {(Number(exposure?.summary?.overLimitCount) || 0) === 1
+                    ? ""
+                    : "s"}
+                </div>
               </div>
               <div
                 data-testid="exposure-tile-near-limit"
@@ -862,13 +1073,29 @@ export default function SuppliersAdmin() {
                   gap: 4,
                 }}
               >
-                <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.85 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.5,
+                    opacity: 0.85,
+                  }}
+                >
                   Near limit
                 </div>
-                <div style={{ fontSize: 18, fontWeight: 700 }} data-testid="exposure-tile-near-limit-count">
+                <div
+                  style={{ fontSize: 18, fontWeight: 700 }}
+                  data-testid="exposure-tile-near-limit-count"
+                >
                   {Number(exposure?.summary?.nearLimitCount) || 0}
                 </div>
-                <div style={{ fontSize: 11, opacity: 0.85 }}>supplier{(Number(exposure?.summary?.nearLimitCount) || 0) === 1 ? "" : "s"}</div>
+                <div style={{ fontSize: 11, opacity: 0.85 }}>
+                  supplier
+                  {(Number(exposure?.summary?.nearLimitCount) || 0) === 1
+                    ? ""
+                    : "s"}
+                </div>
               </div>
               <div
                 data-testid="exposure-tile-total"
@@ -883,23 +1110,44 @@ export default function SuppliersAdmin() {
                   gap: 4,
                 }}
               >
-                <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.85 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.5,
+                    opacity: 0.85,
+                  }}
+                >
                   Total exposure
                 </div>
-                <div style={{ fontSize: 18, fontWeight: 700 }} data-testid="exposure-tile-total-amount">
-                  ₹{(Number(exposure?.summary?.totalExposure) || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                <div
+                  style={{ fontSize: 18, fontWeight: 700 }}
+                  data-testid="exposure-tile-total-amount"
+                >
+                  ₹
+                  {(
+                    Number(exposure?.summary?.totalExposure) || 0
+                  ).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                 </div>
                 <div style={{ fontSize: 11, opacity: 0.85 }}>open A/P</div>
               </div>
             </div>
 
-            {Array.isArray(exposure?.suppliers) && exposure.suppliers.length > 0 ? (
+            {Array.isArray(exposure?.suppliers) &&
+            exposure.suppliers.length > 0 ? (
               <table
                 data-testid="exposure-table"
-                style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
+                style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  fontSize: 13,
+                }}
               >
                 <thead>
-                  <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                  <tr
+                    style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+                  >
                     <th style={payableTh}>Supplier</th>
                     <th style={payableTh}>Category</th>
                     <th style={payableTh}>Credit limit</th>
@@ -911,17 +1159,21 @@ export default function SuppliersAdmin() {
                 <tbody>
                   {exposure.suppliers.map((s) => {
                     const statusKey = s.status || "no-limit";
-                    const style = EXPOSURE_STATUS_STYLE[statusKey] || EXPOSURE_STATUS_STYLE["no-limit"];
+                    const style =
+                      EXPOSURE_STATUS_STYLE[statusKey] ||
+                      EXPOSURE_STATUS_STYLE["no-limit"];
                     const sym = CURRENCY_SYMBOL[s.creditCurrency] || "₹";
                     const limitDisplay =
-                      s.creditLimit != null && Number.isFinite(Number(s.creditLimit))
+                      s.creditLimit != null &&
+                      Number.isFinite(Number(s.creditLimit))
                         ? `${sym}${Number(s.creditLimit).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`
                         : "—";
                     const openDisplay = `${sym}${(Number(s.openExposure) || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
                     // Half-up rounding to 1 decimal place for utilisation %
                     // (backend ships utilisation as a 4dp ratio; display as %).
                     const utilPctRaw =
-                      s.utilization != null && Number.isFinite(Number(s.utilization))
+                      s.utilization != null &&
+                      Number.isFinite(Number(s.utilization))
                         ? Number(s.utilization) * 100
                         : null;
                     const utilDisplay =
@@ -932,22 +1184,39 @@ export default function SuppliersAdmin() {
                       <tr
                         key={s.id}
                         data-testid={`exposure-row-${s.id}`}
-                        style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+                        style={{
+                          borderTop: "1px solid rgba(255,255,255,0.04)",
+                        }}
                       >
                         <td style={payableTd}>
                           <strong>{s.name}</strong>
                           {s.subBrand && (
-                            <span style={{ ...brandBadge, background: SUB_BRAND_BG[s.subBrand] || "rgba(255,255,255,0.08)", marginLeft: 6 }}>
+                            <span
+                              style={{
+                                ...brandBadge,
+                                background:
+                                  SUB_BRAND_BG[s.subBrand] ||
+                                  "rgba(255,255,255,0.08)",
+                                marginLeft: 6,
+                              }}
+                            >
                               {s.subBrand}
                             </span>
                           )}
                         </td>
                         <td style={payableTd}>
-                          <span style={categoryBadge}>{s.supplierCategory || "—"}</span>
+                          <span style={categoryBadge}>
+                            {s.supplierCategory || "—"}
+                          </span>
                         </td>
                         <td style={payableTd}>{limitDisplay}</td>
                         <td style={payableTd}>{openDisplay}</td>
-                        <td style={payableTd} data-testid={`exposure-util-${s.id}`}>{utilDisplay}</td>
+                        <td
+                          style={payableTd}
+                          data-testid={`exposure-util-${s.id}`}
+                        >
+                          {utilDisplay}
+                        </td>
                         <td style={payableTd}>
                           <span
                             data-testid={`exposure-status-${s.id}`}
@@ -968,7 +1237,11 @@ export default function SuppliersAdmin() {
             ) : (
               <div
                 data-testid="exposure-empty"
-                style={{ fontSize: 13, color: "var(--text-secondary)", fontStyle: "italic" }}
+                style={{
+                  fontSize: 13,
+                  color: "var(--text-secondary)",
+                  fontStyle: "italic",
+                }}
               >
                 {exposureNearLimitOnly
                   ? "No suppliers at or over credit limit."
@@ -987,7 +1260,8 @@ export default function SuppliersAdmin() {
             padding: 16,
             marginBottom: 16,
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
             gap: 10,
             alignItems: "end",
           }}
@@ -1003,7 +1277,9 @@ export default function SuppliersAdmin() {
           <input
             placeholder="Contact person"
             value={form.contactPerson}
-            onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
+            onChange={(e) =>
+              setForm({ ...form, contactPerson: e.target.value })
+            }
             style={inputStyle}
             aria-label="Contact person"
           />
@@ -1029,7 +1305,9 @@ export default function SuppliersAdmin() {
               type="text"
               maxLength={15}
               value={form.gstin}
-              onChange={(e) => setForm({ ...form, gstin: e.target.value.toUpperCase() })}
+              onChange={(e) =>
+                setForm({ ...form, gstin: e.target.value.toUpperCase() })
+              }
               style={inputStyle}
               aria-label="GSTIN"
               aria-describedby="gstin-hint"
@@ -1037,7 +1315,11 @@ export default function SuppliersAdmin() {
             {/* PRD_TRAVEL_SUPPLIER_MASTER #903 slice 2 — inline format hint. */}
             <span
               id="gstin-hint"
-              style={{ fontSize: 11, color: "var(--text-secondary)", paddingLeft: 2 }}
+              style={{
+                fontSize: 11,
+                color: "var(--text-secondary)",
+                paddingLeft: 2,
+              }}
             >
               {GSTIN_HINT}
             </span>
@@ -1051,12 +1333,16 @@ export default function SuppliersAdmin() {
           />
           <select
             value={form.supplierCategory}
-            onChange={(e) => setForm({ ...form, supplierCategory: e.target.value })}
+            onChange={(e) =>
+              setForm({ ...form, supplierCategory: e.target.value })
+            }
             style={inputStyle}
             aria-label="Supplier category"
           >
             {SUPPLIER_CATEGORIES.filter((c) => c.value).map((c) => (
-              <option key={c.value} value={c.value}>{c.label}</option>
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
             ))}
           </select>
           {/* Sub-brand resolves to the user's access (Q25). Single-brand users
@@ -1079,7 +1365,9 @@ export default function SuppliersAdmin() {
               aria-label="Sub-brand"
             >
               {myBrands.map((b) => (
-                <option key={b} value={b}>{subBrandShortLabel(b)}</option>
+                <option key={b} value={b}>
+                  {subBrandShortLabel(b)}
+                </option>
               ))}
             </select>
           )}
@@ -1089,7 +1377,9 @@ export default function SuppliersAdmin() {
             type="number"
             min="0"
             value={form.paymentTermsDays}
-            onChange={(e) => setForm({ ...form, paymentTermsDays: e.target.value })}
+            onChange={(e) =>
+              setForm({ ...form, paymentTermsDays: e.target.value })
+            }
             style={inputStyle}
             aria-label="Payment terms days"
           />
@@ -1113,30 +1403,40 @@ export default function SuppliersAdmin() {
               min="0"
               step="0.01"
               value={form.creditLimit}
-              onChange={(e) => setForm({ ...form, creditLimit: e.target.value })}
+              onChange={(e) =>
+                setForm({ ...form, creditLimit: e.target.value })
+              }
               style={{ ...inputStyle, flex: 1 }}
               aria-label="Credit limit"
             />
           </div>
           <select
             value={form.creditCurrency}
-            onChange={(e) => setForm({ ...form, creditCurrency: e.target.value })}
+            onChange={(e) =>
+              setForm({ ...form, creditCurrency: e.target.value })
+            }
             style={inputStyle}
             aria-label="Credit currency"
           >
             {CREDIT_CURRENCIES.map((c) => (
-              <option key={c} value={c}>{c}</option>
+              <option key={c} value={c}>
+                {c}
+              </option>
             ))}
           </select>
           {/* Slice 2 (#903) — tax regime (regular / composite / exempt). */}
           <select
             value={form.taxRegimeCode}
-            onChange={(e) => setForm({ ...form, taxRegimeCode: e.target.value })}
+            onChange={(e) =>
+              setForm({ ...form, taxRegimeCode: e.target.value })
+            }
             style={inputStyle}
             aria-label="Tax regime"
           >
             {TAX_REGIMES.map((r) => (
-              <option key={r.value || "unset"} value={r.value}>{r.label}</option>
+              <option key={r.value || "unset"} value={r.value}>
+                {r.label}
+              </option>
             ))}
           </select>
           {/* Slice 2 (#903) — primary contact role (free-form with suggestions). */}
@@ -1145,12 +1445,16 @@ export default function SuppliersAdmin() {
             type="text"
             list="primary-contact-role-suggestions"
             value={form.primaryContactRole}
-            onChange={(e) => setForm({ ...form, primaryContactRole: e.target.value })}
+            onChange={(e) =>
+              setForm({ ...form, primaryContactRole: e.target.value })
+            }
             style={inputStyle}
             aria-label="Primary contact role"
           />
           <datalist id="primary-contact-role-suggestions">
-            {CONTACT_ROLE_SUGGESTIONS.map((r) => <option key={r} value={r} />)}
+            {CONTACT_ROLE_SUGGESTIONS.map((r) => (
+              <option key={r} value={r} />
+            ))}
           </datalist>
           {/* Slice 2 (#903) — operator notes (multi-line). Spans full row width. */}
           <textarea
@@ -1162,12 +1466,22 @@ export default function SuppliersAdmin() {
             aria-label="Notes"
           />
           <div style={{ display: "flex", gap: 8 }}>
-            <button type="submit" disabled={saving} style={{ ...primaryBtn, background: "var(--success-color, var(--primary-color))" }}>
+            <button
+              type="submit"
+              disabled={saving}
+              style={{
+                ...primaryBtn,
+                background: "var(--success-color, var(--primary-color))",
+              }}
+            >
               {saving ? "Saving…" : editingId ? "Save Changes" : "Save"}
             </button>
             <button
               type="button"
-              onClick={() => { setShowForm(false); resetForm(); }}
+              onClick={() => {
+                setShowForm(false);
+                resetForm();
+              }}
               style={secondaryBtn}
             >
               Cancel
@@ -1176,10 +1490,7 @@ export default function SuppliersAdmin() {
         </form>
       )}
 
-      <div
-        className="glass"
-        style={{ padding: 0, overflow: "hidden" }}
-      >
+      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : (
@@ -1194,7 +1505,9 @@ export default function SuppliersAdmin() {
                 <th style={th}>Sub-brand</th>
                 <th style={th}>Category</th>
                 <th style={th}>Status</th>
-                {canWrite && <th style={{ ...th, textAlign: "center" }}>Actions</th>}
+                {canWrite && (
+                  <th style={{ ...th, textAlign: "center" }}>Actions</th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -1206,7 +1519,8 @@ export default function SuppliersAdmin() {
                 // whole sub-line is absent when both are null (no empty
                 // div, no flicker).
                 const ptToken =
-                  s.paymentTermsDays != null && Number.isFinite(Number(s.paymentTermsDays))
+                  s.paymentTermsDays != null &&
+                  Number.isFinite(Number(s.paymentTermsDays))
                     ? `NET-${s.paymentTermsDays}`
                     : null;
                 let clToken = null;
@@ -1225,128 +1539,177 @@ export default function SuppliersAdmin() {
                 const subLine = [ptToken, clToken].filter(Boolean).join(" · ");
                 const isExpanded = expandedSupplierId === s.id;
                 return (
-                <Fragment key={s.id}>
-                <tr style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-                  <td style={td}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <strong>{s.name}</strong>
-                      <button
-                        type="button"
-                        onClick={() => togglePayablesPanel(s.id)}
-                        title={isExpanded ? `Hide payables for ${s.name}` : `Show payables for ${s.name}`}
-                        aria-label={`Toggle payables for ${s.name}`}
-                        aria-expanded={isExpanded}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 3,
-                          padding: "2px 7px",
-                          borderRadius: 10,
-                          border: "1px solid rgba(255,255,255,0.15)",
-                          background: isExpanded ? "rgba(200,154,78,0.18)" : "rgba(255,255,255,0.06)",
-                          color: isExpanded ? "var(--accent-color, #C89A4E)" : "var(--text-secondary)",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          cursor: "pointer",
-                          letterSpacing: "0.02em",
-                          transition: "background 0.15s",
-                        }}
-                      >
-                        <Wallet size={11} aria-hidden />
-                        Payables
-                        {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                      </button>
-                    </div>
-                    {subLine && (
-                      <div
-                        data-testid={`supplier-finance-sub-${s.id}`}
-                        style={{
-                          fontSize: 11,
-                          color: "var(--text-secondary)",
-                          marginTop: 2,
-                        }}
-                      >
-                        {subLine}
-                      </div>
-                    )}
-                  </td>
-                  <td style={td}>{s.contactPerson || "—"}</td>
-                  <td style={td}>{s.phone || "—"}</td>
-                  <td style={td}>{s.email || "—"}</td>
-                  <td style={td}>{s.gstin || "—"}</td>
-                  <td style={td}>
-                    <span style={{ ...brandBadge, background: SUB_BRAND_BG[s.subBrand] || "rgba(255,255,255,0.08)" }}>
-                      {s.subBrand || "—"}
-                    </span>
-                  </td>
-                  <td style={td}>
-                    <span style={categoryBadge}>{s.supplierCategory || "—"}</span>
-                  </td>
-                  <td style={td}>
-                    <span
-                      style={{
-                        ...statusBadge,
-                        background: s.isActive ? "rgba(34, 197, 94, 0.18)" : "rgba(244, 63, 94, 0.18)",
-                        color: s.isActive ? "var(--success-color, #22c55e)" : "var(--danger-color, #f43f5e)",
-                      }}
+                  <Fragment key={s.id}>
+                    <tr
+                      style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
                     >
-                      {s.isActive ? "Active" : "Inactive"}
-                    </span>
-                  </td>
-                  {canWrite && (
-                    <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
-                      {/* Per-action gating — Edit (update) and
+                      <td style={td}>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                          }}
+                        >
+                          <strong>{s.name}</strong>
+                          <button
+                            type="button"
+                            onClick={() => togglePayablesPanel(s.id)}
+                            title={
+                              isExpanded
+                                ? `Hide payables for ${s.name}`
+                                : `Show payables for ${s.name}`
+                            }
+                            aria-label={`Toggle payables for ${s.name}`}
+                            aria-expanded={isExpanded}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 3,
+                              padding: "2px 7px",
+                              borderRadius: 10,
+                              border: "1px solid rgba(255,255,255,0.15)",
+                              background: isExpanded
+                                ? "rgba(200,154,78,0.18)"
+                                : "rgba(255,255,255,0.06)",
+                              color: isExpanded
+                                ? "var(--accent-color, #C89A4E)"
+                                : "var(--text-secondary)",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              cursor: "pointer",
+                              letterSpacing: "0.02em",
+                              transition: "background 0.15s",
+                            }}
+                          >
+                            <Wallet size={11} aria-hidden />
+                            Payables
+                            {isExpanded ? (
+                              <ChevronDown size={11} />
+                            ) : (
+                              <ChevronRight size={11} />
+                            )}
+                          </button>
+                        </div>
+                        {subLine && (
+                          <div
+                            data-testid={`supplier-finance-sub-${s.id}`}
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-secondary)",
+                              marginTop: 2,
+                            }}
+                          >
+                            {subLine}
+                          </div>
+                        )}
+                      </td>
+                      <td style={td}>{s.contactPerson || "—"}</td>
+                      <td style={td}>{s.phone || "—"}</td>
+                      <td style={td}>{s.email || "—"}</td>
+                      <td style={td}>{s.gstin || "—"}</td>
+                      <td style={td}>
+                        <span
+                          style={{
+                            ...brandBadge,
+                            background:
+                              SUB_BRAND_BG[s.subBrand] ||
+                              "rgba(255,255,255,0.08)",
+                          }}
+                        >
+                          {s.subBrand || "—"}
+                        </span>
+                      </td>
+                      <td style={td}>
+                        <span style={categoryBadge}>
+                          {s.supplierCategory || "—"}
+                        </span>
+                      </td>
+                      <td style={td}>
+                        <span
+                          style={{
+                            ...statusBadge,
+                            background: s.isActive
+                              ? "rgba(34, 197, 94, 0.18)"
+                              : "rgba(244, 63, 94, 0.18)",
+                            color: s.isActive
+                              ? "var(--success-color, #22c55e)"
+                              : "var(--danger-color, #f43f5e)",
+                          }}
+                        >
+                          {s.isActive ? "Active" : "Inactive"}
+                        </span>
+                      </td>
+                      {canWrite && (
+                        <td
+                          style={{
+                            ...td,
+                            textAlign: "center",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {/* Per-action gating — Edit (update) and
                           Deactivate (delete) gate on independent
                           catalog actions so a role granted update-only
                           doesn't see the destructive button. */}
-                      {canUpdate && (
-                        <button
-                          type="button"
-                          onClick={() => openEdit(s)}
-                          title={`Edit ${s.name}`}
-                          aria-label={`Edit ${s.name}`}
-                          style={iconBtn}
-                        >
-                          <Pencil size={16} />
-                        </button>
+                          {canUpdate && (
+                            <button
+                              type="button"
+                              onClick={() => openEdit(s)}
+                              title={`Edit ${s.name}`}
+                              aria-label={`Edit ${s.name}`}
+                              style={iconBtn}
+                            >
+                              <Pencil size={16} />
+                            </button>
+                          )}
+                          {s.isActive && canDelete && (
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(s)}
+                              title={`Deactivate ${s.name}`}
+                              aria-label={`Deactivate ${s.name}`}
+                              style={{
+                                ...iconBtn,
+                                color: "var(--danger-color, #f43f5e)",
+                              }}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </td>
                       )}
-                      {s.isActive && canDelete && (
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(s)}
-                          title={`Deactivate ${s.name}`}
-                          aria-label={`Deactivate ${s.name}`}
-                          style={{ ...iconBtn, color: "var(--danger-color, #f43f5e)" }}
+                    </tr>
+                    {isExpanded && (
+                      <tr
+                        data-testid={`payables-panel-${s.id}`}
+                        style={{
+                          borderTop: "1px solid rgba(255,255,255,0.04)",
+                          background: "rgba(255,255,255,0.02)",
+                        }}
+                      >
+                        <td
+                          colSpan={canWrite ? 9 : 8}
+                          style={{ padding: "12px 16px" }}
                         >
-                          <Trash2 size={16} />
-                        </button>
-                      )}
-                    </td>
-                  )}
-                </tr>
-                {isExpanded && (
-                  <tr
-                    data-testid={`payables-panel-${s.id}`}
-                    style={{ borderTop: "1px solid rgba(255,255,255,0.04)", background: "rgba(255,255,255,0.02)" }}
-                  >
-                    <td colSpan={canWrite ? 9 : 8} style={{ padding: "12px 16px" }}>
-                      {renderPayablesPanel({
-                        supplier: s,
-                        canWrite,
-                        loading: !!payablesLoadingBy[s.id],
-                        payables: payablesBySupplier[s.id] || [],
-                        form: payableForm[s.id] || EMPTY_PAYABLE_FORM,
-                        saving: !!payableSaving[s.id],
-                        onFormChange: (patch) => updatePayableForm(s.id, patch),
-                        onSubmit: (e) => handleAddPayable(e, s.id),
-                        onMarkPaid: (p) => openMarkPaidDialog(s.id, p),
-                        onCancel: (p) => handleCancelPayable(s.id, p),
-                        onDelete: (p) => handleDeletePayable(s.id, p),
-                      })}
-                    </td>
-                  </tr>
-                )}
-                </Fragment>
+                          {renderPayablesPanel({
+                            supplier: s,
+                            canWrite,
+                            loading: !!payablesLoadingBy[s.id],
+                            payables: payablesBySupplier[s.id] || [],
+                            form: payableForm[s.id] || EMPTY_PAYABLE_FORM,
+                            saving: !!payableSaving[s.id],
+                            onFormChange: (patch) =>
+                              updatePayableForm(s.id, patch),
+                            onSubmit: (e) => handleAddPayable(e, s.id),
+                            onMarkPaid: (p) => openMarkPaidDialog(s.id, p),
+                            onCancel: (p) => handleCancelPayable(s.id, p),
+                            onDelete: (p) => handleDeletePayable(s.id, p),
+                          })}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
               {suppliers.length === 0 && (
@@ -1356,7 +1719,9 @@ export default function SuppliersAdmin() {
                     style={{
                       ...td,
                       textAlign: "center",
-                      color: permissionDenied ? "var(--warning-color, #f59e0b)" : "var(--text-secondary)",
+                      color: permissionDenied
+                        ? "var(--warning-color, #f59e0b)"
+                        : "var(--text-secondary)",
                       padding: permissionDenied ? "2rem 1rem" : "1.5rem 1rem",
                     }}
                   >
@@ -1364,13 +1729,24 @@ export default function SuppliersAdmin() {
                     {permissionDenied ? (
                       <>
                         <strong>Access restricted.</strong>
-                        <div style={{ fontSize: "0.85rem", marginTop: "0.5rem", color: "var(--text-secondary)" }}>
-                          Your role does not have permission to view travel suppliers. Ask an Admin to grant access if you need it.
+                        <div
+                          style={{
+                            fontSize: "0.85rem",
+                            marginTop: "0.5rem",
+                            color: "var(--text-secondary)",
+                          }}
+                        >
+                          Your role does not have permission to view travel
+                          suppliers. Ask an Admin to grant access if you need
+                          it.
                         </div>
                       </>
                     ) : (
                       <>
-                        <Building2 size={20} style={{ opacity: 0.4, marginBottom: 6 }} />
+                        <Building2
+                          size={20}
+                          style={{ opacity: 0.4, marginBottom: 6 }}
+                        />
                         <div>No suppliers match.</div>
                       </>
                     )}
@@ -1389,22 +1765,57 @@ export default function SuppliersAdmin() {
           aria-modal="true"
           aria-label="Confirm payment"
           style={{
-            position: "fixed", inset: 0, zIndex: 9999,
-            background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)",
-            display: "flex", alignItems: "center", justifyContent: "center",
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            background: "rgba(0,0,0,0.55)",
+            backdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
-          onClick={(e) => { if (e.target === e.currentTarget) { setPendingPay(null); setPayRefInput(""); } }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setPendingPay(null);
+              setPayRefInput("");
+            }
+          }}
         >
-          <div className="glass" style={{ padding: 28, borderRadius: 12, maxWidth: 420, width: "90%", display: "flex", flexDirection: "column", gap: 16 }}>
+          <div
+            className="glass"
+            style={{
+              padding: 28,
+              borderRadius: 12,
+              maxWidth: 420,
+              width: "90%",
+              display: "flex",
+              flexDirection: "column",
+              gap: 16,
+            }}
+          >
             <div style={{ fontWeight: 700, fontSize: 16 }}>Confirm payment</div>
             <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-              Marking <strong style={{ color: "var(--text-primary)" }}>{pendingPay.payable.description}</strong> as paid
-              ({pendingPay.payable.currency || "INR"} {pendingPay.payable.amount}).
-              An expense record will be created automatically.
+              Marking{" "}
+              <strong style={{ color: "var(--text-primary)" }}>
+                {pendingPay.payable.description}
+              </strong>{" "}
+              as paid ({pendingPay.payable.currency || "INR"}{" "}
+              {pendingPay.payable.amount}). An expense record will be created
+              automatically.
             </div>
             <div>
-              <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
-                Payment reference <span style={{ fontStyle: "italic" }}>(UPI ref, cheque #, bank ref — optional)</span>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  marginBottom: 4,
+                }}
+              >
+                Payment reference{" "}
+                <span style={{ fontStyle: "italic" }}>
+                  (UPI ref, cheque #, bank ref — optional)
+                </span>
               </label>
               <input
                 autoFocus
@@ -1413,24 +1824,58 @@ export default function SuppliersAdmin() {
                 onChange={(e) => setPayRefInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") confirmMarkPaid();
-                  if (e.key === "Escape") { setPendingPay(null); setPayRefInput(""); }
+                  if (e.key === "Escape") {
+                    setPendingPay(null);
+                    setPayRefInput("");
+                  }
                 }}
                 placeholder="e.g. UPI/2026/06/XXXXX or CHQ-1234"
-                style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.06)", color: "var(--text-primary)", fontSize: 13, boxSizing: "border-box" }}
+                style={{
+                  width: "100%",
+                  padding: "8px 10px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  background: "rgba(255,255,255,0.06)",
+                  color: "var(--text-primary)",
+                  fontSize: 13,
+                  boxSizing: "border-box",
+                }}
               />
             </div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <div
+              style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
+            >
               <button
                 type="button"
-                onClick={() => { setPendingPay(null); setPayRefInput(""); }}
-                style={{ padding: "7px 16px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", fontSize: 13 }}
+                onClick={() => {
+                  setPendingPay(null);
+                  setPayRefInput("");
+                }}
+                style={{
+                  padding: "7px 16px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                  fontSize: 13,
+                }}
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={confirmMarkPaid}
-                style={{ padding: "7px 18px", borderRadius: 6, border: "none", background: "var(--success-color, #22c55e)", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 13 }}
+                style={{
+                  padding: "7px 18px",
+                  borderRadius: 6,
+                  border: "none",
+                  background: "var(--success-color, #22c55e)",
+                  color: "#fff",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  fontSize: 13,
+                }}
               >
                 Mark as paid
               </button>
@@ -1468,7 +1913,11 @@ function renderPayablesPanel({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <Wallet size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
+        <Wallet
+          size={16}
+          aria-hidden
+          style={{ color: "var(--text-secondary)" }}
+        />
         <strong style={{ fontSize: 13 }}>Payables for {supplier.name}</strong>
         <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
           A/P ledger — track invoices owed to this supplier.
@@ -1476,13 +1925,23 @@ function renderPayablesPanel({
       </div>
 
       {loading ? (
-        <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>Loading payables&hellip;</div>
+        <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+          Loading payables&hellip;
+        </div>
       ) : payables.length === 0 ? (
-        <div style={{ fontSize: 13, color: "var(--text-secondary)", fontStyle: "italic" }}>
+        <div
+          style={{
+            fontSize: 13,
+            color: "var(--text-secondary)",
+            fontStyle: "italic",
+          }}
+        >
           No payables recorded yet — add the first one below.
         </div>
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table
+          style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
+        >
           <thead>
             <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
               <th style={{ ...payableTh }}>Description</th>
@@ -1492,16 +1951,21 @@ function renderPayablesPanel({
               <th style={{ ...payableTh }}>Payment ref</th>
               <th style={{ ...payableTh }}>PO #</th>
               <th style={{ ...payableTh }}>Notes</th>
-              {canWrite && <th style={{ ...payableTh, textAlign: "center" }}>Actions</th>}
+              {canWrite && (
+                <th style={{ ...payableTh, textAlign: "center" }}>Actions</th>
+              )}
             </tr>
           </thead>
           <tbody>
             {payables.map((p) => {
               const statusKey = p.status || "pending";
-              const style = PAYABLE_STATUS_STYLE[statusKey] || PAYABLE_STATUS_STYLE.pending;
+              const style =
+                PAYABLE_STATUS_STYLE[statusKey] || PAYABLE_STATUS_STYLE.pending;
               const isCancelled = statusKey === "cancelled";
               const isPaid = statusKey === "paid";
-              const dueDisplay = p.dueDate ? new Date(p.dueDate).toISOString().slice(0, 10) : "—";
+              const dueDisplay = p.dueDate
+                ? new Date(p.dueDate).toISOString().slice(0, 10)
+                : "—";
               const amountDisplay = p.amount != null ? String(p.amount) : "—";
               const currency = p.currency || "INR";
               return (
@@ -1532,26 +1996,59 @@ function renderPayablesPanel({
                       {statusKey}
                     </span>
                   </td>
-                  <td style={{ ...payableTd, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <td
+                    style={{
+                      ...payableTd,
+                      maxWidth: 160,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {p.paymentReference ? (
-                      <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--success-color, #22c55e)" }}>
+                      <span
+                        style={{
+                          fontFamily: "monospace",
+                          fontSize: 11,
+                          color: "var(--success-color, #22c55e)",
+                        }}
+                      >
                         {p.paymentReference}
                       </span>
-                    ) : "—"}
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td style={payableTd}>{p.poNumber || "—"}</td>
-                  <td style={{ ...payableTd, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <td
+                    style={{
+                      ...payableTd,
+                      maxWidth: 180,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {p.notes || "—"}
                   </td>
                   {canWrite && (
-                    <td style={{ ...payableTd, textAlign: "center", whiteSpace: "nowrap" }}>
+                    <td
+                      style={{
+                        ...payableTd,
+                        textAlign: "center",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
                       {!isPaid && !isCancelled && (
                         <button
                           type="button"
                           onClick={() => onMarkPaid(p)}
                           title={`Mark paid: ${p.description}`}
                           aria-label={`Mark paid payable ${p.id}`}
-                          style={{ ...iconBtn, color: "var(--success-color, #22c55e)" }}
+                          style={{
+                            ...iconBtn,
+                            color: "var(--success-color, #22c55e)",
+                          }}
                         >
                           <CheckCircle2 size={15} />
                         </button>
@@ -1572,7 +2069,10 @@ function renderPayablesPanel({
                         onClick={() => onDelete(p)}
                         title={`Delete: ${p.description}`}
                         aria-label={`Delete payable ${p.id}`}
-                        style={{ ...iconBtn, color: "var(--danger-color, #f43f5e)" }}
+                        style={{
+                          ...iconBtn,
+                          color: "var(--danger-color, #f43f5e)",
+                        }}
                       >
                         <Trash2 size={15} />
                       </button>
@@ -1591,7 +2091,8 @@ function renderPayablesPanel({
           data-testid={`payable-add-form-${supplier.id}`}
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))",
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(min(100%, 160px), 1fr))",
             gap: 8,
             alignItems: "end",
             paddingTop: 8,
@@ -1640,7 +2141,10 @@ function renderPayablesPanel({
           <button
             type="submit"
             disabled={saving}
-            style={{ ...primaryBtn, background: "var(--success-color, var(--primary-color))" }}
+            style={{
+              ...primaryBtn,
+              background: "var(--success-color, var(--primary-color))",
+            }}
           >
             <Plus size={13} /> {saving ? "Saving…" : "Add payable"}
           </button>
@@ -1659,7 +2163,11 @@ const payableTh = {
   color: "var(--text-secondary)",
   fontWeight: 600,
 };
-const payableTd = { padding: "6px 8px", fontSize: 13, color: "var(--text-primary)" };
+const payableTd = {
+  padding: "6px 8px",
+  fontSize: 13,
+  color: "var(--text-primary)",
+};
 
 const th = {
   textAlign: "left",
@@ -1673,7 +2181,12 @@ const th = {
   fontWeight: 600,
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
-const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
+const empty = {
+  padding: 32,
+  textAlign: "center",
+  color: "var(--text-secondary)",
+  fontSize: 14,
+};
 const inputStyle = {
   padding: "8px 10px",
   borderRadius: 6,

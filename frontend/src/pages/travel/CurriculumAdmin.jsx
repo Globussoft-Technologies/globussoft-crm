@@ -512,17 +512,17 @@ export default function CurriculumAdmin() {
             with &ldquo;New Mapping&rdquo; or clear the filters to widen the search.
           </div>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
               <tr>
-                <th style={th}>Curriculum</th>
-                <th style={th}>Grade</th>
-                <th style={th}>Subject</th>
-                <th style={th}>Learning outcome</th>
-                <th style={th}>Destination</th>
-                <th style={th}>Fit</th>
-                <th style={th}>Active</th>
-                {isAdmin && <th style={th}>Actions</th>}
+                <th style={{ ...th, width: '12%' }}>Curriculum</th>
+                <th style={{ ...th, width: '6%' }}>Grade</th>
+                <th style={{ ...th, width: '10%' }}>Subject</th>
+                <th style={{ ...th, width: '20%' }}>Learning outcome</th>
+                <th style={{ ...th, width: '18%' }}>Destination</th>
+                <th style={{ ...th, width: '8%' }}>Fit</th>
+                <th style={{ ...th, width: '8%' }}>Active</th>
+                {isAdmin && <th style={{ ...th, width: '18%' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -926,4 +926,7 @@ const td = {
   padding: '10px 12px',
   fontSize: 14,
   color: 'var(--text-primary)',
+  wordWrap: 'break-word',
+  overflowWrap: 'break-word',
+  whiteSpace: 'normal',
 };

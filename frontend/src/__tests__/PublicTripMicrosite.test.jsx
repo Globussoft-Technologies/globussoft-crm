@@ -2,31 +2,33 @@
  * PublicTripMicrosite.test.jsx — vitest + RTL coverage for the public
  * parent/teacher trip microsite (frontend/src/pages/travel/PublicTripMicrosite.jsx).
  *
- * The page loads public trip info + the participant list, then drives
- * DigiLocker Aadhaar verification per participant. There is NO app-side OTP
- * gate — DigiLocker authenticates the individual during its own consent
- * flow. All backend calls are raw `fetch` to the public
- * /api/travel/microsites/public/:uuid/* endpoints.
+ * The page loads public trip info and, when the visitor arrives from the
+ * landing-page registration with a ?draftToken, lets them (a) confirm their
+ * registration via phone OTP and (b) upload their own Passport + Aadhaar
+ * documents with a parent-consent checkbox.
+ *
+ * IMPORTANT privacy invariant: this is a PUBLIC page, so it must NOT show any
+ * other traveller's data. The old per-participant Aadhaar-verification section
+ * (which listed every traveller's name + last-4) was removed — these tests pin
+ * that it stays gone.
  *
  * Pinned invariants:
- *   1. mount loads public info + participants → renders destination + names.
+ *   1. mount loads public info → renders destination; NO participant list /
+ *      Aadhaar section is rendered.
  *   2. 404 → "Trip page not found"; 410 GONE → "expired".
- *   3. an already-verified participant shows the masked last-4 badge; an
- *      unverified one shows a "Verify Aadhaar" button.
- *   4. stub mode: "Verify Aadhaar" completes inline (start → callback) and the
- *      participant flips to verified after the reload.
- *   5. real mode: stashes the uuid in sessionStorage and redirects the browser
- *      to the DigiLocker oauthUrl (no inline callback).
+ *   3. no draftToken → no upload button; a hint tells the visitor to open
+ *      their registration link.
+ *   4. with draftToken → an "Upload documents" button opens a modal that
+ *      requires both files + consent and POSTs multipart to /documents.
+ *   5. Phase 7 RegistrationConfirmPanel behaviour is unchanged.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import PublicTripMicrosite from '../pages/travel/PublicTripMicrosite';
 
 const BASE = '/api/travel/microsites/public/uuid-x';
 
-let startMode;   // 'stub' | 'apisetu-partner'
-let aaravLast4;  // null until verified, then '9999'
 let infoResponse; // { status, body }
 
 function jsonResponse(status, body) {
@@ -37,28 +39,14 @@ function jsonResponse(status, body) {
   });
 }
 
+// Base mock — the page only fetches the public info endpoint when there's no
+// draftToken. A stray call to anything else resolves 404 so the test surfaces
+// an unexpected request rather than hanging.
 function installMock() {
   global.fetch = vi.fn((url, opts = {}) => {
     const method = opts.method || 'GET';
     if (url === BASE && method === 'GET') {
       return jsonResponse(infoResponse.status, infoResponse.body);
-    }
-    if (url === `${BASE}/participants` && method === 'GET') {
-      return jsonResponse(200, {
-        participants: [
-          { id: 1, fullName: 'Aarav Sharma', aadhaarLast4: aaravLast4 },
-          { id: 2, fullName: 'Bina Patel', aadhaarLast4: '4321' },
-        ],
-      });
-    }
-    if (url === `${BASE}/verify/aadhaar/start` && method === 'POST') {
-      return startMode === 'stub'
-        ? jsonResponse(201, { mode: 'stub', state: 'st1', sessionId: 9 })
-        : jsonResponse(201, { mode: 'apisetu-partner', oauthUrl: 'https://dl.example/authorize?x=1', state: 'st1', sessionId: 9 });
-    }
-    if (url === `${BASE}/verify/aadhaar/callback` && method === 'POST') {
-      aaravLast4 = '9999';
-      return jsonResponse(200, { verified: true, aadhaarLast4: '9999' });
     }
     return jsonResponse(404, { error: 'unexpected', code: 'X' });
   });
@@ -75,8 +63,6 @@ function renderPage(uuid = 'uuid-x') {
 }
 
 beforeEach(() => {
-  startMode = 'stub';
-  aaravLast4 = null;
   infoResponse = {
     status: 200,
     body: {
@@ -96,12 +82,14 @@ afterEach(() => {
 });
 
 describe('<PublicTripMicrosite /> — load states', () => {
-  it('renders the trip destination + participants after load', async () => {
+  it('renders the trip destination and does NOT render any participant / Aadhaar section', async () => {
     renderPage();
     expect(await screen.findByTestId('microsite-destination-title')).toHaveTextContent('Goa Ed Tour');
-    expect(screen.getByTestId('microsite-aadhaar-section')).toBeInTheDocument();
-    expect(await screen.findByText('Aarav Sharma')).toBeInTheDocument();
-    expect(screen.getByText('Bina Patel')).toBeInTheDocument();
+    // Privacy: the public participant list + Aadhaar verification section is gone.
+    expect(screen.queryByTestId('microsite-aadhaar-section')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Verify Aadhaar/i)).not.toBeInTheDocument();
+    // The page never fetches the (PII-leaking) participants endpoint.
+    expect(global.fetch.mock.calls.some(([u]) => String(u).endsWith('/participants'))).toBe(false);
   });
 
   it('shows "Trip page not found" on 404', async () => {
@@ -114,17 +102,6 @@ describe('<PublicTripMicrosite /> — load states', () => {
     infoResponse = { status: 410, body: { error: 'expired', code: 'GONE' } };
     renderPage();
     expect(await screen.findByText(/expired/i)).toBeInTheDocument();
-  });
-});
-
-describe('<PublicTripMicrosite /> — participant affordances', () => {
-  it('verified participant shows the masked badge; unverified shows a Verify button', async () => {
-    renderPage();
-    await screen.findByText('Aarav Sharma');
-    // Bina is already verified → masked badge, not a button.
-    expect(screen.getByText(/Verified ••••4321/)).toBeInTheDocument();
-    // Aarav is unverified → exactly one Verify Aadhaar button.
-    expect(screen.getAllByRole('button', { name: /Verify Aadhaar/i })).toHaveLength(1);
   });
 });
 
@@ -143,12 +120,10 @@ describe('<PublicTripMicrosite /> — G095 brand-kit consumer', () => {
       },
     };
     renderPage();
-    // Brand logo image renders with the tagline embedded into alt.
     const logo = await screen.findByTestId('microsite-brand-logo');
     expect(logo).toBeInTheDocument();
     expect(logo.tagName).toBe('IMG');
     expect(logo).toHaveAttribute('alt', 'Travel that teaches logo');
-    // Tagline copy ALSO shows in the header.
     expect(screen.getByText('Travel that teaches')).toBeInTheDocument();
   });
 
@@ -173,63 +148,23 @@ describe('<PublicTripMicrosite /> — G095 brand-kit consumer', () => {
     expect(screen.getByText('hello@example.com')).toBeInTheDocument();
     expect(screen.getByText('+91-22-1234-5678')).toBeInTheDocument();
     expect(screen.getByText('© 2026 Test Brand')).toBeInTheDocument();
-    // mailto + tel: hrefs.
     expect(screen.getByText('hello@example.com').closest('a')?.getAttribute('href')).toBe('mailto:hello@example.com');
     expect(screen.getByText('+91-22-1234-5678').closest('a')?.getAttribute('href')).toBe('tel:+91-22-1234-5678');
   });
 
   it('falls back to default Plane icon + no brand-footer when brandKit is null', async () => {
-    // Default fixture already has brandKit:null — assert the fallback.
     renderPage();
     await screen.findByTestId('microsite-destination-title');
-    // No brand-logo IMG and no brand-footer in fallback mode.
     expect(screen.queryByAltText(/Brand logo/i)).not.toBeInTheDocument();
     expect(screen.queryByTestId('microsite-brand-footer')).not.toBeInTheDocument();
   });
 });
 
-describe('<PublicTripMicrosite /> — Aadhaar verification', () => {
-  it('stub mode: Verify Aadhaar completes inline and flips the participant to verified', async () => {
-    renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: /Verify Aadhaar/i }));
+// ─── Document upload (draftToken-scoped) ─────────────────────────────
 
-    // After start(stub) → callback → reload, Aarav shows the synthetic last-4.
-    expect(await screen.findByText(/Verified ••••9999/)).toBeInTheDocument();
-    const cbCall = global.fetch.mock.calls.find(([u]) => u === `${BASE}/verify/aadhaar/callback`);
-    expect(cbCall).toBeTruthy();
-    expect(JSON.parse(cbCall[1].body)).toEqual({ state: 'st1', code: 'stub-code' });
-  });
-
-  it('real mode: stashes the uuid and redirects to the DigiLocker oauthUrl', async () => {
-    startMode = 'apisetu-partner';
-    const hrefMock = vi.fn();
-    const orig = Object.getOwnPropertyDescriptor(window, 'location');
-    Object.defineProperty(window, 'location', {
-      configurable: true,
-      value: { search: '', origin: 'http://localhost', set href(v) { hrefMock(v); }, get href() { return 'http://localhost'; } },
-    });
-    try {
-      renderPage();
-      fireEvent.click(await screen.findByRole('button', { name: /Verify Aadhaar/i }));
-
-      await waitFor(() => expect(hrefMock).toHaveBeenCalledWith('https://dl.example/authorize?x=1'));
-      expect(sessionStorage.getItem('kycMicrositeUuid')).toBe('uuid-x');
-      // Real mode must NOT call the inline callback.
-      expect(global.fetch.mock.calls.find(([u]) => u === `${BASE}/verify/aadhaar/callback`)).toBeFalsy();
-    } finally {
-      if (orig) Object.defineProperty(window, 'location', orig);
-    }
-  });
-});
-
-// ─── Phase 7 — RegistrationConfirmPanel (hybrid registration flow) ──
-
-describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
-  // The panel reads `?draftToken=...` from window.location.search; we
-  // override window.location for the duration of each test that needs
-  // the panel rendered. The legacy load-states / Aadhaar tests don't
-  // override window.location, so they continue to render WITHOUT the
-  // panel (back-compat verified separately below).
+describe('<PublicTripMicrosite /> — document upload', () => {
+  // The upload button + modal only appear for a registrant identified by a
+  // draftToken. We override window.location for the duration of each test.
   async function withDraftToken(token, body) {
     const orig = Object.getOwnPropertyDescriptor(window, 'location');
     Object.defineProperty(window, 'location', {
@@ -237,8 +172,170 @@ describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
       value: { search: `?draftToken=${token}`, origin: 'http://localhost', href: 'http://localhost' },
     });
     try {
-      // await — otherwise finally restores window.location BEFORE the
-      // async body runs, and the component never sees the draftToken.
+      return await body();
+    } finally {
+      if (orig) Object.defineProperty(window, 'location', orig);
+    }
+  }
+
+  function installDocMock({
+    draftSummary = {
+      id: 7001, status: 'DRAFT', otpVerified: false,
+      studentFirstName: 'Aarav', parentFirstName: 'Rohan',
+      parentPhoneMasked: '••••••3210', parentPhoneLast4: '3210',
+      parentEmailMasked: 'ro••••@example.com', hasPassport: true,
+      hasPassportDoc: false, hasAadhaarDoc: false, consentGiven: false,
+    },
+    uploadResponse = jsonResponse(200, {
+      ok: true,
+      documents: { passport: true, aadhaar: true, consentCapturedAt: '2026-07-01T00:00:00.000Z' },
+    }),
+  } = {}) {
+    global.fetch = vi.fn((url, opts = {}) => {
+      const method = opts.method || 'GET';
+      if (url === BASE && method === 'GET') return jsonResponse(infoResponse.status, infoResponse.body);
+      if (url.startsWith(`${BASE}/draft-summary?token=`) && method === 'GET') return jsonResponse(200, draftSummary);
+      if (url === `${BASE}/documents` && method === 'POST') return uploadResponse;
+      // request-otp / verify-otp fire from the RegistrationConfirmPanel that
+      // also renders under a draftToken; stub them so they never 404-noise.
+      if (url === `${BASE}/request-otp` && method === 'POST') return jsonResponse(201, { sent: true });
+      if (url === `${BASE}/verify-otp` && method === 'POST') return jsonResponse(200, { verified: true });
+      return jsonResponse(404, { error: 'unexpected', code: 'X' });
+    });
+  }
+
+  const makeFile = (name, type) => new File(['x'], name, { type });
+
+  it('shows no upload button and a "use your registration link" hint when there is no draftToken', async () => {
+    installMock();
+    renderPage();
+    await screen.findByTestId('microsite-destination-title');
+    expect(screen.queryByTestId('microsite-upload-docs-btn')).not.toBeInTheDocument();
+    expect(screen.getByText(/open this page from the registration link/i)).toBeInTheDocument();
+  });
+
+  it('shows the upload button under a draftToken and opens the modal on click', async () => {
+    installDocMock();
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      const btn = await screen.findByTestId('microsite-upload-docs-btn');
+      expect(btn).toHaveTextContent(/Upload documents/i);
+      fireEvent.click(btn);
+      expect(await screen.findByTestId('microsite-doc-modal')).toBeInTheDocument();
+    });
+  });
+
+  it('blocks submit until consent is ticked and both files are chosen', async () => {
+    installDocMock();
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      fireEvent.click(await screen.findByTestId('microsite-upload-docs-btn'));
+      await screen.findByTestId('microsite-doc-modal');
+
+      // No consent, no files → consent error, no POST.
+      fireEvent.click(screen.getByTestId('microsite-doc-submit'));
+      expect(await screen.findByTestId('microsite-doc-error')).toHaveTextContent(/parent consent/i);
+      expect(global.fetch.mock.calls.some(([u]) => u === `${BASE}/documents`)).toBe(false);
+
+      // Consent but still no files → missing-files error.
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByTestId('microsite-doc-submit'));
+      expect(await screen.findByTestId('microsite-doc-error')).toHaveTextContent(/Passport and Aadhaar/i);
+      expect(global.fetch.mock.calls.some(([u]) => u === `${BASE}/documents`)).toBe(false);
+    });
+  });
+
+  it('happy path: pick both files + consent → POSTs multipart and shows the done state', async () => {
+    installDocMock();
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      fireEvent.click(await screen.findByTestId('microsite-upload-docs-btn'));
+      await screen.findByTestId('microsite-doc-modal');
+
+      fireEvent.change(screen.getByTestId('microsite-doc-passport'), {
+        target: { files: [makeFile('passport.pdf', 'application/pdf')] },
+      });
+      fireEvent.change(screen.getByTestId('microsite-doc-aadhaar'), {
+        target: { files: [makeFile('aadhaar.png', 'image/png')] },
+      });
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByTestId('microsite-doc-submit'));
+
+      expect(await screen.findByTestId('microsite-doc-modal-done')).toBeInTheDocument();
+
+      const post = global.fetch.mock.calls.find(([u, o]) => u === `${BASE}/documents` && o?.method === 'POST');
+      expect(post).toBeTruthy();
+      // Body is a FormData carrying the token, consent flag and both files.
+      const fd = post[1].body;
+      expect(fd).toBeInstanceOf(FormData);
+      expect(fd.get('draftToken')).toBe('abc123');
+      expect(fd.get('consent')).toBe('true');
+      expect(fd.get('passport')).toBeInstanceOf(File);
+      expect(fd.get('aadhaar')).toBeInstanceOf(File);
+    });
+  });
+
+  it('surfaces a server error inside the modal without closing it', async () => {
+    installDocMock({ uploadResponse: jsonResponse(400, { error: 'Draft token has expired', code: 'DRAFT_EXPIRED' }) });
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      fireEvent.click(await screen.findByTestId('microsite-upload-docs-btn'));
+      await screen.findByTestId('microsite-doc-modal');
+      fireEvent.change(screen.getByTestId('microsite-doc-passport'), {
+        target: { files: [makeFile('p.pdf', 'application/pdf')] },
+      });
+      fireEvent.change(screen.getByTestId('microsite-doc-aadhaar'), {
+        target: { files: [makeFile('a.pdf', 'application/pdf')] },
+      });
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByTestId('microsite-doc-submit'));
+
+      expect(await screen.findByTestId('microsite-doc-error')).toHaveTextContent(/expired/i);
+      expect(screen.getByTestId('microsite-doc-modal')).toBeInTheDocument();
+      expect(screen.queryByTestId('microsite-doc-modal-done')).not.toBeInTheDocument();
+    });
+  });
+
+  it('when a doc is already on record, the button reads "Update documents" and a single re-upload is allowed', async () => {
+    installDocMock({
+      draftSummary: {
+        id: 7001, status: 'OTP_VERIFIED', otpVerified: true,
+        studentFirstName: 'Aarav', parentFirstName: 'Rohan',
+        parentPhoneMasked: '••••••3210', parentPhoneLast4: '3210',
+        parentEmailMasked: 'ro••••@example.com', hasPassport: true,
+        hasPassportDoc: true, hasAadhaarDoc: true, consentGiven: true,
+      },
+    });
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      const btn = await screen.findByTestId('microsite-upload-docs-btn');
+      expect(btn).toHaveTextContent(/Update documents/i);
+      fireEvent.click(btn);
+      await screen.findByTestId('microsite-doc-modal');
+      // Both already uploaded → replacing just the passport + re-consenting works.
+      fireEvent.change(screen.getByTestId('microsite-doc-passport'), {
+        target: { files: [makeFile('newpass.pdf', 'application/pdf')] },
+      });
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByTestId('microsite-doc-submit'));
+      expect(await screen.findByTestId('microsite-doc-modal-done')).toBeInTheDocument();
+      const post = global.fetch.mock.calls.find(([u, o]) => u === `${BASE}/documents` && o?.method === 'POST');
+      expect(post[1].body.get('passport')).toBeInstanceOf(File);
+      expect(post[1].body.get('aadhaar')).toBeNull(); // not re-sent
+    });
+  });
+});
+
+// ─── Phase 7 — RegistrationConfirmPanel (hybrid registration flow) ──
+
+describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
+  async function withDraftToken(token, body) {
+    const orig = Object.getOwnPropertyDescriptor(window, 'location');
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { search: `?draftToken=${token}`, origin: 'http://localhost', href: 'http://localhost' },
+    });
+    try {
       return await body();
     } finally {
       if (orig) Object.defineProperty(window, 'location', orig);
@@ -263,6 +360,9 @@ describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
       parentPhoneMasked: '••••••3210',
       parentPhoneLast4: '3210',
       hasPassport: true,
+      hasPassportDoc: false,
+      hasAadhaarDoc: false,
+      consentGiven: false,
     }),
   } = {}) {
     global.fetch = vi.fn((url, opts = {}) => {
@@ -270,19 +370,16 @@ describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
       if (url === BASE && method === 'GET') {
         return jsonResponse(infoResponse.status, infoResponse.body);
       }
-      if (url === `${BASE}/participants` && method === 'GET') {
-        return jsonResponse(200, { participants: [] });
-      }
-      // Phase 7+ — draft-summary fires on panel mount when a
-      // ?draftToken is present.
+      // draft-summary fires on panel mount AND from the page-level doc-status
+      // fetch when a ?draftToken is present.
       if (url.startsWith(`${BASE}/draft-summary?token=`) && method === 'GET') {
-        return Promise.resolve(draftSummaryResponse);
+        return draftSummaryResponse;
       }
       if (url === `${BASE}/request-otp` && method === 'POST') {
-        return Promise.resolve(requestOtpResponse);
+        return requestOtpResponse;
       }
       if (url === `${BASE}/verify-otp` && method === 'POST') {
-        return Promise.resolve(verifyOtpResponse);
+        return verifyOtpResponse;
       }
       return jsonResponse(404, { error: 'unexpected', code: 'X' });
     });
@@ -293,12 +390,8 @@ describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
     await withDraftToken('abc123', async () => {
       renderPage();
       expect(await screen.findByTestId('registration-confirm-panel')).toBeInTheDocument();
-      // Greeting derived from the draft summary's parentFirstName
       expect(await screen.findByText(/Hi Rohan/)).toBeInTheDocument();
-      // Masked phone visible in the "we'll send to" row
       expect(screen.getByText('••••••3210')).toBeInTheDocument();
-      // Single "Send verification code" button (no phone input — user
-      // doesn't have to retype what they entered on the landing page)
       expect(screen.getByTestId('registration-request-otp-btn')).toBeInTheDocument();
       expect(screen.queryByTestId('registration-phone-input')).not.toBeInTheDocument();
     });
@@ -315,25 +408,20 @@ describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
     installMockWithOtp();
     await withDraftToken('abc123', async () => {
       renderPage();
-      // Wait for summary to load + reveal the send button
       const sendBtn = await screen.findByTestId('registration-request-otp-btn');
       fireEvent.click(sendBtn);
 
-      // Verify form appears (no phone input)
       const codeInput = await screen.findByTestId('registration-code-input');
       fireEvent.change(codeInput, { target: { value: '1234' } });
       fireEvent.click(screen.getByTestId('registration-verify-otp-btn'));
 
-      // Terminal "verified" state surfaces with the receipt summary
       expect(await screen.findByTestId('registration-confirmed')).toBeInTheDocument();
       expect(screen.getByText(/registration is being reviewed/i)).toBeInTheDocument();
       expect(screen.getByText(/What we received/i)).toBeInTheDocument();
 
-      // request-otp body carries only purpose + draftToken (phone derived server-side)
       const reqCall = global.fetch.mock.calls.find(([u]) => u === `${BASE}/request-otp`);
       expect(JSON.parse(reqCall[1].body)).toEqual({ purpose: 'registration', draftToken: 'abc123' });
 
-      // verify-otp body carries draftToken + code (phone derived server-side)
       const verifyCall = global.fetch.mock.calls.find(([u]) => u === `${BASE}/verify-otp`);
       expect(JSON.parse(verifyCall[1].body)).toEqual({
         purpose: 'registration',
@@ -350,12 +438,12 @@ describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
         studentFirstName: 'Aarav', parentFirstName: 'Rohan',
         parentPhoneMasked: '••••••3210', parentPhoneLast4: '3210',
         parentEmailMasked: 'ro••••@example.com', hasPassport: true,
+        hasPassportDoc: false, hasAadhaarDoc: false, consentGiven: false,
       }),
     });
     await withDraftToken('already-verified', async () => {
       renderPage();
       expect(await screen.findByTestId('registration-confirmed')).toBeInTheDocument();
-      // No OTP flow surfaces — terminal verified state on revisit
       expect(screen.queryByTestId('registration-request-otp-btn')).not.toBeInTheDocument();
       expect(screen.queryByTestId('registration-code-input')).not.toBeInTheDocument();
     });
@@ -423,7 +511,6 @@ describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
       fireEvent.click(await screen.findByTestId('registration-request-otp-btn'));
       const err = await screen.findByTestId('registration-otp-error');
       expect(err.textContent).toMatch(/wait a minute/i);
-      // Send button still visible — retryable
       expect(screen.getByTestId('registration-request-otp-btn')).toBeInTheDocument();
     });
   });

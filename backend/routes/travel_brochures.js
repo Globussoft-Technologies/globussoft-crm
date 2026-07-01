@@ -28,6 +28,8 @@
  */
 const express = require("express");
 const crypto = require("crypto");
+const path = require("path");
+const fs = require("fs");
 const multer = require("multer");
 const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
@@ -769,6 +771,101 @@ router.get(
       return res.status(404).json({ error: "Brochure not found" });
     }
     return res.json(row);
+  },
+);
+
+// ─── GET /brochures/:id/download ──────────────────────────────────────────
+// Auth-gated download/view proxy. Serves the persisted brochure artifact from
+// S3 (or local disk for pre-S3 rows) so the frontend doesn't depend on the S3
+// bucket being world-readable. Default Content-Disposition is attachment so the
+// browser saves the file with a sensible name. Pass ?inline=1 to display it
+// inline (used by the "Open" link).
+router.get(
+  "/brochures/:id/download",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("marketing", "read"),
+  async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "Invalid id", code: "INVALID_ID" });
+    }
+    const row = await prisma.travelBrochure.findFirst({
+      where: { id, tenantId: req.travelTenant.id, archivedAt: null },
+      select: { id: true, pdfUrl: true, runId: true, goal: true },
+    });
+    if (!row) {
+      return res.status(404).json({ error: "Brochure not found" });
+    }
+    if (!row.pdfUrl) {
+      return res.status(404).json({ error: "Brochure file not ready" });
+    }
+
+    try {
+      const url = row.pdfUrl;
+      const isLocal = url.startsWith("/api/brochure-assets/") || url.startsWith("/brochure-assets/");
+      const isS3 = brochureS3Store.isS3Url(url);
+
+      // Derive a friendly download filename from the run id + goal.
+      const safeGoal = String(row.goal || "brochure")
+        .split(/\s+/)
+        .slice(0, 6)
+        .join("-")
+        .replace(/[^a-zA-Z0-9_-]/g, "")
+        .slice(0, 40) || "brochure";
+      const isHtml = /\.html?($|\?)/i.test(url);
+      const ext = isHtml ? "html" : "pdf";
+      const downloadName = `${safeGoal}-${row.runId || row.id}.${ext}`;
+      const contentType = isHtml ? "text/html" : "application/pdf";
+      const inline = req.query.inline === '1';
+      const dispositionType = inline ? 'inline' : 'attachment';
+
+      if (isS3) {
+        const { stream, contentType: s3Type, contentLength } = await brochureS3Store.streamBrochure(
+          req.travelTenant.id,
+          url,
+        );
+        res.setHeader("Content-Type", s3Type || contentType);
+        res.setHeader("Content-Disposition", `${dispositionType}; filename="${downloadName}"`);
+        if (contentLength) res.setHeader("Content-Length", contentLength);
+        stream.on("error", (err) => {
+          console.error(`[brochures] S3 stream error for ${id}:`, err.message);
+          if (!res.headersSent) {
+            return res.status(502).json({ error: "Failed to stream brochure file", code: "DOWNLOAD_FAILED" });
+          }
+          res.destroy();
+        });
+        stream.pipe(res);
+        return;
+      }
+
+      if (isLocal) {
+        const localName = url.replace("/api/brochure-assets/", "").replace("/brochure-assets/", "");
+        const localPath = path.join(brochureEngine.GENERATED_DIR, localName);
+        try {
+          await fs.promises.access(localPath);
+        } catch {
+          return res.status(404).json({ error: "Brochure file not found on disk" });
+        }
+        res.setHeader("Content-Type", contentType);
+        res.setHeader("Content-Disposition", `${dispositionType}; filename="${downloadName}"`);
+        const fileStream = fs.createReadStream(localPath);
+        fileStream.on("error", (err) => {
+          console.error(`[brochures] local file stream error for ${id}:`, err.message);
+          if (!res.headersSent) {
+            return res.status(502).json({ error: "Failed to stream brochure file", code: "DOWNLOAD_FAILED" });
+          }
+          res.destroy();
+        });
+        return fileStream.pipe(res);
+      }
+
+      // External / legacy URL — redirect rather than proxying cross-origin.
+      return res.redirect(url);
+    } catch (e) {
+      console.error(`[brochures] download error for ${id}:`, e.message);
+      return res.status(502).json({ error: "Failed to stream brochure file", code: "DOWNLOAD_FAILED" });
+    }
   },
 );
 

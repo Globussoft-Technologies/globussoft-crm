@@ -36,6 +36,7 @@ const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 const digilockerClient = require("../services/digilockerClient");
+const visaDocStore = require("../lib/visaDocStore");
 // const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
 const watiClient = require("../services/whatsappWebClient"); // connected WhatsApp Web (drop-in)
 
@@ -144,6 +145,42 @@ function uploadImageOrReject(req, res, next) {
       return res.status(400).json({ error: err.message, code: "INVALID_FILE" });
     }
     console.error("[travel-microsite] upload middleware error:", err.message);
+    return res.status(500).json({ error: "Upload error", code: "UPLOAD_FAILED" });
+  });
+}
+
+// Document upload for the PUBLIC microsite (passport + Aadhaar). These are
+// PII scans, NOT editor images — they never land on the public /uploads
+// static mount. We use MEMORY storage so the buffer can be handed to
+// visaDocStore (S3 when configured, gated-disk fallback otherwise), which
+// is the same private-doc backend the Visa Sure checklist uses. Accepts
+// JPEG / PNG / PDF only, 8MB cap. Two named fields so a single multipart
+// POST carries both documents.
+const docUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (/^(image\/(png|jpe?g)|application\/pdf)$/i.test(file.mimetype || "")) return cb(null, true);
+    return cb(new Error("Only JPEG, PNG or PDF files are allowed"));
+  },
+});
+
+// Mirror of uploadImageOrReject for the two-field document POST — converts
+// multer's rejection paths into structured 400 INVALID_FILE responses so
+// the public handler's try/catch stays focused on business logic.
+function uploadDocsOrReject(req, res, next) {
+  docUpload.fields([
+    { name: "passport", maxCount: 1 },
+    { name: "aadhaar", maxCount: 1 },
+  ])(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "File too large (max 8MB)", code: "INVALID_FILE" });
+    }
+    if (/allowed|invalid/i.test(err.message || "")) {
+      return res.status(400).json({ error: err.message, code: "INVALID_FILE" });
+    }
+    console.error("[travel-microsite] doc upload middleware error:", err.message);
     return res.status(500).json({ error: "Upload error", code: "UPLOAD_FAILED" });
   });
 }
@@ -1174,6 +1211,10 @@ router.get("/microsites/public/:publicUuid/draft-summary", async (req, res) => {
         studentName: true, parentName: true,
         parentEmail: true, parentPhone: true,
         passportNumber: true,
+        // extrasJson holds the document-upload descriptors (passport /
+        // Aadhaar / consent). We derive booleans from it below — the raw
+        // JSON (which carries private storage keys) is NEVER echoed.
+        extrasJson: true,
         createdAt: true,
       },
     });
@@ -1217,6 +1258,19 @@ router.get("/microsites/public/:publicUuid/draft-summary", async (req, res) => {
       return String(n).split(/\s+/)[0];
     };
 
+    // Derive document-upload status from extrasJson without echoing the
+    // raw blob (it carries private storage keys). Drives the microsite's
+    // "Upload documents" button state + the modal's per-doc checkmarks.
+    let docs = {};
+    if (draft.extrasJson) {
+      try {
+        const parsed = JSON.parse(draft.extrasJson);
+        if (parsed && typeof parsed === "object" && parsed.documents && typeof parsed.documents === "object") {
+          docs = parsed.documents;
+        }
+      } catch { /* malformed extras → treat as no documents */ }
+    }
+
     res.json({
       id: draft.id,
       status: draft.status,
@@ -1229,6 +1283,11 @@ router.get("/microsites/public/:publicUuid/draft-summary", async (req, res) => {
       parentPhoneMasked: maskPhone(draft.parentPhone),
       parentPhoneLast4: draft.parentPhone ? String(draft.parentPhone).slice(-4) : null,
       hasPassport: !!draft.passportNumber,
+      // Document-upload status (booleans + consent timestamp only)
+      hasPassportDoc: !!docs.passport,
+      hasAadhaarDoc: !!docs.aadhaar,
+      consentGiven: !!docs.consentCapturedAt,
+      consentCapturedAt: docs.consentCapturedAt || null,
     });
   } catch (e) {
     console.error("[travel-microsite] draft-summary error:", e.message);
@@ -1899,5 +1958,123 @@ router.post("/microsites/public/:publicUuid/verify/aadhaar/callback", async (req
     res.status(500).json({ error: "Failed to complete Aadhaar verification" });
   }
 });
+
+// ─── PUBLIC document upload (Passport + Aadhaar + parent consent) ─────
+//
+// POST /api/travel/microsites/public/:publicUuid/documents
+//
+// Parent-facing document upload on the PUBLIC microsite. The uploader is
+// identified ONLY by the opaque draftToken they arrive with from the
+// landing-page registration — there is NO traveller list on this page, so
+// one family can never see or touch another's data. Documents are stored
+// via visaDocStore (private backend: S3 when configured, gated-disk
+// fallback otherwise — NEVER the public /uploads static mount), and their
+// descriptors are merged into the draft's extrasJson.documents. A parent-
+// consent checkbox is mandatory and captured as documents.consentCapturedAt.
+//
+// The response returns ONLY booleans + the consent timestamp — never a URL
+// or storage key (the docs are PII scans; same discretion as the Aadhaar
+// flow which only ever returns last-4).
+//
+// multipart/form-data fields:
+//   draftToken (text, required)
+//   consent    (text "true", required)
+//   passport   (file, required unless already uploaded on the draft)
+//   aadhaar    (file, required unless already uploaded on the draft)
+router.post(
+  "/microsites/public/:publicUuid/documents",
+  uploadDocsOrReject,
+  async (req, res) => {
+    try {
+      const ms = await loadPublicMicrosite(String(req.params.publicUuid));
+
+      const draftToken = typeof req.body.draftToken === "string" ? req.body.draftToken.trim() : "";
+      if (!draftToken) {
+        return res.status(400).json({ error: "draftToken is required", code: "MISSING_TOKEN" });
+      }
+
+      const draft = await prisma.pendingTripRegistration.findUnique({
+        where: { draftToken },
+        select: { id: true, tripId: true, draftTokenExpiresAt: true, extrasJson: true },
+      });
+      if (!draft) {
+        return res.status(404).json({ error: "Registration draft not found for this token", code: "DRAFT_NOT_FOUND" });
+      }
+      // Scope check — a leaked token from another trip's microsite can't
+      // write documents onto a draft that isn't this microsite's.
+      if (draft.tripId !== ms.tripId) {
+        return res.status(403).json({ error: "Draft token belongs to a different trip's microsite", code: "DRAFT_WRONG_TRIP" });
+      }
+      if (draft.draftTokenExpiresAt < new Date()) {
+        return res.status(400).json({ error: "Draft token has expired — please re-submit the registration form", code: "DRAFT_EXPIRED" });
+      }
+
+      // Consent is mandatory — the parent must tick the box.
+      const consentRaw = req.body.consent;
+      const consentGiven = consentRaw === true || consentRaw === "true" || consentRaw === "1" || consentRaw === "on";
+      if (!consentGiven) {
+        return res.status(400).json({ error: "Parent consent is required", code: "CONSENT_REQUIRED" });
+      }
+
+      // Parse existing extras so we MERGE (never clobber wizard-collected
+      // fields like medical notes / dietary prefs stored on the draft).
+      let extras = {};
+      if (draft.extrasJson) {
+        try { extras = JSON.parse(draft.extrasJson) || {}; } catch { extras = {}; }
+        if (typeof extras !== "object" || Array.isArray(extras)) extras = {};
+      }
+      const existingDocs = (extras.documents && typeof extras.documents === "object") ? extras.documents : {};
+
+      const passportFile = req.files?.passport?.[0] || null;
+      const aadhaarFile = req.files?.aadhaar?.[0] || null;
+
+      // Both documents must be present AFTER this operation. A doc already
+      // stored on the draft satisfies the requirement even without a fresh
+      // file this time (so a parent can re-upload just one). Neither present
+      // and none stored → reject.
+      const willHavePassport = !!passportFile || !!existingDocs.passport;
+      const willHaveAadhaar = !!aadhaarFile || !!existingDocs.aadhaar;
+      if (!willHavePassport || !willHaveAadhaar) {
+        return res.status(400).json({
+          error: "Both Passport and Aadhaar documents are required",
+          code: "MISSING_FILES",
+        });
+      }
+
+      const nextDocs = { ...existingDocs };
+      if (passportFile) {
+        if (existingDocs.passport) await visaDocStore.removeDoc(existingDocs.passport);
+        const d = await visaDocStore.storeDoc(passportFile.buffer, passportFile.mimetype);
+        nextDocs.passport = { ...d, uploadedAt: new Date().toISOString() };
+      }
+      if (aadhaarFile) {
+        if (existingDocs.aadhaar) await visaDocStore.removeDoc(existingDocs.aadhaar);
+        const d = await visaDocStore.storeDoc(aadhaarFile.buffer, aadhaarFile.mimetype);
+        nextDocs.aadhaar = { ...d, uploadedAt: new Date().toISOString() };
+      }
+      nextDocs.consentCapturedAt = new Date().toISOString();
+
+      extras.documents = nextDocs;
+      await prisma.pendingTripRegistration.update({
+        where: { id: draft.id },
+        data: { extrasJson: JSON.stringify(extras) },
+      });
+
+      // NEVER return URLs / keys — only booleans + the consent timestamp.
+      res.status(200).json({
+        ok: true,
+        documents: {
+          passport: !!nextDocs.passport,
+          aadhaar: !!nextDocs.aadhaar,
+          consentCapturedAt: nextDocs.consentCapturedAt,
+        },
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-microsite] document upload error:", e.message);
+      res.status(500).json({ error: "Failed to upload documents" });
+    }
+  },
+);
 
 module.exports = router;

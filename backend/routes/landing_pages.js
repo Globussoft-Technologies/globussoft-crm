@@ -120,9 +120,9 @@ const videoUpload = multer({
 //
 // MIME allowlist is intentionally narrow — PDFs are the canonical
 // brochure format; DOC/DOCX/PPT/PPTX cover the small "ours is a Word
-// deck" cases. 50 MB cap fits the typical agency brochure (5-49 MB).
-// Larger files belong on a CDN; we serve from local disk to keep the
-// surface simple.
+// deck" cases. 150 MB cap fits large agency brochures / media-rich
+// decks. Larger files belong on a CDN; we serve from local disk to
+// keep the surface simple.
 //
 // File extension derives from MIME (not the client filename) so a
 // renamed `.exe` masquerading as a PDF lands on disk with a `.pdf`
@@ -136,7 +136,7 @@ const ALLOWED_DOC_MIMES = {
   "application/vnd.ms-powerpoint": ".ppt",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
 };
-const DOC_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
+const DOC_UPLOAD_SIZE_BYTES = 150 * 1024 * 1024; // 150 MB
 const docUpload = multer({
   storage: multer.diskStorage({
     destination: (req, _file, cb) => {

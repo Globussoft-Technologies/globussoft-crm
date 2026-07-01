@@ -20,7 +20,7 @@
 // - subBrand — optional, defaults to "tmc"; sub-brand isolation enforced
 //   server-side via getSubBrandAccessSet.
 
-import { useEffect, useState, useContext } from "react";
+import { useEffect, useMemo, useState, useContext } from "react";
 import { Link } from "react-router-dom";
 import { Receipt, Pencil, Trash2, Calculator } from "lucide-react";
 import { fetchApi } from "../../utils/api";
@@ -131,7 +131,7 @@ export default function QuotesAdmin() {
 
   const [subBrand, setSubBrand] = useState("");
   const [status, setStatus] = useState("");
-  const [contactIdFilter, setContactIdFilter] = useState("");
+  const [nameFilter, setNameFilter] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -146,15 +146,7 @@ export default function QuotesAdmin() {
     const url = `/api/travel/quotes${qs.toString() ? `?${qs.toString()}` : ""}`;
     fetchApi(url)
       .then((d) => {
-        let rows = Array.isArray(d?.quotes) ? d.quotes : [];
-        // contactId filter is client-side — backend doesn't expose a
-        // ?contactId query param yet. Filter narrows the visible window
-        // returned by the limit-bounded list.
-        if (contactIdFilter.trim()) {
-          const needle = contactIdFilter.trim();
-          rows = rows.filter((q) => String(q.contactId).includes(needle));
-        }
-        setQuotes(rows);
+        setQuotes(Array.isArray(d?.quotes) ? d.quotes : []);
         setTotal(Number.isFinite(d?.total) ? d.total : 0);
         setPermissionDenied(false);
       })
@@ -166,6 +158,21 @@ export default function QuotesAdmin() {
       .finally(() => setLoading(false));
   };
 
+  // Name filter is a derived client-side view over the raw fetched rows —
+  // NOT re-fetched on every keystroke. Case-insensitive against the
+  // contactId -> name map (loaded separately below). The backend doesn't
+  // expose a ?name query param, and TravelQuote has no destination field
+  // to search by. Kept separate from `load()` so contactsById finishing
+  // its own fetch (after the quotes list) re-applies the filter for free
+  // via a normal re-render, instead of needing another network round-trip.
+  const visibleQuotes = useMemo(() => {
+    const needle = nameFilter.trim().toLowerCase();
+    if (!needle) return quotes;
+    return quotes.filter((q) =>
+      (contactsById[q.contactId] || "").toLowerCase().includes(needle),
+    );
+  }, [quotes, nameFilter, contactsById]);
+
   // Sync the global sub-brand selector (sidebar) into the local filter so this
   // list re-scopes when the user switches brand — consistent with InvoicesAdmin
   // and the other travel modules. Without this the page ignored the global
@@ -174,7 +181,7 @@ export default function QuotesAdmin() {
     setSubBrand(activeSubBrand || "");
   }, [activeSubBrand]);
 
-  useEffect(load, [subBrand, status, contactIdFilter]);
+  useEffect(load, [subBrand, status]);
 
   // Load a contactId → name map once so the Contact column renders names.
   useEffect(() => {
@@ -314,11 +321,11 @@ export default function QuotesAdmin() {
         </select>
         <input
           type="text"
-          placeholder="Filter by contact ID…"
-          value={contactIdFilter}
-          onChange={(e) => setContactIdFilter(e.target.value)}
+          placeholder="Filter by customer name…"
+          value={nameFilter}
+          onChange={(e) => setNameFilter(e.target.value)}
           style={{ ...selectStyle, minWidth: 200 }}
-          aria-label="Filter by contact ID"
+          aria-label="Filter by customer name"
         />
       </div>
 
@@ -439,7 +446,7 @@ export default function QuotesAdmin() {
               </tr>
             </thead>
             <tbody>
-              {quotes.map((q) => (
+              {visibleQuotes.map((q) => (
                 <tr key={q.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                   <td style={td}>
                     <strong>{contactsById[q.contactId] || `#${q.contactId}`}</strong>
@@ -507,7 +514,7 @@ export default function QuotesAdmin() {
                   )}
                 </tr>
               ))}
-              {quotes.length === 0 && (
+              {visibleQuotes.length === 0 && (
                 <tr>
                   <td
                     colSpan={canWrite ? 8 : 7}

@@ -10,7 +10,7 @@ import {
   useCallback,
   useMemo,
 } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { io } from "socket.io-client";
 import {
   Users,
@@ -136,6 +136,10 @@ import {
   // gated to mirror the share-link lifecycle's elevated-privilege posture
   // (revoke is destructive).
   Share2,
+  // TravelSubBrandSwitcher — caret on the custom (non-native) sub-brand
+  // dropdown trigger, replacing the native <select> so switching brands
+  // can't race against an OS-rendered popup.
+  ChevronDown,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -162,6 +166,7 @@ const Sidebar = ({
 }) => {
   const { user, tenant } = useContext(AuthContext);
   const notify = useNotify();
+  const navigate = useNavigate();
   const { activeSubBrand, setActiveSubBrand } = useActiveSubBrand();
   // G096: BrandKit for the active sub-brand. Module-level cache keeps this
   // cheap on every sidebar re-render; null subBrand resolves to the
@@ -475,6 +480,45 @@ const Sidebar = ({
       setActiveSubBrand(null);
     }
   }, [isTravel, activeSubBrand, subBrandAccess, setActiveSubBrand]);
+  // Stable identity for the sub-brand switcher's onChange — without this,
+  // Sidebar's frequent unrelated re-renders (60s count poll, socket events)
+  // hand the switcher a brand-new handler each time. Debounced (250ms) so a
+  // rapid run of clicks collapses into one actual switch (the last one)
+  // instead of firing a network request per click.
+  //
+  // The switcher itself is a custom (non-native) dropdown — see
+  // TravelSubBrandSwitcher below — specifically so this async round-trip
+  // (network validation + the destination page's own re-render) can happen
+  // without any native OS popup around to visually race against it, the
+  // way a native <select> did.
+  const subBrandDebounceRef = useRef(null);
+  useEffect(() => () => clearTimeout(subBrandDebounceRef.current), []);
+  const handleSubBrandChange = useCallback(
+    (next) => {
+      clearTimeout(subBrandDebounceRef.current);
+      subBrandDebounceRef.current = setTimeout(async () => {
+        if (!next) {
+          setActiveSubBrand(null);
+          navigate("/travel");
+          return;
+        }
+        try {
+          await fetchApi("/api/travel/session/switch-brand", {
+            method: "POST",
+            body: JSON.stringify({ subBrand: next }),
+          });
+          setActiveSubBrand(next);
+          navigate("/travel");
+        } catch {
+          // Rejected (403 SUB_BRAND_FORBIDDEN) or invalid (400): the error
+          // toast was already shown by fetchApi. Leave the selection
+          // unchanged — the controlled switcher snaps back to the prior
+          // activeSubBrand.
+        }
+      }, 250);
+    },
+    [setActiveSubBrand, navigate],
+  );
   const brand = tenant?.name || "Globussoft";
   const logoUrl = tenant?.logoUrl || null;
   const brandColor = tenant?.brandColor || null;
@@ -918,7 +962,7 @@ const Sidebar = ({
             sectionLabelStyle,
             subBrandAccess,
             activeSubBrand,
-            setActiveSubBrand,
+            onSubBrandChange: handleSubBrandChange,
             // G096: BrandKit-driven pinned logo for the active sub-brand.
             // Resolved here at the parent (hooks must run unconditionally;
             // safe because the hook short-circuits when subBrand is null).
@@ -1351,6 +1395,175 @@ function renderWellnessNav({
   );
 }
 
+// Custom (non-native) dropdown for the sub-brand switcher. A real component
+// (not a plain render-helper function like the others in this file) because
+// it needs its own open/close + keyboard-nav state — hooks require an
+// actual component, not a function called mid-render.
+//
+// Why not the native <select>: switching brands makes downstream pages
+// (e.g. the travel Dashboard) re-fetch + re-render against the new brand,
+// which is a legitimate, unavoidable reflow. Reopening a NATIVE <select>'s
+// OS-rendered popup while that reflow is in flight is a well-known
+// Chromium quirk that can blank the popup for a frame. A div-based popup
+// rendered entirely by React has no OS-level paint to race against, so the
+// same reflow can't cause it to blank — closing the popup on selection is
+// already the intended UX (same as a native select), so no disabled/
+// loading state is needed to keep it safe.
+function TravelSubBrandSwitcher({ activeSubBrand, visibleSubBrands, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [highlighted, setHighlighted] = useState(0);
+  const containerRef = useRef(null);
+  const listRef = useRef(null);
+
+  const options = useMemo(
+    () => [{ value: "", label: `All (${visibleSubBrands.length})` }, ...visibleSubBrands],
+    [visibleSubBrands],
+  );
+  const currentIndex = Math.max(
+    0,
+    options.findIndex((o) => o.value === (activeSubBrand || "")),
+  );
+  const currentLabel = options[currentIndex]?.label || "All";
+
+  // Click-outside + Escape close the popup. Only attached while open so
+  // idle renders don't pay for a document-level listener.
+  useEffect(() => {
+    if (!open) return undefined;
+    setHighlighted(currentIndex);
+    const onDocMouseDown = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    const onDocKeyDown = (e) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("keydown", onDocKeyDown);
+    // Focus the listbox so arrow keys work immediately without a stray
+    // Tab press — matches native <select> "opens focused" behavior.
+    listRef.current?.focus();
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("keydown", onDocKeyDown);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const commit = (value) => {
+    setOpen(false);
+    onChange(value || null);
+  };
+
+  const onTriggerKeyDown = (e) => {
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setOpen(true);
+    }
+  };
+
+  const onListKeyDown = (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlighted((h) => Math.min(h + 1, options.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlighted((h) => Math.max(h - 1, 0));
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      commit(options[highlighted]?.value);
+    } else if (e.key === "Tab") {
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div ref={containerRef} style={{ position: "relative", flex: 1 }}>
+      <button
+        type="button"
+        id="travel-sub-brand-switcher"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label="Switch active sub-brand"
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={onTriggerKeyDown}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+          fontSize: 12,
+          padding: "4px 6px",
+          borderRadius: 4,
+          border: "1px solid var(--border-color)",
+          background: "var(--surface-color)",
+          color: "var(--text-primary)",
+          cursor: "pointer",
+          fontFamily: "inherit",
+        }}
+      >
+        <span>{currentLabel}</span>
+        <ChevronDown size={12} aria-hidden style={{ flexShrink: 0, opacity: 0.7 }} />
+      </button>
+      {open && (
+        <ul
+          ref={listRef}
+          role="listbox"
+          tabIndex={-1}
+          aria-label="Switch active sub-brand"
+          aria-activedescendant={`travel-sub-brand-option-${highlighted}`}
+          onKeyDown={onListKeyDown}
+          // travel-subbrand-popup forces an opaque background via explicit
+          // index.css rules (light/dark) — var(--surface-color) is
+          // intentionally translucent in the base glassmorphism scope
+          // (rgba, for cards), which bled the sidebar nav through this
+          // floating popup. Same fix pattern as .travel-itin-suggest-modal.
+          className="travel-subbrand-popup"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            right: 0,
+            zIndex: 50,
+            margin: 0,
+            padding: 4,
+            listStyle: "none",
+            borderRadius: 6,
+            border: "1px solid var(--border-color)",
+            boxShadow: "var(--shadow-md, 0 4px 12px rgba(0,0,0,0.25))",
+            maxHeight: 200,
+            overflowY: "auto",
+          }}
+        >
+          {options.map((opt, idx) => (
+            <li
+              key={opt.value || "__all__"}
+              id={`travel-sub-brand-option-${idx}`}
+              role="option"
+              aria-selected={idx === currentIndex}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => commit(opt.value)}
+              onMouseEnter={() => setHighlighted(idx)}
+              style={{
+                padding: "6px 8px",
+                borderRadius: 4,
+                fontSize: 12,
+                cursor: "pointer",
+                color: "var(--text-primary)",
+                background:
+                  idx === highlighted ? "var(--subtle-bg, rgba(255,255,255,0.08))" : "transparent",
+              }}
+            >
+              {opt.label}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ── Travel sidebar — Day 1 scaffolding ────────────────────────────
 //
 // Slim placeholder nav for the travel vertical. Phase 1 (docs/TRAVEL_CRM_PRD.md
@@ -1369,7 +1582,7 @@ function renderTravelSubBrandHeader({
   sectionLabelStyle,
   subBrandAccess = null,
   activeSubBrand = null,
-  setActiveSubBrand = () => {},
+  onSubBrandChange = () => {},
   brandKit = null,
 }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
@@ -1490,52 +1703,11 @@ function renderTravelSubBrandHeader({
           >
             Sub-brand
           </label>
-          <select
-            id="travel-sub-brand-switcher"
-            value={activeSubBrand || ""}
-            onChange={async (e) => {
-              const next = e.target.value || null;
-              // "All" (null) just clears the client-side filter — there's no
-              // sub-brand to validate, and server-side subBrandAccess still
-              // gates every data route. Clear immediately.
-              if (!next) {
-                setActiveSubBrand(null);
-                return;
-              }
-              // WS-1: authoritative server-side check before switching.
-              // fetchApi throws + auto-surfaces a toast on 400/403, so we only
-              // reach setActiveSubBrand on a 200 — never an optimistic switch.
-              try {
-                await fetchApi("/api/travel/session/switch-brand", {
-                  method: "POST",
-                  body: JSON.stringify({ subBrand: next }),
-                });
-                setActiveSubBrand(next);
-              } catch {
-                // Rejected (403 SUB_BRAND_FORBIDDEN) or invalid (400): the
-                // error toast was already shown by fetchApi. Leave the
-                // selection unchanged — the controlled <select value=...>
-                // snaps back to the prior activeSubBrand.
-              }
-            }}
-            style={{
-              flex: 1,
-              fontSize: 12,
-              padding: "4px 6px",
-              borderRadius: 4,
-              border: "1px solid var(--border-color)",
-              background: "var(--surface-color)",
-              color: "var(--text-primary)",
-            }}
-            aria-label="Switch active sub-brand"
-          >
-            <option value="">All ({visibleSubBrands.length})</option>
-            {visibleSubBrands.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
+          <TravelSubBrandSwitcher
+            activeSubBrand={activeSubBrand}
+            visibleSubBrands={visibleSubBrands}
+            onChange={onSubBrandChange}
+          />
         </div>
       )}
     </div>

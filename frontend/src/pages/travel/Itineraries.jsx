@@ -810,7 +810,7 @@ export default function Itineraries() {
                   >
                     <td style={td}><strong>{it.destination}</strong></td>
                     <td style={td}><span style={brandBadge}>{it.subBrand}</span></td>
-                    <td style={td}>{it.contactId ? `#${it.contactId}` : "—"}</td>
+                    <td style={td}>{it.contact ? (it.contact.name || it.contact.email || `#${it.contact.id}`) : "—"}</td>
                     <td style={td}>
                       {it.startDate || it.endDate
                         ? `${fmt(it.startDate)} → ${fmt(it.endDate)}`

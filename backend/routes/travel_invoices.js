@@ -6364,11 +6364,14 @@ router.post(
       });
 
       // 3. Check siblings — if all are paid/waived, flip invoice to Paid;
-      // otherwise flip to Partial (mid-settlement state).
+      // otherwise flip to Partial (mid-settlement state). #945 defensive check:
+      // Only mark invoice as "Paid" if there is at least one milestone AND all
+      // are paid/waived. This prevents edge cases where an invoice with zero
+      // milestones could incorrectly be marked Paid.
       const siblings = await prisma.travelPaymentSchedule.findMany({
         where: { invoiceId, tenantId: req.travelTenant.id },
       });
-      const allPaid = siblings.every(
+      const allPaid = siblings.length > 0 && siblings.every(
         (s) => s.status === "paid" || s.status === "waived",
       );
       const anyPaid = siblings.some((s) => s.status === "paid");

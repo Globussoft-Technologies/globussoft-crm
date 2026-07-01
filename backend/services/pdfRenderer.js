@@ -4652,7 +4652,11 @@ async function renderTravelInvoicePdf(opts) {
   const balanceDue = explicitBalanceDue != null && Number.isFinite(explicitBalanceDue)
     ? Math.max(0, explicitBalanceDue)
     : Math.max(0, grandTotal - amountPaid);
-  const hasPartialPayment = invoice.status !== "Paid" && amountPaid > 0;
+  // A payment is partial if: (1) status is not "Paid", AND (2) some amount was paid
+  // OR (3) status is "Paid" but the actual amountPaid is less than total (invoice
+  // status mismatch — honor the math over the status field). This ensures that even
+  // if status is incorrectly set to "Paid", the PDF still shows the correct Balance Due.
+  const hasPartialPayment = (invoice.status !== "Paid" && amountPaid > 0) || (invoice.status === "Paid" && amountPaid < grandTotal && amountPaid > 0);
 
   doc.moveDown(0.5);
   const totalsY = doc.y;
@@ -4673,8 +4677,10 @@ async function renderTravelInvoicePdf(opts) {
   ty += 6;
   // S34 — paint the total label in the sub-brand's primaryColor so the
   // page's most-load-bearing figure is brand-tinted. Numeric value stays
-  // #111 (high-contrast black) for readability. Paid invoices read "Total Paid".
-  const totalLabel = invoice.status === "Paid"
+  // #111 (high-contrast black) for readability. Only show "Total Paid" if
+  // status=Paid AND amountPaid >= total (fully paid). If status=Paid but
+  // partial, show "Balance Due" instead.
+  const totalLabel = isFullyPaid
     ? "Total Paid"
     : hasPartialPayment
       ? "Balance Due"
@@ -4729,9 +4735,13 @@ async function renderTravelInvoicePdf(opts) {
   doc.moveDown(1);
   const termsY = doc.y;
   doc.font("Helvetica-Bold").fontSize(10).fillColor("#333").text("Payment Terms", 50, termsY);
-  const termsText =
-    invoice.status === "Paid"
-      ? "Payment has been received in full. Thank you for your business."
+  // Only show "fully paid" message if truly fully paid (status=Paid AND amountPaid >= total).
+  // If status=Paid but partial payment, show the payment status + balance due.
+  const isFullyPaid = invoice.status === "Paid" && amountPaid >= grandTotal;
+  const termsText = isFullyPaid
+    ? "Payment has been received in full. Thank you for your business."
+    : hasPartialPayment
+      ? `Payment received: ${fmt(amountPaid)}. Balance due: ${fmt(balanceDue)}. Please quote invoice number ${invoice.invoiceNum || invoice.id || ""} on any payment or correspondence.`
       : invoice.dueDate
         ? `Payment is due by ${formatDate(invoice.dueDate)}. Please quote invoice number ${invoice.invoiceNum || invoice.id || ""} on any payment or correspondence.`
         : "Please quote the invoice number on any payment or correspondence.";

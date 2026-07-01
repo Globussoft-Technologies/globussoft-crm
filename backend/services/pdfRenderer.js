@@ -4680,6 +4680,7 @@ async function renderTravelInvoicePdf(opts) {
   // #111 (high-contrast black) for readability. Only show "Total Paid" if
   // status=Paid AND amountPaid >= total (fully paid). If status=Paid but
   // partial, show "Balance Due" instead.
+  const isFullyPaid = invoice.status === "Paid" && amountPaid >= grandTotal;
   const totalLabel = isFullyPaid
     ? "Total Paid"
     : hasPartialPayment
@@ -4737,7 +4738,6 @@ async function renderTravelInvoicePdf(opts) {
   doc.font("Helvetica-Bold").fontSize(10).fillColor("#333").text("Payment Terms", 50, termsY);
   // Only show "fully paid" message if truly fully paid (status=Paid AND amountPaid >= total).
   // If status=Paid but partial payment, show the payment status + balance due.
-  const isFullyPaid = invoice.status === "Paid" && amountPaid >= grandTotal;
   const termsText = isFullyPaid
     ? "Payment has been received in full. Thank you for your business."
     : hasPartialPayment

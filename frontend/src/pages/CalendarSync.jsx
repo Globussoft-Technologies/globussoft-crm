@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useContext } from 'react';
 import { Calendar, RefreshCw, ExternalLink, Check, Plug, Trash2, Users, Video, Plus, AlertTriangle } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../App';
 
 const PROVIDERS = [
   {
@@ -66,6 +67,12 @@ function attendeeCount(att) {
 
 export default function CalendarSync() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const tenantVertical = user?.tenant?.vertical || 'generic';
+  // Travel tenants only use Google Calendar; generic + wellness keep both.
+  const availableProviders = PROVIDERS.filter((p) =>
+    tenantVertical === 'travel' ? p.key === 'google' : true,
+  );
   const [status, setStatus] = useState({
     google: { connected: false, lastSyncAt: null },
     outlook: { connected: false, lastSyncAt: null },
@@ -117,7 +124,7 @@ export default function CalendarSync() {
     const next = { google: { connected: false, lastSyncAt: null }, outlook: { connected: false, lastSyncAt: null } };
     const collected = [];
     await Promise.all(
-      PROVIDERS.map(async (p) => {
+      availableProviders.map(async (p) => {
         try {
           const evs = await fetchApi(`/api/calendar/${p.key}/events`);
           if (Array.isArray(evs)) {
@@ -371,7 +378,9 @@ export default function CalendarSync() {
         <div>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', margin: 0 }}>Calendar Sync</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0 }}>
-            Connect your Google and Outlook calendars to sync meetings into the CRM
+            {tenantVertical === 'travel'
+              ? 'Connect your Google Calendar to sync meetings into the CRM'
+              : 'Connect your Google and Outlook calendars to sync meetings into the CRM'}
           </p>
         </div>
       </header>
@@ -381,7 +390,7 @@ export default function CalendarSync() {
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
         gap: '1.25rem', marginBottom: '2rem',
       }}>
-        {PROVIDERS.map((p) => {
+        {availableProviders.map((p) => {
           const s = status[p.key];
           return (
             <div

@@ -18,7 +18,12 @@ const GOOGLE_REDIRECT_URI =
   process.env.GOOGLE_CALENDAR_REDIRECT_URI ||
   process.env.GOOGLE_REDIRECT_URI ||
   "http://localhost:5000/api/calendar/google/callback";
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+// Strip trailing slash AND a stray "/api" suffix so a deployment whose
+// FRONTEND_URL is mistakenly set to the API base (e.g. https://host/api)
+// still produces a working SPA link instead of /api/calendar-sync.
+const FRONTEND_URL = (process.env.FRONTEND_URL || "http://localhost:5173")
+  .replace(/\/+$/, "")
+  .replace(/\/api$/i, "");
 
 const SCOPES = [
   "https://www.googleapis.com/auth/calendar.readonly",

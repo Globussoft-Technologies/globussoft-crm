@@ -55,7 +55,12 @@ const GMAIL_REDIRECT_URI =
   process.env.GMAIL_REDIRECT_URI ||
   process.env.GOOGLE_GMAIL_REDIRECT_URI ||
   "http://localhost:5000/api/gmail/callback";
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+// Strip trailing slash AND a stray "/api" suffix so a deployment whose
+// FRONTEND_URL is mistakenly set to the API base (e.g. https://host/api)
+// still produces a working SPA link instead of /api/gmail.
+const FRONTEND_URL = (process.env.FRONTEND_URL || "http://localhost:5173")
+  .replace(/\/+$/, "")
+  .replace(/\/api$/i, "");
 
 // Scopes: read (sync/list), send (compose from CRM), modify (labels/read-state).
 const SCOPES = [

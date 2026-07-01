@@ -12,7 +12,12 @@ const zoomClient = require("../services/zoomClient");
 const MS_CLIENT_ID = process.env.MS_CLIENT_ID;
 const MS_CLIENT_SECRET = process.env.MS_CLIENT_SECRET;
 const MS_REDIRECT_URI = process.env.MS_REDIRECT_URI;
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+// Strip trailing slash AND a stray "/api" suffix so a deployment whose
+// FRONTEND_URL is mistakenly set to the API base (e.g. https://host/api)
+// still produces a working SPA link instead of /api/calendar-sync.
+const FRONTEND_URL = (process.env.FRONTEND_URL || "http://localhost:5173")
+  .replace(/\/+$/, "")
+  .replace(/\/api$/i, "");
 
 const TOKEN_URL = `https://login.microsoftonline.com/common/oauth2/v2.0/token`;
 const AUTH_URL = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize`;

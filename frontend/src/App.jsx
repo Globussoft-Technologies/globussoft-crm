@@ -206,6 +206,7 @@ const TravelItineraries = lazy(() => import("./pages/travel/Itineraries"));
 const TravelTrips = lazy(() => import("./pages/travel/Trips"));
 const TravelTripDetail = lazy(() => import("./pages/travel/TripDetail"));
 const TravelWebCheckinQueue = lazy(() => import("./pages/travel/WebCheckinQueue"));
+const TravelAutomationHealth = lazy(() => import("./pages/travel/AutomationHealth"));
 // Slice C2 — Passport OCR verification queue (ADMIN+MANAGER). PRD_PASSPORT_OCR §5.4.
 const TravelPassportVerificationQueue = lazy(() => import("./pages/travel/PassportVerificationQueue"));
 const TravelCostMaster = lazy(() => import("./pages/travel/CostMaster"));
@@ -1462,6 +1463,7 @@ export default function App() {
                   alias stays registered so existing bookmarks / sidebar links keep working. */}
               <Route path="travel/web-checkins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
               <Route path="travel/webcheckins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
+              <Route path="travel/automation-health" element={<TravelOnly><TravelAutomationHealth /></TravelOnly>} />
               {/* Slice C2 — Passport OCR verification queue. Backend route gates
                   ADMIN+MANAGER; frontend RoleGuard mirrors so non-privileged
                   users hit a friendly access-denied surface rather than the

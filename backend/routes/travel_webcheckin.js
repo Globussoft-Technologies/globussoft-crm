@@ -1050,6 +1050,63 @@ router.get(
   },
 );
 
+// GET /api/travel/automation-health/per-airline — rolling 24h web check-in
+// automation success rate per airline (PRD FR-8/AC-5), derived from
+// WebCheckinAutomationRun rows. Shape:
+//   { windowHours, perAirline: [{ airlineCode, total, success, failure,
+//       captcha, notImplemented, successRate, lastFailureAt }] }
+// `successRate` counts only attempts where automation could actually run
+// (success + failure + captcha) — `not-implemented` rows are excluded from the
+// denominator since they reflect a missing adapter, not a degraded one.
+router.get(
+  "/automation-health/per-airline",
+  verifyToken,
+  requirePermission("web_checkins", "read"),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const windowHours = Math.min(168, Math.max(1, parseInt(req.query.windowHours, 10) || 24));
+      const since = new Date(Date.now() - windowHours * 3600 * 1000);
+      const runs = await prisma.webCheckinAutomationRun.findMany({
+        where: { tenantId: req.travelTenant.id, createdAt: { gte: since } },
+        select: { airlineCode: true, outcome: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+      });
+
+      const byAirline = new Map();
+      for (const r of runs) {
+        const code = r.airlineCode || "??";
+        if (!byAirline.has(code)) {
+          byAirline.set(code, {
+            airlineCode: code, total: 0, success: 0, failure: 0,
+            captcha: 0, notImplemented: 0, lastFailureAt: null,
+          });
+        }
+        const a = byAirline.get(code);
+        a.total += 1;
+        if (r.outcome === "success") a.success += 1;
+        else if (r.outcome === "captcha") a.captcha += 1;
+        else if (r.outcome === "not-implemented") a.notImplemented += 1;
+        else a.failure += 1;
+        if (r.outcome !== "success" && r.outcome !== "not-implemented" && !a.lastFailureAt) {
+          a.lastFailureAt = r.createdAt; // runs are desc → first non-success is latest
+        }
+      }
+
+      const perAirline = [...byAirline.values()].map((a) => {
+        const denom = a.success + a.failure + a.captcha; // exclude not-implemented
+        return { ...a, successRate: denom > 0 ? Number((a.success / denom).toFixed(3)) : null };
+      });
+      perAirline.sort((x, y) => y.total - x.total);
+
+      res.json({ windowHours, perAirline });
+    } catch (e) {
+      console.error("[travel-webcheckin] automation-health error:", e.message);
+      res.status(500).json({ error: "Failed to compute automation health" });
+    }
+  },
+);
+
 // ─── Get / create / patch / delete ───────────────────────────────────
 
 // GET /api/travel/webcheckins/:id
@@ -1171,6 +1228,7 @@ router.patch(
         mealPref,
         attemptsJson,
         boardingPassUrl,
+        automationSkipped,
       } = req.body || {};
 
       if (status !== undefined) {
@@ -1199,6 +1257,9 @@ router.patch(
         }
       }
       if (boardingPassUrl !== undefined) data.boardingPassUrl = boardingPassUrl || null;
+      // Operator opt-out of automation (PRD FR-11). When true the automation
+      // engine never picks this row up — only the manual upload path applies.
+      if (automationSkipped !== undefined) data.automationSkipped = !!automationSkipped;
 
       if (Object.keys(data).length === 0) {
         return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
@@ -1319,7 +1380,7 @@ router.post(
       // deliveredAt mark below happens either way (matches the old stub
       // contract where the DB transition was always real).
       if (passengerPhone) {
-        const portalBase = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
+        const portalBase = process.env.PUBLIC_BASE_URL || `https://${req.headers.host}`;
         const passLink = /^https?:\/\//i.test(existing.boardingPassUrl)
           ? existing.boardingPassUrl
           : `${portalBase}${existing.boardingPassUrl}`;
@@ -1343,6 +1404,50 @@ router.post(
     } catch (e) {
       console.error("[travel-webcheckin] deliver error:", e.message);
       res.status(500).json({ error: "Failed to mark delivered" });
+    }
+  },
+);
+
+// POST /api/travel/webcheckins/:id/automation/retry — manually re-arm the
+// automation engine for a row (PRD FR-12). Resets status to 'reminded' and
+// clears attemptsJson so the engine treats it as a fresh attempt on its next
+// tick. Use case: airline portal was down at the original window and has since
+// recovered. ADMIN+MANAGER gated (web_checkins.update).
+router.post(
+  "/webcheckins/:id/automation/retry",
+  verifyToken,
+  requirePermission("web_checkins", "update"),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const existing = await prisma.webCheckin.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!existing) return res.status(404).json({ error: "Web check-in not found", code: "NOT_FOUND" });
+      if (existing.status === "done") {
+        return res.status(409).json({
+          error: "Check-in already completed — nothing to retry",
+          code: "ALREADY_DONE",
+        });
+      }
+      if (existing.automationSkipped) {
+        return res.status(409).json({
+          error: "Automation is skipped for this row — clear automationSkipped first",
+          code: "AUTOMATION_SKIPPED",
+        });
+      }
+      const updated = await prisma.webCheckin.update({
+        where: { id },
+        data: { status: "reminded", attemptsJson: null },
+      });
+      res.json({ ok: true, webcheckin: updated });
+    } catch (e) {
+      console.error("[travel-webcheckin] automation retry error:", e.message);
+      res.status(500).json({ error: "Failed to re-arm automation" });
     }
   },
 );

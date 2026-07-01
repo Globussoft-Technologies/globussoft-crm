@@ -191,6 +191,7 @@ model Tenant {
   travelMarkupRules                   TravelMarkupRule[]
   tmcTrips                            TmcTrip[]
   webCheckins                         WebCheckin[]
+  webCheckinAutomationRuns            WebCheckinAutomationRun[]
   travelTripReviews                   TravelTripReview[]
   travelPortalNotifications           TravelPortalNotification[]
   supplierCredentials                 SupplierCredential[]
@@ -6463,12 +6464,40 @@ model WebCheckin {
   boardingPassUrl    String?
   deliveredAt        DateTime?
   assignedAgentId    Int?
+  // Airline check-in automation (PRD_AIRLINE_WEBCHECKIN_AUTOMATION FR-9/FR-11).
+  // automationSkipped: operator opt-out — the automation engine (cron/
+  // webCheckinAutomation.js) never picks up a row where this is true; only the
+  // manual upload path applies. completedAt: set when automation (or manual
+  // upload) flips the row to 'done'.
+  automationSkipped  Boolean   @default(false)
+  completedAt        DateTime?
   tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
   @@index([tenantId, status, windowOpenAt])
   @@index([tenantId, contactId])
+}
+
+/// Per-attempt audit + health metric for the airline web check-in automation
+/// engine (PRD_AIRLINE_WEBCHECKIN_AUTOMATION FR-8/FR-10). One row per adapter
+/// run. `outcome` in success | failure | captcha | not-implemented. The rolling
+/// 24h success rate per airline is derived from these rows and surfaced at
+/// GET /api/travel/automation-health/per-airline. Append-only; never updated.
+model WebCheckinAutomationRun {
+  id           Int      @id @default(autoincrement())
+  tenantId     Int      @default(1)
+  webCheckinId Int
+  airlineCode  String
+  outcome      String // success | failure | captcha | not-implemented
+  attempt      Int      @default(1)
+  durationMs   Int?
+  errorReason  String?  @db.Text
+  createdAt    DateTime @default(now())
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, airlineCode, createdAt])
+  @@index([webCheckinId])
 }
 
 /// Post-trip customer review (2026-06-16). One per completed itinerary. The

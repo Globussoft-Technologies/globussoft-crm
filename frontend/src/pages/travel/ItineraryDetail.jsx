@@ -406,6 +406,54 @@ export default function ItineraryDetail() {
     }
   };
 
+  const recordPayment = async (kind, amountStr) => {
+    const amount = Number(amountStr);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      notify.error("Please enter a valid amount");
+      return;
+    }
+
+    const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
+    const paid = itin.advancePaidAmount ? Number(itin.advancePaidAmount) : 0;
+
+    if (kind === "balance") {
+      const balanceDue = Math.max(0, total - paid);
+      if (amount > balanceDue + 0.01) {
+        notify.error(`Balance payment cannot exceed balance due of ${fmtMoney(balanceDue, itin.currency)}`);
+        return;
+      }
+    }
+
+    const endpoint = kind === "balance"
+      ? `/api/travel/itineraries/${id}/record-balance-payment`
+      : `/api/travel/itineraries/${id}/record-advance-payment`;
+
+    try {
+      const paymentRef = `ref_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const res = await fetchApi(endpoint, {
+        method: "POST",
+        body: JSON.stringify({
+          amount,
+          paymentReference: paymentRef,
+          paymentMethod: "manual",
+        }),
+      });
+
+      const cur = (itin.currency || "INR") === "INR" ? "₹" : `${itin.currency} `;
+      const newBalance = res.balanceDue || 0;
+      const statusMsg = res.status === "fully_paid"
+        ? "Booking is now fully paid ✓"
+        : `Balance remaining: ${cur}${Number(newBalance).toLocaleString("en-IN")}`;
+
+      notify.success(
+        `${kind === "balance" ? "Balance" : "Advance"} payment of ${cur}${Number(amount).toLocaleString("en-IN")} recorded. ${statusMsg}`
+      );
+      load();
+    } catch (e) {
+      notify.error(e?.body?.error || `Failed to record ${kind} payment`);
+    }
+  };
+
   const generateShare = async () => {
     try {
       const res = await fetchApi(`/api/travel/itineraries/${id}/share`, {
@@ -704,6 +752,82 @@ export default function ItineraryDetail() {
           </div>
         )}
       </header>
+
+      {/* Payment status and balance payment section */}
+      {status !== "draft" && status !== "rejected" && (
+        <section
+          aria-label="Payment status"
+          style={{
+            marginBottom: 20,
+            padding: 16,
+            borderRadius: 10,
+            border: "1px solid var(--border-color)",
+            background: "var(--surface-color)",
+          }}
+        >
+          <h3 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 600 }}>
+            Payment Status
+          </h3>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }}>
+            <div>
+              <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>Total Amount</span>
+              <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)" }}>
+                {fmtMoney(itin.totalAmount, itin.currency)}
+              </div>
+            </div>
+            <div>
+              <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>Paid So Far</span>
+              <div style={{ fontSize: 16, fontWeight: 600, color: "var(--primary-color, var(--accent-color))" }}>
+                {fmtMoney(itin.advancePaidAmount || 0, itin.currency)}
+              </div>
+            </div>
+            <div>
+              <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>Balance Due</span>
+              <div style={{ fontSize: 16, fontWeight: 600, color: itin.status === "fully_paid" ? "rgba(22,163,74,0.8)" : "rgba(217,119,6,0.8)" }}>
+                {fmtMoney(Math.max(0, Number(itin.totalAmount || 0) - Number(itin.advancePaidAmount || 0)), itin.currency)}
+              </div>
+            </div>
+          </div>
+
+          {canEdit && itin.status !== "fully_paid" && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  const amount = await notify.prompt({
+                    title: "Record Advance Payment",
+                    message: `Total: ${fmtMoney(itin.totalAmount, itin.currency)}`,
+                    placeholder: String(Number(itin.totalAmount || 0) * 0.5),
+                  });
+                  if (amount !== null) recordPayment("advance", amount);
+                }}
+                style={primaryBtn}
+                aria-label="Record advance payment"
+              >
+                <Check size={14} /> Record Advance Payment
+              </button>
+              {itin.status === "advance_paid" && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const balanceDue = Math.max(0, Number(itin.totalAmount || 0) - Number(itin.advancePaidAmount || 0));
+                    const amount = await notify.prompt({
+                      title: "Record Balance Payment",
+                      message: `Balance due: ${fmtMoney(balanceDue, itin.currency)}`,
+                      placeholder: String(balanceDue),
+                    });
+                    if (amount !== null) recordPayment("balance", amount);
+                  }}
+                  style={secondaryBtn}
+                  aria-label="Record balance payment"
+                >
+                  <Check size={14} /> Record Balance Payment
+                </button>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Customer-initiated cancellation — admin resolution surface. The portal
           sets cancellationStatus; here the advisor approves/declines/refunds. */}

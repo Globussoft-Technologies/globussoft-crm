@@ -2263,7 +2263,10 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
     );
   }
   const items = Array.isArray(itinerary.items) ? itinerary.items : [];
-  const total = itinerary.totalAmount != null ? Number(itinerary.totalAmount) : 0;
+  // Calculate total from itinerary.totalAmount if available and > 0, fallback to summing items
+  const itemsTotal = items.reduce((sum, item) => sum + (item.totalPrice ? Number(item.totalPrice) : 0), 0);
+  const totalAmount = itinerary.totalAmount != null ? Number(itinerary.totalAmount) : 0;
+  const total = totalAmount > 0 ? totalAmount : itemsTotal;
   const pax = itinerary.pax && itinerary.pax > 0 ? itinerary.pax : 1;
   // Per-person figure derived from the advisor's quoted group total ÷ pax.
   const perPerson = total / pax;

@@ -200,7 +200,7 @@ test.describe("Travel microsites API — admin CRUD", () => {
     expect(body.tripId).toBe(tripId);
   });
 
-  test("PATCH amends itineraryHtml + faqJson", async ({ request }) => {
+  test("PATCH amends itineraryHtml", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!tripId) test.skip(true, "no trip");
     const res = await patch(request, token, `/api/travel/trips/${tripId}/microsite`, {

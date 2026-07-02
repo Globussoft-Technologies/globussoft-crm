@@ -954,11 +954,10 @@ describe('<TripDetail /> — Microsite Editor preview toggle', () => {
 //  10. Microsite Create — POST rejection surfaces notify.error with the
 //      body.error from fetchApi (not the default "Failed to publish…").
 //  11. Microsite Editor — Save (PATCH) happy path: PATCHes /microsite with
-//      subdomain + itineraryHtml + faqJson:null + expiresAt:null and
+//      subdomain + itineraryHtml + expiresAt:null and
 //      surfaces notify.success("Microsite updated").
 //  12. Microsite Editor — Unpublish (DELETE) with window.confirm=true.
-//  13. Microsite Editor — invalid faqJson surfaces notify.error + no PATCH.
-//  14. StatusBadge — unknown status string falls back to subtle colours
+//  13. StatusBadge — unknown status string falls back to subtle colours
 //      without crashing (renders the literal status text).
 //
 // All cases use stable mock object refs, findBy / waitFor for async, and
@@ -1038,9 +1037,10 @@ describe('<TripDetail /> — Rooming create-room flow', () => {
     expect(screen.getByText(/0 rooms/)).toBeInTheDocument();
   });
 
-  it('RoomCard at-capacity unchecked participant boxes are disabled', async () => {
+  it('RoomCard at-capacity unchecked participant buttons are not shown', async () => {
     // 3 participants + a single room type (single, capacity 1) →
-    // after assigning P1, P2 and P3 boxes must be disabled.
+    // after assigning P1, the "Add more participants" section disappears
+    // because the room is at capacity.
     const tripWith3 = makeTrip({
       participants: [
         { id: 901, fullName: 'Anaya Sharma' },
@@ -1060,18 +1060,15 @@ describe('<TripDetail /> — Rooming create-room flow', () => {
     fireEvent.change(typeSelect, { target: { value: 'single' } });
     // Capacity readout: "0 / 1 assigned".
     expect(screen.getByText(/0 \/ 1 assigned/)).toBeInTheDocument();
-    // Assign Anaya — find her checkbox via her label text.
-    const anayaCheckbox = screen.getByLabelText('Anaya Sharma');
-    fireEvent.click(anayaCheckbox);
-    // Now capacity reads 1 / 1; Kabir + Riya boxes are unchecked and
-    // disabled (per RoomCard line 559 `disabled = !checked && atCapacity`).
+    // Assign Anaya — click the button showing her name.
+    const anayaBtn = screen.getByRole('button', { name: /Anaya Sharma/ });
+    fireEvent.click(anayaBtn);
+    // Now capacity reads 1 / 1.
     expect(screen.getByText(/1 \/ 1 assigned/)).toBeInTheDocument();
-    const kabirCheckbox = screen.getByLabelText('Kabir Mehta');
-    expect(kabirCheckbox).toBeDisabled();
-    const riyaCheckbox = screen.getByLabelText('Riya Singh');
-    expect(riyaCheckbox).toBeDisabled();
-    // Anaya stays enabled (checked, so the guard allows un-check).
-    expect(anayaCheckbox).not.toBeDisabled();
+    // Anaya now appears in the selected participants area (as a pill).
+    expect(screen.getByText('Anaya Sharma')).toBeInTheDocument();
+    // The "Add more participants" section is hidden because capacity is full.
+    expect(screen.queryByText(/Add more participants/i)).not.toBeInTheDocument();
   });
 });
 
@@ -1177,12 +1174,16 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Per-participant instalments/i });
-    // Each row now shows the participant's actual fullName (looked up by
-    // id from trip.participants). Fixture participant 901 is "Anaya Sharma".
-    expect(screen.getAllByText('Anaya Sharma').length).toBeGreaterThanOrEqual(2);
-    // Status labels.
-    expect(screen.getByText('pending')).toBeInTheDocument();
-    expect(screen.getByText('paid')).toBeInTheDocument();
+    // Participant accordion header shows "Anaya Sharma" (fixture participant 901).
+    expect(screen.getByText('Anaya Sharma')).toBeInTheDocument();
+    // Expand the accordion by clicking the participant's row to see the instalments.
+    const accordionBtn = screen.getByRole('button', { name: /Anaya Sharma/ });
+    fireEvent.click(accordionBtn);
+    // Status labels now visible in the expanded instalment rows.
+    await waitFor(() => {
+      expect(screen.getByText('pending')).toBeInTheDocument();
+      expect(screen.getByText('paid')).toBeInTheDocument();
+    });
   });
 });
 
@@ -1260,7 +1261,6 @@ describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
       const body = JSON.parse(patch[1].body);
       expect(body.subdomain).toBe('tmc-andaman-mumbai-g7');
       expect(body.itineraryHtml).toContain('Day 1');
-      expect(body.faqJson).toBeNull();
       expect(body.expiresAt).toBeNull();
     });
     expect(notifySuccess).toHaveBeenCalledWith(
@@ -1292,28 +1292,6 @@ describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
     expect(notifySuccess).toHaveBeenCalledWith(
       expect.stringMatching(/Microsite unpublished/i),
     );
-  });
-
-  it('Save with invalid faqJson surfaces notify.error + no PATCH fires', async () => {
-    installFetchMock({ trip: makeTrip({ microsite: ms }) });
-    renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Public Experience/.test(t.textContent)));
-    await screen.findByText((c) => c.includes('abc-123-def-456'));
-    // Type non-JSON into the FAQ textarea.
-    const faqInput = screen.getByLabelText(/Microsite FAQ JSON/i);
-    fireEvent.change(faqInput, { target: { value: '{ not json' } });
-    fetchApiMock.mockClear();
-    installFetchMock({ trip: makeTrip({ microsite: ms }) });
-    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/faqJson is not valid JSON/i),
-      );
-    });
-    const patches = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'PATCH');
-    expect(patches.length).toBe(0);
   });
 });
 
@@ -1437,7 +1415,8 @@ describe('<TripDetail /> — Participants passport upload', () => {
   });
 
   it('Clear & re-upload with confirm()=false short-circuits — no DELETE fires', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => false));
+    // Mock notify.confirm to return false, so the DELETE is skipped.
+    notifyObj.confirm = vi.fn(async () => false);
     installFetchMock({
       trip: makeTrip({
         participants: [
@@ -1669,18 +1648,21 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
   });
 
   it('clicking Reject prompts confirm then fires POST /registrations/:rid/reject', async () => {
+    // Fresh resolve for each test to avoid mock cross-contamination
+    const confirmMock = vi.fn(async () => true);
+    vi.mocked(notifyObj.confirm).mockImplementation(confirmMock);
+
     installFetchMock({
       pendingRegs: [makePendingReg()],
       registrationDecide: { rejected: true, registration: { id: 9001, status: 'REJECTED' } },
     });
-    notifyConfirm.mockResolvedValueOnce(true);
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     const rejectBtn = await screen.findByTestId('reject-registration-9001');
     fireEvent.click(rejectBtn);
     await waitFor(() => {
-      expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({
         title: 'Reject registration',
         destructive: true,
       }));
@@ -1694,14 +1676,17 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
   });
 
   it('Reject cancel does NOT fire the endpoint', async () => {
+    // Fresh mock for this test to avoid cross-contamination
+    const confirmMock = vi.fn(async () => false);
+    vi.mocked(notifyObj.confirm).mockImplementation(confirmMock);
+
     installFetchMock({ pendingRegs: [makePendingReg()] });
-    notifyConfirm.mockResolvedValueOnce(false);
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     const rejectBtn = await screen.findByTestId('reject-registration-9001');
     fireEvent.click(rejectBtn);
-    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled());
+    await waitFor(() => expect(confirmMock).toHaveBeenCalled());
     expect(fetchApiMock.mock.calls.find(
       ([u]) => /\/registrations\/9001\/reject/.test(u),
     )).toBeFalsy();

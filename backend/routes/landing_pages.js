@@ -6,6 +6,7 @@ const multer = require("multer");
 const { verifyToken } = require("../middleware/auth");
 const { renderPage } = require("../services/landingPageRenderer");
 const landingPageGeneratorLLM = require("../services/landingPageGeneratorLLM");
+const { uploadFile } = require("../services/s3Service");
 const { snapshotSafe, VERSION_SOURCES } = require("../lib/landingPageVersions");
 
 const router = express.Router();
@@ -159,6 +160,47 @@ const docUpload = multer({
   },
 });
 
+// ── S3 upload helper for landing-page media ───────────────────────
+//
+// multer saves the upload to a local temp file first (disk storage keeps a
+// large brochure/video off the heap while multipart is parsed + lets the
+// MIME/size fileFilter run); we then push the bytes to S3 and return the
+// public S3 URL. Why S3 and not a local /api/uploads path: an S3 URL is
+// served directly by AWS — it never touches Nginx OR the Node event loop on
+// download, so even a big video can't slow the site, and there's no auth-
+// guard 401 for public visitors. The local temp file is deleted once S3 has
+// the bytes (whether the upload succeeds or throws).
+//
+// `kind` is "images" | "videos" | "documents". The S3 key is namespaced by
+// tenant to mirror the on-disk layout and keep tenants isolated.
+async function uploadLandingMediaToS3(req, kind) {
+  const file = req.file;
+  const buffer = await fs.promises.readFile(file.path);
+  // Use the operator's original filename (sanitized inside uploadFile) so the
+  // S3 key + download filename are meaningful ("brochure.pdf") instead of the
+  // random multer temp name. Fall back to the temp name if absent.
+  const originalName = file.originalname || path.basename(file.path);
+  // Documents (brochures) download instead of opening inline — set
+  // Content-Disposition: attachment. Images/videos stay inline (no header) so
+  // they render/play on the page. Strip quotes/newlines from the header value.
+  const opts = {};
+  if (kind === "documents") {
+    const safeName = originalName.replace(/[^\w.-]/g, "_").slice(0, 80);
+    opts.contentDisposition = `attachment; filename="${safeName}"`;
+  }
+  try {
+    return await uploadFile(
+      buffer,
+      originalName,
+      file.mimetype,
+      `landing-page-${kind}/tenant-${req.user.tenantId}`,
+      opts,
+    );
+  } finally {
+    await fs.promises.unlink(file.path).catch(() => {});
+  }
+}
+
 // #378: slug validation — only lowercase a-z, 0-9, hyphens; max 50 chars.
 // Anything else produces broken public URLs (spaces, uppercase, special chars).
 const SLUG_PATTERN = /^[a-z0-9-]+$/;
@@ -302,17 +344,28 @@ router.post(
       next();
     });
   },
-  (req, res) => {
+  async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: "No image file provided (field 'image')" });
     }
-    const url = `/api/uploads/landing-page-images/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
-    res.status(201).json({
-      url,
-      mimetype: req.file.mimetype,
-      size: req.file.size,
-      filename: path.basename(req.file.path),
-    });
+    try {
+      const url = await uploadLandingMediaToS3(req, "images");
+      res.status(201).json({
+        url,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        filename: path.basename(req.file.path),
+      });
+    } catch (e) {
+      // S3 not configured (e.g. CI api_tests env has no AWS_S3_* vars) →
+      // 503 STORAGE_UNCONFIGURED, matching the auth profile-picture route's
+      // pattern (auth.js:1241). Lets the gated spec tolerate it in CI.
+      if (/S3 bucket not configured/.test(e.message || "")) {
+        return res.status(503).json({ error: "Image storage is not configured", code: "STORAGE_UNCONFIGURED" });
+      }
+      console.error("[landing-pages] image S3 upload failed:", e.message);
+      res.status(500).json({ error: "Image upload failed" });
+    }
   }
 );
 
@@ -344,17 +397,25 @@ router.post(
       next();
     });
   },
-  (req, res) => {
+  async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: "No video file provided (field 'video')" });
     }
-    const url = `/api/uploads/landing-page-videos/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
-    res.status(201).json({
-      url,
-      mimetype: req.file.mimetype,
-      size: req.file.size,
-      filename: path.basename(req.file.path),
-    });
+    try {
+      const url = await uploadLandingMediaToS3(req, "videos");
+      res.status(201).json({
+        url,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        filename: path.basename(req.file.path),
+      });
+    } catch (e) {
+      if (/S3 bucket not configured/.test(e.message || "")) {
+        return res.status(503).json({ error: "Video storage is not configured", code: "STORAGE_UNCONFIGURED" });
+      }
+      console.error("[landing-pages] video S3 upload failed:", e.message);
+      res.status(500).json({ error: "Video upload failed" });
+    }
   }
 );
 
@@ -386,17 +447,25 @@ router.post(
       next();
     });
   },
-  (req, res) => {
+  async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: "No document file provided (field 'document')" });
     }
-    const url = `/api/uploads/landing-page-documents/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
-    res.status(201).json({
-      url,
-      mimetype: req.file.mimetype,
-      size: req.file.size,
-      filename: path.basename(req.file.path),
-    });
+    try {
+      const url = await uploadLandingMediaToS3(req, "documents");
+      res.status(201).json({
+        url,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        filename: path.basename(req.file.path),
+      });
+    } catch (e) {
+      if (/S3 bucket not configured/.test(e.message || "")) {
+        return res.status(503).json({ error: "Document storage is not configured", code: "STORAGE_UNCONFIGURED" });
+      }
+      console.error("[landing-pages] document S3 upload failed:", e.message);
+      res.status(500).json({ error: "Document upload failed" });
+    }
   }
 );
 

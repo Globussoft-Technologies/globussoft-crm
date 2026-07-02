@@ -22,7 +22,13 @@
 //   - Local /uploads/... URL (pass-through; renderer outputs <video>, not <iframe>)
 //   - Anything else: pass through unchanged so we don't break exotic providers.
 
-const LOCAL_UPLOAD_PREFIX = '/uploads/landing-page-videos/';
+// Canonical prefix for new uploads (must be under /api/* — Nginx on the
+// deployed demo only proxies /api/* to the backend; a bare /uploads/...
+// URL falls through to the SPA catch-all and serves index.html instead of
+// the file). The legacy bare-/uploads/ prefix is also recognised so pages
+// saved before this fix keep rendering a <video> tag instead of an <iframe>.
+const LOCAL_UPLOAD_PREFIX = '/api/uploads/landing-page-videos/';
+const LEGACY_LOCAL_UPLOAD_PREFIX = '/uploads/landing-page-videos/';
 
 // Recognise URLs that point directly at a video file (Pexels CDN, Cloudflare
 // Stream MP4 endpoints, S3-served clips, etc.). The renderer must emit a
@@ -33,7 +39,8 @@ const DIRECT_VIDEO_FILE_RE = /\.(mp4|webm|mov|ogv|ogg|m4v)(\?|#|$)/i;
 
 function isLocalUpload(url) {
   if (!url || typeof url !== 'string') return false;
-  return url.trim().startsWith(LOCAL_UPLOAD_PREFIX);
+  const t = url.trim();
+  return t.startsWith(LOCAL_UPLOAD_PREFIX) || t.startsWith(LEGACY_LOCAL_UPLOAD_PREFIX);
 }
 
 function isDirectVideoFile(url) {

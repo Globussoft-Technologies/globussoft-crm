@@ -2169,10 +2169,12 @@ function ReviewCarouselEditor({ p, updateProp, field }) {
 // (YouTube Shorts / watch / youtu.be → /embed; Vimeo → player.vimeo).
 // Mismatch between this and the backend would cause "preview works,
 // public render shows 'refused to connect'" — keep them in sync.
-const LOCAL_VIDEO_UPLOAD_PREFIX = '/uploads/landing-page-videos/';
+const LOCAL_VIDEO_UPLOAD_PREFIX = '/api/uploads/landing-page-videos/';
+const LEGACY_LOCAL_VIDEO_UPLOAD_PREFIX = '/uploads/landing-page-videos/';
 function isLocalVideoUpload(url) {
   if (!url || typeof url !== 'string') return false;
-  return url.trim().startsWith(LOCAL_VIDEO_UPLOAD_PREFIX);
+  const t = url.trim();
+  return t.startsWith(LOCAL_VIDEO_UPLOAD_PREFIX) || t.startsWith(LEGACY_LOCAL_VIDEO_UPLOAD_PREFIX);
 }
 function normalizeVideoEmbedUrl(url) {
   if (!url || typeof url !== 'string') return '';

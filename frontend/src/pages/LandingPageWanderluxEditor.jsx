@@ -275,7 +275,10 @@ function FileField({ label, value, onChange, placeholder, accept }) {
       {value && (
         <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', margin: '0.35rem 0 0' }}>
           Linked file:{' '}
-          <a href={value} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)' }}>{value}</a>
+          {/* Pages saved before the /api/uploads fix have a bare /uploads/...
+              value — rewrite for the preview link only (not the stored
+              value) so clicking it doesn't hit the SPA catch-all. */}
+          <a href={value.startsWith('/uploads/') ? `/api${value}` : value} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)' }}>{value}</a>
         </p>
       )}
     </div>

@@ -1306,6 +1306,14 @@ class Component extends DCLogic {
     /* ----- brochure ----- */
     const br = cfg.brochure || {};
     out.showBrochure = !!(br.enabled && br.fields && br.fields.length);
+    /* Pages saved before the /api/uploads fix have a bare /uploads/... URL
+       baked into their stored config. Nginx on the deployed demo only
+       proxies /api/* to the backend, so a bare /uploads/... request falls
+       through the SPA catch-all and downloads index.html instead of the
+       file. Rewrite the legacy prefix at render time so already-published
+       pages self-heal without an operator having to re-upload. */
+    let brFileUrl = br.fileUrl || '';
+    if (brFileUrl.startsWith('/uploads/')) brFileUrl = '/api' + brFileUrl;
     out.brochure = { eyebrow:br.eyebrow, title:br.title, body:br.body, note:br.note, submitLabel:br.submitLabel || 'Download',
       successTitle: br.successTitle || 'Thank you!', successBody: br.successBody || 'Your brochure is on the way.',
       /* fileUrl — operator-uploaded PDF or pasted hosted link. Surfaces
@@ -1313,7 +1321,7 @@ class Component extends DCLogic {
          card so visitors can grab the file immediately in addition to
          the email-it-to-you flow. Empty string = no direct link, success
          card stays text-only. */
-      fileUrl: br.fileUrl || '' };
+      fileUrl: brFileUrl };
     /* Only render the outer copy card when there's actually copy to put
        in it — empty body + empty note collapses the card entirely so the
        form alone sits on the page (avoids an empty white rectangle). */

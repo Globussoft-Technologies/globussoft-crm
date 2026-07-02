@@ -644,8 +644,8 @@ function renderComponent(component, slug) {
       // Vimeo / Wistia paste — normalised to the provider's /embed
       // path so X-Frame-Options doesn't block the render — or (b) an
       // upload via POST /api/landing-pages/upload-video, which lands
-      // at /uploads/landing-page-videos/tenant-<id>/<file> and renders
-      // as a native <video> control.
+      // at /api/uploads/landing-page-videos/tenant-<id>/<file> and
+      // renders as a native <video> control.
       const title = escapeHtml(props.title || "");
       const subtitle = escapeHtml(props.subtitle || "");
       const normalized = normalizeVideoEmbedUrl(props.url);

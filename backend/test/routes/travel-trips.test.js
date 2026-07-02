@@ -761,6 +761,39 @@ describe('GET /api/travel/trips/:id/ops-dashboard', () => {
       assignmentCount: 1, participantsRoomed: 0, participantsUnroomed: 1,
     });
   });
+
+  test('zero doc requirements → docsPct=0 (not penalised, but shows 0%)', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100, tripCode: 'x', destination: 'D', departDate: new Date(),
+      returnDate: new Date(), status: 'confirmed', legalEntity: 'tmc_nexus',
+      pricePerStudent: 50000,
+    });
+    // 1 participant, all consent → consentPct=100
+    prisma.tripParticipant.findMany.mockResolvedValue([
+      { id: 1, consentCapturedAt: new Date() },
+    ]);
+    // 50k expected, 50k received → paymentPct=100
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { amount: 50000, paidAmount: 50000, status: 'paid' },
+    ]);
+    // Zero doc requirements
+    prisma.tripDocumentRequirement.findMany.mockResolvedValue([]);
+    // 1 participant roomed → roomingPct=100
+    prisma.roomingAssignment.findMany.mockResolvedValue([
+      { participantIds: JSON.stringify([1]) },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/ops-dashboard')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    // Weighted: 0.3*1 + 0.3*0 + 0.3*1 + 0.1*1 = 0.3 + 0 + 0.3 + 0.1 = 0.7 → score=70
+    expect(res.body.departureReadiness).toMatchObject({
+      score: 70,
+      components: {
+        consentPct: 100, docsPct: 0, paymentPct: 100, roomingPct: 100,
+      },
+    });
+  });
 });
 
 // -----------------------------------------------------------------------------

@@ -58,11 +58,11 @@ const helmetMiddleware = helmet({
       // Follow-up issue: migrate legacy inline event handlers to attached
       // listeners + emit a nonce per request, then drop 'unsafe-inline'.
       // unpkg.com added 2026-06-23 — the Wanderlux landing-page renderer
-       // (backend/services/templates/wanderlux/support.js) loads React,
-       // ReactDOM, and Babel-standalone from unpkg at runtime to mount the
-       // client-rendered <x-dc> template. Without this entry the dc-runtime
-       // throws "window.React is not available yet" and the page renders as
-       // raw {{ tokens }}.
+      // (backend/services/templates/wanderlux/support.js) loads React,
+      // ReactDOM, and Babel-standalone from unpkg at runtime to mount the
+      // client-rendered <x-dc> template. Without this entry the dc-runtime
+      // throws "window.React is not available yet" and the page renders as
+      // raw {{ tokens }}.
       // checkout.razorpay.com added 2026-06-26 — the public trip-booking page
       // (frontend/src/pages/public/TripBooking.jsx) loads the Razorpay checkout
       // SDK via <script src="https://checkout.razorpay.com/v1/checkout.js">.
@@ -72,7 +72,13 @@ const helmetMiddleware = helmet({
       // payment gateway." This only surfaced on the deployed box (Nginx/Express
       // serve the SPA WITH this header); the Vite dev server ships no CSP, which
       // is why local worked and demo didn't.
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net", "https://unpkg.com", "https://checkout.razorpay.com"],
+      scriptSrc: [
+        "'self'",
+        "'unsafe-inline'",
+        "https://cdn.jsdelivr.net",
+        "https://unpkg.com",
+        "https://checkout.razorpay.com",
+      ],
       // 'unsafe-inline' on style-src is REQUIRED today because Vite/React
       // emit inline style attributes (style={{}}). Hash-based or nonce-based
       // tightening requires a build-step change.
@@ -110,7 +116,11 @@ const helmetMiddleware = helmet({
       // falls back to default-src 'self' and blocks that iframe, so the
       // checkout modal never renders (the "stuck on processing" symptom on
       // the public trip-booking page). Scoped to Razorpay's own origins.
-      frameSrc: ["'self'", "https://api.razorpay.com", "https://checkout.razorpay.com"],
+      frameSrc: [
+        "'self'",
+        "https://api.razorpay.com",
+        "https://checkout.razorpay.com",
+      ],
       // object-src 'none' kills <object> / <embed> / Flash. Strict.
       objectSrc: ["'none'"],
       // form-action: limit the destination of <form action=> POSTs to self —
@@ -244,7 +254,12 @@ function buildStrictCspHelmet(reportOnly) {
         // nonce attribute set by the HTML template substitution layer.
         // checkout.razorpay.com mirrors the transitional CSP above so the
         // Razorpay SDK <script> survives the eventual CSP_ENFORCE flip.
-        scriptSrc: ["'self'", "https://cdn.jsdelivr.net", "https://checkout.razorpay.com", nonceScriptSrc],
+        scriptSrc: [
+          "'self'",
+          "https://cdn.jsdelivr.net",
+          "https://checkout.razorpay.com",
+          nonceScriptSrc,
+        ],
         styleSrc: ["'self'", "https://fonts.googleapis.com", nonceStyleSrc],
         imgSrc: ["'self'", "data:", "blob:", "https:"],
         connectSrc: [
@@ -263,7 +278,11 @@ function buildStrictCspHelmet(reportOnly) {
         fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
         // frame-src for the Razorpay payment modal iframe — mirrors the
         // transitional CSP so the enforce-flip keeps checkout working.
-        frameSrc: ["'self'", "https://api.razorpay.com", "https://checkout.razorpay.com"],
+        frameSrc: [
+          "'self'",
+          "https://api.razorpay.com",
+          "https://checkout.razorpay.com",
+        ],
         objectSrc: ["'none'"],
         formAction: ["'self'"],
         // Strict 'none' here (vs 'self' in transitional) — clickjacking defense

@@ -131,6 +131,18 @@ test.describe("Travel trip billing — rooming", () => {
     created.roomIds.push(body.id);
   });
 
+  test("POST /rooming with duplicate participant assignment → 409 DUPLICATE_ASSIGNMENT", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !tripId || !participantId) test.skip(true, "deps missing");
+    const res = await post(request, token, `/api/travel/trips/${tripId}/rooming`, {
+      roomNumber: "102",
+      roomType: "twin",
+      participantIds: [participantId],
+    });
+    expect(res.status()).toBe(409);
+    expect((await res.json()).code).toBe("DUPLICATE_ASSIGNMENT");
+  });
+
   test("POST /rooming with too many participants → 400 ROOM_CAPACITY_EXCEEDED", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !tripId || !participantId) test.skip(true, "deps missing");
@@ -141,6 +153,19 @@ test.describe("Travel trip billing — rooming", () => {
     });
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe("ROOM_CAPACITY_EXCEEDED");
+  });
+
+  test("POST /rooming with duplicate room number → 409 DUPLICATE_ROOM_NUMBER", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !tripId || !participantId || created.roomIds.length === 0) test.skip(true, "deps missing");
+    // Try to create a room with same number as first room (which is "101")
+    const res = await post(request, token, `/api/travel/trips/${tripId}/rooming`, {
+      roomNumber: "101",
+      roomType: "twin",
+      participantIds: [],
+    });
+    expect(res.status()).toBe(409);
+    expect((await res.json()).code).toBe("DUPLICATE_ROOM_NUMBER");
   });
 
   test("POST /rooming with bad roomType → 400 INVALID_ROOM_TYPE", async ({ request }) => {
@@ -183,6 +208,25 @@ test.describe("Travel trip billing — rooming", () => {
     });
     expect(res.status()).toBe(200);
     expect((await res.json()).roomNumber).toBe("101A");
+  });
+
+  test("PATCH /rooming with duplicate room number → 409 DUPLICATE_ROOM_NUMBER", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !tripId || created.roomIds.length === 0) test.skip(true, "deps missing");
+    // First, create a second room with number "102"
+    const createRes = await post(request, token, `/api/travel/trips/${tripId}/rooming`, {
+      roomNumber: "102",
+      roomType: "twin",
+      participantIds: [],
+    });
+    if (!createRes.ok()) test.skip(true, "failed to create second room");
+    const room2Id = (await createRes.json()).id;
+    // Try to PATCH room 1 to use room 2's number
+    const res = await patch(request, token, `/api/travel/trips/${tripId}/rooming/${created.roomIds[0]}`, {
+      roomNumber: "102",
+    });
+    expect(res.status()).toBe(409);
+    expect((await res.json()).code).toBe("DUPLICATE_ROOM_NUMBER");
   });
 });
 
@@ -290,6 +334,34 @@ test.describe("Travel trip billing — rooming XLSX export", () => {
     expect(res.status()).toBe(404);
     const body = await res.json().catch(() => ({}));
     expect(body.code).toBe("TRIP_NOT_FOUND");
+  });
+
+  test("GET /rooming/export.pdf returns PDF with rooming data", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !tripId) test.skip(true, "deps missing");
+    const res = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/trips/${tripId}/rooming/export.pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(res.status()).toBe(200);
+    expect(res.headers()["content-type"]).toContain("application/pdf");
+    const buf = await res.body();
+    expect(buf.length).toBeGreaterThan(100);
+  });
+
+  test("POST /rooming/auto allocates unassigned participants", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !tripId) test.skip(true, "no trip");
+    const res = await post(request, token, `/api/travel/trips/${tripId}/rooming/auto`, {
+      roomTypes: ["twin"],
+      startingRoomNumber: 200,
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    expect(typeof body.created).toBe("number");
+    expect(typeof body.skipped).toBe("number");
   });
 });
 
@@ -412,6 +484,16 @@ test.describe("Travel trip billing — instalments", () => {
     });
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe("INVALID_STATUS");
+  });
+
+  test("PATCH /instalments with paidAmount > amount → 400 PAID_EXCEEDS_TOTAL", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !tripId || created.instalmentIds.length === 0) test.skip(true, "no instalments");
+    const res = await patch(request, token, `/api/travel/trips/${tripId}/instalments/${created.instalmentIds[0]}`, {
+      paidAmount: 99999,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("PAID_EXCEEDS_TOTAL");
   });
 
   test("GET /instalments filters by status", async ({ request }) => {

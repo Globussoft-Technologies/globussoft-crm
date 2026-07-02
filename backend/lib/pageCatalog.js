@@ -755,13 +755,14 @@ const PAGE_CATALOG = [
     category: 'Travel Sales',
     requiredPermissions: [{ module: 'leads', action: 'read' }],
   },
-  {
-    path: '/travel/inbound-leads',
-    label: 'Inbound Leads',
-    description: 'Webhook-ingested raw leads pre-conversion',
-    category: 'Travel Sales',
-    requiredPermissions: [{ module: 'inbound_leads', action: 'read' }],
-  },
+  // COMMENTED OUT - Inbound Leads hidden from sidebar and search
+  // {
+  //   path: '/travel/inbound-leads',
+  //   label: 'Inbound Leads',
+  //   description: 'Webhook-ingested raw leads pre-conversion',
+  //   category: 'Travel Sales',
+  //   requiredPermissions: [{ module: 'inbound_leads', action: 'read' }],
+  // },
   {
     path: '/travel/diagnostics',
     label: 'Diagnostics',

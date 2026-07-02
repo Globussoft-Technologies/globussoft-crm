@@ -309,8 +309,9 @@ export default function WebCheckinQueue() {
                         data-testid={`status-badge-${r.id}`}
                         style={{
                           background: sc.bg, color: sc.color,
-                          padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
+                          padding: "4px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
                           textTransform: "uppercase", letterSpacing: 0.5,
+                          display: "inline-flex", alignItems: "center", height: 24, whiteSpace: "nowrap",
                         }}
                       >
                         {r.status}
@@ -331,7 +332,7 @@ export default function WebCheckinQueue() {
                       )}
                     </td>
                     <td style={td}>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", minWidth: 0 }}>
                         <button
                           type="button"
                           onClick={() => onUploadClick(r.id)}
@@ -339,8 +340,8 @@ export default function WebCheckinQueue() {
                           disabled={uploadingId === r.id}
                           aria-label={`Upload boarding pass for ${r.pnr}`}
                         >
-                          <Upload size={12} aria-hidden style={{ marginRight: 4 }} />
-                          {uploadingId === r.id ? "Uploading…" : "Upload"}
+                          <Upload size={12} aria-hidden style={{ marginRight: 3, flexShrink: 0 }} />
+                          <span style={{ whiteSpace: "nowrap" }}>{uploadingId === r.id ? "Uploading…" : "Upload"}</span>
                         </button>
                         <input
                           ref={(el) => { fileInputs.current[r.id] = el; }}
@@ -357,11 +358,11 @@ export default function WebCheckinQueue() {
                           disabled={deliveringId === r.id || !!r.deliveredAt}
                           aria-label={`Deliver boarding pass for ${r.pnr}`}
                         >
-                          <Send size={12} aria-hidden style={{ marginRight: 4 }} />
-                          {r.deliveredAt ? "Delivered" : (deliveringId === r.id ? "Sending…" : "Deliver")}
+                          <Send size={12} aria-hidden style={{ marginRight: 3, flexShrink: 0 }} />
+                          <span style={{ whiteSpace: "nowrap" }}>{r.deliveredAt ? "Delivered" : (deliveringId === r.id ? "Sending…" : "Deliver")}</span>
                         </button>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                          <UserCheck size={12} aria-hidden style={{ color: "var(--text-secondary)" }} />
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+                          <UserCheck size={12} aria-hidden style={{ color: "var(--text-secondary)", flexShrink: 0 }} />
                           <select
                             value={r.assignedAgentId ?? ""}
                             onChange={(e) => onReassign(r, e.target.value)}
@@ -422,10 +423,10 @@ const selectStyle = {
   minWidth: 160, fontSize: 13,
 };
 const miniSelectStyle = {
-  padding: "2px 6px", borderRadius: 4,
+  padding: "3px 6px", borderRadius: 4,
   border: "1px solid var(--border-color)",
   background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 12, minWidth: 110,
+  fontSize: 12, minWidth: 100, height: 28,
 };
 const refreshBtn = {
   display: "inline-flex", alignItems: "center",
@@ -435,11 +436,11 @@ const refreshBtn = {
   fontSize: 13, cursor: "pointer",
 };
 const actionBtn = {
-  display: "inline-flex", alignItems: "center",
-  padding: "4px 8px", borderRadius: 4,
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  padding: "4px 10px", borderRadius: 4,
   border: "1px solid var(--border-color)",
   background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 12, cursor: "pointer",
+  fontSize: 12, cursor: "pointer", height: 28, minWidth: 70, whiteSpace: "nowrap",
 };
 const pagerBtn = {
   display: "inline-flex", alignItems: "center", gap: 2,
@@ -453,12 +454,12 @@ const empty = {
   color: "var(--text-secondary)", fontSize: 14,
 };
 const th = {
-  textAlign: "left", padding: "10px 12px", fontSize: 12,
+  textAlign: "left", padding: "12px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)", whiteSpace: "nowrap",
+  background: "var(--subtle-bg)", whiteSpace: "nowrap", fontWeight: 600,
 };
 const td = {
-  padding: "10px 12px", fontSize: 14,
-  color: "var(--text-primary)", verticalAlign: "middle",
+  padding: "12px 12px", fontSize: 14,
+  color: "var(--text-primary)", verticalAlign: "middle", minWidth: 0,
 };

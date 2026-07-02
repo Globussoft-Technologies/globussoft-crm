@@ -368,6 +368,45 @@ components:
         winProbability: { type: integer, minimum: 0, maximum: 100 }
         pipelineId: { type: integer }
 
+    # ─── Marketing ───────────────────────────────────────────────────
+    Campaign:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        channel: { type: string, enum: [email, sms, whatsapp, push, multi] }
+        status:
+          type: string
+          enum: [draft, scheduled, running, paused, completed, archived]
+        audienceFilter:
+          type: object
+          description: JSON filter — see `lib/audienceFilter.js`.
+        scheduledFor: { type: string, format: date-time, nullable: true }
+        sent: { type: integer, readOnly: true }
+        opened: { type: integer, readOnly: true }
+        clicked: { type: integer, readOnly: true }
+      allOf:
+        - $ref: "#/components/schemas/AuditMeta"
+    Sequence:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        isActive: { type: boolean }
+        triggerType: { type: string, enum: [manual, event, schedule] }
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              delayMinutes: { type: integer }
+              channel: { type: string, enum: [email, sms, whatsapp, task] }
+              templateId: { type: integer, nullable: true }
+              conditionJson:
+                { type: string, description: JSON-encoded condition tree. }
+      allOf:
+        - $ref: "#/components/schemas/AuditMeta"
+
     # ─── Communications ──────────────────────────────────────────────
     EmailMessage:
       type: object
@@ -420,45 +459,6 @@ components:
         link: { type: string, nullable: true }
         readAt: { type: string, format: date-time, nullable: true }
         createdAt: { type: string, format: date-time, readOnly: true }
-
-    # ─── Marketing ───────────────────────────────────────────────────
-    Campaign:
-      type: object
-      properties:
-        id: { type: integer, readOnly: true }
-        name: { type: string }
-        channel: { type: string, enum: [email, sms, whatsapp, push, multi] }
-        status:
-          type: string
-          enum: [draft, scheduled, running, paused, completed, archived]
-        audienceFilter:
-          type: object
-          description: JSON filter — see `lib/audienceFilter.js`.
-        scheduledFor: { type: string, format: date-time, nullable: true }
-        sent: { type: integer, readOnly: true }
-        opened: { type: integer, readOnly: true }
-        clicked: { type: integer, readOnly: true }
-      allOf:
-        - $ref: "#/components/schemas/AuditMeta"
-    Sequence:
-      type: object
-      properties:
-        id: { type: integer, readOnly: true }
-        name: { type: string }
-        isActive: { type: boolean }
-        triggerType: { type: string, enum: [manual, event, schedule] }
-        steps:
-          type: array
-          items:
-            type: object
-            properties:
-              delayMinutes: { type: integer }
-              channel: { type: string, enum: [email, sms, whatsapp, task] }
-              templateId: { type: integer, nullable: true }
-              conditionJson:
-                { type: string, description: JSON-encoded condition tree. }
-      allOf:
-        - $ref: "#/components/schemas/AuditMeta"
 
     # ─── Workflow / Automation ───────────────────────────────────────
     Workflow:
@@ -9987,544 +9987,6 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   # ════════════════════════════════════════════════════════════════════
-  # MULTICHANNEL LEAD INTAKE (G015)
-  # ════════════════════════════════════════════════════════════════════
-  /leads/intake:
-    post:
-      summary: Canonical body-channel lead intake alias
-      description: |
-        Multi-channel lead intake endpoint
-        (PRD_TRAVEL_MULTICHANNEL_LEADS G015). The channel is read from
-        `req.body.channel` rather than the URL path; the handler forwards
-        to the legacy `/api/travel/inbound/leads/:channel` so both
-        surfaces share one envelope, one idempotency contract, one
-        Touchpoint write, one cooldown gate.
-
-        Accepted channels (matching the 17-channel allowlist): voyagr,
-        web_form, whatsapp, ads, adsgpt, meta_ad, manual, indiamart,
-        justdial, tradeindia, voice, sms, email, google_ad, linkedin_ad,
-        referral, chat.
-
-        Open / public — no JWT — but the route is rate-limited and the
-        legacy handler enforces channel-specific authentication
-        (e.g. signed webhooks, API keys per channel).
-      tags: [Marketing]
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [channel, tenantSlug]
-              properties:
-                channel: { type: string, example: "voyagr" }
-                tenantSlug: { type: string }
-                email: { type: string, format: email }
-                phone: { type: string }
-                name: { type: string }
-                subBrand:
-                  { type: string, enum: [tmc, rfu, travelstall, visasure] }
-                meta:
-                  type: object
-                  description: Channel-specific extra payload (formId, utmSource, etc.).
-                externalRef:
-                  type: string
-                  description: Channel-side ID, used for idempotency.
-            example:
-              channel: "voyagr"
-              tenantSlug: "globussoft-travel"
-              email: "asha@example.com"
-              phone: "+919876543210"
-              name: "Asha Verma"
-              subBrand: "tmc"
-              externalRef: "vgr_lead_42"
-      responses:
-        "200":
-          description: Lead ingested or de-duped.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  action:
-                    { type: string, enum: [created, deduped, cooldown_dropped] }
-                  touchpointId: { type: integer }
-                  matchedRoutingRuleId: { type: integer, nullable: true }
-              example:
-                action: "created"
-                touchpointId: 1041
-                matchedRoutingRuleId: 7
-        "400":
-          description: Missing channel.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorResponse" }
-              example:
-                error: "channel is required in body for the canonical /api/leads/intake alias"
-                code: "MISSING_CHANNEL"
-        "429": { $ref: "#/components/responses/RateLimited" }
-
-  # ════════════════════════════════════════════════════════════════════
-  # TRAVEL — WHATSAPP (Q9, Wati transport)
-  # ════════════════════════════════════════════════════════════════════
-  /travel/whatsapp/status:
-    get:
-      summary: Read the travel WhatsApp connection status
-      description: |
-        Returns whether the Wati credential is configured + last-sync
-        metadata. Distinct from `/api/whatsapp/*` (Meta Cloud, wellness/
-        generic) — this is the travel-tenant Wati transport (Q9).
-      tags: [Travel — Operations]
-      responses:
-        "200":
-          description: Status.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  configured: { type: boolean }
-                  provider: { type: string, example: "wati" }
-                  lastSyncAt:
-                    { type: string, format: date-time, nullable: true }
-                  webhookHealthy: { type: boolean }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-  /travel/whatsapp/media:
-    get:
-      summary: "[PUBLIC] Proxy media download from Wati"
-      description: Authenticated media download proxy — proxies a Wati media URL with the configured tenant credentials.
-      tags: [Travel — Operations]
-      security: []
-      parameters:
-        - in: query
-          name: messageId
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: Media bytes.
-          content:
-            application/octet-stream:
-              schema: { type: string, format: binary }
-        "404": { $ref: "#/components/responses/NotFound" }
-  /travel/whatsapp/templates:
-    get:
-      summary: List Wati-side approved templates
-      tags: [Travel — Operations]
-      responses:
-        "200":
-          description: Templates.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  templates:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        name: { type: string }
-                        language: { type: string }
-                        category: { type: string }
-                        status: { type: string }
-  /travel/whatsapp/send:
-    post:
-      summary: Send a WhatsApp template message via Wati
-      tags: [Travel — Operations]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [to, templateName]
-              properties:
-                to: { type: string, description: E.164 phone. }
-                templateName: { type: string }
-                language: { type: string, default: "en" }
-                variables:
-                  type: array
-                  items: { type: string }
-                contactId: { type: integer, nullable: true }
-            example:
-              to: "+919876543210"
-              templateName: "trip_payment_reminder"
-              language: "en"
-              variables: ["Asha", "TINV-2026-0091", "₹25,000"]
-              contactId: 421
-      responses:
-        "200":
-          description: Sent.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  messageId: { type: string }
-                  delivered: { type: boolean }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "503": { description: Wati provider unreachable. }
-  /travel/whatsapp/send-media:
-    post:
-      summary: Send a WhatsApp media message (image, doc, etc.)
-      tags: [Travel — Operations]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [to, mediaUrl, mediaType]
-              properties:
-                to: { type: string }
-                mediaUrl: { type: string, format: uri }
-                mediaType: { type: string, enum: [image, document, video] }
-                caption: { type: string }
-      responses:
-        "200": { description: Sent. }
-        "400": { $ref: "#/components/responses/ValidationError" }
-  /travel/whatsapp/sync:
-    post:
-      summary: Trigger a Wati conversation sync (operator manual)
-      description: Pulls fresh conversations from Wati; idempotent.
-      tags: [Travel — Operations]
-      responses:
-        "200":
-          description: Sync stats.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  conversationsFetched: { type: integer }
-                  messagesIngested: { type: integer }
-  /travel/whatsapp/webhook:
-    get:
-      summary: "[PUBLIC] Wati webhook verification handshake"
-      tags: [Travel — Operations]
-      security: []
-      responses:
-        "200": { description: Verified. }
-    post:
-      summary: "[PUBLIC] Wati inbound webhook"
-      description: Inbound message + status updates from Wati. Signature-verified inside the handler.
-      tags: [Travel — Operations]
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              description: Wati-side payload shape (eventType, message, contact, etc.).
-      responses:
-        "200": { description: Acknowledged. }
-
-  # ════════════════════════════════════════════════════════════════════
-  # TRAVEL — SUPPLIER RECONCILIATION (G044/G046)
-  # ════════════════════════════════════════════════════════════════════
-  /travel/suppliers/{id}/reconciliation-batches:
-    post:
-      summary: Create a draft reconciliation batch (ADMIN/MANAGER)
-      description: |
-        Operator-driven supplier-statement reconciliation. Each batch
-        holds the lines parsed from a supplier statement; subsequent calls
-        bulk-add lines, run the auto-matcher, mark review / reconciliation
-        / dispute.
-      tags: [Travel — Suppliers & Pricing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [statementMonth]
-              properties:
-                statementMonth: { type: string, example: "2026-05" }
-                notes: { type: string }
-      responses:
-        "201":
-          description: Batch created.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  id: { type: integer }
-                  statementMonth: { type: string }
-                  status:
-                    {
-                      type: string,
-                      enum: [draft, reviewed, reconciled, disputed],
-                    }
-        "400": { $ref: "#/components/responses/ValidationError" }
-    get:
-      summary: List reconciliation batches for a supplier
-      tags: [Travel — Suppliers & Pricing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      responses:
-        "200":
-          description: Batches.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  batches: { type: array, items: { type: object } }
-                  total: { type: integer }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}:
-    get:
-      summary: Read one reconciliation batch with lines
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      responses:
-        "200":
-          description: Batch detail.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  id: { type: integer }
-                  status: { type: string }
-                  lines: { type: array, items: { type: object } }
-        "404": { $ref: "#/components/responses/NotFound" }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/lines/bulk:
-    post:
-      summary: Bulk-add lines parsed from a supplier statement
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [lines]
-              properties:
-                lines:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      pnr: { type: string, nullable: true }
-                      bookingRef: { type: string, nullable: true }
-                      description: { type: string }
-                      amount: { type: number }
-                      currency: { type: string }
-                      statementDate: { type: string, format: date }
-            example:
-              lines:
-                - pnr: "AI-5678"
-                  description: "Room block — 20 doubles × 3 nights"
-                  amount: 150000
-                  currency: "INR"
-                  statementDate: "2026-05-15"
-      responses:
-        "201":
-          description: Lines added.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  added: { type: integer }
-                  totalLines: { type: integer }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/auto-match:
-    post:
-      summary: Run the auto-matcher on the batch's lines
-      description: |
-        Pairs each unmatched statement line with the closest TravelSupplierPayable
-        by PNR / bookingRef / description-amount-tolerance. Returns a per-line
-        match-decision payload.
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      responses:
-        "200":
-          description: Match decisions.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  matched: { type: integer }
-                  unmatched: { type: integer }
-                  decisions: { type: array, items: { type: object } }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/lines/{lineId}/manual-match:
-    post:
-      summary: Operator-picked manual match for a line
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-        - in: path
-          name: lineId
-          required: true
-          schema: { type: integer }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [payableId]
-              properties:
-                payableId: { type: integer }
-                comment: { type: string }
-      responses:
-        "200": { description: Matched. }
-        "404": { $ref: "#/components/responses/NotFound" }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/review:
-    post:
-      summary: Transition batch draft → reviewed
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      responses:
-        "200": { description: Reviewed. }
-        "409": { description: Invalid transition. }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/reconcile:
-    post:
-      summary: Transition batch reviewed → reconciled
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      responses:
-        "200": { description: Reconciled. }
-        "409": { description: Invalid transition. }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/dispute:
-    post:
-      summary: Flag the batch as disputed
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [reason]
-              properties:
-                reason: { type: string }
-      responses:
-        "200": { description: Disputed. }
-        "400": { $ref: "#/components/responses/ValidationError" }
-  /travel/suppliers/{id}/invoice-uploads:
-    post:
-      summary: Upload a supplier invoice PDF / CSV / image
-      description: |
-        Multipart upload — PDF, CSV, JPG, PNG only, 10 MB cap. File is
-        stored under `uploads/supplier-invoices/`; the filename is
-        UUID-derived from the validated MIME type (NOT the client filename).
-      tags: [Travel — Suppliers & Pricing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                file: { type: string, format: binary }
-                statementMonth: { type: string }
-      responses:
-        "201":
-          description: Uploaded.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  id: { type: integer }
-                  filename: { type: string }
-                  mimeType: { type: string }
-                  bytes: { type: integer }
-        "413": { description: File exceeds 10 MB. }
-        "415": { description: Unsupported MIME type. }
-    get:
-      summary: List supplier invoice uploads
-      tags: [Travel — Suppliers & Pricing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      responses:
-        "200":
-          description: Uploads.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  uploads: { type: array, items: { type: object } }
-                  total: { type: integer }
-  /travel/suppliers/{id}/invoice-uploads/{uploadId}/match:
-    post:
-      summary: Link an uploaded invoice to a payable
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: uploadId
-          required: true
-          schema: { type: integer }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [payableId]
-              properties:
-                payableId: { type: integer }
-      responses:
-        "200": { description: Matched. }
-  /travel/suppliers/{id}/invoice-uploads/{uploadId}:
-    delete:
-      summary: Delete a supplier invoice upload (ADMIN)
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: uploadId
-          required: true
-          schema: { type: integer }
-      responses:
-        "204": { description: Deleted. }
-        "403": { $ref: "#/components/responses/Forbidden" }
-
-  # ════════════════════════════════════════════════════════════════════
   # TRAVEL — ENGINE WEIGHTS + QUOTE/ITINERARY TEMPLATES + STALL/CURRICULUM/POIS
   # ════════════════════════════════════════════════════════════════════
   /travel/engine-weights:
@@ -11636,3 +11098,541 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
               example:
                 { error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" }
+
+  # ════════════════════════════════════════════════════════════════════
+  # MULTICHANNEL LEAD INTAKE (G015)
+  # ════════════════════════════════════════════════════════════════════
+  /leads/intake:
+    post:
+      summary: Canonical body-channel lead intake alias
+      description: |
+        Multi-channel lead intake endpoint
+        (PRD_TRAVEL_MULTICHANNEL_LEADS G015). The channel is read from
+        `req.body.channel` rather than the URL path; the handler forwards
+        to the legacy `/api/travel/inbound/leads/:channel` so both
+        surfaces share one envelope, one idempotency contract, one
+        Touchpoint write, one cooldown gate.
+
+        Accepted channels (matching the 17-channel allowlist): voyagr,
+        web_form, whatsapp, ads, adsgpt, meta_ad, manual, indiamart,
+        justdial, tradeindia, voice, sms, email, google_ad, linkedin_ad,
+        referral, chat.
+
+        Open / public — no JWT — but the route is rate-limited and the
+        legacy handler enforces channel-specific authentication
+        (e.g. signed webhooks, API keys per channel).
+      tags: [Marketing]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel, tenantSlug]
+              properties:
+                channel: { type: string, example: "voyagr" }
+                tenantSlug: { type: string }
+                email: { type: string, format: email }
+                phone: { type: string }
+                name: { type: string }
+                subBrand:
+                  { type: string, enum: [tmc, rfu, travelstall, visasure] }
+                meta:
+                  type: object
+                  description: Channel-specific extra payload (formId, utmSource, etc.).
+                externalRef:
+                  type: string
+                  description: Channel-side ID, used for idempotency.
+            example:
+              channel: "voyagr"
+              tenantSlug: "globussoft-travel"
+              email: "asha@example.com"
+              phone: "+919876543210"
+              name: "Asha Verma"
+              subBrand: "tmc"
+              externalRef: "vgr_lead_42"
+      responses:
+        "200":
+          description: Lead ingested or de-duped.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  action:
+                    { type: string, enum: [created, deduped, cooldown_dropped] }
+                  touchpointId: { type: integer }
+                  matchedRoutingRuleId: { type: integer, nullable: true }
+              example:
+                action: "created"
+                touchpointId: 1041
+                matchedRoutingRuleId: 7
+        "400":
+          description: Missing channel.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                error: "channel is required in body for the canonical /api/leads/intake alias"
+                code: "MISSING_CHANNEL"
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ════════════════════════════════════════════════════════════════════
+  # TRAVEL — WHATSAPP (Q9, Wati transport)
+  # ════════════════════════════════════════════════════════════════════
+  /travel/whatsapp/status:
+    get:
+      summary: Read the travel WhatsApp connection status
+      description: |
+        Returns whether the Wati credential is configured + last-sync
+        metadata. Distinct from `/api/whatsapp/*` (Meta Cloud, wellness/
+        generic) — this is the travel-tenant Wati transport (Q9).
+      tags: [Travel — Operations]
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configured: { type: boolean }
+                  provider: { type: string, example: "wati" }
+                  lastSyncAt:
+                    { type: string, format: date-time, nullable: true }
+                  webhookHealthy: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /travel/whatsapp/media:
+    get:
+      summary: "[PUBLIC] Proxy media download from Wati"
+      description: Authenticated media download proxy — proxies a Wati media URL with the configured tenant credentials.
+      tags: [Travel — Operations]
+      security: []
+      parameters:
+        - in: query
+          name: messageId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Media bytes.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /travel/whatsapp/templates:
+    get:
+      summary: List Wati-side approved templates
+      tags: [Travel — Operations]
+      responses:
+        "200":
+          description: Templates.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        language: { type: string }
+                        category: { type: string }
+                        status: { type: string }
+  /travel/whatsapp/send:
+    post:
+      summary: Send a WhatsApp template message via Wati
+      tags: [Travel — Operations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, templateName]
+              properties:
+                to: { type: string, description: E.164 phone. }
+                templateName: { type: string }
+                language: { type: string, default: "en" }
+                variables:
+                  type: array
+                  items: { type: string }
+                contactId: { type: integer, nullable: true }
+            example:
+              to: "+919876543210"
+              templateName: "trip_payment_reminder"
+              language: "en"
+              variables: ["Asha", "TINV-2026-0091", "₹25,000"]
+              contactId: 421
+      responses:
+        "200":
+          description: Sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messageId: { type: string }
+                  delivered: { type: boolean }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "503": { description: Wati provider unreachable. }
+  /travel/whatsapp/send-media:
+    post:
+      summary: Send a WhatsApp media message (image, doc, etc.)
+      tags: [Travel — Operations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, mediaUrl, mediaType]
+              properties:
+                to: { type: string }
+                mediaUrl: { type: string, format: uri }
+                mediaType: { type: string, enum: [image, document, video] }
+                caption: { type: string }
+      responses:
+        "200": { description: Sent. }
+        "400": { $ref: "#/components/responses/ValidationError" }
+  /travel/whatsapp/sync:
+    post:
+      summary: Trigger a Wati conversation sync (operator manual)
+      description: Pulls fresh conversations from Wati; idempotent.
+      tags: [Travel — Operations]
+      responses:
+        "200":
+          description: Sync stats.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversationsFetched: { type: integer }
+                  messagesIngested: { type: integer }
+  /travel/whatsapp/webhook:
+    get:
+      summary: "[PUBLIC] Wati webhook verification handshake"
+      tags: [Travel — Operations]
+      security: []
+      responses:
+        "200": { description: Verified. }
+    post:
+      summary: "[PUBLIC] Wati inbound webhook"
+      description: Inbound message + status updates from Wati. Signature-verified inside the handler.
+      tags: [Travel — Operations]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Wati-side payload shape (eventType, message, contact, etc.).
+      responses:
+        "200": { description: Acknowledged. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # TRAVEL — SUPPLIER RECONCILIATION (G044/G046)
+  # ════════════════════════════════════════════════════════════════════
+  /travel/suppliers/{id}/reconciliation-batches:
+    post:
+      summary: Create a draft reconciliation batch (ADMIN/MANAGER)
+      description: |
+        Operator-driven supplier-statement reconciliation. Each batch
+        holds the lines parsed from a supplier statement; subsequent calls
+        bulk-add lines, run the auto-matcher, mark review / reconciliation
+        / dispute.
+      tags: [Travel — Suppliers & Pricing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [statementMonth]
+              properties:
+                statementMonth: { type: string, example: "2026-05" }
+                notes: { type: string }
+      responses:
+        "201":
+          description: Batch created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  statementMonth: { type: string }
+                  status:
+                    {
+                      type: string,
+                      enum: [draft, reviewed, reconciled, disputed],
+                    }
+        "400": { $ref: "#/components/responses/ValidationError" }
+    get:
+      summary: List reconciliation batches for a supplier
+      tags: [Travel — Suppliers & Pricing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Batches.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batches: { type: array, items: { type: object } }
+                  total: { type: integer }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}:
+    get:
+      summary: Read one reconciliation batch with lines
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Batch detail.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  status: { type: string }
+                  lines: { type: array, items: { type: object } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/lines/bulk:
+    post:
+      summary: Bulk-add lines parsed from a supplier statement
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lines]
+              properties:
+                lines:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      pnr: { type: string, nullable: true }
+                      bookingRef: { type: string, nullable: true }
+                      description: { type: string }
+                      amount: { type: number }
+                      currency: { type: string }
+                      statementDate: { type: string, format: date }
+            example:
+              lines:
+                - pnr: "AI-5678"
+                  description: "Room block — 20 doubles × 3 nights"
+                  amount: 150000
+                  currency: "INR"
+                  statementDate: "2026-05-15"
+      responses:
+        "201":
+          description: Lines added.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added: { type: integer }
+                  totalLines: { type: integer }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/auto-match:
+    post:
+      summary: Run the auto-matcher on the batch's lines
+      description: |
+        Pairs each unmatched statement line with the closest TravelSupplierPayable
+        by PNR / bookingRef / description-amount-tolerance. Returns a per-line
+        match-decision payload.
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Match decisions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matched: { type: integer }
+                  unmatched: { type: integer }
+                  decisions: { type: array, items: { type: object } }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/lines/{lineId}/manual-match:
+    post:
+      summary: Operator-picked manual match for a line
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+        - in: path
+          name: lineId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payableId]
+              properties:
+                payableId: { type: integer }
+                comment: { type: string }
+      responses:
+        "200": { description: Matched. }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/review:
+    post:
+      summary: Transition batch draft → reviewed
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: Reviewed. }
+        "409": { description: Invalid transition. }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/reconcile:
+    post:
+      summary: Transition batch reviewed → reconciled
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: Reconciled. }
+        "409": { description: Invalid transition. }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/dispute:
+    post:
+      summary: Flag the batch as disputed
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "200": { description: Disputed. }
+        "400": { $ref: "#/components/responses/ValidationError" }
+  /travel/suppliers/{id}/invoice-uploads:
+    post:
+      summary: Upload a supplier invoice PDF / CSV / image
+      description: |
+        Multipart upload — PDF, CSV, JPG, PNG only, 10 MB cap. File is
+        stored under `uploads/supplier-invoices/`; the filename is
+        UUID-derived from the validated MIME type (NOT the client filename).
+      tags: [Travel — Suppliers & Pricing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                statementMonth: { type: string }
+      responses:
+        "201":
+          description: Uploaded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  filename: { type: string }
+                  mimeType: { type: string }
+                  bytes: { type: integer }
+        "413": { description: File exceeds 10 MB. }
+        "415": { description: Unsupported MIME type. }
+    get:
+      summary: List supplier invoice uploads
+      tags: [Travel — Suppliers & Pricing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Uploads.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploads: { type: array, items: { type: object } }
+                  total: { type: integer }
+  /travel/suppliers/{id}/invoice-uploads/{uploadId}/match:
+    post:
+      summary: Link an uploaded invoice to a payable
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: uploadId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payableId]
+              properties:
+                payableId: { type: integer }
+      responses:
+        "200": { description: Matched. }
+  /travel/suppliers/{id}/invoice-uploads/{uploadId}:
+    delete:
+      summary: Delete a supplier invoice upload (ADMIN)
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: uploadId
+          required: true
+          schema: { type: integer }
+      responses:
+        "204": { description: Deleted. }
+        "403": { $ref: "#/components/responses/Forbidden" }

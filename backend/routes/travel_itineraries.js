@@ -4849,7 +4849,13 @@ router.get("/itineraries/public/:shareToken", async (req, res) => {
       userAgent: req.headers && req.headers["user-agent"],
       extra: { subBrand: itin.subBrand },
     });
-    const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
+    // Calculate total from items if totalAmount is not set or is 0
+    const itemsTotal = Array.isArray(itin.items)
+      ? itin.items.reduce((sum, item) => sum + (item.totalPrice ? Number(item.totalPrice) : 0), 0)
+      : 0;
+    const total = (itin.totalAmount && Number(itin.totalAmount) > 0)
+      ? Number(itin.totalAmount)
+      : itemsTotal;
     const advanceRatio = await getTravelAdvanceRatio(prisma, itin.tenantId, itin.subBrand);
     const advanceDue = total > 0 ? Math.round(total * advanceRatio * 100) / 100 : 0;
     const advancePaid = itin.advancePaidAmount ? Number(itin.advancePaidAmount) : 0;
@@ -4985,6 +4991,145 @@ router.post("/itineraries/public/:shareToken/preferred-dates", async (req, res) 
   }
 });
 
+// POST /api/travel/itineraries/:id/record-advance-payment
+//
+// Authenticated endpoint for admins/managers to record advance payments.
+// Mirrors the billing.js POST /:id/mark-paid pattern. Creates a Payment
+// record and emits events. Idempotent on paymentReference.
+router.post("/itineraries/:id/record-advance-payment", verifyToken, async (req, res) => {
+  try {
+    const itinId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(itinId)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const { amount, paymentReference, paymentMethod } = req.body || {};
+    if (amount == null || !paymentReference) {
+      return res.status(400).json({
+        error: "amount and paymentReference required",
+        code: "MISSING_FIELDS",
+      });
+    }
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return res.status(400).json({ error: "amount must be positive", code: "INVALID_AMOUNT" });
+    }
+
+    const itin = await prisma.itinerary.findUnique({ where: { id: itinId } });
+    if (!itin || itin.tenantId !== req.user.tenantId) {
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
+    if (itin.status === "draft") {
+      return res.status(409).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
+    }
+    if (itin.status === "rejected" || itin.status === "fully_paid") {
+      return res.status(409).json({
+        error: `Cannot record advance against an itinerary in '${itin.status}' status`,
+        code: "INVALID_STATE",
+      });
+    }
+
+    // Idempotent on paymentReference
+    if (itin.paymentReference === String(paymentReference)) {
+      return res.json({
+        status: itin.status,
+        advancePaidAmount: itin.advancePaidAmount ? Number(itin.advancePaidAmount) : 0,
+        advancePaidAt: itin.advancePaidAt,
+        paymentReference: itin.paymentReference,
+        idempotent: true,
+      });
+    }
+
+    const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
+    const newAdvanceTotal = Number(itin.advancePaidAmount || 0) + amt;
+    const nextStatus = total > 0 && newAdvanceTotal + 0.01 >= total ? "fully_paid" : "advance_paid";
+
+    const updated = await prisma.itinerary.update({
+      where: { id: itin.id },
+      data: {
+        status: nextStatus,
+        advancePaidAmount: newAdvanceTotal,
+        advancePaidAt: new Date(),
+        paymentReference: String(paymentReference),
+        paymentOverdueAt: null,
+      },
+    });
+
+    // Record the payment in the Payment table
+    let payment = null;
+    try {
+      payment = await prisma.payment.create({
+        data: {
+          tenantId: itin.tenantId,
+          contactId: itin.contactId || null,
+          description: `Travel to ${itin.destination || "trip"} — advance payment`,
+          amount: amt,
+          currency: (itin.currency || "INR").toUpperCase(),
+          gateway: paymentMethod || "manual",
+          gatewayId: String(paymentReference),
+          status: "SUCCESS",
+          paidAt: new Date(),
+          metadata: JSON.stringify({
+            type: "travel-itinerary",
+            itineraryId: itin.id,
+            subBrand: itin.subBrand,
+            destination: itin.destination || null,
+            kind: "advance",
+          }),
+        },
+      });
+    } catch (pErr) {
+      console.error("[travel-itin] payment row create failed (non-fatal):", pErr.message);
+    }
+
+    // Emit events
+    const { safeEmitEvent } = require("../lib/eventBus");
+    safeEmitEvent(
+      "payment.collected",
+      {
+        itineraryId: itin.id,
+        paymentId: payment ? payment.id : null,
+        amount: amt,
+        currency: (itin.currency || "INR").toUpperCase(),
+        method: paymentMethod || "manual",
+      },
+      itin.tenantId,
+      "travel-itin/record-advance-payment",
+    );
+
+    // Notify the customer
+    notifyCustomerTrip(itin, updated.status);
+    notifyCustomerPaymentConfirmation(itin, amt, Math.max(0, total - newAdvanceTotal), process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com");
+
+    // If fully paid on advance, emit completion
+    if (nextStatus === "fully_paid") {
+      safeEmitEvent(
+        "itinerary.completed",
+        { id: itin.id, contactId: itin.contactId || null, tenantId: itin.tenantId },
+        itin.tenantId,
+        "travel-itin/record-advance-payment",
+      );
+    }
+
+    res.status(201).json({
+      status: updated.status,
+      advancePaidAmount: Number(updated.advancePaidAmount),
+      advancePaidAt: updated.advancePaidAt,
+      paymentReference: updated.paymentReference,
+      balanceDue: Math.max(0, total - Number(updated.advancePaidAmount)),
+      currency: (itin.currency || "INR").toUpperCase(),
+      payment: payment ? {
+        id: payment.id,
+        amount: Number(payment.amount),
+        paidAt: payment.paidAt,
+        method: paymentMethod || "manual",
+      } : null,
+    });
+  } catch (e) {
+    console.error("[travel-itin] record-advance error:", e.message);
+    res.status(500).json({ error: "Failed to record advance" });
+  }
+});
+
 // POST /api/travel/itineraries/public/:shareToken/record-advance-payment
 //
 // Phase 2 demo-mode endpoint: records that an advance payment has
@@ -5062,9 +5207,51 @@ router.post("/itineraries/public/:shareToken/record-advance-payment", async (req
       },
     });
 
+    // Record the payment in the Payment table (mirrors billing.js)
+    let payment = null;
+    try {
+      payment = await prisma.payment.create({
+        data: {
+          tenantId: itin.tenantId,
+          contactId: itin.contactId || null,
+          description: `Travel to ${itin.destination || "trip"} — advance payment`,
+          amount: amt,
+          currency: (itin.currency || "INR").toUpperCase(),
+          gateway: "razorpay",
+          gatewayId: String(paymentReference),
+          status: "SUCCESS",
+          paidAt: new Date(),
+          metadata: JSON.stringify({
+            type: "travel-itinerary",
+            itineraryId: itin.id,
+            subBrand: itin.subBrand,
+            destination: itin.destination || null,
+            kind: "advance",
+          }),
+        },
+      });
+    } catch (pErr) {
+      console.error("[travel-itin-public] payment row create failed (non-fatal):", pErr.message);
+    }
+
     // Thank the customer + confirm the booking in their portal (itin carries
     // contactId/destination/tenantId; updated.status is advance_paid|fully_paid).
     notifyCustomerTrip(itin, updated.status);
+
+    // Emit payment.collected event (mirrors billing.js pattern)
+    const { safeEmitEvent } = require("../lib/eventBus");
+    safeEmitEvent(
+      "payment.collected",
+      {
+        itineraryId: itin.id,
+        paymentId: payment ? payment.id : null,
+        amount: amt,
+        currency: (itin.currency || "INR").toUpperCase(),
+        method: "razorpay",
+      },
+      itin.tenantId,
+      "travel-itin-public/record-advance-payment",
+    );
 
     // Payment = implicit acceptance — fan out WebCheckin rows and emit the
     // itinerary.accepted event so downstream workflows fire (same side-effects
@@ -5074,13 +5261,22 @@ router.post("/itineraries/public/:shareToken/record-advance-payment", async (req
     autoCreateWebCheckinsForItinerary(itin.id, itin.tenantId).catch((e) =>
       console.error("[travel-itin-public] webcheckin auto-create on payment (non-fatal):", e.message),
     );
-    const { safeEmitEvent } = require("../lib/eventBus");
     safeEmitEvent(
       "itinerary.accepted",
       { id: itin.id, contactId: itin.contactId || null, tenantId: itin.tenantId, trigger: "payment" },
       itin.tenantId,
-      "travel-itin/record-advance-payment",
+      "travel-itin-public/record-advance-payment",
     );
+
+    // If fully paid on advance, also emit completion event
+    if (nextStatus === "fully_paid") {
+      safeEmitEvent(
+        "itinerary.completed",
+        { id: itin.id, contactId: itin.contactId || null, tenantId: itin.tenantId },
+        itin.tenantId,
+        "travel-itin-public/record-advance-payment",
+      );
+    }
 
     res.status(201).json({
       status: updated.status,
@@ -5089,10 +5285,315 @@ router.post("/itineraries/public/:shareToken/record-advance-payment", async (req
       paymentReference: updated.paymentReference,
       balanceDue: Math.max(0, total - Number(updated.advancePaidAmount)),
       currency: (itin.currency || "INR").toUpperCase(),
+      payment: payment ? {
+        id: payment.id,
+        amount: Number(payment.amount),
+        paidAt: payment.paidAt,
+      } : null,
     });
   } catch (e) {
     console.error("[travel-itin-public] record-advance error:", e.message);
     res.status(500).json({ error: "Failed to record advance" });
+  }
+});
+
+// POST /api/travel/itineraries/:id/record-balance-payment
+// POST /api/travel/itineraries/public/:shareToken/record-balance-payment
+//
+// Records the remaining balance payment after an advance has been paid.
+// Mirrors the billing.js POST /:id/mark-paid pattern. Creates a Payment
+// record and emits completion events. Idempotent on paymentReference.
+router.post("/itineraries/:id/record-balance-payment", verifyToken, async (req, res) => {
+  try {
+    const itinId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(itinId)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const { amount, paymentReference, paymentMethod } = req.body || {};
+    if (amount == null || !paymentReference) {
+      return res.status(400).json({
+        error: "amount and paymentReference required",
+        code: "MISSING_FIELDS",
+      });
+    }
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return res.status(400).json({ error: "amount must be positive", code: "INVALID_AMOUNT" });
+    }
+
+    const itin = await prisma.itinerary.findUnique({ where: { id: itinId } });
+    if (!itin || itin.tenantId !== req.user.tenantId) {
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
+    if (itin.status === "draft") {
+      return res.status(409).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
+    }
+    if (itin.status === "rejected" || itin.status === "draft" || itin.status === "sent" || itin.status === "revised") {
+      return res.status(409).json({
+        error: `Cannot record balance payment for an itinerary in '${itin.status}' status`,
+        code: "INVALID_STATE",
+      });
+    }
+    // If already fully paid, no need to accept more payments
+    if (itin.status === "fully_paid") {
+      return res.status(409).json({
+        error: "Itinerary is already fully paid",
+        code: "ALREADY_PAID",
+      });
+    }
+
+    // Idempotent on balance paymentReference
+    if (itin.paymentReference === String(paymentReference)) {
+      return res.json({
+        status: itin.status,
+        advancePaidAmount: itin.advancePaidAmount ? Number(itin.advancePaidAmount) : 0,
+        advancePaidAt: itin.advancePaidAt,
+        paymentReference: itin.paymentReference,
+        idempotent: true,
+      });
+    }
+
+    const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
+    const currentPaid = Number(itin.advancePaidAmount || 0);
+    const balanceDue = Math.max(0, total - currentPaid);
+
+    // Validate that the balance payment doesn't exceed the balance due
+    if (amt > balanceDue + 0.01) {
+      return res.status(400).json({
+        error: `Balance payment cannot exceed balance due of ${balanceDue}`,
+        code: "INVALID_BALANCE_AMOUNT",
+      });
+    }
+
+    const newTotalPaid = currentPaid + amt;
+    // Mark as fully_paid if the balance is now covered
+    const nextStatus = total > 0 && newTotalPaid + 0.01 >= total ? "fully_paid" : "advance_paid";
+
+    const updated = await prisma.itinerary.update({
+      where: { id: itin.id },
+      data: {
+        status: nextStatus,
+        advancePaidAmount: newTotalPaid,
+        advancePaidAt: new Date(),
+        paymentReference: String(paymentReference),
+        paymentOverdueAt: null,
+      },
+    });
+
+    // Record the payment in the Payment table (mirrors billing.js)
+    let payment = null;
+    try {
+      payment = await prisma.payment.create({
+        data: {
+          tenantId: itin.tenantId,
+          contactId: itin.contactId || null,
+          description: `Travel to ${itin.destination || "trip"} — balance payment`,
+          amount: amt,
+          currency: (itin.currency || "INR").toUpperCase(),
+          gateway: paymentMethod || "manual",
+          gatewayId: String(paymentReference),
+          status: "SUCCESS",
+          paidAt: new Date(),
+          metadata: JSON.stringify({
+            type: "travel-itinerary",
+            itineraryId: itin.id,
+            subBrand: itin.subBrand,
+            destination: itin.destination || null,
+            kind: "balance",
+          }),
+        },
+      });
+    } catch (pErr) {
+      console.error("[travel-itin] payment row create failed (non-fatal):", pErr.message);
+    }
+
+    // Emit events (mirrors billing.js pattern)
+    const { safeEmitEvent } = require("../lib/eventBus");
+    if (nextStatus === "fully_paid") {
+      safeEmitEvent(
+        "itinerary.completed",
+        { id: itin.id, contactId: itin.contactId || null, tenantId: itin.tenantId },
+        itin.tenantId,
+        "travel-itin/record-balance-payment",
+      );
+    }
+    safeEmitEvent(
+      "payment.collected",
+      {
+        itineraryId: itin.id,
+        paymentId: payment ? payment.id : null,
+        amount: amt,
+        currency: (itin.currency || "INR").toUpperCase(),
+        method: paymentMethod || "manual",
+      },
+      itin.tenantId,
+      "travel-itin/record-balance-payment",
+    );
+
+    // Notify the customer of balance payment confirmation
+    notifyCustomerTrip(itin, updated.status);
+    notifyCustomerPaymentConfirmation(itin, amt, Math.max(0, total - newTotalPaid), process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com");
+
+    res.status(201).json({
+      status: updated.status,
+      advancePaidAmount: Number(updated.advancePaidAmount),
+      advancePaidAt: updated.advancePaidAt,
+      paymentReference: updated.paymentReference,
+      balanceDue: Math.max(0, total - Number(updated.advancePaidAmount)),
+      currency: (itin.currency || "INR").toUpperCase(),
+      payment: payment ? {
+        id: payment.id,
+        amount: Number(payment.amount),
+        paidAt: payment.paidAt,
+        method: paymentMethod || "manual",
+      } : null,
+    });
+  } catch (e) {
+    console.error("[travel-itin] record-balance error:", e.message);
+    res.status(500).json({ error: "Failed to record balance payment" });
+  }
+});
+
+// Public (unauthenticated) balance payment recording for payment gateway callbacks
+router.post("/itineraries/public/:shareToken/record-balance-payment", async (req, res) => {
+  try {
+    const token = String(req.params.shareToken || "");
+    if (!token || token.length < 16) {
+      return res.status(400).json({ error: "shareToken required", code: "MISSING_TOKEN" });
+    }
+    const { amount, paymentReference } = req.body || {};
+    if (amount == null || !paymentReference) {
+      return res.status(400).json({
+        error: "amount and paymentReference required",
+        code: "MISSING_FIELDS",
+      });
+    }
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      return res.status(400).json({ error: "amount must be positive", code: "INVALID_AMOUNT" });
+    }
+
+    const itin = await prisma.itinerary.findUnique({ where: { shareToken: token } });
+    if (!itin) {
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
+    if (itin.status === "draft") {
+      return res.status(409).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
+    }
+    if (itin.status === "rejected" || itin.status === "fully_paid") {
+      return res.status(409).json({
+        error: `Cannot record balance payment for an itinerary in '${itin.status}' status`,
+        code: "INVALID_STATE",
+      });
+    }
+
+    // Idempotent on balance paymentReference
+    if (itin.paymentReference === String(paymentReference)) {
+      return res.json({
+        status: itin.status,
+        advancePaidAmount: itin.advancePaidAmount ? Number(itin.advancePaidAmount) : 0,
+        advancePaidAt: itin.advancePaidAt,
+        paymentReference: itin.paymentReference,
+        idempotent: true,
+      });
+    }
+
+    const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
+    const currentPaid = Number(itin.advancePaidAmount || 0);
+    const balanceDue = Math.max(0, total - currentPaid);
+
+    // Validate that the balance payment doesn't exceed the balance due
+    if (amt > balanceDue + 0.01) {
+      return res.status(400).json({
+        error: `Balance payment cannot exceed balance due of ${balanceDue}`,
+        code: "INVALID_BALANCE_AMOUNT",
+      });
+    }
+
+    const newTotalPaid = currentPaid + amt;
+    const nextStatus = total > 0 && newTotalPaid + 0.01 >= total ? "fully_paid" : "advance_paid";
+
+    const updated = await prisma.itinerary.update({
+      where: { id: itin.id },
+      data: {
+        status: nextStatus,
+        advancePaidAmount: newTotalPaid,
+        advancePaidAt: new Date(),
+        paymentReference: String(paymentReference),
+        paymentOverdueAt: null,
+      },
+    });
+
+    // Record the payment in the Payment table
+    let payment = null;
+    try {
+      payment = await prisma.payment.create({
+        data: {
+          tenantId: itin.tenantId,
+          contactId: itin.contactId || null,
+          description: `Travel to ${itin.destination || "trip"} — balance payment`,
+          amount: amt,
+          currency: (itin.currency || "INR").toUpperCase(),
+          gateway: "razorpay",
+          gatewayId: String(paymentReference),
+          status: "SUCCESS",
+          paidAt: new Date(),
+          metadata: JSON.stringify({
+            type: "travel-itinerary",
+            itineraryId: itin.id,
+            subBrand: itin.subBrand,
+            destination: itin.destination || null,
+            kind: "balance",
+          }),
+        },
+      });
+    } catch (pErr) {
+      console.error("[travel-itin-public] payment row create failed (non-fatal):", pErr.message);
+    }
+
+    // Emit events
+    const { safeEmitEvent } = require("../lib/eventBus");
+    if (nextStatus === "fully_paid") {
+      safeEmitEvent(
+        "itinerary.completed",
+        { id: itin.id, contactId: itin.contactId || null, tenantId: itin.tenantId },
+        itin.tenantId,
+        "travel-itin-public/record-balance-payment",
+      );
+    }
+    safeEmitEvent(
+      "payment.collected",
+      {
+        itineraryId: itin.id,
+        paymentId: payment ? payment.id : null,
+        amount: amt,
+        currency: (itin.currency || "INR").toUpperCase(),
+        method: "razorpay",
+      },
+      itin.tenantId,
+      "travel-itin-public/record-balance-payment",
+    );
+
+    // Notify the customer
+    notifyCustomerTrip(itin, updated.status);
+    notifyCustomerPaymentConfirmation(itin, amt, Math.max(0, total - newTotalPaid), process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com");
+
+    res.status(201).json({
+      status: updated.status,
+      advancePaidAmount: Number(updated.advancePaidAmount),
+      advancePaidAt: updated.advancePaidAt,
+      paymentReference: updated.paymentReference,
+      balanceDue: Math.max(0, total - Number(updated.advancePaidAmount)),
+      currency: (itin.currency || "INR").toUpperCase(),
+      payment: payment ? {
+        id: payment.id,
+        amount: Number(payment.amount),
+        paidAt: payment.paidAt,
+      } : null,
+    });
+  } catch (e) {
+    console.error("[travel-itin-public] record-balance error:", e.message);
+    res.status(500).json({ error: "Failed to record balance payment" });
   }
 });
 
@@ -5202,20 +5703,43 @@ router.post("/itineraries/public/:shareToken/create-payment-order", async (req, 
 router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) => {
   try {
     const token = String(req.params.shareToken || "");
+    // Detect if this is a Razorpay form POST redirect or an XHR/fetch from frontend
+    const isFormPost = req.headers && String(req.headers["content-type"]).includes("application/x-www-form-urlencoded");
+
     if (!token || token.length < 16) {
+      if (isFormPost) {
+        // Razorpay redirect with error
+        return res.redirect(303, `/p/itinerary/${encodeURIComponent(token)}/payment-success?error=Invalid%20itinerary%20token`);
+      }
       return res.status(400).json({ error: "shareToken required", code: "MISSING_TOKEN" });
     }
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      if (isFormPost) {
+        return res.redirect(303, `/p/itinerary/${encodeURIComponent(token)}/payment-success?error=Missing%20payment%20details`);
+      }
       return res.status(400).json({ error: "Missing payment fields", code: "MISSING_FIELDS" });
     }
     const itin = await prisma.itinerary.findUnique({ where: { shareToken: token } });
-    if (!itin) return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
-    if (itin.status === "draft") return res.status(409).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
+    if (!itin) {
+      if (isFormPost) {
+        return res.redirect(303, `/p/itinerary/${encodeURIComponent(token)}/payment-success?error=Itinerary%20not%20found`);
+      }
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
+    if (itin.status === "draft") {
+      if (isFormPost) {
+        return res.redirect(303, `/p/itinerary/${encodeURIComponent(token)}/payment-success?error=Itinerary%20not%20yet%20shared`);
+      }
+      return res.status(409).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
+    }
     // Resolve the TENANT's own Razorpay keys (the order was created with them)
     // and verify the checkout signature against the TENANT's key secret.
     const rp = await getTenantRazorpayClient(itin.tenantId);
     if (!rp) {
+      if (isFormPost) {
+        return res.redirect(303, `/p/itinerary/${encodeURIComponent(token)}/payment-success?error=Payment%20gateway%20not%20configured`);
+      }
       return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
     }
     // Verify checkout signature: HMAC-SHA256(order_id|payment_id, key_secret).
@@ -5228,6 +5752,9 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
       expected.length === sig.length &&
       crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig));
     if (!ok) {
+      if (isFormPost) {
+        return res.redirect(303, `/p/itinerary/${encodeURIComponent(token)}/payment-success?error=Payment%20verification%20failed`);
+      }
       return res.status(400).json({ error: "Payment verification failed", code: "BAD_SIGNATURE" });
     }
 
@@ -5248,10 +5775,26 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
         chosenTotal = Number(chosen.totalPrice);
       }
     }
-    const total = chosenTotal != null ? chosenTotal : (itin.totalAmount ? Number(itin.totalAmount) : 0);
+
+    // Calculate total: use chosenTotal if set, else use itin.totalAmount, else sum items
+    let total = chosenTotal != null ? chosenTotal : (itin.totalAmount ? Number(itin.totalAmount) : 0);
+    if (total <= 0) {
+      // No totalAmount in DB and no chosenTotal — calculate from items
+      const items = await prisma.itineraryItem.findMany({ where: { itineraryId: itin.id } });
+      console.log(`[verify-payment] itin ${itin.id}: found ${items.length} items for sum`, items.map(i => ({ itemType: i.itemType, totalPrice: i.totalPrice })));
+      total = items.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0);
+      console.log(`[verify-payment] itin ${itin.id}: calculated total = ${total}`);
+    }
 
     // Idempotency: this payment id already recorded → return current state.
     if (itin.paymentReference === String(razorpay_payment_id)) {
+      if (isFormPost) {
+        // Redirect to success page — payment was already recorded
+        return res.redirect(303, `/p/itinerary/${encodeURIComponent(token)}/payment-success?` +
+          `razorpay_order_id=${encodeURIComponent(razorpay_order_id)}&` +
+          `razorpay_payment_id=${encodeURIComponent(razorpay_payment_id)}&` +
+          `razorpay_signature=${encodeURIComponent(razorpay_signature)}`);
+      }
       return res.json({
         status: itin.status,
         advancePaidAmount: Number(itin.advancePaidAmount || 0),
@@ -5270,14 +5813,25 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
       paidMajor = payment && payment.amount ? Number(payment.amount) / 100 : 0;
     } catch (fErr) {
       console.error("[travel-itin-public] razorpay payments.fetch error:", fErr && fErr.message);
+      if (isFormPost) {
+        return res.redirect(303, `/p/itinerary/${encodeURIComponent(token)}/payment-success?error=Could%20not%20confirm%20payment`);
+      }
       return res.status(502).json({ error: "Could not confirm payment. Please contact support.", code: "GATEWAY_ERROR" });
     }
     if (!(paidMajor > 0)) {
+      if (isFormPost) {
+        return res.redirect(303, `/p/itinerary/${encodeURIComponent(token)}/payment-success?error=Payment%20not%20captured`);
+      }
       return res.status(400).json({ error: "Payment not captured", code: "NOT_CAPTURED" });
     }
 
     const newTotalPaid = Number(itin.advancePaidAmount || 0) + paidMajor;
     const nextStatus = total > 0 && newTotalPaid + 0.01 >= total ? "fully_paid" : "advance_paid";
+
+    // Always persist the totalAmount (calculated from chosen option, DB, or items sum)
+    const updateTotalAmount = total > 0 ? total : undefined;
+    console.log(`[verify-payment] itin ${itin.id}: updateTotalAmount = ${updateTotalAmount}, will update DB: ${updateTotalAmount != null}`);
+
     const updated = await prisma.itinerary.update({
       where: { id: itin.id },
       data: {
@@ -5285,17 +5839,17 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
         advancePaidAmount: newTotalPaid,
         advancePaidAt: new Date(),
         paymentReference: String(razorpay_payment_id),
-        // Commit the chosen flight option's price as the total — only here, on a
-        // verified payment (kept null until now so the selector stayed usable).
-        ...(chosenTotal != null ? { totalAmount: chosenTotal } : {}),
+        // Commit the total amount (whether chosen option or regular itinerary total)
+        ...(updateTotalAmount != null ? { totalAmount: updateTotalAmount } : {}),
         // Deposit landed → clear any pay-or-cancel at-risk flag (see
         // cron/paymentDeadlineEngine.js).
         paymentOverdueAt: null,
       },
     });
+    console.log(`[verify-payment] itin ${itin.id}: updated DB, new totalAmount = ${updated.totalAmount}`);
     // Keep the in-memory copy consistent for the notify helpers below (they
     // read itin.totalAmount to describe the chosen option + balance).
-    if (chosenTotal != null) itin.totalAmount = chosenTotal;
+    if (updateTotalAmount != null) itin.totalAmount = updateTotalAmount;
 
     // Record this payment in the Payment table so it appears on the Payments
     // page. Deduplicates on gatewayId (razorpay_payment_id) — idempotent on
@@ -5363,6 +5917,18 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
       "travel-itin/verify-payment",
     );
 
+    // If this is a Razorpay redirect (form POST from Razorpay), redirect to the
+    // success page. Otherwise (XHR/fetch from frontend), return JSON for the handler.
+    if (isFormPost) {
+      // Razorpay redirect: send the user to the success page with payment details
+      const successUrl = `/p/itinerary/${encodeURIComponent(token)}/payment-success?` +
+        `razorpay_order_id=${encodeURIComponent(razorpay_order_id)}&` +
+        `razorpay_payment_id=${encodeURIComponent(razorpay_payment_id)}&` +
+        `razorpay_signature=${encodeURIComponent(razorpay_signature)}`;
+      return res.redirect(303, successUrl);
+    }
+
+    // XHR/fetch from frontend handler: return JSON
     res.status(201).json({
       status: updated.status,
       advancePaidAmount: Number(updated.advancePaidAmount),
@@ -5373,6 +5939,11 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
     });
   } catch (e) {
     console.error("[travel-itin-public] verify-payment error:", e.message);
+    const token = String(req.params.shareToken || "");
+    const isFormPost = req.headers && String(req.headers["content-type"]).includes("application/x-www-form-urlencoded");
+    if (isFormPost) {
+      return res.redirect(303, `/p/itinerary/${encodeURIComponent(token)}/payment-success?error=Payment%20verification%20failed`);
+    }
     res.status(500).json({ error: "Failed to verify payment" });
   }
 });
@@ -5400,7 +5971,18 @@ router.get("/itineraries/public/:shareToken/receipt", async (req, res) => {
     if (!(paid > 0)) {
       return res.status(409).json({ error: "No payment recorded yet", code: "NO_PAYMENT" });
     }
-    const total = Number(itin.totalAmount || 0);
+    // Use totalAmount if available; otherwise calculate from items
+    let total = Number(itin.totalAmount || 0);
+    if (total <= 0 && Array.isArray(itin.items)) {
+      total = itin.items.reduce((sum, it) => sum + Number(it.totalPrice || 0), 0);
+    }
+    // Ensure we have a valid total
+    if (!(total > 0)) {
+      return res.status(400).json({
+        error: "Itinerary has no total cost set",
+        code: "NO_TOTAL_AMOUNT"
+      });
+    }
     const balance = Math.max(0, total - paid);
     const cur = itin.currency || "INR";
 
@@ -5413,16 +5995,36 @@ router.get("/itineraries/public/:shareToken/receipt", async (req, res) => {
 
     // For a flight quote only the CHOSEN option (price == total) is billed; a
     // normal itinerary bills all its line items.
-    const chosen = total > 0 ? itin.items.find((it) => Number(it.totalPrice || 0) === total) : null;
-    const billItems = chosen ? [chosen] : itin.items;
-    const lines = billItems.map((it, i) => ({
-      sortOrder: i,
-      lineType: it.itemType || "other",
-      description: it.description || it.itemType || "Item",
-      quantity: 1,
-      unitPrice: Number(it.totalPrice || 0),
-      amount: Number(it.totalPrice || 0),
-    }));
+    const items = Array.isArray(itin.items) ? itin.items : [];
+    const chosen = total > 0 ? items.find((it) => Number(it.totalPrice || 0) === total) : null;
+    const billItems = chosen ? [chosen] : items;
+
+    if (!billItems || billItems.length === 0) {
+      return res.status(400).json({
+        error: "Itinerary has no line items to bill",
+        code: "NO_LINE_ITEMS"
+      });
+    }
+    const lines = billItems.map((it, i) => {
+      const amount = Number(it.totalPrice || 0);
+      // Ensure valid amount
+      if (!Number.isFinite(amount) || amount < 0) {
+        throw new Error(`Line item #${i} (${it.itemType}) has invalid price: ${it.totalPrice}`);
+      }
+      return {
+        sortOrder: i,
+        lineType: String(it.itemType || "service").toLowerCase(),
+        description: String(it.description || it.itemType || "Travel Service").trim(),
+        quantity: 1,
+        unitPrice: amount,
+        amount,
+        // GST fields required by PDF renderer — default to 18% for travel services
+        gstPercent: 18,
+        taxableValue: amount,
+        // Services have no HSN, only SAC code (determined by lineType in renderer)
+        hsn: null,
+      };
+    });
 
     const dueDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // 3-day balance deadline
     const invoiceObj = {
@@ -5440,14 +6042,23 @@ router.get("/itineraries/public/:shareToken/receipt", async (req, res) => {
       contactEmail: contact?.email || null,
       contactPhone: contact?.phone || null,
       totalAmount: total,
+      // CRITICAL: Pass amountPaid to PDF renderer so it calculates balance due correctly
+      amountPaid: paid,
+      // GST configuration — assume intrastate (CGST+SGST) by default
+      placeOfSupplyInterstate: false,
     };
 
     let pdfBuffer;
     try {
       pdfBuffer = await pdfRenderer.generateTravelInvoicePdf({ invoice: invoiceObj, lines, tenant: itin.tenant });
     } catch (renderErr) {
-      console.error("[travel-itin-public] receipt render error:", renderErr && renderErr.message);
-      return res.status(500).json({ error: "Failed to render receipt", code: "RECEIPT_FAILED" });
+      const errMsg = renderErr && renderErr.message ? renderErr.message : String(renderErr);
+      console.error("[travel-itin-public] receipt render error:", errMsg, renderErr);
+      return res.status(500).json({
+        error: "Failed to render receipt",
+        code: "RECEIPT_FAILED",
+        details: errMsg
+      });
     }
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="receipt-${itin.id}.pdf"`);

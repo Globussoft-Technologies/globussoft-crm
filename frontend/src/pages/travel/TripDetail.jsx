@@ -1007,7 +1007,13 @@ function PassportCell({ participant: p, notify, onChange }) {
   // roles (this page does no client-side role gating); the DELETE route
   // 403s non-ADMIN/MANAGER users with a friendly RBAC toast.
   const clearAndReupload = async () => {
-    if (!confirm(`Clear ${p.fullName}'s verified passport so a new one can be uploaded?`)) return;
+    const ok = await notify.confirm({
+      title: "Clear passport",
+      message: `Clear ${p.fullName}'s verified passport so a new one can be uploaded?`,
+      confirmText: "Clear",
+      destructive: true,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await fetchApi(`/api/travel/passport/participants/${p.id}/passport-extraction`, {
@@ -1089,6 +1095,9 @@ function RoomingTab({ trip, notify }) {
   // 'new' or a room.id while an API call is in flight; used to disable
   // its row's Save/Delete buttons.
   const [busyId, setBusyId] = useState(null);
+  const [autoAllocating, setAutoAllocating] = useState(false);
+  const [showAutoAllocateDialog, setShowAutoAllocateDialog] = useState(false);
+  const [autoAllocStartRoom, setAutoAllocStartRoom] = useState(101);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1177,7 +1186,13 @@ function RoomingTab({ trip, notify }) {
   };
 
   const deleteRoom = async (id) => {
-    if (!window.confirm("Delete this room?")) return;
+    const ok = await notify.confirm({
+      title: "Delete room",
+      message: "Delete this room?",
+      confirmText: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
     setBusyId(id);
     try {
       await fetchApi(`/api/travel/trips/${trip.id}/rooming/${id}`, { method: "DELETE" });
@@ -1239,9 +1254,79 @@ function RoomingTab({ trip, notify }) {
   const xlsxHref =
     `/api/travel/trips/${trip.id}/rooming/export.xlsx` +
     (xlsxToken ? `?_t=${encodeURIComponent(xlsxToken)}` : "");
+  const pdfHref =
+    `/api/travel/trips/${trip.id}/rooming/export.pdf` +
+    (xlsxToken ? `?_t=${encodeURIComponent(xlsxToken)}` : "");
+
+  const handleAutoAllocateConfirm = async () => {
+    setShowAutoAllocateDialog(false);
+    setAutoAllocating(true);
+    try {
+      const result = await fetchApi(`/api/travel/trips/${trip.id}/rooming/auto`, {
+        method: "POST",
+        body: JSON.stringify({
+          roomTypes: ["twin", "quad"],
+          startingRoomNumber: autoAllocStartRoom,
+        }),
+      });
+      notify.success(`Auto-allocated: ${result.created} room(s) created`);
+      load();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to auto-allocate rooming");
+    } finally {
+      setAutoAllocating(false);
+    }
+  };
 
   return (
     <div>
+      {showAutoAllocateDialog && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center",
+          zIndex: 1000,
+        }} onClick={() => setShowAutoAllocateDialog(false)}>
+          <div style={{
+            background: "var(--surface-color)", borderRadius: 12, padding: 24, maxWidth: 400,
+            boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
+          }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 12px 0" }}>Auto-allocate rooms</h3>
+            <p style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 16 }}>
+              Automatically assign {unassignedCount} unallocated participant{unassignedCount === 1 ? "" : "s"} to rooms starting from room number:
+            </p>
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>Starting room number</span>
+                <input
+                  type="number"
+                  min="1"
+                  value={autoAllocStartRoom}
+                  onChange={(e) => setAutoAllocStartRoom(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  style={{ ...input, fontSize: 14, fontVariantNumeric: "tabular-nums" }}
+                />
+              </label>
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => setShowAutoAllocateDialog(false)}
+                style={secondaryBtn}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAutoAllocateConfirm}
+                disabled={autoAllocating}
+                style={{ ...primaryBtn, opacity: autoAllocating ? 0.5 : 1, cursor: autoAllocating ? "not-allowed" : "pointer" }}
+              >
+                <Sparkles size={14} aria-hidden /> {autoAllocating ? "Allocating…" : "Auto allocate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{
         display: "flex", justifyContent: "space-between", alignItems: "center",
         marginBottom: 12, flexWrap: "wrap", gap: 8,
@@ -1251,6 +1336,26 @@ function RoomingTab({ trip, notify }) {
           {unassignedCount} of {participants.length} participant{participants.length === 1 ? "" : "s"} unassigned
         </span>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {unassignedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAutoAllocateDialog(true)}
+              disabled={autoAllocating || showAutoAllocateDialog}
+              style={{ ...secondaryBtn, opacity: (autoAllocating || showAutoAllocateDialog) ? 0.5 : 1, cursor: (autoAllocating || showAutoAllocateDialog) ? "not-allowed" : "pointer" }}
+              aria-label="Auto-allocate unassigned participants"
+            >
+              <Sparkles size={14} aria-hidden /> {autoAllocating ? "Allocating…" : "Auto allocate"}
+            </button>
+          )}
+          <a
+            href={pdfHref}
+            target="_blank"
+            rel="noreferrer"
+            style={{ ...secondaryBtn, textDecoration: "none" }}
+            aria-label="Download rooming as PDF"
+          >
+            <FileText size={14} aria-hidden /> Download PDF
+          </a>
           <a
             href={xlsxHref}
             target="_blank"
@@ -1282,7 +1387,106 @@ function RoomingTab({ trip, notify }) {
         />
       )}
 
-      {rooms.length === 0 && !newRoom ? (
+      {/* Saved Rooms Summary View */}
+      {rooms.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10 }}>
+            Allocated Rooms
+          </div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {rooms.map((room) => {
+              let pids = [];
+              try { pids = JSON.parse(room.participantIds || "[]"); } catch (_e) { pids = []; }
+              const roomParticipants = pids.map((pid) => participants.find((p) => p.id === pid));
+              const isEditing = !!buffers[room.id];
+
+              if (isEditing) {
+                // Show edit form
+                const buf = buffers[room.id];
+                return (
+                  <RoomCard
+                    key={room.id}
+                    buf={buf}
+                    busy={busyId === room.id}
+                    participants={participants}
+                    onChangeRoomNumber={(v) => updateBuf(room.id, { roomNumber: v })}
+                    onChangeRoomType={(v) => updateBuf(room.id, { roomType: v })}
+                    onToggleParticipant={(pid) => toggleParticipant(room.id, pid)}
+                    onSave={() => saveRoom(room.id)}
+                    onCancel={() => setBuffers({ ...buffers, [room.id]: undefined })}
+                    onDelete={() => deleteRoom(room.id)}
+                  />
+                );
+              }
+
+              // Show summary view
+              const ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
+              const capacity = ROOM_CAPACITY[room.roomType] || 0;
+              const isFull = pids.length >= capacity;
+
+              return (
+                <div key={room.id} style={{
+                  background: "var(--surface-color)", border: "1px solid var(--border-color)",
+                  borderRadius: 8, padding: 14, display: "flex", justifyContent: "space-between",
+                  alignItems: "flex-start", gap: 12,
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                      <strong style={{ fontSize: 16 }}>Room {room.roomNumber}</strong>
+                      <span style={{
+                        background: isFull ? "rgba(47,122,77,0.2)" : "rgba(200,154,78,0.18)",
+                        color: isFull ? "#2F7A4D" : "#9A6F2E",
+                        padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 700,
+                        textTransform: "uppercase", letterSpacing: 0.3,
+                      }}>
+                        {room.roomType} ({pids.length}/{capacity})
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
+                      {pids.length === 0 ? (
+                        <em>No participants assigned</em>
+                      ) : (
+                        roomParticipants.filter(Boolean).map((p) => p.fullName).join(", ")
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const currentBuf = buffers[room.id];
+                        if (!currentBuf) {
+                          updateBuf(room.id, {
+                            roomNumber: room.roomNumber,
+                            roomType: room.roomType,
+                            participantIds: pids,
+                          });
+                        }
+                      }}
+                      style={{ ...secondaryBtn, padding: "6px 12px", fontSize: 12 }}
+                      title="Edit room"
+                    >
+                      <Edit3 size={14} aria-hidden /> Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteRoom(room.id)}
+                      disabled={busyId === room.id}
+                      style={{ ...iconBtn, opacity: busyId === room.id ? 0.5 : 1 }}
+                      title="Delete room"
+                    >
+                      <Trash2 size={14} aria-hidden />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Empty State */}
+      {rooms.length === 0 && !newRoom && (
         <div style={listShell}>
           <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
             <BedDouble size={28} aria-hidden style={{ opacity: 0.4 }} />
@@ -1292,27 +1496,6 @@ function RoomingTab({ trip, notify }) {
             </div>
           </div>
         </div>
-      ) : (
-        rooms.map((room) => {
-          const buf = buffers[room.id] || {
-            roomNumber: room.roomNumber,
-            roomType: room.roomType,
-            participantIds: [],
-          };
-          return (
-            <RoomCard
-              key={room.id}
-              buf={buf}
-              busy={busyId === room.id}
-              participants={participants}
-              onChangeRoomNumber={(v) => updateBuf(room.id, { roomNumber: v })}
-              onChangeRoomType={(v) => updateBuf(room.id, { roomType: v })}
-              onToggleParticipant={(pid) => toggleParticipant(room.id, pid)}
-              onSave={() => saveRoom(room.id)}
-              onDelete={() => deleteRoom(room.id)}
-            />
-          );
-        })
       )}
     </div>
   );
@@ -1327,9 +1510,13 @@ function RoomCard({
   const count = buf.participantIds.length;
   const overCapacity = count > capacity;
   const atCapacity = count >= capacity;
+
+  const selectedParticipants = participants.filter((p) => buf.participantIds.includes(p.id));
+  const availableParticipants = participants.filter((p) => !buf.participantIds.includes(p.id));
+
   return (
     <div style={{ ...listShell, marginBottom: 12, padding: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         <input
           type="text"
           value={buf.roomNumber}
@@ -1383,38 +1570,85 @@ function RoomCard({
         </div>
       </div>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-        {participants.length === 0 ? (
-          <span style={{ ...empty, padding: 0 }}>No participants on this trip yet.</span>
-        ) : (
-          participants.map((p) => {
-            const checked = buf.participantIds.includes(p.id);
-            const disabled = !checked && atCapacity;
-            return (
-              <label
+      {/* Participants Section */}
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>
+          Participants ({count} selected)
+        </div>
+
+        {/* Selected Participants Display */}
+        {selectedParticipants.length > 0 ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+            {selectedParticipants.map((p) => (
+              <div
                 key={p.id}
                 style={{
                   display: "inline-flex", alignItems: "center", gap: 6,
-                  padding: "4px 10px", borderRadius: 6,
-                  border: "1px solid var(--border-color)",
-                  background: checked ? "var(--primary-color)" : "var(--surface-color)",
-                  color: checked ? "#fff" : "var(--text-primary)",
-                  cursor: disabled ? "not-allowed" : "pointer",
-                  opacity: disabled ? 0.45 : 1,
-                  fontSize: 13,
+                  padding: "6px 10px", borderRadius: 6,
+                  background: "var(--primary-color)", color: "#fff",
+                  fontSize: 13, fontWeight: 500,
                 }}
               >
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => onToggleParticipant(p.id)}
-                  disabled={disabled}
-                  style={{ margin: 0 }}
-                />
-                {p.fullName || `Participant #${p.id}`}
-              </label>
-            );
-          })
+                <span>{p.fullName || `Participant #${p.id}`}</span>
+                <button
+                  type="button"
+                  onClick={() => onToggleParticipant(p.id)}
+                  style={{
+                    background: "transparent", border: "none", color: "#fff",
+                    cursor: "pointer", padding: "2px", display: "flex", alignItems: "center",
+                    fontSize: 16, lineHeight: 1,
+                  }}
+                  aria-label={`Remove ${p.fullName}`}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 12, fontStyle: "italic" }}>
+            No participants selected
+          </div>
+        )}
+
+        {/* Add Participant - Simple Select List */}
+        {!atCapacity && availableParticipants.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>
+              Add more participants:
+            </div>
+            <div style={{
+              display: "grid", gap: 6,
+              maxHeight: 200, overflowY: "auto",
+              padding: "8px", background: "var(--subtle-bg)", borderRadius: 6,
+            }}>
+              {availableParticipants.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => onToggleParticipant(p.id)}
+                  style={{
+                    textAlign: "left", padding: "8px 10px", background: "var(--surface-color)",
+                    border: "1px solid var(--border-color)", borderRadius: 4,
+                    cursor: "pointer", fontSize: 13, color: "var(--text-primary)",
+                    transition: "all 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "var(--primary-color)";
+                    e.currentTarget.style.color = "#fff";
+                    e.currentTarget.style.borderColor = "var(--primary-color)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "var(--surface-color)";
+                    e.currentTarget.style.color = "var(--text-primary)";
+                    e.currentTarget.style.borderColor = "var(--border-color)";
+                  }}
+                >
+                  {p.fullName || `Participant #${p.id}`}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
       </div>
     </div>
@@ -1434,6 +1668,10 @@ function PaymentTab({ trip, notify }) {
   const [editInstalments, setEditInstalments] = useState([]);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [editingInstalment, setEditingInstalment] = useState(null);
+  const [instalmentEdit, setInstalmentEdit] = useState({});
+  const [expandedParticipant, setExpandedParticipant] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1520,7 +1758,13 @@ function PaymentTab({ trip, notify }) {
   };
 
   const onDelete = async () => {
-    if (!window.confirm("Delete payment plan? Per-participant instalments are NOT deleted.")) return;
+    const ok = await notify.confirm({
+      title: "Delete payment plan",
+      message: "Delete payment plan? Per-participant instalments are NOT deleted.",
+      confirmText: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
     setDeleting(true);
     try {
       await fetchApi(`/api/travel/trips/${trip.id}/payment-plan`, { method: "DELETE" });
@@ -1530,6 +1774,51 @@ function PaymentTab({ trip, notify }) {
       notify.error(e?.body?.error || "Failed to delete payment plan");
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const onGenerateInstalments = async () => {
+    if (!plan) {
+      notify.error("Save a payment plan first");
+      return;
+    }
+    setGenerating(true);
+    try {
+      const result = await fetchApi(`/api/travel/trips/${trip.id}/instalments/from-plan`, {
+        method: "POST",
+      });
+      notify.success(`Generated ${result.materialised} instalment(s) for ${result.participants} participant(s)`);
+      load();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to generate instalments");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const onEditInstalment = (ins) => {
+    setEditingInstalment(ins.id);
+    setInstalmentEdit({
+      paidAmount: ins.paidAmount,
+      paidAt: ins.paidAt,
+      status: ins.status,
+      invoiceId: ins.invoiceId,
+    });
+  };
+
+  const onSaveInstalmentEdit = async () => {
+    const ins = instalments.find((i) => i.id === editingInstalment);
+    if (!ins) return;
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}/instalments/${editingInstalment}`, {
+        method: "PATCH",
+        body: JSON.stringify(instalmentEdit),
+      });
+      notify.success("Instalment updated");
+      setEditingInstalment(null);
+      load();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to update instalment");
     }
   };
 
@@ -1709,50 +1998,198 @@ function PaymentTab({ trip, notify }) {
         </div>
       </section>
 
-      <h3 style={{ fontSize: 14, marginBottom: 8 }}>Per-participant instalments</h3>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+        <h3 style={{ fontSize: 14, margin: 0 }}>Per-participant instalments</h3>
+        {plan && instalments.length === 0 && (
+          <button
+            type="button"
+            onClick={onGenerateInstalments}
+            disabled={generating}
+            style={{ ...addBtn, opacity: generating ? 0.5 : 1, cursor: generating ? "not-allowed" : "pointer" }}
+            aria-label="Generate instalments from plan"
+          >
+            <Sparkles size={14} aria-hidden /> {generating ? "Generating…" : "Generate instalments"}
+          </button>
+        )}
+      </div>
       <div style={listShell}>
         {instalments.length === 0 ? (
           <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
             <Users size={24} aria-hidden style={{ opacity: 0.4 }} />
             <div>No per-participant instalments yet</div>
             <div style={{ fontSize: 12, opacity: 0.75 }}>
-              Once the plan is saved and participants are linked, individual instalments appear here.
+              {plan ? "Click Generate instalments to create per-participant payment schedules." : "Once the plan is saved and participants are linked, individual instalments appear here."}
             </div>
           </div>
         ) : (
-          instalments.map((i) => {
-            const participant = (trip.participants || []).find((p) => p.id === i.participantId);
-            const name = participant?.fullName || `Participant #${i.participantId}`;
-            const statusBg =
-              i.status === "paid" ? "rgba(47,122,77,0.14)" :
-              i.status === "partial" ? "rgba(200,154,78,0.18)" :
-              i.status === "overdue" ? "rgba(168,50,63,0.14)" :
-              "var(--subtle-bg)";
-            const statusColor =
-              i.status === "paid" ? "#2F7A4D" :
-              i.status === "partial" ? "#9A6F2E" :
-              i.status === "overdue" ? "#A8323F" :
-              "var(--text-secondary)";
+          // Group instalments by participant for accordion UI
+          Object.entries(
+            instalments.reduce((acc, i) => {
+              const pid = i.participantId;
+              if (!acc[pid]) acc[pid] = [];
+              acc[pid].push(i);
+              return acc;
+            }, {})
+          ).map(([participantId, participantInstalments]) => {
+            const participant = (trip.participants || []).find((p) => p.id === Number(participantId));
+            const name = participant?.fullName || `Participant #${participantId}`;
+            const isExpanded = expandedParticipant === Number(participantId);
+
+            // Calculate totals for this participant
+            const totalDue = participantInstalments.reduce((sum, i) => sum + Number(i.amount), 0);
+            const totalPaid = participantInstalments.reduce((sum, i) => sum + Number(i.paidAmount || 0), 0);
+            const pendingCount = participantInstalments.filter((i) => i.status === "pending" || i.status === "partial").length;
+
             return (
-              <div key={i.id} style={row}>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <strong style={{ fontSize: 14 }}>{name}</strong>
-                  <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
-                    Instalment #{i.instalmentIndex + 1} · due {fmt(i.dueDate)}
+              <div key={participantId} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                {/* Accordion Header */}
+                <button
+                  type="button"
+                  onClick={() => setExpandedParticipant(isExpanded ? null : Number(participantId))}
+                  style={{
+                    width: "100%", padding: "14px", background: "transparent", border: "none",
+                    cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center",
+                    gap: 12, fontFamily: "inherit", fontSize: 14, fontWeight: 600, color: "var(--text-primary)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
+                    <ChevronDown
+                      size={16}
+                      style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s" }}
+                      aria-hidden
+                    />
+                    <div style={{ textAlign: "left", minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>{name}</div>
+                      <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
+                        ₹{totalDue.toLocaleString()} total · {pendingCount} pending
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div style={{ textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-                    ₹{Number(i.amount).toLocaleString()}
+                  <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
+                    ₹{(totalDue - totalPaid).toLocaleString()} due
                   </div>
-                  <span style={{
-                    background: statusBg, color: statusColor,
-                    padding: "2px 8px", borderRadius: 10,
-                    fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4,
-                  }}>
-                    {i.status}
-                  </span>
-                </div>
+                </button>
+
+                {/* Accordion Content */}
+                {isExpanded && (
+                  <div style={{ background: "var(--subtle-bg)", padding: "0 14px 14px 14px", borderTop: "1px solid var(--border-color)" }}>
+                    {participantInstalments
+                      .sort((a, b) => a.instalmentIndex - b.instalmentIndex)
+                      .map((i) => {
+                        const statusBg =
+                          i.status === "paid" ? "rgba(47,122,77,0.14)" :
+                          i.status === "partial" ? "rgba(200,154,78,0.18)" :
+                          i.status === "overdue" ? "rgba(168,50,63,0.14)" :
+                          "var(--surface-color)";
+                        const statusColor =
+                          i.status === "paid" ? "#2F7A4D" :
+                          i.status === "partial" ? "#9A6F2E" :
+                          i.status === "overdue" ? "#A8323F" :
+                          "var(--text-secondary)";
+
+                        const isEditing = editingInstalment === i.id;
+
+                        if (isEditing) {
+                          return (
+                            <div key={i.id} style={{ background: "var(--surface-color)", padding: 12, borderRadius: 6, marginTop: 10, flexDirection: "column", gap: 12, display: "flex" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                                <strong style={{ fontSize: 13 }}>Due {fmt(i.dueDate)} · ₹{Number(i.amount).toLocaleString()}</strong>
+                              </div>
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 150px), 1fr))", gap: 10 }}>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>Paid (₹)</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={instalmentEdit.paidAmount ?? ""}
+                                    onChange={(e) => setInstalmentEdit({ ...instalmentEdit, paidAmount: e.target.value === "" ? 0 : Number(e.target.value) })}
+                                    style={{ ...input, fontSize: 12, fontVariantNumeric: "tabular-nums" }}
+                                  />
+                                </label>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>Date</span>
+                                  <input
+                                    type="date"
+                                    value={toDateInput(instalmentEdit.paidAt)}
+                                    onChange={(e) => setInstalmentEdit({ ...instalmentEdit, paidAt: e.target.value || null })}
+                                    style={{ ...input, fontSize: 12 }}
+                                  />
+                                </label>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>Status</span>
+                                  <select
+                                    value={instalmentEdit.status ?? "pending"}
+                                    onChange={(e) => setInstalmentEdit({ ...instalmentEdit, status: e.target.value })}
+                                    style={{ ...input, fontSize: 12 }}
+                                  >
+                                    <option value="pending">Pending</option>
+                                    <option value="partial">Partial</option>
+                                    <option value="paid">Paid</option>
+                                    <option value="overdue">Overdue</option>
+                                  </select>
+                                </label>
+                              </div>
+                              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingInstalment(null)}
+                                  style={{ ...secondaryBtn, padding: "6px 12px", fontSize: 12 }}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={onSaveInstalmentEdit}
+                                  style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+                                >
+                                  <Save size={12} aria-hidden /> Save
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div
+                            key={i.id}
+                            style={{
+                              background: statusBg, padding: 10, borderRadius: 6, marginTop: 10,
+                              display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
+                            }}
+                          >
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                                Due {fmt(i.dueDate)}
+                              </div>
+                              <div style={{ fontSize: 13, fontWeight: 600, fontVariantNumeric: "tabular-nums", marginTop: 2 }}>
+                                ₹{Number(i.paidAmount).toLocaleString()} of ₹{Number(i.amount).toLocaleString()}
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              <span
+                                style={{
+                                  background: "transparent", color: statusColor, padding: "2px 6px", borderRadius: 4,
+                                  fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3,
+                                }}
+                              >
+                                {i.status}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => onEditInstalment(i)}
+                                style={{ ...iconBtn, padding: "4px" }}
+                                title="Edit"
+                                aria-label="Edit instalment"
+                              >
+                                <Edit3 size={12} aria-hidden />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
               </div>
             );
           })
@@ -2130,7 +2567,6 @@ function MicrositeCreate({ trip, onChange, notify }) {
 function MicrositeEditor({ trip, ms, onChange, notify }) {
   const [subdomain, setSubdomain] = useState(ms.subdomain || "");
   const [itineraryHtml, setItineraryHtml] = useState(ms.itineraryHtml || "");
-  const [faqJson, setFaqJson] = useState(ms.faqJson || "");
   const [expiresAt, setExpiresAt] = useState(toDateInput(ms.expiresAt));
   const [saving, setSaving] = useState(false);
   const [unpublishing, setUnpublishing] = useState(false);
@@ -2156,10 +2592,6 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
       notify.error("Itinerary content required");
       return;
     }
-    if (faqJson.trim()) {
-      try { JSON.parse(faqJson); }
-      catch { notify.error("faqJson is not valid JSON"); return; }
-    }
     setSaving(true);
     try {
       await fetchApi(`/api/travel/trips/${trip.id}/microsite`, {
@@ -2167,7 +2599,6 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
         body: JSON.stringify({
           subdomain: subdomain.trim(),
           itineraryHtml,
-          faqJson: faqJson.trim() ? faqJson : null,
           expiresAt: expiresAt || null,
         }),
       });
@@ -2181,7 +2612,13 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
   };
 
   const unpublish = async () => {
-    if (!window.confirm("Unpublish this microsite? The public URL will stop responding.")) return;
+    const ok = await notify.confirm({
+      title: "Unpublish microsite",
+      message: "Unpublish this microsite? The public URL will stop responding.",
+      confirmText: "Unpublish",
+      destructive: true,
+    });
+    if (!ok) return;
     setUnpublishing(true);
     try {
       await fetchApi(`/api/travel/trips/${trip.id}/microsite`, { method: "DELETE" });
@@ -2324,17 +2761,6 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
             notify={notify}
           />
 
-          <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4, marginTop: 12 }}>
-            FAQ (optional, JSON array of {`{ q, a }`})
-          </label>
-          <textarea
-            value={faqJson}
-            onChange={(e) => setFaqJson(e.target.value)}
-            placeholder='[{"q":"What to pack?","a":"Sunscreen + ID."}]'
-            spellCheck={false}
-            style={{ ...input, width: "100%", boxSizing: "border-box", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, minHeight: 80, resize: "vertical" }}
-            aria-label="Microsite FAQ JSON"
-          />
         </>
       )}
     </div>

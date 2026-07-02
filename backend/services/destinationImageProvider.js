@@ -382,11 +382,13 @@ function applyImagesToContent(content, fetched) {
 }
 
 // An image URL is "operator-owned" (do not overwrite) when it's a local
-// upload path. Any TEE-fetched URL starts with https://; operator
-// uploads start with /uploads/.
+// upload path. Any TEE-fetched URL starts with https://; operator uploads
+// start with /api/uploads/ (canonical — see server.js's /uploads mount
+// comment for why /api/* is required) or the legacy bare /uploads/ (pages
+// saved before that fix).
 function isOperatorOwned(url) {
   if (!url || typeof url !== 'string') return false;
-  return url.startsWith('/uploads/');
+  return url.startsWith('/api/uploads/') || url.startsWith('/uploads/');
 }
 
 function _resetForTests() {

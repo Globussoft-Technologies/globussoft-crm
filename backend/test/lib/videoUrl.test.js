@@ -91,7 +91,10 @@ describe('normalizeVideoEmbedUrl — empty / invalid input', () => {
 });
 
 describe('isLocalUpload', () => {
-  test('detects /uploads/landing-page-videos prefix', () => {
+  test('detects canonical /api/uploads/landing-page-videos prefix', () => {
+    expect(isLocalUpload('/api/uploads/landing-page-videos/tenant-1/foo.mp4')).toBe(true);
+  });
+  test('detects legacy bare /uploads/landing-page-videos prefix (pre-fix saved pages)', () => {
     expect(isLocalUpload('/uploads/landing-page-videos/tenant-1/foo.mp4')).toBe(true);
   });
   test('false for YouTube URL', () => {
@@ -107,6 +110,7 @@ describe('isLocalUpload', () => {
   });
   test('tolerates leading whitespace', () => {
     expect(isLocalUpload('  /uploads/landing-page-videos/tenant-1/foo.mp4')).toBe(true);
+    expect(isLocalUpload('  /api/uploads/landing-page-videos/tenant-1/foo.mp4')).toBe(true);
   });
 });
 
@@ -149,6 +153,6 @@ describe('isDirectVideoFile', () => {
 
 describe('exported constant', () => {
   test('LOCAL_UPLOAD_PREFIX matches the upload route + renderer expectations', () => {
-    expect(LOCAL_UPLOAD_PREFIX).toBe('/uploads/landing-page-videos/');
+    expect(LOCAL_UPLOAD_PREFIX).toBe('/api/uploads/landing-page-videos/');
   });
 });

@@ -393,6 +393,7 @@ describe('applyImagesToContent — bridge into LandingPage.content', () => {
   });
 
   test('isOperatorOwned recognizes /uploads/ paths and external URLs', () => {
+    expect(provider.isOperatorOwned('/api/uploads/landing-page-images/x.jpg')).toBe(true);
     expect(provider.isOperatorOwned('/uploads/landing-page-images/x.jpg')).toBe(true);
     expect(provider.isOperatorOwned('https://images.unsplash.com/x.jpg')).toBe(false);
     expect(provider.isOperatorOwned('')).toBe(false);

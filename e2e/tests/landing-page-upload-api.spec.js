@@ -10,7 +10,10 @@
  *   uploads at 5 MB. This spec pins the contract:
  *
  *     201 { url, mimetype, size, filename }
- *       - url is "/uploads/landing-page-images/tenant-<id>/<unique>.<ext>"
+ *       - url is "/api/uploads/landing-page-images/tenant-<id>/<unique>.<ext>"
+ *         (must be under /api/* — Nginx on the deployed demo only proxies
+ *         /api/* to the backend; a bare /uploads/... URL falls through to
+ *         the SPA catch-all and serves index.html instead of the file)
  *       - extension is derived from MIME, NOT the client filename
  *
  *     400 paths:
@@ -111,7 +114,7 @@ test.describe('POST /api/landing-pages/upload — happy paths', () => {
     expect(res.status(), `upload PNG: ${await res.text()}`).toBe(201);
     const body = await res.json();
     expect(typeof body.url).toBe('string');
-    expect(body.url).toMatch(/^\/uploads\/landing-page-images\/tenant-\d+\//);
+    expect(body.url).toMatch(/^\/api\/uploads\/landing-page-images\/tenant-\d+\//);
     expect(body.url).toContain(`tenant-${genericTenantId}/`);
     expect(body.url).toMatch(/\.png$/);
     expect(body.mimetype).toBe('image/png');
@@ -263,7 +266,7 @@ test.describe('POST /api/landing-pages/upload-video — happy path', () => {
     });
     expect(res.status(), `upload-video: ${await res.text()}`).toBe(201);
     const body = await res.json();
-    expect(body.url).toMatch(/^\/uploads\/landing-page-videos\/tenant-\d+\//);
+    expect(body.url).toMatch(/^\/api\/uploads\/landing-page-videos\/tenant-\d+\//);
     expect(body.url).toContain(`tenant-${genericTenantId}/`);
     expect(body.url).toMatch(/\.mp4$/);
     expect(body.mimetype).toBe('video/mp4');

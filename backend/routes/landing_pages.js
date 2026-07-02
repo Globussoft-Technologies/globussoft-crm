@@ -282,7 +282,10 @@ router.get("/template-catalogue", verifyToken, (req, res) => {
 //
 // Tenant isolation: storage path includes req.user.tenantId so a
 // directory listing on disk is segmented per tenant. The returned
-// `url` is `/uploads/landing-page-images/tenant-<id>/<file>`. We do
+// `url` is `/api/uploads/landing-page-images/tenant-<id>/<file>` (the
+// `/api/*` prefix is required — Nginx on the deployed demo only proxies
+// `/api/*` to the backend, so a bare `/uploads/...` URL falls through to
+// the SPA catch-all and serves index.html instead of the file). We do
 // NOT persist a row in the DB — the URL is opaque and gets stored in
 // the parent LandingPage row's `content` JSON when the user saves.
 router.post(
@@ -303,7 +306,7 @@ router.post(
     if (!req.file) {
       return res.status(400).json({ error: "No image file provided (field 'image')" });
     }
-    const url = `/uploads/landing-page-images/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
+    const url = `/api/uploads/landing-page-images/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
     res.status(201).json({
       url,
       mimetype: req.file.mimetype,
@@ -322,10 +325,11 @@ router.post(
 //   400 — wrong MIME, missing file, multer LIMIT_FILE_SIZE
 //   401/403 — verifyToken
 //
-// Tenant-segmented path: /uploads/landing-page-videos/tenant-<id>/<file>.
-// Caller stores the returned `url` directly in the video block's `url`
-// prop; the public renderer detects the /uploads/landing-page-videos
-// prefix and emits a native <video controls> tag.
+// Tenant-segmented path: /api/uploads/landing-page-videos/tenant-<id>/<file>
+// (must be under /api/* — see the /upload comment above for why). Caller
+// stores the returned `url` directly in the video block's `url` prop; the
+// public renderer detects the /api/uploads/landing-page-videos prefix and
+// emits a native <video controls> tag.
 router.post(
   "/upload-video",
   verifyToken,
@@ -344,7 +348,7 @@ router.post(
     if (!req.file) {
       return res.status(400).json({ error: "No video file provided (field 'video')" });
     }
-    const url = `/uploads/landing-page-videos/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
+    const url = `/api/uploads/landing-page-videos/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
     res.status(201).json({
       url,
       mimetype: req.file.mimetype,
@@ -363,10 +367,11 @@ router.post(
 //   400 — wrong MIME, missing file, multer LIMIT_FILE_SIZE
 //   401/403 — verifyToken
 //
-// Tenant-segmented path: /uploads/landing-page-documents/tenant-<id>/<file>.
-// Caller stores the returned `url` into `brochure.fileUrl` in the page
-// config; the wanderlux template surfaces a "Download brochure" CTA on
-// the brochure section's success state when that field is non-empty.
+// Tenant-segmented path: /api/uploads/landing-page-documents/tenant-<id>/<file>
+// (must be under /api/* — see the /upload comment above for why). Caller
+// stores the returned `url` into `brochure.fileUrl` in the page config; the
+// wanderlux template surfaces a "Download brochure" CTA on the brochure
+// section's success state when that field is non-empty.
 router.post(
   "/upload-document",
   verifyToken,
@@ -385,7 +390,7 @@ router.post(
     if (!req.file) {
       return res.status(400).json({ error: "No document file provided (field 'document')" });
     }
-    const url = `/uploads/landing-page-documents/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
+    const url = `/api/uploads/landing-page-documents/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
     res.status(201).json({
       url,
       mimetype: req.file.mimetype,

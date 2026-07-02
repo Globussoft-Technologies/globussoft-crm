@@ -33,6 +33,8 @@
 import React, { useState } from 'react';
 import { Trash2, Plus, Upload, AlertCircle } from 'lucide-react';
 import { getAuthToken } from '../utils/api';
+import { isUploadedS3Url } from '../utils/uploadDisplay';
+import UploadedAssetChip from '../components/UploadedAssetChip';
 
 // ── upload helper (mirror of the image-upload logic in the builder) ─
 async function uploadImage(file) {
@@ -118,16 +120,27 @@ function ImageField({ label, value, onChange, hint }) {
       .catch((err) => setError(err.message || 'Upload failed'))
       .finally(() => { setUploading(false); if (ref.current) ref.current.value = ''; });
   };
+  const showChip = isUploadedS3Url(value);
   return (
     <div style={{ marginBottom: '0.65rem' }}>
       {label && <label style={labelStyle}>{label}</label>}
-      <div style={{ display: 'flex', gap: '0.35rem' }}>
-        <input className="input-field" value={value || ''} onChange={(e) => onChange(e.target.value || null)} placeholder="https://… or /uploads/…" style={{ ...inputStyle, flex: 1 }} />
-        <button type="button" onClick={() => ref.current?.click()} disabled={uploading} style={{ padding: '0.4rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', cursor: uploading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.78rem' }}>
-          <Upload size={12} /> {uploading ? '...' : 'Upload'}
-        </button>
-        <input ref={ref} type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={onPick} style={{ display: 'none' }} />
-      </div>
+      {showChip ? (
+        <UploadedAssetChip
+          url={value}
+          kind="image"
+          uploading={uploading}
+          onReplace={() => ref.current?.click()}
+          onRemove={() => onChange('')}
+        />
+      ) : (
+        <div style={{ display: 'flex', gap: '0.35rem' }}>
+          <input className="input-field" value={value || ''} onChange={(e) => onChange(e.target.value || null)} placeholder="https://… or /uploads/…" style={{ ...inputStyle, flex: 1 }} />
+          <button type="button" onClick={() => ref.current?.click()} disabled={uploading} style={{ padding: '0.4rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', cursor: uploading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.78rem' }}>
+            <Upload size={12} /> {uploading ? '...' : 'Upload'}
+          </button>
+          <input ref={ref} type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={onPick} style={{ display: 'none' }} />
+        </div>
+      )}
       {hint && <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>{hint}</p>}
       {error && <p style={{ fontSize: '0.7rem', color: '#ef4444', marginTop: '0.2rem' }}>{error}</p>}
     </div>
@@ -152,28 +165,39 @@ function VideoField({ label, value, onChange, hint }) {
       .catch((err) => setError(err.message || 'Upload failed'))
       .finally(() => { setUploading(false); if (ref.current) ref.current.value = ''; });
   };
+  const showChip = isUploadedS3Url(value);
   return (
     <div style={{ marginBottom: '0.65rem' }}>
       {label && <label style={labelStyle}>{label}</label>}
-      <div style={{ display: 'flex', gap: '0.35rem' }}>
-        <input
-          className="input-field"
-          value={value || ''}
-          onChange={(e) => onChange(e.target.value || '')}
-          placeholder="https://youtube.com/… or paste Vimeo / Wistia URL"
-          style={{ ...inputStyle, flex: 1 }}
+      {showChip ? (
+        <UploadedAssetChip
+          url={value}
+          kind="video"
+          uploading={uploading}
+          onReplace={() => ref.current?.click()}
+          onRemove={() => onChange('')}
         />
-        <button
-          type="button"
-          onClick={() => ref.current?.click()}
-          disabled={uploading}
-          style={{ padding: '0.4rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', cursor: uploading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.78rem' }}
-          title="Upload an MP4 / WebM / MOV (max 50 MB)"
-        >
-          <Upload size={12} /> {uploading ? '...' : 'Upload'}
-        </button>
-        <input ref={ref} type="file" accept="video/mp4,video/webm,video/quicktime,video/ogg" onChange={onPick} style={{ display: 'none' }} />
-      </div>
+      ) : (
+        <div style={{ display: 'flex', gap: '0.35rem' }}>
+          <input
+            className="input-field"
+            value={value || ''}
+            onChange={(e) => onChange(e.target.value || '')}
+            placeholder="https://youtube.com/… or paste Vimeo / Wistia URL"
+            style={{ ...inputStyle, flex: 1 }}
+          />
+          <button
+            type="button"
+            onClick={() => ref.current?.click()}
+            disabled={uploading}
+            style={{ padding: '0.4rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', cursor: uploading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.78rem' }}
+            title="Upload an MP4 / WebM / MOV (max 50 MB)"
+          >
+            <Upload size={12} /> {uploading ? '...' : 'Upload'}
+          </button>
+          <input ref={ref} type="file" accept="video/mp4,video/webm,video/quicktime,video/ogg" onChange={onPick} style={{ display: 'none' }} />
+        </div>
+      )}
       {hint && <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>{hint}</p>}
       {error && <p style={{ fontSize: '0.7rem', color: '#ef4444', marginTop: '0.2rem' }}>{error}</p>}
     </div>

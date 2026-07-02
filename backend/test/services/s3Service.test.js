@@ -114,6 +114,22 @@ describe('s3Service — uploadFile', () => {
       uploadFile(Buffer.from('x'), 'p.jpg', 'image/jpeg', 'images')
     ).rejects.toThrow(/Failed to upload file to S3: AccessDenied/);
   });
+
+  test('sets ContentDisposition when opts.contentDisposition is provided (force download)', async () => {
+    sendMock.mockResolvedValueOnce({});
+    await uploadFile(Buffer.from('x'), 'brochure.pdf', 'application/pdf', 'docs', {
+      contentDisposition: 'attachment; filename="brochure.pdf"',
+    });
+    const cmd = sendMock.mock.calls[0][0];
+    expect(cmd.input.ContentDisposition).toBe('attachment; filename="brochure.pdf"');
+  });
+
+  test('omits ContentDisposition by default (inline — images/videos render in-page)', async () => {
+    sendMock.mockResolvedValueOnce({});
+    await uploadFile(Buffer.from('x'), 'hero.png', 'image/png', 'images');
+    const cmd = sendMock.mock.calls[0][0];
+    expect(cmd.input.ContentDisposition).toBeUndefined();
+  });
 });
 
 describe('s3Service — uploadImage', () => {

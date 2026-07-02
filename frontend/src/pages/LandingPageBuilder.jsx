@@ -3,6 +3,8 @@ import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { ArrowLeft, Save, Eye, Monitor, Smartphone, Plus, Trash2, ChevronUp, ChevronDown, Type, AlignLeft, Image, MousePointerClick, FileInput, Minus, Space, Video, Upload, Undo2, Redo2, Columns, MapPin, Building2, Sparkles, ListChecks, CalendarDays, IndianRupee, HelpCircle, MessageSquare, AlertCircle, CheckCircle2, Globe, Film, Shield, FileDown, PhoneCall, History, X, RotateCcw, UserPlus } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { isUploadedS3Url } from '../utils/uploadDisplay';
+import UploadedAssetChip from '../components/UploadedAssetChip';
 import { PRESETS as REG_FORM_PRESETS, listPresets as listRegFormPresets, defaultPropsFor as regFormDefaultPropsFor } from '../utils/travelRegistrationPresets';
 import LandingPageTemplateEditor from './LandingPageTemplateEditor';
 import LandingPageWanderluxEditor, { LayoutPanel as WanderluxLayoutPanel } from './LandingPageWanderluxEditor';
@@ -1431,23 +1433,34 @@ function ImagePropertyEditor({ p, updateProp, field }) {
     }
   };
 
+  const showChip = isUploadedS3Url(p.src);
   return (
     <>
       <div style={{ marginBottom: '0.75rem' }}>
         <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>Image URL</label>
-        <div style={{ display: 'flex', gap: '0.3rem' }}>
-          <input className="input-field" type="text" value={p.src || ''} onChange={e => updateProp('src', e.target.value)} style={{ flex: 1, padding: '0.4rem', fontSize: '0.85rem' }} placeholder="https://… or /uploads/…" />
-          <button
-            type="button"
-            onClick={onPick}
-            disabled={uploading}
-            title="Upload an image from your device (PNG/JPG/WebP/GIF, max 5 MB)"
-            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.78rem' }}
-          >
-            <Upload size={12} /> {uploading ? '...' : 'Upload'}
-          </button>
-          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={onFile} style={{ display: 'none' }} />
-        </div>
+        {showChip ? (
+          <UploadedAssetChip
+            url={p.src}
+            kind="image"
+            uploading={uploading}
+            onReplace={onPick}
+            onRemove={() => updateProp('src', '')}
+          />
+        ) : (
+          <div style={{ display: 'flex', gap: '0.3rem' }}>
+            <input className="input-field" type="text" value={p.src || ''} onChange={e => updateProp('src', e.target.value)} style={{ flex: 1, padding: '0.4rem', fontSize: '0.85rem' }} placeholder="https://… or /uploads/…" />
+            <button
+              type="button"
+              onClick={onPick}
+              disabled={uploading}
+              title="Upload an image from your device (PNG/JPG/WebP/GIF, max 5 MB)"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.78rem' }}
+            >
+              <Upload size={12} /> {uploading ? '...' : 'Upload'}
+            </button>
+          </div>
+        )}
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={onFile} style={{ display: 'none' }} />
         {uploadError && (
           <div style={{ marginTop: '0.3rem', fontSize: '0.7rem', color: '#ef4444' }}>{uploadError}</div>
         )}
@@ -1638,29 +1651,40 @@ function TravelImageField({ label, value, onChange, hint }) {
     }
   };
   const empty = !value;
+  const showChip = isUploadedS3Url(value);
   return (
     <div style={{ marginBottom: '0.75rem' }}>
       <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>{label}</label>
-      <div style={{ display: 'flex', gap: '0.3rem' }}>
-        <input
-          className="input-field"
-          type="text"
-          value={value || ''}
-          onChange={e => onChange(e.target.value || null)}
-          style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
-          placeholder="https://… or /uploads/…"
+      {showChip ? (
+        <UploadedAssetChip
+          url={value}
+          kind="image"
+          uploading={uploading}
+          onReplace={onPick}
+          onRemove={() => onChange('')}
         />
-        <button
-          type="button"
-          onClick={onPick}
-          disabled={uploading}
-          title="Upload an image (PNG/JPG/WebP/GIF, max 5 MB)"
-          style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.4rem 0.6rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.75rem' }}
-        >
-          <Upload size={11} /> {uploading ? '…' : 'Upload'}
-        </button>
-        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={onFile} style={{ display: 'none' }} />
-      </div>
+      ) : (
+        <div style={{ display: 'flex', gap: '0.3rem' }}>
+          <input
+            className="input-field"
+            type="text"
+            value={value || ''}
+            onChange={e => onChange(e.target.value || null)}
+            style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
+            placeholder="https://… or /uploads/…"
+          />
+          <button
+            type="button"
+            onClick={onPick}
+            disabled={uploading}
+            title="Upload an image (PNG/JPG/WebP/GIF, max 5 MB)"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.4rem 0.6rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.75rem' }}
+          >
+            <Upload size={11} /> {uploading ? '…' : 'Upload'}
+          </button>
+        </div>
+      )}
+      <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={onFile} style={{ display: 'none' }} />
       {err && <div style={{ marginTop: '0.25rem', fontSize: '0.7rem', color: '#ef4444' }}>{err}</div>}
       {empty && !err && (
         <div style={{ marginTop: '0.25rem', fontSize: '0.7rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
@@ -2256,30 +2280,41 @@ function GenericVideoEditor({ p, updateProp, field }) {
   const rawUrl = (p.url || '').trim();
   const normalized = normalizeVideoEmbedUrl(rawUrl);
   const showNormalizedHint = rawUrl && normalized !== rawUrl && !isLocalVideoUpload(normalized);
+  const showChip = isUploadedS3Url(p.url);
   return (
     <>
       <div style={{ marginBottom: '0.75rem' }}>
         <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>Video URL</label>
-        <div style={{ display: 'flex', gap: '0.3rem' }}>
-          <input
-            className="input-field"
-            type="url"
-            value={p.url || ''}
-            onChange={(e) => updateProp('url', e.target.value)}
-            placeholder="https://youtube.com/… or upload"
-            style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
+        {showChip ? (
+          <UploadedAssetChip
+            url={p.url}
+            kind="video"
+            uploading={uploading}
+            onReplace={onPick}
+            onRemove={() => updateProp('url', '')}
           />
-          <button
-            type="button"
-            onClick={onPick}
-            disabled={uploading}
-            title="Upload a video from your device (MP4 / WebM / MOV, max 50 MB)"
-            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.78rem' }}
-          >
-            <Upload size={12} /> {uploading ? '...' : 'Upload'}
-          </button>
-          <input ref={fileRef} type="file" accept="video/mp4,video/webm,video/quicktime,video/ogg" onChange={onFile} style={{ display: 'none' }} />
-        </div>
+        ) : (
+          <div style={{ display: 'flex', gap: '0.3rem' }}>
+            <input
+              className="input-field"
+              type="url"
+              value={p.url || ''}
+              onChange={(e) => updateProp('url', e.target.value)}
+              placeholder="https://youtube.com/… or upload"
+              style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
+            />
+            <button
+              type="button"
+              onClick={onPick}
+              disabled={uploading}
+              title="Upload a video from your device (MP4 / WebM / MOV, max 50 MB)"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.78rem' }}
+            >
+              <Upload size={12} /> {uploading ? '...' : 'Upload'}
+            </button>
+          </div>
+        )}
+        <input ref={fileRef} type="file" accept="video/mp4,video/webm,video/quicktime,video/ogg" onChange={onFile} style={{ display: 'none' }} />
         {uploadError && (
           <div style={{ marginTop: '0.3rem', fontSize: '0.7rem', color: '#ef4444' }}>{uploadError}</div>
         )}
@@ -2365,32 +2400,43 @@ function TravelVideoEditor({ p, updateProp, field }) {
   // their pasted Shorts / watch URL to an embed URL (and the iframe
   // will actually load instead of "refused to connect").
   const showNormalizedHint = rawUrl && normalized !== rawUrl && !isLocalVideoUpload(normalized);
+  const showChip = isUploadedS3Url(p.url);
   return (
     <>
       {field('Section title', 'title')}
       {field('Subtitle', 'subtitle', 'textarea')}
       <div style={{ marginBottom: '0.75rem' }}>
         <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>Video URL (YouTube / Vimeo / Wistia)</label>
-        <div style={{ display: 'flex', gap: '0.3rem' }}>
-          <input
-            className="input-field"
-            type="url"
-            value={p.url || ''}
-            onChange={(e) => updateProp('url', e.target.value)}
-            placeholder="https://youtube.com/watch?v=…  or  https://youtu.be/…"
-            style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
+        {showChip ? (
+          <UploadedAssetChip
+            url={p.url}
+            kind="video"
+            uploading={uploading}
+            onReplace={onPick}
+            onRemove={() => updateProp('url', '')}
           />
-          <button
-            type="button"
-            onClick={onPick}
-            disabled={uploading}
-            title="Upload a video from your device (MP4 / WebM / MOV, max 50 MB)"
-            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.78rem' }}
-          >
-            <Upload size={12} /> {uploading ? '...' : 'Upload'}
-          </button>
-          <input ref={fileRef} type="file" accept="video/mp4,video/webm,video/quicktime,video/ogg" onChange={onFile} style={{ display: 'none' }} />
-        </div>
+        ) : (
+          <div style={{ display: 'flex', gap: '0.3rem' }}>
+            <input
+              className="input-field"
+              type="url"
+              value={p.url || ''}
+              onChange={(e) => updateProp('url', e.target.value)}
+              placeholder="https://youtube.com/watch?v=…  or  https://youtu.be/…"
+              style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
+            />
+            <button
+              type="button"
+              onClick={onPick}
+              disabled={uploading}
+              title="Upload a video from your device (MP4 / WebM / MOV, max 50 MB)"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.78rem' }}
+            >
+              <Upload size={12} /> {uploading ? '...' : 'Upload'}
+            </button>
+          </div>
+        )}
+        <input ref={fileRef} type="file" accept="video/mp4,video/webm,video/quicktime,video/ogg" onChange={onFile} style={{ display: 'none' }} />
         {uploadError && (
           <div style={{ marginTop: '0.3rem', fontSize: '0.7rem', color: '#ef4444' }}>{uploadError}</div>
         )}

@@ -42,6 +42,8 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { isUploadedS3Url, formatUploadFilename } from '../utils/uploadDisplay';
+import UploadedAssetChip from '../components/UploadedAssetChip';
 
 const sectionStyle = {
   marginBottom: '1.2rem',
@@ -148,21 +150,32 @@ function ImageField({ label, value, onChange, placeholder }) {
       if (inputRef.current) inputRef.current.value = '';
     }
   };
+  const showChip = isUploadedS3Url(value);
   return (
     <div>
       <label style={labelStyle}>{label}</label>
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <input type="text" style={{ ...inputStyle, flex: 1 }} value={value ?? ''} onChange={(e) => onChange(e.target.value)} placeholder={placeholder || 'https://… or /uploads/…'} />
-        <input ref={inputRef} type="file" accept="image/*" onChange={handleFile} style={{ display: 'none' }} />
-        <button
-          type="button"
-          onClick={() => inputRef.current && inputRef.current.click()}
-          disabled={uploading}
-          style={{ padding: '0.4rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-color)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-        >
-          {uploading ? '…' : 'Upload'}
-        </button>
-      </div>
+      {showChip ? (
+        <UploadedAssetChip
+          url={value}
+          kind="image"
+          uploading={uploading}
+          onReplace={() => inputRef.current && inputRef.current.click()}
+          onRemove={() => onChange('')}
+        />
+      ) : (
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <input type="text" style={{ ...inputStyle, flex: 1 }} value={value ?? ''} onChange={(e) => onChange(e.target.value)} placeholder={placeholder || 'https://… or /uploads/…'} />
+          <button
+            type="button"
+            onClick={() => inputRef.current && inputRef.current.click()}
+            disabled={uploading}
+            style={{ padding: '0.4rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-color)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+          >
+            {uploading ? '…' : 'Upload'}
+          </button>
+        </div>
+      )}
+      <input ref={inputRef} type="file" accept="image/*" onChange={handleFile} style={{ display: 'none' }} />
     </div>
   );
 }
@@ -198,21 +211,32 @@ function VideoField({ label, value, onChange, placeholder }) {
       if (inputRef.current) inputRef.current.value = '';
     }
   };
+  const showChip = isUploadedS3Url(value);
   return (
     <div>
       <label style={labelStyle}>{label}</label>
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <input type="text" style={{ ...inputStyle, flex: 1 }} value={value ?? ''} onChange={(e) => onChange(e.target.value)} placeholder={placeholder || 'https://… (Wistia/YouTube/Vimeo embed URL) or /uploads/…'} />
-        <input ref={inputRef} type="file" accept="video/*" onChange={handleFile} style={{ display: 'none' }} />
-        <button
-          type="button"
-          onClick={() => inputRef.current && inputRef.current.click()}
-          disabled={uploading}
-          style={{ padding: '0.4rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-color)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-        >
-          {uploading ? '…' : 'Upload'}
-        </button>
-      </div>
+      {showChip ? (
+        <UploadedAssetChip
+          url={value}
+          kind="video"
+          uploading={uploading}
+          onReplace={() => inputRef.current && inputRef.current.click()}
+          onRemove={() => onChange('')}
+        />
+      ) : (
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <input type="text" style={{ ...inputStyle, flex: 1 }} value={value ?? ''} onChange={(e) => onChange(e.target.value)} placeholder={placeholder || 'https://… (Wistia/YouTube/Vimeo embed URL) or /uploads/…'} />
+          <button
+            type="button"
+            onClick={() => inputRef.current && inputRef.current.click()}
+            disabled={uploading}
+            style={{ padding: '0.4rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-color)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+          >
+            {uploading ? '…' : 'Upload'}
+          </button>
+        </div>
+      )}
+      <input ref={inputRef} type="file" accept="video/*" onChange={handleFile} style={{ display: 'none' }} />
     </div>
   );
 }
@@ -230,6 +254,9 @@ function VideoField({ label, value, onChange, placeholder }) {
 function FileField({ label, value, onChange, placeholder, accept }) {
   const notify = useNotify();
   const [uploading, setUploading] = useState(false);
+  // Local draft for the "paste a link" input so typing doesn't flip the field
+  // into the filename-chip view on the first keystroke; committed on blur/Enter.
+  const [linkDraft, setLinkDraft] = useState('');
   const inputRef = React.useRef(null);
   const handleFile = async (e) => {
     const f = e.target.files && e.target.files[0];
@@ -257,30 +284,51 @@ function FileField({ label, value, onChange, placeholder, accept }) {
       if (inputRef.current) inputRef.current.value = '';
     }
   };
+  // Friendly filename for display — the basename of the stored URL with the
+  // leading "<timestamp>-" prefix(es) stripped (S3 keys are "<ts>-<name>.pdf";
+  // legacy uploads were double-timestamped). Falls back to the raw value.
+  const displayName = formatUploadFilename(value);
+  const btnStyle = { padding: '0.4rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-color)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' };
   return (
     <div>
       <label style={labelStyle}>{label}</label>
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <input type="text" style={{ ...inputStyle, flex: 1 }} value={value ?? ''} onChange={(e) => onChange(e.target.value)} placeholder={placeholder || 'https://… (Drive / S3 link) or upload below'} />
-        <input ref={inputRef} type="file" accept={accept || '.pdf,.doc,.docx,.ppt,.pptx,application/pdf'} onChange={handleFile} style={{ display: 'none' }} />
-        <button
-          type="button"
-          onClick={() => inputRef.current && inputRef.current.click()}
-          disabled={uploading}
-          style={{ padding: '0.4rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-color)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-        >
-          {uploading ? '…' : 'Upload'}
-        </button>
-      </div>
-      {value && (
-        <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', margin: '0.35rem 0 0' }}>
-          Linked file:{' '}
-          {/* Pages saved before the /api/uploads fix have a bare /uploads/...
-              value — rewrite for the preview link only (not the stored
-              value) so clicking it doesn't hit the SPA catch-all. */}
-          <a href={value.startsWith('/uploads/') ? `/api${value}` : value} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)' }}>{value}</a>
-        </p>
+      {value ? (
+        // A file is set — show just the filename (not the full URL), plus
+        // Replace (re-upload) and Remove.
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span
+            title={displayName}
+            style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.6rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--bg-color)', fontSize: '0.8rem', color: 'var(--text-primary)', overflow: 'hidden' }}
+          >
+            <span aria-hidden="true">📄</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</span>
+          </span>
+          <button type="button" onClick={() => inputRef.current && inputRef.current.click()} disabled={uploading} style={btnStyle}>
+            {uploading ? '…' : 'Replace'}
+          </button>
+          <button type="button" onClick={() => { onChange(''); setLinkDraft(''); }} disabled={uploading} style={{ ...btnStyle, color: 'var(--text-secondary)' }}>
+            Remove
+          </button>
+        </div>
+      ) : (
+        // Empty — paste a hosted link (committed on blur / Enter so typing
+        // doesn't flip to the chip mid-entry) or upload a file.
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <input
+            type="text"
+            style={{ ...inputStyle, flex: 1 }}
+            value={linkDraft}
+            onChange={(e) => setLinkDraft(e.target.value)}
+            onBlur={() => { const v = linkDraft.trim(); if (v) onChange(v); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const v = linkDraft.trim(); if (v) onChange(v); } }}
+            placeholder={placeholder || 'https://… paste a link (press Enter) or upload'}
+          />
+          <button type="button" onClick={() => inputRef.current && inputRef.current.click()} disabled={uploading} style={btnStyle}>
+            {uploading ? '…' : 'Upload'}
+          </button>
+        </div>
       )}
+      <input ref={inputRef} type="file" accept={accept || '.pdf,.doc,.docx,.ppt,.pptx,application/pdf'} onChange={handleFile} style={{ display: 'none' }} />
     </div>
   );
 }

@@ -74,8 +74,6 @@ async function uploadFile(
     Key: fileKey,
     Body: fileBody,
     ContentType: mimeType,
-    // Set public read access for downloadable artifacts
-    ACL: 'private',
   });
 
   try {

@@ -70,7 +70,7 @@ describe('externalAuth', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  test('returns 401 on malformed key (does not match glbs_<hex32+>)', async () => {
+  test('returns 401 on malformed key (does not match glbs_<hex48+>)', async () => {
     const { req, res, next } = makeReqResNext({
       headers: { 'x-api-key': 'not-a-key' },
     });
@@ -83,7 +83,7 @@ describe('externalAuth', () => {
   test('returns 401 on bogus key (prisma returns null)', async () => {
     findUniqueMock.mockResolvedValueOnce(null);
     const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': 'glbs_' + 'a'.repeat(32) },
+      headers: { 'x-api-key': 'glbs_' + 'a'.repeat(48) },
     });
     await externalAuth(req, res, next);
     expect(res.status).toHaveBeenCalledWith(401);
@@ -99,7 +99,7 @@ describe('externalAuth', () => {
       tenant: { id: 5, isActive: false, name: 'Stale Inc' },
     });
     const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': 'glbs_' + 'b'.repeat(32) },
+      headers: { 'x-api-key': 'glbs_' + 'b'.repeat(48) },
     });
     await externalAuth(req, res, next);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -115,7 +115,7 @@ describe('externalAuth', () => {
       tenant: null,
     });
     const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': 'glbs_' + 'c'.repeat(32) },
+      headers: { 'x-api-key': 'glbs_' + 'c'.repeat(48) },
     });
     await externalAuth(req, res, next);
     expect(res.status).toHaveBeenCalledWith(403);
@@ -128,12 +128,12 @@ describe('externalAuth', () => {
       id: 99,
       tenantId: 7,
       userId: 4,
-      keySecret: 'glbs_' + 'd'.repeat(32),
+      keySecret: 'glbs_' + 'd'.repeat(48),
       tenant,
     };
     findUniqueMock.mockResolvedValueOnce(apiKey);
     const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': 'glbs_' + 'd'.repeat(32) },
+      headers: { 'x-api-key': 'glbs_' + 'd'.repeat(48) },
     });
     await externalAuth(req, res, next);
     expect(next).toHaveBeenCalledOnce();
@@ -150,11 +150,11 @@ describe('externalAuth', () => {
       id: 99,
       tenantId: 7,
       userId: 4,
-      keySecret: 'glbs_' + 'e'.repeat(32),
+      keySecret: 'glbs_' + 'e'.repeat(48),
       tenant,
     });
     const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': 'glbs_' + 'e'.repeat(32) },
+      headers: { 'x-api-key': 'glbs_' + 'e'.repeat(48) },
     });
     await externalAuth(req, res, next);
     expect(updateMock).toHaveBeenCalledWith({
@@ -172,7 +172,7 @@ describe('externalAuth', () => {
     });
     updateMock.mockRejectedValueOnce(new Error('write failed'));
     const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': 'glbs_' + 'f'.repeat(32) },
+      headers: { 'x-api-key': 'glbs_' + 'f'.repeat(48) },
     });
     await externalAuth(req, res, next);
     expect(next).toHaveBeenCalledOnce();
@@ -188,7 +188,7 @@ describe('externalAuth', () => {
       tenant: { id: 1, isActive: true },
     });
     const { req, res, next } = makeReqResNext({
-      headers: { 'X-API-Key': 'glbs_' + '1'.repeat(32) },
+      headers: { 'X-API-Key': 'glbs_' + '1'.repeat(48) },
     });
     await externalAuth(req, res, next);
     expect(next).toHaveBeenCalledOnce();
@@ -200,7 +200,7 @@ describe('externalAuth', () => {
     });
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': 'glbs_' + '2'.repeat(32) },
+      headers: { 'x-api-key': 'glbs_' + '2'.repeat(48) },
     });
     await externalAuth(req, res, next);
     expect(res.status).toHaveBeenCalledWith(500);
@@ -242,7 +242,7 @@ describe('externalAuth', () => {
   });
 
   test('accepts uppercase hex characters in the key (case-insensitive regex)', async () => {
-    const upperKey = 'glbs_' + 'A'.repeat(32);
+    const upperKey = 'glbs_' + 'A'.repeat(48);
     findUniqueMock.mockResolvedValueOnce({
       id: 50,
       tenantId: 3,
@@ -263,7 +263,7 @@ describe('externalAuth', () => {
   });
 
   test('trims surrounding whitespace before lookup (token passed without padding)', async () => {
-    const cleanKey = 'glbs_' + '7'.repeat(32);
+    const cleanKey = 'glbs_' + '7'.repeat(48);
     findUniqueMock.mockResolvedValueOnce({
       id: 71,
       tenantId: 8,
@@ -292,7 +292,7 @@ describe('externalAuth', () => {
       tenant: { id: 4, isActive: true },
     });
     const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': 'glbs_' + '3'.repeat(32) },
+      headers: { 'x-api-key': 'glbs_' + '3'.repeat(48) },
     });
     await externalAuth(req, res, next);
     expect(next).toHaveBeenCalledOnce();
@@ -312,7 +312,7 @@ describe('externalAuth', () => {
       tenant: { id: 4, isActive: true },
     });
     const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': 'glbs_' + '4'.repeat(32) },
+      headers: { 'x-api-key': 'glbs_' + '4'.repeat(48) },
     });
     await externalAuth(req, res, next);
     expect(next).toHaveBeenCalledOnce();

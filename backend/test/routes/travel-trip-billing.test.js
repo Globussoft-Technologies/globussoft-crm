@@ -214,6 +214,8 @@ describe('GET /api/travel/trips/:tripId/rooming', () => {
 describe('POST /api/travel/trips/:tripId/rooming', () => {
   test('happy path returns 201 with persisted row (participantIds stringified)', async () => {
     prisma.tripParticipant.count.mockResolvedValue(2);
+    prisma.roomingAssignment.findFirst.mockResolvedValue(null); // no duplicate room
+    prisma.roomingAssignment.findMany.mockResolvedValue([]); // no existing assignments
     prisma.roomingAssignment.create.mockResolvedValue({
       id: 50, tripId: 100, roomNumber: '101', roomType: 'twin', participantIds: '[1,2]',
     });
@@ -322,9 +324,12 @@ describe('POST /api/travel/trips/:tripId/rooming', () => {
 
 describe('PATCH /api/travel/trips/:tripId/rooming/:roomId', () => {
   test('happy partial-update returns 200 with updated row', async () => {
-    prisma.roomingAssignment.findFirst.mockResolvedValue({
-      id: 50, tripId: 100, roomNumber: '101', roomType: 'twin', participantIds: '[1,2]',
-    });
+    // First call loads the existing room; second call is the duplicate-room check.
+    prisma.roomingAssignment.findFirst
+      .mockResolvedValueOnce({
+        id: 50, tripId: 100, roomNumber: '101', roomType: 'twin', participantIds: '[1,2]',
+      })
+      .mockResolvedValueOnce(null);
     prisma.roomingAssignment.update.mockResolvedValue({
       id: 50, tripId: 100, roomNumber: '101A', roomType: 'twin', participantIds: '[1,2]',
     });

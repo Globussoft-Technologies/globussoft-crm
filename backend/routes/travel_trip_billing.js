@@ -846,7 +846,7 @@ router.post(
 
       const unassigned = participants.filter((p) => !assignedSet.has(p.id));
       if (unassigned.length === 0) {
-        return res.json({ created: 0, skipped: 0, warnings: ["All participants already assigned"] });
+        return res.status(201).json({ created: 0, skipped: 0, warnings: ["All participants already assigned"] });
       }
 
       // Auto-allocate: partition unassigned into rooms

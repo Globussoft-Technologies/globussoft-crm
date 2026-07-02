@@ -4681,7 +4681,6 @@ async function renderTravelInvoicePdf(opts) {
   // #111 (high-contrast black) for readability. Only show "Total Paid" if
   // status=Paid AND amountPaid >= total (fully paid). If status=Paid but
   // partial, show "Balance Due" instead.
-  const isFullyPaid = invoice.status === "Paid" && amountPaid >= grandTotal;
   const totalLabel = isFullyPaid
     ? "Total Paid"
     : hasPartialPayment

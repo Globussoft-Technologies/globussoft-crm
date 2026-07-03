@@ -412,7 +412,7 @@ function compareButtons(htmlDoc, reactDoc, detailed = false) {
 /**
  * Compare forms
  */
-function compareforms(htmlDoc, reactDoc, detailed = false) {
+function compareForms(htmlDoc, reactDoc, detailed = false) {
   const differences = [];
 
   const htmlForms = Array.from(htmlDoc.querySelectorAll('form')).map((form) => ({

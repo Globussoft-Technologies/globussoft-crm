@@ -205,7 +205,7 @@ export function FormBlock({ props = {}, slug = '', pageId = null }) {
   }
 
   const turnstileSiteKey =
-    props.turnstileSiteKey || process.env.REACT_APP_TURNSTILE_SITE_KEY || '1x00000000000000000000AA';
+    props.turnstileSiteKey || import.meta.env.VITE_TURNSTILE_SITE_KEY || '1x00000000000000000000AA';
 
   return (
     <>

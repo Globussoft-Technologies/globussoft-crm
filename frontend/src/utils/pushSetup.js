@@ -96,7 +96,6 @@ export async function setupPush(token) {
     const name = err && err.name;
     const msg = (err && err.message) || '';
     if (name === 'AbortError' || /Registration failed/i.test(msg)) {
-      console.debug('[push] setupPush skipped:', name || msg);
       return false;
     }
     console.warn('[push] setupPush error:', err);

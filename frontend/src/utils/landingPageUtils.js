@@ -17,6 +17,7 @@ export function safeUrl(input, kind) {
   if (input == null) return SAFE_FALLBACK[kind] ?? '';
   const raw = String(input);
   // Browsers strip leading C0 whitespace AND TAB before scheme parsing
+  // eslint-disable-next-line no-control-regex
   const trimmed = raw.replace(/^[\s\x00-\x1f]+/, '');
   // Empty / whitespace-only input
   if (trimmed.length === 0) return SAFE_FALLBACK[kind] ?? '';
@@ -132,8 +133,8 @@ export function parseContentJson(landingPage) {
       return JSON.parse(landingPage.content);
     }
     return landingPage.content;
-  } catch (e) {
-    console.error('Failed to parse landing page content:', e);
+  } catch (_e) {
+    // Silent parse failure — return null
     return null;
   }
 }

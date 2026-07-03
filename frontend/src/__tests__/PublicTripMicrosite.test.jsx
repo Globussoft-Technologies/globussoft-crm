@@ -420,14 +420,73 @@ describe('<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel', () => {
       expect(screen.getByText(/What we received/i)).toBeInTheDocument();
 
       const reqCall = global.fetch.mock.calls.find(([u]) => u === `${BASE}/request-otp`);
-      expect(JSON.parse(reqCall[1].body)).toEqual({ purpose: 'registration', draftToken: 'abc123' });
+      expect(JSON.parse(reqCall[1].body)).toEqual({ purpose: 'registration', draftToken: 'abc123', channel: 'phone' });
 
       const verifyCall = global.fetch.mock.calls.find(([u]) => u === `${BASE}/verify-otp`);
       expect(JSON.parse(verifyCall[1].body)).toEqual({
         purpose: 'registration',
         code: '1234',
         draftToken: 'abc123',
+        channel: 'phone',
       });
+    });
+  });
+
+  it('offers an email channel toggle and sends the code via email when picked', async () => {
+    installMockWithOtp();
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      // Both channel options are offered because the draft carries an email.
+      const emailBtn = await screen.findByTestId('registration-channel-email');
+      expect(screen.getByTestId('registration-channel-phone')).toBeInTheDocument();
+
+      // Default destination is the masked phone; picking email swaps it.
+      expect(screen.getByTestId('registration-destination-masked')).toHaveTextContent('••••••3210');
+      fireEvent.click(emailBtn);
+      expect(screen.getByTestId('registration-destination-masked')).toHaveTextContent('ro••••@example.com');
+
+      fireEvent.click(screen.getByTestId('registration-request-otp-btn'));
+      fireEvent.change(await screen.findByTestId('registration-code-input'), { target: { value: '1234' } });
+      fireEvent.click(screen.getByTestId('registration-verify-otp-btn'));
+      expect(await screen.findByTestId('registration-confirmed')).toBeInTheDocument();
+
+      const reqCall = global.fetch.mock.calls.find(([u]) => u === `${BASE}/request-otp`);
+      expect(JSON.parse(reqCall[1].body)).toEqual({ purpose: 'registration', draftToken: 'abc123', channel: 'email' });
+      const verifyCall = global.fetch.mock.calls.find(([u]) => u === `${BASE}/verify-otp`);
+      expect(JSON.parse(verifyCall[1].body)).toEqual({
+        purpose: 'registration', code: '1234', draftToken: 'abc123', channel: 'email',
+      });
+    });
+  });
+
+  it('shows a code-expiry countdown once the code is sent', async () => {
+    installMockWithOtp();
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      fireEvent.click(await screen.findByTestId('registration-request-otp-btn'));
+      await screen.findByTestId('registration-code-input');
+      const expiry = screen.getByTestId('registration-otp-expiry');
+      expect(expiry).toHaveTextContent(/Code expires in/i);
+      // request-otp mock returns expiresAt ~10 min out → mm:ss in the 09/10 range.
+      expect(expiry).toHaveTextContent(/\d{2}:\d{2}/);
+    });
+  });
+
+  it('hides the channel toggle when the draft has no email (phone-only)', async () => {
+    installMockWithOtp({
+      draftSummaryResponse: jsonResponse(200, {
+        id: 7001, status: 'DRAFT', otpVerified: false,
+        studentFirstName: 'Aarav', parentFirstName: 'Rohan',
+        parentPhoneMasked: '••••••3210', parentPhoneLast4: '3210',
+        parentEmailMasked: '', hasPassport: true,
+        hasPassportDoc: false, hasAadhaarDoc: false, consentGiven: false,
+      }),
+    });
+    await withDraftToken('abc123', async () => {
+      renderPage();
+      await screen.findByTestId('registration-request-otp-btn');
+      expect(screen.queryByTestId('registration-channel-email')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('registration-channel-phone')).not.toBeInTheDocument();
     });
   });
 

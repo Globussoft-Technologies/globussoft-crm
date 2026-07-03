@@ -499,6 +499,77 @@ test.describe("Travel microsites API — OTP flow (PRD §4.5)", () => {
     expect((await second.json()).code).toBe("OTP_COOLDOWN");
   });
 
+  test("request-otp with invalid channel → 400 INVALID_CHANNEL", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { phone: "+919999999999", purpose: "registration", channel: "carrier-pigeon" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_CHANNEL");
+  });
+
+  test("request-otp channel=email without email → 400 MISSING_FIELDS", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { purpose: "registration", channel: "email" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_FIELDS");
+  });
+
+  test("request-otp channel=email happy path → 201 with channel echoed + no code", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const res = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        // Unique email per RUN to avoid the 60s cooldown stomping the test.
+        data: { email: `otp-${Date.now()}@e2e.test`, purpose: "registration", channel: "email" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status(), `body: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.sent).toBe(true);
+    expect(body.channel).toBe("email");
+    expect(body.expiresAt).toBeTruthy();
+    expect(body).not.toHaveProperty("code");
+    expect(body).not.toHaveProperty("otp");
+  });
+
+  test("verify-otp channel=email with bogus code → 400 OTP_INVALID", async ({ request }) => {
+    if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
+    const email = `otp-${Date.now() + 3}@e2e.test`;
+    await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/request-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { email, purpose: "registration", channel: "email" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    const res = await request.post(
+      `${BASE_URL}/api/travel/microsites/public/${micrositeUuid}/verify-otp`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { email, purpose: "registration", channel: "email", code: "9999" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("OTP_INVALID");
+  });
+
   test("verify-otp with bogus code → 400 OTP_INVALID", async ({ request }) => {
     if (!micrositeUuid) test.skip(true, "no microsite from earlier tests");
     const phone = `+91${String(Date.now() + 2).slice(-10)}`;

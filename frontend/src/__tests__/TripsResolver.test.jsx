@@ -46,17 +46,32 @@ describe('<TripsResolver />', () => {
     vi.stubGlobal('location', { ...window.location, replace: locationReplace });
   });
 
-  it('forces a full-page load to /trips when the featured endpoint returns a slug', async () => {
+  it('redirects to the featured page /p/<slug> render URL when the featured endpoint returns a slug', async () => {
+    // The resolver redirects to /p/<slug> (the canonical landing-page render
+    // surface, reliably proxied to the backend) rather than the /trips vanity
+    // URL — redirecting to /trips re-mounts this resolver on a misconfigured
+    // web layer and loops forever.
     global.fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ id: 1, slug: 'japan-2026', title: 'Japan 2026' }),
     });
     renderResolver();
     await waitFor(() => {
-      expect(locationReplace).toHaveBeenCalledWith('/trips');
+      expect(locationReplace).toHaveBeenCalledWith('/p/japan-2026');
     });
     // The fallback should NOT have rendered.
     expect(screen.queryByTestId('trips-fallback')).not.toBeInTheDocument();
+  });
+
+  it('URL-encodes the slug in the /p/<slug> redirect', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ slug: 'summer sale/2026' }),
+    });
+    renderResolver();
+    await waitFor(() => {
+      expect(locationReplace).toHaveBeenCalledWith('/p/summer%20sale%2F2026');
+    });
   });
 
   it('falls back to the hardcoded TripsLanding on 404 NO_FEATURED_PAGE', async () => {

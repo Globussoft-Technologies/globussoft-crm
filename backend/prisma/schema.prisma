@@ -6913,7 +6913,16 @@ model TripMicrosite {
 model TripMicrositeOtp {
   id          Int           @id @default(autoincrement())
   micrositeId Int
-  phone       String
+  // Delivery channel for this code. "phone" → WhatsApp/SMS via watiClient;
+  // "email" → SendGrid. Parents pick whichever contact they'd rather verify
+  // (both are captured at registration). Defaults to "phone" for back-compat
+  // with rows created before the email option shipped.
+  channel     String        @default("phone") // phone | email
+  // Exactly one of phone/email is populated per row, keyed by `channel`.
+  // phone was NOT NULL before the email channel landed — relaxed to nullable
+  // so email-channel rows don't carry a bogus phone.
+  phone       String?
+  email       String?
   purpose     String // registration | payment-plan | document-checklist | teacher-access
   otpHash     String
   expiresAt   DateTime
@@ -6922,6 +6931,7 @@ model TripMicrositeOtp {
   createdAt   DateTime      @default(now())
 
   @@index([micrositeId, phone, purpose])
+  @@index([micrositeId, email, purpose])
 }
 
 // ── Travel-vertical financial fork (PRD_TRAVEL_{QUOTE_BUILDER,BILLING,SUPPLIER_MASTER} DD-5.1 [RESOLVED 2026-05-24]) ──

@@ -2781,6 +2781,122 @@ async function createParticipantFromLeadSubmission(tripId, tenantId, formFields,
   });
 }
 
+// Authenticated API endpoint for form submissions (used by React renderer)
+// Accepts landing page ID instead of slug for API-based form handling
+router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
+  try {
+    const pageId = parseInt(req.params.id);
+    const page = await prisma.landingPage.findUnique({ where: { id: pageId } });
+    if (!page) return res.status(404).json({ error: "Page not found" });
+    const tenantId = page.tenantId || 1;
+
+    // #451: locate the form component in the page's content so we can
+    // honour its enableCaptcha / leadRoutingRuleId / successRedirectUrl
+    // props on the server side too.
+    const submittedAudience = typeof req.body.audience === "string" ? req.body.audience : null;
+    const isBrochureRequest = req.body.brochureRequest === true || req.body.type === "brochure";
+    const formComp = await pickFormFromContent(page.content, submittedAudience, isBrochureRequest);
+    const formProps = (formComp && formComp.props) || {};
+
+    // Registration-draft handling for trip-linked pages
+    if (page.tripId && !isBrochureRequest && resolveRegistrationMode(page, formProps) === "registration-draft") {
+      if (formProps.enableCaptcha) {
+        const ok = await verifyTurnstile(req.body.cfTurnstileToken, req.ip);
+        if (!ok) {
+          return res.status(400).json({ error: "CAPTCHA verification failed. Please try again." });
+        }
+      }
+      return handleRegistrationDraft(req, res, page, formProps);
+    }
+
+    // CAPTCHA verification before any DB writes
+    if (formProps.enableCaptcha) {
+      const ok = await verifyTurnstile(req.body.cfTurnstileToken, req.ip);
+      if (!ok) {
+        return res.status(400).json({ error: "CAPTCHA verification failed. Please try again." });
+      }
+    }
+
+    // Extract form fields (supports both nested and flat structures)
+    const formFields = (req.body && typeof req.body.fields === "object" && req.body.fields) ? req.body.fields : {};
+    const pick = (key) => formFields[key] || req.body[key] || null;
+
+    const email = pick("email") || pick("parentEmail") || pick("parent_email");
+    const name = pick("name") || pick("parentName") || pick("parent_name") || pick("full_name") || pick("fullName");
+    const full_name = pick("full_name") || pick("fullName");
+    const phone = pick("phone") || pick("parentPhone") || pick("parent_phone");
+    const company = pick("company") || pick("companyName") || pick("company_name") || pick("studentSchool") || pick("student_school") || pick("school");
+    const company_name = pick("company_name") || pick("companyName");
+
+    const contactEmail = email || `lp-${page.slug}-${Date.now()}@anonymous.local`;
+    const contactName = name || full_name || pick("studentName") || pick("student_name") || "Landing Page Lead";
+    const sourceSuffix = submittedAudience ? ` (${submittedAudience})` : "";
+    const attributionLabel = `Landing Page: ${page.title}${sourceSuffix}`;
+
+    const contactSource = isBrochureRequest
+      ? "brochure_request"
+      : page.tripId
+        ? "tmc_registration"
+        : "inbound:webform";
+
+    // Upsert contact with unique constraint on email + tenantId
+    const contact = await prisma.contact.upsert({
+      where: { email_tenantId: { email: contactEmail, tenantId } },
+      update: {
+        source: contactSource,
+        deletedAt: null,
+      },
+      create: {
+        name: contactName,
+        email: contactEmail,
+        phone: phone || null,
+        company: company || company_name || null,
+        status: "Lead",
+        source: contactSource,
+        firstTouchSource: attributionLabel,
+        subBrand: page.subBrand || (typeof req.body.subBrand === "string" ? req.body.subBrand : null),
+        aiScore: 30,
+        tenantId,
+      },
+    });
+
+    // Apply per-form lead routing
+    await applyLeadRouting(formProps, tenantId, contact.id);
+
+    // Create associated deal
+    await prisma.deal.create({
+      data: { title: `LP Inbound: ${page.title}`, amount: 0, stage: "lead", contactId: contact.id, tenantId },
+    });
+
+    // Create trip participant if trip-linked
+    if (page.tripId && !isBrochureRequest) {
+      try {
+        await createParticipantFromLeadSubmission(page.tripId, tenantId, formFields, req.body);
+      } catch (err) {
+        console.error("[LandingPage] participant auto-enrol error:", err.message);
+      }
+    }
+
+    // Update submission count and analytics
+    await prisma.landingPage.update({ where: { id: page.id }, data: { submissions: { increment: 1 } } });
+    await prisma.landingPageAnalytics.create({
+      data: { landingPageId: page.id, eventType: "FORM_SUBMIT", visitorIp: req.ip, metadata: JSON.stringify(req.body), tenantId },
+    });
+
+    if (req.io) req.io.emit("deal_updated", {});
+
+    // Return success with redirect URL if configured
+    const response = { success: true, message: "Thank you for your submission!" };
+    if (formProps.successRedirectUrl) {
+      response.successRedirectUrl = formProps.successRedirectUrl;
+    }
+    res.json(response);
+  } catch (err) {
+    console.error("[LandingPage] Submit error:", err);
+    res.status(500).json({ error: "Submission failed" });
+  }
+});
+
 publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
   try {
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });

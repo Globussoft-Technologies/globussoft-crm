@@ -254,7 +254,7 @@ function OverviewTab({ trip, onJump }) {
         status={trip.paymentPlan ? "Configured" : "Not set yet"}
         statusTone={trip.paymentPlan ? "good" : "warn"}
       >
-        {pay && pay.expectedTotalRupees > 0 ? (
+        {pay && pay.expectedTotalRupees > 0 && partCount > 0 ? (
           <PaymentBand pay={pay} />
         ) : (
           <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>

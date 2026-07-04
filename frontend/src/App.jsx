@@ -187,6 +187,12 @@ const StaffPermissions = lazy(() => import("./pages/StaffPermissions"));
 const SsoReturn = lazy(() => import("./pages/SsoReturn"));
 const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));
 const PaymentFailed = lazy(() => import("./pages/PaymentFailed"));
+// React landing page renderer test page (for QA validation during migration)
+const TestReactLandingPage = lazy(() => import("./pages/TestReactLandingPage"));
+// Parity verification tool — automated regression detection
+const ParityVerificationTool = lazy(() => import("./pages/ParityVerificationTool"));
+// Phase 2 validation suite — builder round-trip, schema compatibility, routes
+const Phase2ValidationSuite = lazy(() => import("./pages/Phase2ValidationSuite"));
 // Landing-page marketing funnel: email check → register → plan selection → Razorpay → success.
 const GetStarted = lazy(() => import("./pages/GetStarted"));
 const RegisterSuccess = lazy(() => import("./pages/RegisterSuccess"));
@@ -1028,6 +1034,21 @@ export default function App() {
                       hardcoded Japan TripsLanding if no page is featured
                       yet (lazy-imported by the resolver). */}
                   <Route path="/trips" element={<TripsResolver />} />
+                  {/* React landing page renderer test — accessible during migration
+                      for QA to validate React output against HTML renderer.
+                      Usage: /test/react-landing-page?id=123 or ?slug=my-slug
+                      This route will be removed after migration is complete. */}
+                  <Route path="/test/react-landing-page" element={<TestReactLandingPage />} />
+                  {/* Parity verification tool — automated regression detection.
+                      Usage: /test/parity?id=123 or ?slug=my-slug
+                      Compares DOM structure, text, images, links, buttons, forms.
+                      This route will be removed after Phase 1 validation. */}
+                  <Route path="/test/parity" element={<ParityVerificationTool />} />
+                  {/* Phase 2 validation suite — builder round-trip, schema, routes.
+                      Usage: /test/phase2
+                      Tests: builder workflows, all JSON schemas, route behavior.
+                      This route will be removed after Phase 2 validation. */}
+                  <Route path="/test/phase2" element={<Phase2ValidationSuite />} />
                   <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
                   <Route path="/travel/portal/kyc/callback" element={<TravelKycCallback flow="portal" />} />
                   <Route

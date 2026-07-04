@@ -105,6 +105,56 @@ async function sendOtpStub(phone, code, purpose, wabaId, tenantId) {
   return result;
 }
 
+// Email-channel OTP dispatch. Mirrors sendOtpStub's contract: sends a real
+// SendGrid email when SENDGRID_API_KEY is set, otherwise logs the code so
+// dev/CI flows complete without keys (the API response never returns the
+// code either way). Reuses the SendGrid env vars already documented for the
+// self-service email-OTP flow (backend/lib/emailOtp.js) so there's one set
+// of mail creds to configure.
+async function sendOtpEmailStub(email, code, purpose, tenantId) {
+  const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
+  const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
+  const subject = "Your Travel Stall verification code";
+  const body =
+    `Your Travel Stall verification code is ${code}.\n\n` +
+    `Enter it on the trip page to confirm your registration. The code is valid for 10 minutes.\n\n` +
+    `If you didn't request this, you can safely ignore this email.`;
+
+  if (!SENDGRID_API_KEY) {
+    console.log(
+      `[travel-microsite] OTP email dispatch (stub) — email=${email} purpose=${purpose} ` +
+        `tenantId=${tenantId} stub=true code=${code}`,
+    );
+    return { sent: false, stub: true, reason: "no_api_key" };
+  }
+  try {
+    const resp = await fetch("https://api.sendgrid.com/v3/mail/send", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${SENDGRID_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email }] }],
+        from: { email: FROM_EMAIL },
+        subject,
+        content: [
+          { type: "text/plain", value: body },
+          { type: "text/html", value: body.replace(/\n/g, "<br>") },
+        ],
+      }),
+    });
+    const ok = resp.ok;
+    console.log(
+      `[travel-microsite] OTP email dispatch via SendGrid — email=${email} purpose=${purpose} ` +
+        `tenantId=${tenantId} status=${resp.status} stub=false`,
+    );
+    return { sent: ok, stub: false, status: resp.status };
+  } catch (e) {
+    console.error("[travel-microsite] OTP email dispatch failed:", e.message);
+    return { sent: false, stub: false, reason: e.message };
+  }
+}
+
+const VALID_OTP_CHANNELS = ["phone", "email"];
+
 // Image upload for the microsite editor. Mirrors routes/booking_pages.js's
 // multer pattern (disk storage under backend/uploads/, PNG/JPEG/WebP only,
 // 4MB cap). Files land under uploads/microsites/ and are served from the
@@ -1335,8 +1385,12 @@ router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
       return res.status(400).json({ error: "publicUuid must be a UUID", code: "INVALID_UUID" });
     }
-    let { phone, purpose } = req.body || {};
+    let { phone, email, purpose } = req.body || {};
     const { draftToken } = req.body || {};
+    // Delivery channel — "phone" (WhatsApp/SMS, the default for back-compat)
+    // or "email" (SendGrid). Parents captured both at registration and may
+    // verify against whichever they prefer.
+    const channel = (req.body && req.body.channel) || "phone";
     if (!purpose) {
       return res.status(400).json({ error: "purpose required", code: "MISSING_FIELDS" });
     }
@@ -1344,6 +1398,12 @@ router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
       return res.status(400).json({
         error: `purpose must be one of: ${VALID_OTP_PURPOSES.join(", ")}`,
         code: "INVALID_PURPOSE",
+      });
+    }
+    if (!VALID_OTP_CHANNELS.includes(channel)) {
+      return res.status(400).json({
+        error: `channel must be one of: ${VALID_OTP_CHANNELS.join(", ")}`,
+        code: "INVALID_CHANNEL",
       });
     }
     // Look up the microsite (+ expiry check) before generating an OTP —
@@ -1359,16 +1419,18 @@ router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
       return res.status(410).json({ error: "This microsite has expired", code: "GONE" });
     }
 
-    // Phase 7+ — if the caller didn't supply a phone but DID supply a
-    // draftToken (microsite hybrid-registration UX), derive the phone
-    // from the draft so the visitor doesn't have to retype what they
-    // already entered on the landing page. Same explicit error codes
-    // as verify-otp (decision #9) — mismatches DON'T silently fall back
-    // to whatever the body might have contained.
-    if (!phone && purpose === "registration" && draftToken) {
+    // Phase 7+ — if the caller didn't supply the channel's destination but
+    // DID supply a draftToken (microsite hybrid-registration UX), derive it
+    // from the draft so the visitor doesn't have to retype what they already
+    // entered on the landing page. Same explicit error codes as verify-otp
+    // (decision #9) — mismatches DON'T silently fall back to whatever the
+    // body might have contained.
+    const needDestFromDraft = purpose === "registration" && draftToken
+      && ((channel === "phone" && !phone) || (channel === "email" && !email));
+    if (needDestFromDraft) {
       const draft = await prisma.pendingTripRegistration.findUnique({
         where: { draftToken: String(draftToken) },
-        select: { tripId: true, parentPhone: true, draftTokenExpiresAt: true },
+        select: { tripId: true, parentPhone: true, parentEmail: true, draftTokenExpiresAt: true },
       });
       if (!draft) {
         return res.status(404).json({
@@ -1388,18 +1450,27 @@ router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
           code: "DRAFT_EXPIRED",
         });
       }
-      phone = draft.parentPhone;
+      if (channel === "phone") phone = draft.parentPhone;
+      else email = draft.parentEmail;
     }
 
-    if (!phone) {
-      return res.status(400).json({ error: "phone required", code: "MISSING_FIELDS" });
+    // The destination the code is sent to, keyed by channel.
+    const destination = channel === "email" ? email : phone;
+    if (!destination) {
+      return res.status(400).json({
+        error: `${channel} required`,
+        code: "MISSING_FIELDS",
+      });
     }
 
     // Cool-down: reject if we issued an OTP for the same tuple inside
     // the OTP_COOLDOWN_MS window. Prevents trivial spam.
     const cooldownFloor = new Date(Date.now() - OTP_COOLDOWN_MS);
+    const destWhere = channel === "email"
+      ? { email: String(destination) }
+      : { phone: String(destination) };
     const recent = await prisma.tripMicrositeOtp.findFirst({
-      where: { micrositeId: ms.id, phone: String(phone), purpose, createdAt: { gte: cooldownFloor } },
+      where: { micrositeId: ms.id, channel, purpose, createdAt: { gte: cooldownFloor }, ...destWhere },
       select: { id: true },
     });
     if (recent) {
@@ -1415,23 +1486,39 @@ router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
     await prisma.tripMicrositeOtp.create({
       data: {
         micrositeId: ms.id,
-        phone: String(phone),
+        channel,
+        phone: channel === "phone" ? String(destination) : null,
+        email: channel === "email" ? String(destination) : null,
         purpose,
         otpHash,
         expiresAt,
       },
     });
-    // Resolve the TMC sub-brand WABA id for observability — microsites
-    // are domain-locked to TMC per Q21. Q9 cred-drop swaps the stub for
-    // a real Wati dispatch using this resolved wabaId.
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: ms.tenantId },
-      select: { subBrandConfigJson: true },
-    });
-    const tmcCfg = resolveForSubBrand(tenant, "tmc");
-    await sendOtpStub(phone, code, purpose, tmcCfg.wabaId, ms.tenantId);
+    if (channel === "email") {
+      const emailResult = await sendOtpEmailStub(destination, code, purpose, ms.tenantId);
+      // Surface a genuine provider failure so the parent isn't left staring
+      // at a "code sent" screen for an email that never left. stub mode
+      // (no SENDGRID_API_KEY) still reports success — the code is dev-logged.
+      if (!emailResult.sent && !emailResult.stub) {
+        return res.status(502).json({
+          error: "We couldn't send the code to your email right now — please try again or use your phone.",
+          code: "EMAIL_SEND_FAILED",
+        });
+      }
+    } else {
+      // Resolve the TMC sub-brand WABA id for observability — microsites
+      // are domain-locked to TMC per Q21. Q9 cred-drop swaps the stub for
+      // a real Wati dispatch using this resolved wabaId.
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: ms.tenantId },
+        select: { subBrandConfigJson: true },
+      });
+      const tmcCfg = resolveForSubBrand(tenant, "tmc");
+      await sendOtpStub(destination, code, purpose, tmcCfg.wabaId, ms.tenantId);
+    }
     res.status(201).json({
       sent: true,
+      channel,
       expiresAt: expiresAt.toISOString(),
       // Code intentionally NOT returned in the response — the stub logs
       // it server-side. When Wati replaces the stub, this endpoint stays
@@ -1455,7 +1542,8 @@ router.post("/microsites/public/:publicUuid/verify-otp", async (req, res) => {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
       return res.status(400).json({ error: "publicUuid must be a UUID", code: "INVALID_UUID" });
     }
-    let { phone, purpose, code } = req.body || {};
+    let { phone, email, purpose, code } = req.body || {};
+    const channel = (req.body && req.body.channel) || "phone";
     if (!purpose || !code) {
       return res.status(400).json({ error: "purpose + code required", code: "MISSING_FIELDS" });
     }
@@ -1465,21 +1553,29 @@ router.post("/microsites/public/:publicUuid/verify-otp", async (req, res) => {
         code: "INVALID_PURPOSE",
       });
     }
+    if (!VALID_OTP_CHANNELS.includes(channel)) {
+      return res.status(400).json({
+        error: `channel must be one of: ${VALID_OTP_CHANNELS.join(", ")}`,
+        code: "INVALID_CHANNEL",
+      });
+    }
     const ms = await prisma.tripMicrosite.findUnique({
       where: { publicUuid: uuid },
       select: { id: true, tripId: true, expiresAt: true },
     });
     if (!ms) return res.status(404).json({ error: "Microsite not found", code: "NOT_FOUND" });
 
-    // Phase 7+ — derive phone from draftToken when not explicitly
-    // supplied (microsite hybrid-registration UX where the visitor
+    // Phase 7+ — derive the channel's destination from draftToken when not
+    // explicitly supplied (microsite hybrid-registration UX where the visitor
     // already entered it on the landing page). Mirrors request-otp's
-    // explicit-error model — mismatches surface as deterministic
-    // codes, never silent fallbacks.
-    if (!phone && purpose === "registration" && req.body.draftToken) {
+    // explicit-error model — mismatches surface as deterministic codes,
+    // never silent fallbacks.
+    const needDestFromDraft = purpose === "registration" && req.body.draftToken
+      && ((channel === "phone" && !phone) || (channel === "email" && !email));
+    if (needDestFromDraft) {
       const draft = await prisma.pendingTripRegistration.findUnique({
         where: { draftToken: String(req.body.draftToken) },
-        select: { tripId: true, parentPhone: true, draftTokenExpiresAt: true },
+        select: { tripId: true, parentPhone: true, parentEmail: true, draftTokenExpiresAt: true },
       });
       if (!draft) {
         return res.status(404).json({
@@ -1499,20 +1595,26 @@ router.post("/microsites/public/:publicUuid/verify-otp", async (req, res) => {
           code: "DRAFT_EXPIRED",
         });
       }
-      phone = draft.parentPhone;
+      if (channel === "phone") phone = draft.parentPhone;
+      else email = draft.parentEmail;
     }
-    if (!phone) {
-      return res.status(400).json({ error: "phone required", code: "MISSING_FIELDS" });
+    const destination = channel === "email" ? email : phone;
+    if (!destination) {
+      return res.status(400).json({ error: `${channel} required`, code: "MISSING_FIELDS" });
     }
 
     // Find the latest unused, unexpired OTP for the tuple.
+    const destWhere = channel === "email"
+      ? { email: String(destination) }
+      : { phone: String(destination) };
     const otp = await prisma.tripMicrositeOtp.findFirst({
       where: {
         micrositeId: ms.id,
-        phone: String(phone),
+        channel,
         purpose,
         usedAt: null,
         expiresAt: { gt: new Date() },
+        ...destWhere,
       },
       orderBy: { createdAt: "desc" },
     });
@@ -1589,22 +1691,32 @@ router.post("/microsites/public/:publicUuid/verify-otp", async (req, res) => {
             status: "OTP_VERIFIED",
             otpVerified: true,
             otpVerifiedAt: new Date(),
-            otpPhone: String(phone),
+            // otpPhone records the phone that verified; only set for the
+            // phone channel (email-channel verifications leave it null —
+            // the draft already carries parentEmail).
+            ...(channel === "phone" ? { otpPhone: String(destination) } : {}),
           },
         }),
       );
     }
     await prisma.$transaction(txOps);
 
-    // Mint a short-lived access JWT scoped to the (micrositeId, phone,
-    // purpose). The /full endpoint verifies this token and refuses to
-    // serve PII without it.
+    // Mint a short-lived access JWT scoped to the (micrositeId, channel,
+    // destination, purpose). The /full endpoint verifies this token and
+    // refuses to serve PII without it.
     const accessToken = jwt.sign(
-      { kind: "microsite-otp", micrositeId: ms.id, phone: String(phone), purpose },
+      {
+        kind: "microsite-otp",
+        micrositeId: ms.id,
+        channel,
+        phone: channel === "phone" ? String(destination) : undefined,
+        email: channel === "email" ? String(destination) : undefined,
+        purpose,
+      },
       JWT_SECRET,
       { expiresIn: OTP_ACCESS_TTL },
     );
-    const response = { verified: true, accessToken, expiresIn: OTP_ACCESS_TTL };
+    const response = { verified: true, channel, accessToken, expiresIn: OTP_ACCESS_TTL };
     if (draftBindResult) {
       response.draftBound = {
         id: draftBindResult.id,

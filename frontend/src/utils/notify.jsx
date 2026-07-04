@@ -147,9 +147,9 @@ export function useNotify() {
     // Fallback — if anything calls useNotify outside the provider (e.g. in
     // a test that doesn't wrap), degrade to native so we don't crash.
     return {
-      success: (m) => console.log('[notify.success]', m),
-      error: (m) => console.error('[notify.error]', m),
-      info: (m) => console.log('[notify.info]', m),
+      success: (m) => console.warn('[notify.success]', m),
+      error: (m) => console.warn('[notify.error]', m),
+      info: (m) => console.warn('[notify.info]', m),
       confirm: (input) => Promise.resolve(window.confirm(typeof input === 'string' ? input : input?.message || '')),
       prompt: (a, b) => {
         const cfg = typeof a === 'string' ? { message: a, defaultValue: b ?? '' } : (a || {});

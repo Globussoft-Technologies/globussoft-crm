@@ -78,11 +78,6 @@ function getCurrent(setter, fieldName) {
   const cached = lastSeen.get(setter);
   return cached ? cached[fieldName] : '';
 }
-function remember(setter, fieldName, value) {
-  const bucket = lastSeen.get(setter) || {};
-  bucket[fieldName] = value;
-  lastSeen.set(setter, bucket);
-}
 
 /**
  * If the new value looks like the previous value with the user's typed
@@ -138,7 +133,6 @@ export function sanitizeNumberInput(rawNext, prev) {
  * wrapper into the canonical demo path (Service Duration, Estimates line
  * items, Visit amountCharged) without rewriting their setState shape.
  */
-import React from 'react';
 export function NumberInput({ value, onChange, ...rest }) {
   const handle = (e) => {
     const sanitised = sanitizeNumberInput(e.target.value, value);

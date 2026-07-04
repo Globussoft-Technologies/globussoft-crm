@@ -70,9 +70,23 @@ export default function TripsResolver() {
   }
 
   if (state === STATES.REDIRECT && slug) {
-    // Full-page load so the backend's /trips route serves the rendered
-    // landing page HTML. Returning null prevents any React render flash.
-    window.location.replace("/trips");
+    // Redirect to the featured page's canonical /p/<slug> render URL instead
+    // of the /trips vanity URL.
+    //
+    // WHY NOT /trips: the backend DOES have a GET /trips route that
+    // server-renders the featured page (server.js), but it only fires if the
+    // web layer proxies /trips to Express. On globuscrm.globussoft.com the
+    // Nginx config serves the SPA shell at /trips, so replacing to /trips just
+    // re-mounts THIS resolver → redirects again → infinite blank reload.
+    //
+    // /p/<slug> is the canonical public landing-page render surface
+    // (app.use("/p", landingPagesPublic)). Every published landing page is
+    // served through it, so it is reliably proxied to the backend wherever the
+    // product is deployed. Redirecting there renders the real featured page
+    // with no /trips loop and no Nginx change. It is also a distinct URL from
+    // /trips, so this resolver never re-mounts — the loop is impossible by
+    // construction. Returning null prevents any React render flash.
+    window.location.replace(`/p/${encodeURIComponent(slug)}`);
     return null;
   }
 

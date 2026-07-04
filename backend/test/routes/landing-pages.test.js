@@ -2118,3 +2118,266 @@ describe('POST /p/:slug/submit — recognises all lead-capture block types', () 
     );
   });
 });
+
+// ─── AUTHENTICATED POST /:id/submit (new endpoint) ────────────────────────
+
+describe('POST /api/landing-pages/:id/submit (authenticated endpoint, ID-based)', () => {
+  test('401 Unauthorized without Bearer token', async () => {
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/submit')
+      .send({ email: 'asha@example.com', name: 'Asha' });
+    // verifyToken blocks the request with 401 RFC-7235 contract
+    expect(res.status).toBe(401);
+  });
+
+  test('happy path WITH auth: upserts contact, creates deal, increments submissions, returns success + successRedirectUrl', async () => {
+    prisma.landingPage.findUnique.mockResolvedValue({
+      id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
+      content: JSON.stringify([{ type: 'form', props: { successRedirectUrl: '/thank-you' } }]), tenantId: 1,
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 999, email: 'asha@example.com', tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/submit')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ email: 'asha@example.com', name: 'Asha Iyer', phone: '+919876543210', company: 'Acme Inc' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true });
+    expect(res.body.message).toMatch(/thank you/i);
+    expect(res.body.successRedirectUrl).toBe('/thank-you');
+
+    // Contact upsert uses the composite email_tenantId unique key
+    expect(prisma.contact.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { email_tenantId: { email: 'asha@example.com', tenantId: 1 } },
+      }),
+    );
+    // Deal created with stage="lead" and the page's tenantId
+    expect(prisma.deal.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          stage: 'lead',
+          contactId: 999,
+          tenantId: 1,
+        }),
+      }),
+    );
+    // submissions incremented + FORM_SUBMIT event logged
+    expect(prisma.landingPage.update).toHaveBeenCalledWith({
+      where: { id: 50 },
+      data: { submissions: { increment: 1 } },
+    });
+    expect(prisma.landingPageAnalytics.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          eventType: 'FORM_SUBMIT',
+          tenantId: 1,
+        }),
+      }),
+    );
+  });
+
+  test('404 for invalid page ID', async () => {
+    prisma.landingPage.findUnique.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/landing-pages/999/submit')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ email: 'asha@example.com', name: 'Asha' });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not found/i);
+    expect(prisma.contact.upsert).not.toHaveBeenCalled();
+    expect(prisma.deal.create).not.toHaveBeenCalled();
+  });
+
+  test('trip-linked registration creates Contact + Deal + TripParticipant', async () => {
+    prisma.landingPage.findUnique.mockResolvedValue({
+      id: 51, slug: 'australia-2026', status: 'PUBLISHED', title: 'Australia 7-Day Tour',
+      content: '[]', templateType: 'travel_destination',
+      tenantId: 1, tripId: 7,
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 500, email: 'parent@example.com', tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 51, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/landing-pages/51/submit')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({
+        fields: {
+          student_name: 'Aarav Iyer',
+          student_grade: '8th Grade',
+          name: 'Ravi Iyer',
+          email: 'parent@example.com',
+          phone: '+919876543210',
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+
+    // Contact created with tmc_registration source
+    const createArgs = prisma.contact.upsert.mock.calls[0][0].create;
+    expect(createArgs.source).toBe('tmc_registration');
+
+    // Deal created
+    expect(prisma.deal.create).toHaveBeenCalled();
+
+    // TripParticipant lookup + creation
+    expect(prisma.tripParticipant.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tripId: 7,
+          fullName: 'Aarav Iyer',
+        }),
+      }),
+    );
+  });
+
+  test('brochure request uses brochure_request source, no participant created', async () => {
+    prisma.landingPage.findUnique.mockResolvedValue({
+      id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
+      content: '[]',
+      templateType: 'wanderlux-v1',
+      tenantId: 1, tripId: 100, subBrand: 'tmc',
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 501, tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/submit')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({
+        brochureRequest: true,
+        parentName: 'Rohan Iyer',
+        email: 'rohan@example.com',
+        phone: '+919876543210',
+      });
+
+    expect(res.status).toBe(200);
+    const createArgs = prisma.contact.upsert.mock.calls[0][0].create;
+    expect(createArgs.source).toBe('brochure_request');
+    // TripParticipant should NOT be created for brochure requests
+    expect(prisma.tripParticipant.create).not.toHaveBeenCalled();
+  });
+
+  test('registration-draft mode branches to handleRegistrationDraft', async () => {
+    prisma.landingPage.findUnique.mockResolvedValue({
+      id: 50, slug: 'trip-bali2026', status: 'PUBLISHED', title: 'Bali Trip',
+      content: JSON.stringify({
+        register: { mode: 'registration-draft', steps: [{ id: 'student' }] },
+      }),
+      templateType: 'wanderlux-v1',
+      tenantId: 1, tripId: 100, subBrand: 'tmc',
+    });
+    prisma.pendingTripRegistration.create.mockResolvedValue({
+      id: 7001, tenantId: 1, tripId: 100, status: 'DRAFT', otpVerified: false,
+      draftToken: 'aaaa1111bbbb2222cccc3333dddd4444',
+    });
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      publicUuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      publishedAt: new Date(),
+      expiresAt: null,
+    });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+    prisma.contact.upsert.mockResolvedValue({ id: 8001, tenantId: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/submit')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({
+        student: { name: 'Aarav Iyer', dob: '2010-04-12', school: 'DPS North' },
+        parent: { name: 'Rohan Iyer', email: 'rohan@example.com', phone: '+919876543210' },
+      });
+
+    expect(res.status).toBe(201); // handleRegistrationDraft returns 201 Created
+    expect(res.body.ok).toBe(true); // registration-draft returns {ok:true}, not {success:true}
+    // PendingTripRegistration should be created (not direct TripParticipant)
+    expect(prisma.pendingTripRegistration.create).toHaveBeenCalled();
+  });
+
+  test('generic landing-page lead uses inbound:webform source + preserves page attribution', async () => {
+    prisma.landingPage.findUnique.mockResolvedValue({
+      id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Marketing Campaign',
+      content: '[]', tenantId: 1,
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 999, email: 'asha@example.com', tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/submit')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ email: 'asha@example.com', name: 'Asha Iyer', phone: '+919876543210' });
+
+    expect(res.status).toBe(200);
+    const createArgs = prisma.contact.upsert.mock.calls[0][0].create;
+    expect(createArgs.source).toBe('inbound:webform');
+    expect(createArgs.firstTouchSource).toBe('Landing Page: Marketing Campaign');
+  });
+
+  test('submission without email synthesises placeholder address (anonymous tracking)', async () => {
+    prisma.landingPage.findUnique.mockResolvedValue({
+      id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
+      content: '[]', tenantId: 1,
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 1001, tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/submit')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ name: 'Anon User' }); // no email
+
+    expect(res.status).toBe(200);
+    const upsertArgs = prisma.contact.upsert.mock.calls[0][0];
+    // Synthesised placeholder: "lp-<slug>-<ts>@anonymous.local"
+    expect(upsertArgs.where.email_tenantId.email).toMatch(/^lp-live-page-\d+@anonymous\.local$/);
+  });
+
+  test('re-registration after contact deletion restores soft-deleted contact', async () => {
+    prisma.landingPage.findUnique.mockResolvedValue({
+      id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
+      content: '[]', tenantId: 1,
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 999, email: 'returning@example.com', tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/submit')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ email: 'returning@example.com', name: 'Returning User' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const upsertArgs = prisma.contact.upsert.mock.calls[0][0];
+    // The update branch must clear deletedAt
+    expect(upsertArgs.update).toMatchObject({
+      source: 'inbound:webform',
+      deletedAt: null,
+    });
+  });
+
+  test('CAPTCHA verification gated on TURNSTILE_SECRET_KEY env var', async () => {
+    prisma.landingPage.findUnique.mockResolvedValue({
+      id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
+      content: JSON.stringify([{ type: 'form', props: { enableCaptcha: true } }]),
+      tenantId: 1,
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 999, tenantId: 1 });
+    prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/submit')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({
+        email: 'asha@example.com',
+        name: 'Asha',
+        cfTurnstileToken: 'invalid-token'
+      });
+
+    // Without TURNSTILE_SECRET_KEY, verification is skipped and submission succeeds
+    // (see lib/middleware/captcha.js verifyTurnstile — returns true when env var not set)
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+});

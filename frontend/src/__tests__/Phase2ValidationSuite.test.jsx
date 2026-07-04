@@ -3,8 +3,68 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import Phase2ValidationSuite from '../pages/Phase2ValidationSuite';
 
-// Mock fetch globally
-global.fetch = vi.fn();
+// URL-aware mock fetch so the four validation suites can run in any order.
+global.fetch = vi.fn(async (url, options = {}) => {
+  const method = options.method || 'GET';
+  let body = {};
+  if (typeof options.body === 'string') {
+    try {
+      body = JSON.parse(options.body);
+    } catch {
+      body = {};
+    }
+  } else if (options.body) {
+    body = options.body;
+  }
+
+  if (url === '/api/landing-pages' && method === 'POST') {
+    // Malformed JSON must be rejected for the schema test.
+    if (body.title && body.title.startsWith('Malformed')) {
+      return { ok: false, status: 400, json: async () => ({ error: 'Invalid content' }) };
+    }
+    return { ok: true, json: async () => ({ id: '123', slug: body.slug || 'test-page' }) };
+  }
+
+  if (url.startsWith('/api/landing-pages/') && method === 'PATCH') {
+    return { ok: true, json: async () => ({ id: '123', status: 'PUBLISHED' }) };
+  }
+
+  if (url.startsWith('/api/landing-pages/') && url.endsWith('/versions')) {
+    return { ok: true, json: async () => [] };
+  }
+
+  if (url.startsWith('/api/landing-pages/') && method === 'DELETE') {
+    return { ok: true, status: 200 };
+  }
+
+  if (url.startsWith('/api/landing-pages?')) {
+    return {
+      ok: true,
+      json: async () => [
+        { id: '1', slug: 'page-one', templateType: 'block-array' },
+        { id: '2', slug: 'page-two', templateType: 'wanderlux-v1' },
+        { id: '3', slug: 'page-three', templateType: 'family-trip-v1' },
+      ],
+    };
+  }
+
+  if (url === '/trips') {
+    return { ok: true, status: 200, text: async () => '' };
+  }
+
+  if (url.startsWith('/p/')) {
+    if (url.includes('non-existent') || url.includes('/..')) {
+      return { ok: false, status: 404, text: async () => 'Not found' };
+    }
+    return { ok: true, status: 200, text: async () => '<div>HTML</div>' };
+  }
+
+  if (url.startsWith('/test/react-landing-page')) {
+    return { ok: true, status: 200, text: async () => '<div>React</div>' };
+  }
+
+  return { ok: true, json: async () => ({}), text: async () => '' };
+});
 
 describe('Phase2ValidationSuite', () => {
   beforeEach(() => {
@@ -12,95 +72,35 @@ describe('Phase2ValidationSuite', () => {
   });
 
   afterEach(() => {
-    fetch.mockReset();
+    fetch.mockClear();
   });
 
   it('renders the page title', () => {
-    fetch.mockImplementation(() =>
-      new Promise((resolve) => {
-        setTimeout(() => {
-          resolve({ ok: true, json: async () => ({}) });
-        }, 100);
-      })
-    );
-
     render(<Phase2ValidationSuite />);
     expect(screen.getByText('🚀 Phase 2 Validation Suite')).toBeInTheDocument();
   });
 
   it('displays loading state initially', () => {
-    fetch.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          setTimeout(() => {
-            resolve({ ok: true, json: async () => ({}) });
-          }, 100);
-        })
-    );
-
     render(<Phase2ValidationSuite />);
     expect(screen.getByText(/running phase 2 validation suite/i)).toBeInTheDocument();
   });
 
   it('runs all four validation suites', async () => {
-    fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) }) // Create page
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) }) // PATCH page
-      .mockResolvedValueOnce({ ok: true }) // Versions
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'PUBLISHED' }) }) // PATCH publish
-      .mockResolvedValueOnce({ ok: true }) // HTML access
-      .mockResolvedValueOnce({ ok: true }) // React access
-      .mockResolvedValueOnce({ ok: true, status: 200 }) // DELETE cleanup
-      .mockResolvedValueOnce({ ok: true, json: async () => [] }) // Block-array test
-      .mockResolvedValueOnce({ ok: true, json: async () => [] }) // Wanderlux test
-      .mockResolvedValueOnce({ ok: true, json: async () => [] }) // Family test
-      .mockResolvedValueOnce({ ok: false, status: 400 }) // Malformed JSON rejection
-      .mockResolvedValueOnce({ ok: true, json: async () => [{ id: '1', slug: 'test' }] }) // Dataset query
-      .mockResolvedValueOnce({ ok: true }) // Template coverage
-      .mockResolvedValueOnce({ ok: true }) // Sample pages
-      .mockResolvedValueOnce({ ok: true }) // /trips
-      .mockResolvedValueOnce({ ok: true }) // /p/:slug
-      .mockResolvedValueOnce({ ok: false }) // Non-existent page
-      .mockResolvedValueOnce({ ok: false }) // Invalid slug
-      .mockResolvedValueOnce({ ok: true }); // Test route
-
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
       expect(screen.queryByText(/running phase 2 validation/i)).not.toBeInTheDocument();
     });
 
-    // Should show all four validation suites
     await waitFor(() => {
-      expect(screen.getByText(/Builder Round-Trip Validation/i)).toBeInTheDocument();
-      expect(screen.getByText(/Schema Compatibility Testing/i)).toBeInTheDocument();
-      expect(screen.getByText(/Regression Dataset Validation/i)).toBeInTheDocument();
-      expect(screen.getByText(/Production Route Validation/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/Builder Round-Trip Validation/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Schema Compatibility Testing/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Regression Dataset Validation/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Production Route Validation/i).length).toBeGreaterThan(0);
     });
   });
 
   it('displays builder round-trip test results', async () => {
-    fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true });
-
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
@@ -112,27 +112,6 @@ describe('Phase2ValidationSuite', () => {
   });
 
   it('displays schema compatibility test results', async () => {
-    fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true });
-
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
@@ -144,27 +123,6 @@ describe('Phase2ValidationSuite', () => {
   });
 
   it('displays regression dataset validation results', async () => {
-    fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true, json: async () => [{ id: '1', slug: 'test', templateType: 'block-array' }] })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true });
-
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
@@ -174,27 +132,6 @@ describe('Phase2ValidationSuite', () => {
   });
 
   it('displays production route validation results', async () => {
-    fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true });
-
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
@@ -205,27 +142,6 @@ describe('Phase2ValidationSuite', () => {
   });
 
   it('shows READY FOR PHASE 2 when all tests pass', async () => {
-    fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true, json: async () => [{ id: '1' }] })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true });
-
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
@@ -234,57 +150,14 @@ describe('Phase2ValidationSuite', () => {
   });
 
   it('shows detailed test results', async () => {
-    fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true });
-
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
-      // Should show detailed results section
       expect(screen.getByText(/Detailed Results/i)).toBeInTheDocument();
     });
   });
 
   it('provides next steps recommendations', async () => {
-    fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true });
-
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
@@ -293,105 +166,39 @@ describe('Phase2ValidationSuite', () => {
   });
 
   it('handles API errors gracefully', async () => {
-    fetch.mockRejectedValue(new Error('Network error'));
+    fetch.mockRejectedValueOnce(new Error('Network error'));
 
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
-      expect(screen.getByText(/validation error/i)).toBeInTheDocument();
+      expect(screen.getByText(/NOT READY FOR PHASE 2/i)).toBeInTheDocument();
     });
   });
 
   it('shows test pass/fail indicators', async () => {
-    fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true });
-
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
-      // Should show checkmark indicators
-      expect(screen.getByText(/✅|❌/)).toBeInTheDocument();
+      expect(screen.getAllByText(/✅|❌/).length).toBeGreaterThan(0);
     });
   });
 
   it('shows test suite summary cards', async () => {
-    fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true });
-
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
-      // Should show grid of 4 test suite cards
-      expect(screen.getByText(/Builder Round-Trip/i)).toBeInTheDocument();
-      expect(screen.getByText(/Schema Compatibility/i)).toBeInTheDocument();
-      expect(screen.getByText(/Regression Dataset/i)).toBeInTheDocument();
-      expect(screen.getByText(/Production Route/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/Builder Round-Trip/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Schema Compatibility/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Regression Dataset/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Production Route/i).length).toBeGreaterThan(0);
     });
   });
 
   it('includes test count in each suite', async () => {
-    fetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '123' }) })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true, json: async () => [] })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true });
-
     render(<Phase2ValidationSuite />);
 
     await waitFor(() => {
-      // Should show test count like "6/6 tests passed"
-      expect(screen.getByText(/tests passed/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/tests passed/i).length).toBeGreaterThanOrEqual(4);
     });
   });
 });

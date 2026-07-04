@@ -22,10 +22,11 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import BlockRenderer from '../components/landing-page-renderers/BlockRenderer';
 
-// Mock window.Image for analytics tracking
-global.Image = vi.fn(() => ({
-  src: '',
-}));
+// Mock window.Image for analytics tracking.
+// Must be a regular (non-arrow) function so it can be used with `new`.
+global.Image = vi.fn(function () {
+  this.src = '';
+});
 
 const sampleLandingPage = {
   id: 123,
@@ -281,7 +282,7 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
       </MemoryRouter>
     );
 
-    const iframe = screen.getByTitle('');  // Video iframes typically have empty title
+    const iframe = screen.getByTitle('Embedded video');
     expect(iframe).toBeInTheDocument();
   });
 

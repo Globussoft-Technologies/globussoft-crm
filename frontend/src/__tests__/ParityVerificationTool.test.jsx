@@ -1,10 +1,16 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import ParityVerificationTool from '../pages/ParityVerificationTool';
 
 // Mock fetch globally
 global.fetch = vi.fn();
+
+function renderWithRouter(ui, { search = 'id=123' } = {}) {
+  const initialEntries = [`/test?${search}`];
+  return render(<MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>);
+}
 
 describe('ParityVerificationTool', () => {
   beforeEach(() => {
@@ -21,7 +27,7 @@ describe('ParityVerificationTool', () => {
       json: async () => ({}),
     });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
     expect(screen.getByText('🔍 Parity Verification Tool')).toBeInTheDocument();
   });
 
@@ -39,10 +45,10 @@ describe('ParityVerificationTool', () => {
       json: async () => mockPage,
     });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith('/api/landing-pages/undefined');
+      expect(fetch).toHaveBeenCalledWith('/api/landing-pages/123');
     });
   });
 
@@ -52,7 +58,7 @@ describe('ParityVerificationTool', () => {
       status: 404,
     });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
 
     await waitFor(() => {
       expect(screen.getByText(/page not found/i)).toBeInTheDocument();
@@ -83,7 +89,7 @@ describe('ParityVerificationTool', () => {
         text: async () => '<div><h1>Test</h1></div>',
       });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
 
     await waitFor(() => {
       // Should show report after loading
@@ -92,37 +98,25 @@ describe('ParityVerificationTool', () => {
   });
 
   it('handles URL parameters (id query)', () => {
-    const originalLocation = window.location;
-    delete window.location;
-    window.location = { search: '?id=456' };
-
     fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ id: '456', slug: 'page', content: '[]' }),
     });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />, { search: 'id=456' });
 
     expect(fetch).toHaveBeenCalled();
-
-    window.location = originalLocation;
   });
 
   it('handles URL parameters (slug query)', () => {
-    const originalLocation = window.location;
-    delete window.location;
-    window.location = { search: '?slug=my-page' };
-
     fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ id: '123', slug: 'my-page', content: '[]' }),
     });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />, { search: 'slug=my-page' });
 
     expect(fetch).toHaveBeenCalled();
-
-    window.location = originalLocation;
   });
 
   it('shows comparison loading state', async () => {
@@ -138,7 +132,7 @@ describe('ParityVerificationTool', () => {
         })
     );
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
 
     expect(screen.getByText(/comparing/i)).toBeInTheDocument();
   });
@@ -166,7 +160,7 @@ describe('ParityVerificationTool', () => {
         text: async () => '<div>Content</div>',
       });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
 
     await waitFor(() => {
       // Should show DOM structure check
@@ -197,7 +191,15 @@ describe('ParityVerificationTool', () => {
         text: async () => '<div><h1>Title</h1></div>',
       });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('DOM Structure')).toBeInTheDocument();
+    });
+
+    // Expand the DOM structure check to reveal the difference details
+    const domCheck = screen.getByText('DOM Structure').closest('div').parentElement;
+    fireEvent.click(domCheck);
 
     await waitFor(() => {
       // Should detect structure mismatch
@@ -228,11 +230,11 @@ describe('ParityVerificationTool', () => {
         text: async () => '<div>React Different Content</div>',
       });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
 
     await waitFor(() => {
       // Should detect text content mismatch
-      expect(screen.queryByText(/text content/i)).toBeInTheDocument();
+      expect(screen.queryAllByText(/text content/i).length).toBeGreaterThan(0);
     });
   });
 
@@ -261,7 +263,7 @@ describe('ParityVerificationTool', () => {
         text: async () => '<div><a href="https://example.com">Click</a></div>',
       });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
 
     await waitFor(() => {
       expect(screen.queryByText(/links/i)).toBeInTheDocument();
@@ -271,10 +273,10 @@ describe('ParityVerificationTool', () => {
   it('handles network errors gracefully', async () => {
     fetch.mockRejectedValueOnce(new Error('Network error'));
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
 
     await waitFor(() => {
-      expect(screen.getByText(/error/i)).toBeInTheDocument();
+      expect(screen.getByText(/network error/i)).toBeInTheDocument();
     });
   });
 
@@ -301,7 +303,7 @@ describe('ParityVerificationTool', () => {
         text: async () => '<h1>Test</h1>',
       });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
 
     await waitFor(() => {
       // Should show recommendations section
@@ -310,20 +312,14 @@ describe('ParityVerificationTool', () => {
   });
 
   it('supports detailed comparison mode', () => {
-    const originalLocation = window.location;
-    delete window.location;
-    window.location = { search: '?id=123&detailed=true' };
-
     fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ id: '123', slug: 'test', content: '[]' }),
     });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />, { search: 'id=123&detailed=true' });
 
     expect(fetch).toHaveBeenCalled();
-
-    window.location = originalLocation;
   });
 
   it('displays side-by-side comparison panels', async () => {
@@ -349,30 +345,35 @@ describe('ParityVerificationTool', () => {
         text: async () => '<div>Test React</div>',
       });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Text Content')).toBeInTheDocument();
+    });
+
+    // Expand the text-content check to reveal the side-by-side diff labels
+    const textCheck = screen.getByText('Text Content').closest('div').parentElement;
+    fireEvent.click(textCheck);
 
     await waitFor(() => {
       // Should show comparison results
-      expect(screen.queryByText(/html/i)).toBeInTheDocument();
-      expect(screen.queryByText(/react/i)).toBeInTheDocument();
+      expect(screen.queryByText(/HTML:/i)).toBeInTheDocument();
+      expect(screen.queryByText(/React:/i)).toBeInTheDocument();
     });
   });
 
-  it('handles missing query parameters with default ID', () => {
-    const originalLocation = window.location;
-    delete window.location;
-    window.location = { search: '' };
-
+  it('handles missing query parameters with default ID', async () => {
     fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ id: '1', slug: 'default', content: '[]' }),
     });
 
-    render(<ParityVerificationTool />);
+    renderWithRouter(<ParityVerificationTool />, { search: '' });
 
-    // Should attempt to fetch with some default or display error
-    expect(fetch).toHaveBeenCalled();
-
-    window.location = originalLocation;
+    // Should display the missing-parameter error and not call fetch
+    await waitFor(() => {
+      expect(screen.getByText(/please provide either \?id=/i)).toBeInTheDocument();
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

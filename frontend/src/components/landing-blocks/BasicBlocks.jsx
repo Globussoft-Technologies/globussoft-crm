@@ -224,36 +224,41 @@ export function FormBlock({ props = {}, slug = '', pageId = null }) {
           border: '1px solid #e5e7eb',
         }}
       >
-        {fields.map((field) => (
-          <div key={field.name} style={{ marginBottom: '12px' }}>
-            <label
-              style={{
-                display: 'block',
-                marginBottom: '4px',
-                fontWeight: '500',
-                color: '#333',
-                fontSize: '14px',
-              }}
-            >
-              {field.label || field.name}
-            </label>
-            <input
-              type={field.type || 'text'}
-              name={field.name}
-              value={formData[field.name] || ''}
-              onChange={handleChange}
-              required={field.required}
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                border: '1px solid #d1d5db',
-                borderRadius: '6px',
-                fontSize: '15px',
-                boxSizing: 'border-box',
-              }}
-            />
-          </div>
-        ))}
+        {fields.map((field) => {
+          const fieldId = `${formId}_${field.name}`;
+          return (
+            <div key={field.name} style={{ marginBottom: '12px' }}>
+              <label
+                htmlFor={fieldId}
+                style={{
+                  display: 'block',
+                  marginBottom: '4px',
+                  fontWeight: '500',
+                  color: '#333',
+                  fontSize: '14px',
+                }}
+              >
+                {field.label || field.name}
+              </label>
+              <input
+                id={fieldId}
+                type={field.type || 'text'}
+                name={field.name}
+                value={formData[field.name] || ''}
+                onChange={handleChange}
+                required={field.required}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '6px',
+                  fontSize: '15px',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+          );
+        })}
 
         {enableCaptcha && (
           <div style={{ margin: '0 0 12px 0' }}>
@@ -347,6 +352,7 @@ export function VideoBlock({ props = {} }) {
   return (
     <div style={{ textAlign: 'center', margin: '0 0 16px 0' }}>
       <iframe
+        title="Embedded video"
         src={safeVideoUrl}
         style={{
           width,

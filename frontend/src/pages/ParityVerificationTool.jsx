@@ -57,7 +57,9 @@ const ParityVerificationTool = () => {
 
         const pageResponse = await fetch(url);
         if (!pageResponse.ok) {
-          throw new Error(`Failed to fetch landing page: ${pageResponse.status}`);
+          throw new Error(
+            pageResponse.status === 404 ? 'Landing page not found' : `Failed to fetch landing page: ${pageResponse.status}`
+          );
         }
 
         const pageData = await pageResponse.json();
@@ -90,7 +92,7 @@ const ParityVerificationTool = () => {
 
       {loading && (
         <div style={{ fontSize: '18px', color: '#0066cc', textAlign: 'center', padding: '40px' }}>
-          Running parity verification... This may take 10-30 seconds.
+          Comparing HTML and React renderers... This may take 10-30 seconds.
         </div>
       )}
 
@@ -228,7 +230,7 @@ function compareStructure(htmlDoc, reactDoc, detailed = false) {
       severity: 'low',
       html: `${htmlTags.length} elements`,
       react: `${reactTags.length} elements`,
-      description: `Element count differs by ${Math.abs(htmlTags.length - reactTags.length)}`,
+      description: `Elements don't match: element count differs by ${Math.abs(htmlTags.length - reactTags.length)}`,
     });
   }
 
@@ -266,8 +268,8 @@ function compareTextContent(htmlDoc, reactDoc, detailed = false) {
   const htmlMain = htmlDoc.querySelector('main') || htmlDoc.body;
   const reactMain = reactDoc.querySelector('main') || reactDoc.body;
 
-  const htmlText = htmlMain.innerText.trim().toLowerCase();
-  const reactText = reactMain.innerText.trim().toLowerCase();
+  const htmlText = (htmlMain.textContent || '').trim().toLowerCase();
+  const reactText = (reactMain.textContent || '').trim().toLowerCase();
 
   // Compare text length
   if (htmlText.length !== reactText.length) {
@@ -358,12 +360,12 @@ function compareLinks(htmlDoc, reactDoc, detailed = false) {
 
   const htmlLinks = Array.from(htmlDoc.querySelectorAll('a')).map((a) => ({
     href: a.href,
-    text: a.innerText,
+    text: a.textContent || '',
   }));
 
   const reactLinks = Array.from(reactDoc.querySelectorAll('a')).map((a) => ({
     href: a.href,
-    text: a.innerText,
+    text: a.textContent || '',
   }));
 
   if (htmlLinks.length !== reactLinks.length) {

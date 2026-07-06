@@ -7,6 +7,7 @@ const nodemailer = require("nodemailer");
 const prisma = require("../lib/prisma");
 const { notify } = require("../lib/notificationService");
 const { fulfillSignedEstimate } = require("../lib/signatureFulfillment");
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 
 const router = express.Router();
 
@@ -450,11 +451,13 @@ router.post("/sign/:token", async (req, res) => {
       let customerEmail = updated.signerEmail;
 
       if (updated.documentType === "Estimate") {
+        const frontendBase = getFrontendUrlFromRequest(req);
         const result = await fulfillSignedEstimate({
           documentId: updated.documentId,
           tenantId: updated.tenantId,
           signerName: updated.signerName,
           signerEmail: updated.signerEmail,
+          baseUrl: frontendBase,
         });
 
         if (result.status === "converted") {

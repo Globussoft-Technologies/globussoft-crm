@@ -47,6 +47,10 @@ if (!BUCKET_NAME) {
  * @param {string} fileName - Original filename
  * @param {string} mimeType - MIME type (e.g. 'image/jpeg')
  * @param {string} subfolder - Subfolder in bucket (e.g. 'avatars', 'prescriptions')
+ * @param {{ contentDisposition?: string }} [opts] - Optional S3 object options.
+ *   contentDisposition: e.g. 'attachment; filename="brochure.pdf"' so the
+ *   object DOWNLOADS instead of opening inline in the browser. Omit it for
+ *   images/videos that must render/play inline on the page.
  * @returns {Promise<string>} - Full S3 URL of uploaded file
  */
 async function uploadFile(
@@ -54,6 +58,7 @@ async function uploadFile(
   fileName,
   mimeType,
   subfolder = "uploads",
+  opts = {},
 ) {
   if (!BUCKET_NAME) {
     throw new Error(
@@ -74,6 +79,11 @@ async function uploadFile(
     Key: fileKey,
     Body: fileBody,
     ContentType: mimeType,
+    // Only set when provided (e.g. brochures → force download). Left off for
+    // images/videos so they stay inline.
+    ...(opts.contentDisposition
+      ? { ContentDisposition: opts.contentDisposition }
+      : {}),
   });
 
   try {

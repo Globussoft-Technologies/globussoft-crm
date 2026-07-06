@@ -77,6 +77,7 @@ const { notifyMany } = require('../lib/notificationService');
 // Payment Gateway config (BYOK), NEVER the platform env keys. Returns null when
 // the tenant hasn't configured + activated its keys (link is then skipped).
 const { getTenantRazorpayClient } = require('../lib/tenantPaymentGateway');
+const { getFrontendUrlFromRequest } = require('../lib/requestOrigin');
 // Best-effort customer delivery of the advance-payment link (email + WhatsApp).
 const { sendEmail } = require('../lib/emailSender');
 const waWebClient = require('../services/whatsappWebClient');
@@ -178,7 +179,7 @@ async function notifyStaffOfQuoteDecision({ tenantId, subBrand, quoteId, action,
  * reason }. Never throws — when the tenant has no active gateway the accept
  * still succeeds; the link is simply skipped.
  */
-async function createAdvancePaymentLink({ quote, contact, displayName }) {
+async function createAdvancePaymentLink({ quote, contact, displayName, req }) {
   try {
     const total = Number(quote.totalAmount) || 0;
     if (total <= 0) return { ok: false, reason: 'no_total' };
@@ -197,7 +198,7 @@ async function createAdvancePaymentLink({ quote, contact, displayName }) {
       if (validTs > Math.floor(Date.now() / 1000)) expireBy = validTs;
     }
 
-    const frontendBase = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const frontendBase = req ? getFrontendUrlFromRequest(req) : (process.env.FRONTEND_URL || 'http://localhost:5173');
     const link = await gw.client.paymentLink.create({
       amount: Math.round(total * 100),          // full trip cost in smallest unit (paise)
       currency,
@@ -771,7 +772,7 @@ router.post('/quote/:shareToken/accept', async (req, res) => {
         const t = await prisma.tenant.findUnique({ where: { id: quote.tenantId }, select: { name: true } });
         tenantName = t && t.name;
       } catch { /* fall back to generic */ }
-      const advance = await createAdvancePaymentLink({ quote, contact, displayName });
+      const advance = await createAdvancePaymentLink({ quote, contact, displayName, req });
       if (advance.ok) {
         const channelsSent = await sendAdvanceLinkToCustomer({
           quote, contact, displayName, payUrl: advance.url, amountMajor: advance.amountMajor, totalAmount: advance.totalAmount, currency: advance.currency, tenantName,

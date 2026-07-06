@@ -10,6 +10,8 @@
 //   PATCH  /api/travel/trips/:tripId/rooming/:roomId          ADMIN+MGR
 //   DELETE /api/travel/trips/:tripId/rooming/:roomId          ADMIN
 //   GET    /api/travel/trips/:tripId/rooming/export.xlsx      ADMIN+MGR
+//   GET    /api/travel/trips/:tripId/rooming/export.pdf       ADMIN+MGR
+//   POST   /api/travel/trips/:tripId/rooming/auto             ADMIN+MGR — auto-allocate unassigned
 //
 //   GET    /api/travel/trips/:tripId/payment-plan             — single plan
 //   PUT    /api/travel/trips/:tripId/payment-plan             ADMIN+MGR (upsert)
@@ -18,7 +20,7 @@
 //   GET    /api/travel/trips/:tripId/instalments              — list per-participant
 //   POST   /api/travel/trips/:tripId/instalments              ADMIN+MGR — bulk-create for one participant
 //   POST   /api/travel/trips/:tripId/instalments/from-plan    ADMIN+MGR — materialise plan template × roster
-//   PATCH  /api/travel/trips/:tripId/instalments/:id          ADMIN+MGR — mark paid
+//   PATCH  /api/travel/trips/:tripId/instalments/:id          ADMIN+MGR — mark paid, validate paidAmount
 //   DELETE /api/travel/trips/:tripId/instalments/:id          ADMIN
 //
 // Plan has 1:1 relationship with trip (schema @unique([tripId])).
@@ -499,6 +501,19 @@ router.post(
           code: "INVALID_ROOM_TYPE",
         });
       }
+
+      // Check for duplicate room number
+      const existingRoom = await prisma.roomingAssignment.findFirst({
+        where: { tripId: trip.id, roomNumber: String(roomNumber) },
+        select: { id: true },
+      });
+      if (existingRoom) {
+        return res.status(409).json({
+          error: `Room number ${roomNumber} already exists on this trip`,
+          code: "DUPLICATE_ROOM_NUMBER",
+        });
+      }
+
       const capLimit = { single: 1, twin: 2, triple: 3, quad: 4 }[roomType];
       if (participantIds.length > capLimit) {
         return res.status(400).json({
@@ -517,6 +532,28 @@ router.post(
             error: "one or more participantIds aren't on this trip",
             code: "PARTICIPANTS_OFF_TRIP",
           });
+        }
+
+        // Prevent duplicate room assignments: check if any participant is already assigned to another room
+        const existingAssignments = await prisma.roomingAssignment.findMany({
+          where: { tripId: trip.id },
+          select: { id: true, participantIds: true },
+        });
+        for (const assignment of existingAssignments) {
+          let existingPids = [];
+          try {
+            existingPids = JSON.parse(assignment.participantIds || "[]");
+          } catch (_e) {
+            existingPids = [];
+          }
+          for (const pid of ids) {
+            if (existingPids.includes(pid)) {
+              return res.status(409).json({
+                error: `Participant #${pid} is already assigned to another room`,
+                code: "DUPLICATE_ASSIGNMENT",
+              });
+            }
+          }
         }
       }
       const created = await prisma.roomingAssignment.create({
@@ -554,7 +591,24 @@ router.patch(
 
       const data = {};
       const { roomNumber, roomType, participantIds } = req.body || {};
-      if (roomNumber !== undefined) data.roomNumber = String(roomNumber);
+      if (roomNumber !== undefined) {
+        // Check for duplicate room number (excluding current room)
+        const duplicateRoom = await prisma.roomingAssignment.findFirst({
+          where: {
+            tripId: trip.id,
+            roomNumber: String(roomNumber),
+            NOT: { id: roomId },
+          },
+          select: { id: true },
+        });
+        if (duplicateRoom) {
+          return res.status(409).json({
+            error: `Room number ${roomNumber} already exists on this trip`,
+            code: "DUPLICATE_ROOM_NUMBER",
+          });
+        }
+        data.roomNumber = String(roomNumber);
+      }
       if (roomType !== undefined) {
         if (!VALID_ROOM_TYPES.includes(roomType)) {
           return res.status(400).json({ error: "invalid roomType", code: "INVALID_ROOM_TYPE" });
@@ -571,6 +625,32 @@ router.patch(
             code: "ROOM_CAPACITY_EXCEEDED",
           });
         }
+
+        // Prevent duplicate assignments: check if any new participant is already assigned to a different room
+        if (participantIds.length > 0) {
+          const ids = participantIds.map((x) => parseInt(x, 10)).filter(Number.isFinite);
+          const otherAssignments = await prisma.roomingAssignment.findMany({
+            where: { tripId: trip.id, id: { not: roomId } },
+            select: { id: true, participantIds: true },
+          });
+          for (const assignment of otherAssignments) {
+            let otherPids = [];
+            try {
+              otherPids = JSON.parse(assignment.participantIds || "[]");
+            } catch (_e) {
+              otherPids = [];
+            }
+            for (const pid of ids) {
+              if (otherPids.includes(pid)) {
+                return res.status(409).json({
+                  error: `Participant #${pid} is already assigned to another room`,
+                  code: "DUPLICATE_ASSIGNMENT",
+                });
+              }
+            }
+          }
+        }
+
         data.participantIds = JSON.stringify(participantIds);
       }
       if (Object.keys(data).length === 0) {
@@ -704,6 +784,245 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-trip-billing] rooming xlsx error:", e.message);
       res.status(500).json({ error: "Failed to export rooming XLSX" });
+    }
+  },
+);
+
+// POST /api/travel/trips/:tripId/rooming/auto
+//
+// Automatic room allocation. Distributes all unassigned participants
+// into rooms based on capacity and room type preferences. Simple
+// deterministic algorithm: sort participants by ID, create rooms as
+// needed following the specified roomType(s), respect capacity.
+// Idempotent — re-running after adding new participants allocates only
+// the unassigned ones.
+//
+// Request body: { roomTypes: ["twin", "quad"], startingRoomNumber: 101 }
+// roomTypes: array of types in order of preference. When filled, moves
+//   to the next type in the list.
+// startingRoomNumber: number to increment for each new room created.
+//
+// Returns: { created: N, skipped: M, warnings: [...] }
+router.post(
+  "/trips/:tripId/rooming/auto",
+  verifyToken,
+  requirePermission("trips", "write"),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const { roomTypes, startingRoomNumber } = req.body || {};
+      const types = Array.isArray(roomTypes) && roomTypes.length > 0
+        ? roomTypes.filter((t) => VALID_ROOM_TYPES.includes(t))
+        : ["twin", "quad"];
+      if (types.length === 0) types.push("twin");
+      const startNum = Number(startingRoomNumber) || 101;
+
+      // Fetch all participants and existing room assignments
+      const [participants, existingRooms] = await Promise.all([
+        prisma.tripParticipant.findMany({
+          where: { tripId: trip.id },
+          select: { id: true },
+          orderBy: { id: "asc" },
+        }),
+        prisma.roomingAssignment.findMany({
+          where: { tripId: trip.id },
+          select: { participantIds: true },
+        }),
+      ]);
+
+      const assignedSet = new Set();
+      for (const room of existingRooms) {
+        try {
+          const pids = JSON.parse(room.participantIds || "[]");
+          if (Array.isArray(pids)) {
+            pids.forEach((p) => assignedSet.add(Number(p)));
+          }
+        } catch (_e) {
+          // ignore
+        }
+      }
+
+      const unassigned = participants.filter((p) => !assignedSet.has(p.id));
+      if (unassigned.length === 0) {
+        return res.status(201).json({ created: 0, skipped: 0, warnings: ["All participants already assigned"] });
+      }
+
+      // Auto-allocate: partition unassigned into rooms
+      const toCreate = [];
+      let roomNum = startNum;
+      let typeIdx = 0;
+      let currentRoom = [];
+      const CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
+
+      for (const p of unassigned) {
+        const type = types[typeIdx % types.length];
+        const cap = CAPACITY[type];
+
+        if (currentRoom.length < cap) {
+          currentRoom.push(p.id);
+        }
+
+        if (currentRoom.length === cap) {
+          toCreate.push({
+            tripId: trip.id,
+            roomNumber: String(roomNum++),
+            roomType: type,
+            participantIds: JSON.stringify(currentRoom),
+          });
+          currentRoom = [];
+          typeIdx += 1;
+        }
+      }
+
+      // Leftover participants (partial room)
+      if (currentRoom.length > 0) {
+        const type = types[typeIdx % types.length];
+        toCreate.push({
+          tripId: trip.id,
+          roomNumber: String(roomNum++),
+          roomType: type,
+          participantIds: JSON.stringify(currentRoom),
+        });
+      }
+
+      let created = 0;
+      if (toCreate.length > 0) {
+        const result = await prisma.roomingAssignment.createMany({ data: toCreate });
+        created = result.count;
+      }
+
+      return res.status(201).json({
+        created,
+        skipped: 0,
+        warnings: created === 0 ? ["No new rooms created"] : [],
+      });
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+      console.error("[travel-trip-billing] rooming auto error:", err.message);
+      res.status(500).json({ error: "Failed to auto-allocate rooming" });
+    }
+  },
+);
+
+// GET /api/travel/trips/:tripId/rooming/export.pdf
+//
+// PDF export of rooming assignments. Reuses the pdfRenderer pattern.
+// Format: header with trip info, then a table of rooms with participants.
+router.get(
+  "/trips/:tripId/rooming/export.pdf",
+  verifyToken,
+  requirePermission("trips", "export"),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const [rooms, participants] = await Promise.all([
+        prisma.roomingAssignment.findMany({
+          where: { tripId: trip.id },
+          orderBy: { roomNumber: "asc" },
+        }),
+        prisma.tripParticipant.findMany({
+          where: { tripId: trip.id },
+          select: { id: true, fullName: true },
+        }),
+        prisma.tmcTrip.findUnique({ where: { id: trip.id }, select: { destination: true, departDate: true, returnDate: true, tripCode: true } }),
+      ]);
+
+      const tripData = await prisma.tmcTrip.findUnique({
+        where: { id: trip.id },
+        select: { destination: true, departDate: true, returnDate: true, tripCode: true },
+      });
+
+      const nameById = new Map(participants.map((p) => [p.id, p.fullName]));
+      const ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
+
+      const PDFDocument = require("pdfkit");
+      const doc = new PDFDocument({ margin: 40 });
+
+      // Header
+      doc.fontSize(18).font("Helvetica-Bold").text("Rooming Assignment", { align: "left" });
+      doc.moveDown(0.3);
+      doc.fontSize(11).font("Helvetica").fillColor("#666");
+
+      if (tripData) {
+        doc.text(`Trip: ${tripData.tripCode || "—"}`, { align: "left" });
+        doc.text(`Destination: ${tripData.destination || "—"}`, { align: "left" });
+        const depart = tripData.departDate ? new Date(tripData.departDate).toLocaleDateString() : "—";
+        const ret = tripData.returnDate ? new Date(tripData.returnDate).toLocaleDateString() : "—";
+        doc.text(`Dates: ${depart} to ${ret}`, { align: "left" });
+      }
+
+      doc.moveDown(0.5);
+      doc.fillColor("black");
+
+      if (rooms.length === 0) {
+        doc.fontSize(11).text("No rooming assignments.", { align: "center" });
+      } else {
+        // Table header
+        const tableTop = doc.y;
+        const col1 = 50, col2 = 140, col3 = 200, col4 = 250, col5 = 380;
+        const rowHeight = 20;
+
+        doc.fontSize(9).font("Helvetica-Bold").fillColor("#333");
+        doc.text("Room #", col1, tableTop);
+        doc.text("Type", col2, tableTop);
+        doc.text("Capacity", col3, tableTop);
+        doc.text("Occupancy", col4, tableTop);
+        doc.text("Participants", col5, tableTop);
+
+        doc.moveTo(40, tableTop + 15).lineTo(550, tableTop + 15).stroke();
+        let y = tableTop + 20;
+
+        doc.font("Helvetica").fontSize(10);
+        for (const room of rooms) {
+          let pids = [];
+          try {
+            pids = JSON.parse(room.participantIds || "[]");
+          } catch (_e) {
+            pids = [];
+          }
+          if (!Array.isArray(pids)) pids = [];
+
+          const names = pids.map((pid) => nameById.get(Number(pid)) || `#${pid}`).join(", ");
+          const capacity = ROOM_CAPACITY[room.roomType] || 0;
+
+          doc.fillColor("black");
+          doc.text(String(room.roomNumber), col1, y);
+          doc.text(room.roomType, col2, y);
+          doc.text(String(capacity), col3, y);
+          doc.text(String(pids.length), col4, y);
+
+          const textWidth = 150;
+          doc.fontSize(9);
+          const nameLines = doc.heightOfString(names, { width: textWidth });
+          if (y + nameLines > 750) {
+            doc.addPage();
+            y = 40;
+          }
+          doc.text(names, col5, y, { width: textWidth });
+
+          y += Math.max(rowHeight, nameLines) + 5;
+          if (y > 750) {
+            doc.addPage();
+            y = 40;
+          }
+        }
+      }
+
+      doc.fontSize(8).fillColor("#999");
+      doc.text(`Generated at ${new Date().toLocaleString()}`, 40, doc.page.height - 30, { align: "left" });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="rooming-trip-${trip.id}.pdf"`);
+      doc.pipe(res);
+      doc.end();
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trip-billing] rooming pdf error:", e.message);
+      res.status(500).json({ error: "Failed to export rooming PDF" });
     }
   },
 );
@@ -1023,6 +1342,13 @@ router.patch(
       if (paidAmount !== undefined) {
         const p = Number(paidAmount);
         if (!Number.isFinite(p) || p < 0) return res.status(400).json({ error: "invalid paidAmount", code: "INVALID_AMOUNT" });
+        const finalAmount = data.amount !== undefined ? data.amount : existing.amount;
+        if (p > finalAmount) {
+          return res.status(400).json({
+            error: "paidAmount cannot exceed instalment amount",
+            code: "PAID_EXCEEDS_TOTAL",
+          });
+        }
         data.paidAmount = p;
       }
       if (paidAt !== undefined) data.paidAt = paidAt ? new Date(paidAt) : null;

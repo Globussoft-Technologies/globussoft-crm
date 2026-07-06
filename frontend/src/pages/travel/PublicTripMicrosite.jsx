@@ -489,6 +489,29 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
   const [error, setError] = useState(null);
   const [summary, setSummary] = useState(null);
   const [summaryError, setSummaryError] = useState(null);
+  // Delivery channel the parent picks — "phone" (WhatsApp/SMS) or "email".
+  // Both contacts were captured at registration; email is only offered when
+  // the draft actually carries one.
+  const [channel, setChannel] = useState("phone");
+  // Code expiry — request-otp returns an ISO expiresAt (10-min TTL server
+  // side). We surface a live countdown so the parent knows the window and
+  // block verify once it lapses (a stale code always fails OTP_INVALID).
+  const [expiresAt, setExpiresAt] = useState(null);
+  const [secondsLeft, setSecondsLeft] = useState(0);
+
+  useEffect(() => {
+    if (!expiresAt) return undefined;
+    const tick = () => {
+      const remaining = Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000));
+      setSecondsLeft(remaining);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [expiresAt]);
+
+  const expired = step === "otp_sent" && expiresAt != null && secondsLeft <= 0;
+  const mmss = `${String(Math.floor(secondsLeft / 60)).padStart(2, "0")}:${String(secondsLeft % 60).padStart(2, "0")}`;
 
   // Phase 7+ — on mount, fetch the non-PII draft summary so we can
   // greet the visitor by first name and show them the (masked)
@@ -545,10 +568,12 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
     setError(null);
     setStep("sending");
     try {
-      await publicFetch(`/${publicUuid}/request-otp`, {
+      const resp = await publicFetch(`/${publicUuid}/request-otp`, {
         method: "POST",
-        body: { purpose: "registration", draftToken },
+        body: { purpose: "registration", draftToken, channel },
       });
+      setExpiresAt(resp?.expiresAt || null);
+      setCode("");
       setStep("otp_sent");
     } catch (err) {
       const copy = draftErrorCopy(err.code);
@@ -566,6 +591,10 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
       setError({ text: "Please enter the code we sent you." });
       return;
     }
+    if (expired) {
+      setError({ text: "This code has expired. Please request a fresh one." });
+      return;
+    }
     setError(null);
     setStep("verifying");
     try {
@@ -575,6 +604,7 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
           purpose: "registration",
           code: code.trim(),
           draftToken,
+          channel,
         },
       });
       if (resp.verified) {
@@ -608,6 +638,21 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
   const terminalErr = (step === "error" && error?.terminal) || summaryError?.terminal;
   const terminalCopy = error?.text || summaryError?.text;
 
+  // Email is only an option when the draft carries one. The masked
+  // destination shown in the copy follows the chosen channel.
+  const hasEmail = !!summary?.parentEmailMasked;
+  const destinationMasked = channel === "email"
+    ? summary?.parentEmailMasked
+    : summary?.parentPhoneMasked;
+  const channelNoun = channel === "email" ? "email address" : "phone number";
+  const segBtn = (active) => ({
+    flex: 1, padding: "8px 10px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+    border: `1px solid ${active ? buttonBg : "#cbd5e1"}`,
+    background: active ? buttonBg : "transparent",
+    color: active ? "#fff" : "#475569",
+    display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+  });
+
   return (
     <div data-testid="registration-confirm-panel">
       <h2 style={S.h2}><UserCheck size={18} aria-hidden /> Confirm your registration</h2>
@@ -617,7 +662,7 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
           <div style={{ ...S.okBanner, padding: "14px 16px", fontSize: 14, marginBottom: 12 }}>
             <CheckCircle2 size={18} aria-hidden />
             <span>
-              Phone verified — your registration is being reviewed. We&apos;ll be in touch shortly.
+              Contact verified — your registration is being reviewed. We&apos;ll be in touch shortly.
             </span>
           </div>
           {summary && (
@@ -658,8 +703,40 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
         <>
           <p style={S.help}>
             {greeting} we&apos;ve received your registration for this trip. To finish, verify the
-            phone number you provided — we&apos;ll send a one-time code.
+            {" "}{channelNoun} you provided — we&apos;ll send a one-time code.
           </p>
+
+          {/* Channel picker — only offered when an email is on file. When the
+              draft has no email the phone flow is unchanged (no toggle shown). */}
+          {hasEmail && (step === "idle" || step === "sending" || (step === "error" && !error?.terminal)) && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 13, color: "#475569", marginBottom: 6 }}>
+                How would you like to receive your code?
+              </div>
+              <div style={{ display: "flex", borderRadius: 8, overflow: "hidden" }} role="group" aria-label="Verification channel">
+                <button
+                  type="button"
+                  onClick={() => setChannel("phone")}
+                  disabled={step === "sending"}
+                  style={{ ...segBtn(channel === "phone"), borderRadius: "8px 0 0 8px" }}
+                  aria-pressed={channel === "phone"}
+                  data-testid="registration-channel-phone"
+                >
+                  <Phone size={14} aria-hidden /> Text / WhatsApp
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChannel("email")}
+                  disabled={step === "sending"}
+                  style={{ ...segBtn(channel === "email"), borderRadius: "0 8px 8px 0", borderLeft: "none" }}
+                  aria-pressed={channel === "email"}
+                  data-testid="registration-channel-email"
+                >
+                  <Mail size={14} aria-hidden /> Email
+                </button>
+              </div>
+            </div>
+          )}
 
           <div style={S.summaryCard}>
             <div style={S.summaryRow}>
@@ -672,7 +749,7 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
             </div>
             <div style={S.summaryRow}>
               <span style={S.summaryLabel}>We&apos;ll send a code to</span>
-              <span style={{ fontWeight: 600 }}>{summary.parentPhoneMasked}</span>
+              <span style={{ fontWeight: 600 }} data-testid="registration-destination-masked">{destinationMasked}</span>
             </div>
           </div>
 
@@ -691,8 +768,19 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
           {(step === "otp_sent" || step === "verifying") && (
             <form onSubmit={verifyOtp} data-testid="registration-otp-verify-form" style={{ marginTop: 16 }}>
               <p style={{ fontSize: 13, color: "#475569", margin: "10px 0" }}>
-                We sent a 4-digit code to <strong>{summary.parentPhoneMasked}</strong>. Enter it below.
+                We sent a 4-digit code to <strong>{destinationMasked}</strong>. Enter it below.
               </p>
+              {expiresAt && (
+                <p
+                  style={{ fontSize: 13, margin: "0 0 10px", color: expired ? "#dc2626" : "#475569", display: "flex", alignItems: "center", gap: 6 }}
+                  data-testid="registration-otp-expiry"
+                >
+                  <Clock size={14} aria-hidden />
+                  {expired
+                    ? "Your code has expired — tap Resend code for a new one."
+                    : <span>Code expires in <strong>{mmss}</strong></span>}
+                </p>
+              )}
               <label htmlFor="reg-code" style={{ display: "block", fontSize: 13, color: "#475569", marginBottom: 6 }}>
                 Verification code
               </label>
@@ -712,8 +800,8 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
               <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
                 <button
                   type="submit"
-                  disabled={step === "verifying"}
-                  style={buttonStyle}
+                  disabled={step === "verifying" || expired}
+                  style={{ ...buttonStyle, ...(expired ? { opacity: 0.5, cursor: "not-allowed" } : {}) }}
                   data-testid="registration-verify-otp-btn"
                 >
                   {step === "verifying" ? "Verifying…" : "Verify and confirm"}

@@ -15,9 +15,7 @@ export async function registerPWA() {
     return false;
   }
   try {
-    const reg = await navigator.serviceWorker.register('/sw-pwa.js', { scope: '/' });
-     
-    console.log('[PWA] Registered:', reg.scope);
+    await navigator.serviceWorker.register('/sw-pwa.js', { scope: '/' });
     return true;
   } catch (e) {
      

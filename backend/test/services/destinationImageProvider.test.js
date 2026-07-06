@@ -199,6 +199,8 @@ describe('fetchMany — gallery (public destination-photo proxy)', () => {
       { url: 'https://pexels.example/b.jpg', attribution: { providerId: 'pexels', photographer: 'B' } },
       { url: 'https://pexels.example/a.jpg', attribution: { providerId: 'pexels', photographer: 'A' } }, // dup URL — dropped
     ]);
+    vi.spyOn(unsplashProvider, 'search').mockResolvedValue([]);
+    vi.spyOn(pixabayProvider, 'search').mockResolvedValue([]);
     const out = await provider.fetchMany('Srinagar', { limit: 5 });
     expect(out.map((r) => r.url)).toEqual([
       'https://pexels.example/a.jpg',
@@ -221,6 +223,8 @@ describe('fetchMany — gallery (public destination-photo proxy)', () => {
     expect(await provider.fetchMany('')).toEqual([]);
     process.env.PEXELS_API_KEY = 'test-key';
     const spy = vi.spyOn(pexelsProvider, 'search').mockResolvedValue([]);
+    vi.spyOn(unsplashProvider, 'search').mockResolvedValue([]);
+    vi.spyOn(pixabayProvider, 'search').mockResolvedValue([]);
     await provider.fetchMany('Goa', { limit: 999 });
     expect(spy.mock.calls[0][1].perPage).toBe(30); // clamped to MAX
   });

@@ -54,6 +54,7 @@ function resolveGateway(pref, currency) {
  * @param {string} [opts.currency] - ISO 4217 (defaults USD)
  * @param {string} [opts.gatewayPref] - auto | razorpay | stripe
  * @param {string} [opts.tenantName]  - org display name shown on the payment page
+ * @param {string} [opts.baseUrl]  - frontend base URL for callbacks (defaults to FRONTEND_URL env var)
  * @param {Object} [opts.travelContext] - { scheduleId, travelInvoiceId }. When
  *   present this is a TRAVEL-vertical link: the Payment row is tagged
  *   kind='travel-milestone' (in notes + metadata) and its invoiceId is left
@@ -62,7 +63,7 @@ function resolveGateway(pref, currency) {
  *   branch reconciles it back to the TravelPaymentSchedule + TravelInvoice.
  * @returns {Promise<{url, gateway, paymentId}|{error, code}>}
  */
-async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId, currency, gatewayPref, tenantName, travelContext }) {
+async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId, currency, gatewayPref, tenantName, baseUrl, travelContext }) {
   const amount = Number(invoice?.amount);
   if (!invoice?.id || !amount || isNaN(amount) || amount <= 0) {
     return { error: "Invoice with a positive amount is required", code: "BAD_INVOICE" };
@@ -72,7 +73,7 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
   if (!gateway) {
     return { error: "No payment gateway configured", code: "NO_GATEWAY" };
   }
-  const frontendBase = process.env.FRONTEND_URL || "http://localhost:5173";
+  const frontendBase = baseUrl || process.env.FRONTEND_URL || "http://localhost:5173";
   const amountMinor = Math.round(amount * 100);
   const invoiceLabel = invoice.invoiceNum || `Invoice #${invoice.id}`;
   const label = tenantName ? `${tenantName} — ${invoiceLabel}` : invoiceLabel;
@@ -84,6 +85,8 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
         return { error: "Razorpay is not configured for this account. Please add your keys in Settings → Payment.", code: "NO_GATEWAY" };
       }
       const razorpay = tenantGateway.client;
+      const callbackUrl = `${frontendBase}/p/payment/success`;
+      console.log(`[paymentLink] Creating Razorpay link for tenant ${tenantId}, amount ${amount} ${cur}, callback: ${callbackUrl}`);
       const link = await razorpay.paymentLink.create({
         amount: amountMinor,
         currency: cur,
@@ -107,7 +110,7 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
               travelInvoiceId: String(travelContext.travelInvoiceId),
             }
           : { tenantId: String(tenantId), invoiceId: String(invoice.id) },
-        callback_url: `${frontendBase}/p/payment/success`,
+        callback_url: callbackUrl,
         callback_method: "get",
       });
       const payment = await prisma.payment.create({
@@ -173,6 +176,7 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
     return { url: session.url, gateway: "stripe", paymentId: payment.id };
   } catch (err) {
     console.error(`[paymentLink] ${gateway} link creation failed:`, err.message);
+    console.error(`[paymentLink] Error details:`, { code: err.code, statusCode: err.statusCode, body: err.body });
     return { error: err.message, code: "GATEWAY_ERROR", gateway };
   }
 }

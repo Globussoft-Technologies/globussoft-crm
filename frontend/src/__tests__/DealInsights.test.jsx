@@ -282,23 +282,25 @@ describe('<DealInsights /> — KPI tiles', () => {
     mockLoaded();
     renderPage();
 
-    // Wait for any KPI label to appear, then probe each tile's value.
+    // Wait for the KPI labels and their asynchronously-loaded values.
     await screen.findByText('Open Insights');
 
-    // KPI block uses uppercase labels. Each tile's value lives in the same
-    // `.card` ancestor.
-    const openTile = screen.getByText('Open Insights').closest('.card');
-    expect(openTile).not.toBeNull();
-    expect(within(openTile).getByText('2')).toBeInTheDocument();
+    await waitFor(() => {
+      // KPI block uses uppercase labels. Each tile's value lives in the same
+      // `.card` ancestor.
+      const openTile = screen.getByText('Open Insights').closest('.card');
+      expect(openTile).not.toBeNull();
+      expect(within(openTile).getByText('2')).toBeInTheDocument();
 
-    const criticalTile = screen.getByText('Critical').closest('.card');
-    expect(within(criticalTile).getByText('1')).toBeInTheDocument();
+      const criticalTile = screen.getByText('Critical').closest('.card');
+      expect(within(criticalTile).getByText('1')).toBeInTheDocument();
 
-    const warningsTile = screen.getByText('Warnings').closest('.card');
-    expect(within(warningsTile).getByText('1')).toBeInTheDocument();
+      const warningsTile = screen.getByText('Warnings').closest('.card');
+      expect(within(warningsTile).getByText('1')).toBeInTheDocument();
 
-    const resolvedTile = screen.getByText('Resolved').closest('.card');
-    expect(within(resolvedTile).getByText('1')).toBeInTheDocument();
+      const resolvedTile = screen.getByText('Resolved').closest('.card');
+      expect(within(resolvedTile).getByText('1')).toBeInTheDocument();
+    });
   });
 });
 

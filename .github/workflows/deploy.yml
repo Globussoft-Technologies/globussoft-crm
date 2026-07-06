@@ -1023,7 +1023,12 @@ jobs:
             node scripts/backfill-role-preset-perms.js --apply 2>&1 | tail -20
 
             echo "=== pm2 restart ==="
-            pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
+            # If the process entry is stale (e.g. host rebooted and the old
+            # PID is gone), fall back to deleting the entry and starting fresh.
+            pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3 || {
+              pm2 delete globussoft-crm-backend 2>&1 || true
+              pm2 start server.js --name globussoft-crm-backend 2>&1 | tail -3
+            }
             echo "staging backend restarted"
 
       - name: Deploy frontend to staging

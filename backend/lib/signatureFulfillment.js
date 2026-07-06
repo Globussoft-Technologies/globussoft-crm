@@ -38,8 +38,9 @@ async function resolveGatewayPref(tenantId) {
  * @param {string} [opts.signerName]  - who signed (preferred over contact)
  * @param {string} [opts.signerEmail] - the address the owner sent this to
  * @param {number|null} [opts.actorUserId] - for the audit trail (null = signer)
+ * @param {string} [opts.baseUrl] - frontend base URL for payment callbacks
  */
-async function fulfillSignedEstimate({ documentId, tenantId, signerName, signerEmail, actorUserId = null }) {
+async function fulfillSignedEstimate({ documentId, tenantId, signerName, signerEmail, actorUserId = null, baseUrl }) {
   const estimate = await prisma.estimate.findFirst({
     where: { id: documentId, tenantId },
     include: { contact: true, lineItems: true },
@@ -105,6 +106,7 @@ async function fulfillSignedEstimate({ documentId, tenantId, signerName, signerE
     contact: { name: customerName, email: customerEmail, phone: estimate.contact?.phone },
     currency,
     gatewayPref,
+    baseUrl,
   });
 
   const payLink = payResult && payResult.url

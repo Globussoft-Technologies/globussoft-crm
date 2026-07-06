@@ -1063,7 +1063,7 @@ router.get(
         const consentFrac = clampFrac(capturedConsent / participantsCount);
         const docsFrac = requirementCount > 0
           ? clampFrac(submittedCount / requirementCount)
-          : 1; // No docs required → component is 100% (don't penalise)
+          : 0; // No docs required → 0% (nothing to submit)
         const paymentFrac = clampFrac(receivedRupees / expectedTotalRupees);
         const roomingFrac = clampFrac(participantsRoomed / participantsCount);
         const weighted = (consentFrac * 0.3) + (docsFrac * 0.3) + (paymentFrac * 0.3) + (roomingFrac * 0.1);

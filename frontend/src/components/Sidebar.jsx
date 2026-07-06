@@ -1786,7 +1786,8 @@ function renderTravelNav({
       {/* "Leads" lives in the Sales-pipeline section below (next to Contacts +
           Pipeline). The duplicate top-level Leads link was removed — it pointed
           to the same /travel/leads page. */}
-      <Link to="/travel/inbound-leads" icon={InboxIcon} label="Inbound Leads" requiredPermission={{ module: "inbound_leads", action: "read" }} />
+      {/* COMMENTED OUT - Inbound Leads hidden from sidebar */}
+      {/* <Link to="/travel/inbound-leads" icon={InboxIcon} label="Inbound Leads" requiredPermission={{ module: "inbound_leads", action: "read" }} /> */}
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" requiredPermission={{ module: "diagnostics", action: "read" }} />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" requiredPermission={{ module: "itineraries", action: "read" }} />
       <Link to="/travel/pois/pending" icon={CheckSquare} label="POI Approvals" requiredPermission={{ module: "pois", action: "manage" }} />
@@ -1806,8 +1807,9 @@ function renderTravelNav({
       <Link to="/travel/reports" icon={BarChart3} label="Reports" requiredPermission={{ module: "reports", action: "read" }} />
       <Link to="/travel/reviews" icon={MessageSquare} label="Reviews" requiredPermission={{ module: "reports", action: "read" }} />
       <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" requiredPermission={{ module: "suppliers", action: "read" }} />
-      <Link to="/admin/ratehawk-search" icon={Hotel} label="RateHawk Search" requiredPermission={{ module: "suppliers", action: "read" }} />
-      <Link to="/admin/booking-expedia-search" icon={BedDouble} label="Booking / Expedia" requiredPermission={{ module: "suppliers", action: "read" }} />
+      {/* COMMENTED OUT - RateHawk Search and Booking/Expedia hidden from sidebar */}
+      {/* <Link to="/admin/ratehawk-search" icon={Hotel} label="RateHawk Search" requiredPermission={{ module: "suppliers", action: "read" }} /> */}
+      {/* <Link to="/admin/booking-expedia-search" icon={BedDouble} label="Booking / Expedia" requiredPermission={{ module: "suppliers", action: "read" }} /> */}
       <Link to="/travel/commission-profiles" icon={Award} label="Commission Profiles" requiredPermission={{ module: "commission_profiles", action: "read" }} />
       <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />
       <Link to="/travel/flights/quote" icon={Plane} label="Flight quick-quote" requiredPermission={{ module: "flight_quotes", action: "read" }} />

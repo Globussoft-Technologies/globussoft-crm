@@ -68,7 +68,7 @@ vi.mock('socket.io-client', () => ({ io: () => socketObj }));
 // surface; MANAGER drops the admin-tier perms like roles.manage /
 // pois.manage / visa.manage / passport.manage / suppliers.manage /
 // flyer_studio.manage / pricing.manage; USER gets only the role-
-// agnostic /travel/inbound-leads perm). Per-test overrides via
+// agnostic travel entries hidden for USER). Per-test overrides via
 // renderSidebar({ permissions: [...] }) take precedence.
 let currentPermissionSet = new Set();
 vi.mock('../hooks/usePermissions', () => ({
@@ -128,9 +128,9 @@ function permsForRole(role) {
   if (role === 'MANAGER') {
     return new Set([...GENERIC_BASE_PERMS.filter((k) => !k.startsWith('roles.') && !k.startsWith('staff.manage') && !k.startsWith('settings.manage') && !k.startsWith('audit.') && !k.startsWith('developer.')), ...TRAVEL_MANAGER_PERMS]);
   }
-  // USER role — only the role-agnostic inbound-leads entry, mirroring
-  // the "renders /travel/inbound-leads link for all roles" contract.
-  return new Set(['inbound_leads.read']);
+  // USER role — no travel sidebar entries are visible because unused
+  // pages (e.g. Inbound Leads) are hidden.
+  return new Set();
 }
 
 // fetchApi is URL-aware so tests that need /api/pages/me to return a
@@ -952,8 +952,8 @@ describe('Sidebar — load-bearing render surface', () => {
 
     it('hides Sales pipeline / Customer comms / Financial / Reports section headers when the user has no grants beneath them', () => {
       // <Section> collapses the entire group (label + children) when
-      // every child Link is gated out. USER default perms only carry
-      // `inbound_leads.read`, so none of the four section headers
+      // every child Link is gated out. USER default perms carry no travel
+      // grants, so none of the four section headers
       // should render — only the "User" footer (notification-settings
       // has no requiredPermission and always renders) survives.
       renderSidebar({ vertical: 'travel', role: 'USER' });
@@ -1373,18 +1373,16 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 
-  describe('Travel vertical — Inbound Leads operator surface', () => {
-    it('renders /travel/inbound-leads link for all roles under travel (role-agnostic)', () => {
-      // #904 slice — InboundLeads admin is mounted with no role gate so
-      // every operator on the travel vertical can see the queue of newly-
-      // arrived webhook leads. Pin presence + href for both USER + ADMIN.
+  describe('Travel vertical — Inbound Leads hidden', () => {
+    it('does not render /travel/inbound-leads link under travel (unused page hidden)', () => {
+      // #1198 — Inbound Leads is hidden from the travel sidebar as an unused
+      // page. Pin absence for all operator roles.
       const cases = ['USER', 'MANAGER', 'ADMIN'];
       cases.forEach((role) => {
         const { unmount } = renderSidebar({ vertical: 'travel', role });
         const link = Array.from(document.querySelectorAll('a'))
           .find((a) => a.getAttribute('href') === '/travel/inbound-leads');
-        expect(link).toBeTruthy();
-        expect(link.textContent).toContain('Inbound Leads');
+        expect(link).toBeFalsy();
         unmount();
       });
     });

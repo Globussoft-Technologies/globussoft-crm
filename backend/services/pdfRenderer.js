@@ -4657,6 +4657,7 @@ async function renderTravelInvoicePdf(opts) {
   // status mismatch — honor the math over the status field). This ensures that even
   // if status is incorrectly set to "Paid", the PDF still shows the correct Balance Due.
   const hasPartialPayment = (invoice.status !== "Paid" && amountPaid > 0) || (invoice.status === "Paid" && amountPaid < grandTotal && amountPaid > 0);
+  const isFullyPaid = invoice.status === "Paid" && amountPaid >= grandTotal;
 
   doc.moveDown(0.5);
   const totalsY = doc.y;
@@ -4680,7 +4681,6 @@ async function renderTravelInvoicePdf(opts) {
   // #111 (high-contrast black) for readability. Only show "Total Paid" if
   // status=Paid AND amountPaid >= total (fully paid). If status=Paid but
   // partial, show "Balance Due" instead.
-  const isFullyPaid = invoice.status === "Paid" && amountPaid >= grandTotal;
   const totalLabel = isFullyPaid
     ? "Total Paid"
     : hasPartialPayment

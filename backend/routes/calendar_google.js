@@ -50,9 +50,9 @@ function decodeState(state) {
   }
 }
 
-async function getAuthorizedClientForUser(userId, tenantId) {
+async function getAuthorizedClientForUser(userId) {
   const integration = await prisma.calendarIntegration.findUnique({
-    where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
+    where: { userId_provider: { userId, provider: "google" } },
   });
   if (!integration) {
     const err = new Error("Google Calendar not connected. Please connect your calendar first via /api/calendar/google/connect");
@@ -75,7 +75,7 @@ async function getAuthorizedClientForUser(userId, tenantId) {
       if (tokens.expiry_date) data.expiresAt = new Date(tokens.expiry_date);
       if (Object.keys(data).length) {
         await prisma.calendarIntegration.update({
-          where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
+          where: { userId_provider: { userId, provider: "google" } },
           data,
         });
       }
@@ -170,8 +170,8 @@ router.post("/sync", verifyToken, async (req, res) => {
     if (!userId) {
       return res.status(401).json({ error: "User ID not found in token" });
     }
-    const tenantId = req.user.tenantId;
-    const { client, integration } = await getAuthorizedClientForUser(userId, tenantId);
+    const tenantId = req.user.tenantId || 1;
+    const { client, integration } = await getAuthorizedClientForUser(userId);
     const calendar = google.calendar({ version: "v3", auth: client });
 
     const now = Date.now();
@@ -344,7 +344,7 @@ router.post("/events", verifyToken, async (req, res) => {
     if (!userId) {
       return res.status(401).json({ error: "User ID not found in token" });
     }
-    const tenantId = req.user.tenantId;
+    const tenantId = req.user.tenantId || 1;
 
     // Check for conflicting events (same timing)
     const conflictingEvent = await prisma.calendarEvent.findFirst({
@@ -359,7 +359,7 @@ router.post("/events", verifyToken, async (req, res) => {
       return res.status(409).json({ error: "Event time conflicts with an existing event. Please choose a different time." });
     }
 
-    const { client, integration } = await getAuthorizedClientForUser(userId, tenantId);
+    const { client, integration } = await getAuthorizedClientForUser(userId);
     const calendar = google.calendar({ version: "v3", auth: client });
 
     const attendeesArr = Array.isArray(attendees)
@@ -491,7 +491,6 @@ router.post("/events", verifyToken, async (req, res) => {
 router.get("/slots", verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const tenantId = req.user.tenantId;
     if (!userId) {
       return res.status(401).json({ error: "User ID not found in token" });
     }
@@ -499,7 +498,7 @@ router.get("/slots", verifyToken, async (req, res) => {
     const win = parseSlotWindow(req.query);
     if (win.error) return res.status(400).json({ error: win.error });
 
-    const { client, integration } = await getAuthorizedClientForUser(userId, tenantId);
+    const { client, integration } = await getAuthorizedClientForUser(userId);
     const calendar = google.calendar({ version: "v3", auth: client });
     const calId = integration.calendarId || "primary";
 

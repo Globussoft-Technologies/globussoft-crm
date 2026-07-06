@@ -115,9 +115,9 @@ const GMAIL_NOT_ENABLED_MSG =
   "This Google account doesn't have Gmail enabled (no mailbox). Connect a Gmail-enabled account, " +
   "or enable Gmail for this user in Google Workspace Admin.";
 
-async function getAuthorizedClientForUser(userId, tenantId) {
+async function getAuthorizedClientForUser(userId) {
   const integration = await prisma.gmailIntegration.findUnique({
-    where: { tenantId_userId_provider: { tenantId, userId, provider: PROVIDER } },
+    where: { userId_provider: { userId, provider: PROVIDER } },
   });
   if (!integration) {
     const err = new Error(
@@ -284,13 +284,12 @@ router.delete("/disconnect", verifyToken, async (req, res) => {
 router.get("/messages", verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const tenantId = req.user.tenantId;
     const q = typeof req.query.q === "string" ? req.query.q : undefined;
     let maxResults = parseInt(req.query.maxResults, 10);
     if (!Number.isFinite(maxResults) || maxResults < 1) maxResults = 15;
     if (maxResults > 50) maxResults = 50;
 
-    const { client } = await getAuthorizedClientForUser(userId, tenantId);
+    const { client } = await getAuthorizedClientForUser(userId);
     const gmail = google.gmail({ version: "v1", auth: client });
 
     const list = await gmail.users.messages.list({ userId: "me", q, maxResults });
@@ -340,7 +339,7 @@ router.get("/messages", verifyToken, async (req, res) => {
 // sidesteps that validator.
 router.get("/messages/:messageId", verifyToken, async (req, res) => {
   try {
-    const { client } = await getAuthorizedClientForUser(req.user.userId, req.user.tenantId);
+    const { client } = await getAuthorizedClientForUser(req.user.userId);
     const gmail = google.gmail({ version: "v1", auth: client });
     const full = await gmail.users.messages.get({ userId: "me", id: req.params.messageId, format: "full" });
     return res.json(parseGmailMessage(full.data));
@@ -379,8 +378,8 @@ router.post("/send", verifyToken, upload.array("attachments", 10), async (req, r
     }
 
     const userId = req.user.userId;
-    const tenantId = req.user.tenantId;
-    const { client, integration } = await getAuthorizedClientForUser(userId, tenantId);
+    const tenantId = req.user.tenantId || 1;
+    const { client, integration } = await getAuthorizedClientForUser(userId);
     const gmail = google.gmail({ version: "v1", auth: client });
 
     const attachments = (req.files || []).map((f) => ({

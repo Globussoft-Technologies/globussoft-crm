@@ -2514,10 +2514,8 @@ model CalendarIntegration {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  /// One calendar connection per (tenant, user, provider). Multi-tenancy isolation: a user's calendar
-  /// connection in Wellness tenant is independent from their connection in Travel tenant.
-  @@unique([tenantId, userId, provider])
-  @@index([tenantId])
+  /// One calendar connection per (user, provider). A user connects their Google calendar once; reconnecting refreshes tokens in place. Note: scoped on userId (already globally unique across tenants), so tenantId is redundant in this key.
+  @@unique([userId, provider])
 }
 
 /// Per-user Gmail connection (OAuth2 via the Gmail API). Mirrors
@@ -2545,10 +2543,8 @@ model GmailIntegration {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  /// One Gmail connection per (tenant, user, provider). Multi-tenancy isolation: each tenant's
-  /// users have independent Gmail connections.
-  @@unique([tenantId, userId, provider])
-  @@index([tenantId])
+  /// One Gmail connection per (user, provider) — same convention as CalendarIntegration.
+  @@unique([userId, provider])
 }
 
 model CalendarEvent {

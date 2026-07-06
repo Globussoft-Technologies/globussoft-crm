@@ -146,7 +146,7 @@ router.get("/callback", async (req, res) => {
     const tenantId = user?.tenantId || 1;
 
     await prisma.calendarIntegration.upsert({
-      where: { userId_provider: { userId, provider: "microsoft" } },
+      where: { tenantId_userId_provider: { tenantId, userId, provider: "microsoft" } },
       update: {
         accessToken: tokenData.access_token,
         refreshToken: tokenData.refresh_token || null,
@@ -187,10 +187,10 @@ router.post("/sync", verifyToken, async (req, res) => {
     if (!userId) {
       return res.status(401).json({ error: "User ID not found in token" });
     }
-    const tenantId = req.user.tenantId || 1;
+    const tenantId = req.user.tenantId;
 
     let integration = await prisma.calendarIntegration.findUnique({
-      where: { userId_provider: { userId, provider: "microsoft" } },
+      where: { tenantId_userId_provider: { tenantId, userId, provider: "microsoft" } },
     });
     if (!integration) {
       return res.status(404).json({ error: "Outlook calendar not connected. Please connect your calendar first via /api/calendar/outlook/connect" });
@@ -290,11 +290,11 @@ router.post("/sync", verifyToken, async (req, res) => {
 router.get("/events", verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const tenantId = req.user.tenantId || 1;
+    const tenantId = req.user.tenantId;
 
     // Check if integration exists first
     const integration = await prisma.calendarIntegration.findUnique({
-      where: { userId_provider: { userId, provider: "microsoft" } },
+      where: { tenantId_userId_provider: { tenantId, userId, provider: "microsoft" } },
     });
 
     if (!integration) {
@@ -361,7 +361,7 @@ router.post("/events", verifyToken, async (req, res) => {
     if (!userId) {
       return res.status(401).json({ error: "User ID not found in token" });
     }
-    const tenantId = req.user.tenantId || 1;
+    const tenantId = req.user.tenantId;
 
     // Check for conflicting events (same timing)
     const conflictingEvent = await prisma.calendarEvent.findFirst({
@@ -377,7 +377,7 @@ router.post("/events", verifyToken, async (req, res) => {
     }
 
     let integration = await prisma.calendarIntegration.findUnique({
-      where: { userId_provider: { userId, provider: "microsoft" } },
+      where: { tenantId_userId_provider: { tenantId, userId, provider: "microsoft" } },
     });
     if (!integration) {
       return res.status(404).json({ error: "Outlook calendar not connected" });
@@ -492,6 +492,7 @@ router.post("/events", verifyToken, async (req, res) => {
 router.get("/slots", verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId;
+    const tenantId = req.user.tenantId;
     if (!userId) {
       return res.status(401).json({ error: "User ID not found in token" });
     }
@@ -500,7 +501,7 @@ router.get("/slots", verifyToken, async (req, res) => {
     if (win.error) return res.status(400).json({ error: win.error });
 
     let integration = await prisma.calendarIntegration.findUnique({
-      where: { userId_provider: { userId, provider: "microsoft" } },
+      where: { tenantId_userId_provider: { tenantId, userId, provider: "microsoft" } },
     });
     if (!integration) {
       return res.status(404).json({ error: "Outlook calendar not connected" });

@@ -1,4 +1,5 @@
 ﻿import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Package, Plus, Edit2, Trash2, AlertCircle, Search, Upload } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -8,6 +9,7 @@ import PageHeader from '../../components/PageHeader';
 export default function Products() {
   const notify = useNotify();
   const fileInputRef = useRef(null);
+  const [searchParams] = useSearchParams();
   // Backend routes inventory.js gate POST=products.write,
   // PUT=products.update, DELETE=products.delete. We default to fail-closed
   // (canX=false until perms resolve) so buttons don't flash visible during
@@ -62,6 +64,14 @@ export default function Products() {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Auto-open detail panel when navigated from a low-stock notification (?productId=N)
+  useEffect(() => {
+    const pid = searchParams.get('productId');
+    if (!pid || !products.length) return;
+    const product = products.find((p) => String(p.id) === String(pid));
+    if (product) setSelectedProductForDetails(product);
+  }, [searchParams, products]);
 
   // Fetch the last 5 CONSUMPTION movements when the details modal opens so
   // the user can trace which completed visits actually drove the deductions.

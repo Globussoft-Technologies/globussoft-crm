@@ -332,9 +332,9 @@ const Sidebar = ({
     // fetchApi docstring at utils/api.js:107-109 explicitly recommends
     // {silent} for background-poll callsites.
     const [leads, tasks, tickets, inbox] = await Promise.all([
-      safeLen(fetchApi("/api/contacts?status=Lead", { silent: true })),
-      safeLen(fetchApi("/api/tasks?status=PENDING", { silent: true })),
-      safeLen(fetchApi("/api/tickets?status=OPEN", { silent: true })),
+      safeLen(fetchApi("/api/contacts?status=Lead&count=1", { silent: true })),
+      safeLen(fetchApi("/api/tasks?status=PENDING&count=1", { silent: true })),
+      safeLen(fetchApi("/api/tickets?status=OPEN&count=1", { silent: true })),
       safeLen(fetchApi("/api/email?unread=1", { silent: true })),
     ]);
     setCounts((prev) => ({

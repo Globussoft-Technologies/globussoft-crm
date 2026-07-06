@@ -769,7 +769,7 @@ export default function Itineraries() {
 
       <div style={{
         background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)", overflow: "hidden",
+        border: "1px solid var(--border-color)", overflow: "visible",
       }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
@@ -783,7 +783,8 @@ export default function Itineraries() {
             No itineraries match &ldquo;{searchQuery}&rdquo;.
           </div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: "1000px", borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={th}>Destination</th>
@@ -923,6 +924,7 @@ export default function Itineraries() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 

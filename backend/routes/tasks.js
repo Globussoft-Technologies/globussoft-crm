@@ -103,6 +103,11 @@ router.get("/", verifyToken, async (req, res) => {
         : [{ userId: me }];
     }
     if (req.query.includeDeleted !== "true") where.deletedAt = null;
+    // ?count=1 — sidebar badge polls: return { total } only, skip full fetch.
+    if (req.query.count === '1') {
+      const total = await prisma.task.count({ where });
+      return res.json({ total });
+    }
 
     // #172: pagination
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));

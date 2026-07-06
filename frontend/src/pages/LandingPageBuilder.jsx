@@ -224,6 +224,7 @@ export default function LandingPageBuilder() {
   const [versions, setVersions] = useState([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [restoringVersionId, setRestoringVersionId] = useState(null);
+  const [selectedVersion, setSelectedVersion] = useState(null);
 
   // #449: hide the global app sidebar while the builder is mounted. The
   // builder is a 3-column layout that competes with the global Sidebar +
@@ -774,6 +775,7 @@ export default function LandingPageBuilder() {
               <LandingPageWanderluxEditor
                 content={templateContent}
                 onChange={(next) => { setTemplateContent(next); setIsDirty(true); }}
+                page={page}
               />
             ) : (
               <LandingPageTemplateEditor
@@ -1004,11 +1006,11 @@ export default function LandingPageBuilder() {
           (create / manual save / publish / AI generation / restore).
           No diff view, no branching, no merge. */}
       {showVersionsDrawer && (
-        <VersionsDrawer
+        <VersionHistoryModal
           versions={versions}
           loading={versionsLoading}
           restoringVersionId={restoringVersionId}
-          onClose={() => setShowVersionsDrawer(false)}
+          onClose={() => { setShowVersionsDrawer(false); setSelectedVersion(null); }}
           onRestore={handleRestoreVersion}
           onPreview={handlePreviewVersion}
           onRefresh={loadVersions}
@@ -1018,118 +1020,154 @@ export default function LandingPageBuilder() {
   );
 }
 
-// ── Version history drawer ────────────────────────────────────────────
-//
-// Right-side panel listing every snapshot the backend has captured for
-// this page. Each row shows version number, source (Created / Manual
-// save / Published / AI generation / Restored), timestamp, and a
-// Restore button. The newest version sits at the top.
-//
-// Restoring a version writes a NEW snapshot server-side so prior
-// versions remain available — the list reloads after each restore.
-function VersionsDrawer({ versions, loading, restoringVersionId, onClose, onRestore, onPreview, onRefresh }) {
+// ── Version history modal ─────────────────────────────────────────────
+// Full-screen modal replacing the side drawer, showing all versions in
+// a readable grid with proper spacing and no overlapping text.
+function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, onRestore, onPreview, onRefresh }) {
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Version history"
       style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 60,
-        display: 'flex', justifyContent: 'flex-end',
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 100,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
       onClick={onClose}
     >
-      <aside
+      <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: '380px', maxWidth: '100vw', height: '100vh', background: 'var(--surface-color)',
-          borderLeft: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column',
-          boxShadow: '-4px 0 16px rgba(0,0,0,0.12)',
+          background: 'var(--surface-color)', borderRadius: 12,
+          boxShadow: '0 25px 80px rgba(0,0,0,0.4)', width: 'min(700px, 92vw)',
+          maxHeight: '85vh', display: 'flex', flexDirection: 'column',
         }}
       >
-        <header style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.85rem 1rem', borderBottom: '1px solid var(--border-color)' }}>
-          <History size={16} />
-          <h2 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600, flex: 1 }}>Version history</h2>
-          <button onClick={onRefresh} title="Refresh" style={{ background: 'transparent', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0.25rem 0.5rem', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.72rem' }}>Refresh</button>
-          <button onClick={onClose} aria-label="Close version history" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-            <X size={16} />
+        {/* Header */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '1rem', padding: '1.5rem',
+          borderBottom: '1px solid var(--border-color)', flexShrink: 0,
+        }}>
+          <History size={20} />
+          <h2 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 600, flex: 1 }}>Version History</h2>
+          <button
+            onClick={onRefresh}
+            style={{
+              background: 'transparent', border: '1px solid var(--border-color)',
+              borderRadius: 6, padding: '0.5rem 1rem', cursor: 'pointer',
+              fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-primary)',
+            }}
+            title="Refresh version list"
+          >
+            ↻ Refresh
           </button>
-        </header>
-        <div style={{ padding: '0.65rem 1rem', borderBottom: '1px solid var(--border-color)', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-          Snapshots are captured automatically on save, publish, AI generation, and restore. Restoring keeps every prior version.
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: 'var(--text-secondary)', fontSize: '1.4rem', padding: 0,
+            }}
+            aria-label="Close"
+          >
+            ✕
+          </button>
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0.5rem' }}>
+
+        {/* Content */}
+        <div style={{
+          flex: 1, overflow: 'auto', padding: '1.5rem',
+        }}>
           {loading ? (
-            <div style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading…</div>
+            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+              Loading versions…
+            </div>
           ) : versions.length === 0 ? (
-            <div style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
               No versions yet. Save or publish this page to create the first snapshot.
             </div>
           ) : (
-            versions.map((v, idx) => {
-              const isCurrent = idx === 0;
-              const restoring = restoringVersionId === v.id;
-              return (
-                <div
-                  key={v.id}
-                  style={{
-                    border: '1px solid var(--border-color)', borderRadius: 8, padding: '0.65rem 0.75rem',
-                    marginBottom: '0.5rem', background: isCurrent ? 'var(--subtle-bg, rgba(0,0,0,0.02))' : 'transparent',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginBottom: '0.2rem' }}>
-                    <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>v{v.versionNumber}</span>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>·</span>
-                    <span style={{ fontSize: '0.78rem', color: 'var(--text-primary)' }}>{formatVersionSource(v.source)}</span>
-                    {isCurrent && (
-                      <span style={{ marginLeft: 'auto', fontSize: '0.65rem', color: '#10b981', fontWeight: 600, textTransform: 'uppercase' }}>Current</span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '0.15rem' }}>
-                    {formatVersionTimestamp(v.createdAt)}
-                  </div>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '0.4rem' }} title={v.title}>
-                    {v.title || '(untitled)'} <span style={{ opacity: 0.7 }}>· /p/{v.slug || '—'}</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.4rem' }}>
-                    {/* PR-E Phase 2.3 — Preview this version (without restoring).
-                        Opens the production renderer with ?version=N so the
-                        operator can compare BEFORE deciding to restore. */}
-                    <button
-                      onClick={() => onPreview && onPreview(v)}
-                      style={{
-                        display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
-                        background: 'transparent', border: '1px solid var(--border-color)', borderRadius: 6,
-                        padding: '0.3rem 0.6rem', cursor: 'pointer',
-                        fontSize: '0.72rem', color: 'var(--text-primary)',
-                      }}
-                      title={isCurrent
-                        ? "Preview the current live state in a new tab"
-                        : `Preview version #${v.versionNumber} in a new tab (does not modify the live page)`}
-                    >
-                      <Eye size={12} /> Preview
-                    </button>
-                    {!isCurrent && (
+            <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
+              {versions.map((v) => {
+                const isCurrent = versions.indexOf(v) === 0;
+                const restoring = restoringVersionId === v.id;
+                return (
+                  <div
+                    key={v.id}
+                    style={{
+                      border: '1px solid var(--border-color)', borderRadius: 8,
+                      padding: '1rem', background: isCurrent ? 'rgba(16,185,129,0.05)' : 'transparent',
+                      transition: 'all 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--accent-color)';
+                      e.currentTarget.style.background = 'rgba(139,92,246,0.03)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--border-color)';
+                      e.currentTarget.style.background = isCurrent ? 'rgba(16,185,129,0.05)' : 'transparent';
+                    }}
+                  >
+                    <div style={{ marginBottom: '0.8rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
+                        <span style={{ fontWeight: 600, fontSize: '1rem' }}>v{v.versionNumber}</span>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)' }}>{formatVersionSource(v.source)}</span>
+                        {isCurrent && (
+                          <span style={{ marginLeft: 'auto', fontSize: '0.65rem', color: '#10b981', fontWeight: 600, background: 'rgba(16,185,129,0.15)', padding: '0.25rem 0.5rem', borderRadius: 3 }}>CURRENT</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        {formatVersionTimestamp(v.createdAt)}
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: '1rem', paddingTop: '0.8rem', borderTop: '1px solid var(--border-color)' }}>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>TITLE</div>
+                      <div style={{ fontSize: '0.9rem', fontWeight: 500, marginBottom: '0.6rem', wordBreak: 'break-word' }}>
+                        {v.title || '(untitled)'}
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>SLUG</div>
+                      <div style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: 'var(--text-primary)', wordBreak: 'break-all' }}>
+                        /p/{v.slug || '—'}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
                       <button
-                        onClick={() => onRestore(v)}
-                        disabled={restoring}
+                        onClick={() => onPreview?.(v)}
                         style={{
                           display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
-                          background: 'transparent', border: '1px solid var(--border-color)', borderRadius: 6,
-                          padding: '0.3rem 0.6rem', cursor: restoring ? 'not-allowed' : 'pointer',
-                          fontSize: '0.72rem', color: 'var(--text-primary)', opacity: restoring ? 0.6 : 1,
+                          background: 'transparent', border: '1px solid var(--border-color)',
+                          borderRadius: 4, padding: '0.4rem 0.8rem', cursor: 'pointer',
+                          fontSize: '0.8rem', flex: 1, justifyContent: 'center',
                         }}
+                        title="Preview in a new tab"
                       >
-                        <RotateCcw size={12} /> {restoring ? 'Restoring…' : 'Restore'}
+                        <Eye size={13} /> Preview
                       </button>
-                    )}
+                      {!isCurrent && (
+                        <button
+                          onClick={() => onRestore(v)}
+                          disabled={restoring}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                            background: 'transparent', border: '1px solid var(--border-color)',
+                            borderRadius: 4, padding: '0.4rem 0.8rem', cursor: restoring ? 'not-allowed' : 'pointer',
+                            fontSize: '0.8rem', flex: 1, justifyContent: 'center',
+                            opacity: restoring ? 0.5 : 1,
+                          }}
+                          title="Restore this version"
+                        >
+                          <RotateCcw size={13} /> {restoring ? '…' : 'Restore'}
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })
+                );
+              })}
+            </div>
           )}
         </div>
-      </aside>
+      </div>
     </div>
   );
 }

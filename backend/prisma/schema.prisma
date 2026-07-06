@@ -6172,6 +6172,11 @@ model TripParticipant {
   passportRejectedAt     DateTime?
   aadhaarLast4           String?
   aadhaarTokenId         String? // DigiLocker token, encrypted
+  // Physical Aadhaar scan uploaded via the public microsite (fallback when
+  // DigiLocker is not used). Key + storage backend mirror the visaDocStore
+  // descriptor so resolveViewUrl / readDocBuffer work without re-parsing.
+  aadhaarDocKey          String?
+  aadhaarDocStorage      String? // "s3" | "disk"
   parentName             String?
   parentPhone            String?
   parentEmail            String?

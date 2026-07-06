@@ -1437,7 +1437,8 @@ export function LayoutPanel({ cfg, onChange, isDirty = false }) {
   );
 }
 
-export default function LandingPageWanderluxEditor({ content, onChange }) {
+export default function LandingPageWanderluxEditor({ content, onChange, page }) {
+  const notify = useNotify();
   const cfg = content || {};
   const [open, setOpen] = useState({
     brand: true, hero: true, countdown: false, cities: true, video: false,
@@ -1445,6 +1446,7 @@ export default function LandingPageWanderluxEditor({ content, onChange }) {
     investment: false, register: false, brochure: false, faqs: false,
     finalCta: false, footer: false, raw: false,
   });
+  const [syncingInvestment, setSyncingInvestment] = useState(false);
 
   // Helper: deep-set into a nested path. Build a new object each change so
   // React picks it up (config is immutable upstream).
@@ -1458,6 +1460,32 @@ export default function LandingPageWanderluxEditor({ content, onChange }) {
     }
     target[path[path.length - 1]] = value;
     onChange(next);
+  };
+
+  const syncInvestmentFromTrip = async () => {
+    if (!page || !page.id || !page.tripId) {
+      notify.error('Page must be linked to a trip to sync investment pricing');
+      return;
+    }
+    setSyncingInvestment(true);
+    try {
+      const res = await fetchApi(`/api/landing-pages/${page.id}/sync-investment`, {
+        method: 'POST',
+      });
+      if (res.success) {
+        // Update installments from response
+        const next = JSON.parse(JSON.stringify(cfg));
+        next.investment = next.investment || {};
+        next.investment.installments = res.installments;
+        onChange(next);
+        notify.success(res.message || 'Investment pricing synced from trip');
+      }
+    } catch (err) {
+      console.error('Sync error:', err);
+      notify.error(err.message || 'Failed to sync investment pricing');
+    } finally {
+      setSyncingInvestment(false);
+    }
   };
 
   return (
@@ -1689,6 +1717,49 @@ export default function LandingPageWanderluxEditor({ content, onChange }) {
 
       {/* ── INVESTMENT (PRICING) ── */}
       <Section id="investment" title="Investment (pricing)" open={open} setOpen={setOpen}>
+        {page && page.tripId && (
+          <div style={{
+            padding: '1rem',
+            background: 'linear-gradient(135deg, #d1fae5 0%, #c5f2e4 100%)',
+            border: '2px solid #10b981',
+            borderRadius: 8,
+            marginBottom: '1.2rem',
+            display: 'flex',
+            gap: '1rem',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontSize: '0.95rem',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flex: 1 }}>
+              <span style={{ fontSize: '1.2rem' }}>✓</span>
+              <div>
+                <div style={{ fontWeight: 600, color: '#047857', fontSize: '0.95rem' }}>Linked to trip</div>
+                <div style={{ color: '#059669', fontSize: '0.8rem' }}>Auto-filled from payment plan</div>
+              </div>
+            </div>
+            <button
+              onClick={syncInvestmentFromTrip}
+              disabled={syncingInvestment}
+              style={{
+                padding: '0.6rem 1.2rem',
+                fontSize: '0.85rem',
+                background: 'var(--accent-color)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                cursor: syncingInvestment ? 'not-allowed' : 'pointer',
+                opacity: syncingInvestment ? 0.65 : 1,
+                whiteSpace: 'nowrap',
+                fontWeight: 600,
+                flexShrink: 0,
+                transition: 'all 0.2s',
+              }}
+              title={syncingInvestment ? 'Syncing...' : 'Re-sync installments from trip payment plan'}
+            >
+              {syncingInvestment ? 'Syncing...' : '↻ Regenerate'}
+            </button>
+          </div>
+        )}
         <TextField label="Eyebrow" value={cfg.investment && cfg.investment.eyebrow} onChange={(v) => setPath(['investment', 'eyebrow'], v)} placeholder="Investment" />
         <TextField label="Title" value={cfg.investment && cfg.investment.title} onChange={(v) => setPath(['investment', 'title'], v)} placeholder="Transparent Pricing" />
         <TextArea label="Subtitle" value={cfg.investment && cfg.investment.subtitle} onChange={(v) => setPath(['investment', 'subtitle'], v)} rows={2} />

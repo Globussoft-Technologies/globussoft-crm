@@ -238,6 +238,11 @@ function renderComponent(component, slug) {
           var data = {};
           var inputs = form.querySelectorAll("input");
           inputs.forEach(function(inp){ data[inp.name] = inp.value; });
+          var phoneInp = form.querySelector('input[type="tel"]');
+          if(phoneInp && phoneInp.value.trim()){
+            var digits = phoneInp.value.replace(/\\D/g,'');
+            if(digits.length < 10 || digits.length > 15){ alert('Please enter a valid phone number (10–15 digits).'); phoneInp.focus(); return; }
+          }
           ${enableCaptcha ? `data.cfTurnstileToken = turnstileToken; if (!turnstileToken) { alert("Please complete the CAPTCHA challenge."); return; }` : ""}
           fetch("/api/pages/${escapeHtml(slug)}/submit", {
             method: "POST",
@@ -769,6 +774,8 @@ function renderComponent(component, slug) {
             e.preventDefault();
             var data={brochureRequest:true};
             form.querySelectorAll('input').forEach(function(i){data[i.name]=i.value;});
+            var brPhoneInp=form.querySelector('input[type="tel"]');
+            if(brPhoneInp&&brPhoneInp.value.trim()){var d=brPhoneInp.value.replace(/\\D/g,'');if(d.length<10||d.length>15){alert('Please enter a valid phone number (10–15 digits).');brPhoneInp.focus();return;}}
             fetch('/api/pages/${escapeHtml(slug)}/submit',{
               method:'POST',
               headers:{'Content-Type':'application/json'},
@@ -842,6 +849,8 @@ function renderComponent(component, slug) {
             e.preventDefault();
             var data={registrationForm:true};
             form.querySelectorAll('input').forEach(function(i){if(i.name)data[i.name]=i.value;});
+            var regPhoneInp=form.querySelector('input[type="tel"]');
+            if(regPhoneInp&&regPhoneInp.value.trim()){var d=regPhoneInp.value.replace(/\\D/g,'');if(d.length<10||d.length>15){alert('Please enter a valid phone number (10–15 digits).');regPhoneInp.focus();return;}}
             // Phase 6 - registration-draft mode wraps values in
             // a fields object so handleRegistrationDraft can
             // pluck student_name / parent_phone / etc. out of the

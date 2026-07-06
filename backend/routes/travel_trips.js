@@ -48,6 +48,8 @@ const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const digilockerClient = require("../services/digilockerClient");
 const googleDriveClient = require("../services/googleDriveClient");
+const visaDocStore = require("../lib/visaDocStore");
+const passportOcrClient = require("../services/passportOcrClient");
 const listProjection = require("../lib/listProjection");
 const { toE164 } = require("../utils/deduplication");
 
@@ -1856,6 +1858,54 @@ router.get(
   },
 );
 
+// GET /trips/:id/registrations/:rid/documents/:docType/view-url
+// Mints a short-lived (5-min) signed URL for a passport or Aadhaar scan
+// uploaded via the public microsite and stored in PendingTripRegistration.
+// ADMIN+MANAGER only — operators need to view documents before approving.
+// Returns { url } — the signed URL is valid for DEFAULT_VIEW_TTL_SEC seconds.
+router.get(
+  "/trips/:id/registrations/:rid/documents/:docType/view-url",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const { draft } = await loadPendingRegistration(req);
+      const { docType } = req.params;
+      if (!["passport", "aadhaar"].includes(docType)) {
+        return res.status(400).json({ error: "docType must be passport or aadhaar", code: "INVALID_DOC_TYPE" });
+      }
+      let extras = {};
+      if (draft.extrasJson) {
+        try { extras = JSON.parse(draft.extrasJson) || {}; } catch { extras = {}; }
+      }
+      const descriptor = extras?.documents?.[docType];
+      if (!descriptor || !descriptor.url) {
+        return res.status(404).json({
+          error: `No ${docType} document uploaded for this registration`,
+          code: "DOC_NOT_FOUND",
+        });
+      }
+      // Map microsite descriptor shape { storage, url, key } → visaDocStore item shape
+      const item = {
+        attachmentUrl: descriptor.url,
+        attachmentKey: descriptor.key,
+        attachmentStorage: descriptor.storage,
+      };
+      const url = await visaDocStore.resolveViewUrl(item);
+      if (!url) {
+        return res.status(500).json({ error: "Could not generate a view URL for this document" });
+      }
+      res.json({ url, docType, expiresInSeconds: visaDocStore.DEFAULT_VIEW_TTL_SEC });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] registration doc view-url error:", e.message);
+      res.status(500).json({ error: "Failed to generate document URL" });
+    }
+  },
+);
+
 async function loadPendingRegistration(req) {
   const trip = await loadTrip(req);
   const rid = parseInt(req.params.rid, 10);
@@ -1899,6 +1949,15 @@ router.post(
       const reviewerId = req.user?.userId ?? null;
       const reviewerIdSafe = Number.isFinite(reviewerId) ? reviewerId : null;
 
+      // Extract uploaded document descriptors from the draft so we can
+      // carry them into the TripParticipant and trigger OCR after conversion.
+      let draftExtras = {};
+      if (draft.extrasJson) {
+        try { draftExtras = JSON.parse(draft.extrasJson) || {}; } catch { draftExtras = {}; }
+      }
+      const draftDocs = (draftExtras.documents && typeof draftExtras.documents === "object")
+        ? draftExtras.documents : {};
+
       // Atomic conversion. One transaction so we never end up with a
       // half-converted draft (participant created but draft not
       // pointed at it, or vice versa). Approve writes
@@ -1919,6 +1978,12 @@ router.post(
             reviewedAt: new Date(),
             reviewedById: reviewerIdSafe,
             reviewNotes,
+            // NOTE: aadhaarDocKey / aadhaarDocStorage are intentionally omitted
+            // here until `prisma generate` + `prisma db push` are run after the
+            // schema change. The aadhaar scan descriptor remains accessible via
+            // PendingTripRegistration.extrasJson.documents.aadhaar (draft is kept
+            // and linked via convertedToParticipantId). Add them back once the
+            // columns exist in the live DB.
           },
         }),
       ]);
@@ -1936,6 +2001,65 @@ router.post(
         },
       });
       res.json({ approved: true, participant, registration: updatedDraft });
+
+      // Fire-and-forget passport OCR so the participant surfaces in
+      // PassportVerificationQueue without blocking the conversion response.
+      // Failures are logged and silently swallowed — the operator can always
+      // trigger a re-upload via the verification queue's "Clear (re-upload)" action.
+      if (draftDocs.passport?.key) {
+        setImmediate(async () => {
+          try {
+            const passportDescriptor = draftDocs.passport;
+            const buffer = await visaDocStore.readDocBuffer(passportDescriptor);
+            const extMap = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", pdf: "application/pdf" };
+            const ext = (passportDescriptor.key || "").split(".").pop().toLowerCase();
+            const mimeType = extMap[ext] || "image/jpeg";
+            // Use travelTenant.id — trip is loaded with select:{id:true} so trip.tenantId is undefined.
+            const tenantId = req.travelTenant?.id;
+            let envelope;
+            if (buffer) {
+              try {
+                envelope = await passportOcrClient.extractPassport({ tenantId, fileBuffer: buffer, mimeType });
+              } catch (_ocrErr) {
+                // OCR disabled or failed — still queue the participant for manual operator review.
+                envelope = {
+                  extraction: {
+                    passportNumber: null, surname: null, givenNames: null,
+                    dateOfBirth: null, sex: null, nationality: null,
+                    dateOfExpiry: null, mrz: null,
+                  },
+                  confidence: 0,
+                  provider: "manual",
+                  mrzFound: false,
+                  note: "Automatic extraction unavailable — please verify passport fields manually.",
+                };
+              }
+            } else {
+              // File not readable (moved/deleted) — queue with empty envelope so operator is notified.
+              envelope = {
+                extraction: {
+                  passportNumber: null, surname: null, givenNames: null,
+                  dateOfBirth: null, sex: null, nationality: null,
+                  dateOfExpiry: null, mrz: null,
+                },
+                confidence: 0,
+                provider: "manual",
+                mrzFound: false,
+                note: "Document file not readable — ask participant to re-upload.",
+              };
+            }
+            await prisma.tripParticipant.update({
+              where: { id: participant.id },
+              data: {
+                passportExtractionJson: JSON.stringify({ ...envelope, extractedAt: new Date().toISOString() }),
+                passportExtractedAt: new Date(),
+              },
+            });
+          } catch (e) {
+            console.error("[travel-trips] post-conversion passport queue error:", e.message);
+          }
+        });
+      }
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-trips] approve pending-registration error:", e.message);

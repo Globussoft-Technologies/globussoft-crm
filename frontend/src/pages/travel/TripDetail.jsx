@@ -14,7 +14,7 @@ import {
   ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
   Bold, Italic, Heading, Link2, List, Image as ImageIcon, Eye, Download, Upload,
   MapPin, IndianRupee, FileText, CheckCircle2, AlertCircle, Clock, TrendingUp,
-  Sparkles, ArrowRight,
+  Sparkles, ArrowRight, RotateCcw,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -654,6 +654,20 @@ function ParticipantsTab({ trip, onChange, notify }) {
     }
   };
 
+  // Open a short-lived signed URL for a passport or Aadhaar scan uploaded
+  // via the public microsite. The backend mints a 5-minute link so raw
+  // storage paths never reach the browser directly.
+  const viewRegistrationDoc = async (rid, docType) => {
+    try {
+      const data = await fetchApi(
+        `/api/travel/trips/${trip.id}/registrations/${rid}/documents/${docType}/view-url`,
+      );
+      if (data?.url) window.open(data.url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      notify.error(e?.body?.error || `Failed to open ${docType} document`);
+    }
+  };
+
   // Phase 8 — approve / reject a PendingTripRegistration. Uses the
   // /registrations/:rid/approve|reject endpoints from Phase 5. Approve
   // creates a TripParticipant{applicationStatus:"approved"} server-
@@ -753,8 +767,22 @@ function ParticipantsTab({ trip, onChange, notify }) {
               : isOtpVerified
                 ? { bg: "rgba(154,111,46,0.18)", color: "#9A6F2E", label: "AWAITING REVIEW" }
                 : { bg: "rgba(100,116,139,0.18)", color: "#64748b", label: "AWAITING VERIFICATION" };
+            // Parse uploaded document status from extrasJson — booleans only, no raw keys
+            let regDocs = {};
+            if (r.extrasJson) {
+              try { regDocs = JSON.parse(r.extrasJson)?.documents || {}; } catch { regDocs = {}; }
+            }
+            const hasPassport = !!regDocs.passport;
+            const hasAadhaar = !!regDocs.aadhaar;
+            const docBtnBase = {
+              display: "inline-flex", alignItems: "center", gap: 3,
+              fontSize: 11, fontWeight: 500, border: "none",
+              borderRadius: 3, padding: "2px 7px", cursor: "pointer",
+            };
+            const docUploaded = { ...docBtnBase, background: "rgba(47,122,77,0.12)", color: "#2F7A4D" };
+            const docMissing = { ...docBtnBase, background: "rgba(100,116,139,0.10)", color: "var(--text-secondary)", cursor: "default" };
             return (
-              <div key={`reg:${r.id}`} style={{ ...row, opacity: isRejected ? 0.6 : 1 }} data-testid={`pending-reg-row-${r.id}`}>
+            <div key={`reg:${r.id}`} style={{ ...row, opacity: isRejected ? 0.6 : 1 }} data-testid={`pending-reg-row-${r.id}`}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{r.studentName}</strong>
@@ -776,6 +804,39 @@ function ParticipantsTab({ trip, onChange, notify }) {
                     )}
                     {r.parentPhone && <span style={{ fontVariantNumeric: "tabular-nums" }}>{r.parentPhone}</span>}
                     {r.parentEmail && <span style={{ opacity: 0.85 }}>{r.parentEmail}</span>}
+                  </div>
+                  {/* Document upload status — clicking "View" opens a 5-min signed URL */}
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 }}>
+                    {hasPassport ? (
+                      <button
+                        type="button"
+                        style={docUploaded}
+                        onClick={() => viewRegistrationDoc(r.id, "passport")}
+                        title="View uploaded passport scan"
+                        data-testid={`view-passport-${r.id}`}
+                      >
+                        <FileText size={11} aria-hidden /> Passport ✓ View
+                      </button>
+                    ) : (
+                      <span style={docMissing} data-testid={`passport-missing-${r.id}`}>
+                        <FileText size={11} aria-hidden /> Passport not uploaded
+                      </span>
+                    )}
+                    {hasAadhaar ? (
+                      <button
+                        type="button"
+                        style={docUploaded}
+                        onClick={() => viewRegistrationDoc(r.id, "aadhaar")}
+                        title="View uploaded Aadhaar scan"
+                        data-testid={`view-aadhaar-${r.id}`}
+                      >
+                        <FileText size={11} aria-hidden /> Aadhaar ✓ View
+                      </button>
+                    ) : (
+                      <span style={docMissing} data-testid={`aadhaar-missing-${r.id}`}>
+                        <FileText size={11} aria-hidden /> Aadhaar not uploaded
+                      </span>
+                    )}
                   </div>
                   {r.reviewNotes && (
                     <div style={{ fontSize: 11, color: "var(--text-secondary)", fontStyle: "italic", marginTop: 2 }}>
@@ -1002,6 +1063,34 @@ function PassportCell({ participant: p, notify, onChange }) {
     }
   };
 
+  // Re-queue passport from the document uploaded during microsite registration.
+  // Appears only for "No passport" state participants (not re-upload / rejected).
+  const syncFromRegistration = async () => {
+    setBusy(true);
+    try {
+      await fetchApi(`/api/travel/passport/participants/${p.id}/requeue-registration-docs`, {
+        method: "POST",
+        silent: true,
+      });
+      notify.success(`Passport synced for ${p.fullName} — queued for verification`);
+      onChange();
+    } catch (err) {
+      const code = err?.data?.code || err?.code;
+      if (code === "ALREADY_QUEUED") {
+        notify.error("Already queued — try refreshing the page");
+        onChange();
+      } else if (code === "NO_REGISTRATION" || code === "NO_REGISTRATION_DOCS") {
+        notify.error("No registration document found — please upload the passport manually");
+      } else if (code === "DOC_NOT_READABLE") {
+        notify.error("Registration file not readable — please upload the passport manually");
+      } else {
+        notify.error(err?.data?.error || "Failed to sync registration documents");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Verified-state escape hatch: a verified passport that needs replacing
   // (renewal, mistaken approval) has to be cleared first. Rendered for all
   // roles (this page does no client-side role gating); the DELETE route
@@ -1060,6 +1149,21 @@ function PassportCell({ participant: p, notify, onChange }) {
             aria-label={`Passport file for ${p.fullName}`}
             style={visuallyHiddenInput}
           />
+          {!isReupload && (
+            <button
+              type="button"
+              onClick={syncFromRegistration}
+              disabled={busy}
+              aria-label={`Sync passport from registration for ${p.fullName}`}
+              title="Re-sync the passport document uploaded during microsite registration"
+              style={{
+                ...secondaryBtn, padding: "5px 10px", fontSize: 12,
+                opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
+              }}
+            >
+              <RotateCcw size={12} aria-hidden /> Sync from registration
+            </button>
+          )}
         </>
       ) : (
         <button

@@ -8,6 +8,7 @@ const { renderPage } = require("../services/landingPageRenderer");
 const landingPageGeneratorLLM = require("../services/landingPageGeneratorLLM");
 const { uploadFile } = require("../services/s3Service");
 const { snapshotSafe, VERSION_SOURCES } = require("../lib/landingPageVersions");
+const { isValidPhoneOrEmpty } = require("../lib/validators");
 
 const router = express.Router();
 const publicRouter = express.Router();
@@ -1343,10 +1344,10 @@ router.put("/:id", verifyToken, async (req, res) => {
         }
         // Verify the trip exists in this tenant — prevents cross-tenant
         // tripId stuffing and surfaces a clean 404 instead of a P2003
-        // foreign-key error.
+        // foreign-key error. Also fetch paymentPlan for investment auto-fill.
         const trip = await prisma.tmcTrip.findFirst({
           where: { id: parsed, tenantId: req.user.tenantId },
-          select: { id: true },
+          select: { id: true, tripCode: true, paymentPlan: true },
         });
         if (!trip) {
           return res.status(404).json({ error: "Trip not found in this tenant", code: "TRIP_NOT_FOUND" });
@@ -1360,15 +1361,45 @@ router.put("/:id", verifyToken, async (req, res) => {
         // full action set and keep the participant count in sync across
         // views. Use explicit register.mode = "registration-draft" only when
         // the OTP/hybrid staging flow is intentionally required.
+        // Also auto-fill investment installments from trip payment plan.
         if (existing.templateType === "wanderlux-v1") {
           try {
             const cfg = typeof existing.content === "string"
               ? JSON.parse(existing.content || "{}")
               : (existing.content || {});
+
+            // Set register.mode to "lead" if not set
             if (cfg && cfg.register && !cfg.register.mode) {
               cfg.register.mode = "lead";
-              data.content = JSON.stringify(cfg);
             }
+
+            // Auto-fill investment installments from trip payment plan
+            if (trip.paymentPlan && cfg.investment) {
+              const tripInstallments = JSON.parse(trip.paymentPlan.instalmentsJson || "[]");
+              // Only auto-fill if investment section exists but has no installments
+              if (tripInstallments.length > 0 && (!cfg.investment.installments || cfg.investment.installments.length === 0)) {
+                cfg.investment.installments = tripInstallments.map((inst, idx) => {
+                  const letterLabel = String.fromCharCode(65 + idx); // A, B, C, ...
+                  const dueDate = new Date(inst.dueDate);
+                  const formattedDate = dueDate.toLocaleDateString('en-IN', {
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric',
+                  });
+                  const formattedAmount = `₹${inst.amount.toLocaleString('en-IN')}`;
+                  return {
+                    tag: `${letterLabel}. Instalment`,
+                    title: '',
+                    sub: '',
+                    amount: formattedAmount,
+                    date: formattedDate,
+                    entity: '',
+                  };
+                });
+              }
+            }
+
+            data.content = JSON.stringify(cfg);
           } catch (_e) {
             // Malformed content — leave it alone; don't block the link.
           }
@@ -1453,6 +1484,112 @@ router.delete("/:id", verifyToken, async (req, res) => {
     await prisma.landingPage.delete({ where: { id: existing.id } });
     res.json({ success: true });
   } catch (_err) { res.status(500).json({ error: "Failed to delete page" }); }
+});
+
+// ── POST /:id/sync-investment ─────────────────────────────────────
+// Regenerate/sync investment installments from linked trip's payment plan.
+// Idempotent: replaces investment.installments with fresh data from the trip.
+// Requires: page is linked to a trip (tripId not null) and trip has a payment plan.
+router.post("/:id/sync-investment", verifyToken, async (req, res) => {
+  try {
+    const pageId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(pageId)) {
+      return res.status(400).json({ error: "Invalid page ID", code: "INVALID_PAGE_ID" });
+    }
+
+    const page = await prisma.landingPage.findFirst({
+      where: { id: pageId, tenantId: req.user.tenantId },
+      select: { id: true, tripId: true, content: true, templateType: true },
+    });
+    if (!page) {
+      return res.status(404).json({ error: "Page not found", code: "PAGE_NOT_FOUND" });
+    }
+
+    if (!page.tripId) {
+      return res.status(400).json({
+        error: "Page is not linked to a trip. Link a trip first.",
+        code: "NO_TRIP_LINKED",
+      });
+    }
+
+    if (page.templateType !== "wanderlux-v1") {
+      return res.status(400).json({
+        error: "Investment sync only works on wanderlux-v1 template pages.",
+        code: "INVALID_TEMPLATE_TYPE",
+      });
+    }
+
+    const trip = await prisma.tmcTrip.findFirst({
+      where: { id: page.tripId, tenantId: req.user.tenantId },
+      select: { id: true, tripCode: true, paymentPlan: true },
+    });
+    if (!trip) {
+      return res.status(404).json({ error: "Linked trip not found", code: "TRIP_NOT_FOUND" });
+    }
+
+    if (!trip.paymentPlan) {
+      return res.status(400).json({
+        error: `Trip '${trip.tripCode}' does not have a payment plan. Create one first.`,
+        code: "NO_PAYMENT_PLAN",
+      });
+    }
+
+    const tripInstallments = JSON.parse(trip.paymentPlan.instalmentsJson || "[]");
+    if (!tripInstallments.length) {
+      return res.status(400).json({
+        error: "Trip payment plan is empty.",
+        code: "EMPTY_PAYMENT_PLAN",
+      });
+    }
+
+    const cfg = typeof page.content === "string"
+      ? JSON.parse(page.content || "{}")
+      : (page.content || {});
+
+    if (!cfg.investment) {
+      return res.status(400).json({
+        error: "Page does not have an investment section. Add it first in the editor.",
+        code: "NO_INVESTMENT_SECTION",
+      });
+    }
+
+    // Generate fresh installments from trip
+    cfg.investment.installments = tripInstallments.map((inst, idx) => {
+      const letterLabel = String.fromCharCode(65 + idx); // A, B, C, ...
+      const dueDate = new Date(inst.dueDate);
+      const formattedDate = dueDate.toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      });
+      const formattedAmount = `₹${inst.amount.toLocaleString('en-IN')}`;
+      return {
+        tag: `${letterLabel}. Instalment`,
+        title: '',
+        sub: '',
+        amount: formattedAmount,
+        date: formattedDate,
+        entity: '',
+      };
+    });
+
+    const updated = await prisma.landingPage.update({
+      where: { id: page.id },
+      data: { content: JSON.stringify(cfg) },
+    });
+
+    // Snapshot the regenerated version
+    await snapshotSafe(prisma, updated, VERSION_SOURCES.MANUAL_SAVE, req.user);
+
+    res.json({
+      success: true,
+      installments: cfg.investment.installments,
+      message: `Investment installments synced from trip '${trip.tripCode}'.`,
+    });
+  } catch (_err) {
+    console.error("[LandingPages] Sync investment error:", _err);
+    res.status(500).json({ error: "Failed to sync investment" });
+  }
 });
 
 // ── Publish-gate helper ───────────────────────────────────────────
@@ -2828,6 +2965,10 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
     const company = pick("company") || pick("companyName") || pick("company_name") || pick("studentSchool") || pick("student_school") || pick("school");
     const company_name = pick("company_name") || pick("companyName");
 
+    if (!isValidPhoneOrEmpty(phone)) {
+      return res.status(400).json({ error: "Please enter a valid phone number (digits only, 10–15 digits)", code: "INVALID_PHONE" });
+    }
+
     const contactEmail = email || `lp-${page.slug}-${Date.now()}@anonymous.local`;
     const contactName = name || full_name || pick("studentName") || pick("student_name") || "Landing Page Lead";
     const sourceSuffix = submittedAudience ? ` (${submittedAudience})` : "";
@@ -2958,6 +3099,11 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
     const phone = pick("phone") || pick("parentPhone") || pick("parent_phone");
     const company = pick("company") || pick("companyName") || pick("company_name") || pick("studentSchool") || pick("student_school") || pick("school");
     const company_name = pick("company_name") || pick("companyName");
+
+    if (!isValidPhoneOrEmpty(phone)) {
+      return res.status(400).json({ error: "Please enter a valid phone number (digits only, 10–15 digits)", code: "INVALID_PHONE" });
+    }
+
     const contactEmail = email || `lp-${page.slug}-${Date.now()}@anonymous.local`;
     const contactName = name || full_name || pick("studentName") || pick("student_name") || "Landing Page Lead";
     // Append the audience tag to the descriptive attribution so lead-routing

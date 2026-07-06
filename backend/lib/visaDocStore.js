@@ -122,9 +122,31 @@ async function resolveViewUrl(item, ttlSec = DEFAULT_VIEW_TTL_SEC) {
   return name ? signDiskUrl(name, ttlSec) : null;
 }
 
+// Read a stored document back as a raw Buffer — used by the post-conversion
+// passport OCR trigger so the file doesn't need to be re-uploaded by the operator.
+// Returns null on any failure; callers must degrade gracefully (e.g. skip OCR).
+async function readDocBuffer(descriptor) {
+  if (!descriptor || !descriptor.key) return null;
+  try {
+    if (descriptor.storage === "s3") {
+      const { stream } = await s3Service.getObjectStream(descriptor.key);
+      if (!stream) return null;
+      const chunks = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      return Buffer.concat(chunks);
+    }
+    const filePath = path.join(uploadDir, path.basename(descriptor.key));
+    if (!fs.existsSync(filePath)) return null;
+    return fs.readFileSync(filePath);
+  } catch (_e) {
+    return null;
+  }
+}
+
 module.exports = {
   storeDoc,
   removeDoc,
+  readDocBuffer,
   VISA_DOC_MIME_EXT,
   uploadDir,
   signDiskUrl,

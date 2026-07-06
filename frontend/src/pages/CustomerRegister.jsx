@@ -62,6 +62,7 @@ export default function CustomerRegister() {
   const [form, setForm] = useState({
     email: initialEmail,
     name: initialName,
+    organization: "",
     tenantId: "",
     password: "",
     confirmPassword: "",
@@ -93,12 +94,30 @@ export default function CustomerRegister() {
     if (!tenantSlugParam || tenants.length === 0) return;
     const match = tenants.find((t) => t.slug === tenantSlugParam);
     if (match) {
-      setForm((prev) => (prev.tenantId ? prev : { ...prev, tenantId: String(match.id) }));
+      setForm((prev) =>
+        prev.tenantId
+          ? prev
+          : { ...prev, tenantId: String(match.id), organization: match.name }
+      );
     }
   }, [tenantSlugParam, tenants]);
 
   const update = (field) => (e) =>
     setForm({ ...form, [field]: e.target.value });
+
+  const normalizeOrg = (s) => s.trim().toLowerCase().replace(/\s+/g, "");
+
+  const handleOrganizationChange = (e) => {
+    const text = e.target.value;
+    const match = tenants.find(
+      (t) => normalizeOrg(t.name) === normalizeOrg(text)
+    );
+    setForm((prev) => ({
+      ...prev,
+      organization: text,
+      tenantId: match ? String(match.id) : "",
+    }));
+  };
   const strength = passwordStrength(form.password);
   const strengthLabel =
     strength <= 2
@@ -117,7 +136,11 @@ export default function CustomerRegister() {
       e.email = "Enter a valid email";
     }
     if (!form.name.trim()) e.name = "Full name is required";
-    if (!form.tenantId) e.tenantId = "Select an organization";
+    if (!form.organization.trim()) {
+      e.organization = "Organization name is required";
+    } else if (!form.tenantId) {
+      e.organization = "Organization not found. Please check the name you entered.";
+    }
     if (!form.password || form.password.length < 8) {
       e.password = "Password must be at least 8 characters";
     } else if (!/[A-Za-z]/.test(form.password)) {
@@ -317,33 +340,25 @@ export default function CustomerRegister() {
 
           <Field
             label={lockedToTenantSlug ? "Booking for" : "Organization"}
-            htmlFor="cr-tenant"
-            error={errors.tenantId}
+            htmlFor="cr-organization"
+            error={errors.organization}
             help={
               lockedToTenantSlug
                 ? "You started this booking from a specific clinic — registration is scoped to it."
                 : undefined
             }
           >
-            <select
-              id="cr-tenant"
+            <input
+              id="cr-organization"
+              type="text"
               className="input-field"
-              value={form.tenantId}
-              onChange={update("tenantId")}
-              disabled={isLoading || tenantsLoading || lockedToTenantSlug}
+              autoComplete="organization"
+              placeholder={tenantsLoading ? "Loading…" : "Enter your organization name"}
+              value={form.organization}
+              onChange={handleOrganizationChange}
+              disabled={isLoading || lockedToTenantSlug}
               required
-            >
-              <option value="">
-                {tenantsLoading
-                  ? "Loading organizations..."
-                  : "Select an organization…"}
-              </option>
-              {tenants.map((t) => (
-                <option key={t.id} value={String(t.id)}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
+            />
           </Field>
 
           <Field

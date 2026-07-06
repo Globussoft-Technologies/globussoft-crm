@@ -241,6 +241,14 @@ function installFetchMock({
     // any latent fire doesn't reject and surface a stray notify.error).
     if (method === 'GET' && /payment-plan$/.test(url)) return Promise.resolve(null);
     if (method === 'GET' && /instalments$/.test(url)) return Promise.resolve({ instalments: [] });
+    // document view-url endpoint (registration doc signed URL)
+    if (method === 'GET' && /\/registrations\/\d+\/documents\/[^/]+\/view-url$/.test(url)) {
+      return Promise.resolve({ url: 'https://signed.example.com/doc.pdf', docType: url.includes('aadhaar') ? 'aadhaar' : 'passport', expiresInSeconds: 300 });
+    }
+    // passport requeue-registration-docs endpoint
+    if (method === 'POST' && /\/api\/travel\/passport\/participants\/\d+\/requeue-registration-docs$/.test(url)) {
+      return Promise.resolve({ queued: true });
+    }
     return Promise.resolve(null);
   });
 }
@@ -1752,5 +1760,137 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
     // Microsite section also present (MicrositeCreate "No microsite" copy
     // shows since the default trip fixture has microsite: null)
     expect(screen.getByText(/Create a public registration page/i)).toBeInTheDocument();
+  });
+});
+
+// ─── Pending-registration document view buttons ───────────────────────────
+describe('<TripDetail /> — pending registration document view buttons', () => {
+  const regWithPassport = {
+    id: 99,
+    studentName: 'Doc Student',
+    parentPhone: '+911234567890',
+    parentEmail: null,
+    isOtpVerified: true,
+    isApproved: false,
+    isRejected: false,
+    reviewNotes: null,
+    extrasJson: JSON.stringify({
+      documents: {
+        passport: { storage: 'disk', key: 'passport-99.jpg', url: '/api/uploads/visa-docs/passport-99.jpg' },
+        // aadhaar intentionally absent
+      },
+    }),
+  };
+
+  it('renders "View" passport button when passport uploaded, "not uploaded" for aadhaar', async () => {
+    installFetchMock({ pendingRegs: [regWithPassport] });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    expect(await screen.findByTestId('view-passport-99')).toBeInTheDocument();
+    expect(screen.getByTestId('aadhaar-missing-99')).toBeInTheDocument();
+  });
+
+  it('renders both "not uploaded" placeholders when extrasJson is null', async () => {
+    const regNoDocs = { ...regWithPassport, id: 100, extrasJson: null };
+    installFetchMock({ pendingRegs: [regNoDocs] });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    expect(await screen.findByTestId('passport-missing-100')).toBeInTheDocument();
+    expect(screen.getByTestId('aadhaar-missing-100')).toBeInTheDocument();
+  });
+
+  it('clicking passport View calls the view-url API and opens the signed URL', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    installFetchMock({ pendingRegs: [regWithPassport] });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    const viewBtn = await screen.findByTestId('view-passport-99');
+    fireEvent.click(viewBtn);
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u]) => /\/registrations\/99\/documents\/passport\/view-url/.test(u),
+      );
+      expect(call).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith(
+        'https://signed.example.com/doc.pdf',
+        '_blank',
+        'noopener,noreferrer',
+      );
+    });
+    openSpy.mockRestore();
+  });
+});
+
+// ─── Sync from registration (PassportCell) ────────────────────────────────
+describe('<TripDetail /> — Sync from registration button', () => {
+  it('renders "Sync from registration" button for a participant without a passport', async () => {
+    // Anaya Sharma has no passportExtractionJson in the default fixture →
+    // PassportCell renders the no-passport upload area + the Sync button.
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    expect(
+      await screen.findByRole('button', {
+        name: /Sync passport from registration for Anaya Sharma/i,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it('clicking Sync fires POST /requeue-registration-docs + notify.success', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    const syncBtn = await screen.findByRole('button', {
+      name: /Sync passport from registration for Anaya Sharma/i,
+    });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(syncBtn);
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          u === '/api/travel/passport/participants/901/requeue-registration-docs' &&
+          o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/queued for verification/i),
+    );
+  });
+
+  it('NO_REGISTRATION error from requeue surfaces notify.error', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (method === 'POST' && /requeue-registration-docs/.test(url)) {
+        return Promise.reject({ data: { code: 'NO_REGISTRATION' } });
+      }
+      if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) return Promise.resolve(makeTrip());
+      if (method === 'GET' && /rooming$/.test(url)) return Promise.resolve({ rooming: [] });
+      if (method === 'GET' && /registrations$/.test(url)) return Promise.resolve([]);
+      if (method === 'GET' && /landing-page$/.test(url)) {
+        const e = new Error('NOT_LINKED'); e.status = 404; e.body = { code: 'NOT_LINKED' }; return Promise.reject(e);
+      }
+      if (method === 'GET' && /payment-plan$/.test(url)) return Promise.resolve(null);
+      if (method === 'GET' && /instalments$/.test(url)) return Promise.resolve({ instalments: [] });
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    const syncBtn = await screen.findByRole('button', {
+      name: /Sync passport from registration for Anaya Sharma/i,
+    });
+    fireEvent.click(syncBtn);
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/no registration document found/i),
+      );
+    });
   });
 });

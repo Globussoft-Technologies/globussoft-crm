@@ -21,15 +21,6 @@ const { getSetting, KEYS } = require("../lib/tenantSettings");
 const NOTIF_TYPE = "warning";
 const NOTIF_LINK_PREFIX = "/wellness/products?productId=";
 
-async function alreadyAlertedRecently(tenantId, productId) {
-  const since = new Date(Date.now() - 24 * 3600 * 1000);
-  const link = `${NOTIF_LINK_PREFIX}${productId}`;
-  const existing = await prisma.notification.findFirst({
-    where: { tenantId, link, createdAt: { gte: since } },
-    select: { id: true },
-  });
-  return !!existing;
-}
 
 async function runLowStockForTenant(tenant) {
   const products = await prisma.product.findMany({

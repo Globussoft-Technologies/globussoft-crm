@@ -492,6 +492,7 @@ router.post("/events", verifyToken, async (req, res) => {
 router.get("/slots", verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId;
+    const tenantId = req.user.tenantId;
     if (!userId) {
       return res.status(401).json({ error: "User ID not found in token" });
     }

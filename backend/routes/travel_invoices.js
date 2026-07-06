@@ -44,6 +44,7 @@ const waWebClient = require("../services/whatsappWebClient");
 // (or Stripe); returns { error } fail-soft when no gateway is configured, so the
 // reminder still sends without a link rather than erroring.
 const { createInvoicePaymentLink } = require("../lib/paymentLink");
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { invoicePrefixFor, fiscalYearStart } = require("../lib/travelFiscalYear");
 const { computeTcs, isOverseasDestination } = require("../lib/tcsCalculation");
 // Arc 2 #901 slice 21 — TDS withholding sum from lines (lineType==='tds').
@@ -6840,6 +6841,7 @@ router.post(
       // just without a link.
       let payUrl = null;
       try {
+        const frontendBase = getFrontendUrlFromRequest(req);
         const linkRes = await createInvoicePaymentLink({
           tenantId: req.travelTenant.id,
           invoice: {
@@ -6851,6 +6853,7 @@ router.post(
           contactId: contact.id,
           currency: cur,
           tenantName: brand !== "our team" ? brand : undefined,
+          baseUrl: frontendBase,
           travelContext: { scheduleId: schedule.id, travelInvoiceId: schedule.invoice.id },
         });
         if (linkRes && linkRes.url) {
@@ -7042,6 +7045,8 @@ router.post(
       } catch { brand = undefined; }
 
       const cur = invoice.currency || "INR";
+      const frontendBase = getFrontendUrlFromRequest(req);
+      console.log(`[travel-invoices] payment-link: frontendBase=${frontendBase}, FRONTEND_URL env=${process.env.FRONTEND_URL}`);
       const result = await createInvoicePaymentLink({
         tenantId: req.travelTenant.id,
         invoice: { id: invoice.id, invoiceNum: invoice.invoiceNum, amount: outstanding },
@@ -7052,6 +7057,7 @@ router.post(
         currency: cur,
         tenantName: brand,
         travelContext: { kind: "travel-invoice", travelInvoiceId: invoice.id },
+        baseUrl: frontendBase,
       });
 
       if (result && result.url) {

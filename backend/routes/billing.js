@@ -11,6 +11,7 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { formatMoney } = require("../utils/formatMoney");
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 // #577 — wire fieldFilter into Invoice routes so the FieldPermissions UI
 // rules are actually enforced (not just stored). Mirrors the deals.js +
 // contacts.js adoption pattern from #464.
@@ -2075,6 +2076,7 @@ router.post(
           .status(400)
           .json({ error: "Cannot generate a link for a voided invoice" });
 
+      const frontendBase = getFrontendUrlFromRequest(req);
       const result = await createInvoicePaymentLink({
         tenantId,
         invoice: {
@@ -2086,6 +2088,7 @@ router.post(
         currency: invoice.currency || "INR",
         gatewayPref: "razorpay",
         tenantName: tenant?.name || undefined,
+        baseUrl: frontendBase,
       });
 
       if (result.error)

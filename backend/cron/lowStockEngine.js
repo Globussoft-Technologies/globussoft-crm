@@ -19,7 +19,7 @@ const prisma = require("../lib/prisma");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 
 const NOTIF_TYPE = "warning";
-const NOTIF_LINK_PREFIX = "/inventory/low-stock?productId=";
+const NOTIF_LINK_PREFIX = "/wellness/products?productId=";
 
 async function alreadyAlertedRecently(tenantId, productId) {
   const since = new Date(Date.now() - 24 * 3600 * 1000);

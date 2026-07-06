@@ -263,6 +263,11 @@ router.get('/', async (req, res) => {
     // probe a colleague's book of business by URL. Total Contacts KPI on
     // /dashboard now reflects own-book size for sales reps.
     if (req.user.role === 'USER') where.assignedToId = req.user.userId;
+    // ?count=1 — sidebar badge polls: return { total } only, skip full fetch.
+    if (req.query.count === '1') {
+      const total = await prisma.contact.count({ where });
+      return res.json({ total });
+    }
     // #172: honor limit / offset query params with sensible defaults + a hard cap.
     // Pre-fix the API silently returned the entire dataset, breaking pagination
     // and exposing a perf/DoS surface.

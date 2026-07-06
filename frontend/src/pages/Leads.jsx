@@ -416,7 +416,7 @@ const Leads = () => {
 
       {/* #892 — Leads Table (full-width; Create Lead form now lives in the
           drawer below, triggered by the header CTA). */}
-      <div className="card leads-table-wrapper" style={{ overflow: 'hidden' }}>
+      <div className="card leads-table-wrapper" style={{ overflow: 'visible' }}>
           <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
             <div style={{ position: 'relative', maxWidth: '300px' }}>
               <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
@@ -431,7 +431,8 @@ const Leads = () => {
             </div>
           </div>
 
-          <table className="leads-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+          <div style={{ overflowX: 'auto' }}>
+          <table className="leads-table" style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                 <th style={{ padding: '1rem', width: '40px' }}>
@@ -532,6 +533,7 @@ const Leads = () => {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
 
         {/* #892 — Create Lead drawer. Mounted only when `creating` is true.

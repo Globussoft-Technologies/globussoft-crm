@@ -177,6 +177,9 @@ describe('llmRouter — module shape', () => {
       "payment-reminder": { primary: "gemini-flash", fallback: "groq-llama" },
       // WhatsApp inbound → Travel auto-lead qualification (2026-06-19).
       "whatsapp-lead-qualify": { primary: "gemini-flash", fallback: "groq-llama" },
+      // Lead conversation summary + full-history narrative summary (2026-07-07).
+      "lead-conversation-summary": { primary: "gemini-flash", fallback: "gpt-4" },
+      "lead-narrative-summary": { primary: "gemini-flash", fallback: "gpt-4" },
       "marketing-flyer-copy": { primary: "gemini-flash", fallback: "groq-llama" },
       "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
       // TBO flight/hotel/transfer AI-estimate search fallback. 2026-06-23:
@@ -204,8 +207,9 @@ describe('llmRouter — module shape', () => {
     // notification engines 'trip-countdown' + 'payment-reminder' + the
     // 2026-06-19 'whatsapp-lead-qualify' + TBO 'flight-search' / 'hotel-search'
     // / 'transfer-search' + the 'airport-iata' name→code resolver +
-    // 'landing-page-generate' (PR #1174) + 'quote-template-generate' (PR #1178) = 19.
-    expect(r.VALID_TASKS).toHaveLength(19);
+    // 'landing-page-generate' (PR #1174) + 'quote-template-generate' (PR #1178) +
+    // 'lead-conversation-summary' + 'lead-narrative-summary' (PR #1203) = 21.
+    expect(r.VALID_TASKS).toHaveLength(21);
   });
 });
 
@@ -458,6 +462,12 @@ describe('routeRequest', () => {
         // can render line items without a live LLM key.
         expect(() => JSON.parse(out.text)).not.toThrow();
         expect(Array.isArray(JSON.parse(out.text))).toBe(true);
+      } else if (task === 'lead-conversation-summary' || task === 'lead-narrative-summary') {
+        // Stub returns parseable JSON objects so lead summary consumers can
+        // render the summary without a live LLM key.
+        expect(() => JSON.parse(out.text)).not.toThrow();
+        expect(typeof JSON.parse(out.text)).toBe('object');
+        expect(Array.isArray(JSON.parse(out.text))).toBe(false);
       } else {
         expect(out.text).toMatch(new RegExp(`^\\[STUB-${task.toUpperCase()}\\]`));
       }

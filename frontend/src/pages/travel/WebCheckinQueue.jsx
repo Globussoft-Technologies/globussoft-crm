@@ -332,13 +332,14 @@ export default function WebCheckinQueue() {
                       )}
                     </td>
                     <td style={td}>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", minWidth: 0 }}>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "nowrap", alignItems: "center", minWidth: 0, overflow: "auto" }}>
                         <button
                           type="button"
                           onClick={() => onUploadClick(r.id)}
                           style={actionBtn}
                           disabled={uploadingId === r.id}
                           aria-label={`Upload boarding pass for ${r.pnr}`}
+                          title={uploadingId === r.id ? "Uploading…" : "Upload boarding pass"}
                         >
                           <Upload size={12} aria-hidden style={{ marginRight: 3, flexShrink: 0 }} />
                           <span style={{ whiteSpace: "nowrap" }}>{uploadingId === r.id ? "Uploading…" : "Upload"}</span>
@@ -357,11 +358,12 @@ export default function WebCheckinQueue() {
                           style={actionBtn}
                           disabled={deliveringId === r.id || !!r.deliveredAt}
                           aria-label={`Deliver boarding pass for ${r.pnr}`}
+                          title={r.deliveredAt ? "Already delivered" : (deliveringId === r.id ? "Sending…" : "Send to passenger")}
                         >
                           <Send size={12} aria-hidden style={{ marginRight: 3, flexShrink: 0 }} />
                           <span style={{ whiteSpace: "nowrap" }}>{r.deliveredAt ? "Delivered" : (deliveringId === r.id ? "Sending…" : "Deliver")}</span>
                         </button>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, minWidth: 0, flexShrink: 0 }}>
                           <UserCheck size={12} aria-hidden style={{ color: "var(--text-secondary)", flexShrink: 0 }} />
                           <select
                             value={r.assignedAgentId ?? ""}
@@ -369,6 +371,7 @@ export default function WebCheckinQueue() {
                             disabled={reassigningId === r.id}
                             aria-label={`Reassign agent for ${r.pnr}`}
                             style={miniSelectStyle}
+                            title="Assign operator to handle this check-in"
                           >
                             <option value="">Unassigned</option>
                             {staff.map((u) => (
@@ -426,7 +429,7 @@ const miniSelectStyle = {
   padding: "3px 6px", borderRadius: 4,
   border: "1px solid var(--border-color)",
   background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 12, minWidth: 100, height: 28,
+  fontSize: 12, minWidth: 110, height: 28, flexShrink: 0,
 };
 const refreshBtn = {
   display: "inline-flex", alignItems: "center",
@@ -440,7 +443,7 @@ const actionBtn = {
   padding: "4px 10px", borderRadius: 4,
   border: "1px solid var(--border-color)",
   background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 12, cursor: "pointer", height: 28, minWidth: 70, whiteSpace: "nowrap",
+  fontSize: 12, cursor: "pointer", height: 28, minWidth: 75, whiteSpace: "nowrap", flexShrink: 0,
 };
 const pagerBtn = {
   display: "inline-flex", alignItems: "center", gap: 2,

@@ -726,3 +726,87 @@ describe('<LandingPageBuilder /> — page surface', () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// VersionHistoryModal — renamed from VersionsDrawer (side <aside>) to a
+// centered <div role="dialog"> modal. The trigger button's aria-label is
+// "View version history". The modal's root element carries role="dialog"
+// aria-label="Version history". Closing it removes the dialog from the
+// DOM and resets selectedVersion to null.
+//
+// API shape: GET /api/landing-pages/:id/versions returns
+//   { versions: [] }  (the SUT reads data?.versions).
+// When versions is empty the modal renders the "No versions yet" copy.
+// ─────────────────────────────────────────────────────────────────────
+describe('<LandingPageBuilder /> — VersionHistoryModal', () => {
+  // Wire the versions endpoint to return an empty list so the modal
+  // renders the "No versions yet" copy without trying to show cards.
+  function versionsEmptyFetch(url, opts) {
+    const method = (opts && opts.method) || 'GET';
+    if (url === '/api/landing-pages/42' && method === 'GET') return Promise.resolve(samplePageDraft);
+    if (url === '/api/lead-routing' && method === 'GET') return Promise.resolve(sampleRules);
+    if (url === '/api/landing-pages/42/versions' && method === 'GET')
+      return Promise.resolve({ versions: [] });
+    if (url.startsWith('/api/landing-pages/') && method === 'PUT')
+      return Promise.resolve({ ...samplePageDraft, ...JSON.parse(opts.body) });
+    return Promise.resolve([]);
+  }
+
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    notifyInfo.mockReset();
+    confirmMock.mockReset();
+    confirmMock.mockImplementation(() => Promise.resolve(true));
+    fetchApiMock.mockImplementation(versionsEmptyFetch);
+  });
+
+  it('clicking "View version history" renders a dialog with role="dialog" and aria-label="Version history"', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    // The trigger is an icon-only button in the top bar; its accessible
+    // name is "View version history" (aria-label on the <button>).
+    const historyBtn = screen.getByLabelText('View version history');
+    expect(historyBtn).toBeInTheDocument();
+
+    // Modal is not yet visible.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    await user.click(historyBtn);
+
+    // After click the modal mounts with role="dialog" aria-label="Version history".
+    await waitFor(() => {
+      const dialog = screen.getByRole('dialog');
+      expect(dialog).toBeInTheDocument();
+      expect(dialog).toHaveAttribute('aria-label', 'Version history');
+      expect(dialog).toHaveAttribute('aria-modal', 'true');
+    });
+
+    // With an empty versions list the modal shows the "No versions yet" copy.
+    expect(
+      screen.getByText(/No versions yet/i),
+    ).toBeInTheDocument();
+  });
+
+  it('clicking the Close button (✕) dismisses the VersionHistoryModal', async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    // Open the modal.
+    await user.click(screen.getByLabelText('View version history'));
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument());
+
+    // The close button carries aria-label="Close" (see LandingPageBuilder.jsx:1070).
+    const closeBtn = screen.getByRole('button', { name: /^Close$/i });
+    await user.click(closeBtn);
+
+    // Dialog is removed from the DOM after close.
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
+});

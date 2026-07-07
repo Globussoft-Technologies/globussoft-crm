@@ -54,6 +54,7 @@ const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/tra
 const passportOcrClient = require("../services/passportOcrClient");
 const { writeAudit } = require("../lib/audit");
 const { removeScanFromEnvelopeJson } = require("../lib/passportFileStore");
+const visaDocStore = require("../lib/visaDocStore");
 
 // ─── Multer setup (disk storage; matches deals_documents.js convention) ─
 
@@ -374,6 +375,137 @@ router.get(
     } catch (e) {
       console.error("[travel-passport] queue error:", e.message);
       res.status(500).json({ error: "Failed to load verification queue" });
+    }
+  },
+);
+
+// ─── POST /participants/:id/requeue-registration-docs (ADMIN+MANAGER) ──
+//
+// Re-syncs the passport from the microsite-uploaded document stored on the
+// participant's linked PendingTripRegistration. Called by the admin UI when
+// the post-approval OCR fire-and-forget didn't set passportExtractedAt
+// (e.g. participants approved before the bug fix). Returns a manual envelope
+// if OCR is disabled so the participant always surfaces in the queue.
+
+router.post(
+  "/participants/:id/requeue-registration-docs",
+  verifyToken,
+  requirePermission("passport", "update"),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const participant = await loadParticipant(req);
+
+      if (participant.passportExtractedAt) {
+        return res.status(409).json({
+          error: "Passport already queued — clear the extraction first if you want to re-sync",
+          code: "ALREADY_QUEUED",
+        });
+      }
+
+      const registration = await prisma.pendingTripRegistration.findFirst({
+        where: { convertedToParticipantId: participant.id },
+        select: { id: true, extrasJson: true },
+      });
+
+      if (!registration) {
+        return res.status(404).json({
+          error: "No linked registration found for this participant",
+          code: "NO_REGISTRATION",
+        });
+      }
+
+      let regDocs = {};
+      try {
+        const extras = registration.extrasJson ? JSON.parse(registration.extrasJson) : {};
+        regDocs = extras.documents || {};
+      } catch (_) { regDocs = {}; }
+
+      const passportDesc = regDocs.passport;
+      if (!passportDesc?.key) {
+        return res.status(404).json({
+          error: "Registration has no passport document — participant must upload manually",
+          code: "NO_REGISTRATION_DOCS",
+        });
+      }
+
+      const buffer = await visaDocStore.readDocBuffer(passportDesc);
+      if (!buffer) {
+        return res.status(422).json({
+          error: "Could not read the registration document — file may have been moved or deleted",
+          code: "DOC_NOT_READABLE",
+        });
+      }
+
+      const extMap = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", pdf: "application/pdf" };
+      const ext = (passportDesc.key || "").split(".").pop().toLowerCase();
+      const mimeType = extMap[ext] || "image/jpeg";
+
+      let envelope;
+      try {
+        envelope = await passportOcrClient.extractPassport({
+          tenantId: req.travelTenant.id,
+          fileBuffer: buffer,
+          mimeType,
+        });
+      } catch (_ocrErr) {
+        envelope = {
+          extraction: {
+            passportNumber: null, surname: null, givenNames: null,
+            dateOfBirth: null, sex: null, nationality: null,
+            dateOfExpiry: null, mrz: null,
+          },
+          confidence: 0,
+          provider: "manual",
+          mrzFound: false,
+          note: "Automatic extraction unavailable — please verify passport fields manually.",
+        };
+      }
+
+      const resolvedUrl = await visaDocStore.resolveViewUrl({
+        attachmentUrl: passportDesc.url,
+        attachmentKey: passportDesc.key,
+        attachmentStorage: passportDesc.storage,
+      });
+
+      const persistedEnvelope = {
+        ...envelope,
+        imageUrl: resolvedUrl || passportDesc.url || null,
+        extractedAt: new Date().toISOString(),
+        source: "registration_sync",
+      };
+
+      await prisma.tripParticipant.update({
+        where: { id: participant.id },
+        data: {
+          passportExtractionJson: JSON.stringify(persistedEnvelope),
+          passportExtractedAt: new Date(),
+          passportRejectedAt: null,
+        },
+      });
+
+      writeAudit(
+        "TripParticipant",
+        "passport.requeued_from_registration",
+        participant.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { registrationId: registration.id, provider: envelope.provider, confidence: envelope.confidence },
+      ).catch(() => {});
+
+      return res.json({
+        participantId: participant.id,
+        extraction: envelope.extraction,
+        confidence: envelope.confidence,
+        provider: envelope.provider,
+        extractedAt: new Date(),
+        note: envelope.note || null,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-passport] requeue-registration-docs error:", e.message);
+      res.status(500).json({ error: "Failed to requeue registration documents" });
     }
   },
 );

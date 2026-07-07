@@ -442,6 +442,7 @@ jobs:
             tests/landing-page-pending-registration-api.spec.js \
             tests/landing-pages-versions-api.spec.js \
             tests/wanderlux-layout-api.spec.js \
+            tests/landing-pages-investment-sync-api.spec.js \
             tests/portal-api.spec.js \
             tests/portal-kyc-api.spec.js \
             tests/tenant-switch-disabled-api.spec.js \

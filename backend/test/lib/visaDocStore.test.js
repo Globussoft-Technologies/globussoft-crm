@@ -79,3 +79,60 @@ describe("visaDocStore.resolveViewUrl", () => {
     expect(await store.resolveViewUrl(null)).toBe(null);
   });
 });
+
+describe("visaDocStore.readDocBuffer", () => {
+  beforeEach(() => {
+    s3Service.getObjectStream = vi.fn();
+  });
+
+  it("returns null for a null descriptor", async () => {
+    expect(await store.readDocBuffer(null)).toBe(null);
+  });
+
+  it("returns null when the descriptor has no key", async () => {
+    expect(await store.readDocBuffer({})).toBe(null);
+    expect(await store.readDocBuffer({ storage: "disk" })).toBe(null);
+  });
+
+  it("concatenates S3 stream chunks into a Buffer", async () => {
+    const chunk1 = Buffer.from("hello ");
+    const chunk2 = Buffer.from("world");
+    async function* fakeStream() {
+      yield chunk1;
+      yield chunk2;
+    }
+    s3Service.getObjectStream = vi.fn(async () => ({ stream: fakeStream() }));
+
+    const result = await store.readDocBuffer({ storage: "s3", key: "visa-docs/test.pdf" });
+
+    expect(s3Service.getObjectStream).toHaveBeenCalledWith("visa-docs/test.pdf");
+    expect(Buffer.isBuffer(result)).toBe(true);
+    expect(result.toString()).toBe("hello world");
+  });
+
+  it("returns null when the S3 stream is absent", async () => {
+    s3Service.getObjectStream = vi.fn(async () => ({ stream: null }));
+
+    const result = await store.readDocBuffer({ storage: "s3", key: "visa-docs/missing.pdf" });
+
+    expect(result).toBe(null);
+  });
+
+  it("returns null for a disk key whose file does not exist", async () => {
+    // path.basename("definitely-nonexistent-xyz.pdf") resolves inside uploadDir;
+    // fs.existsSync will return false because the file was never created.
+    const result = await store.readDocBuffer({ storage: "disk", key: "definitely-nonexistent-xyz.pdf" });
+
+    expect(result).toBe(null);
+  });
+
+  it("swallows a thrown error from getObjectStream and returns null", async () => {
+    s3Service.getObjectStream = vi.fn(async () => {
+      throw new Error("network failure");
+    });
+
+    const result = await store.readDocBuffer({ storage: "s3", key: "visa-docs/boom.pdf" });
+
+    expect(result).toBe(null);
+  });
+});

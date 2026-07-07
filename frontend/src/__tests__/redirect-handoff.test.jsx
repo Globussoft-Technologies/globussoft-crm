@@ -138,10 +138,11 @@ describe('Marketing-site → CRM redirect handoff', () => {
       renderAt(CustomerRegister, `/customer/register?tenantSlug=enhanced-wellness&next=${encodeURIComponent(nextPath)}`);
 
       // Wait for tenants to load + the locked tenant to be auto-selected.
+      // Field is now a text input — value is the org name, not the tenant id.
       await waitFor(() => {
         const sel = screen.getByLabelText(/Booking for/i);
         expect(sel).toBeDisabled();
-        expect(sel.value).toBe('2');
+        expect(sel.value).toBe("Dr. Haror's Wellness");
       });
 
       // Fill required fields + verify email before the submit CTA is enabled.
@@ -185,10 +186,11 @@ describe('Marketing-site → CRM redirect handoff', () => {
       ]);
       renderAt(CustomerRegister, '/customer/register?tenantSlug=enhanced-wellness&next=https%3A%2F%2Fevil.com%2Fphish');
 
+      // Field is now a text input — value is the org name, not the tenant id.
       await waitFor(() => {
         const sel = screen.getByLabelText(/Booking for/i);
         expect(sel).toBeDisabled();
-        expect(sel.value).toBe('2');
+        expect(sel.value).toBe("Dr. Haror's Wellness");
       });
 
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'jane@example.com' } });

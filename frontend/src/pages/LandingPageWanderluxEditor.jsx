@@ -1522,7 +1522,7 @@ export default function LandingPageWanderluxEditor({ content, onChange, page }) 
         <TextField label="Kicker" value={cfg.hero && cfg.hero.kicker} onChange={(v) => setPath(['hero', 'kicker'], v)} placeholder="07 Days. 03 Cities." />
         <TextField label="Title lines (comma separated)" value={(cfg.hero && Array.isArray(cfg.hero.titleLines) ? cfg.hero.titleLines.join(', ') : '')} onChange={(v) => setPath(['hero', 'titleLines'], v.split(',').map((s) => s.trim()).filter(Boolean))} placeholder="Bali, but only the, extraordinary parts." />
         <TextArea label="Sub-head" value={cfg.hero && cfg.hero.subhead} onChange={(v) => setPath(['hero', 'subhead'], v)} placeholder="Seven unhurried nights of private villas…" rows={3} />
-        <TextField label="CTA label" value={cfg.hero && cfg.hero.ctaLabel} onChange={(v) => setPath(['hero', 'ctaLabel'], v)} placeholder="Reserve Your Suite" />
+        <TextField label="CTA label" value={cfg.hero && cfg.hero.ctaLabel} onChange={(v) => { const next = JSON.parse(JSON.stringify(cfg)); next.hero = next.hero || {}; next.hero.ctaLabel = v; next.nav = next.nav || {}; next.nav.ctaLabel = v; next.countdown = next.countdown || {}; next.countdown.ctaLabel = v; next.intro = next.intro || {}; next.intro.ctaLabel = v; next.highlights = next.highlights || {}; next.highlights.bannerCtaLabel = v; next.safety = next.safety || {}; next.safety.ctaLabel = v; next.finalCta = next.finalCta || {}; next.finalCta.ctaLabel = v; onChange(next); }} placeholder="Reserve Your Suite" />
 
         {/* Logos strip — rendered at the top of the hero (above the
             eyebrow / title). The template's <sc-for list="{{ hero.logos }}">

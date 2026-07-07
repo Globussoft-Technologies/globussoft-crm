@@ -53,6 +53,7 @@ const Login = () => {
   // org as `loginTenantId`. Empty = "let the server pick the first match",
   // which keeps single-org emails (incl. the demo quick-logins) working.
   const [orgs, setOrgs] = useState([]);
+  const [organization, setOrganization] = useState("");
   const [orgTenantId, setOrgTenantId] = useState("");
 
   const { setUser, setToken, setTenant } = useContext(AuthContext);
@@ -78,13 +79,18 @@ const Login = () => {
   }, []);
 
   // When the marketing-site handoff passes ?tenantSlug=, pre-select the
-  // dropdown once the list arrives. The select is rendered disabled (below)
+  // text field once the list arrives. The field is rendered disabled (below)
   // so the user stays scoped to the clinic they started from.
   useEffect(() => {
     if (!tenantSlugParam || orgs.length === 0) return;
     const match = orgs.find((t) => t.slug === tenantSlugParam);
     if (match) {
-      setOrgTenantId((prev) => (prev ? prev : String(match.id)));
+      setOrgTenantId((prev) =>
+        prev ? prev : String(match.id)
+      );
+      setOrganization((prev) =>
+        prev ? prev : match.name
+      );
     }
   }, [tenantSlugParam, orgs]);
   // Pre-fill email when redirected from the /get-started wizard.
@@ -169,6 +175,17 @@ const Login = () => {
 
   const handleSsoLogin = (provider) => {
     window.location.href = `/api/sso/${provider}/start`;
+  };
+
+  const normalizeOrg = (s) => s.trim().toLowerCase().replace(/\s+/g, "");
+
+  const handleOrganizationChange = (e) => {
+    const text = e.target.value;
+    const match = orgs.find(
+      (t) => normalizeOrg(t.name) === normalizeOrg(text)
+    );
+    setOrganization(text);
+    setOrgTenantId(match ? String(match.id) : "");
   };
 
   const handleForgotPassword = async (e) => {
@@ -442,13 +459,21 @@ const Login = () => {
         style={{ width: "100%", maxWidth: "400px", padding: "2rem" }}
       >
         <div style={{ textAlign: "center", marginBottom: "2rem" }}>
-          <h2 style={{ fontSize: "1.5rem", fontWeight: "bold" }}>
-            Globussoft CRM
-          </h2>
+          <img
+            src="/globussoft-logo-pdf.png"
+            alt="Globussoft CRM"
+            style={{
+              maxWidth: "280px",
+              height: "auto",
+              marginBottom: "1rem",
+              display: "block",
+              margin: "0 auto 1rem auto",
+            }}
+          />
           <p style={{ color: "var(--text-secondary)", marginTop: "0.5rem" }}>
             {require2FA
               ? "Two-factor verification required"
-              : "Sign in to your account"}
+              : "Sign into your CRM account"}
           </p>
         </div>
 
@@ -549,18 +574,15 @@ const Login = () => {
                 >
                   Organization
                 </label>
-                <select
+                <input
+                  type="text"
                   className="input-field"
-                  value={orgTenantId}
-                  onChange={(e) => setOrgTenantId(e.target.value)}
+                  placeholder="Enter your organization name"
+                  value={organization}
+                  onChange={handleOrganizationChange}
                   disabled={lockedToTenantSlug}
                   title={lockedToTenantSlug ? "Scoped by the booking link you arrived from" : undefined}
-                >
-                  <option value="">All organizations</option>
-                  {orgs.map((o) => (
-                    <option key={o.id} value={String(o.id)}>{o.name}</option>
-                  ))}
-                </select>
+                />
               </div>
               <div style={{ marginBottom: "1rem" }}>
                 <label

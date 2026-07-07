@@ -10,7 +10,7 @@
  *   2. POST /api/travel/trips/:id/landing-page lazy-creates a Wanderlux
  *      DRAFT page; the page is then PUBLISHED via the existing
  *      landing-pages route so /p/<slug>/submit can accept submissions.
- *   3. POST /api/pages/<slug>/submit with mode=registration-draft
+ *   3. POST /p/<slug>/submit with mode=registration-draft
  *      creates a PendingTripRegistration AND returns a microsite
  *      redirect URL containing only the opaque draftToken (NO PII).
  *   4. POST /api/travel/microsites/public/:uuid/request-otp issues an
@@ -190,7 +190,7 @@ test.describe('Hybrid registration flow — happy path', () => {
 
   test('4) Phase 3 — POST /p/<slug>/submit creates PendingTripRegistration + returns microsite redirect with opaque token', async ({ request }) => {
     test.skip(!landingPageSlug || !micrositeUuid, 'no landing page slug or microsite available');
-    const submitRes = await postPublic(request, `/api/pages/${landingPageSlug}/submit`, {
+    const submitRes = await postPublic(request, `/p/${landingPageSlug}/submit`, {
       student: {
         name: `${RUN_TAG} Student`,
         school: `${RUN_TAG} School`,

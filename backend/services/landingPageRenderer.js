@@ -244,7 +244,7 @@ function renderComponent(component, slug) {
             if(digits.length < 10 || digits.length > 15){ alert('Please enter a valid phone number (10–15 digits).'); phoneInp.focus(); return; }
           }
           ${enableCaptcha ? `data.cfTurnstileToken = turnstileToken; if (!turnstileToken) { alert("Please complete the CAPTCHA challenge."); return; }` : ""}
-          fetch("/api/pages/${escapeHtml(slug)}/submit", {
+          fetch("/p/${escapeHtml(slug)}/submit", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify(data)
@@ -776,7 +776,7 @@ function renderComponent(component, slug) {
             form.querySelectorAll('input').forEach(function(i){data[i.name]=i.value;});
             var brPhoneInp=form.querySelector('input[type="tel"]');
             if(brPhoneInp&&brPhoneInp.value.trim()){var d=brPhoneInp.value.replace(/\\D/g,'');if(d.length<10||d.length>15){alert('Please enter a valid phone number (10–15 digits).');brPhoneInp.focus();return;}}
-            fetch('/api/pages/${escapeHtml(slug)}/submit',{
+            fetch('/p/${escapeHtml(slug)}/submit',{
               method:'POST',
               headers:{'Content-Type':'application/json'},
               body:JSON.stringify(data)
@@ -798,7 +798,7 @@ function renderComponent(component, slug) {
       // in the builder.
       //
       // Submission flow matches brochureDownload: posts to the same
-      // /api/pages/<slug>/submit endpoint, which honours per-form
+      // /p/<slug>/submit endpoint, which honours per-form
       // leadRoutingRuleId + enableCaptcha + audience tagging.
       //
       // Phase 6 — when props.mode === "registration-draft" the inline
@@ -860,7 +860,7 @@ function renderComponent(component, slug) {
             var body=isDraft
               ? Object.assign({},data,{fields:data,mode:'registration-draft'})
               : data;
-            fetch('/api/pages/${escapeHtml(slug)}/submit',{
+            fetch('/p/${escapeHtml(slug)}/submit',{
               method:'POST',
               headers:{'Content-Type':'application/json'},
               body:JSON.stringify(body)

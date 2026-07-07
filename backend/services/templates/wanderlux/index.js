@@ -91,7 +91,7 @@ function render(landingPage, options = {}) {
   // POSTing — that path is intentional for operator previews and for any
   // draft / archived render.
   if (config && landingPage && landingPage.slug && !options.preview && landingPage.status === 'PUBLISHED') {
-    const submitUrl = `/api/pages/${encodeURIComponent(landingPage.slug)}/submit`;
+    const submitUrl = `/p/${encodeURIComponent(landingPage.slug)}/submit`;
     if (config.register && typeof config.register === 'object') {
       config.register.endpoint = submitUrl;
     }

@@ -9987,6 +9987,308 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   # ════════════════════════════════════════════════════════════════════
+  # TRAVEL — SUPPLIER RECONCILIATION (G044/G046)
+  # ════════════════════════════════════════════════════════════════════
+  /travel/suppliers/{id}/reconciliation-batches:
+    post:
+      summary: Create a draft reconciliation batch (ADMIN/MANAGER)
+      description: |
+        Operator-driven supplier-statement reconciliation. Each batch
+        holds the lines parsed from a supplier statement; subsequent calls
+        bulk-add lines, run the auto-matcher, mark review / reconciliation
+        / dispute.
+      tags: [Travel — Suppliers & Pricing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [statementMonth]
+              properties:
+                statementMonth: { type: string, example: "2026-05" }
+                notes: { type: string }
+      responses:
+        "201":
+          description: Batch created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  statementMonth: { type: string }
+                  status:
+                    {
+                      type: string,
+                      enum: [draft, reviewed, reconciled, disputed],
+                    }
+        "400": { $ref: "#/components/responses/ValidationError" }
+    get:
+      summary: List reconciliation batches for a supplier
+      tags: [Travel — Suppliers & Pricing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Batches.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batches: { type: array, items: { type: object } }
+                  total: { type: integer }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}:
+    get:
+      summary: Read one reconciliation batch with lines
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Batch detail.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  status: { type: string }
+                  lines: { type: array, items: { type: object } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/lines/bulk:
+    post:
+      summary: Bulk-add lines parsed from a supplier statement
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lines]
+              properties:
+                lines:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      pnr: { type: string, nullable: true }
+                      bookingRef: { type: string, nullable: true }
+                      description: { type: string }
+                      amount: { type: number }
+                      currency: { type: string }
+                      statementDate: { type: string, format: date }
+            example:
+              lines:
+                - pnr: "AI-5678"
+                  description: "Room block — 20 doubles × 3 nights"
+                  amount: 150000
+                  currency: "INR"
+                  statementDate: "2026-05-15"
+      responses:
+        "201":
+          description: Lines added.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  added: { type: integer }
+                  totalLines: { type: integer }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/auto-match:
+    post:
+      summary: Run the auto-matcher on the batch's lines
+      description: |
+        Pairs each unmatched statement line with the closest TravelSupplierPayable
+        by PNR / bookingRef / description-amount-tolerance. Returns a per-line
+        match-decision payload.
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Match decisions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matched: { type: integer }
+                  unmatched: { type: integer }
+                  decisions: { type: array, items: { type: object } }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/lines/{lineId}/manual-match:
+    post:
+      summary: Operator-picked manual match for a line
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+        - in: path
+          name: lineId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payableId]
+              properties:
+                payableId: { type: integer }
+                comment: { type: string }
+      responses:
+        "200": { description: Matched. }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/review:
+    post:
+      summary: Transition batch draft → reviewed
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: Reviewed. }
+        "409": { description: Invalid transition. }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/reconcile:
+    post:
+      summary: Transition batch reviewed → reconciled
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: Reconciled. }
+        "409": { description: Invalid transition. }
+  /travel/suppliers/{id}/reconciliation-batches/{batchId}/dispute:
+    post:
+      summary: Flag the batch as disputed
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: batchId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "200": { description: Disputed. }
+        "400": { $ref: "#/components/responses/ValidationError" }
+  /travel/suppliers/{id}/invoice-uploads:
+    post:
+      summary: Upload a supplier invoice PDF / CSV / image
+      description: |
+        Multipart upload — PDF, CSV, JPG, PNG only, 10 MB cap. File is
+        stored under `uploads/supplier-invoices/`; the filename is
+        UUID-derived from the validated MIME type (NOT the client filename).
+      tags: [Travel — Suppliers & Pricing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                statementMonth: { type: string }
+      responses:
+        "201":
+          description: Uploaded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  filename: { type: string }
+                  mimeType: { type: string }
+                  bytes: { type: integer }
+        "413": { description: File exceeds 10 MB. }
+        "415": { description: Unsupported MIME type. }
+    get:
+      summary: List supplier invoice uploads
+      tags: [Travel — Suppliers & Pricing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Uploads.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploads: { type: array, items: { type: object } }
+                  total: { type: integer }
+  /travel/suppliers/{id}/invoice-uploads/{uploadId}/match:
+    post:
+      summary: Link an uploaded invoice to a payable
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: uploadId
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payableId]
+              properties:
+                payableId: { type: integer }
+      responses:
+        "200": { description: Matched. }
+  /travel/suppliers/{id}/invoice-uploads/{uploadId}:
+    delete:
+      summary: Delete a supplier invoice upload (ADMIN)
+      tags: [Travel — Suppliers & Pricing]
+      parameters:
+        - { $ref: "#/components/parameters/IdPath" }
+        - in: path
+          name: uploadId
+          required: true
+          schema: { type: integer }
+      responses:
+        "204": { description: Deleted. }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ════════════════════════════════════════════════════════════════════
   # TRAVEL — ENGINE WEIGHTS + QUOTE/ITINERARY TEMPLATES + STALL/CURRICULUM/POIS
   # ════════════════════════════════════════════════════════════════════
   /travel/engine-weights:
@@ -11098,308 +11400,6 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
               example:
                 { error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" }
-
-  # ════════════════════════════════════════════════════════════════════
-  # TRAVEL — SUPPLIER RECONCILIATION (G044/G046)
-  # ════════════════════════════════════════════════════════════════════
-  /travel/suppliers/{id}/reconciliation-batches:
-    post:
-      summary: Create a draft reconciliation batch (ADMIN/MANAGER)
-      description: |
-        Operator-driven supplier-statement reconciliation. Each batch
-        holds the lines parsed from a supplier statement; subsequent calls
-        bulk-add lines, run the auto-matcher, mark review / reconciliation
-        / dispute.
-      tags: [Travel — Suppliers & Pricing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [statementMonth]
-              properties:
-                statementMonth: { type: string, example: "2026-05" }
-                notes: { type: string }
-      responses:
-        "201":
-          description: Batch created.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  id: { type: integer }
-                  statementMonth: { type: string }
-                  status:
-                    {
-                      type: string,
-                      enum: [draft, reviewed, reconciled, disputed],
-                    }
-        "400": { $ref: "#/components/responses/ValidationError" }
-    get:
-      summary: List reconciliation batches for a supplier
-      tags: [Travel — Suppliers & Pricing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      responses:
-        "200":
-          description: Batches.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  batches: { type: array, items: { type: object } }
-                  total: { type: integer }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}:
-    get:
-      summary: Read one reconciliation batch with lines
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      responses:
-        "200":
-          description: Batch detail.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  id: { type: integer }
-                  status: { type: string }
-                  lines: { type: array, items: { type: object } }
-        "404": { $ref: "#/components/responses/NotFound" }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/lines/bulk:
-    post:
-      summary: Bulk-add lines parsed from a supplier statement
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [lines]
-              properties:
-                lines:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      pnr: { type: string, nullable: true }
-                      bookingRef: { type: string, nullable: true }
-                      description: { type: string }
-                      amount: { type: number }
-                      currency: { type: string }
-                      statementDate: { type: string, format: date }
-            example:
-              lines:
-                - pnr: "AI-5678"
-                  description: "Room block — 20 doubles × 3 nights"
-                  amount: 150000
-                  currency: "INR"
-                  statementDate: "2026-05-15"
-      responses:
-        "201":
-          description: Lines added.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  added: { type: integer }
-                  totalLines: { type: integer }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/auto-match:
-    post:
-      summary: Run the auto-matcher on the batch's lines
-      description: |
-        Pairs each unmatched statement line with the closest TravelSupplierPayable
-        by PNR / bookingRef / description-amount-tolerance. Returns a per-line
-        match-decision payload.
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      responses:
-        "200":
-          description: Match decisions.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  matched: { type: integer }
-                  unmatched: { type: integer }
-                  decisions: { type: array, items: { type: object } }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/lines/{lineId}/manual-match:
-    post:
-      summary: Operator-picked manual match for a line
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-        - in: path
-          name: lineId
-          required: true
-          schema: { type: integer }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [payableId]
-              properties:
-                payableId: { type: integer }
-                comment: { type: string }
-      responses:
-        "200": { description: Matched. }
-        "404": { $ref: "#/components/responses/NotFound" }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/review:
-    post:
-      summary: Transition batch draft → reviewed
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      responses:
-        "200": { description: Reviewed. }
-        "409": { description: Invalid transition. }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/reconcile:
-    post:
-      summary: Transition batch reviewed → reconciled
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      responses:
-        "200": { description: Reconciled. }
-        "409": { description: Invalid transition. }
-  /travel/suppliers/{id}/reconciliation-batches/{batchId}/dispute:
-    post:
-      summary: Flag the batch as disputed
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: batchId
-          required: true
-          schema: { type: integer }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [reason]
-              properties:
-                reason: { type: string }
-      responses:
-        "200": { description: Disputed. }
-        "400": { $ref: "#/components/responses/ValidationError" }
-  /travel/suppliers/{id}/invoice-uploads:
-    post:
-      summary: Upload a supplier invoice PDF / CSV / image
-      description: |
-        Multipart upload — PDF, CSV, JPG, PNG only, 10 MB cap. File is
-        stored under `uploads/supplier-invoices/`; the filename is
-        UUID-derived from the validated MIME type (NOT the client filename).
-      tags: [Travel — Suppliers & Pricing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                file: { type: string, format: binary }
-                statementMonth: { type: string }
-      responses:
-        "201":
-          description: Uploaded.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  id: { type: integer }
-                  filename: { type: string }
-                  mimeType: { type: string }
-                  bytes: { type: integer }
-        "413": { description: File exceeds 10 MB. }
-        "415": { description: Unsupported MIME type. }
-    get:
-      summary: List supplier invoice uploads
-      tags: [Travel — Suppliers & Pricing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      responses:
-        "200":
-          description: Uploads.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  uploads: { type: array, items: { type: object } }
-                  total: { type: integer }
-  /travel/suppliers/{id}/invoice-uploads/{uploadId}/match:
-    post:
-      summary: Link an uploaded invoice to a payable
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: uploadId
-          required: true
-          schema: { type: integer }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [payableId]
-              properties:
-                payableId: { type: integer }
-      responses:
-        "200": { description: Matched. }
-  /travel/suppliers/{id}/invoice-uploads/{uploadId}:
-    delete:
-      summary: Delete a supplier invoice upload (ADMIN)
-      tags: [Travel — Suppliers & Pricing]
-      parameters:
-        - { $ref: "#/components/parameters/IdPath" }
-        - in: path
-          name: uploadId
-          required: true
-          schema: { type: integer }
-      responses:
-        "204": { description: Deleted. }
-        "403": { $ref: "#/components/responses/Forbidden" }
 
   # ════════════════════════════════════════════════════════════════════
   # MULTICHANNEL LEAD INTAKE (G015)

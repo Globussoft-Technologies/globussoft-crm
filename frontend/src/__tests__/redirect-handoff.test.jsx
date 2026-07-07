@@ -235,11 +235,12 @@ describe('Marketing-site → CRM redirect handoff', () => {
       const nextPath = '/wellness/book-appointment?serviceId=434&time=15:00';
       renderAt(Login, `/login?tenantSlug=enhanced-wellness&next=${encodeURIComponent(nextPath)}`);
 
-      // Wait for the tenant dropdown to pre-select to enhanced-wellness.
+      // Wait for the organization text field to pre-fill with enhanced-wellness name.
+      // Field is now a text input — value is the org name, not the tenant id.
       await waitFor(() => {
-        const orgSelect = screen.getAllByRole('combobox')[0];
-        expect(orgSelect).toBeDisabled();
-        expect(orgSelect.value).toBe('2');
+        const orgInput = screen.getByPlaceholderText(/Enter your organization name/i);
+        expect(orgInput).toBeDisabled();
+        expect(orgInput.value).toBe("Dr. Haror's Wellness");
       });
 
       // Labels in Login.jsx aren't associated via htmlFor/id, so getByLabelText
@@ -276,7 +277,8 @@ describe('Marketing-site → CRM redirect handoff', () => {
       renderAt(Login, '/login?tenantSlug=enhanced-wellness&next=%2F%2Fevil.com%2Fphish');
 
       await waitFor(() => {
-        expect(screen.getAllByRole('combobox')[0]).toBeDisabled();
+        const orgInput = screen.getByPlaceholderText(/Enter your organization name/i);
+        expect(orgInput).toBeDisabled();
       });
 
       // Login.jsx no longer pre-fills demo creds (commit 46247368) — fill the

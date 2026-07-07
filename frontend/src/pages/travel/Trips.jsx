@@ -8,9 +8,9 @@
 // No creation flow here — trips spawn from the linked Deal in the sales
 // pipeline (Day 7+ Deal-extension lands later).
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X, Trash2 } from "lucide-react";
+import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X, Trash2, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
@@ -58,6 +58,7 @@ export default function Trips() {
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
+  const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
@@ -116,6 +117,15 @@ export default function Trips() {
   // row's trash button (prevents double-click race) without disabling
   // siblings.
   const [deletingId, setDeletingId] = useState(null);
+
+  const visibleTrips = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return trips;
+    return trips.filter((t) =>
+      t.tripCode?.toLowerCase().includes(q) ||
+      t.destination?.toLowerCase().includes(q)
+    );
+  }, [trips, search]);
 
   // DELETE /api/travel/trips/:id is ADMIN-only on the server
   // (requirePermission("trips","delete")). The route cascades through
@@ -180,6 +190,17 @@ export default function Trips() {
         border: "1px solid var(--border-color)", marginBottom: 16,
       }}>
         <Filter size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
+        <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+          <Search size={14} aria-hidden style={{ position: "absolute", left: 8, color: "var(--text-secondary)", pointerEvents: "none" }} />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search trip code or destination…"
+            aria-label="Search trips"
+            style={{ ...selectStyle, paddingLeft: 28, minWidth: 240 }}
+          />
+        </div>
         <select value={status} onChange={(e) => setStatus(e.target.value)} style={selectStyle} aria-label="Filter by status">
           {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
@@ -196,6 +217,8 @@ export default function Trips() {
           <div style={empty}>
             No trips yet. New trips spawn from the linked Deal in the sales pipeline.
           </div>
+        ) : visibleTrips.length === 0 ? (
+          <div style={empty}>No trips match &ldquo;{search}&rdquo;.</div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -211,7 +234,7 @@ export default function Trips() {
               </tr>
             </thead>
             <tbody>
-              {trips.map((t) => {
+              {visibleTrips.map((t) => {
                 const sc = STATUS_COLORS[t.status] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
                 return (
                   <tr key={t.id} style={{ borderTop: "1px solid var(--border-light)" }}>

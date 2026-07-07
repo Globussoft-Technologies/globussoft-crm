@@ -305,12 +305,12 @@ describe('component: form', () => {
     expect(html).toContain('&lt;y&gt;Thanks&lt;/y&gt;');
   });
 
-  test('points form submit at /api/pages/<slug>/submit', () => {
+  test('points form submit at /p/<slug>/submit', () => {
     const html = renderPage({
       slug: 'lead-magnet',
       content: [{ type: 'form', props: { fields: [{ name: 'email' }] } }],
     });
-    expect(html).toContain('/api/pages/lead-magnet/submit');
+    expect(html).toContain('/p/lead-magnet/submit');
   });
 
   test('escapes slug in form submit URL', () => {
@@ -603,7 +603,7 @@ describe('renderPage — full integration (#447 surfaces never appear in final H
 
 // ─── Form submission flow + successRedirectUrl validation (#451) ───────
 //
-// The form component embeds inline JS that POSTs to /api/pages/:slug/submit
+// The form component embeds inline JS that POSTs to /p/:slug/submit
 // and either reveals the thank-you panel or redirects to a configured URL.
 // The redirect URL is validated AT RENDER TIME — invalid URLs (javascript:,
 // mailto:, malformed) silently fall back to the thank-you panel mode so a

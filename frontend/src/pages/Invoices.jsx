@@ -91,15 +91,19 @@ export default function Invoices() {
   // Default the create-form brand to the currently-active sub-brand (travel).
   useEffect(() => {
     if (isTravel && activeSubBrand) {
-      setNewInvoice((p) => (p.subBrand ? p : { ...p, subBrand: activeSubBrand }));
+      setNewInvoice((p) =>
+        p.subBrand ? p : { ...p, subBrand: activeSubBrand },
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTravel, activeSubBrand]);
 
-
   const loadData = async () => {
     try {
-      const qs = isTravel && activeSubBrand ? `?subBrand=${encodeURIComponent(activeSubBrand)}` : "";
+      const qs =
+        isTravel && activeSubBrand
+          ? `?subBrand=${encodeURIComponent(activeSubBrand)}`
+          : "";
       const [invs, c, d] = await Promise.all([
         fetchApi(`/api/billing${qs}`),
         fetchApi("/api/contacts"),
@@ -262,7 +266,9 @@ export default function Invoices() {
 
   const generatePaymentLink = async (inv) => {
     try {
-      const result = await fetchApi(`/api/billing/${inv.id}/payment-link`, { method: "POST" });
+      const result = await fetchApi(`/api/billing/${inv.id}/payment-link`, {
+        method: "POST",
+      });
       setLinkCopied(false);
       setLinkModal({ inv, url: result.url });
     } catch (err) {
@@ -390,14 +396,20 @@ export default function Invoices() {
             <Filter size={14} color="var(--text-secondary)" />
             <label
               htmlFor="invoice-subbrand-filter"
-              style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 600 }}
+              style={{
+                fontSize: "0.8rem",
+                color: "var(--text-secondary)",
+                fontWeight: 600,
+              }}
             >
               Sub-brand:
             </label>
             <select
               id="invoice-subbrand-filter"
               value={activeSubBrand || ""}
-              onChange={(e) => setActiveSubBrand && setActiveSubBrand(e.target.value || null)}
+              onChange={(e) =>
+                setActiveSubBrand && setActiveSubBrand(e.target.value || null)
+              }
               aria-label="Filter invoices by sub-brand"
               style={{
                 background: "transparent",
@@ -410,11 +422,24 @@ export default function Invoices() {
                 padding: "0.25rem 0.25rem",
               }}
             >
-              <option value="" style={{ background: "var(--bg-color, #0b0c10)", color: "var(--text-primary, #fff)" }}>
+              <option
+                value=""
+                style={{
+                  background: "var(--bg-color, #0b0c10)",
+                  color: "var(--text-primary, #fff)",
+                }}
+              >
                 All sub-brands
               </option>
               {SUB_BRAND_IDS.map((id) => (
-                <option key={id} value={id} style={{ background: "var(--bg-color, #0b0c10)", color: "var(--text-primary, #fff)" }}>
+                <option
+                  key={id}
+                  value={id}
+                  style={{
+                    background: "var(--bg-color, #0b0c10)",
+                    color: "var(--text-primary, #fff)",
+                  }}
+                >
                   {subBrandShortLabel(id)}
                 </option>
               ))}
@@ -621,7 +646,9 @@ export default function Invoices() {
                   className="input-field"
                   required
                   value={newInvoice.subBrand}
-                  onChange={(e) => handleFieldChange("subBrand", e.target.value)}
+                  onChange={(e) =>
+                    handleFieldChange("subBrand", e.target.value)
+                  }
                   style={{ background: "var(--input-bg)" }}
                   aria-label="Sub-brand"
                 >
@@ -808,7 +835,9 @@ export default function Invoices() {
                   cell can no longer expand past its allotted space and bleed
                   on top of the sticky Actions column. The Contact cell itself
                   also truncates with ellipsis (see <td> below). */}
-              <table className="stable-table" style={{ borderCollapse: "collapse", fontSize: "0.875rem" }}
+              <table
+                className="stable-table"
+                style={{ borderCollapse: "collapse", fontSize: "0.875rem" }}
                 role="table"
                 aria-label="Invoices table"
               >
@@ -994,25 +1023,28 @@ export default function Invoices() {
                         title={inv.contact?.name || "Unknown"}
                       >
                         {inv.contact?.name || "Unknown"}
-                        {isTravel && (inv.subBrand || inv.contact?.subBrand) && (
-                          <span
-                            style={{
-                              display: "inline-block",
-                              marginLeft: 8,
-                              padding: "1px 7px",
-                              borderRadius: 999,
-                              fontSize: "0.65rem",
-                              fontWeight: 700,
-                              textTransform: "uppercase",
-                              letterSpacing: 0.3,
-                              background: "rgba(79,70,229,0.16)",
-                              color: "#818cf8",
-                              verticalAlign: "middle",
-                            }}
-                          >
-                            {subBrandShortLabel(inv.subBrand || inv.contact?.subBrand)}
-                          </span>
-                        )}
+                        {isTravel &&
+                          (inv.subBrand || inv.contact?.subBrand) && (
+                            <span
+                              style={{
+                                display: "inline-block",
+                                marginLeft: 8,
+                                padding: "1px 7px",
+                                borderRadius: 999,
+                                fontSize: "0.65rem",
+                                fontWeight: 700,
+                                textTransform: "uppercase",
+                                letterSpacing: 0.3,
+                                background: "rgba(79,70,229,0.16)",
+                                color: "#818cf8",
+                                verticalAlign: "middle",
+                              }}
+                            >
+                              {subBrandShortLabel(
+                                inv.subBrand || inv.contact?.subBrand,
+                              )}
+                            </span>
+                          )}
                       </td>
                       <td
                         style={{
@@ -1362,23 +1394,73 @@ export default function Invoices() {
               backdropFilter: "blur(12px)",
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
-              <h3 style={{ fontSize: "1.1rem", fontWeight: 600, margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "1.25rem",
+              }}
+            >
+              <h3
+                style={{
+                  fontSize: "1.1rem",
+                  fontWeight: 600,
+                  margin: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                }}
+              >
                 <CreditCard size={18} /> Payment Link
               </h3>
               <button
                 onClick={() => setLinkModal(null)}
                 aria-label="Close payment dialog"
-                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)" }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--text-secondary)",
+                }}
               >
                 <X size={18} />
               </button>
             </div>
-            <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginBottom: "1rem" }}>
-              Share this link with <strong>{linkModal.inv.contact?.name || "the customer"}</strong> to collect payment for invoice <strong>{linkModal.inv.invoiceNum}</strong> ({formatCurrency(linkModal.inv.amount)}).
+            <p
+              style={{
+                fontSize: "0.85rem",
+                color: "var(--text-secondary)",
+                marginBottom: "1rem",
+              }}
+            >
+              Share this link with{" "}
+              <strong>{linkModal.inv.contact?.name || "the customer"}</strong>{" "}
+              to collect payment for invoice{" "}
+              <strong>{linkModal.inv.invoiceNum}</strong> (
+              {formatCurrency(linkModal.inv.amount)}).
             </p>
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", background: "var(--subtle-bg-2)", border: "1px solid var(--border-color)", borderRadius: "8px", padding: "0.6rem 0.75rem" }}>
-              <span style={{ flex: 1, fontSize: "0.82rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-primary)" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                alignItems: "center",
+                background: "var(--subtle-bg-2)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "8px",
+                padding: "0.6rem 0.75rem",
+              }}
+            >
+              <span
+                style={{
+                  flex: 1,
+                  fontSize: "0.82rem",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  color: "var(--text-primary)",
+                }}
+              >
                 {linkModal.url}
               </span>
               <button
@@ -1390,7 +1472,9 @@ export default function Invoices() {
                 style={{
                   flexShrink: 0,
                   padding: "0.35rem 0.75rem",
-                  background: linkCopied ? "var(--success-color)" : "var(--accent-color)",
+                  background: linkCopied
+                    ? "var(--success-color)"
+                    : "var(--accent-color)",
                   color: "#fff",
                   border: "none",
                   borderRadius: "6px",
@@ -1403,8 +1487,16 @@ export default function Invoices() {
                 {linkCopied ? "Copied!" : "Copy"}
               </button>
             </div>
-            <p style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "0.75rem", marginBottom: 0 }}>
-              Powered by Razorpay · Payment is processed via your configured gateway keys.
+            <p
+              style={{
+                fontSize: "0.75rem",
+                color: "var(--text-secondary)",
+                marginTop: "0.75rem",
+                marginBottom: 0,
+              }}
+            >
+              Powered by Razorpay · Payment is processed via your configured
+              gateway keys.
             </p>
           </div>
         </div>

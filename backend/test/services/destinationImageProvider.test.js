@@ -304,6 +304,8 @@ describe('fetchStrategy — full TeeOutput.imageStrategy', () => {
       aiCounter += 1;
       return [{ url: `https://ai.example/fallback-${aiCounter}.jpg`, attribution: { providerId: 'ai-fallback' } }];
     });
+    // Keep the test fast and deterministic: never hit the real Unsplash/Pixabay
+    // network. The Pexels mock + AI-fallback mock are enough to exercise dedup.
     const result = await provider.fetchStrategy({
       hero: { query: 'h', aspectRatio: '4:3' },
       marquee: [
@@ -312,7 +314,7 @@ describe('fetchStrategy — full TeeOutput.imageStrategy', () => {
       ],
       brochure: { query: 'b', aspectRatio: '4:5' },
       cultural: [],
-    });
+    }, { excludeProviders: ['unsplash', 'pixabay'] });
     const urls = [
       result.hero?.url,
       result.marquee[0].image?.url,

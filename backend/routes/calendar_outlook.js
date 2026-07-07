@@ -1,6 +1,3 @@
-const path = require("path");
-require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
-
 const express = require("express");
 const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
@@ -9,9 +6,12 @@ const prisma = require("../lib/prisma");
 const { parseSlotWindow, freeSlots } = require("../lib/calendarSlots");
 const zoomClient = require("../services/zoomClient");
 
-const MS_CLIENT_ID = process.env.MS_CLIENT_ID;
-const MS_CLIENT_SECRET = process.env.MS_CLIENT_SECRET;
-const MS_REDIRECT_URI = process.env.MS_REDIRECT_URI;
+// Read at request time so server.js dotenv.config() always wins
+const getMS = () => ({
+  MS_CLIENT_ID: process.env.MS_CLIENT_ID,
+  MS_CLIENT_SECRET: process.env.MS_CLIENT_SECRET,
+  MS_REDIRECT_URI: process.env.MS_REDIRECT_URI,
+});
 // Strip trailing slash AND a stray "/api" suffix so a deployment whose
 // FRONTEND_URL is mistakenly set to the API base (e.g. https://host/api)
 // still produces a working SPA link instead of /api/calendar-sync.
@@ -38,6 +38,7 @@ async function refreshTokenIfNeeded(integration) {
     throw e;
   }
 
+  const { MS_CLIENT_ID, MS_CLIENT_SECRET, MS_REDIRECT_URI } = getMS();
   const params = new URLSearchParams();
   params.append("client_id", MS_CLIENT_ID || "");
   params.append("client_secret", MS_CLIENT_SECRET || "");
@@ -89,6 +90,7 @@ async function refreshTokenIfNeeded(integration) {
 // GET /connect — return Microsoft OAuth URL
 router.get("/connect", verifyToken, async (req, res) => {
   try {
+    const { MS_CLIENT_ID, MS_CLIENT_SECRET, MS_REDIRECT_URI } = getMS();
     if (!MS_CLIENT_ID || !MS_REDIRECT_URI) {
       return res.status(500).json({ error: "Microsoft OAuth env vars not configured" });
     }
@@ -118,6 +120,7 @@ router.get("/callback", async (req, res) => {
       return res.status(400).send("Invalid state");
     }
 
+    const { MS_CLIENT_ID, MS_CLIENT_SECRET, MS_REDIRECT_URI } = getMS();
     const params = new URLSearchParams();
     params.append("client_id", MS_CLIENT_ID || "");
     params.append("client_secret", MS_CLIENT_SECRET || "");

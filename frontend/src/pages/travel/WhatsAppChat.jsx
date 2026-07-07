@@ -141,6 +141,54 @@ export default function TravelWhatsAppChat() {
   // Generation counters to discard stale async results (§5.5 race guard).
   const listGenRef = useRef(0);
   const detailGenRef = useRef(0);
+
+  // ─── Older-message pagination (infinite scroll-up) ──────────
+  // GET /threads/:id only ever returns the newest 50 messages. Every
+  // "refresh" fetch (polling, socket events, post-action reloads) also
+  // hits that same un-paginated endpoint, so a naive setDetail(fresh)
+  // would silently drop any older page the user scrolled up to load.
+  // mergeDetailPreservingOlder keeps those older messages stitched onto
+  // the front of whatever the latest-50 refresh returns.
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const oldestLoadedIdRef = useRef(null);
+
+  const mergeDetailPreservingOlder = (prevDetail, fresh, forThreadId) => {
+    setHasMoreMessages(!!fresh?.hasMoreMessages);
+    if (!prevDetail || prevDetail.thread?.id !== forThreadId) return fresh;
+    const freshMessages = Array.isArray(fresh.messages) ? fresh.messages : [];
+    const freshIds = new Set(freshMessages.map((m) => m.id));
+    const olderKept = (prevDetail.messages || []).filter(
+      (m) => !freshIds.has(m.id) && (freshMessages.length === 0 || m.createdAt <= freshMessages[0].createdAt)
+    );
+    return { ...fresh, messages: [...olderKept, ...freshMessages] };
+  };
+
+  // Fetch the next page of older messages (before the oldest one currently
+  // shown) and prepend them. Called when the user scrolls near the top of
+  // the message pane. No-ops if there's nothing older or a fetch is already
+  // in flight.
+  const loadOlderMessages = async () => {
+    const threadId = selectedIdRef.current;
+    const oldest = oldestLoadedIdRef.current;
+    if (!threadId || !oldest || loadingOlderMessages || !hasMoreMessages) return;
+    setLoadingOlderMessages(true);
+    try {
+      const older = await fetchApi(`/api/whatsapp/threads/${threadId}?before=${oldest}`);
+      if (selectedIdRef.current !== threadId) return;
+      setDetail((prev) => {
+        if (!prev || prev.thread?.id !== threadId) return prev;
+        const existingIds = new Set((prev.messages || []).map((m) => m.id));
+        const newOlder = (older.messages || []).filter((m) => !existingIds.has(m.id));
+        return { ...prev, messages: [...newOlder, ...(prev.messages || [])] };
+      });
+      setHasMoreMessages(!!older.hasMoreMessages);
+    } catch (err) {
+      notify.error(err.message || 'Failed to load older messages.');
+    }
+    setLoadingOlderMessages(false);
+  };
+
   // Latest WhatsApp connection state, read by loadList without stale closures.
   // The inbox is a live mirror — when disconnected we show no chats (they
   // re-fetch on the next Connect). Optimistic init so connected users never
@@ -295,7 +343,7 @@ export default function TravelWhatsAppChat() {
         fetchApi(`/api/whatsapp/threads/${selId}`)
           .then((fresh) => {
             if (gen === detailGenRef.current && selectedIdRef.current === selId) {
-              setDetail(fresh);
+              setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
             }
           })
           .catch(() => { /* swallow — next tick retries */ });
@@ -582,7 +630,7 @@ export default function TravelWhatsAppChat() {
             const gen = ++detailGenRef.current;
             const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
             if (gen === detailGenRef.current && selectedIdRef.current === payload.threadId) {
-              setDetail(fresh);
+              setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
             }
           } catch { /* swallow — manual refresh still works */ }
         })();
@@ -635,7 +683,7 @@ export default function TravelWhatsAppChat() {
             const gen = ++detailGenRef.current;
             const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
             if (gen === detailGenRef.current) {
-              setDetail(fresh);
+              setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
             }
           } catch { /* swallow */ }
         })();
@@ -652,7 +700,7 @@ export default function TravelWhatsAppChat() {
             const gen = ++detailGenRef.current;
             const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
             if (gen === detailGenRef.current && selectedIdRef.current === payload.threadId) {
-              setDetail(fresh);
+              setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
             }
           } catch { /* swallow */ }
         })();
@@ -740,11 +788,13 @@ export default function TravelWhatsAppChat() {
     }
     let cancelled = false;
     setLoadingDetail(true);
+    setHasMoreMessages(false);
     (async () => {
       try {
         const data = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
         if (!cancelled) {
           setDetail(data);
+          setHasMoreMessages(!!data?.hasMoreMessages);
           // Mark as read if it had unread messages.
           if (data?.thread?.unreadCount > 0) {
             try {
@@ -768,15 +818,63 @@ export default function TravelWhatsAppChat() {
       }
       if (!cancelled) setLoadingDetail(false);
     })();
+    // ── Full-history backfill (fire-and-forget) ──────────────────────
+    // The CRM's DB only ever has whatever the bulk import pulled (last ~25
+    // messages/chat, to keep linking fast). The first time an operator opens
+    // a thread, pull that ONE chat's complete WhatsApp Web history in the
+    // background — same as WhatsApp Web itself lazy-loading as you scroll —
+    // then refresh hasMoreMessages so scroll-up pagination can reach it.
+    // Silent on failure (WA disconnected, thread already fully synced, a
+    // second open already in flight) — this is a best-effort enhancement,
+    // not required for the thread to be usable.
+    (async () => {
+      try {
+        const result = await fetchApi(`/api/travel/whatsapp/threads/${selectedId}/backfill-history`, {
+          method: 'POST',
+          silent: true,
+          body: JSON.stringify({}),
+        });
+        if (!cancelled && result?.added > 0 && selectedIdRef.current === selectedId) {
+          // New older messages landed in the DB — refresh hasMoreMessages so
+          // the scroll-up pagination in ThreadDetail.jsx can reach them. Only
+          // refresh the flag (not the visible messages), so the operator's
+          // current scroll position + read state don't jump around.
+          const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
+          if (!cancelled && selectedIdRef.current === selectedId) {
+            setHasMoreMessages(!!fresh?.hasMoreMessages);
+          }
+        }
+      } catch { /* best-effort — thread stays usable with whatever was already imported */ }
+    })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
+  // Track the oldest currently-loaded message id so loadOlderMessages knows
+  // what cursor to page from. Recomputed on every detail change (initial
+  // load, refresh, or an older page being prepended).
+  useEffect(() => {
+    const first = detail?.messages?.[0];
+    oldestLoadedIdRef.current = first ? first.id : null;
+  }, [detail]);
+
+  // Auto-scroll to the newest message on initial load / new-message arrival.
+  // Keyed on the LAST message's id (not the whole `detail` object) so that
+  // prepending an older page — which changes detail.messages but never the
+  // newest entry — doesn't re-trigger this. Using a loadingOlderMessages
+  // boolean guard instead is racy: setDetail(...) and
+  // setLoadingOlderMessages(false) land in the same React batch at the end
+  // of loadOlderMessages, so by the time this effect re-runs the guard has
+  // already flipped false and the scroll-to-bottom fires anyway, yanking the
+  // view back down right after history loads.
+  const newestMessageId = detail?.messages?.length
+    ? detail.messages[detail.messages.length - 1].id
+    : null;
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [detail]);
+  }, [newestMessageId]);
 
   // ─── Actions ──────────────────────────────────────────────
   const handleSearch = (e) => {
@@ -814,7 +912,7 @@ export default function TravelWhatsAppChat() {
       setReplyToMsg(null);
       // Reload detail
       const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
-      setDetail(fresh);
+      setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
       loadList();
     } catch (err) {
       const msg = err?.message || '';
@@ -909,7 +1007,7 @@ export default function TravelWhatsAppChat() {
         body: JSON.stringify({ targetUserId: targetUserId == null ? null : Number(targetUserId) }),
       });
       const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
-      setDetail(fresh);
+      setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
       loadList();
     } catch (err) {
       notify.error(err.message || 'Failed to assign.');
@@ -944,7 +1042,7 @@ export default function TravelWhatsAppChat() {
         body: JSON.stringify({ name }),
       });
       const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
-      setDetail(fresh);
+      setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
       loadList();
       setRenaming(false);
       setRenameValue('');
@@ -964,7 +1062,7 @@ export default function TravelWhatsAppChat() {
         body: JSON.stringify({}),
       });
       const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
-      setDetail(fresh);
+      setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
       loadList();
     } catch (err) {
       notify.error(err.message || 'Failed to close.');
@@ -1003,10 +1101,38 @@ export default function TravelWhatsAppChat() {
         body: JSON.stringify({ until }),
       });
       const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
-      setDetail(fresh);
+      setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
       loadList();
     } catch (err) {
       notify.error(err.message || 'Failed to snooze.');
+    }
+  };
+
+  // "Sync Lead" (2026-07-07) — AI-summarizes any WhatsApp messages received
+  // since the last sync and appends the block to the linked Contact's
+  // description (append-only lead conversation history). Travel-only action
+  // (ThreadDetail only shows the button when this handler + a linked
+  // contactId are both present).
+  const [syncingLead, setSyncingLead] = useState(false);
+  const syncLead = async () => {
+    if (!detail?.thread) return;
+    setSyncingLead(true);
+    try {
+      const result = await fetchApi(`/api/whatsapp-web/threads/${detail.thread.id}/sync-lead`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      if (result?.skipped === 'no-new-messages') {
+        notify.info('No new messages to summarize since the last sync.');
+      } else if (result?.appended) {
+        notify.success(`Lead description updated (${result.messageCount} new message${result.messageCount === 1 ? '' : 's'} summarized).`);
+      } else {
+        notify.info('Nothing to sync for this lead.');
+      }
+    } catch (err) {
+      notify.error(err?.data?.error || err?.body?.error || err.message || 'Failed to sync lead.');
+    } finally {
+      setSyncingLead(false);
     }
   };
 
@@ -1070,7 +1196,7 @@ export default function TravelWhatsAppChat() {
       // backend tracks it in the message status / metadata.
       if (selectedIdRef.current) {
         const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
-        setDetail(fresh);
+        setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
       }
     } catch (err) {
       notify.error(err.message || 'Failed to react.');
@@ -1087,7 +1213,7 @@ export default function TravelWhatsAppChat() {
       // Refresh the open thread so the bubble disappears immediately.
       if (selectedIdRef.current) {
         const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
-        setDetail(fresh);
+        setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
       }
       notify.info('Message hidden from your CRM view.');
     } catch (err) {
@@ -1137,7 +1263,7 @@ export default function TravelWhatsAppChat() {
       setReply('');
       if (selectedIdRef.current) {
         const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
-        setDetail(fresh);
+        setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
       }
       loadList();
     } catch (err) {
@@ -1177,7 +1303,7 @@ export default function TravelWhatsAppChat() {
         body: JSON.stringify({ reason: trimmed }),
       });
       const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
-      setDetail(fresh);
+      setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
       notify.info('Contact unblocked.');
       setUnblockOpen(false);
       setUnblockReason('');
@@ -1198,7 +1324,7 @@ export default function TravelWhatsAppChat() {
         body: JSON.stringify({ contactPhone: detail.thread.contactPhone, reason: 'USER_REQUESTED' }),
       });
       const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
-      setDetail(fresh);
+      setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
     } catch (err) {
       notify.error(err.message || 'Failed to opt out.');
     }
@@ -1217,6 +1343,8 @@ export default function TravelWhatsAppChat() {
     selectedId,
     detail,
     loadingDetail,
+    hasMoreMessages,
+    loadingOlderMessages,
     reply,
     sending,
     replyToMsg,
@@ -1283,6 +1411,7 @@ export default function TravelWhatsAppChat() {
     setUploadingMedia,
     // Handlers
     loadList,
+    loadOlderMessages,
     handleSearch,
     openBlockedThread,
     sendReply,
@@ -1294,6 +1423,8 @@ export default function TravelWhatsAppChat() {
     closeThread,
     deleteThread,
     snoozeThread,
+    syncLead,
+    syncingLead,
     replyToMessage,
     forwardMessage,
     reactToMessage,

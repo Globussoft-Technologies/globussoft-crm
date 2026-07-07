@@ -140,6 +140,58 @@ router.post("/import", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
+// POST /threads/:id/backfill-history — pull this ONE chat's complete history
+// from WhatsApp Web (not gated to ADMIN — any operator opening a chat with
+// more history than the CRM has stored can trigger it; it's a read-only pull
+// against the linked account, same trust level as viewing the thread). See
+// whatsappWebClient.backfillThreadHistory for why this is per-thread and not
+// part of the bulk import sweep.
+router.post("/threads/:id/backfill-history", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    const thread = await prisma.whatsAppThread.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      select: { id: true },
+    });
+    if (!thread) return res.status(404).json({ error: "Thread not found" });
+    if (!waClient.isEnabled(req.user.tenantId)) {
+      return res.status(409).json({ error: "WhatsApp is not connected — scan the QR first.", code: "WA_NOT_CONNECTED" });
+    }
+    const result = await waClient.backfillThreadHistory(req.user.tenantId, id);
+    res.json(result);
+  } catch (e) {
+    console.error("[whatsapp-web] backfill-history error:", e.message);
+    res.status(500).json({ error: "Failed to backfill history", code: "WA_BACKFILL_FAILED" });
+  }
+});
+
+// "Sync Lead" (2026-07-07) — summarizes any WhatsApp messages on this thread
+// received since the last sync and appends the AI-generated block to the
+// linked Contact's description (append-only lead history). No-op (200 +
+// skipped reason) when the thread has no linked contact or no new messages.
+router.post("/threads/:id/sync-lead", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+    const leadConversationSummary = require("../lib/leadConversationSummary");
+    const result = await leadConversationSummary.syncLeadDescription({
+      tenantId: req.user.tenantId,
+      threadId: id,
+    });
+    if (result.skipped === "thread-not-found") {
+      return res.status(404).json({ error: "Thread not found" });
+    }
+    if (result.skipped === "no-linked-contact") {
+      return res.status(409).json({ error: "This chat isn't linked to a lead yet.", code: "WA_NO_LINKED_LEAD" });
+    }
+    res.json(result);
+  } catch (e) {
+    console.error("[whatsapp-web] sync-lead error:", e.message);
+    res.status(500).json({ error: "Failed to sync lead", code: "WA_SYNC_LEAD_FAILED" });
+  }
+});
+
 router.post("/disconnect", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const logout = (req.body && (req.body.logout === true || req.body.logout === "true")) || false;

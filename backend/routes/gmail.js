@@ -105,11 +105,10 @@ function decodeState(state) {
 // Detect a revoked/expired refresh token so callers can prompt a reconnect
 // instead of leaking the raw googleapis/OAuth error to the user.
 function isReauthError(err) {
-  const raw = `${(err && err.message) || ""} ${
-    err && err.response && err.response.data
-      ? JSON.stringify(err.response.data)
-      : ""
-  }`;
+  const raw = `${(err && err.message) || ""} ${err && err.response && err.response.data
+    ? JSON.stringify(err.response.data)
+    : ""
+    }`;
   return /invalid_grant|expired or revoked|Token has been expired/i.test(raw);
 }
 
@@ -118,11 +117,10 @@ function isReauthError(err) {
 // enabled for that Workspace user, or it's a Google account that isn't
 // Gmail-backed. Surface a clear instruction instead of the cryptic raw error.
 function isGmailNotEnabledError(err) {
-  const raw = `${(err && err.message) || ""} ${
-    err && err.response && err.response.data
-      ? JSON.stringify(err.response.data)
-      : ""
-  }`;
+  const raw = `${(err && err.message) || ""} ${err && err.response && err.response.data
+    ? JSON.stringify(err.response.data)
+    : ""
+    }`;
   return /failedPrecondition|Precondition check failed|Mail service not enabled|not enabled for/i.test(
     raw,
   );

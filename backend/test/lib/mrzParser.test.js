@@ -9,7 +9,8 @@
  */
 import { describe, test, expect } from 'vitest';
 import {
-  parseMrz, parseTd3, findMrzLines, computeCheckDigit, checkField, parseMrzDate, normalizeLine,
+  parseMrz, parseTd3, parseTd3FullDate, parseFullDate, findMrzLines, computeCheckDigit, checkField, parseMrzDate, normalizeLine,
+  repairOcrConfusions,
 } from '../../lib/mrzParser.js';
 
 // ICAO 9303 Appendix specimen — all check digits valid.
@@ -140,5 +141,81 @@ describe('normalizeLine', () => {
   test('uppercases, strips spaces, and keeps only the MRZ alphabet', () => {
     expect(normalizeLine('  l898902c3 6uto ')).toBe('L898902C36UTO');
     expect(normalizeLine('p<uto!@#')).toBe('P<UTO');
+  });
+});
+
+describe('repairOcrConfusions', () => {
+  test('repairs a misread DOB digit (O→0) and makes the parse valid', () => {
+    // Original has DOB '74O812' (letter O instead of zero) so DOB check fails.
+    const badL2 = 'L898902C36UTO74O8122F1204159ZE184226B<<<<<10';
+    const repaired = repairOcrConfusions(L1, badL2, 26);
+    expect(repaired.valid).toBe(true);
+    expect(repaired.fields.dateOfBirth).toBe('1974-08-12');
+  });
+
+  test('repairs a misread passport number digit (0→O) and makes the parse valid', () => {
+    const badL2 = 'L8989O2C36UTO7408122F1204159ZE184226B<<<<<10';
+    const repaired = repairOcrConfusions(L1, badL2, 26);
+    expect(repaired.valid).toBe(true);
+    expect(repaired.fields.passportNumber).toBe('L898902C3');
+  });
+
+  test('leaves an already-valid MRZ untouched', () => {
+    const repaired = repairOcrConfusions(L1, L2, 26);
+    expect(repaired.valid).toBe(true);
+    expect(repaired.fields.passportNumber).toBe('L898902C3');
+  });
+
+  test('parseMrz applies the repair automatically', () => {
+    const badL2 = 'L898902C36UTO74O8122F1204159ZE184226B<<<<<10';
+    const parsed = parseMrz(`${L1}\n${badL2}`, { nowYearLast2: 26 });
+    expect(parsed.valid).toBe(true);
+    expect(parsed.fields.dateOfBirth).toBe('1974-08-12');
+  });
+
+  test('repairs misused name separators without corrupting name letters', () => {
+    // OCR doubled the chevron between given names: 'ERIKSSON<<ANNA<<MARIA'.
+    // The structural repair should collapse the second '<<' to a single '<'
+    // because only the surname/first-given boundary uses '<<'.
+    const badL1 = 'P<UTOERIKSSON<<ANNA<<MARIA<<<<<<<<<<<<<<<<<<';
+    const parsed = parseMrz(`${badL1}\n${L2}`, { nowYearLast2: 26 });
+    expect(parsed.valid).toBe(true);
+    expect(parsed.fields.surname).toBe('ERIKSSON');
+    expect(parsed.fields.givenNames).toBe('ANNA MARIA');
+  });
+});
+
+describe('parseFullDate', () => {
+  test('parses DDMMYYYY into ISO date', () => {
+    expect(parseFullDate('27071987', 'dob')).toBe('1987-07-27');
+    expect(parseFullDate('12012021', 'expiry')).toBe('2021-01-12');
+  });
+  test('rejects invalid calendar dates', () => {
+    expect(parseFullDate('31022021', 'dob')).toBeNull(); // Feb 31
+    expect(parseFullDate('27131987', 'dob')).toBeNull(); // month 13
+  });
+});
+
+describe('parseTd3FullDate — non-ICAO layout', () => {
+  const l1 = 'P<BINNASSER<<HUDA<AL<<<<<<<<<<<<<<<<<<<<<<<<';
+  const l2 = 'P90S12345ARE27071987F12012021<<<<<<<<<<<<<<8';
+
+  test('reads positional fields from a UAE-style full-date MRZ', () => {
+    const r = parseTd3FullDate(l1, l2, 26);
+    expect(r.fields.passportNumber).toBe('P90S12345');
+    expect(r.fields.nationality).toBe('ARE');
+    expect(r.fields.dateOfBirth).toBe('1987-07-27');
+    expect(r.fields.dateOfExpiry).toBe('2021-01-12');
+    expect(r.fields.sex).toBe('F');
+    expect(r.fields.surname).toBe('BINNASSER');
+    expect(r.fields.givenNames).toBe('HUDA AL');
+    expect(r.nonIcao).toBe(true);
+  });
+
+  test('parseMrz falls back to the full-date parser when ICAO checks fail', () => {
+    const r = parseMrz(`${l1}\n${l2}`, { nowYearLast2: 26 });
+    expect(r).not.toBeNull();
+    expect(r.fields.passportNumber).toBe('P90S12345');
+    expect(r.fields.dateOfBirth).toBe('1987-07-27');
   });
 });

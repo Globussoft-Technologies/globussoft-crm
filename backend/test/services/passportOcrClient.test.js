@@ -131,12 +131,37 @@ describe('extractPassport — image input resolution', () => {
   });
 });
 
-describe('extractPassport — MRZ + VIZ hybrid (malformed MRZ rescued by the printed zone)', () => {
-  // Mirrors the real UAE specimen: the MRZ second line uses FULL dates instead
-  // of the ICAO YYMMDD+check-digit layout, so every MRZ check digit fails and
-  // the positional dates/nationality come out wrong. The printed visual zone,
-  // however, has the correct values under labels.
-  const BAD_MRZ = [
+describe('extractPassport — VIZ cross-check catches MRZ digit/letter slips', () => {
+  // The MRZ check digit can pass even when a digit is misread as a letter
+  // (G at position 3 has the same modulo-10 weight as 6). The printed page
+  // usually shows the correct passport number, so we use it as a tie-breaker
+  // when it is consistent with the MRZ check digit.
+  const UAE_MRZ = [
+    'P<ARESHAMSI<<MAJID<AL<<<<<<<<<<<<<<<<<<<<<<<<<',
+    'Q34G567890ARE2303196M2604206<<<<<<<<<<<<<<08',
+  ].join('\n');
+  const UAE_VIZ = [
+    'UNITED ARAB EMIRATES',
+    'Passport No Q34656789',
+    'Names SHAMSI MAJID AL',
+  ].join('\n');
+
+  test('prefers VIZ passport number when MRZ digit/letter confusion passes check digit', async () => {
+    const res = await extractPassport({
+      tenantId: 1, fileBuffer: IMG,
+      ocr: async () => ({ mrzText: UAE_MRZ, vizText: UAE_VIZ, confidence: 80 }),
+    });
+    expect(res.extraction.passportNumber).toBe('Q34656789');
+    expect(res.extraction.dateOfBirth).toBe('2023-03-19');
+    expect(res.extraction.dateOfExpiry).toBe('2026-04-20');
+    expect(res.note).toMatch(/disagreed/i);
+  });
+});
+
+describe('extractPassport — non-ICAO full-date MRZ (e.g. UAE)', () => {
+  // Some passports use full DDMMYYYY dates and omit ICAO check digits. The
+  // parser detects this layout and reads the fields positionally from the MRZ.
+  const UAE_MRZ = [
     'P<BINNASSER<<HUDA<AL<<<<<<<<<<<<<<<<<<<<<<<<',
     'P90S12345ARE27071987F12012021<<<<<<<<<<<<<<8',
   ].join('\n');
@@ -149,22 +174,23 @@ describe('extractPassport — MRZ + VIZ hybrid (malformed MRZ rescued by the pri
     'Date of Expiry 12/01/2021   Date of Issue 12/01/2016',
   ].join('\n');
 
-  test('prefers the VIZ values for the fields the MRZ check digits reject', async () => {
+  test('reads positional fields from the non-ICAO MRZ layout', async () => {
     const res = await extractPassport({
       tenantId: 1, fileBuffer: IMG,
-      ocr: async () => ({ mrzText: BAD_MRZ, vizText: VIZ, confidence: 70 }),
+      ocr: async () => ({ mrzText: UAE_MRZ, vizText: VIZ, confidence: 70 }),
     });
-    // Correct values now come from the printed zone, not the broken MRZ.
     expect(res.extraction.passportNumber).toBe('P90S12345');
     expect(res.extraction.dateOfBirth).toBe('1987-07-27');
-    expect(res.extraction.dateOfExpiry).toBe('2021-01-12'); // not the garbled MRZ date
-    expect(res.extraction.nationality).toBe('ARE'); // not "RE2"
-    // Name comes from the VIZ (MRZ line-1 filler was misread as K/L runs).
-    expect(res.extraction.givenNames).toMatch(/HUDA BIN NASSER/);
-    // Flagged for operator double-check since the MRZ didn't validate.
+    expect(res.extraction.dateOfExpiry).toBe('2021-01-12');
+    expect(res.extraction.nationality).toBe('ARE');
+    expect(res.extraction.surname).toBe('BINNASSER');
+    expect(res.extraction.givenNames).toBe('HUDA AL');
+    expect(res.extraction.sex).toBe('F');
+    // VIZ-only fields still come from the printed page.
+    expect(res.extraction.dateOfIssue).toBe('2016-01-12');
     expect(res.mrzFound).toBe(true);
     expect(res.vizFound).toBe(true);
-    expect(res.note).toMatch(/printed page/i);
-    expect(res.confidence).toBeGreaterThan(0.4);
+    expect(res.note).toMatch(/non-ICAO/i);
+    expect(res.confidence).toBeGreaterThan(0.6);
   });
 });

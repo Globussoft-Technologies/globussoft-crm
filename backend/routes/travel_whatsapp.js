@@ -308,6 +308,38 @@ router.post(
   },
 );
 
+// POST /whatsapp/threads/:id/backfill-history — pull this ONE chat's complete
+// history from WhatsApp Web. Not ADMIN-gated: any operator opening a chat with
+// more history than the CRM has stored can trigger it (read-only pull against
+// the linked account, same trust level as viewing the thread). See
+// whatsappWebClient.backfillThreadHistory for why this is per-thread rather
+// than part of the bulk import sweep.
+router.post(
+  "/whatsapp/threads/:id/backfill-history",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+      const thread = await prisma.whatsAppThread.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: { id: true },
+      });
+      if (!thread) return res.status(404).json({ error: "Thread not found" });
+      if (!watiClient.isEnabled(req.travelTenant.id)) {
+        const nr = notReadyResponse(req.travelTenant.id);
+        return res.status(nr.status).json(nr.body);
+      }
+      const result = await watiClient.backfillThreadHistory(req.travelTenant.id, id);
+      res.json(result);
+    } catch (e) {
+      console.error("[travel-whatsapp] backfill-history error:", e.message);
+      res.status(500).json({ error: "Failed to backfill history", code: "WA_BACKFILL_FAILED" });
+    }
+  },
+);
+
 // POST /whatsapp/disconnect — tear down the session. body { logout:true }
 // also clears the saved link so the next connect needs a fresh scan.
 router.post(

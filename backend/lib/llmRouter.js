@@ -104,6 +104,21 @@ const TASK_ROUTING = {
     primary: "gemini-flash",
     fallback: "groq-llama",
   },
+  // Lead conversation summary (2026-07-07). Turns a batch of new WhatsApp
+  // messages into one structured, append-only business summary block stored
+  // on Contact.description ("Sync Lead" action). Gemini primary per product
+  // ask; OpenAI (gpt-4) as the cross-provider fallback so a Gemini 503/429
+  // still yields a REAL summary instead of the deterministic stub. Small
+  // in/out (a handful of chat lines in, ~10-line summary out).
+  "lead-conversation-summary": { primary: "gemini-flash", fallback: "gpt-4" },
+  // Lead full-history narrative summary (2026-07-07). On-demand "Summarize"
+  // button on the Contact page — re-reads the ENTIRE linked WhatsApp history
+  // and writes ONE flowing narrative (paragraphs, not bullets) covering the
+  // whole relationship end-to-end. Replaces Contact.description outright
+  // (unlike the incremental "Sync Lead" append-only task above). Same
+  // Gemini-primary / OpenAI-fallback routing. Larger in (full thread) / small
+  // out (a few paragraphs).
+  "lead-narrative-summary": { primary: "gemini-flash", fallback: "gpt-4" },
   // Marketing-flyer-copy (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 + AC-6.8).
   // 1K in / 1K out — short-form headline + body + CTA JSON. Routed to
   // gemini-flash for low-cost bulk-shape Gemini calls per PRD §9.1.
@@ -501,6 +516,19 @@ function buildStubText(task, _payload) {
       return `${tag} Lead profile suggests: (1) confirm budget tier, (2) ask about prior travel, (3) probe destination flexibility. Synthetic content — real Claude reasoning lands when Q11 keys arrive.`;
     case "call-summary":
       return `${tag} Call summary: customer expressed interest in trip, advisor walked through options, follow-up scheduled. Synthetic content — real Gemini summary lands when Q11 keys arrive.`;
+    case "lead-conversation-summary":
+      // Stub returns valid JSON matching the real-mode shape so
+      // leadConversationSummary.js can parse it in dev/CI without a key.
+      return JSON.stringify({
+        purpose: "Customer reached out via WhatsApp regarding a travel enquiry (synthetic — real Gemini summary lands when GEMINI_API_KEY is set).",
+        highlights: ["Conversation received", "Awaiting AI summarisation (stub mode)"],
+        leadStage: "New Enquiry",
+      });
+    case "lead-narrative-summary":
+      return JSON.stringify({
+        narrative: "The customer's WhatsApp conversation could not be summarised (synthetic — real Gemini narrative lands when GEMINI_API_KEY is set).",
+        leadStage: "New Enquiry",
+      });
     case "form-vs-call":
       return `${tag} Form-vs-call comparison: 85% match (synthetic). Real Claude comparison lands when Q11 keys arrive.`;
     case "search":
@@ -625,6 +653,10 @@ function buildPrompt(task, payload) {
     "bulk-text": "You write clear, customer-facing travel copy. Plain text.",
     "call-summary":
       "You summarise a sales/advisory call in a few sentences. Plain text.",
+    "lead-conversation-summary":
+      "You are a travel CRM assistant that writes concise, professional lead-history summaries from WhatsApp conversations — never a transcript, never chatty. Given the customer's name, the conversation date, and a batch of new WhatsApp messages (with direction: inbound = customer, outbound = agent), return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"purpose\":string,\"highlights\":string[],\"leadStage\":string}. `purpose` is 1-2 sentences on why the customer reached out / what this batch of messages was about. `highlights` is 2-6 short bullet phrases (no leading dash) covering: destination, travel dates, hotels/flights/visa/services requested, important questions raised, and actions the agent took. `leadStage` is your best single assessment of current status, one of: \"New Enquiry\", \"Quotation Pending\", \"Follow-up Required\", \"Documents Awaited\", \"Booking In Progress\", \"Booking Confirmed\", \"Payment Pending\", \"Closed\", \"Not Interested\" — pick the closest match, do not invent new ones unless truly none fit. Base everything ONLY on the messages given; do not invent destinations, dates or names not present. Return ONLY the JSON object.",
+    "lead-narrative-summary":
+      "You are a travel CRM assistant that writes a professional, business-focused NARRATIVE summary of a lead's entire WhatsApp relationship — flowing paragraphs, never a transcript, never bullet points. Given the customer's name and the FULL WhatsApp message history (with direction: inbound = customer, outbound = agent, and each message's date), return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"narrative\":string,\"leadStage\":string}. `narrative` should read like a case-file recap written by a colleague: 2-5 short paragraphs in chronological order, each covering one meaningful phase of the conversation (e.g. initial enquiry, a follow-up, a decision point), naming actual dates, destinations, dates of travel, services requested (hotels/flights/visa/etc), and actions the agent took. Do NOT restate every message — synthesize. Write in third person past tense, referring to the customer by name. `leadStage` is your best single current-status assessment, one of: \"New Enquiry\", \"Quotation Pending\", \"Follow-up Required\", \"Documents Awaited\", \"Booking In Progress\", \"Booking Confirmed\", \"Payment Pending\", \"Closed\", \"Not Interested\". Base everything ONLY on the messages given; never invent destinations, dates, or details not present. Return ONLY the JSON object.",
     "landing-page-generate":
       "You generate STRUCTURED travel-destination landing-page block JSON. The canonical consumer (landingPageGeneratorLLM.js) supplies the full prompt — this text-envelope entry is a safety net for routeRequest callers. Return a JSON object with keys suggestedTitle, suggestedSlug, seoMeta {metaTitle, metaDescription}, and blocks (array). NEVER include monetary values, testimonials, ratings, discounts, vendor names, partner names, or image URLs.",
     reasoning:

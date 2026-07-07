@@ -29,7 +29,7 @@ import { useEffect, useState, useContext } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import {
   UserCircle, Mail, Phone, Building, Tag, MapPin, Briefcase,
-  ExternalLink,
+  ExternalLink, MessageSquareText,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -243,6 +243,24 @@ export default function LeadDetail() {
           </div>
         </div>
       </header>
+
+      {/* ─── Section: AI conversation history (from "Sync Lead") ──── */}
+      {contact.description && (
+        <section style={sectionStyle}>
+          <div style={sectionHeader}>
+            <h2 style={sectionTitle}><MessageSquareText size={16} aria-hidden /> Chat Summary</h2>
+          </div>
+          <div style={cardWrap}>
+            <pre style={{
+              margin: 0, padding: 16, whiteSpace: "pre-wrap", wordBreak: "break-word",
+              fontFamily: "inherit", fontSize: 13, lineHeight: 1.6, color: "var(--text-primary)",
+              maxHeight: 480, overflowY: "auto",
+            }}>
+              {contact.description}
+            </pre>
+          </div>
+        </section>
+      )}
 
       {/* ─── Section 2: Diagnostics summary ──────────────────────── */}
       <section style={sectionStyle}>

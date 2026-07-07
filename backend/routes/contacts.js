@@ -504,6 +504,32 @@ router.post('/:id/activities', async (req, res) => {
   }
 });
 
+// "Summarize" (2026-07-07) — on-demand full-history AI narrative. Re-reads
+// EVERY WhatsApp message linked to this contact and REPLACES Contact.description
+// with one flowing narrative + a current lead-stage line. Independent of the
+// incremental "Sync Lead" action on the WhatsApp thread view.
+router.post('/:id/summarize-chat', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid contact ID' });
+    const leadConversationSummary = require('../lib/leadConversationSummary');
+    const result = await leadConversationSummary.narrativeSummarizeContact({
+      tenantId: req.user.tenantId,
+      contactId: id,
+    });
+    if (result.skipped === 'contact-not-found') {
+      return res.status(404).json({ error: 'Contact not found' });
+    }
+    if (result.skipped === 'no-messages') {
+      return res.status(409).json({ error: 'No WhatsApp messages found for this contact yet.', code: 'NO_WHATSAPP_HISTORY' });
+    }
+    res.json(result);
+  } catch (e) {
+    console.error('[contacts] summarize-chat error:', e.message);
+    res.status(500).json({ error: 'Failed to summarize chat', code: 'SUMMARIZE_CHAT_FAILED' });
+  }
+});
+
 router.put('/:id', async (req, res) => {
   try {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });

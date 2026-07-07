@@ -3,7 +3,7 @@ import { formatMoney } from '../utils/money';
 import { formatDate, formatDateTime } from '../utils/date';
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Phone, Mail, Calendar, Paperclip, Upload, Trash2, FileText, Download, Target, Pencil } from 'lucide-react';
+import { ArrowLeft, Phone, Mail, Calendar, Paperclip, Upload, Trash2, FileText, Download, Target, Pencil, MessageSquareText, Sparkles } from 'lucide-react';
 
 const ContactDetail = () => {
   const { id } = useParams();
@@ -49,6 +49,21 @@ const ContactDetail = () => {
 
   const loadContact = () => {
     fetchApi(`/api/contacts/${id}`).then(data => setContact(data)).catch(() => {});
+  };
+
+  const [summarizing, setSummarizing] = useState(false);
+  const [summarizeError, setSummarizeError] = useState('');
+  const handleSummarizeChat = async () => {
+    setSummarizing(true);
+    setSummarizeError('');
+    try {
+      await fetchApi(`/api/contacts/${id}/summarize-chat`, { method: 'POST', body: JSON.stringify({}) });
+      loadContact();
+    } catch (err) {
+      setSummarizeError(err?.data?.error || err?.body?.error || err?.message || 'Failed to summarize chat.');
+    } finally {
+      setSummarizing(false);
+    }
   };
 
   const loadAttachments = () => {
@@ -153,6 +168,49 @@ const ContactDetail = () => {
                 </div>
               )}
             </div>
+
+            {/* AI-generated chat summary — append-only via "Sync Lead" on the
+                WhatsApp thread, or fully regenerated as one narrative here.
+                Shown whenever the contact already has a summary OR came in
+                through any WhatsApp-flavoured source (direct auto-capture
+                "whatsapp" or multichannel intake "inbound:whatsapp") — the
+                Summarize button itself 404/409s harmlessly if there's no
+                WhatsApp history to read yet. */}
+            {(contact.description || /whatsapp/i.test(contact.source || '')) && (
+              <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', gap: '0.5rem' }}>
+                  <h4 style={{ fontSize: '0.85rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <MessageSquareText size={14} /> Chat Summary
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={handleSummarizeChat}
+                    disabled={summarizing}
+                    className="btn-secondary"
+                    title="Regenerate a full narrative summary from the entire WhatsApp history"
+                    style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                  >
+                    <Sparkles size={13} /> {summarizing ? 'Summarizing…' : 'Summarize'}
+                  </button>
+                </div>
+                {summarizeError && (
+                  <p style={{ color: '#ef4444', fontSize: '0.75rem', margin: '0 0 0.5rem' }}>{summarizeError}</p>
+                )}
+                {contact.description ? (
+                  <pre style={{
+                    margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    fontFamily: 'inherit', fontSize: '0.8rem', lineHeight: 1.6,
+                    color: 'var(--text-secondary)', maxHeight: 360, overflowY: 'auto',
+                  }}>
+                    {contact.description}
+                  </pre>
+                ) : (
+                  <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    No summary yet — click Summarize to generate one from the WhatsApp history.
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Deals */}
             {contact.deals && contact.deals.length > 0 && (

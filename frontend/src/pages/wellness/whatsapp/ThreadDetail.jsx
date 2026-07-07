@@ -1,5 +1,6 @@
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   MessageCircle,
   CheckCheck,
@@ -13,6 +14,7 @@ import {
   Paperclip,
   Smile,
   Send,
+  Sparkles,
 } from 'lucide-react';
 import { useWhatsAppThreads } from './WhatsAppThreadsContext';
 
@@ -29,6 +31,9 @@ export default function ThreadDetail() {
     selectedId,
     detail,
     loadingDetail,
+    hasMoreMessages,
+    loadingOlderMessages,
+    loadOlderMessages,
     isAdmin,
     staff,
     renaming,
@@ -44,6 +49,8 @@ export default function ThreadDetail() {
     optOutContact,
     unblockContact,
     deleteThread,
+    syncLead,
+    syncingLead,
     reply,
     setReply,
     sending,
@@ -63,6 +70,32 @@ export default function ThreadDetail() {
     setNewError,
     setShowNewModal,
   } = useWhatsAppThreads();
+
+  // Scroll container ref — needed to (a) detect "user scrolled near the
+  // top" so we can fetch older messages, and (b) preserve scroll position
+  // across the prepend (otherwise the browser keeps the scrollTOP constant,
+  // which visually yanks the view down to whatever the new top message is).
+  const scrollRef = useRef(null);
+  const prevScrollHeightRef = useRef(null);
+
+  const handleMessagesScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollTop < 80 && hasMoreMessages && !loadingOlderMessages) {
+      prevScrollHeightRef.current = el.scrollHeight;
+      loadOlderMessages();
+    }
+  };
+
+  // After older messages are prepended, restore the scroll offset so the
+  // message the user was looking at stays in the same viewport position
+  // instead of the view jumping to the new top.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || prevScrollHeightRef.current == null) return;
+    el.scrollTop = el.scrollHeight - prevScrollHeightRef.current;
+    prevScrollHeightRef.current = null;
+  }, [detail?.messages]);
 
   return (
     <main style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
@@ -139,7 +172,19 @@ export default function ThreadDetail() {
                     fontSize: '1.05rem', fontWeight: 700, margin: 0,
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
                   }}>
-                    {detail.thread.contact?.name || detail.thread.contactName || detail.thread.patient?.name || detail.thread.contactPhone}
+                    {detail.thread.contactId ? (
+                      <Link
+                        to={`/contacts/${detail.thread.contactId}`}
+                        title="Open this lead's contact page"
+                        style={{ color: 'inherit', textDecoration: 'none' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.textDecoration = 'underline'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
+                      >
+                        {detail.thread.contact?.name || detail.thread.contactName || detail.thread.contactPhone}
+                      </Link>
+                    ) : (
+                      detail.thread.contact?.name || detail.thread.contactName || detail.thread.patient?.name || detail.thread.contactPhone
+                    )}
                   </h2>
                   {isAdmin && (
                     <button
@@ -161,13 +206,32 @@ export default function ThreadDetail() {
             </div>
 
             {/* Row 2 — phone + assignment + snooze info */}
-            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
-              {prettyContactLine(detail.thread.contactPhone)}
+            <p style={{
+              fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0,
+              display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 10px',
+            }}>
+              <span>{prettyContactLine(detail.thread.contactPhone)}</span>
               {detail.thread.assignedTo && (
-                <> · Assigned to {detail.thread.assignedTo.name || detail.thread.assignedTo.email}</>
+                <span>· Assigned to {detail.thread.assignedTo.name || detail.thread.assignedTo.email}</span>
               )}
               {detail.thread.snoozedUntil && (
-                <> · Snoozed until {new Date(detail.thread.snoozedUntil).toLocaleString()}</>
+                <span>· Snoozed until {new Date(detail.thread.snoozedUntil).toLocaleString()}</span>
+              )}
+              {detail.thread.lastLeadSyncedAt && (
+                <span>
+                  · Lead synced{' '}
+                  {detail.thread.contactId ? (
+                    <Link
+                      to={`/contacts/${detail.thread.contactId}`}
+                      title="Open this lead's contact page"
+                      style={{ color: 'inherit' }}
+                    >
+                      {new Date(detail.thread.lastLeadSyncedAt).toLocaleString()}
+                    </Link>
+                  ) : (
+                    new Date(detail.thread.lastLeadSyncedAt).toLocaleString()
+                  )}
+                </span>
               )}
             </p>
 
@@ -211,6 +275,17 @@ export default function ThreadDetail() {
                     ? (detail.thread.assignedTo.name || detail.thread.assignedTo.email)
                     : 'Unassigned'}
                 </span>
+              )}
+              {typeof syncLead === 'function' && detail.thread.contactId && (
+                <button
+                  onClick={syncLead}
+                  disabled={syncingLead}
+                  className="btn-secondary"
+                  title="Summarize new WhatsApp messages into this lead's description"
+                  style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                >
+                  <Sparkles size={14} /> {syncingLead ? 'Syncing…' : 'Sync Lead'}
+                </button>
               )}
               <button onClick={snoozeThread} className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
                 <Clock size={14} /> Snooze
@@ -257,11 +332,23 @@ export default function ThreadDetail() {
               outbound. Dark mode = near-black backdrop + dark-gray inbound
               + muted-teal outbound. Always solid (not translucent) so
               the bubble never blends into the backdrop. */}
-          <div style={{
-            flex: 1, overflowY: 'auto', padding: '1.5rem',
-            display: 'flex', flexDirection: 'column', gap: 18,
-            background: 'var(--chat-bg)',
-          }}>
+          <div
+            ref={scrollRef}
+            onScroll={handleMessagesScroll}
+            style={{
+              flex: 1, overflowY: 'auto', padding: '1.5rem',
+              display: 'flex', flexDirection: 'column', gap: 18,
+              background: 'var(--chat-bg)',
+            }}
+          >
+            {loadingOlderMessages && (
+              <div style={{
+                textAlign: 'center', fontSize: '0.78rem',
+                color: 'var(--text-secondary)', padding: '0.25rem 0',
+              }}>
+                Loading older messages…
+              </div>
+            )}
             {(detail.messages || [])
               // Hide Meta "reaction" events from the chat view — they
               // arrive as full inbound messages with body=null and were

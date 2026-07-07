@@ -178,7 +178,20 @@ function parseViz(text) {
       const name = window
         .replace(/\b(surname|given|names?|holder|signature)\b/gi, " ")
         .match(/[A-Z][A-Z'-]+(?:\s+[A-Z][A-Z'-]+)*/);
-      if (name) out.fullName = name[0].replace(/\s+/g, " ").trim();
+      if (name) {
+        out.fullName = name[0].replace(/\s+/g, " ").trim();
+        // Split into surname (last token) and given names (everything before).
+        // This is a Western/Arabic-name heuristic; the MRZ is authoritative when
+        // available, but the VIZ split lets us populate both fields when only
+        // the printed page is readable.
+        const tokens = out.fullName.split(/\s+/);
+        if (tokens.length >= 2) {
+          out.surname = tokens[tokens.length - 1];
+          out.givenNames = tokens.slice(0, -1).join(" ");
+        } else {
+          out.givenNames = out.fullName;
+        }
+      }
     }
   } catch (_e) { /* ignore */ }
 

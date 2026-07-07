@@ -587,12 +587,20 @@ router.get("/threads", verifyToken, async (req, res) => {
   }
 });
 
-// GET /threads/:id — thread detail with last 50 messages
+// GET /threads/:id — thread detail with the most recent messages.
+//
+// Pagination: `?before=<messageId>` returns the 50 messages immediately
+// older than that message (for infinite-scroll-up in the UI), instead of
+// the newest 50. `hasMoreMessages` tells the frontend whether another
+// older page exists so it can stop issuing scroll-triggered fetches.
 router.get("/threads/:id", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id))
       return res.status(400).json({ error: "invalid id" });
+
+    const beforeId = parseInt(req.query.before);
+    const take = 50;
 
     const thread = await prisma.whatsAppThread.findFirst({
       where: { id, tenantId: req.user.tenantId },
@@ -604,17 +612,31 @@ router.get("/threads/:id", verifyToken, async (req, res) => {
     });
     if (!thread) return res.status(404).json({ error: "Thread not found" });
 
-    const messages = await prisma.whatsAppMessage.findMany({
+    const where = {
+      threadId: thread.id,
+      tenantId: req.user.tenantId,
       // Exclude soft-deleted messages from the operator's chat view.
       // The rows stay in the DB for audit/compliance — only hidden from UI.
-      where: {
-        threadId: thread.id,
-        tenantId: req.user.tenantId,
-        deletedAt: null,
-      },
+      deletedAt: null,
+    };
+
+    if (Number.isFinite(beforeId)) {
+      const cursorMsg = await prisma.whatsAppMessage.findFirst({
+        where: { id: beforeId, threadId: thread.id, tenantId: req.user.tenantId },
+        select: { createdAt: true },
+      });
+      // Compare on createdAt (not id) since ordering is chronological —
+      // guards against a beforeId from a different thread being ignored.
+      if (cursorMsg) where.createdAt = { lt: cursorMsg.createdAt };
+    }
+
+    const messages = await prisma.whatsAppMessage.findMany({
+      where,
       orderBy: { createdAt: "desc" },
-      take: 50,
+      take: take + 1,
     });
+    const hasMoreMessages = messages.length > take;
+    const page = messages.slice(0, take).reverse(); // ascending for UI render
 
     // Check for opt-out so the frontend can disable the reply box.
     const optOut = await prisma.whatsAppOptOut.findUnique({
@@ -628,7 +650,8 @@ router.get("/threads/:id", verifyToken, async (req, res) => {
 
     res.json({
       thread,
-      messages: messages.reverse(), // ascending for UI render
+      messages: page,
+      hasMoreMessages,
       // Include opt-out `id` so the frontend can call DELETE /opt-outs/:id
       // (the Unblock action). Without the id the frontend would have to do
       // a second lookup just to find the row to delete.

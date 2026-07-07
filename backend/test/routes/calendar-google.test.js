@@ -342,7 +342,8 @@ describe('GET /api/calendar/google/callback', () => {
     expect(oauth2State.getToken).toHaveBeenCalledWith('auth-code-xyz');
     expect(prisma.calendarIntegration.upsert).toHaveBeenCalledTimes(1);
     const upsertArgs = prisma.calendarIntegration.upsert.mock.calls[0][0];
-    expect(upsertArgs.where.userId_provider).toEqual({
+    expect(upsertArgs.where.tenantId_userId_provider).toEqual({
+      tenantId: 1,
       userId: 7,
       provider: 'google',
     });
@@ -462,7 +463,8 @@ describe('POST /api/calendar/google/sync', () => {
     // lastSyncAt stamped at the end.
     expect(prisma.calendarIntegration.update).toHaveBeenCalledTimes(1);
     const lastSync = prisma.calendarIntegration.update.mock.calls[0][0];
-    expect(lastSync.where.userId_provider).toEqual({
+    expect(lastSync.where.tenantId_userId_provider).toEqual({
+      tenantId: 1,
       userId: 7,
       provider: 'google',
     });
@@ -878,7 +880,8 @@ describe('DELETE /api/calendar/google/disconnect', () => {
     expect(res.body).toEqual({ success: true });
     expect(prisma.calendarIntegration.delete).toHaveBeenCalledTimes(1);
     const args = prisma.calendarIntegration.delete.mock.calls[0][0];
-    expect(args.where.userId_provider).toEqual({
+    expect(args.where.tenantId_userId_provider).toEqual({
+      tenantId: 1,
       userId: 7,
       provider: 'google',
     });

@@ -143,7 +143,7 @@ async function getAuthorizedClientForUser(userId, tenantId) {
       if (tokens.expiry_date) data.expiresAt = new Date(tokens.expiry_date);
       if (Object.keys(data).length) {
         await prisma.gmailIntegration.update({
-          where: { userId_provider: { userId, provider: PROVIDER } },
+          where: { tenantId_userId_provider: { tenantId, userId, provider: PROVIDER } },
           data,
         });
       }
@@ -209,7 +209,7 @@ router.get("/callback", async (req, res) => {
     }
 
     await prisma.gmailIntegration.upsert({
-      where: { userId_provider: { userId, provider: PROVIDER } },
+      where: { tenantId_userId_provider: { tenantId, userId, provider: PROVIDER } },
       create: {
         userId,
         provider: PROVIDER,
@@ -247,7 +247,7 @@ router.get("/callback", async (req, res) => {
 router.get("/status", verifyToken, async (req, res) => {
   try {
     const integration = await prisma.gmailIntegration.findUnique({
-      where: { userId_provider: { userId: req.user.userId, provider: PROVIDER } },
+      where: { tenantId_userId_provider: { tenantId: req.user.tenantId, userId: req.user.userId, provider: PROVIDER } },
     });
     if (!integration) {
       return res.json({ connected: false });
@@ -267,7 +267,7 @@ router.get("/status", verifyToken, async (req, res) => {
 router.delete("/disconnect", verifyToken, async (req, res) => {
   try {
     await prisma.gmailIntegration
-      .delete({ where: { userId_provider: { userId: req.user.userId, provider: PROVIDER } } })
+      .delete({ where: { tenantId_userId_provider: { tenantId: req.user.tenantId, userId: req.user.userId, provider: PROVIDER } } })
       .catch((err) => {
         if (err && err.code === "P2025") return null; // already gone — fine
         throw err;

@@ -465,7 +465,7 @@ describe('PUT /api/landing-pages/:id (update)', () => {
     expect(res.body).toMatchObject({ tripId: 42 });
     expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith({
       where: { id: 42, tenantId: 1 },
-      select: { id: true },
+      select: { id: true, tripCode: true, paymentPlan: true },
     });
     expect(prisma.landingPage.update.mock.calls[0][0].data).toMatchObject({ tripId: 42 });
   });

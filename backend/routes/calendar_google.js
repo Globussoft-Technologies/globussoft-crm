@@ -128,7 +128,7 @@ router.get("/callback", async (req, res) => {
     const tenantId = decoded.tenantId ? parseInt(decoded.tenantId, 10) : 1;
 
     await prisma.calendarIntegration.upsert({
-      where: { userId_provider: { userId, provider: "google" } },
+      where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
       create: {
         userId,
         provider: "google",
@@ -238,7 +238,7 @@ router.post("/sync", verifyToken, async (req, res) => {
     } while (pageToken);
 
     await prisma.calendarIntegration.update({
-      where: { userId_provider: { userId, provider: "google" } },
+      where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
       data: { lastSyncAt: new Date() },
     });
 
@@ -275,7 +275,7 @@ router.get("/events", verifyToken, async (req, res) => {
 
     // Check if integration exists first
     const integration = await prisma.calendarIntegration.findUnique({
-      where: { userId_provider: { userId, provider: "google" } },
+      where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
     });
 
     if (!integration) {
@@ -558,7 +558,7 @@ router.delete("/disconnect", verifyToken, async (req, res) => {
   try {
     await prisma.calendarIntegration
       .delete({
-        where: { userId_provider: { userId: req.user.userId, provider: "google" } },
+        where: { tenantId_userId_provider: { tenantId: req.user.tenantId, userId: req.user.userId, provider: "google" } },
       })
       .catch((err) => {
         if (err && err.code === "P2025") return null; // not found is fine

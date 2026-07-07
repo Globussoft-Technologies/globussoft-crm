@@ -198,7 +198,7 @@ describe('cron/lowStockEngine — happy path', () => {
     await runLowStockForTenant(TENANT);
 
     const arg = prisma.notification.createMany.mock.calls[0][0];
-    expect(arg.data[0].link).toBe('/inventory/low-stock?productId=999');
+    expect(arg.data[0].link).toBe('/wellness/products?productId=999');
   });
 
   test('notification type is "warning"', async () => {
@@ -349,7 +349,7 @@ describe('cron/lowStockEngine — 24h dedup gate', () => {
     expect(prisma.notification.findFirst).toHaveBeenCalledTimes(1);
     const arg = prisma.notification.findFirst.mock.calls[0][0];
     expect(arg.where.tenantId).toBe('tenant-W');
-    expect(arg.where.link).toBe('/inventory/low-stock?productId=42');
+    expect(arg.where.link).toBe('/wellness/products?productId=42');
     expect(arg.where.createdAt).toHaveProperty('gte');
     const gte = arg.where.createdAt.gte.getTime();
     // Window is 24h ago — should be within ~24h ± a few seconds.

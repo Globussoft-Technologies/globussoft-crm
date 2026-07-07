@@ -296,6 +296,14 @@ describe('fetchStrategy — full TeeOutput.imageStrategy', () => {
       { url: 'https://pex.example/dup-a.jpg', attribution: { providerId: 'pexels' } },
       { url: 'https://pex.example/dup-b.jpg', attribution: { providerId: 'pexels' } },
     ]);
+    // AI fallback is last-resort and may hit real network (Gemini/DALL-E)
+    // in CI; pin it to a fast, predictable unique URL so the dedup loop
+    // converges without timing out.
+    let aiCounter = 0;
+    vi.spyOn(aiImageFallbackProvider, 'search').mockImplementation(async () => {
+      aiCounter += 1;
+      return [{ url: `https://ai.example/fallback-${aiCounter}.jpg`, attribution: { providerId: 'ai-fallback' } }];
+    });
     const result = await provider.fetchStrategy({
       hero: { query: 'h', aspectRatio: '4:3' },
       marquee: [

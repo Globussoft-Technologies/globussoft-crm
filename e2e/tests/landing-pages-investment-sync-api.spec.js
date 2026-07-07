@@ -10,13 +10,30 @@ const { test, expect } = require('@playwright/test');
 
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const API_BASE = `${BASE_URL}/api`;
+const REQUEST_TIMEOUT = 60000;
 
 let adminHeaders;
 
+async function loginAs(request, email, password) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await request.post(`${API_BASE}/auth/login`, {
+        data: { email, password },
+        headers: { 'Content-Type': 'application/json' },
+        timeout: REQUEST_TIMEOUT,
+      });
+      if (r.ok()) return (await r.json()).token;
+    } catch (_e) { if (attempt === 0) continue; }
+  }
+  return null;
+}
+
 test.describe('landing-pages-investment-sync-api', () => {
-  test.beforeAll(async ({}) => {
+  test.beforeAll(async ({ request }) => {
+    const token = await loginAs(request, 'yasin@travelstall.in', 'password123');
+    expect(token, 'travel admin login must succeed').toBeTruthy();
     adminHeaders = {
-      'Authorization': `Bearer ${process.env.ADMIN_TOKEN || 'demo-admin-token'}`,
+      'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
     };
   });
@@ -27,7 +44,7 @@ test.describe('landing-pages-investment-sync-api', () => {
       headers: adminHeaders,
       data: {
         tripCode: 'tmc-test-sync-001',
-        schoolContactId: 1,
+        schoolName: "Test School",
         destination: 'Jaipur',
         departDate: new Date(Date.now() + 30 * 86400000).toISOString(),
         returnDate: new Date(Date.now() + 40 * 86400000).toISOString(),
@@ -114,7 +131,7 @@ test.describe('landing-pages-investment-sync-api', () => {
       headers: adminHeaders,
       data: {
         tripCode: 'tmc-test-sync-002',
-        schoolContactId: 1,
+        schoolName: "Test School",
         destination: 'Andaman',
         departDate: new Date(Date.now() + 50 * 86400000).toISOString(),
         returnDate: new Date(Date.now() + 60 * 86400000).toISOString(),
@@ -222,7 +239,7 @@ test.describe('landing-pages-investment-sync-api', () => {
       headers: adminHeaders,
       data: {
         tripCode: 'tmc-test-no-plan',
-        schoolContactId: 1,
+        schoolName: "Test School",
         destination: 'Kerala',
         departDate: new Date(Date.now() + 70 * 86400000).toISOString(),
         returnDate: new Date(Date.now() + 80 * 86400000).toISOString(),
@@ -264,7 +281,7 @@ test.describe('landing-pages-investment-sync-api', () => {
       headers: adminHeaders,
       data: {
         tripCode: 'tmc-test-preserve',
-        schoolContactId: 1,
+        schoolName: "Test School",
         destination: 'Goa',
         departDate: new Date(Date.now() + 90 * 86400000).toISOString(),
         returnDate: new Date(Date.now() + 100 * 86400000).toISOString(),

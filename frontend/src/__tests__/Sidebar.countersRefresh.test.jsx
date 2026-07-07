@@ -55,9 +55,9 @@ import { fetchApi } from '../utils/api';
 
 // Counter-fetching endpoints we care about — Sidebar wires four with `silent: true`.
 const COUNTER_URLS = [
-  '/api/contacts?status=Lead',
-  '/api/tasks?status=PENDING',
-  '/api/tickets?status=OPEN',
+  '/api/contacts?status=Lead&count=1',
+  '/api/tasks?status=PENDING&count=1',
+  '/api/tickets?status=OPEN&count=1',
   '/api/email?unread=1',
 ];
 
@@ -160,7 +160,7 @@ describe('Sidebar counter refresh — #625', () => {
 
     // Wait for initial-mount fetches to settle (at least one call landed).
     await waitFor(() => {
-      expect(callsForUrl('/api/tasks?status=PENDING')).toBeGreaterThanOrEqual(1);
+      expect(callsForUrl('/api/tasks?status=PENDING&count=1')).toBeGreaterThanOrEqual(1);
     });
 
     const baseline = COUNTER_URLS.map(callsForUrl);

@@ -310,7 +310,8 @@ describe('GET /api/calendar/outlook/callback', () => {
     // Integration upserted under provider='microsoft' keyed by userId.
     expect(prisma.calendarIntegration.upsert).toHaveBeenCalledTimes(1);
     const upsertArgs = prisma.calendarIntegration.upsert.mock.calls[0][0];
-    expect(upsertArgs.where.userId_provider).toEqual({
+    expect(upsertArgs.where.tenantId_userId_provider).toEqual({
+      tenantId: 1,
       userId: 7,
       provider: 'microsoft',
     });

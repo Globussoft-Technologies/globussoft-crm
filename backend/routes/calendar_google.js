@@ -1,6 +1,6 @@
 // Google Calendar OAuth + sync integration
 const path = require("path");
-require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
+require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true });
 
 const express = require("express");
 const crypto = require("crypto");
@@ -364,8 +364,8 @@ router.post("/events", verifyToken, async (req, res) => {
 
     const attendeesArr = Array.isArray(attendees)
       ? attendees
-          .map((a) => (typeof a === "string" ? { email: a } : a))
-          .filter((a) => a && a.email)
+        .map((a) => (typeof a === "string" ? { email: a } : a))
+        .filter((a) => a && a.email)
       : [];
 
     // Create the Zoom meeting up-front (if requested + configured) so its join
@@ -556,9 +556,11 @@ router.get("/slots", verifyToken, async (req, res) => {
 // DELETE /disconnect — remove integration row
 router.delete("/disconnect", verifyToken, async (req, res) => {
   try {
+    const userId = req.user.userId;
+    const tenantId = req.user.tenantId || 1;
     await prisma.calendarIntegration
       .delete({
-        where: { tenantId_userId_provider: { tenantId: req.user.tenantId, userId: req.user.userId, provider: "google" } },
+        where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
       })
       .catch((err) => {
         if (err && err.code === "P2025") return null; // not found is fine

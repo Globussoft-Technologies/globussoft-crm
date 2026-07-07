@@ -798,6 +798,13 @@ model Contact {
   // tombstone the referred Contact's analytics row.
   referrerContactId Int?
 
+  // AI-generated, append-only WhatsApp conversation history (2026-07-07).
+  // Each "Sync Lead" click on a linked WhatsAppThread summarizes the
+  // messages received since the last sync and appends a new dated block
+  // here — never overwritten, never regenerated. See
+  // backend/lib/leadConversationSummary.js.
+  description String? @db.Text
+
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.
@@ -1980,6 +1987,13 @@ model WhatsAppThread {
   labels        String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  // "Sync Lead" AI-description incremental tracking (2026-07-07). Records the
+  // highest WhatsAppMessage.id already folded into the linked Contact's
+  // description, so the next sync only summarizes messages newer than this —
+  // never re-summarizes, never overwrites prior history. Null = never synced.
+  lastLeadSyncedMessageId Int?
+  lastLeadSyncedAt        DateTime?
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)

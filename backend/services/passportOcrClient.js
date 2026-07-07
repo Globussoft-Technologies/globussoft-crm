@@ -3,8 +3,8 @@
 // Real, credential-free, on-box OCR focused on the passport MRZ (the two
 // machine-readable lines at the bottom):
 //
-//   image ─► jimp preprocess (greyscale + contrast + upscale; MRZ-band crop)
-//         ─► tesseract.js (eng, OCR-B-ish, MRZ char whitelist)
+//   image ─► sharp preprocess (deskew + adaptive threshold + MRZ-band crop)
+//         ─► tesseract.js (eng/osd, OCR-B-ish, MRZ char whitelist)
 //         ─► lib/mrzParser.js (ICAO 9303 TD3) ─► fields + check digits
 //         ─► extraction envelope (SAME shape as the old stub)
 //
@@ -25,8 +25,9 @@
 
 const fs = require("fs");
 const path = require("path");
-const { parseMrz } = require("../lib/mrzParser");
+const { parseMrz, computeCheckDigit } = require("../lib/mrzParser");
 const { parseViz } = require("../lib/passportVizParser");
+const passportImagePipeline = require("../lib/passportImagePipeline");
 
 const INTEGRATION = "passport-ocr";
 const PROVIDER = "local-mrz-v1";
@@ -43,6 +44,35 @@ const MRZ_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<";
 // worker's langPath with gzip:false; otherwise the default CDN path is used.
 const LANG_PATH = process.env.PASSPORT_OCR_LANG_PATH
   || (fs.existsSync(path.join(__dirname, "..", "eng.traineddata")) ? path.join(__dirname, "..") : null);
+
+// MRZ-specific OCR-B traineddata. We keep it optional: if `ocrb.traineddata`
+// exists locally (or in the configured LANG_PATH) we use it for the MRZ passes
+// and fall back to `eng` for the visual zone. This avoids fetching from the CDN
+// on outbound-restricted servers and lets us ship a model tuned for the MRZ
+// monospace/OCR-B glyph set.
+const MRZ_LANG = (() => {
+  if (!LANG_PATH) return "eng";
+  const hasOcrb = fs.existsSync(path.join(LANG_PATH, "ocrb.traineddata"));
+  return hasOcrb ? "ocrb" : "eng";
+})();
+const VIZ_LANG = "eng";
+
+// Pre-load both language packs so reinitializing between MRZ and VIZ passes
+// does not hit the network. If `ocrb` is not available, `eng` is used for both.
+const WORKER_LANGS = MRZ_LANG === "ocrb" ? "eng+ocrb" : "eng";
+
+// OSD orientation detection is DISABLED by default. tesseract.js will crash
+// the Node process if `osd.traineddata` is not locally available and the CDN
+// download fails/blocked. Only enable when PASSPORT_OCR_OSD=1 AND the file is
+// present locally (or inside the configured LANG_PATH).
+function isOsdEnabled() {
+  if (process.env.PASSPORT_OCR_OSD !== "1") return false;
+  const candidates = [
+    LANG_PATH && path.join(LANG_PATH, "osd.traineddata"),
+    path.join(__dirname, "..", "osd.traineddata"),
+  ].filter(Boolean);
+  return candidates.some((p) => fs.existsSync(p));
+}
 
 // OCR is CPU/RAM heavy and runs inline in the request (review #3). A small
 // in-process semaphore bounds how many recognitions run at once so a burst of
@@ -81,28 +111,20 @@ function resolveImageBuffer({ filePath, fileBuffer }) {
   return null;
 }
 
-// Preprocess for OCR with jimp: optional crop to the bottom MRZ band, then
-// greyscale + contrast + upscale (tesseract reads big, high-contrast glyphs
-// far better). Returns a PNG Buffer, or null if anything fails (caller then
-// OCRs the raw bytes — preprocessing is an optimization, never a hard
-// dependency).
+// Preprocess for OCR. Delegates to the sharp-based pipeline (deskew, adaptive
+// threshold, MRZ band detection, upscale). Returns a PNG Buffer, or null on any
+// failure — the caller then falls back to raw bytes.
 async function preprocessImage(buffer, { mrzBand } = {}) {
   try {
-    const { Jimp } = await import("jimp");
-    const img = await Jimp.read(buffer);
-    if (mrzBand) {
-      const w = img.bitmap.width;
-      const h = img.bitmap.height;
-      const top = Math.floor(h * 0.7); // MRZ sits in the bottom ~30%
-      img.crop({ x: 0, y: top, w, h: h - top });
-    }
-    img.greyscale().contrast(0.4);
-    const curW = img.bitmap.width;
-    if (curW > 0 && curW < 1400) {
-      const factor = Math.min(4, Math.max(2, Math.ceil(1400 / curW)));
-      img.scale(factor);
-    }
-    return await img.getBuffer("image/png");
+    return await passportImagePipeline.preprocessImage(buffer, { mrzBand });
+  } catch (_e) {
+    return null;
+  }
+}
+
+async function preprocessForViz(buffer) {
+  try {
+    return await passportImagePipeline.preprocessForViz(buffer);
   } catch (_e) {
     return null;
   }
@@ -111,15 +133,16 @@ async function preprocessImage(buffer, { mrzBand } = {}) {
 // Run OCR over an image buffer → { mrzText, vizText, confidence }.
 //
 // opts.ocr is a test/vendor seam: when provided, it fully replaces the engine
-// (no jimp, no worker created). Its return is normalised — { text } feeds both
+// (no sharp, no worker created). Its return is normalised — { text } feeds both
 // MRZ and VIZ; { mrzText, vizText } feeds them separately.
 //
-// Real path = two OCR passes on one worker:
-//   - MRZ pass: char whitelist [A-Z0-9<] + PSM 6 over the cropped MRZ band AND
-//     the full image — best signal for the two machine-readable lines.
-//   - VIZ pass: NO whitelist + PSM 3 (auto) over the full image — needed to
-//     read the printed labels ("Date of Birth", mixed case, slashes) that the
-//     MRZ whitelist would strip.
+// Real path = multi-pass strategy:
+//   1. OSD orientation detection (90/180/270 correction).
+//   2. MRZ passes: char whitelist [A-Z0-9<] + PSM 6 over (a) cropped MRZ band,
+//      (b) full preprocessed page, (c) raw image — parsed and voted by MRZ
+//      check-digit score so the best readable copy wins.
+//   3. VIZ pass: no whitelist + PSM 3 over the deskewed full page for printed
+//      labels ("Date of Birth", mixed case, slashes).
 async function runOcr(imageBuffer, opts = {}) {
   if (typeof opts.ocr === "function") {
     const r = (await opts.ocr(imageBuffer)) || {};
@@ -129,42 +152,121 @@ async function runOcr(imageBuffer, opts = {}) {
       confidence: r.confidence ?? null,
     };
   }
-  const { createWorker } = await import("tesseract.js");
-  // langPath (when configured) makes tesseract load a local traineddata file
-  // instead of the CDN — required on outbound-restricted servers.
-  const workerOpts = LANG_PATH ? { langPath: LANG_PATH, gzip: false } : {};
-  const worker = await createWorker("eng", 1, workerOpts);
-  try {
-    const band = await preprocessImage(imageBuffer, { mrzBand: true });
-    const full = await preprocessImage(imageBuffer, { mrzBand: false });
 
-    // ── MRZ pass ──
+  const { createWorker } = await import("tesseract.js");
+  const workerOpts = LANG_PATH ? { langPath: LANG_PATH, gzip: false } : {};
+
+  // Try to load the preferred language pack (eng+ocrb when ocrb is available).
+  // If that fails — e.g. a corrupted or incompatible traineddata file — fall
+  // back to eng alone so OCR doesn't hard-fail for the whole request.
+  let worker;
+  try {
+    worker = await createWorker(WORKER_LANGS, 1, workerOpts);
+    console.log(`[passportOcrClient] worker ready: ${WORKER_LANGS}`);
+  } catch (e) {
+    console.warn(`[passportOcrClient] createWorker(${WORKER_LANGS}) failed, falling back to eng:`, e?.message || e);
+    try {
+      worker = await createWorker("eng", 1, workerOpts);
+      console.log("[passportOcrClient] worker ready: eng (fallback)");
+    } catch (e2) {
+      console.error("[passportOcrClient] createWorker(eng) also failed:", e2?.message || e2);
+      throw e2;
+    }
+  }
+  async function useLanguage(lang) {
+    try {
+      await worker.reinitialize(lang);
+    } catch (e) {
+      console.warn(`[passportOcrClient] reinitialize(${lang}) failed, continuing with current language:`, e?.message || e);
+    }
+  }
+
+  // Helper to run a single recognition pass and always return { text, confidence }.
+  async function recognize(view) {
+    try {
+      const { data } = await worker.recognize(view);
+      return { text: data?.text || "", confidence: Number.isFinite(data?.confidence) ? data.confidence : null };
+    } catch (e) {
+      console.warn("[passportOcrClient] recognize pass failed:", e?.message || e);
+      return { text: "", confidence: null };
+    }
+  }
+
+  try {
+    // ── 1. Orientation detection (opt-in, requires local osd.traineddata) ──
+    let orientedBuffer = imageBuffer;
+    if (isOsdEnabled()) {
+      try {
+        await worker.reinitialize("osd");
+        const osd = await worker.detect(imageBuffer);
+        const deg = osd?.data?.orientation_degrees || 0;
+        if (deg !== 0) {
+          // Rotate the raw buffer first; the preprocessing pipeline then runs on
+          // an upright image. We only handle 90°-step rotations here because the
+          // pipeline's deskew fixes small camera tilt later.
+          const sharp = require("sharp");
+          orientedBuffer = await sharp(imageBuffer)
+            .rotate(deg, { background: { r: 255, g: 255, b: 255 } })
+            .toBuffer();
+        }
+        await useLanguage(MRZ_LANG);
+      } catch (e) {
+        console.warn("[passportOcrClient] OSD failed, continuing without rotation:", e?.message || e);
+        await useLanguage(MRZ_LANG);
+      }
+    }
+
+    // ── 2. MRZ passes (OCR-B when available, strict MRZ alphabet) ──
+    await useLanguage(MRZ_LANG);
     await worker.setParameters({
       tessedit_char_whitelist: MRZ_WHITELIST,
       tessedit_pageseg_mode: "6",
     });
-    const mrzParts = [];
-    let confidence = null;
-    for (const view of [band, full].filter(Boolean)) {
-      const { data } = await worker.recognize(view);
-      if (data?.text) mrzParts.push(data.text);
-      if (Number.isFinite(data?.confidence)) confidence = Math.max(confidence ?? 0, data.confidence);
-    }
-    if (!mrzParts.length) {
-      const { data } = await worker.recognize(imageBuffer);
-      mrzParts.push(data?.text || "");
-      if (Number.isFinite(data?.confidence)) confidence = data.confidence;
+
+    const band = await preprocessImage(orientedBuffer, { mrzBand: true });
+    const full = await preprocessImage(orientedBuffer, { mrzBand: false });
+    const vizFull = await preprocessForViz(orientedBuffer);
+    console.log("[passportOcrClient] preprocessed views:", { band: !!band, full: !!full, vizFull: !!vizFull });
+
+    const mrzCandidates = [];
+    let bestConfidence = null;
+
+    for (const view of [band, full, orientedBuffer].filter(Boolean)) {
+      const { text, confidence } = await recognize(view);
+      const label = view === band ? "band" : view === full ? "full" : "raw";
+      console.log(`[passportOcrClient] MRZ ${label} text (${text.length} chars):`, text.slice(0, 200).replace(/\n/g, "|"));
+      if (text) {
+        const parsed = parseMrz(text, { nowYearLast2: new Date().getFullYear() % 100 });
+        console.log("[passportOcrClient] MRZ parse:", { found: !!parsed, valid: parsed?.valid, checksPassed: parsed?.checksPassed });
+        mrzCandidates.push({ parsed, text, confidence });
+        if (Number.isFinite(confidence)) bestConfidence = Math.max(bestConfidence ?? 0, confidence);
+      }
     }
 
-    // ── VIZ pass (labels need mixed case + punctuation → no whitelist) ──
+    // Pick the MRZ with the strongest check-digit evidence.
+    let bestMrzText = "";
+    if (mrzCandidates.length) {
+      mrzCandidates.sort((a, b) => {
+        const score = (c) => (c.parsed?.valid ? 100 : 0) + (c.parsed?.checksPassed || 0) + (Number.isFinite(c.confidence) ? c.confidence / 100 : 0);
+        return score(b) - score(a);
+      });
+      bestMrzText = mrzCandidates[0].text;
+    }
+
+    // ── 3. VIZ pass (English, no whitelist, full-page segmentation) ──
     let vizText = "";
     try {
+      await useLanguage(VIZ_LANG);
       await worker.setParameters({ tessedit_char_whitelist: "", tessedit_pageseg_mode: "3" });
-      const { data } = await worker.recognize(full || imageBuffer);
-      vizText = data?.text || "";
+      const { text } = await recognize(vizFull || full || orientedBuffer);
+      vizText = text;
+      console.log(`[passportOcrClient] VIZ text (${text.length} chars):`, text.slice(0, 200).replace(/\n/g, "|"));
     } catch (_e) { /* VIZ is best-effort */ }
 
-    return { mrzText: mrzParts.join("\n"), vizText, confidence };
+    return { mrzText: bestMrzText || mrzCandidates.map((c) => c.text).join("\n"), vizText, confidence: bestConfidence };
+  } catch (runErr) {
+    console.error("[passportOcrClient] runOcr failed:", runErr?.message || runErr, runErr?.stack || "");
+    return { mrzText: "", vizText: "", confidence: null };
   } finally {
     await worker.terminate().catch(() => {});
   }
@@ -175,6 +277,63 @@ async function runOcr(imageBuffer, opts = {}) {
 function nameLooksCorrupted(name) {
   if (!name) return true;
   return /([A-Z])\1{2,}/.test(name) || name.replace(/\s/g, "").length > 30;
+}
+
+// MRZ passport numbers are alphanumeric, but the digit portion is where OCR-B
+// most often slips (G↔6, B↔8, Q↔9, S↔5, Z↔2, O↔0, I↔1). When the MRZ check
+// digit happens to pass for the wrong character we use the VIZ value as a
+// tie-breaker, provided the VIZ number is also consistent with that check digit.
+const OCR_CONFUSIONS = {
+  G: "6", "6": "G",
+  B: "8", "8": "B",
+  Q: "9", "9": "Q",
+  S: "5", "5": "S",
+  Z: "2", "2": "Z",
+  O: "0", "0": "O",
+  I: "1", "1": "I",
+};
+
+function vizCheckDigitMatches(passportNumber, checkChar) {
+  if (!passportNumber || !/^[A-Z0-9<]{1,9}$/.test(passportNumber)) return false;
+  const expected = checkChar === "<" ? 0 : parseInt(checkChar, 10);
+  if (!Number.isInteger(expected)) return false;
+  return computeCheckDigit(passportNumber.padEnd(9, "<")) === expected;
+}
+
+function differsByOneConfusion(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    if (OCR_CONFUSIONS[a[i]] === b[i]) {
+      diff++;
+      continue;
+    }
+    return false;
+  }
+  return diff === 1;
+}
+
+function resolvePassportNumber(mrz, viz) {
+  const mrzNumber = mrz?.fields?.passportNumber || null;
+  const vizNumber = viz?.passportNumber || null;
+  const checkChar = mrz?.mrz?.split("\n")[1]?.[9] || null;
+  if (!mrzNumber) return vizNumber;
+  if (!vizNumber) return mrzNumber;
+  if (vizNumber === mrzNumber) return mrzNumber;
+
+  // If the VIZ number is consistent with the MRZ check digit and differs by a
+  // known single-character OCR confusion, trust the VIZ copy.
+  if (checkChar && vizCheckDigitMatches(vizNumber, checkChar)) {
+    if (differsByOneConfusion(mrzNumber, vizNumber)) return vizNumber;
+    // Also prefer VIZ when the MRZ number has an obvious letter-in-digit slip
+    // (e.g. Q34G56789) and the VIZ number is cleaner.
+    const mrzLettersAfterPos0 = (mrzNumber.slice(1).match(/[A-Z]/g) || []).length;
+    const vizLettersAfterPos0 = (vizNumber.slice(1).match(/[A-Z]/g) || []).length;
+    if (mrzLettersAfterPos0 > vizLettersAfterPos0) return vizNumber;
+  }
+
+  return mrzNumber;
 }
 
 // Race a promise against a timeout; clears the timer on settle.
@@ -329,6 +488,12 @@ async function extractPassport({ tenantId, filePath, fileBuffer, fileName, mimeT
   const mrz = parseMrz(mrzText, { nowYearLast2: new Date().getFullYear() % 100 });
   const viz = parseViz(vizText);
 
+  // Debug aid: when the MRZ is missing but VIZ is present, log the raw OCR
+  // text so we can see why the MRZ lines were not detected.
+  if (process.env.PASSPORT_OCR_DEBUG === "1" || (!mrz && viz)) {
+    console.log("[passportOcrClient] mrzFound:", Boolean(mrz), "vizFound:", Boolean(viz), "mrzText preview:", mrzText.slice(0, 200).replace(/\n/g, "|"), "vizText preview:", vizText.slice(0, 200).replace(/\n/g, "|"));
+  }
+
   if (!mrz && !viz) {
     return manualEnvelope(extractedAt, "Couldn't read the passport's machine-readable zone or printed fields — please verify the fields manually.");
   }
@@ -346,31 +511,52 @@ async function extractPassport({ tenantId, filePath, fileBuffer, fileName, mimeT
 // no check digit (name / nationality / sex) we trust the MRZ when it's broadly
 // valid, else the VIZ. This is what lets a passport with a malformed/non-ICAO
 // MRZ still extract correctly from its printed visual zone.
+//
+// Non-ICAO full-date MRZs (e.g. UAE) have no check digits but a fixed layout we
+// detect explicitly, so we trust their positional fields and only use VIZ for
+// fields the MRZ does not carry (place of birth / issue dates).
 function mergeExtraction(mrz, viz, ocrConfidence) {
   const mf = mrz?.fields || {};
   const checks = mrz?.checks || {};
   const v = viz || {};
   const mrzBroadlyValid = Boolean(checks.passportNumber || checks.dateOfBirth || checks.dateOfExpiry);
+  const nonIcao = mrz?.nonIcao === true;
+  const mrzTrustworthy = mrzBroadlyValid || nonIcao;
 
   // Prefer MRZ when its per-field check passed; else VIZ; else MRZ raw.
   const pickChecked = (mrzVal, vizVal, ok) => (ok ? mrzVal : null) || vizVal || mrzVal || null;
-  // Prefer MRZ when broadly valid; else VIZ; else MRZ raw.
-  const pickTrust = (mrzVal, vizVal) => (mrzBroadlyValid ? mrzVal : null) || vizVal || mrzVal || null;
+  // Prefer MRZ when trustworthy; else VIZ; else MRZ raw.
+  const pickTrust = (mrzVal, vizVal) => (mrzTrustworthy ? mrzVal : null) || vizVal || mrzVal || null;
 
-  // Name: MRZ line 1 is preferred when it's broadly valid AND not corrupted by
-  // misread fillers; otherwise fall back to the printed full name.
+  // Name: MRZ line 1 is preferred when it's trustworthy AND not corrupted by
+  // misread fillers; otherwise fall back to the printed name (split into
+  // surname + given names when the VIZ parser could separate them).
   let surname = mf.surname || null;
   let givenNames = mf.givenNames || null;
-  if (!mrzBroadlyValid || nameLooksCorrupted(mf.surname) || nameLooksCorrupted(mf.givenNames)) {
-    if (v.fullName) { surname = null; givenNames = v.fullName; }
+  if (!mrzTrustworthy || nameLooksCorrupted(mf.surname) || nameLooksCorrupted(mf.givenNames)) {
+    surname = v.surname || null;
+    givenNames = v.givenNames || v.fullName || null;
   }
 
+  // Cross-check the passport number against the VIZ to catch cases where the
+  // MRZ check digit passes for a misread digit/letter (e.g. G↔6). Only run the
+  // cross-check when the MRZ check digit itself is valid; otherwise the normal
+  // MRZ-failed → VIZ fallback path handles it.
+  const passportNumber = checks.passportNumber
+    ? resolvePassportNumber(mrz, viz)
+    : pickChecked(mf.passportNumber, v.passportNumber, checks.passportNumber);
+  const passportNumberChanged = checks.passportNumber && passportNumber && mf.passportNumber && passportNumber !== mf.passportNumber;
+
+  // Sex has no check digit; prefer MRZ when trustworthy, otherwise VIZ.
+  const sex = (mf.sex === "M" || mf.sex === "F" ? mf.sex : null) || v.sex || mf.sex || null;
+  const sexChanged = sex && mf.sex && sex !== mf.sex;
+
   const extraction = {
-    passportNumber: pickChecked(mf.passportNumber, v.passportNumber, checks.passportNumber),
+    passportNumber,
     surname,
     givenNames,
     dateOfBirth: pickChecked(mf.dateOfBirth, v.dateOfBirth, checks.dateOfBirth),
-    sex: mf.sex || v.sex || null,
+    sex,
     nationality: pickTrust(mf.nationality, v.nationality),
     placeOfBirth: null,
     placeOfIssue: null,
@@ -381,8 +567,17 @@ function mergeExtraction(mrz, viz, ocrConfidence) {
 
   let confidence;
   let note = null;
+  if (passportNumberChanged || sexChanged) {
+    note = "The machine-readable zone and the printed page disagreed on passport details; the printed page value was used — please double-check before approving.";
+  }
   if (mrz?.valid) {
     confidence = scoreConfidence(mrz, ocrConfidence);
+  } else if (nonIcao) {
+    // Non-ICAO full-date MRZ: no check digits, but the layout is fixed and was
+    // detected confidently, so confidence is medium-high.
+    const hits = [extraction.passportNumber, extraction.dateOfBirth, extraction.dateOfExpiry, extraction.nationality, extraction.surname, extraction.givenNames].filter(Boolean).length;
+    confidence = Math.round(Math.min(0.88, 0.55 + hits * 0.05) * 100) / 100;
+    note = "This passport uses a non-ICAO machine-readable layout; the fields were read positionally — please double-check before approving.";
   } else {
     // Relied on the visual zone (or a partial MRZ) — score by how many key
     // fields we recovered, and flag for an operator double-check.

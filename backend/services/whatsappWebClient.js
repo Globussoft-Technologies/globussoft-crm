@@ -1707,6 +1707,92 @@ async function getMediaResponse() {
   return null;
 }
 
+// Per-tenant in-flight guard so a double-click / re-opened tab can't kick off
+// two full-history pulls for the same thread concurrently (each would be
+// scrolling the same chat in the shared puppeteer page).
+const backfillInFlight = new Set();
+
+/**
+ * Pull a SINGLE chat's COMPLETE message history from WhatsApp Web (scrolls
+ * back via the same `loadEarlierMsgs` mechanism the WhatsApp Web UI itself
+ * uses when you scroll to the top) and persist any messages the CRM doesn't
+ * already have. Safe to call repeatedly — persistHistoryMessage dedupes by
+ * providerMsgId, so this only ever backfills what's missing.
+ *
+ * Deliberately NOT part of importAllChats's bulk sweep: fetching full history
+ * for all ~300 chats at once would be slow and hammer the linked account.
+ * Instead this runs per-thread, on demand, when an operator opens a
+ * conversation that has more history than the CRM has stored — mirroring how
+ * WhatsApp Web itself lazy-loads older messages only as you scroll to them.
+ */
+async function backfillThreadHistory(tenantId, threadId) {
+  tenantId = Number(tenantId);
+  threadId = Number(threadId);
+  const key = `${tenantId}:${threadId}`;
+  if (backfillInFlight.has(key)) return { backfilled: false, reason: "already-running" };
+  if (!module.exports.isConnected(tenantId)) return { backfilled: false, reason: "not-connected" };
+
+  const prisma = require("../lib/prisma");
+  const thread = await prisma.whatsAppThread.findFirst({ where: { id: threadId, tenantId } });
+  if (!thread) return { backfilled: false, reason: "thread-not-found" };
+
+  backfillInFlight.add(key);
+  try {
+    const session = getSession(tenantId);
+    const chatId = module.exports.toChatId(thread.contactPhone);
+    if (!chatId) return { backfilled: false, reason: "invalid-chat-id" };
+
+    const isGroup = module.exports.chatAddressKind(chatId) === "group";
+    let chat;
+    try {
+      chat = await session.client.getChatById(chatId);
+    } catch (e) {
+      console.warn(`[whatsappWeb] backfillThreadHistory getChatById(${chatId}) failed: ${e.message}`);
+      return { backfilled: false, reason: e.message };
+    }
+
+    let msgs = [];
+    try {
+      // Infinity = keep scrolling until WhatsApp Web has nothing earlier left
+      // to load — the true full history for this chat.
+      msgs = await chat.fetchMessages({ limit: Infinity });
+    } catch (e) {
+      console.warn(`[whatsappWeb] backfillThreadHistory fetchMessages(${chatId}) failed: ${e.message}`);
+      return { backfilled: false, reason: e.message };
+    }
+
+    const content = msgs.filter((m) => module.exports.isContentMessage(m));
+    const contact = thread.contactId
+      ? await prisma.contact.findUnique({ where: { id: thread.contactId } })
+      : null;
+    const channelPhone = session && session.phone;
+    const mediaBudget = { remaining: 250 };
+
+    let added = 0;
+    // Oldest-first so createdAt ordering lands naturally, same as import.
+    for (const m of content.slice().reverse()) {
+      try {
+        const wrote = await module.exports.persistHistoryMessage(tenantId, m, {
+          phone: thread.contactPhone,
+          contactId: contact ? contact.id : null,
+          threadId: thread.id,
+          channelPhone,
+          mediaBudget,
+          isGroup,
+        });
+        if (wrote) added += 1;
+      } catch (e) {
+        console.warn(`[whatsappWeb] backfillThreadHistory persist failed (${chatId}): ${e.message}`);
+      }
+    }
+
+    console.log(`[whatsappWeb] tenant ${tenantId} backfilled thread ${threadId} — ${content.length} total, ${added} new`);
+    return { backfilled: true, totalFetched: content.length, added };
+  } finally {
+    backfillInFlight.delete(key);
+  }
+}
+
 module.exports = {
   STATE,
   init,
@@ -1728,6 +1814,7 @@ module.exports = {
   wireEvents,
   ingestInbound,
   importAllChats,
+  backfillThreadHistory,
   purgeChats,
   persistHistoryMessage,
   isCustomerChatId,

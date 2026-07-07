@@ -362,12 +362,68 @@ async function scrubCallLogs() {
   return bad.length;
 }
 
+async function scrubTenants() {
+  // gdpr.spec.js creates Tenant rows directly via POST /api/auth/register with
+  // organizationName: `E2E_AUDIT GDPR Tenant ${stamp}`. These never got swept
+  // because the scrub script only checked child models, never the Tenant table.
+  // Deleting the tenant cascades all its child rows automatically.
+  //
+  // Safety guard: only delete tenants whose name starts with a known E2E prefix
+  // AND whose ownerEmail ends with a test domain. Never delete a tenant that
+  // could be a real customer.
+  const TEST_TENANT_PREFIXES = [
+    "E2E_AUDIT GDPR Tenant",
+    "E2E_FLOW_",
+    "E2E_AUDIT_",
+    "E2E_RBAC_",
+    "E2E_WC_",
+    "E2E_SLA_",
+  ];
+  const TEST_TENANT_EMAIL_SUFFIXES = [
+    "@example.com", "@example.test", "@e2e.test",
+    "@racecond.test", "@test.local", "@inbound.local",
+  ];
+
+  const all = await prisma.tenant.findMany({
+    select: { id: true, name: true, slug: true, ownerEmail: true },
+  });
+
+  const bad = all.filter((t) => {
+    const nameMatch = TEST_TENANT_PREFIXES.some((p) => (t.name || "").startsWith(p));
+    const emailMatch = TEST_TENANT_EMAIL_SUFFIXES.some((s) => (t.ownerEmail || "").endsWith(s));
+    // Require BOTH name pattern AND test email to avoid any false positives
+    return nameMatch && emailMatch;
+  });
+
+  console.log(`Tenants: ${bad.length} of ${all.length} are test rows`);
+  if (bad.length) {
+    for (const t of bad.slice(0, 5)) {
+      console.log(`     tenant ${t.id} "${t.name}" <${t.ownerEmail}>`);
+    }
+    if (bad.length > 5) console.log(`     ... +${bad.length - 5} more`);
+    if (APPLY) {
+      let deleted = 0;
+      for (const t of bad) {
+        try {
+          await prisma.tenant.delete({ where: { id: t.id } });
+          deleted++;
+        } catch (e) {
+          console.warn(`     skipped tenant ${t.id} "${t.name}": ${e.message}`);
+        }
+      }
+      console.log(`     → DELETED ${deleted} test tenants (cascaded all their rows)`);
+    }
+  }
+  return bad.length;
+}
+
 async function main() {
   console.log(`Mode: ${APPLY ? "\x1b[31mAPPLY (mutating)\x1b[0m" : "\x1b[36mDRY-RUN (no changes)\x1b[0m"}`);
   console.log("Patterns matched: Test*, E2E*, CRM Test*, Race*, Dedupe*, Playwright*, Coverage*, *<13-digit-timestamp>, @racecond.test, dup-*, valid-17*@*, @e2e.test, *{{...}}* (unrendered mustache in admin UI fields — campaigns/approvals/routing-rules)");
   console.log("");
 
   const counts = {
+    tenants: await scrubTenants(),
     locations: await scrubLocations(),
     services: await scrubServices(),
     contacts: await scrubContacts(),

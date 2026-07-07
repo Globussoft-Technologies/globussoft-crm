@@ -2,6 +2,21 @@
 const { defineConfig, devices } = require('@playwright/test');
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
+
+// Hard block: never run the test suite against the production app.
+// Tests create, mutate, and delete DB rows — running against live would
+// flood real customer data with E2E fixtures (E2E_FLOW_*, Test Patient*, etc.).
+// Use BASE_URL=https://crm.globusdemos.com (demo) or BASE_URL=http://localhost:5000 (local).
+const PRODUCTION_HOSTS = ['globuscrm.globussoft.com'];
+const targetHost = new URL(BASE_URL).hostname;
+if (PRODUCTION_HOSTS.includes(targetHost)) {
+  throw new Error(
+    `\n\n❌  E2E suite blocked: BASE_URL is pointing at the PRODUCTION server (${targetHost}).\n` +
+    `   Running tests against production would flood the live DB with test data.\n` +
+    `   Use the demo instead:  BASE_URL=https://crm.globusdemos.com\n` +
+    `   Or run locally:        BASE_URL=http://localhost:5000\n`
+  );
+}
 const AUTH_STATE_PATH = 'playwright/.auth/user.json';
 
 module.exports = defineConfig({

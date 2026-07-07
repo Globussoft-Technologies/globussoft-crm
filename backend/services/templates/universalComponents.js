@@ -1087,7 +1087,7 @@ function renderInlineScripts() {
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(body),
       }).catch(function(){
-        return fetch('/api/pages/'+(regForm.dataset.pageSlug||'')+'/submit',{
+        return fetch('/p/'+(regForm.dataset.pageSlug||'')+'/submit',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify(data),
@@ -1125,7 +1125,7 @@ function renderInlineScripts() {
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(body),
       }).catch(function(){
-        return fetch('/api/pages/'+(brochForm.dataset.pageSlug||'')+'/submit',{
+        return fetch('/p/'+(brochForm.dataset.pageSlug||'')+'/submit',{
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify(data),

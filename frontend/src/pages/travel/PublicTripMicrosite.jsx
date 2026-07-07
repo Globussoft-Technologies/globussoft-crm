@@ -489,10 +489,10 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
   const [error, setError] = useState(null);
   const [summary, setSummary] = useState(null);
   const [summaryError, setSummaryError] = useState(null);
-  // Delivery channel the parent picks — "phone" (WhatsApp/SMS) or "email".
-  // Both contacts were captured at registration; email is only offered when
-  // the draft actually carries one.
-  const [channel, setChannel] = useState("phone");
+  // Delivery channel — phone (WhatsApp/SMS) only.
+  // Email OTP is disabled; channel is fixed to "phone".
+  // const [channel, setChannel] = useState("phone"); // email OTP disabled
+  const channel = "phone";
   // Code expiry — request-otp returns an ISO expiresAt (10-min TTL server
   // side). We surface a live countdown so the parent knows the window and
   // block verify once it lapses (a stale code always fails OTP_INVALID).
@@ -638,20 +638,11 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
   const terminalErr = (step === "error" && error?.terminal) || summaryError?.terminal;
   const terminalCopy = error?.text || summaryError?.text;
 
-  // Email is only an option when the draft carries one. The masked
-  // destination shown in the copy follows the chosen channel.
-  const hasEmail = !!summary?.parentEmailMasked;
-  const destinationMasked = channel === "email"
-    ? summary?.parentEmailMasked
-    : summary?.parentPhoneMasked;
-  const channelNoun = channel === "email" ? "email address" : "phone number";
-  const segBtn = (active) => ({
-    flex: 1, padding: "8px 10px", fontSize: 13, fontWeight: 600, cursor: "pointer",
-    border: `1px solid ${active ? buttonBg : "#cbd5e1"}`,
-    background: active ? buttonBg : "transparent",
-    color: active ? "#fff" : "#475569",
-    display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-  });
+  // Phone-only OTP — email channel disabled.
+  // const hasEmail = !!summary?.parentEmailMasked; // email OTP disabled
+  const destinationMasked = summary?.parentPhoneMasked;
+  const channelNoun = "phone number";
+  // const segBtn = ... // channel picker unused — email OTP disabled
 
   return (
     <div data-testid="registration-confirm-panel">
@@ -706,8 +697,7 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
             {" "}{channelNoun} you provided — we&apos;ll send a one-time code.
           </p>
 
-          {/* Channel picker — only offered when an email is on file. When the
-              draft has no email the phone flow is unchanged (no toggle shown). */}
+          {/* Channel picker disabled — email OTP hidden, phone only.
           {hasEmail && (step === "idle" || step === "sending" || (step === "error" && !error?.terminal)) && (
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 13, color: "#475569", marginBottom: 6 }}>
@@ -736,7 +726,7 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
                 </button>
               </div>
             </div>
-          )}
+          )} */}
 
           <div style={S.summaryCard}>
             <div style={S.summaryRow}>

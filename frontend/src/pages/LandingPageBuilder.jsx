@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
-import { ArrowLeft, Save, Eye, Monitor, Smartphone, Plus, Trash2, ChevronUp, ChevronDown, Type, AlignLeft, Image, MousePointerClick, FileInput, Minus, Space, Video, Upload, Undo2, Redo2, Columns, MapPin, Building2, Sparkles, ListChecks, CalendarDays, IndianRupee, HelpCircle, MessageSquare, AlertCircle, CheckCircle2, Globe, Film, Shield, FileDown, PhoneCall, History, X, RotateCcw, UserPlus } from 'lucide-react';
+import { ArrowLeft, Save, Eye, Monitor, Smartphone, Plus, Trash2, ChevronUp, ChevronDown, Type, AlignLeft, Image, MousePointerClick, FileInput, Minus, Space, Video, Upload, Undo2, Redo2, Columns, MapPin, Building2, Sparkles, ListChecks, CalendarDays, IndianRupee, HelpCircle, MessageSquare, AlertCircle, CheckCircle2, Globe, Film, Shield, FileDown, PhoneCall, History, X, RotateCcw, UserPlus, Search } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { isUploadedS3Url } from '../utils/uploadDisplay';
@@ -214,6 +214,9 @@ export default function LandingPageBuilder() {
   // for non-TMC pages so the picker stays hidden.
   const [tmcTrips, setTmcTrips] = useState([]);
   const [linkingTripId, setLinkingTripId] = useState(null);
+  const [tripPickerOpen, setTripPickerOpen] = useState(false);
+  const [tripSearch, setTripSearch] = useState('');
+  const tripPickerRef = useRef(null);
   // #454: dirty-state tracking + beforeunload guard.
   const [isDirty, setIsDirty] = useState(false);
   // Version-history drawer state. Lightweight versioning per PRD —
@@ -676,7 +679,7 @@ export default function LandingPageBuilder() {
           onClick={async () => {
             // Save first if dirty so the preview reflects the latest
             // edits rather than a stale row.
-            if (isDirty && slugIsValid) {
+            if (isDirty) {
               await handleSave(false);
             }
             try {
@@ -687,7 +690,7 @@ export default function LandingPageBuilder() {
               notify.error('Could not open preview — try again or save the page first.');
             }
           }}
-          title={isDirty ? "Save first, then open the production preview in a new tab" : "Open the production preview in a new tab"}
+          title="Open the production preview in a new tab (auto-saves if needed)"
           style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.35rem 0.7rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-primary)', background: 'transparent', cursor: 'pointer' }}
         >
           <Eye size={14} /> Preview
@@ -706,23 +709,93 @@ export default function LandingPageBuilder() {
             the trip participants list. Explicit register.mode =
             "registration-draft" is required to use the OTP/hybrid draft
             flow instead. */}
-        {tmcTrips.length > 0 && (
-          <select
-            value={linkingTripId ?? ''}
-            onChange={(e) => handleLinkToTrip(e.target.value)}
-            title="Link this landing page to a TMC trip so wizard submissions enrol participants immediately"
-            aria-label="Link landing page to TMC trip"
-            data-testid="link-to-tmc-trip-picker"
-            style={{ padding: '0.3rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.78rem', background: 'var(--surface-color)', color: 'var(--text-primary)', cursor: 'pointer', maxWidth: 180 }}
-          >
-            <option value="">— Not linked to a trip —</option>
-            {tmcTrips.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.tripCode} ({t.destination})
-              </option>
-            ))}
-          </select>
-        )}
+        {tmcTrips.length > 0 && (() => {
+          const selectedTrip = tmcTrips.find(t => t.id === linkingTripId);
+          const filteredTrips = tripSearch.trim()
+            ? tmcTrips.filter(t =>
+                t.tripCode?.toLowerCase().includes(tripSearch.toLowerCase()) ||
+                t.destination?.toLowerCase().includes(tripSearch.toLowerCase())
+              )
+            : tmcTrips;
+          return (
+            <div
+              ref={tripPickerRef}
+              style={{ position: 'relative' }}
+              data-testid="link-to-tmc-trip-picker"
+              onBlur={(e) => {
+                if (!tripPickerRef.current?.contains(e.relatedTarget)) {
+                  setTripPickerOpen(false);
+                  setTripSearch('');
+                }
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => { setTripPickerOpen(o => !o); setTripSearch(''); }}
+                title="Link this landing page to a TMC trip so wizard submissions enrol participants immediately"
+                aria-label="Link landing page to TMC trip"
+                aria-expanded={tripPickerOpen}
+                aria-haspopup="listbox"
+                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0.3rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.78rem', background: 'var(--surface-color)', color: 'var(--text-primary)', cursor: 'pointer', maxWidth: 200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, textAlign: 'left' }}>
+                  {selectedTrip ? `${selectedTrip.tripCode} (${selectedTrip.destination})` : '— Not linked to a trip —'}
+                </span>
+                <ChevronDown size={12} aria-hidden style={{ flexShrink: 0 }} />
+              </button>
+
+              {tripPickerOpen && (
+                <div style={{
+                  position: 'absolute', top: 'calc(100% + 4px)', right: 0,
+                  background: 'var(--surface-color)', border: '1px solid var(--border-color)',
+                  borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
+                  zIndex: 300, width: 280, overflow: 'hidden',
+                }}>
+                  <div style={{ padding: '8px 8px 6px', borderBottom: '1px solid var(--border-color)', position: 'relative' }}>
+                    <Search size={13} aria-hidden style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
+                    <input
+                      autoFocus
+                      type="search"
+                      value={tripSearch}
+                      onChange={e => setTripSearch(e.target.value)}
+                      placeholder="Search trips…"
+                      aria-label="Search trips"
+                      style={{ width: '100%', padding: '5px 8px 5px 26px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--input-bg, var(--surface-color))', color: 'var(--text-primary)', fontSize: '0.78rem', boxSizing: 'border-box' }}
+                    />
+                  </div>
+                  <ul role="listbox" onMouseDown={(e) => e.preventDefault()} style={{ margin: 0, padding: 0, listStyle: 'none', maxHeight: 220, overflowY: 'auto' }}>
+                    <li
+                      role="option"
+                      aria-selected={linkingTripId == null}
+                      onClick={() => { handleLinkToTrip(''); setTripPickerOpen(false); setTripSearch(''); }}
+                      style={{ padding: '7px 12px', fontSize: '0.78rem', cursor: 'pointer', color: 'var(--text-secondary)', background: linkingTripId == null ? 'var(--subtle-bg)' : 'transparent' }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg)'}
+                      onMouseLeave={e => e.currentTarget.style.background = linkingTripId == null ? 'var(--subtle-bg)' : 'transparent'}
+                    >
+                      — Not linked to a trip —
+                    </li>
+                    {filteredTrips.length === 0 ? (
+                      <li style={{ padding: '7px 12px', fontSize: '0.78rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No trips match</li>
+                    ) : filteredTrips.map(t => (
+                      <li
+                        key={t.id}
+                        role="option"
+                        aria-selected={linkingTripId === t.id}
+                        onClick={() => { handleLinkToTrip(String(t.id)); setTripPickerOpen(false); setTripSearch(''); }}
+                        style={{ padding: '7px 12px', fontSize: '0.78rem', cursor: 'pointer', background: linkingTripId === t.id ? 'var(--subtle-bg)' : 'transparent', display: 'flex', flexDirection: 'column', gap: 1 }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg)'}
+                        onMouseLeave={e => e.currentTarget.style.background = linkingTripId === t.id ? 'var(--subtle-bg)' : 'transparent'}
+                      >
+                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{t.tripCode}</span>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>{t.destination}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          );
+        })()}
         <button className="btn-primary" onClick={() => handleSave(false)} disabled={saving || !slugIsValid} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.35rem 0.9rem', fontSize: '0.85rem' }}>
           <Save size={14} /> {saving ? 'Saving...' : 'Save'}{isDirty && !saving && <span style={{ marginLeft: '0.3rem', opacity: 0.85 }}>•</span>}
         </button>
@@ -880,66 +953,121 @@ export default function LandingPageBuilder() {
 
         {/* Center: Preview Canvas */}
         <div style={{ flex: 1, overflowY: 'auto', background: 'var(--subtle-bg)', padding: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-          {/* G094: BrandKit preview ribbon. Renders a small chrome strip
-              above the canvas showing the resolved logo + tagline + accent
-              so the admin sees the sub-brand context the public render
-              will inherit. Absent when there's no sub-brand context AND no
-              tenant-wide kit. */}
-          {(previewLogo || previewBrandKit?.tagline) && (
-            <div
-              data-testid="landing-builder-brand-kit-ribbon"
-              style={{
-                width: previewMode === 'mobile' ? '375px' : '100%',
-                maxWidth: '800px',
-                background: 'var(--surface-color)',
-                borderRadius: '8px',
-                boxShadow: 'var(--glass-shadow)',
-                padding: '0.5rem 1rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.75rem',
-                borderLeft: `4px solid ${previewAccent}`,
-              }}
-            >
-              {previewLogo && (
-                <img
-                  src={previewLogo}
-                  alt="Brand logo preview"
-                  style={{ maxHeight: 28, maxWidth: 120, objectFit: 'contain' }}
-                />
-              )}
-              {previewBrandKit?.tagline && (
-                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                  {previewBrandKit.tagline}
-                </span>
-              )}
-              {previewSubBrand && (
-                <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                  Preview: {previewSubBrand}
-                </span>
-              )}
-            </div>
-          )}
-          <div style={{ width: previewMode === 'mobile' ? '375px' : '100%', maxWidth: '800px', background: 'var(--surface-color)', borderRadius: '8px', boxShadow: 'var(--glass-shadow)', padding: '2rem', minHeight: '400px' }}>
-            {components.length === 0 && (
-              <div style={{ textAlign: 'center', padding: '4rem 2rem', color: '#94a3b8' }}>
-                <Plus size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
-                <p>Click components on the left to add them</p>
+          {previewMode === 'mobile' ? (
+            /* Phone frame — wraps the 375px canvas in a device bezel so the mobile
+               toggle is visually meaningful. Editing (select/move/delete) still works. */
+            <div style={{ width: '395px', background: '#0f172a', borderRadius: '44px', padding: '18px 10px 14px', boxShadow: '0 30px 60px rgba(0,0,0,0.5), 0 0 0 1px #334155', flexShrink: 0 }}>
+              {/* pill notch */}
+              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '10px' }}>
+                <div style={{ width: '90px', height: '5px', background: '#334155', borderRadius: '3px' }} />
               </div>
-            )}
-            {components.map((comp, idx) => (
-              <div key={comp.id} onClick={() => setSelected(idx)} style={{ position: 'relative', border: selected === idx ? '2px solid #3b82f6' : '2px solid transparent', borderRadius: '4px', padding: '0.25rem', margin: '0.25rem 0', cursor: 'pointer', transition: 'border-color 0.15s' }}>
-                {selected === idx && (
-                  <div style={{ position: 'absolute', top: '-1px', right: '-1px', display: 'flex', gap: '0.125rem', zIndex: 10, background: '#3b82f6', borderRadius: '0 4px 0 4px', padding: '0.125rem' }}>
-                    <button onClick={e => { e.stopPropagation(); moveComponent(idx, -1); }} style={iconBtnStyle}><ChevronUp size={12} /></button>
-                    <button onClick={e => { e.stopPropagation(); moveComponent(idx, 1); }} style={iconBtnStyle}><ChevronDown size={12} /></button>
-                    <button onClick={e => { e.stopPropagation(); removeComponent(idx); }} style={iconBtnStyle}><Trash2 size={12} /></button>
+              {/* screen */}
+              <div style={{ width: '375px', background: 'var(--surface-color)', borderRadius: '24px', overflow: 'hidden', maxHeight: '70vh', overflowY: 'auto' }}>
+                {/* G094: BrandKit ribbon inside phone screen */}
+                {(previewLogo || previewBrandKit?.tagline) && (
+                  <div
+                    data-testid="landing-builder-brand-kit-ribbon"
+                    style={{
+                      background: 'var(--surface-color)',
+                      padding: '0.5rem 1rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.75rem',
+                      borderLeft: `4px solid ${previewAccent}`,
+                    }}
+                  >
+                    {previewLogo && <img src={previewLogo} alt="Brand logo preview" style={{ maxHeight: 28, maxWidth: 120, objectFit: 'contain' }} />}
+                    {previewBrandKit?.tagline && <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{previewBrandKit.tagline}</span>}
+                    {previewSubBrand && <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Preview: {previewSubBrand}</span>}
                   </div>
                 )}
-                <ComponentPreview comp={comp} />
+                <div style={{ padding: '1rem', minHeight: '400px' }}>
+                  {components.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '4rem 2rem', color: '#94a3b8' }}>
+                      <Plus size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                      <p>Click components on the left to add them</p>
+                    </div>
+                  )}
+                  {components.map((comp, idx) => (
+                    <div key={comp.id} onClick={() => setSelected(idx)} style={{ position: 'relative', border: selected === idx ? '2px solid #3b82f6' : '2px solid transparent', borderRadius: '4px', padding: '0.25rem', margin: '0.25rem 0', cursor: 'pointer', transition: 'border-color 0.15s' }}>
+                      {selected === idx && (
+                        <div style={{ position: 'absolute', top: '-1px', right: '-1px', display: 'flex', gap: '0.125rem', zIndex: 10, background: '#3b82f6', borderRadius: '0 4px 0 4px', padding: '0.125rem' }}>
+                          <button onClick={e => { e.stopPropagation(); moveComponent(idx, -1); }} style={iconBtnStyle}><ChevronUp size={12} /></button>
+                          <button onClick={e => { e.stopPropagation(); moveComponent(idx, 1); }} style={iconBtnStyle}><ChevronDown size={12} /></button>
+                          <button onClick={e => { e.stopPropagation(); removeComponent(idx); }} style={iconBtnStyle}><Trash2 size={12} /></button>
+                        </div>
+                      )}
+                      <ComponentPreview comp={comp} />
+                    </div>
+                  ))}
+                </div>
               </div>
-            ))}
-          </div>
+              {/* home indicator bar */}
+              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
+                <div style={{ width: '120px', height: '4px', background: '#334155', borderRadius: '2px' }} />
+              </div>
+            </div>
+          ) : (
+            /* Desktop canvas */
+            <>
+              {/* G094: BrandKit preview ribbon */}
+              {(previewLogo || previewBrandKit?.tagline) && (
+                <div
+                  data-testid="landing-builder-brand-kit-ribbon"
+                  style={{
+                    width: '100%',
+                    maxWidth: '800px',
+                    background: 'var(--surface-color)',
+                    borderRadius: '8px',
+                    boxShadow: 'var(--glass-shadow)',
+                    padding: '0.5rem 1rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                    borderLeft: `4px solid ${previewAccent}`,
+                  }}
+                >
+                  {previewLogo && (
+                    <img
+                      src={previewLogo}
+                      alt="Brand logo preview"
+                      style={{ maxHeight: 28, maxWidth: 120, objectFit: 'contain' }}
+                    />
+                  )}
+                  {previewBrandKit?.tagline && (
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      {previewBrandKit.tagline}
+                    </span>
+                  )}
+                  {previewSubBrand && (
+                    <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Preview: {previewSubBrand}
+                    </span>
+                  )}
+                </div>
+              )}
+              <div style={{ width: '100%', maxWidth: '800px', background: 'var(--surface-color)', borderRadius: '8px', boxShadow: 'var(--glass-shadow)', padding: '2rem', minHeight: '400px' }}>
+                {components.length === 0 && (
+                  <div style={{ textAlign: 'center', padding: '4rem 2rem', color: '#94a3b8' }}>
+                    <Plus size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                    <p>Click components on the left to add them</p>
+                  </div>
+                )}
+                {components.map((comp, idx) => (
+                  <div key={comp.id} onClick={() => setSelected(idx)} style={{ position: 'relative', border: selected === idx ? '2px solid #3b82f6' : '2px solid transparent', borderRadius: '4px', padding: '0.25rem', margin: '0.25rem 0', cursor: 'pointer', transition: 'border-color 0.15s' }}>
+                    {selected === idx && (
+                      <div style={{ position: 'absolute', top: '-1px', right: '-1px', display: 'flex', gap: '0.125rem', zIndex: 10, background: '#3b82f6', borderRadius: '0 4px 0 4px', padding: '0.125rem' }}>
+                        <button onClick={e => { e.stopPropagation(); moveComponent(idx, -1); }} style={iconBtnStyle}><ChevronUp size={12} /></button>
+                        <button onClick={e => { e.stopPropagation(); moveComponent(idx, 1); }} style={iconBtnStyle}><ChevronDown size={12} /></button>
+                        <button onClick={e => { e.stopPropagation(); removeComponent(idx); }} style={iconBtnStyle}><Trash2 size={12} /></button>
+                      </div>
+                    )}
+                    <ComponentPreview comp={comp} />
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Right: Property Editor — #449 grouped into Component + Page */}

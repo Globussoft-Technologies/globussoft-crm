@@ -52,7 +52,17 @@ const Signup = () => {
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', padding: '1rem' }}>
       <div className="card glass" style={{ width: '100%', maxWidth: '420px', padding: '2rem' }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Globussoft CRM</h2>
+          <img
+            src="/globussoft-logo-pdf.png"
+            alt="Globussoft CRM"
+            style={{
+              maxWidth: '280px',
+              height: 'auto',
+              marginBottom: '1rem',
+              display: 'block',
+              margin: '0 auto 1rem auto',
+            }}
+          />
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>Create your organization</p>
         </div>
 

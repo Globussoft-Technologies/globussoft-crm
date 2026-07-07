@@ -241,6 +241,7 @@ describe('<Trips /> — page chrome', () => {
     expect(
       screen.getByRole('heading', { name: /TMC Trips/i }),
     ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Search trips/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by status/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reload list/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Create a new trip/i })).toBeInTheDocument();
@@ -493,5 +494,92 @@ describe('<Trips /> — new-trip drawer + create POST', () => {
     expect(notifySuccess).toHaveBeenCalledWith(
       expect.stringMatching(/Trip created/i),
     );
+  });
+});
+
+describe('<Trips /> — search filter (client-side)', () => {
+  it('search input is present in the filter bar', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    expect(screen.getByLabelText(/Search trips/i)).toBeInTheDocument();
+  });
+
+  it('typing a trip code hides non-matching rows without triggering a refetch', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fetchApiMock.mockClear();
+
+    fireEvent.change(screen.getByLabelText(/Search trips/i), {
+      target: { value: 'GOA' },
+    });
+
+    expect(screen.getByText('TMC-GOA-2026-DPS-G8')).toBeInTheDocument();
+    expect(screen.queryByText('TMC-AND-2026-MUMBAI-G7')).not.toBeInTheDocument();
+    expect(screen.queryByText('TMC-SHIM-2025-BPS-G10')).not.toBeInTheDocument();
+    // No GET fired — search is purely client-side.
+    expect(fetchApiMock).not.toHaveBeenCalled();
+  });
+
+  it('search matches destination case-insensitively', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+
+    fireEvent.change(screen.getByLabelText(/Search trips/i), {
+      target: { value: 'shimla' },
+    });
+
+    expect(screen.getByText('TMC-SHIM-2025-BPS-G10')).toBeInTheDocument();
+    expect(screen.queryByText('TMC-AND-2026-MUMBAI-G7')).not.toBeInTheDocument();
+    expect(screen.queryByText('TMC-GOA-2026-DPS-G8')).not.toBeInTheDocument();
+  });
+
+  it('search with zero matches shows "No trips match" message', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+
+    fireEvent.change(screen.getByLabelText(/Search trips/i), {
+      target: { value: 'ZZZNOTEXIST' },
+    });
+
+    expect(screen.getByText(/No trips match/i)).toBeInTheDocument();
+    expect(screen.queryByText('TMC-AND-2026-MUMBAI-G7')).not.toBeInTheDocument();
+  });
+
+  it('clearing the search restores all rows', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+
+    const searchInput = screen.getByLabelText(/Search trips/i);
+    fireEvent.change(searchInput, { target: { value: 'GOA' } });
+    expect(screen.queryByText('TMC-AND-2026-MUMBAI-G7')).not.toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: '' } });
+    expect(screen.getByText('TMC-AND-2026-MUMBAI-G7')).toBeInTheDocument();
+    expect(screen.getByText('TMC-GOA-2026-DPS-G8')).toBeInTheDocument();
+    expect(screen.getByText('TMC-SHIM-2025-BPS-G10')).toBeInTheDocument();
+  });
+
+  it('status filter and search work together — status narrows the fetched list, search narrows the rendered list', async () => {
+    // Server returns only confirmed trips after status filter.
+    installFetchMock({
+      list: { trips: [TRIPS_DEFAULT[0]], total: 1, limit: 100, offset: 0 },
+    });
+    renderPage();
+    fireEvent.change(screen.getByLabelText(/Filter by status/i), {
+      target: { value: 'confirmed' },
+    });
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+
+    // Now search within the already-filtered result.
+    fireEvent.change(screen.getByLabelText(/Search trips/i), {
+      target: { value: 'ANDAMAN' },
+    });
+    expect(screen.getByText('TMC-AND-2026-MUMBAI-G7')).toBeInTheDocument();
+
+    // Search for something that isn't in the confirmed set.
+    fireEvent.change(screen.getByLabelText(/Search trips/i), {
+      target: { value: 'GOA' },
+    });
+    expect(screen.getByText(/No trips match/i)).toBeInTheDocument();
   });
 });

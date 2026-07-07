@@ -2517,7 +2517,7 @@ model CalendarIntegration {
   /// One calendar connection per (tenant, user, provider). Multi-tenancy isolation: a user's calendar
   /// connection in Wellness tenant is independent from their connection in Travel tenant.
   @@unique([tenantId, userId, provider])
-  @@index([tenantId])
+  // @@index([tenantId]) removed — the FK relation already creates an implicit index on tenantId
 }
 
 /// Per-user Gmail connection (OAuth2 via the Gmail API). Mirrors
@@ -2548,7 +2548,7 @@ model GmailIntegration {
   /// One Gmail connection per (tenant, user, provider). Multi-tenancy isolation: each tenant's
   /// users have independent Gmail connections.
   @@unique([tenantId, userId, provider])
-  @@index([tenantId])
+  // @@index([tenantId]) removed — the FK relation already creates an implicit index on tenantId
 }
 
 model CalendarEvent {

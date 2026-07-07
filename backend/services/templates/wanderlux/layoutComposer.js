@@ -233,7 +233,7 @@ function effectiveLayout(config) {
  * `<section>` so it matches the visual rhythm of native sections.
  *
  * Slug is forwarded so a custom Form block's submit URL still resolves
- * to /api/pages/<slug>/submit (parity with manual pages).
+ * to /p/<slug>/submit (parity with manual pages).
  */
 function renderCustomBlock(item, slug) {
   // Late-required to dodge a require cycle: landingPageRenderer.js

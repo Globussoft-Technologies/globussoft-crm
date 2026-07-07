@@ -5,7 +5,7 @@
  *
  * Focuses on testing the critical endpoint selection logic:
  *   1. Uses /api/landing-pages/:id/submit when pageId provided (new authenticated)
- *   2. Uses /api/pages/:slug/submit when pageId not provided (fallback to old)
+ *   2. Uses /p/:slug/submit when pageId not provided (fallback to old)
  *   3. Success response shows thank-you message
  *   4. Error response shows error message
  *   5. Redirect URL from response is handled
@@ -67,7 +67,7 @@ describe('<FormBlock /> — form submission endpoint routing', () => {
     });
   });
 
-  test('routes to /api/pages/:slug/submit when pageId not provided', async () => {
+  test('routes to /p/:slug/submit when pageId not provided', async () => {
     fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ success: true, message: 'OK' }),
@@ -82,7 +82,7 @@ describe('<FormBlock /> — form submission endpoint routing', () => {
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
-        '/api/pages/fallback-page/submit',
+        '/p/fallback-page/submit',
         expect.any(Object)
       );
     });

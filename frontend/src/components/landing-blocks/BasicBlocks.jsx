@@ -145,7 +145,7 @@ export function FormBlock({ props = {}, slug = '', pageId = null }) {
       // Use pageId if available (React renderer), fallback to slug (HTML renderer)
       const endpoint = pageId
         ? `/api/landing-pages/${pageId}/submit`
-        : `/api/pages/${slug}/submit`;
+        : `/p/${slug}/submit`;
 
       const response = await fetch(endpoint, {
         method: 'POST',

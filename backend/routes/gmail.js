@@ -27,7 +27,10 @@
 //   GMAIL_REDIRECT_URI  (defaults to <host>/api/gmail/callback)
 //   FRONTEND_URL        (where the callback bounces the browser back to)
 const path = require("path");
-require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
+require("dotenv").config({
+  path: path.resolve(__dirname, "../../.env"),
+  override: true,
+});
 
 const express = require("express");
 const multer = require("multer");
@@ -49,8 +52,12 @@ const upload = multer({
 
 const router = express.Router();
 
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "";
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
+const GOOGLE_CLIENT_ID =
+  process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "";
+const GOOGLE_CLIENT_SECRET =
+  process.env.GOOGLE_CLIENT_SECRET ||
+  process.env.GOOGLE_OAUTH_CLIENT_SECRET ||
+  "";
 const GMAIL_REDIRECT_URI =
   process.env.GMAIL_REDIRECT_URI ||
   process.env.GOOGLE_GMAIL_REDIRECT_URI ||
@@ -72,7 +79,11 @@ const SCOPES = [
 const PROVIDER = "google";
 
 function buildOAuthClient() {
-  return new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GMAIL_REDIRECT_URI);
+  return new google.auth.OAuth2(
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    GMAIL_REDIRECT_URI,
+  );
 }
 
 function encodeState(payload) {
@@ -95,7 +106,9 @@ function decodeState(state) {
 // instead of leaking the raw googleapis/OAuth error to the user.
 function isReauthError(err) {
   const raw = `${(err && err.message) || ""} ${
-    err && err.response && err.response.data ? JSON.stringify(err.response.data) : ""
+    err && err.response && err.response.data
+      ? JSON.stringify(err.response.data)
+      : ""
   }`;
   return /invalid_grant|expired or revoked|Token has been expired/i.test(raw);
 }
@@ -106,9 +119,13 @@ function isReauthError(err) {
 // Gmail-backed. Surface a clear instruction instead of the cryptic raw error.
 function isGmailNotEnabledError(err) {
   const raw = `${(err && err.message) || ""} ${
-    err && err.response && err.response.data ? JSON.stringify(err.response.data) : ""
+    err && err.response && err.response.data
+      ? JSON.stringify(err.response.data)
+      : ""
   }`;
-  return /failedPrecondition|Precondition check failed|Mail service not enabled|not enabled for/i.test(raw);
+  return /failedPrecondition|Precondition check failed|Mail service not enabled|not enabled for/i.test(
+    raw,
+  );
 }
 
 const GMAIL_NOT_ENABLED_MSG =
@@ -117,11 +134,13 @@ const GMAIL_NOT_ENABLED_MSG =
 
 async function getAuthorizedClientForUser(userId, tenantId) {
   const integration = await prisma.gmailIntegration.findUnique({
-    where: { tenantId_userId_provider: { tenantId, userId, provider: PROVIDER } },
+    where: {
+      tenantId_userId_provider: { tenantId, userId, provider: PROVIDER },
+    },
   });
   if (!integration) {
     const err = new Error(
-      "Gmail not connected. Please connect your mailbox first via /api/gmail/connect"
+      "Gmail not connected. Please connect your mailbox first via /api/gmail/connect",
     );
     err.status = 404;
     err.code = "NOT_CONNECTED";
@@ -131,7 +150,9 @@ async function getAuthorizedClientForUser(userId, tenantId) {
   client.setCredentials({
     access_token: integration.accessToken,
     refresh_token: integration.refreshToken || undefined,
-    expiry_date: integration.expiresAt ? integration.expiresAt.getTime() : undefined,
+    expiry_date: integration.expiresAt
+      ? integration.expiresAt.getTime()
+      : undefined,
   });
 
   // Persist refreshed tokens automatically (same as calendar_google.js).
@@ -143,7 +164,9 @@ async function getAuthorizedClientForUser(userId, tenantId) {
       if (tokens.expiry_date) data.expiresAt = new Date(tokens.expiry_date);
       if (Object.keys(data).length) {
         await prisma.gmailIntegration.update({
-          where: { tenantId_userId_provider: { tenantId, userId, provider: PROVIDER } },
+          where: {
+            tenantId_userId_provider: { tenantId, userId, provider: PROVIDER },
+          },
           data,
         });
       }
@@ -161,10 +184,17 @@ router.get("/connect", verifyToken, (req, res) => {
     if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
       return res
         .status(500)
-        .json({ error: "Google OAuth credentials not configured on server", code: "NOT_CONFIGURED" });
+        .json({
+          error: "Google OAuth credentials not configured on server",
+          code: "NOT_CONFIGURED",
+        });
     }
     const oauth2Client = buildOAuthClient();
-    const state = encodeState({ userId: req.user.userId, tenantId: req.user.tenantId, t: Date.now() });
+    const state = encodeState({
+      userId: req.user.userId,
+      tenantId: req.user.tenantId,
+      t: Date.now(),
+    });
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: "offline",
       prompt: "consent", // force a refresh_token on every (re)connect
@@ -182,7 +212,9 @@ router.get("/connect", verifyToken, (req, res) => {
 router.get("/callback", async (req, res) => {
   const { code, state, error } = req.query;
   if (error) {
-    return res.redirect(`${FRONTEND_URL}/gmail?error=${encodeURIComponent(error)}`);
+    return res.redirect(
+      `${FRONTEND_URL}/gmail?error=${encodeURIComponent(error)}`,
+    );
   }
   if (!code || !state) {
     return res.redirect(`${FRONTEND_URL}/gmail?error=missing_code_or_state`);
@@ -209,7 +241,9 @@ router.get("/callback", async (req, res) => {
     }
 
     await prisma.gmailIntegration.upsert({
-      where: { tenantId_userId_provider: { tenantId, userId, provider: PROVIDER } },
+      where: {
+        tenantId_userId_provider: { tenantId, userId, provider: PROVIDER },
+      },
       create: {
         userId,
         provider: PROVIDER,
@@ -239,15 +273,24 @@ router.get("/callback", async (req, res) => {
     `);
   } catch (err) {
     console.error("[gmail] /callback error:", err);
-    res.redirect(`${FRONTEND_URL}/gmail?error=${encodeURIComponent("token_exchange_failed")}`);
+    res.redirect(
+      `${FRONTEND_URL}/gmail?error=${encodeURIComponent("token_exchange_failed")}`,
+    );
   }
 });
 
 // GET /status — is the current user's mailbox connected?
 router.get("/status", verifyToken, async (req, res) => {
   try {
+    const tenantId = req.user.tenantId;
     const integration = await prisma.gmailIntegration.findUnique({
-      where: { tenantId_userId_provider: { tenantId: req.user.tenantId, userId: req.user.userId, provider: PROVIDER } },
+      where: {
+        tenantId_userId_provider: {
+          tenantId: req.user.tenantId,
+          userId: req.user.userId,
+          provider: PROVIDER,
+        },
+      },
     });
     if (!integration) {
       return res.json({ connected: false });
@@ -266,8 +309,17 @@ router.get("/status", verifyToken, async (req, res) => {
 // DELETE /disconnect — drop the integration row.
 router.delete("/disconnect", verifyToken, async (req, res) => {
   try {
+    const tenantId = req.user.tenantId;
     await prisma.gmailIntegration
-      .delete({ where: { tenantId_userId_provider: { tenantId: req.user.tenantId, userId: req.user.userId, provider: PROVIDER } } })
+      .delete({
+        where: {
+          tenantId_userId_provider: {
+            tenantId: req.user.tenantId,
+            userId: req.user.userId,
+            provider: PROVIDER,
+          },
+        },
+      })
       .catch((err) => {
         if (err && err.code === "P2025") return null; // already gone — fine
         throw err;
@@ -293,12 +345,20 @@ router.get("/messages", verifyToken, async (req, res) => {
     const { client } = await getAuthorizedClientForUser(userId, tenantId);
     const gmail = google.gmail({ version: "v1", auth: client });
 
-    const list = await gmail.users.messages.list({ userId: "me", q, maxResults });
+    const list = await gmail.users.messages.list({
+      userId: "me",
+      q,
+      maxResults,
+    });
     const ids = (list.data.messages || []).map((m) => m.id).filter(Boolean);
 
     const messages = await Promise.all(
       ids.map(async (id) => {
-        const full = await gmail.users.messages.get({ userId: "me", id, format: "full" });
+        const full = await gmail.users.messages.get({
+          userId: "me",
+          id,
+          format: "full",
+        });
         const parsed = parseGmailMessage(full.data);
         // Trim the heavy body for the list view; /messages/:id returns full.
         return {
@@ -311,22 +371,35 @@ router.get("/messages", verifyToken, async (req, res) => {
           snippet: parsed.snippet,
           unread: parsed.labelIds.includes("UNREAD"),
         };
-      })
+      }),
     );
 
-    return res.json({ messages, nextPageToken: list.data.nextPageToken || null });
+    return res.json({
+      messages,
+      nextPageToken: list.data.nextPageToken || null,
+    });
   } catch (err) {
     if (isReauthError(err)) {
       return res
         .status(401)
-        .json({ error: "Your Gmail connection has expired. Please reconnect.", code: "RECONNECT_REQUIRED" });
+        .json({
+          error: "Your Gmail connection has expired. Please reconnect.",
+          code: "RECONNECT_REQUIRED",
+        });
     }
     if (isGmailNotEnabledError(err)) {
-      return res.status(400).json({ error: GMAIL_NOT_ENABLED_MSG, code: "GMAIL_NOT_ENABLED" });
+      return res
+        .status(400)
+        .json({ error: GMAIL_NOT_ENABLED_MSG, code: "GMAIL_NOT_ENABLED" });
     }
-    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    if (err.status)
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     console.error("[gmail] GET /messages error:", err);
-    return res.status(500).json({ error: "Couldn't load your Gmail messages right now." });
+    return res
+      .status(500)
+      .json({ error: "Couldn't load your Gmail messages right now." });
   }
 });
 
@@ -340,26 +413,45 @@ router.get("/messages", verifyToken, async (req, res) => {
 // sidesteps that validator.
 router.get("/messages/:messageId", verifyToken, async (req, res) => {
   try {
-    const { client } = await getAuthorizedClientForUser(req.user.userId, req.user.tenantId);
+    const { client } = await getAuthorizedClientForUser(
+      req.user.userId,
+      req.user.tenantId,
+    );
     const gmail = google.gmail({ version: "v1", auth: client });
-    const full = await gmail.users.messages.get({ userId: "me", id: req.params.messageId, format: "full" });
+    const full = await gmail.users.messages.get({
+      userId: "me",
+      id: req.params.messageId,
+      format: "full",
+    });
     return res.json(parseGmailMessage(full.data));
   } catch (err) {
     if (isReauthError(err)) {
       return res
         .status(401)
-        .json({ error: "Your Gmail connection has expired. Please reconnect.", code: "RECONNECT_REQUIRED" });
+        .json({
+          error: "Your Gmail connection has expired. Please reconnect.",
+          code: "RECONNECT_REQUIRED",
+        });
     }
     if (isGmailNotEnabledError(err)) {
-      return res.status(400).json({ error: GMAIL_NOT_ENABLED_MSG, code: "GMAIL_NOT_ENABLED" });
+      return res
+        .status(400)
+        .json({ error: GMAIL_NOT_ENABLED_MSG, code: "GMAIL_NOT_ENABLED" });
     }
-    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    if (err.status)
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
     // A bad/unknown message id surfaces as a 404 from Gmail.
     if (err.code === 404 || (err.response && err.response.status === 404)) {
-      return res.status(404).json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" });
+      return res
+        .status(404)
+        .json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" });
     }
     console.error("[gmail] GET /messages/:id error:", err);
-    return res.status(500).json({ error: "Couldn't load that message right now." });
+    return res
+      .status(500)
+      .json({ error: "Couldn't load that message right now." });
   }
 });
 
@@ -367,94 +459,130 @@ router.get("/messages/:messageId", verifyToken, async (req, res) => {
 // EmailMessage (threaded to a Contact when one matches the recipient).
 // Accepts either application/json (no attachments) or multipart/form-data
 // (with file attachments) — multer handles both transparently.
-router.post("/send", verifyToken, upload.array("attachments", 10), async (req, res) => {
-  try {
-    const { to, subject, text, html, cc, bcc, contactId } = req.body || {};
-    if (!to || typeof to !== "string") {
-      return res.status(400).json({ error: "`to` is required", code: "MISSING_FIELDS" });
-    }
-    const hasBody = (typeof text === "string" && text.length) || (typeof html === "string" && html.length);
-    if (!hasBody) {
-      return res.status(400).json({ error: "`text` or `html` body is required", code: "MISSING_FIELDS" });
-    }
-
-    const userId = req.user.userId;
-    const tenantId = req.user.tenantId;
-    const { client, integration } = await getAuthorizedClientForUser(userId, tenantId);
-    const gmail = google.gmail({ version: "v1", auth: client });
-
-    const attachments = (req.files || []).map((f) => ({
-      filename: f.originalname,
-      mimeType: f.mimetype,
-      data: f.buffer,
-    }));
-
-    const raw = buildRawMessage({
-      from: integration.emailAddress || undefined,
-      to,
-      cc: typeof cc === "string" && cc.length ? cc : undefined,
-      bcc: typeof bcc === "string" && bcc.length ? bcc : undefined,
-      subject: typeof subject === "string" ? subject : "",
-      text,
-      html,
-      attachments,
-    });
-
-    const sent = await gmail.users.messages.send({ userId: "me", requestBody: { raw } });
-
-    // Best-effort: log the sent mail on the CRM timeline, linked to a Contact.
-    // A persistence hiccup must never fail an email that already went out.
-    let logged = null;
+router.post(
+  "/send",
+  verifyToken,
+  upload.array("attachments", 10),
+  async (req, res) => {
     try {
-      let resolvedContactId = contactId ? parseInt(contactId, 10) : null;
-      if (!resolvedContactId) {
-        const addr = extractEmailAddress(to);
-        if (addr) {
-          const match = await prisma.contact.findFirst({
-            where: { tenantId, email: addr },
-            select: { id: true },
-          });
-          resolvedContactId = match ? match.id : null;
-        }
+      const { to, subject, text, html, cc, bcc, contactId } = req.body || {};
+      if (!to || typeof to !== "string") {
+        return res
+          .status(400)
+          .json({ error: "`to` is required", code: "MISSING_FIELDS" });
       }
-      logged = await prisma.emailMessage.create({
-        data: {
-          subject: typeof subject === "string" && subject.length ? subject : "(no subject)",
-          body: html || text || "",
-          from: integration.emailAddress || "me",
-          to,
-          cc: typeof cc === "string" && cc.length ? cc : null,
-          direction: "OUTBOUND",
-          read: true,
-          threadId: (sent.data && sent.data.threadId) || null,
-          userId,
-          tenantId,
-          contactId: resolvedContactId,
-        },
-      });
-    } catch (e) {
-      console.error("[gmail] failed to log OUTBOUND EmailMessage (non-fatal):", e.message);
-    }
+      const hasBody =
+        (typeof text === "string" && text.length) ||
+        (typeof html === "string" && html.length);
+      if (!hasBody) {
+        return res
+          .status(400)
+          .json({
+            error: "`text` or `html` body is required",
+            code: "MISSING_FIELDS",
+          });
+      }
 
-    return res.status(201).json({
-      success: true,
-      gmailMessageId: (sent.data && sent.data.id) || null,
-      threadId: (sent.data && sent.data.threadId) || null,
-      emailMessageId: logged ? logged.id : null,
-    });
-  } catch (err) {
-    if (isReauthError(err)) {
+      const userId = req.user.userId;
+      const tenantId = req.user.tenantId;
+      const { client, integration } = await getAuthorizedClientForUser(
+        userId,
+        tenantId,
+      );
+      const gmail = google.gmail({ version: "v1", auth: client });
+
+      const attachments = (req.files || []).map((f) => ({
+        filename: f.originalname,
+        mimeType: f.mimetype,
+        data: f.buffer,
+      }));
+
+      const raw = buildRawMessage({
+        from: integration.emailAddress || undefined,
+        to,
+        cc: typeof cc === "string" && cc.length ? cc : undefined,
+        bcc: typeof bcc === "string" && bcc.length ? bcc : undefined,
+        subject: typeof subject === "string" ? subject : "",
+        text,
+        html,
+        attachments,
+      });
+
+      const sent = await gmail.users.messages.send({
+        userId: "me",
+        requestBody: { raw },
+      });
+
+      // Best-effort: log the sent mail on the CRM timeline, linked to a Contact.
+      // A persistence hiccup must never fail an email that already went out.
+      let logged = null;
+      try {
+        let resolvedContactId = contactId ? parseInt(contactId, 10) : null;
+        if (!resolvedContactId) {
+          const addr = extractEmailAddress(to);
+          if (addr) {
+            const match = await prisma.contact.findFirst({
+              where: { tenantId, email: addr },
+              select: { id: true },
+            });
+            resolvedContactId = match ? match.id : null;
+          }
+        }
+        logged = await prisma.emailMessage.create({
+          data: {
+            subject:
+              typeof subject === "string" && subject.length
+                ? subject
+                : "(no subject)",
+            body: html || text || "",
+            from: integration.emailAddress || "me",
+            to,
+            cc: typeof cc === "string" && cc.length ? cc : null,
+            direction: "OUTBOUND",
+            read: true,
+            threadId: (sent.data && sent.data.threadId) || null,
+            userId,
+            tenantId,
+            contactId: resolvedContactId,
+          },
+        });
+      } catch (e) {
+        console.error(
+          "[gmail] failed to log OUTBOUND EmailMessage (non-fatal):",
+          e.message,
+        );
+      }
+
+      return res.status(201).json({
+        success: true,
+        gmailMessageId: (sent.data && sent.data.id) || null,
+        threadId: (sent.data && sent.data.threadId) || null,
+        emailMessageId: logged ? logged.id : null,
+      });
+    } catch (err) {
+      if (isReauthError(err)) {
+        return res
+          .status(401)
+          .json({
+            error: "Your Gmail connection has expired. Please reconnect.",
+            code: "RECONNECT_REQUIRED",
+          });
+      }
+      if (isGmailNotEnabledError(err)) {
+        return res
+          .status(400)
+          .json({ error: GMAIL_NOT_ENABLED_MSG, code: "GMAIL_NOT_ENABLED" });
+      }
+      if (err.status)
+        return res
+          .status(err.status)
+          .json({ error: err.message, code: err.code });
+      console.error("[gmail] POST /send error:", err);
       return res
-        .status(401)
-        .json({ error: "Your Gmail connection has expired. Please reconnect.", code: "RECONNECT_REQUIRED" });
+        .status(500)
+        .json({ error: "Couldn't send that email right now." });
     }
-    if (isGmailNotEnabledError(err)) {
-      return res.status(400).json({ error: GMAIL_NOT_ENABLED_MSG, code: "GMAIL_NOT_ENABLED" });
-    }
-    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
-    console.error("[gmail] POST /send error:", err);
-    return res.status(500).json({ error: "Couldn't send that email right now." });
-  }
-});
+  },
+);
 
 module.exports = router;

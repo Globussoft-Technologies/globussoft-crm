@@ -482,9 +482,9 @@ function mapBlocksToWanderluxConfig(blocks, input) {
     },
     nav: {
       links: [
-        { label: 'Itinerary', href: '#itinerary' },
-        { label: 'Inclusions', href: '#inclusions' },
-        { label: 'Pricing', href: '#investment' },
+        { label: 'Programme', href: '#programme' },
+        { label: 'Safety', href: '#safety' },
+        { label: 'Investment', href: '#investment' },
         { label: 'FAQs', href: '#faqs' },
       ],
       ctaLabel: hero.ctaText || 'Reserve Your Spot',

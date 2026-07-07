@@ -148,8 +148,8 @@ describe('<Login /> — page surface', () => {
 
   it('renders the heading, sign-in copy, and email + password inputs on initial mount', () => {
     renderLogin();
-    expect(screen.getByRole('heading', { name: /Globussoft CRM/i })).toBeInTheDocument();
-    expect(screen.getByText(/Sign in to your account/i)).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /Globussoft CRM/i })).toBeInTheDocument();
+    expect(screen.getByText(/Sign into your CRM account/i)).toBeInTheDocument();
     // Post-46247368 refactor: email + password inputs render EMPTY on
     // initial mount (the hardcoded admin@globussoft.com / password123
     // defaults were removed; demo creds now live on the quick-login

@@ -144,7 +144,7 @@ describe('<Signup /> — page surface', () => {
 
   it('renders the heading, create-organization subhead, all four inputs, the submit button, and the sign-in link', () => {
     renderSignup();
-    expect(screen.getByRole('heading', { name: /Globussoft CRM/i })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /Globussoft CRM/i })).toBeInTheDocument();
     expect(screen.getByText(/Create your organization/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Acme Inc.')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('John Doe')).toBeInTheDocument();

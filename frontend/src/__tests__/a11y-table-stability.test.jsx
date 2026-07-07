@@ -256,33 +256,34 @@ describe("#633 — canonical tables adopt .stable-table className", () => {
   const TABLES = [
     {
       file: ["pages", "Contacts.jsx"],
-      substr: '<table className="stable-table"',
+      pattern: /<table\s+className="stable-table"/,
     },
     {
       file: ["pages", "Tickets.jsx"],
-      substr: '<table className="stable-table"',
+      pattern: /<table\s+className="stable-table"/,
     },
     {
       file: ["pages", "Invoices.jsx"],
-      substr: '<table className="stable-table"',
+      // Invoices.jsx splits the tag across lines for the comment block.
+      pattern: /<table\s+className="stable-table"/s,
     },
     {
       file: ["pages", "Currencies.jsx"],
-      substr: '<table className="stable-table"',
+      pattern: /<table\s+className="stable-table"/,
     },
     {
       file: ["pages", "Territories.jsx"],
-      substr: '<table className="stable-table"',
+      pattern: /<table\s+className="stable-table"/,
     },
     {
       file: ["pages", "wellness", "Patients.jsx"],
-      substr: 'className="stable-table"',
+      pattern: /className="stable-table"/,
     },
   ];
-  for (const { file, substr } of TABLES) {
+  for (const { file, pattern } of TABLES) {
     it(`${file.join("/")} adopts stable-table`, () => {
       const src = readSrc(...file);
-      expect(src).toContain(substr);
+      expect(src).toMatch(pattern);
     });
   }
 });

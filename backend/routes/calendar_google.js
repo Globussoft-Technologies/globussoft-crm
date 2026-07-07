@@ -129,7 +129,6 @@ router.get("/callback", async (req, res) => {
 
     await prisma.calendarIntegration.upsert({
       where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
-      where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
       create: {
         userId,
         provider: "google",
@@ -561,7 +560,7 @@ router.delete("/disconnect", verifyToken, async (req, res) => {
     const tenantId = req.user.tenantId || 1;
     await prisma.calendarIntegration
       .delete({
-        where: { tenantId_userId_provider: { tenantId: req.user.tenantId, userId: req.user.userId, provider: "google" } },
+        where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
       })
       .catch((err) => {
         if (err && err.code === "P2025") return null; // not found is fine

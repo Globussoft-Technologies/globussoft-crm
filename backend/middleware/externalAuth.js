@@ -2,10 +2,17 @@
  * API-key authentication for the external partner API (/api/v1/external).
  *
  * Partner products (Callified.ai, Globus Phone, etc.) authenticate with:
- *   X-API-Key: glbs_<hex> (CRM-generated, 48+ hex chars with prefix)
- *   X-API-Key: <hex> (external-generated e.g. GlobusPhone, raw 48-96 hex chars)
+ *   X-API-Key: glbs_<hex> (CRM-generated, 48-96 hex chars after the prefix)
  *
- * Both formats are accepted; validation looks up the key in the ApiKey table.
+ * The glbs_ prefix is REQUIRED. Every key ever minted into the ApiKey table
+ * is glbs_-prefixed (routes/developer.js, scripts/mint-api-key.js and
+ * prisma/seed-wellness.js are the only insert sites), so a bare-hex value
+ * can never match a row. f9cfd96f briefly accepted raw 48-96 hex
+ * "external-generated" keys, but that leniency only deferred the failure to
+ * a misleading "Invalid API key": partners have twice pasted the per-tenant
+ * webhook signing secret (bare 64 hex, routes/settings.js, shown once on the
+ * Settings page) into the X-API-Key field. That shape now gets a specific
+ * 401 pointing at Developer → API Keys instead.
  *
  * On success, req.apiKey, req.tenant, and req.tenantId are populated.
  * We deliberately do NOT populate req.user — this isn't a human session —
@@ -39,10 +46,17 @@ module.exports = async function externalAuth(req, res, next) {
     if (!token) {
       return res.status(401).json({ error: "Missing X-API-Key header" });
     }
-    // Accept both glbs_<hex> (CRM-generated) and raw hex (GlobusPhone/external-generated).
-    // Format validation: either "glbs_<hex>" or raw 48-96 hex chars (24-48 bytes).
-    const isValidFormat = /^(glbs_)?[a-f0-9]{48,96}$/i.test(token);
-    if (!isValidFormat) {
+    // The glbs_ prefix is required — see header. Bare 64-hex is the exact
+    // shape of the per-tenant webhook signing secret (routes/settings.js,
+    // shown once on the Settings page); name that mistake specifically
+    // instead of failing with a generic 401 later.
+    if (!/^glbs_[a-f0-9]{48,96}$/i.test(token)) {
+      if (/^[a-f0-9]{64}$/i.test(token)) {
+        return res.status(401).json({
+          error:
+            "This looks like a webhook signing secret, not an API key. API keys start with glbs_ — generate one from Developer → API Keys.",
+        });
+      }
       return res.status(401).json({ error: "Malformed API key" });
     }
 

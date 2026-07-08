@@ -34,6 +34,9 @@ import { ThemeContext, AuthContext } from "../App";
 import PasswordInput from "../components/PasswordInput";
 import WebhookSigningCredential from "../components/WebhookSigningCredential";
 import RoleHistoryDialog from "../components/RoleHistoryDialog";
+import { SUB_BRAND_IDS, subBrandShortLabel, subBrandBackground } from "../utils/travelSubBrand";
+import { useActiveSubBrand } from "../utils/subBrand";
+import { useEffectiveBrand, invalidateEffectiveBrandCache } from "../hooks/useEffectiveBrand";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -46,6 +49,19 @@ export default function Settings() {
   const { theme, setTheme, toggleTheme } = useContext(ThemeContext);
   const { tenant: ctxTenant, setTenant } = useContext(AuthContext);
   const { isOwner, hasPermission } = usePermissions();
+
+  // Branding refactor (2026-07-08): the Branding card follows whichever
+  // sub-brand is currently selected in the sidebar dropdown — travel
+  // tenants only; non-travel tenants always get activeSubBrand=null (the
+  // context defaults to null anyway when unmounted, so this is a no-op
+  // there) and the card behaves exactly as it always has (Tenant.logoUrl /
+  // brandColor, edited via /api/wellness/branding*).
+  const { activeSubBrand } = useActiveSubBrand();
+  const brandingSubBrand = ctxTenant?.vertical === "travel" ? activeSubBrand : null;
+  // Only `reload` is consumed here (busts the shared cache Sidebar also
+  // reads from after a save/delete) — the card displays the brand's OWN
+  // values via `branding` state, not the fallback-resolved `effective`.
+  const { reload: reloadEffectiveBrand } = useEffectiveBrand(brandingSubBrand);
 
   // ── Role Recovery section ────────────────────────────────────────
   // Lockout-scenario recovery surface. Reuses the existing /api/roles
@@ -111,6 +127,24 @@ export default function Settings() {
   const logoInputRef = useRef(null);
   const [logoUploading, setLogoUploading] = useState(false);
   const [brandingMsg, setBrandingMsg] = useState("");
+  // Multi-brand (BrandKit) — travel-vertical only. "Your Brands" list below
+  // the default-brand card, backed by the existing /api/brand-kits CRUD
+  // (same system /admin/brand-kits already manages). Settings only ever
+  // touches the ACTIVE kit per sub-brand; version history / advanced fields
+  // stay on the dedicated admin page.
+  const [brandKits, setBrandKits] = useState([]);
+  const [brandKitsLoading, setBrandKitsLoading] = useState(false);
+  const [showAddBrand, setShowAddBrand] = useState(false);
+  const [addBrandForm, setAddBrandForm] = useState({ subBrand: "", logoUrl: "", primaryColor: "" });
+  const [addBrandFile, setAddBrandFile] = useState(null);
+  const [addBrandFilePreviewUrl, setAddBrandFilePreviewUrl] = useState(null);
+  const pickAddBrandFile = (file) => {
+    if (addBrandFilePreviewUrl) URL.revokeObjectURL(addBrandFilePreviewUrl);
+    setAddBrandFile(file || null);
+    setAddBrandFilePreviewUrl(file ? URL.createObjectURL(file) : null);
+  };
+  const [addBrandSaving, setAddBrandSaving] = useState(false);
+  const [addBrandError, setAddBrandError] = useState("");
   // AdsGPT configuration
   const [adsgptLogin, setAdsgptLogin] = useState("");
   const [adsgptSaving, setAdsgptSaving] = useState(false);
@@ -167,6 +201,48 @@ export default function Settings() {
       .catch(() => setCallifiedLoading(false));
   }, []);
 
+  // Multi-brand (BrandKit) list — travel vertical only (sub-brands are a
+  // travel-only concept; generic/wellness tenants only ever have the
+  // tenant-wide default kit, which the Branding card above already covers).
+  const loadBrandKits = () => {
+    setBrandKitsLoading(true);
+    fetchApi("/api/brand-kits?isActive=true")
+      .then((res) => setBrandKits(Array.isArray(res?.brandKits) ? res.brandKits : []))
+      .catch(() => setBrandKits([]))
+      .finally(() => setBrandKitsLoading(false));
+  };
+
+  useEffect(() => {
+    if (ctxTenant?.vertical === "travel") loadBrandKits();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctxTenant?.vertical]);
+
+  // The BrandKit row (if any) for whichever sub-brand is currently active —
+  // this drives what the Branding card shows/edits when brandingSubBrand is
+  // set. Sourced from the same brandKits list "Your Brands" already loads
+  // (no extra fetch); its OWN logoUrl/primaryColor (not the fallback-
+  // resolved effectiveBrand) are what "Save" should read/write, so an
+  // unmodified save never accidentally writes a borrowed fallback value
+  // onto this sub-brand.
+  const activeBrandKitRow = brandingSubBrand
+    ? brandKits.find((k) => k.subBrand === brandingSubBrand) || null
+    : null;
+
+  // Sync the editable branding fields whenever the selected brand changes
+  // (dropdown switch, or the kit list finishes loading). Default-brand mode
+  // (brandingSubBrand null) is untouched — it keeps loading from
+  // /api/wellness/branding, exactly as before.
+  useEffect(() => {
+    if (!brandingSubBrand) return; // default-brand fetch effect handles this case
+    setBranding({
+      logoUrl: activeBrandKitRow?.logoUrl || null,
+      brandColor: activeBrandKitRow?.primaryColor || "",
+    });
+    setLogoBroken(false);
+    setBrandingMsg("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brandingSubBrand, activeBrandKitRow?.id, activeBrandKitRow?.logoUrl, activeBrandKitRow?.primaryColor]);
+
   // Stage a picked file locally — render a preview, wait for the user to
   // hit "Save logo" before doing the actual upload. URL.createObjectURL
   // returns a blob: URL we must revoke when replacing or unmounting to
@@ -193,32 +269,94 @@ export default function Settings() {
     setBrandingMsg("");
   };
 
+  // Create-or-update the active sub-brand's BrandKit row with a patch of
+  // asset fields. Shared by the logo save/delete and color save paths below
+  // so there's exactly one place that knows "POST when no kit exists yet,
+  // PUT when one does."
+  const upsertActiveBrandKit = async (patch) => {
+    if (activeBrandKitRow) {
+      return fetchApi(`/api/brand-kits/${activeBrandKitRow.id}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
+    }
+    return fetchApi("/api/brand-kits", {
+      method: "POST",
+      body: JSON.stringify({ subBrand: brandingSubBrand, isActive: true, ...patch }),
+    });
+  };
+
   const handleSaveLogo = async () => {
     if (!stagedLogo) return;
     setLogoUploading(true);
     setBrandingMsg("");
     try {
-      const fd = new FormData();
-      fd.append("logo", stagedLogo);
-      const token = getAuthToken();
-      const resp = await fetch("/api/wellness/branding/logo", {
-        method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: fd,
-      });
-      const json = await resp.json().catch(() => ({}));
-      if (!resp.ok) throw new Error(json.error || "Upload failed");
-      setBranding((b) => ({ ...b, logoUrl: json.logoUrl }));
+      let logoUrl;
+      if (brandingSubBrand) {
+        const fd = new FormData();
+        fd.append("file", stagedLogo);
+        fd.append("assetType", "logo");
+        fd.append("subBrand", brandingSubBrand);
+        const uploadRes = await fetchApi("/api/brand-kits/upload", { method: "POST", body: fd });
+        logoUrl = uploadRes?.url || null;
+        await upsertActiveBrandKit({ logoUrl });
+        loadBrandKits();
+        reloadEffectiveBrand();
+      } else {
+        const fd = new FormData();
+        fd.append("logo", stagedLogo);
+        const token = getAuthToken();
+        const resp = await fetch("/api/wellness/branding/logo", {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: fd,
+        });
+        const json = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(json.error || "Upload failed");
+        logoUrl = json.logoUrl;
+        // Reflect into sidebar instantly
+        if (setTenant && ctxTenant) setTenant({ ...ctxTenant, logoUrl });
+        reloadEffectiveBrand();
+      }
+      setBranding((b) => ({ ...b, logoUrl }));
       setLogoBroken(false);
-      // Reflect into sidebar instantly
-      if (setTenant && ctxTenant)
-        setTenant({ ...ctxTenant, logoUrl: json.logoUrl });
       setBrandingMsg("Logo updated.");
       cancelStagedLogo();
     } catch (err) {
-      setBrandingMsg(err.message || "Logo upload failed");
+      setBrandingMsg(err?.body?.error || err?.message || "Logo upload failed");
     } finally {
       setLogoUploading(false);
+    }
+  };
+
+  // Delete Logo (2026-07-08) — clears the current brand's logo (BrandKit.logoUrl
+  // for a sub-brand, or Tenant.logoUrl for the default brand) and removes the
+  // underlying file from S3/disk. Immediately falls back to whatever the next
+  // link in the chain resolves to (default brand → system logo) with no
+  // reload — reloadEffectiveBrand() busts the shared cache Sidebar reads too.
+  const [logoDeleting, setLogoDeleting] = useState(false);
+  const handleDeleteLogo = async () => {
+    if (!branding.logoUrl) return;
+    const ok = await notify.confirm("Delete this logo? This removes the file permanently.");
+    if (!ok) return;
+    setLogoDeleting(true);
+    setBrandingMsg("");
+    try {
+      if (brandingSubBrand && activeBrandKitRow) {
+        await fetchApi(`/api/brand-kits/${activeBrandKitRow.id}/logo`, { method: "DELETE" });
+        loadBrandKits();
+      } else if (!brandingSubBrand) {
+        await fetchApi("/api/wellness/branding/logo", { method: "DELETE" });
+        if (setTenant && ctxTenant) setTenant({ ...ctxTenant, logoUrl: null });
+      }
+      setBranding((b) => ({ ...b, logoUrl: null }));
+      setLogoBroken(false);
+      reloadEffectiveBrand();
+      setBrandingMsg("Logo deleted.");
+    } catch (err) {
+      setBrandingMsg(err?.body?.error || err?.message || "Failed to delete logo");
+    } finally {
+      setLogoDeleting(false);
     }
   };
 
@@ -226,6 +364,7 @@ export default function Settings() {
   useEffect(() => {
     return () => {
       if (stagedPreviewUrl) URL.revokeObjectURL(stagedPreviewUrl);
+      if (addBrandFilePreviewUrl) URL.revokeObjectURL(addBrandFilePreviewUrl);
     };
   }, []);
 
@@ -237,18 +376,136 @@ export default function Settings() {
       if (value && !/^#[0-9a-fA-F]{6}$/.test(value)) {
         throw new Error("Brand color must be a 6-digit hex (e.g. #265855).");
       }
-      const res = await fetchApi("/api/wellness/branding/color", {
-        method: "PUT",
-        body: JSON.stringify({ brandColor: value || null }),
-      });
-      setBranding((b) => ({ ...b, brandColor: res.brandColor || "" }));
-      if (setTenant && ctxTenant)
-        setTenant({ ...ctxTenant, brandColor: res.brandColor || null });
+      if (brandingSubBrand) {
+        const updated = await upsertActiveBrandKit({ primaryColor: value || null });
+        setBranding((b) => ({ ...b, brandColor: updated?.primaryColor || "" }));
+        loadBrandKits();
+      } else {
+        const res = await fetchApi("/api/wellness/branding/color", {
+          method: "PUT",
+          body: JSON.stringify({ brandColor: value || null }),
+        });
+        setBranding((b) => ({ ...b, brandColor: res.brandColor || "" }));
+        if (setTenant && ctxTenant)
+          setTenant({ ...ctxTenant, brandColor: res.brandColor || null });
+      }
+      reloadEffectiveBrand();
       setBrandingMsg("Brand color saved.");
     } catch (err) {
-      setBrandingMsg(err.message || "Failed to save brand color");
+      setBrandingMsg(err?.body?.error || err?.message || "Failed to save brand color");
     } finally {
       setBrandingSaving(false);
+    }
+  };
+
+  // Sub-brands that don't yet have an active BrandKit — offered in the
+  // "Add Another Brand" picker. Sub-brands that already have one are edited
+  // in place (same modal, pre-filled, PUT instead of POST) rather than
+  // re-created.
+  const brandKitSubBrands = new Set(brandKits.map((k) => k.subBrand));
+  const availableSubBrands = SUB_BRAND_IDS.filter((id) => !brandKitSubBrands.has(id));
+
+  // `editingKit` is null when adding a brand new-to-this-tenant, or the
+  // existing BrandKit row when editing one that already exists.
+  const [editingKit, setEditingKit] = useState(null);
+
+  const openAddBrand = () => {
+    setEditingKit(null);
+    setAddBrandForm({ subBrand: availableSubBrands[0] || "", logoUrl: "", primaryColor: "" });
+    pickAddBrandFile(null);
+    setAddBrandError("");
+    setShowAddBrand(true);
+  };
+
+  const openEditBrand = (kit) => {
+    setEditingKit(kit);
+    setAddBrandForm({
+      subBrand: kit.subBrand,
+      logoUrl: kit.logoUrl || "",
+      primaryColor: kit.primaryColor || "",
+    });
+    pickAddBrandFile(null);
+    setAddBrandError("");
+    setShowAddBrand(true);
+  };
+
+  const handleAddBrandSubmit = async (e) => {
+    e.preventDefault();
+    if (!addBrandForm.subBrand) {
+      setAddBrandError("Brand name is required.");
+      return;
+    }
+    setAddBrandSaving(true);
+    setAddBrandError("");
+    try {
+      let logoUrl = editingKit ? addBrandForm.logoUrl || null : null;
+      if (addBrandFile) {
+        const form = new FormData();
+        form.append("file", addBrandFile);
+        form.append("assetType", "logo");
+        form.append("subBrand", addBrandForm.subBrand);
+        const uploadRes = await fetchApi("/api/brand-kits/upload", {
+          method: "POST",
+          body: form,
+        });
+        logoUrl = uploadRes?.url || null;
+      }
+      const color = addBrandForm.primaryColor || "";
+      if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) {
+        throw new Error("Brand color must be a 6-digit hex (e.g. #265855).");
+      }
+      if (editingKit) {
+        await fetchApi(`/api/brand-kits/${editingKit.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            logoUrl,
+            primaryColor: color || null,
+          }),
+        });
+        notify.success(`${subBrandShortLabel(addBrandForm.subBrand)} brand updated.`);
+      } else {
+        await fetchApi("/api/brand-kits", {
+          method: "POST",
+          body: JSON.stringify({
+            subBrand: addBrandForm.subBrand,
+            logoUrl,
+            primaryColor: color || null,
+            isActive: true,
+          }),
+        });
+        notify.success(`${subBrandShortLabel(addBrandForm.subBrand)} brand added.`);
+      }
+      setShowAddBrand(false);
+      loadBrandKits();
+      invalidateEffectiveBrandCache(addBrandForm.subBrand);
+      reloadEffectiveBrand();
+    } catch (err) {
+      setAddBrandError(err?.body?.error || err?.message || "Failed to save brand.");
+    } finally {
+      setAddBrandSaving(false);
+    }
+  };
+
+  // "Set as Default" (2026-07-08) — marks a sub-brand as the tenant-wide
+  // fallback (Tenant.defaultSubBrand) that every consumer surface falls back
+  // to before the system default, once its own sub-brand has no branding.
+  // Only one brand can be default at a time; the backend clears
+  // defaultSubBrand entirely to restore old behaviour if this ever needs
+  // to point back at the plain default-brand card instead of a sub-brand.
+  const [settingDefaultId, setSettingDefaultId] = useState(null);
+  const handleSetDefaultBrand = async (kit) => {
+    setSettingDefaultId(kit.id);
+    try {
+      await fetchApi(`/api/brand-kits/${kit.id}/set-default`, { method: "POST" });
+      setTenantState((t) => (t ? { ...t, defaultSubBrand: kit.subBrand } : t));
+      if (setTenant && ctxTenant) setTenant({ ...ctxTenant, defaultSubBrand: kit.subBrand });
+      invalidateEffectiveBrandCache();
+      reloadEffectiveBrand();
+      notify.success(`${subBrandShortLabel(kit.subBrand)} is now the default brand.`);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to set default brand.");
+    } finally {
+      setSettingDefaultId(null);
     }
   };
 
@@ -1532,13 +1789,14 @@ export default function Settings() {
               style={{
                 fontSize: "1.25rem",
                 fontWeight: "600",
-                marginBottom: "1.5rem",
+                marginBottom: "0.35rem",
                 display: "flex",
                 alignItems: "center",
                 gap: "0.5rem",
               }}
             >
-              <Palette size={20} color="var(--accent-color)" /> Branding
+              <Palette size={20} color="var(--accent-color)" />
+              {brandingSubBrand ? `Branding — ${subBrandShortLabel(brandingSubBrand)}` : "Branding"}
             </h3>
             <p
               style={{
@@ -1547,8 +1805,9 @@ export default function Settings() {
                 marginBottom: "1.25rem",
               }}
             >
-              Upload your clinic logo and pick a brand color. These appear in
-              the sidebar and on branded PDFs.
+              {brandingSubBrand
+                ? `Editing the logo and color for ${subBrandShortLabel(brandingSubBrand)}. Switch the Sub Brand dropdown in the sidebar to edit a different brand.`
+                : "Upload your default logo and pick a brand color. These are the company-wide fallback shown in the sidebar and on branded PDFs whenever a sub-brand has no branding of its own."}
             </p>
 
             {/* #479: Branding two-column (Logo | Brand color) collapses to
@@ -1717,17 +1976,37 @@ export default function Settings() {
                         </button>
                       </>
                     ) : (
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={() => logoInputRef.current?.click()}
-                        disabled={logoUploading}
-                        style={{ whiteSpace: "nowrap" }}
-                      >
-                        {branding.logoUrl && !logoBroken
-                          ? "Replace logo"
-                          : "Upload logo"}
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={() => logoInputRef.current?.click()}
+                          disabled={logoUploading}
+                          style={{ whiteSpace: "nowrap" }}
+                        >
+                          {branding.logoUrl && !logoBroken
+                            ? "Replace logo"
+                            : "Upload logo"}
+                        </button>
+                        {branding.logoUrl && !logoBroken && (
+                          <button
+                            type="button"
+                            onClick={handleDeleteLogo}
+                            disabled={logoDeleting}
+                            style={{
+                              padding: "0.5rem 0.9rem",
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: 6,
+                              color: "var(--danger-color, #ef4444)",
+                              cursor: "pointer",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {logoDeleting ? "Deleting…" : "Delete logo"}
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -1835,6 +2114,298 @@ export default function Settings() {
               </p>
             )}
           </div>
+
+          {/* Your Brands — multi-brand (BrandKit) management. Travel-vertical
+              only: sub-brands (TMC / RFU / Travel Stall / Visa Sure) are a
+              travel-only concept, so generic/wellness tenants never see this
+              card and their experience is byte-for-byte unchanged (single
+              default brand above, no "Add Another Brand" affordance). Reuses
+              the same /api/brand-kits backend the full /admin/brand-kits
+              page manages — this card only handles the common "add a new
+              brand with a logo + color" path; version history / advanced
+              fields (fonts, PDF headers, etc.) stay on the dedicated page. */}
+          {ctxTenant?.vertical === "travel" && (
+            <div className="card" style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "1rem",
+                  flexWrap: "wrap",
+                  gap: "0.75rem",
+                }}
+              >
+                <h3
+                  style={{
+                    fontSize: "1.25rem",
+                    fontWeight: "600",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.5rem",
+                    margin: 0,
+                  }}
+                >
+                  <Palette size={20} color="var(--accent-color)" /> Your Brands
+                </h3>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                  <Link
+                    to="/admin/brand-kits"
+                    style={{ fontSize: "0.8rem", color: "var(--accent-color)", display: "inline-flex", alignItems: "center", gap: 4 }}
+                  >
+                    Manage all brands <ArrowRight size={13} />
+                  </Link>
+                  {availableSubBrands.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={openAddBrand}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}
+                    >
+                      <Plus size={15} /> Add Another Brand
+                    </button>
+                  )}
+                </div>
+              </div>
+              <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginBottom: "1.25rem" }}>
+                Give each sub-brand its own logo and color. The sidebar shows a brand's own
+                logo when set, and falls back to the default brand above otherwise.
+              </p>
+
+              {brandKitsLoading ? (
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Loading…</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                  {SUB_BRAND_IDS.map((id) => {
+                    const kit = brandKits.find((k) => k.subBrand === id);
+                    return (
+                      <div
+                        key={id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.75rem",
+                          padding: "0.6rem 0.85rem",
+                          borderRadius: 8,
+                          border: "1px solid var(--border-color)",
+                          background: subBrandBackground(id),
+                        }}
+                      >
+                        {kit?.logoUrl ? (
+                          <img
+                            src={kit.logoUrl}
+                            alt=""
+                            style={{ width: 32, height: 32, borderRadius: 6, objectFit: "cover" }}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              width: 32,
+                              height: 32,
+                              borderRadius: 6,
+                              border: "1px dashed var(--border-color)",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              color: "var(--text-secondary)",
+                            }}
+                          >
+                            <ImageIcon size={14} />
+                          </div>
+                        )}
+                        <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 500, fontSize: "0.9rem", flex: 1 }}>
+                          {subBrandShortLabel(id)}
+                          {ctxTenant?.defaultSubBrand === id && (
+                            <span
+                              style={{
+                                fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase",
+                                padding: "0.15rem 0.45rem", borderRadius: 999,
+                                background: "var(--accent-color)", color: "#fff",
+                              }}
+                            >
+                              Default
+                            </span>
+                          )}
+                        </span>
+                        {kit ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                            {ctxTenant?.defaultSubBrand !== id && (
+                              <button
+                                type="button"
+                                onClick={() => handleSetDefaultBrand(kit)}
+                                disabled={settingDefaultId === kit.id}
+                                style={{ fontSize: "0.8rem", color: "var(--text-secondary)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                              >
+                                {settingDefaultId === kit.id ? "Setting…" : "Set as Default"}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => openEditBrand(kit)}
+                              style={{ fontSize: "0.8rem", color: "var(--accent-color)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                            >
+                              Edit logo / color
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingKit(null);
+                              setAddBrandForm({ subBrand: id, logoUrl: "", primaryColor: "" });
+                              pickAddBrandFile(null);
+                              setAddBrandError("");
+                              setShowAddBrand(true);
+                            }}
+                            style={{ fontSize: "0.8rem", color: "var(--accent-color)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                          >
+                            + Set up
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Add Another Brand — compact modal. Uploads a logo (optional) via
+              /api/brand-kits/upload, then creates the active BrandKit row.
+              Advanced fields stay on /admin/brand-kits. */}
+          {showAddBrand && (
+            <div
+              onClick={() => !addBrandSaving && setShowAddBrand(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(0,0,0,0.5)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1000,
+              }}
+            >
+              <form
+                onClick={(e) => e.stopPropagation()}
+                onSubmit={handleAddBrandSubmit}
+                className="card"
+                style={{ width: "min(94vw, 420px)", padding: "1.5rem" }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+                  <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600 }}>
+                    {editingKit ? `Edit ${subBrandShortLabel(editingKit.subBrand)} branding` : "Add Another Brand"}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddBrand(false)}
+                    disabled={addBrandSaving}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)" }}
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <label style={{ display: "block", marginBottom: "0.4rem", fontSize: "0.85rem", fontWeight: 500 }}>
+                  Brand Name *
+                </label>
+                {editingKit ? (
+                  <input
+                    className="input-field"
+                    disabled
+                    value={subBrandShortLabel(editingKit.subBrand)}
+                    style={{ width: "100%", marginBottom: "1rem" }}
+                  />
+                ) : (
+                  <select
+                    className="input-field"
+                    required
+                    value={addBrandForm.subBrand}
+                    onChange={(e) => setAddBrandForm({ ...addBrandForm, subBrand: e.target.value })}
+                    style={{ width: "100%", marginBottom: "1rem" }}
+                  >
+                    {availableSubBrands.map((id) => (
+                      <option key={id} value={id}>{subBrandShortLabel(id)}</option>
+                    ))}
+                  </select>
+                )}
+
+                <label style={{ display: "block", marginBottom: "0.4rem", fontSize: "0.85rem", fontWeight: 500 }}>
+                  Brand Logo {editingKit ? "" : "(optional)"}
+                </label>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem" }}>
+                  {addBrandFilePreviewUrl ? (
+                    <img
+                      src={addBrandFilePreviewUrl}
+                      alt="New logo preview"
+                      style={{ width: 44, height: 44, borderRadius: 6, objectFit: "cover", border: "1px solid var(--accent-color)" }}
+                    />
+                  ) : addBrandForm.logoUrl ? (
+                    <img
+                      src={addBrandForm.logoUrl}
+                      alt="Current logo"
+                      style={{ width: 44, height: 44, borderRadius: 6, objectFit: "cover", border: "1px solid var(--border-color)" }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: 44, height: 44, borderRadius: 6, border: "1px dashed var(--border-color)",
+                        display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)",
+                      }}
+                    >
+                      <ImageIcon size={16} />
+                    </div>
+                  )}
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                    onChange={(e) => pickAddBrandFile(e.target.files?.[0] || null)}
+                    style={{ flex: 1, minWidth: 0, fontSize: "0.85rem" }}
+                  />
+                </div>
+
+                <label style={{ display: "block", marginBottom: "0.4rem", fontSize: "0.85rem", fontWeight: 500 }}>
+                  Brand Color (optional)
+                </label>
+                <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+                  <input
+                    type="color"
+                    value={/^#[0-9a-fA-F]{6}$/.test(addBrandForm.primaryColor) ? addBrandForm.primaryColor : DEFAULT_BRAND_COLOR}
+                    onChange={(e) => setAddBrandForm({ ...addBrandForm, primaryColor: e.target.value })}
+                    style={{ width: 44, height: 38, border: "1px solid var(--border-color)", borderRadius: 6, cursor: "pointer", padding: 2 }}
+                  />
+                  <input
+                    type="text"
+                    className="input-field"
+                    placeholder={DEFAULT_BRAND_COLOR}
+                    value={addBrandForm.primaryColor}
+                    onChange={(e) => setAddBrandForm({ ...addBrandForm, primaryColor: e.target.value })}
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                </div>
+
+                {addBrandError && (
+                  <p style={{ color: "var(--danger-color, #ef4444)", fontSize: "0.8rem", marginBottom: "1rem" }}>
+                    {addBrandError}
+                  </p>
+                )}
+
+                <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddBrand(false)}
+                    disabled={addBrandSaving}
+                    style={{ padding: "0.5rem 1rem", background: "transparent", border: "1px solid var(--border-color)", borderRadius: 6, color: "var(--text-primary)", cursor: "pointer" }}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn-primary" disabled={addBrandSaving}>
+                    {addBrandSaving ? "Saving…" : editingKit ? "Save changes" : "Save Brand"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
 
           {/* Role Recovery — secondary entry point for the version-history /
               restore flow. Reuses the same backend endpoints the Roles &

@@ -279,7 +279,7 @@ const Contacts = () => {
   const handleDelete = async (id) => {
     if (!await notify.confirm({
       title: 'Delete contact',
-      message: 'Are you sure you want to delete this contact?',
+      message: 'Are you sure you want to delete this contact? This action cannot be undone.',
       confirmText: 'Delete',
       destructive: true,
     })) return;

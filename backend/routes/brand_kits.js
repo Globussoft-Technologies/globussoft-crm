@@ -44,6 +44,37 @@ const {
   validateAssetUpload,
   ASSET_CLASSES,
 } = require("../lib/brandAssetValidation");
+const {
+  uploadFile,
+  deleteFile,
+  extractKeyFromUrl,
+  BUCKET_NAME: S3_BUCKET_NAME,
+} = require("../services/s3Service");
+const { resolveEffectiveBrand } = require("../lib/brandResolver");
+
+// Best-effort delete of a previously-saved BrandKit asset so replacing/
+// clearing an image never leaves an orphan behind. Mirrors
+// routes/wellness.js's deleteOldBrandingLogo — handles both S3 URLs
+// (http/https → deleteFile) and local /uploads paths (→ fs.unlink). Never
+// throws; a failed cleanup must not block the write that triggered it.
+async function deleteOldBrandAsset(oldUrl) {
+  if (!oldUrl) return;
+  try {
+    if (/^https?:\/\//i.test(oldUrl)) {
+      const fileKey = extractKeyFromUrl(oldUrl);
+      if (fileKey) await deleteFile(fileKey);
+    } else {
+      const m = oldUrl.match(/\/(?:api\/)?uploads\/(.+)$/);
+      if (m) {
+        const rel = m[1].split("?")[0];
+        const abs = path.join(__dirname, "..", "uploads", rel);
+        if (fs.existsSync(abs)) fs.unlinkSync(abs);
+      }
+    }
+  } catch (e) {
+    console.warn("[brand-kits] old asset cleanup warning:", e.message);
+  }
+}
 
 // ── W4.A G099 — Multer upload pipeline ─────────────────────────────
 // Disk-storage pattern mirrored from booking_pages.js — files land under
@@ -139,6 +170,20 @@ const ASSET_FIELDS = [
   "supportEmail",
   "supportPhone",
   "socialLinksJson",
+];
+
+// Subset of ASSET_FIELDS that are actual FILES produced by this route's own
+// /upload endpoint (S3 or local /uploads/brand-kits/... paths) — cleaned up
+// on replace/clear. Excludes fontUrl (usually a Google Fonts CDN URL, not
+// our storage) and text/color fields.
+const FILE_ASSET_FIELDS = [
+  "logoUrl",
+  "logoDarkUrl",
+  "faviconUrl",
+  "wordmarkUrl",
+  "heroUrl",
+  "headerImageUrl",
+  "invoiceStampUrl",
 ];
 
 function pickAssetFields(body) {
@@ -566,6 +611,16 @@ router.put(
         });
       });
 
+      // Best-effort cleanup of any FILE-asset field that was replaced or
+      // cleared (never leaves an orphan in S3/disk). Only the fields this
+      // route's own /upload endpoint actually produces — fontUrl usually
+      // points at Google Fonts CDN, not our storage, so it's excluded.
+      for (const f of FILE_ASSET_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(data, f) && existing[f] && existing[f] !== data[f]) {
+          await deleteOldBrandAsset(existing[f]);
+        }
+      }
+
       await writeAudit(
         "BrandKit",
         "UPDATE",
@@ -588,6 +643,59 @@ router.put(
     }
   },
 );
+
+// DELETE /api/brand-kits/:id/logo — ADMIN only (2026-07-08).
+//
+// Clears the ACTIVE kit's logoUrl (sets it to null) and deletes the
+// underlying file from S3/disk — distinct from DELETE /:id, which
+// hard-deletes an entire (inactive) version row. This is what the
+// Settings → Branding "Delete Logo" button calls: after this, the
+// sub-brand falls straight through to the tenant's default-brand /
+// system-default logo via lib/brandResolver.js, with no page reload
+// needed (callers re-fetch GET /active/:subBrand or /effective/:subBrand).
+router.delete("/:id/logo", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const existing = await prisma.brandKit.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Brand kit not found", code: "NOT_FOUND" });
+    }
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (existing.subBrand !== null && !canAccessSubBrand(allowed, existing.subBrand)) {
+      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+    if (!existing.logoUrl) {
+      return res.status(200).json(existing); // already logo-less — no-op
+    }
+
+    const oldLogoUrl = existing.logoUrl;
+    const updated = await prisma.brandKit.update({
+      where: { id },
+      data: { logoUrl: null },
+    });
+    await deleteOldBrandAsset(oldLogoUrl);
+
+    await writeAudit(
+      "BrandKit",
+      "DELETE_LOGO",
+      id,
+      req.user.userId,
+      req.user.tenantId,
+      { subBrand: existing.subBrand, version: existing.version },
+    );
+
+    res.json(updated);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[brand-kits] delete-logo error:", e.message);
+    res.status(500).json({ error: "Failed to delete logo" });
+  }
+});
 
 // DELETE /api/brand-kits/:id — ADMIN only.
 // Hard-delete. Refuses to delete an active kit (caller must demote first
@@ -709,25 +817,35 @@ router.post(
         });
       }
 
-      // Disk write — segmented by tenant + sub-brand so cross-tenant access
-      // via path-traversal stays impossible at the filesystem level.
+      // S3-primary, local-FS fallback (same contract as the tenant-wide
+      // branding logo upload in routes/wellness.js). Segmented by tenant +
+      // sub-brand so cross-tenant access via path-traversal stays impossible
+      // at the filesystem level even in local-disk mode.
       const sbSegment = subBrand || "_default";
-      const targetDir = path.join(UPLOAD_DIR, String(req.user.tenantId), sbSegment);
-      try {
-        fs.mkdirSync(targetDir, { recursive: true });
-      } catch (e) {
-        console.error("[brand-kits] upload mkdir failed:", e.message);
-      }
       const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
       const filename = `${assetType}-${stamp}${result.ext}`;
-      const fullPath = path.join(targetDir, filename);
 
-      // Write the SANITIZED buffer — SVG payloads have been re-encoded
-      // by sanitize-html so any silently-tolerated tag is dropped before
-      // disk write. Raster buffers pass through unchanged.
-      fs.writeFileSync(fullPath, result.sanitizedBuffer);
-
-      const url = `/uploads/brand-kits/${req.user.tenantId}/${sbSegment}/${filename}`;
+      let url;
+      if (S3_BUCKET_NAME) {
+        // Write the SANITIZED buffer — SVG payloads have been re-encoded by
+        // sanitize-html so any silently-tolerated tag is dropped before upload.
+        url = await uploadFile(
+          result.sanitizedBuffer,
+          filename,
+          result.mime,
+          `brand-kits/${req.user.tenantId}/${sbSegment}`,
+        );
+      } else {
+        const targetDir = path.join(UPLOAD_DIR, String(req.user.tenantId), sbSegment);
+        try {
+          fs.mkdirSync(targetDir, { recursive: true });
+        } catch (e) {
+          console.error("[brand-kits] upload mkdir failed:", e.message);
+        }
+        const fullPath = path.join(targetDir, filename);
+        fs.writeFileSync(fullPath, result.sanitizedBuffer);
+        url = `/uploads/brand-kits/${req.user.tenantId}/${sbSegment}/${filename}`;
+      }
 
       await writeAudit(
         "BrandKit",
@@ -993,5 +1111,83 @@ router.post(
     }
   },
 );
+
+// GET /api/brand-kits/effective/:subBrand — the FULL fallback-resolved
+// branding for a sub-brand (2026-07-08). Unlike GET /active/:subBrand (a
+// flat single-row lookup with no fallback), this endpoint walks the whole
+// chain via lib/brandResolver.js: subBrand kit → tenant default-brand kit
+// → Tenant.logoUrl/brandColor → null. This is the endpoint the Sidebar and
+// Settings → Branding card should call so branding is consistent (and
+// consumers other than the two legacy endpoints can migrate onto it too).
+router.get("/effective/:subBrand", verifyToken, async (req, res) => {
+  try {
+    let sb = req.params.subBrand;
+    if (sb === "_" || sb === "null" || sb === "") {
+      sb = null;
+    } else {
+      assertValidSubBrand(sb);
+    }
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (sb !== null && !canAccessSubBrand(allowed, sb)) {
+      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+    const effective = await resolveEffectiveBrand(req.user.tenantId, sb);
+    res.json(effective);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[brand-kits] effective lookup error:", e.message);
+    res.status(500).json({ error: "Failed to resolve effective brand" });
+  }
+});
+
+// POST /api/brand-kits/:id/set-default — ADMIN only (2026-07-08).
+//
+// Marks this kit's sub-brand as the tenant's DEFAULT BRAND by writing
+// Tenant.defaultSubBrand (schema.prisma:92-98 — designed for exactly this
+// purpose but had no write path until now). Only one sub-brand can be the
+// default at a time; passing the tenant-wide (subBrand=null) kit CLEARS
+// defaultSubBrand, restoring the original "subBrand=null bucket wins"
+// behaviour. Every branding consumer (Sidebar, Settings, and — once wired
+// — PDFs/email) that goes through lib/brandResolver.js picks this up
+// immediately, no separate propagation step needed.
+router.post("/:id/set-default", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const kit = await prisma.brandKit.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      select: { id: true, subBrand: true },
+    });
+    if (!kit) {
+      return res.status(404).json({ error: "Brand kit not found", code: "NOT_FOUND" });
+    }
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (kit.subBrand !== null && !canAccessSubBrand(allowed, kit.subBrand)) {
+      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+
+    await prisma.tenant.update({
+      where: { id: req.user.tenantId },
+      data: { defaultSubBrand: kit.subBrand },
+    });
+
+    await writeAudit(
+      "Tenant",
+      "SET_DEFAULT_BRAND",
+      req.user.tenantId,
+      req.user.userId,
+      req.user.tenantId,
+      { defaultSubBrand: kit.subBrand, brandKitId: id },
+    );
+
+    res.json({ defaultSubBrand: kit.subBrand });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[brand-kits] set-default error:", e.message);
+    res.status(500).json({ error: "Failed to set default brand" });
+  }
+});
 
 module.exports = router;

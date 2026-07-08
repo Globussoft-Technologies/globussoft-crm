@@ -11390,6 +11390,30 @@ router.post(
   },
 );
 
+// DELETE /branding/logo (2026-07-08) — clears Tenant.logoUrl and removes the
+// underlying file from S3/disk. Companion to POST /branding/logo, whose only
+// prior path to "remove a logo" was uploading a replacement.
+router.delete("/branding/logo", requireTenantAdmin, async (req, res) => {
+  try {
+    const current = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { logoUrl: true },
+    });
+    if (!current?.logoUrl) {
+      return res.json({ logoUrl: null }); // already logo-less — no-op
+    }
+    await prisma.tenant.update({
+      where: { id: req.user.tenantId },
+      data: { logoUrl: null },
+    });
+    await deleteOldBrandingLogo(current.logoUrl);
+    res.json({ logoUrl: null });
+  } catch (e) {
+    console.error("[wellness] branding logo delete error:", e.message);
+    res.status(500).json({ error: "Failed to delete logo" });
+  }
+});
+
 router.put("/branding/color", requireTenantAdmin, async (req, res) => {
   try {
     const { brandColor } = req.body || {};

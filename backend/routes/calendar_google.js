@@ -12,11 +12,15 @@ const prisma = require("../lib/prisma");
 const { parseSlotWindow, freeSlots } = require("../lib/calendarSlots");
 const zoomClient = require("../services/zoomClient");
 
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "";
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
+const GOOGLE_CLIENT_ID =
+  process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "";
+const GOOGLE_CLIENT_SECRET =
+  process.env.GOOGLE_CLIENT_SECRET ||
+  process.env.GOOGLE_OAUTH_CLIENT_SECRET ||
+  "";
 const GOOGLE_REDIRECT_URI =
-  process.env.GOOGLE_CALENDAR_REDIRECT_URI ||
   process.env.GOOGLE_REDIRECT_URI ||
+  process.env.GOOGLE_CALENDAR_REDIRECT_URI ||
   "http://localhost:5000/api/calendar/google/callback";
 // Strip trailing slash AND a stray "/api" suffix so a deployment whose
 // FRONTEND_URL is mistakenly set to the API base (e.g. https://host/api)
@@ -31,7 +35,11 @@ const SCOPES = [
 ];
 
 function buildOAuthClient() {
-  return new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI);
+  return new google.auth.OAuth2(
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI,
+  );
 }
 
 function encodeState(payload) {
@@ -52,10 +60,14 @@ function decodeState(state) {
 
 async function getAuthorizedClientForUser(userId, tenantId) {
   const integration = await prisma.calendarIntegration.findUnique({
-    where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
+    where: {
+      tenantId_userId_provider: { tenantId, userId, provider: "google" },
+    },
   });
   if (!integration) {
-    const err = new Error("Google Calendar not connected. Please connect your calendar first via /api/calendar/google/connect");
+    const err = new Error(
+      "Google Calendar not connected. Please connect your calendar first via /api/calendar/google/connect",
+    );
     err.status = 404;
     throw err;
   }
@@ -63,7 +75,9 @@ async function getAuthorizedClientForUser(userId, tenantId) {
   client.setCredentials({
     access_token: integration.accessToken,
     refresh_token: integration.refreshToken || undefined,
-    expiry_date: integration.expiresAt ? integration.expiresAt.getTime() : undefined,
+    expiry_date: integration.expiresAt
+      ? integration.expiresAt.getTime()
+      : undefined,
   });
 
   // Persist refreshed tokens automatically
@@ -75,12 +89,17 @@ async function getAuthorizedClientForUser(userId, tenantId) {
       if (tokens.expiry_date) data.expiresAt = new Date(tokens.expiry_date);
       if (Object.keys(data).length) {
         await prisma.calendarIntegration.update({
-          where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
+          where: {
+            tenantId_userId_provider: { tenantId, userId, provider: "google" },
+          },
           data,
         });
       }
     } catch (e) {
-      console.error("[calendar_google] failed to persist refreshed tokens:", e.message);
+      console.error(
+        "[calendar_google] failed to persist refreshed tokens:",
+        e.message,
+      );
     }
   });
 
@@ -91,10 +110,16 @@ async function getAuthorizedClientForUser(userId, tenantId) {
 router.get("/connect", verifyToken, (req, res) => {
   try {
     if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-      return res.status(500).json({ error: "Google OAuth credentials not configured on server" });
+      return res
+        .status(500)
+        .json({ error: "Google OAuth credentials not configured on server" });
     }
     const oauth2Client = buildOAuthClient();
-    const state = encodeState({ userId: req.user.userId, tenantId: req.user.tenantId, t: Date.now() });
+    const state = encodeState({
+      userId: req.user.userId,
+      tenantId: req.user.tenantId,
+      t: Date.now(),
+    });
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: "offline",
       prompt: "consent",
@@ -112,10 +137,14 @@ router.get("/connect", verifyToken, (req, res) => {
 router.get("/callback", async (req, res) => {
   const { code, state, error } = req.query;
   if (error) {
-    return res.redirect(`${FRONTEND_URL}/calendar-sync?error=${encodeURIComponent(error)}`);
+    return res.redirect(
+      `${FRONTEND_URL}/calendar-sync?error=${encodeURIComponent(error)}`,
+    );
   }
   if (!code || !state) {
-    return res.redirect(`${FRONTEND_URL}/calendar-sync?error=missing_code_or_state`);
+    return res.redirect(
+      `${FRONTEND_URL}/calendar-sync?error=missing_code_or_state`,
+    );
   }
   const decoded = decodeState(state);
   if (!decoded || !decoded.userId) {
@@ -123,12 +152,22 @@ router.get("/callback", async (req, res) => {
   }
   try {
     const oauth2Client = buildOAuthClient();
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+      throw new Error(
+        "Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in env",
+      );
+    }
     const { tokens } = await oauth2Client.getToken(code);
+    if (!tokens || !tokens.access_token) {
+      throw new Error("No access token received from Google");
+    }
     const userId = parseInt(decoded.userId, 10);
     const tenantId = decoded.tenantId ? parseInt(decoded.tenantId, 10) : 1;
 
     await prisma.calendarIntegration.upsert({
-      where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
+      where: {
+        tenantId_userId_provider: { tenantId, userId, provider: "google" },
+      },
       create: {
         userId,
         provider: "google",
@@ -158,8 +197,19 @@ router.get("/callback", async (req, res) => {
       <p>Redirecting to Calendar Sync...</p>
     `);
   } catch (err) {
-    console.error("[calendar_google] /callback error:", err);
-    res.redirect(`${FRONTEND_URL}/calendar-sync?error=${encodeURIComponent("token_exchange_failed")}`);
+    console.error("[calendar_google] /callback error:", err.message || err);
+    console.error("[calendar_google] Redirect URI used:", GOOGLE_REDIRECT_URI);
+    console.error(
+      "[calendar_google] Client ID:",
+      GOOGLE_CLIENT_ID ? "✓ set" : "✗ missing",
+    );
+    console.error(
+      "[calendar_google] Client Secret:",
+      GOOGLE_CLIENT_SECRET ? "✓ set" : "✗ missing",
+    );
+    res.redirect(
+      `${FRONTEND_URL}/calendar-sync?error=${encodeURIComponent("token_exchange_failed")}`,
+    );
   }
 });
 
@@ -171,7 +221,10 @@ router.post("/sync", verifyToken, async (req, res) => {
       return res.status(401).json({ error: "User ID not found in token" });
     }
     const tenantId = req.user.tenantId;
-    const { client, integration } = await getAuthorizedClientForUser(userId, tenantId);
+    const { client, integration } = await getAuthorizedClientForUser(
+      userId,
+      tenantId,
+    );
     const calendar = google.calendar({ version: "v3", auth: client });
 
     const now = Date.now();
@@ -198,16 +251,28 @@ router.post("/sync", verifyToken, async (req, res) => {
         if (!start || !end) continue;
         const startTime = new Date(start);
         const endTime = new Date(end);
-        const attendeesJson = ev.attendees ? JSON.stringify(ev.attendees) : null;
+        const attendeesJson = ev.attendees
+          ? JSON.stringify(ev.attendees)
+          : null;
         const meetingUrl =
           ev.hangoutLink ||
           (ev.conferenceData &&
             ev.conferenceData.entryPoints &&
-            (ev.conferenceData.entryPoints.find((e) => e.entryPointType === "video") || {}).uri) ||
+            (
+              ev.conferenceData.entryPoints.find(
+                (e) => e.entryPointType === "video",
+              ) || {}
+            ).uri) ||
           null;
 
         await prisma.calendarEvent.upsert({
-          where: { tenantId_provider_externalId: { tenantId, provider: "google", externalId: ev.id } },
+          where: {
+            tenantId_provider_externalId: {
+              tenantId,
+              provider: "google",
+              externalId: ev.id,
+            },
+          },
           create: {
             externalId: ev.id,
             provider: "google",
@@ -238,7 +303,9 @@ router.post("/sync", verifyToken, async (req, res) => {
     } while (pageToken);
 
     await prisma.calendarIntegration.update({
-      where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
+      where: {
+        tenantId_userId_provider: { tenantId, userId, provider: "google" },
+      },
       data: { lastSyncAt: new Date() },
     });
 
@@ -250,10 +317,12 @@ router.post("/sync", verifyToken, async (req, res) => {
     // re-auth condition — show a friendly reconnect prompt, never the raw
     // OAuth/Graph error to the user.
     const raw = `${(err && err.message) || ""} ${err && err.response && err.response.data ? JSON.stringify(err.response.data) : ""}`;
-    const reauth = /invalid_grant|expired or revoked|Token has been expired/i.test(raw);
+    const reauth =
+      /invalid_grant|expired or revoked|Token has been expired/i.test(raw);
     if (reauth) {
       return res.status(401).json({
-        error: "Your Google Calendar connection has expired. Please disconnect and reconnect to resume syncing.",
+        error:
+          "Your Google Calendar connection has expired. Please disconnect and reconnect to resume syncing.",
         code: "RECONNECT_REQUIRED",
       });
     }
@@ -261,9 +330,16 @@ router.post("/sync", verifyToken, async (req, res) => {
     // — keep them. Only mask truly-unexpected errors (no status) so a raw
     // googleapis/OAuth dump never reaches the user.
     if (err.status) {
-      return res.status(err.status).json({ error: err.message || "Sync failed" });
+      return res
+        .status(err.status)
+        .json({ error: err.message || "Sync failed" });
     }
-    return res.status(500).json({ error: "Couldn't sync your Google Calendar right now. Please try again." });
+    return res
+      .status(500)
+      .json({
+        error:
+          "Couldn't sync your Google Calendar right now. Please try again.",
+      });
   }
 });
 
@@ -275,7 +351,9 @@ router.get("/events", verifyToken, async (req, res) => {
 
     // Check if integration exists first
     const integration = await prisma.calendarIntegration.findUnique({
-      where: { tenantId_userId_provider: { tenantId, userId, provider: "google" } },
+      where: {
+        tenantId_userId_provider: { tenantId, userId, provider: "google" },
+      },
     });
 
     if (!integration) {
@@ -300,9 +378,23 @@ router.get("/events", verifyToken, async (req, res) => {
 // POST /events — create event in Google Calendar + DB
 router.post("/events", verifyToken, async (req, res) => {
   try {
-    const { title, description, startTime, endTime, attendees, contactId, dealId, location, createMeet, createZoom, conferencing } = req.body || {};
+    const {
+      title,
+      description,
+      startTime,
+      endTime,
+      attendees,
+      contactId,
+      dealId,
+      location,
+      createMeet,
+      createZoom,
+      conferencing,
+    } = req.body || {};
     if (!title || !startTime || !endTime) {
-      return res.status(400).json({ error: "title, startTime and endTime are required" });
+      return res
+        .status(400)
+        .json({ error: "title, startTime and endTime are required" });
     }
 
     // Opt-in Google Meet link generation (T18). Off by default so every
@@ -326,18 +418,27 @@ router.post("/events", verifyToken, async (req, res) => {
     const start = new Date(startTime);
     const end = new Date(endTime);
     if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-      return res.status(400).json({ error: "Invalid startTime or endTime format" });
+      return res
+        .status(400)
+        .json({ error: "Invalid startTime or endTime format" });
     }
 
     // Check if start time is in the past
     const now = new Date();
     if (start < now) {
-      return res.status(400).json({ error: "Cannot create events in the past. Start time must be in the future." });
+      return res
+        .status(400)
+        .json({
+          error:
+            "Cannot create events in the past. Start time must be in the future.",
+        });
     }
 
     // Check if end time is after start time
     if (end <= start) {
-      return res.status(400).json({ error: "End time must be after start time" });
+      return res
+        .status(400)
+        .json({ error: "End time must be after start time" });
     }
 
     const userId = req.user.userId;
@@ -356,10 +457,18 @@ router.post("/events", verifyToken, async (req, res) => {
       },
     });
     if (conflictingEvent) {
-      return res.status(409).json({ error: "Event time conflicts with an existing event. Please choose a different time." });
+      return res
+        .status(409)
+        .json({
+          error:
+            "Event time conflicts with an existing event. Please choose a different time.",
+        });
     }
 
-    const { client, integration } = await getAuthorizedClientForUser(userId, tenantId);
+    const { client, integration } = await getAuthorizedClientForUser(
+      userId,
+      tenantId,
+    );
     const calendar = google.calendar({ version: "v3", auth: client });
 
     const attendeesArr = Array.isArray(attendees)
@@ -381,7 +490,10 @@ router.post("/events", verifyToken, async (req, res) => {
         });
         zoomUrl = zoom && zoom.joinUrl ? zoom.joinUrl : null;
       } catch (e) {
-        console.error("[calendar_google] Zoom meeting creation failed:", e.message);
+        console.error(
+          "[calendar_google] Zoom meeting creation failed:",
+          e.message,
+        );
       }
     }
     const eventDescription = zoomUrl
@@ -424,12 +536,22 @@ router.post("/events", verifyToken, async (req, res) => {
       ev.hangoutLink ||
       (ev.conferenceData &&
         ev.conferenceData.entryPoints &&
-        (ev.conferenceData.entryPoints.find((e) => e.entryPointType === "video") || {}).uri) ||
+        (
+          ev.conferenceData.entryPoints.find(
+            (e) => e.entryPointType === "video",
+          ) || {}
+        ).uri) ||
       zoomUrl ||
       null;
 
     const saved = await prisma.calendarEvent.upsert({
-      where: { tenantId_provider_externalId: { tenantId, provider: "google", externalId: ev.id } },
+      where: {
+        tenantId_provider_externalId: {
+          tenantId,
+          provider: "google",
+          externalId: ev.id,
+        },
+      },
       create: {
         externalId: ev.id,
         provider: "google",
@@ -464,11 +586,14 @@ router.post("/events", verifyToken, async (req, res) => {
     const raw = `${(err && err.message) || ""} ${err && err.response && err.response.data ? JSON.stringify(err.response.data) : ""}`;
     if (/invalid_grant|expired or revoked|Token has been expired/i.test(raw)) {
       return res.status(401).json({
-        error: "Your Google Calendar connection has expired. Please disconnect and reconnect, then create the event again.",
+        error:
+          "Your Google Calendar connection has expired. Please disconnect and reconnect, then create the event again.",
         code: "RECONNECT_REQUIRED",
       });
     }
-    return res.status(err.status || 500).json({ error: err.message || "Failed to create event" });
+    return res
+      .status(err.status || 500)
+      .json({ error: err.message || "Failed to create event" });
   }
 });
 
@@ -499,7 +624,10 @@ router.get("/slots", verifyToken, async (req, res) => {
     const win = parseSlotWindow(req.query);
     if (win.error) return res.status(400).json({ error: win.error });
 
-    const { client, integration } = await getAuthorizedClientForUser(userId, tenantId);
+    const { client, integration } = await getAuthorizedClientForUser(
+      userId,
+      tenantId,
+    );
     const calendar = google.calendar({ version: "v3", auth: client });
     const calId = integration.calendarId || "primary";
 
@@ -545,11 +673,14 @@ router.get("/slots", verifyToken, async (req, res) => {
     const raw = `${(err && err.message) || ""} ${err && err.response && err.response.data ? JSON.stringify(err.response.data) : ""}`;
     if (/invalid_grant|expired or revoked|Token has been expired/i.test(raw)) {
       return res.status(401).json({
-        error: "Your Google Calendar connection has expired. Please disconnect and reconnect to find available slots.",
+        error:
+          "Your Google Calendar connection has expired. Please disconnect and reconnect to find available slots.",
         code: "RECONNECT_REQUIRED",
       });
     }
-    return res.status(err.status || 500).json({ error: err.message || "Failed to load slots" });
+    return res
+      .status(err.status || 500)
+      .json({ error: err.message || "Failed to load slots" });
   }
 });
 

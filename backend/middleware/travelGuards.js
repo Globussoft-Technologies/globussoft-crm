@@ -61,19 +61,20 @@ async function requireTravelTenant(req, res, next) {
  * full access. Admins always get null (full access regardless of the
  * subBrandAccess column).
  *
- * Returns an empty Set on lookup failure (user row missing), on malformed
- * JSON in the subBrandAccess column, or on an explicit empty array `"[]"`
- * (the natural way to express "not-yet-onboarded — no sub-brand grants").
+ * For non-ADMIN users: if subBrandAccess is not set (NULL), returns empty
+ * Set to DENY ALL access. This prevents data leakage when staff are created
+ * without explicit sub-brand assignments.
+ *
+ * Returns an empty Set on:
+ *   - User row missing (lookup failure)
+ *   - Non-ADMIN user with unset subBrandAccess column (security: deny-all)
+ *   - Malformed JSON in the subBrandAccess column
+ *   - Explicit empty array `"[]"` (the natural way to express "not-yet-onboarded")
+ *
  * Callers should treat an empty Set as "deny everything" (the per-route
  * convention is to short-circuit to an all-zeros / no-op envelope so the
  * dashboard tile renders cleanly rather than 403'ing).
  *
- * Distinguishing the deny-all (`new Set()`) path from the full-access
- * (`null`) path matters because:
- *   - `null` from a missing/unset subBrandAccess column means "no scope
- *     restriction declared" → fall back to tenant-wide access (admin-like).
- *   - `new Set()` from an explicit `"[]"` means "scope declared and it's
- *     empty" → deny everything inside the tenant. (Per #976.)
  * Non-array JSON (e.g. `'{"tmc":true}'`) preserves the null/full-access
  * fallback because the shape is malformed-but-non-array — we can't tell
  * whether the operator intended deny-all or just typo'd a non-array
@@ -87,7 +88,10 @@ async function getSubBrandAccessSet(userId) {
   });
   if (!user) return new Set();
   if (user.role === "ADMIN") return null;
-  if (!user.subBrandAccess) return null;
+  // For non-ADMIN users: if subBrandAccess is not set, deny all access (empty Set)
+  // instead of allowing full access. This prevents data leakage when staff are
+  // created without explicit sub-brand assignments.
+  if (!user.subBrandAccess) return new Set();
   try {
     const arr = JSON.parse(user.subBrandAccess);
     if (!Array.isArray(arr)) return null; // malformed (non-array) → full access (preserved)

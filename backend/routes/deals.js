@@ -11,6 +11,7 @@ const { formatMoney } = require("../utils/formatMoney");
 // Default (no rule in DB) is full access.
 const { filterReadFields, filterWriteFields } = require("../middleware/fieldFilter");
 const { canonicaliseChannel, CHANNEL_ALIASES } = require("../lib/intakePayloadValidators");
+const { getSubBrandAccessSet } = require("../middleware/travelGuards");
 
 const router = express.Router();
 
@@ -58,7 +59,7 @@ async function audit(action, entityId, userId, tenantId, details) {
 router.get("/", async (req, res) => {
   try {
     const { stage, ownerId, pipelineId, contactId, subBrand, from, to, channel } = req.query;
-    const where = { tenantId: req.user.tenantId };
+    let where = { tenantId: req.user.tenantId };
 
     if (stage) where.stage = stage;
     if (ownerId) where.ownerId = parseInt(ownerId);
@@ -95,10 +96,43 @@ router.get("/", async (req, res) => {
       if (to) where.createdAt.lte = new Date(to);
     }
     if (req.query.includeDeleted !== "true") where.deletedAt = null;
+
+    // Travel vertical: check subBrandAccess first to determine filtering behavior
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    const isTravelUser = allowed instanceof Set && allowed.size > 0;
+
     // #588: USER role sees only their own deals; ADMIN/MANAGER see full
     // tenant. An explicit ?ownerId= from a USER is overridden by their own
     // userId — a sales rep cannot probe a colleague's pipeline by URL.
-    if (req.user.role === "USER") where.ownerId = req.user.userId;
+    // EXCEPTION: Travel vertical users see ALL unassigned leads in their
+    // sub-brands (not just their assigned deals).
+    if (req.user.role === "USER" && !isTravelUser) {
+      where.ownerId = req.user.userId;
+    } else if (req.user.role === "USER" && isTravelUser) {
+      // Travel user: show their assigned deals + all unassigned deals
+      where.OR = [
+        { ownerId: req.user.userId },
+        { ownerId: null }
+      ];
+    }
+
+    // Travel vertical: filter by subBrandAccess if user is restricted to
+    // specific sub-brands. Also include NULL subBrand (legacy deals).
+    if (isTravelUser) {
+      // Use OR to match either: subBrand in allowed list OR subBrand is null
+      const basedWhere = { ...where };
+      where = {
+        AND: [
+          basedWhere,
+          {
+            OR: [
+              { subBrand: { in: [...allowed] } },
+              { subBrand: null }
+            ]
+          }
+        ]
+      };
+    }
 
     // #172: pagination support (was ignored entirely pre-fix).
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 100, 500));

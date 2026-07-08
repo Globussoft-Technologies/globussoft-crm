@@ -598,16 +598,15 @@ const Sidebar = ({
     // gate which whitelists admin/manager alongside the named clinical roles).
     if (wellnessRoles && !isManager && !wellnessRoles.includes(wellnessRole))
       return null;
-    // RBAC permission gate. Only HIDE once permissions have resolved so admin
-    // users don't see a flash of an empty sidebar during the first frame of
-    // /auth/me/permissions resolving. After the answer arrives, an entry with
-    // `requiredPermission={{module, action}}` is hidden when the user lacks
-    // that grant. Stacks ON TOP of the legacy gates above — if a link sets
-    // both `adminOnly` and `requiredPermission`, both must pass.
+    // RBAC permission gate. Hide if:
+    //   - requiredPermission is set AND
+    //   - EITHER permissions haven't loaded yet OR user lacks that permission
+    // This is more conservative (hide-by-default) to prevent data leakage if
+    // permissions fail to load or are delayed. Once permissions load, show only
+    // if the user has explicit permission.
     if (
       requiredPermission &&
-      permissionsReady &&
-      !hasPermission(requiredPermission.module, requiredPermission.action)
+      (!permissionsReady || !hasPermission(requiredPermission.module, requiredPermission.action))
     ) {
       return null;
     }
@@ -663,10 +662,11 @@ const Sidebar = ({
       !linkWellnessRoles.includes(wellnessRole)
     )
       return false;
+    // Match linkImplRef logic: hide if requiredPermission set AND
+    // (permissions not ready OR user lacks permission)
     if (
       requiredPermission &&
-      permissionsReady &&
-      !hasPermission(requiredPermission.module, requiredPermission.action)
+      (!permissionsReady || !hasPermission(requiredPermission.module, requiredPermission.action))
     ) {
       return false;
     }

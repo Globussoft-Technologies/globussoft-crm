@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+} from "react";
 import {
   Search,
   User,
@@ -14,11 +20,11 @@ import {
   BookOpen,
   CornerDownLeft,
   HeartPulse,
-} from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { fetchApi } from '../utils/api';
-import { SEARCH_DEBOUNCE_MS } from '../utils/timing';
-import { formatMoney } from '../utils/money';
+} from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { fetchApi } from "../utils/api";
+import { SEARCH_DEBOUNCE_MS } from "../utils/timing";
+import { formatMoney } from "../utils/money";
 
 // Inline top-bar global search.
 //
@@ -29,7 +35,7 @@ import { formatMoney } from '../utils/money';
 // returned seven more result types (tickets/tasks/projects/contracts/
 // estimates/emails/kb) that were silently dropped on the floor.
 //
-// New shape:
+// New shape (v2 — optimized search engine):
 //   - Always-visible inline input in the app header.
 //   - Drop-down panel below the input shows results when query length >= 2.
 //   - "Pages" section searches the user's accessible sidebar pages
@@ -37,7 +43,10 @@ import { formatMoney } from '../utils/money';
 //     have permission for by typing its name or part of its description.
 //     This makes the search bar the canonical SPA navigator for tenants
 //     with 50+ sidebar items.
-//   - Then all 10 backend result types render under their own headers.
+//   - Then 15+ backend result types render under their own headers: contacts,
+//     deals, sequences, campaigns, invoices, tickets, tasks, projects, surveys,
+//     contracts, estimates, emails, WhatsApp, knowledge base, patients.
+//   - Case-insensitive search + expanded entity coverage optimizes discovery.
 //   - Click a row → navigate via react-router (no full page reload).
 //   - Ctrl/Cmd+K focuses the input (kept for power users).
 //   - Escape clears + blurs.
@@ -51,12 +60,12 @@ const ENTITY_SECTIONS = [
   // click navigation. Keeping all section config in one table means a new
   // backend result type only needs one entry here to surface.
   {
-    key: 'pages',
-    label: 'Pages',
+    key: "pages",
+    label: "Pages",
     icon: LayoutDashboard,
-    color: '#a855f7',
-    bg: 'rgba(168, 85, 247, 0.12)',
-    border: 'rgba(168, 85, 247, 0.25)',
+    color: "#a855f7",
+    bg: "rgba(168, 85, 247, 0.12)",
+    border: "rgba(168, 85, 247, 0.25)",
     render: (p) => ({
       primary: p.label,
       secondary: p.description || p.category || p.path,
@@ -64,12 +73,12 @@ const ENTITY_SECTIONS = [
     }),
   },
   {
-    key: 'contacts',
-    label: 'Contacts',
+    key: "contacts",
+    label: "Contacts",
     icon: User,
-    color: '#3b82f6',
-    bg: 'rgba(59, 130, 246, 0.12)',
-    border: 'rgba(59, 130, 246, 0.25)',
+    color: "#3b82f6",
+    bg: "rgba(59, 130, 246, 0.12)",
+    border: "rgba(59, 130, 246, 0.25)",
     render: (c) => ({
       primary: c.company ? `${c.name} • ${c.company}` : c.name,
       secondary: c.email,
@@ -81,135 +90,190 @@ const ENTITY_SECTIONS = [
     // this section to wellness-tenant + PHI-eligible viewers; for any
     // other caller the array is empty and the section silently doesn't
     // render. Row click deep-links to the patient detail page.
-    key: 'patients',
-    label: 'Patients',
+    key: "patients",
+    label: "Patients",
     icon: HeartPulse,
-    color: '#ec4899',
-    bg: 'rgba(236, 72, 153, 0.12)',
-    border: 'rgba(236, 72, 153, 0.25)',
+    color: "#ec4899",
+    bg: "rgba(236, 72, 153, 0.12)",
+    border: "rgba(236, 72, 153, 0.25)",
     render: (p) => ({
       primary: p.name,
-      secondary: [p.phone, p.email].filter(Boolean).join(' • '),
+      secondary: [p.phone, p.email].filter(Boolean).join(" • "),
       to: `/wellness/patients/${p.id}`,
     }),
   },
   {
-    key: 'deals',
-    label: 'Pipeline',
+    key: "deals",
+    label: "Pipeline",
     icon: Briefcase,
-    color: '#10b981',
-    bg: 'rgba(16, 185, 129, 0.12)',
-    border: 'rgba(16, 185, 129, 0.25)',
+    color: "#10b981",
+    bg: "rgba(16, 185, 129, 0.12)",
+    border: "rgba(16, 185, 129, 0.25)",
     render: (d) => ({
       primary: d.title,
       secondary: `Stage: ${d.stage} • ${formatMoney(d.amount, { currency: d.currency, maximumFractionDigits: 0 })}`,
-      to: '/pipeline',
+      to: "/pipeline",
     }),
   },
   {
-    key: 'invoices',
-    label: 'Invoices',
+    key: "sequences",
+    label: "Sequences",
+    icon: Mail,
+    color: "#06b6d4",
+    bg: "rgba(6, 182, 212, 0.12)",
+    border: "rgba(6, 182, 212, 0.25)",
+    render: (s) => ({
+      primary: s.name,
+      secondary: s.status || "Draft",
+      to: "/sequences",
+    }),
+  },
+  {
+    key: "campaigns",
+    label: "Campaigns",
+    icon: Mail,
+    color: "#8b5cf6",
+    bg: "rgba(139, 92, 246, 0.12)",
+    border: "rgba(139, 92, 246, 0.25)",
+    render: (c) => ({
+      primary: c.name,
+      secondary: `${c.type || ""} • ${c.status || ""}`.trim(),
+      to: "/marketing",
+    }),
+  },
+  {
+    key: "invoices",
+    label: "Invoices",
     icon: FileText,
-    color: '#f59e0b',
-    bg: 'rgba(245, 158, 11, 0.12)',
-    border: 'rgba(245, 158, 11, 0.25)',
+    color: "#f59e0b",
+    bg: "rgba(245, 158, 11, 0.12)",
+    border: "rgba(245, 158, 11, 0.25)",
     render: (i) => ({
       primary: i.invoiceNum,
-      secondary: `${i.contact?.name || 'Unknown'} • ${formatMoney(i.amount, { maximumFractionDigits: 2 })}`,
+      secondary: `${i.contact?.name || "Unknown"} • ${formatMoney(i.amount, { maximumFractionDigits: 2 })}`,
       badge: i.status,
-      badgeOk: i.status === 'PAID',
-      to: '/invoices',
+      badgeOk: i.status === "PAID",
+      to: "/invoices",
     }),
   },
   {
-    key: 'tickets',
-    label: 'Tickets',
+    key: "tickets",
+    label: "Tickets",
     icon: Ticket,
-    color: '#ef4444',
-    bg: 'rgba(239, 68, 68, 0.12)',
-    border: 'rgba(239, 68, 68, 0.25)',
+    color: "#ef4444",
+    bg: "rgba(239, 68, 68, 0.12)",
+    border: "rgba(239, 68, 68, 0.25)",
     render: (t) => ({
       primary: t.subject,
-      secondary: `${t.status || ''}${t.priority ? ` • ${t.priority}` : ''}`,
-      to: '/tickets',
+      secondary: `${t.status || ""}${t.priority ? ` • ${t.priority}` : ""}`,
+      to: "/tickets",
     }),
   },
   {
-    key: 'tasks',
-    label: 'Tasks',
+    key: "tasks",
+    label: "Tasks",
     icon: CheckSquare,
-    color: '#06b6d4',
-    bg: 'rgba(6, 182, 212, 0.12)',
-    border: 'rgba(6, 182, 212, 0.25)',
+    color: "#06b6d4",
+    bg: "rgba(6, 182, 212, 0.12)",
+    border: "rgba(6, 182, 212, 0.25)",
     render: (t) => ({
       primary: t.title,
-      secondary: `${t.status || ''}${t.priority ? ` • ${t.priority}` : ''}`,
-      to: '/tasks',
+      secondary: `${t.status || ""}${t.priority ? ` • ${t.priority}` : ""}`,
+      to: "/tasks",
     }),
   },
   {
-    key: 'projects',
-    label: 'Projects',
+    key: "projects",
+    label: "Projects",
     icon: FolderKanban,
-    color: '#8b5cf6',
-    bg: 'rgba(139, 92, 246, 0.12)',
-    border: 'rgba(139, 92, 246, 0.25)',
+    color: "#8b5cf6",
+    bg: "rgba(139, 92, 246, 0.12)",
+    border: "rgba(139, 92, 246, 0.25)",
     render: (p) => ({
       primary: p.name,
-      secondary: p.status || '',
-      to: '/projects',
+      secondary: p.status || "",
+      to: "/projects",
     }),
   },
   {
-    key: 'contracts',
-    label: 'Contracts',
+    key: "surveys",
+    label: "Surveys",
+    icon: FileSpreadsheet,
+    color: "#14b8a6",
+    bg: "rgba(20, 184, 166, 0.12)",
+    border: "rgba(20, 184, 166, 0.25)",
+    render: (s) => ({
+      primary: s.title,
+      secondary: `${s.type || ""} • ${s.status || ""}`.trim(),
+      to: "/surveys",
+    }),
+  },
+  {
+    key: "contracts",
+    label: "Contracts",
     icon: FileText,
-    color: '#0ea5e9',
-    bg: 'rgba(14, 165, 233, 0.12)',
-    border: 'rgba(14, 165, 233, 0.25)',
+    color: "#0ea5e9",
+    bg: "rgba(14, 165, 233, 0.12)",
+    border: "rgba(14, 165, 233, 0.25)",
     render: (c) => ({
       primary: c.title,
-      secondary: c.status || '',
-      to: '/contracts',
+      secondary: c.status || "",
+      to: "/contracts",
     }),
   },
   {
-    key: 'estimates',
-    label: 'Estimates',
+    key: "estimates",
+    label: "Estimates",
     icon: FileSpreadsheet,
-    color: '#84cc16',
-    bg: 'rgba(132, 204, 22, 0.12)',
-    border: 'rgba(132, 204, 22, 0.25)',
+    color: "#84cc16",
+    bg: "rgba(132, 204, 22, 0.12)",
+    border: "rgba(132, 204, 22, 0.25)",
     render: (e) => ({
-      primary: e.estimateNum ? `${e.estimateNum} — ${e.title || ''}` : e.title,
-      secondary: e.status || '',
-      to: '/estimates',
+      primary: e.estimateNum ? `${e.estimateNum} — ${e.title || ""}` : e.title,
+      secondary: e.status || "",
+      to: "/estimates",
     }),
   },
   {
-    key: 'emails',
-    label: 'Email',
+    key: "emails",
+    label: "Email",
     icon: Mail,
-    color: '#f43f5e',
-    bg: 'rgba(244, 63, 94, 0.12)',
-    border: 'rgba(244, 63, 94, 0.25)',
+    color: "#f43f5e",
+    bg: "rgba(244, 63, 94, 0.12)",
+    border: "rgba(244, 63, 94, 0.25)",
     render: (m) => ({
-      primary: m.subject || '(no subject)',
-      secondary: `${m.direction || ''} • ${m.from || ''} → ${m.to || ''}`.trim(),
-      to: '/inbox',
+      primary: m.subject || "(no subject)",
+      secondary:
+        `${m.direction || ""} • ${m.from || ""} → ${m.to || ""}`.trim(),
+      to: "/inbox",
     }),
   },
   {
-    key: 'kbArticles',
-    label: 'Knowledge Base',
+    key: "whatsappMessages",
+    label: "WhatsApp",
+    icon: Mail,
+    color: "#25d366",
+    bg: "rgba(37, 211, 102, 0.12)",
+    border: "rgba(37, 211, 102, 0.25)",
+    render: (m) => ({
+      primary: m.phoneNumber || "WhatsApp Message",
+      secondary: m.body
+        ? m.body.substring(0, 50) + (m.body.length > 50 ? "…" : "")
+        : m.direction || "",
+      to: "/wellness/whatsapp",
+    }),
+  },
+  {
+    key: "kbArticles",
+    label: "Knowledge Base",
     icon: BookOpen,
-    color: '#14b8a6',
-    bg: 'rgba(20, 184, 166, 0.12)',
-    border: 'rgba(20, 184, 166, 0.25)',
+    color: "#14b8a6",
+    bg: "rgba(20, 184, 166, 0.12)",
+    border: "rgba(20, 184, 166, 0.25)",
     render: (a) => ({
       primary: a.title,
-      secondary: a.isPublished ? 'Published' : 'Draft',
-      to: '/knowledge-base',
+      secondary: a.isPublished ? "Published" : "Draft",
+      to: "/knowledge-base",
     }),
   },
 ];
@@ -226,7 +290,8 @@ function scorePageMatch(page, q) {
     const idx = f.toLowerCase().indexOf(needle);
     if (idx === -1) continue;
     // Earlier match in label > later match in description.
-    const fieldWeight = f === page.label ? 0 : f === page.description ? 100 : 200;
+    const fieldWeight =
+      f === page.label ? 0 : f === page.description ? 100 : 200;
     const candidate = fieldWeight + idx;
     if (best === -1 || candidate < best) best = candidate;
   }
@@ -234,7 +299,7 @@ function scorePageMatch(page, q) {
 }
 
 export default function Omnibar() {
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState("");
   const [results, setResults] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
@@ -249,7 +314,7 @@ export default function Omnibar() {
   // endpoint feeds the wellness sidebar, so the cache is shared.
   useEffect(() => {
     let cancelled = false;
-    fetchApi('/api/pages/me', { silent: true })
+    fetchApi("/api/pages/me", { silent: true })
       .then((res) => {
         if (cancelled) return;
         setPagesIndex(Array.isArray(res?.pages) ? res.pages : []);
@@ -259,14 +324,16 @@ export default function Omnibar() {
         setPagesIndex([]);
       });
     const onInvalidate = () => {
-      fetchApi('/api/pages/me', { silent: true })
-        .then((res) => setPagesIndex(Array.isArray(res?.pages) ? res.pages : []))
+      fetchApi("/api/pages/me", { silent: true })
+        .then((res) =>
+          setPagesIndex(Array.isArray(res?.pages) ? res.pages : []),
+        )
         .catch(() => {});
     };
-    window.addEventListener('sidebar:pages-changed', onInvalidate);
+    window.addEventListener("sidebar:pages-changed", onInvalidate);
     return () => {
       cancelled = true;
-      window.removeEventListener('sidebar:pages-changed', onInvalidate);
+      window.removeEventListener("sidebar:pages-changed", onInvalidate);
     };
   }, []);
 
@@ -275,14 +342,14 @@ export default function Omnibar() {
       // Ctrl/Cmd+K focuses the inline input. No more open/close toggle —
       // the input is always in the DOM, so the shortcut becomes a
       // "jump to search" affordance.
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
         e.preventDefault();
         inputRef.current?.focus();
         inputRef.current?.select?.();
       }
-      if (e.key === 'Escape') {
+      if (e.key === "Escape") {
         if (document.activeElement === inputRef.current || query) {
-          setQuery('');
+          setQuery("");
           setIsFocused(false);
           inputRef.current?.blur();
         }
@@ -297,11 +364,11 @@ export default function Omnibar() {
       inputRef.current?.select?.();
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('omnibar:open', handleExternalOpen);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("omnibar:open", handleExternalOpen);
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('omnibar:open', handleExternalOpen);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("omnibar:open", handleExternalOpen);
     };
   }, [query]);
 
@@ -313,8 +380,8 @@ export default function Omnibar() {
       if (containerRef.current.contains(e.target)) return;
       setIsFocused(false);
     };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
   }, []);
 
   // Server-backed search debounced behind SEARCH_DEBOUNCE_MS. Page matches
@@ -328,7 +395,9 @@ export default function Omnibar() {
       }
       setIsLoading(true);
       try {
-        const data = await fetchApi(`/api/search?q=${encodeURIComponent(query)}`);
+        const data = await fetchApi(
+          `/api/search?q=${encodeURIComponent(query)}`,
+        );
         setResults(data || {});
       } catch (err) {
         console.error(err);
@@ -354,16 +423,22 @@ export default function Omnibar() {
 
   // Merge pages (client) + backend results into a single resultSet that the
   // section table iterates over.
-  const resultSet = useMemo(() => ({ pages: pageMatches, ...results }), [pageMatches, results]);
+  const resultSet = useMemo(
+    () => ({ pages: pageMatches, ...results }),
+    [pageMatches, results],
+  );
 
   const totalResultCount = useMemo(() => {
-    return ENTITY_SECTIONS.reduce((sum, s) => sum + (resultSet[s.key]?.length || 0), 0);
+    return ENTITY_SECTIONS.reduce(
+      (sum, s) => sum + (resultSet[s.key]?.length || 0),
+      0,
+    );
   }, [resultSet]);
 
   const handleRowClick = useCallback(
     (to) => {
       if (to) navigate(to);
-      setQuery('');
+      setQuery("");
       setIsFocused(false);
       inputRef.current?.blur();
     },
@@ -377,7 +452,7 @@ export default function Omnibar() {
       ref={containerRef}
       data-testid="omnibar-root"
       style={{
-        position: 'relative',
+        position: "relative",
         // Left-aligned, fixed-but-comfortable width. Earlier shape was
         // `flex: 1 1 540px` which stretched the bar across all free
         // header space, visually centering it between the hamburger and
@@ -385,15 +460,15 @@ export default function Omnibar() {
         // right: auto so the bar sits at the start of the header and
         // the right-side controls (chip / bell / profile / theme /
         // logout) keep their natural flex-end alignment.
-        width: 'min(420px, 38vw)',
+        width: "min(420px, 38vw)",
         minWidth: 220,
-        marginRight: 'auto',
+        marginRight: "auto",
       }}
     >
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
+          display: "flex",
+          alignItems: "center",
           gap: 8,
           // Use the theme's neutral subtle-bg directly. The earlier
           // var(--input-bg, …) chain inherited the generic dark theme's
@@ -401,16 +476,22 @@ export default function Omnibar() {
           // making the bar read as off-brand blue against the wellness
           // cream/teal palette. --subtle-bg is already theme-tinted in
           // both verticals.
-          background: 'var(--subtle-bg)',
-          border: `1px solid ${isFocused ? 'var(--accent-color)' : 'var(--border-color)'}`,
+          background: "var(--subtle-bg)",
+          border: `1px solid ${isFocused ? "var(--accent-color)" : "var(--border-color)"}`,
           borderRadius: 10,
-          padding: '6px 10px',
+          padding: "6px 10px",
           height: 36,
-          transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
-          boxShadow: isFocused ? '0 0 0 3px var(--accent-glow, rgba(99,102,241,0.18))' : 'none',
+          transition: "border-color 0.15s ease, box-shadow 0.15s ease",
+          boxShadow: isFocused
+            ? "0 0 0 3px var(--accent-glow, rgba(99,102,241,0.18))"
+            : "none",
         }}
       >
-        <Search size={16} color="var(--text-secondary)" style={{ flexShrink: 0 }} />
+        <Search
+          size={16}
+          color="var(--text-secondary)"
+          style={{ flexShrink: 0 }}
+        />
         <input
           ref={inputRef}
           type="text"
@@ -421,7 +502,7 @@ export default function Omnibar() {
           // theme/wellness.css:213) for icon-prefixed inputs where the
           // wrapper already owns the focus chrome.
           className="naked-input"
-          placeholder="Search pages, contacts, deals, invoices, tickets…"
+          placeholder="Search pages, contacts, deals, invoices, campaigns, sequences, surveys…"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -431,12 +512,12 @@ export default function Omnibar() {
           aria-label="Global search"
           style={{
             flex: 1,
-            background: 'transparent',
-            border: 'none',
-            color: 'var(--text-primary)',
-            fontSize: '0.9rem',
+            background: "transparent",
+            border: "none",
+            color: "var(--text-primary)",
+            fontSize: "0.9rem",
             padding: 0,
-            outline: 'none',
+            outline: "none",
             minWidth: 0,
           }}
         />
@@ -444,18 +525,18 @@ export default function Omnibar() {
           <button
             type="button"
             onClick={() => {
-              setQuery('');
+              setQuery("");
               inputRef.current?.focus();
             }}
             aria-label="Clear search"
             style={{
-              background: 'transparent',
-              border: 'none',
-              color: 'var(--text-secondary)',
-              cursor: 'pointer',
+              background: "transparent",
+              border: "none",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
               padding: 2,
-              display: 'flex',
-              alignItems: 'center',
+              display: "flex",
+              alignItems: "center",
             }}
           >
             <X size={14} />
@@ -468,27 +549,27 @@ export default function Omnibar() {
           role="listbox"
           aria-label="Search results"
           style={{
-            position: 'absolute',
-            top: 'calc(100% + 6px)',
+            position: "absolute",
+            top: "calc(100% + 6px)",
             left: 0,
             right: 0,
             zIndex: 999,
-            background: 'var(--surface-color)',
-            border: '1px solid var(--border-color)',
+            background: "var(--surface-color)",
+            border: "1px solid var(--border-color)",
             borderRadius: 12,
-            boxShadow: 'var(--shadow-lg, 0 25px 50px -12px rgba(0,0,0,0.5))',
-            backdropFilter: 'blur(12px)',
-            maxHeight: '70vh',
-            overflowY: 'auto',
+            boxShadow: "var(--shadow-lg, 0 25px 50px -12px rgba(0,0,0,0.5))",
+            backdropFilter: "blur(12px)",
+            maxHeight: "70vh",
+            overflowY: "auto",
           }}
         >
           {isLoading && totalResultCount === 0 && (
             <div
               style={{
-                padding: '1.5rem 1.25rem',
-                textAlign: 'center',
-                color: 'var(--text-secondary)',
-                fontSize: '0.85rem',
+                padding: "1.5rem 1.25rem",
+                textAlign: "center",
+                color: "var(--text-secondary)",
+                fontSize: "0.85rem",
               }}
             >
               Searching…
@@ -498,33 +579,35 @@ export default function Omnibar() {
           {!isLoading && totalResultCount === 0 && (
             <div
               style={{
-                padding: '2rem 1.25rem',
-                textAlign: 'center',
-                color: 'var(--text-secondary)',
-                fontSize: '0.875rem',
+                padding: "2rem 1.25rem",
+                textAlign: "center",
+                color: "var(--text-secondary)",
+                fontSize: "0.875rem",
               }}
             >
               No algorithmic matches located for "
-              <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{query}</span>
+              <span style={{ color: "var(--text-primary)", fontWeight: 600 }}>
+                {query}
+              </span>
               " within the enterprise dataset.
             </div>
           )}
 
           {totalResultCount > 0 && (
-            <div style={{ padding: '0.4rem' }}>
+            <div style={{ padding: "0.4rem" }}>
               {ENTITY_SECTIONS.map((section) => {
                 const rows = resultSet[section.key] || [];
                 if (rows.length === 0) return null;
                 const Icon = section.icon;
                 return (
-                  <div key={section.key} style={{ marginBottom: '0.25rem' }}>
+                  <div key={section.key} style={{ marginBottom: "0.25rem" }}>
                     <h4
                       style={{
-                        fontSize: '0.7rem',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.08em',
-                        color: 'var(--text-secondary)',
-                        padding: '0.5rem 0.75rem 0.25rem',
+                        fontSize: "0.7rem",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        color: "var(--text-secondary)",
+                        padding: "0.5rem 0.75rem 0.25rem",
                         margin: 0,
                         fontWeight: 700,
                       }}
@@ -539,24 +622,25 @@ export default function Omnibar() {
                           type="button"
                           onClick={() => handleRowClick(r.to)}
                           style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.75rem',
-                            padding: '0.5rem 0.75rem',
-                            width: '100%',
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.75rem",
+                            padding: "0.5rem 0.75rem",
+                            width: "100%",
+                            background: "transparent",
+                            border: "none",
+                            cursor: "pointer",
                             borderRadius: 8,
-                            textAlign: 'left',
-                            transition: 'background 0.12s ease',
-                            color: 'var(--text-primary)',
+                            textAlign: "left",
+                            transition: "background 0.12s ease",
+                            color: "var(--text-primary)",
                           }}
                           onMouseOver={(e) => {
-                            e.currentTarget.style.background = 'var(--hover-bg, var(--subtle-bg))';
+                            e.currentTarget.style.background =
+                              "var(--hover-bg, var(--subtle-bg))";
                           }}
                           onMouseOut={(e) => {
-                            e.currentTarget.style.background = 'transparent';
+                            e.currentTarget.style.background = "transparent";
                           }}
                         >
                           <div
@@ -565,9 +649,9 @@ export default function Omnibar() {
                               padding: 7,
                               borderRadius: 8,
                               border: `1px solid ${section.border}`,
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
                               flexShrink: 0,
                             }}
                           >
@@ -577,25 +661,25 @@ export default function Omnibar() {
                             <div
                               style={{
                                 fontWeight: 500,
-                                fontSize: '0.9rem',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
+                                fontSize: "0.9rem",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
                               }}
                             >
                               {r.primary}
                               {r.badge && (
                                 <span
                                   style={{
-                                    fontSize: '0.65rem',
-                                    padding: '0.1rem 0.4rem',
+                                    fontSize: "0.65rem",
+                                    padding: "0.1rem 0.4rem",
                                     borderRadius: 4,
                                     background: r.badgeOk
-                                      ? 'rgba(16, 185, 129, 0.18)'
-                                      : 'rgba(239, 68, 68, 0.18)',
-                                    color: r.badgeOk ? '#10b981' : '#ef4444',
-                                    marginLeft: '0.5rem',
-                                    verticalAlign: 'middle',
+                                      ? "rgba(16, 185, 129, 0.18)"
+                                      : "rgba(239, 68, 68, 0.18)",
+                                    color: r.badgeOk ? "#10b981" : "#ef4444",
+                                    marginLeft: "0.5rem",
+                                    verticalAlign: "middle",
                                     fontWeight: 600,
                                   }}
                                 >
@@ -606,11 +690,11 @@ export default function Omnibar() {
                             {r.secondary && (
                               <div
                                 style={{
-                                  fontSize: '0.78rem',
-                                  color: 'var(--text-secondary)',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
+                                  fontSize: "0.78rem",
+                                  color: "var(--text-secondary)",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
                                   marginTop: 2,
                                 }}
                               >
@@ -634,31 +718,33 @@ export default function Omnibar() {
 
           <div
             style={{
-              padding: '0.5rem 0.9rem',
-              borderTop: '1px solid var(--border-color)',
-              fontSize: '0.7rem',
-              color: 'var(--text-secondary)',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
+              padding: "0.5rem 0.9rem",
+              borderTop: "1px solid var(--border-color)",
+              fontSize: "0.7rem",
+              color: "var(--text-secondary)",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
             }}
           >
             <span>
-              Press{' '}
+              Press{" "}
               <kbd
                 style={{
-                  padding: '0.1rem 0.35rem',
-                  border: '1px solid var(--border-color)',
+                  padding: "0.1rem 0.35rem",
+                  border: "1px solid var(--border-color)",
                   borderRadius: 4,
-                  background: 'var(--kbd-bg, var(--subtle-bg-3))',
-                  fontFamily: 'inherit',
+                  background: "var(--kbd-bg, var(--subtle-bg-3))",
+                  fontFamily: "inherit",
                 }}
               >
                 Esc
-              </kbd>{' '}
+              </kbd>{" "}
               to close
             </span>
-            <span style={{ opacity: 0.6 }}>Federated Multi-Index Search Matrix</span>
+            <span style={{ opacity: 0.6 }}>
+              Federated Multi-Index Search Matrix
+            </span>
           </div>
         </div>
       )}

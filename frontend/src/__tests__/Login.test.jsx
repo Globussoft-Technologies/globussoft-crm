@@ -126,12 +126,10 @@ describe('<Login /> — page surface', () => {
     setTokenMock.mockClear();
     setTenantMock.mockClear();
     originalFetch = global.fetch;
-    // Default impl returns an empty-list response so the on-mount
-    // `fetch("/api/auth/public/tenants").then(...)` in Login.jsx:49 doesn't
-    // resolve `undefined.then` and throw a TypeError. Tests that exercise
-    // a specific endpoint override this with mockImplementation.
+    // Default impl returns a 404 for any unexpected endpoint. Tests that
+    // exercise a specific endpoint override this with mockImplementation.
     global.fetch = vi.fn(() => Promise.resolve({
-      ok: true, status: 200, json: () => Promise.resolve([]),
+      ok: false, status: 404, json: () => Promise.resolve({}),
     }));
     // Snapshot + replace window.location with a writable stub so the
     // SSO buttons' window.location.href = '...' assignment is

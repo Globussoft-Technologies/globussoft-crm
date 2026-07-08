@@ -1,21 +1,21 @@
 const express = require("express");
 const { verifyToken } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
+const { SEARCHABLE_ENTITIES } = require("../lib/searchableEntities");
 
 const router = express.Router();
 
-// Wellness-tenant + PHI-eligible-role gate for Patient inclusion in the
-// global search. Mirrors the role list in routes/wellness.js phiReadGate
+// Wellness-tenant + PHI-eligible-role gate for conditional entities like Patient.
+// Mirrors the role list in routes/wellness.js phiReadGate
 // (clinical / doctor / professional / telecaller / admin / manager).
-// Generic-tenant callers and non-PHI roles get a null result so the
-// front-end "patients" section silently stays empty for them — no leak.
 const PHI_WELLNESS_ROLES = new Set([
   "doctor",
   "professional",
   "telecaller",
   "helper",
 ]);
-async function canSearchPatients(req) {
+
+async function canAccessConditionalEntities(req) {
   if (!req.user?.tenantId) return false;
   if (req.user.role === "ADMIN" || req.user.role === "MANAGER") {
     // ADMIN/MANAGER still need to be on a wellness tenant.
@@ -38,82 +38,170 @@ async function canSearchPatients(req) {
   return vertical === "wellness";
 }
 
+// Search filter (MySQL handles case-insensitivity at DB level)
+const searchContains = (value) => ({
+  contains: value,
+});
+
+// Dynamically build search queries from entity config
+async function buildSearchQueries(entityConfigs, tenantId, query, canAccessConditional) {
+  const searchFilter = searchContains(query);
+  const queries = {};
+
+  for (const entity of entityConfigs) {
+    // Skip entities the user can't access
+    if (entity.conditional && !canAccessConditional) {
+      queries[entity.key] = Promise.resolve([]);
+      continue;
+    }
+
+    const model = prisma[entity.model];
+    if (!model) {
+      console.warn(`[Search] Model not found: ${entity.model}`);
+      queries[entity.key] = Promise.resolve([]);
+      continue;
+    }
+
+    // Build OR clause for search fields
+    const searchFields = entity.searchFields.map(field => ({
+      [field]: searchFilter,
+    }));
+
+    // Special handling for certain fields
+    const where = { tenantId };
+    if (entity.model === 'patient') {
+      where.deletedAt = null; // Soft-delete filter for patients
+    }
+
+    if (searchFields.length > 1) {
+      where.OR = searchFields;
+    } else if (searchFields.length === 1) {
+      Object.assign(where, searchFields[0]);
+    }
+
+    // Build the select clause
+    const select = {};
+    entity.selectFields.forEach(field => {
+      select[field] = true;
+    });
+
+    // Special handling for related fields
+    if (entity.model === 'invoice' && !entity.selectFields.includes('contact')) {
+      return model.findMany({
+        where,
+        take: 5,
+        include: { contact: { select: { name: true } } },
+      });
+    }
+
+    queries[entity.key] = model.findMany({
+      where,
+      take: 5,
+      select: Object.keys(select).length > 0 ? select : undefined,
+      orderBy: entity.model === 'patient' ? { createdAt: 'desc' } : undefined,
+    });
+  }
+
+  return queries;
+}
+
 router.get("/", verifyToken, async (req, res) => {
   try {
     const query = req.query.q || "";
     if (query.trim().length === 0) return res.json({});
     const tenantId = req.user.tenantId;
 
-    const includePatients = await canSearchPatients(req);
+    // Get entity config for user's vertical
+    let vertical = req.user.vertical;
+    if (!vertical) {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { vertical: true },
+      });
+      vertical = tenant?.vertical || "generic";
+    }
 
-    const [contacts, deals, invoices, tickets, tasks, projects, contracts, estimates, emails, kbArticles, patients] = await Promise.all([
-      prisma.contact.findMany({
-        where: { tenantId, OR: [{ name: { contains: query } }, { email: { contains: query } }, { company: { contains: query } }, { phone: { contains: query } }] },
-        take: 5, select: { id: true, name: true, email: true, company: true, status: true },
-      }),
-      prisma.deal.findMany({
-        where: { tenantId, title: { contains: query } },
-        take: 5, select: { id: true, title: true, amount: true, stage: true },
-      }),
-      prisma.invoice.findMany({
-        where: { tenantId, invoiceNum: { contains: query } },
-        take: 5, include: { contact: { select: { name: true } } },
-      }),
-      prisma.ticket.findMany({
-        where: { tenantId, OR: [{ subject: { contains: query } }, { description: { contains: query } }] },
-        take: 5, select: { id: true, subject: true, status: true, priority: true },
-      }),
-      prisma.task.findMany({
-        where: { tenantId, title: { contains: query } },
-        take: 5, select: { id: true, title: true, status: true, priority: true },
-      }),
-      prisma.project.findMany({
-        where: { tenantId, name: { contains: query } },
-        take: 5, select: { id: true, name: true, status: true },
-      }),
-      prisma.contract.findMany({
-        where: { tenantId, title: { contains: query } },
-        take: 5, select: { id: true, title: true, status: true },
-      }),
-      prisma.estimate.findMany({
-        where: { tenantId, OR: [{ title: { contains: query } }, { estimateNum: { contains: query } }] },
-        take: 5, select: { id: true, title: true, estimateNum: true, status: true },
-      }),
-      prisma.emailMessage.findMany({
-        where: { tenantId, OR: [{ subject: { contains: query } }, { from: { contains: query } }, { to: { contains: query } }] },
-        take: 5, select: { id: true, subject: true, from: true, to: true, direction: true, createdAt: true },
-      }),
-      prisma.kbArticle.findMany({
-        where: { tenantId, OR: [{ title: { contains: query } }, { content: { contains: query } }] },
-        take: 5, select: { id: true, title: true, slug: true, isPublished: true },
-      }),
-      // Wellness Patient — only queried for wellness-tenant + PHI-eligible
-      // viewers (see canSearchPatients). #1109 regression: pre-fix the
-      // omnibar's only patient-like surface was the legacy Contact match,
-      // so newly-created Patient rows that had no shadow Contact were
-      // invisible in global search. Soft-deleted rows excluded via
-      // deletedAt:null to match the Patients page contract.
-      includePatients
-        ? prisma.patient.findMany({
-            where: {
-              tenantId,
-              deletedAt: null,
-              OR: [
-                { name: { contains: query } },
-                { phone: { contains: query } },
-                { email: { contains: query } },
-              ],
-            },
-            take: 5,
-            orderBy: { createdAt: "desc" },
-            select: { id: true, name: true, email: true, phone: true },
-          })
-        : Promise.resolve([]),
-    ]);
+    const canAccessConditional = await canAccessConditionalEntities(req);
+    const searchFilter = searchContains(query);
 
-    const totalResults = contacts.length + deals.length + invoices.length + tickets.length + tasks.length + projects.length + contracts.length + estimates.length + emails.length + kbArticles.length + patients.length;
+    // Always use all searchable entities and filter visibility per vertical + access level
+    const queryPromises = {};
 
-    res.json({ contacts, deals, invoices, tickets, tasks, projects, contracts, estimates, emails, kbArticles, patients, totalResults });
+    for (const entity of SEARCHABLE_ENTITIES) {
+      // Check if entity is visible for this vertical
+      const isWellnessOnly = entity.key === 'whatsappMessages' || entity.key === 'patients';
+      if (isWellnessOnly && vertical !== 'wellness') {
+        queryPromises[entity.key] = Promise.resolve([]);
+        continue;
+      }
+
+      // Check if user can access conditional entities
+      if (entity.conditional && !canAccessConditional) {
+        queryPromises[entity.key] = Promise.resolve([]);
+        continue;
+      }
+
+      const model = prisma[entity.model];
+      if (!model) {
+        console.warn(`[Search] Model not found: ${entity.model}`);
+        queryPromises[entity.key] = Promise.resolve([]);
+        continue;
+      }
+
+
+      const searchFields = entity.searchFields.map(field => ({
+        [field]: searchFilter,
+      }));
+
+      const where = { tenantId };
+      if (entity.model === 'patient') {
+        where.deletedAt = null;
+      }
+
+      // Add search field conditions
+      if (searchFields.length > 1) {
+        where.OR = searchFields;
+      } else if (searchFields.length === 1) {
+        Object.assign(where, searchFields[0]);
+      }
+
+      const select = {};
+      entity.selectFields.forEach(field => {
+        select[field] = true;
+      });
+
+      const findManyOptions = {
+        where,
+        take: 5,
+      };
+
+      if (entity.model === 'invoice') {
+        findManyOptions.include = { contact: { select: { name: true } } };
+      } else if (Object.keys(select).length > 0) {
+        findManyOptions.select = select;
+      }
+
+      if (entity.model === 'patient') {
+        findManyOptions.orderBy = { createdAt: 'desc' };
+      }
+
+      queryPromises[entity.key] = model.findMany(findManyOptions);
+    }
+
+    // Execute all queries in parallel
+    const results = await Promise.all(
+      Object.entries(queryPromises).map(async ([key, promise]) => [key, await promise])
+    );
+
+    const response = {};
+    let totalResults = 0;
+
+    for (const [key, data] of results) {
+      response[key] = data;
+      totalResults += data.length;
+    }
+    response.totalResults = totalResults;
+    res.json(response);
   } catch (err) {
     console.error("[Search] Error:", err.message);
     res.status(500).json({ error: "Search failed" });

@@ -87,20 +87,20 @@ export function subBrandShortLabel(subBrand) {
 // backend getSubBrandAccessSet (middleware/travelGuards.js) + the Sidebar's
 // subBrandAccess parser so the UI and server agree:
 //   - ADMIN                              → all 4 (full access)
-//   - unset / empty / malformed access   → all 4 (no restriction declared)
+//   - unset / empty / malformed access   → [] (deny-all, matches backend)
 //   - explicit granted subset            → just those ids
 // Returns an ordered array of sub-brand ids (subset of SUB_BRAND_IDS).
 export function accessibleSubBrands(user) {
   if (user?.role === "ADMIN") return [...SUB_BRAND_IDS];
   const raw = user?.subBrandAccess;
-  if (!raw) return [...SUB_BRAND_IDS];
+  if (!raw) return []; // unset → deny-all (matches backend)
   try {
     const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!Array.isArray(arr) || arr.length === 0) return [...SUB_BRAND_IDS];
+    if (!Array.isArray(arr) || arr.length === 0) return []; // empty/malformed → deny-all
     const filtered = SUB_BRAND_IDS.filter((id) => arr.includes(id));
-    return filtered.length ? filtered : [...SUB_BRAND_IDS];
+    return filtered.length ? filtered : []; // no valid brands → deny-all
   } catch {
-    return [...SUB_BRAND_IDS];
+    return []; // parse error → deny-all
   }
 }
 
@@ -115,6 +115,7 @@ export function accessibleSubBrands(user) {
 // fall through to the first accessible brand.
 export function defaultSubBrandFor(user, activeSubBrand, preferred) {
   const brands = accessibleSubBrands(user);
+  if (brands.length === 0) return null; // No access; don't default to anything
   if (brands.length === 1) return brands[0];
   if (activeSubBrand && brands.includes(activeSubBrand)) return activeSubBrand;
   if (preferred && brands.includes(preferred)) return preferred;

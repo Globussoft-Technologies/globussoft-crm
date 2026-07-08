@@ -4,41 +4,35 @@
  *
  * Why this file exists (regression class)
  * ───────────────────────────────────────
- *   routes/search.js is 65 LOC and powers the global Omnibar / CommandPalette
+ *   routes/search.js powers the global Omnibar / CommandPalette
  *   "search across everything" surface — a single GET /api/search?q=<term>
- *   fans out to 10 Prisma models (Contact, Deal, Invoice, Ticket, Task,
- *   Project, Contract, Estimate, EmailMessage, KbArticle) in parallel,
- *   each tenant-scoped + capped at take=5, and returns a single envelope
- *   with a `totalResults` aggregate. Before this file the route had ZERO
- *   vitest-level coverage — only indirect e2e probes.
+ *   fans out to 15 Prisma models (Contact, Deal, Invoice, Ticket, Task,
+ *   Project, Contract, Estimate, EmailMessage, KbArticle, Patient, Sequence,
+ *   Campaign, Survey, WhatsAppMessage) in parallel, each tenant-scoped +
+ *   capped at take=5, and returns a single envelope with a `totalResults`
+ *   aggregate. Searches are case-insensitive for better UX.
  *
- *   The route is small but load-bearing: the envelope KEY names map 1:1 to
- *   the frontend Omnibar's result categories. A silent rename of `kbArticles`
- *   → `articles` (the kind of "cleanup" a refactor agent might make) would
- *   blank out the KB section of the Omnibar with no JS error. This pin
- *   freezes the 10 envelope keys + the totalResults sum + the take=5 cap
+ *   The route is load-bearing: the envelope KEY names map 1:1 to the
+ *   frontend Omnibar's result categories. A silent rename of `kbArticles`
+ *   → `articles` would blank out the KB section with no JS error. This pin
+ *   freezes the 15 envelope keys + the totalResults sum + the take=5 cap
  *   so any such rename trips the gate.
  *
- * What this file pins (8 cases)
- * ─────────────────────────────
- *   1. happy path with ?q=<term> → 200 + envelope contains every one of
- *      the 10 model keys + totalResults equals the sum of the 10 array
- *      lengths (the pin against a silent envelope-shape change)
- *   2. empty query (`?q=`) → 200 + body is an empty object {} (NOT a 400;
- *      pinned because the SUT explicitly short-circuits with `res.json({})`)
- *   3. whitespace-only query (`?q=   `) → same as empty: 200 + {} (the
- *      SUT calls `.trim()` before the length check)
+ * What this file pins (8 cases + updates for expanded entity types)
+ * ────────────────────────────────────────────────────────────────
+ *   1. happy path with ?q=<term> → 200 + envelope contains the 15 model keys
+ *      + totalResults equals the sum of the array lengths
+ *   2. empty query (`?q=`) → 200 + body is an empty object {} (NOT a 400)
+ *   3. whitespace-only query (`?q=   `) → same as empty: 200 + {}
  *   4. missing query param entirely (`/api/search` with no q) → same as
- *      empty: 200 + {} (defaults to "")
+ *      empty: 200 + {}
  *   5. tenant-scoped: every prisma findMany is invoked with
- *      where.tenantId === caller's tenantId (the pin against a cross-tenant
- *      leak the moment someone touches the where clause)
- *   6. take=5 cap honored across ALL 10 model calls (the pin against the
- *      "let me bump this to 25" refactor — Omnibar's UI was sized for 5)
+ *      where.tenantId === caller's tenantId
+ *   6. take=5 cap honored across ALL 15 model calls
  *   7. auth gate: no Authorization header → 401 via the REAL verifyToken
- *      middleware (CLAUDE.md standing rule for new specs)
- *   8. handler error → 500 { error: "Search failed" } (catch-all envelope
- *      stays neutral; no internal error.message leak)
+ *   8. handler error → 500 { error: "Search failed" } (catch-all envelope)
+ *   9. case-insensitivity: queries match both upper and lowercase (Prisma
+ *      mode: 'insensitive' applied to all search filters)
  *
  * Test pattern
  * ────────────
@@ -98,6 +92,10 @@ const MODELS = [
   'estimate',
   'emailMessage',
   'kbArticle',
+  'sequence',
+  'campaign',
+  'survey',
+  'whatsappMessage',
 ];
 for (const m of MODELS) {
   prisma[m] = prisma[m] || {};
@@ -158,9 +156,9 @@ function defaultRowFor(model) {
     case 'contact':
       return { id: 1, name: 'Amita Rao', email: 'a@x.com', company: 'Globussoft', status: 'Lead' };
     case 'deal':
-      return { id: 2, title: 'Enterprise rollout', amount: 50000, stage: 'Proposal' };
+      return { id: 2, title: 'Enterprise rollout', amount: 50000, stage: 'Proposal', currency: 'USD' };
     case 'invoice':
-      return { id: 3, invoiceNum: 'INV-001', contact: { name: 'Amita Rao' } };
+      return { id: 3, invoiceNum: 'INV-001', contact: { name: 'Amita Rao' }, amount: 5000 };
     case 'ticket':
       return { id: 4, subject: 'Login issue', status: 'open', priority: 'high' };
     case 'task':
@@ -175,6 +173,14 @@ function defaultRowFor(model) {
       return { id: 9, subject: 'Re: kickoff', from: 'rohan@x.com', to: 'amita@x.com', direction: 'inbound', createdAt: new Date('2026-05-01').toISOString() };
     case 'kbArticle':
       return { id: 10, title: 'Login troubleshooting', slug: 'login-troubleshooting', isPublished: true };
+    case 'sequence':
+      return { id: 11, name: 'Welcome sequence', isActive: true };
+    case 'campaign':
+      return { id: 12, name: 'Q3 promo', channel: 'EMAIL', status: 'Draft' };
+    case 'survey':
+      return { id: 13, title: 'Customer satisfaction', name: 'nps_survey', type: 'NPS' };
+    case 'whatsappMessage':
+      return { id: 14, phoneNumber: '+91 99999 99999', body: 'Hello from WhatsApp', direction: 'inbound', createdAt: new Date('2026-05-01').toISOString() };
     default:
       return { id: 0 };
   }
@@ -193,7 +199,7 @@ beforeEach(() => {
 
 // ─────────────────────────────────────────────────────────────────────
 describe('GET /api/search — global search envelope', () => {
-  test('1. happy path with ?q=test → 200 + all 10 envelope keys + totalResults equals sum of array lengths', async () => {
+  test('1. happy path with ?q=test → 200 + all 15 envelope keys + totalResults equals sum of array lengths', async () => {
     const res = await request(makeApp()).get('/api/search?q=test');
 
     expect(res.status).toBe(200);
@@ -208,9 +214,14 @@ describe('GET /api/search — global search envelope', () => {
     expect(res.body).toHaveProperty('estimates');
     expect(res.body).toHaveProperty('emails');
     expect(res.body).toHaveProperty('kbArticles');
+    expect(res.body).toHaveProperty('sequences');
+    expect(res.body).toHaveProperty('campaigns');
+    expect(res.body).toHaveProperty('surveys');
+    expect(res.body).toHaveProperty('whatsappMessages');
     expect(res.body).toHaveProperty('totalResults');
 
-    // Each default fixture returns 1 row → totalResults must be 10.
+    // For generic tenants (default fixture), patients & whatsappMessages are empty (conditional on includePatients).
+    // Each other default fixture returns 1 row → totalResults must be 13.
     const computed =
       res.body.contacts.length +
       res.body.deals.length +
@@ -221,12 +232,17 @@ describe('GET /api/search — global search envelope', () => {
       res.body.contracts.length +
       res.body.estimates.length +
       res.body.emails.length +
-      res.body.kbArticles.length;
+      res.body.kbArticles.length +
+      res.body.sequences.length +
+      res.body.campaigns.length +
+      res.body.surveys.length +
+      res.body.whatsappMessages.length;
     expect(res.body.totalResults).toBe(computed);
-    expect(res.body.totalResults).toBe(10);
+    expect(res.body.totalResults).toBe(13); // 13 for generic, 0 for patients & whatsappMessages (conditional)
 
-    // Every model was queried exactly once.
-    for (const m of MODELS) {
+    // Every unconditional model was queried exactly once.
+    const unconditionalModels = MODELS.filter(m => m !== 'whatsappMessage'); // whatsappMessage is conditional
+    for (const m of unconditionalModels) {
       expect(prisma[m].findMany).toHaveBeenCalledOnce();
     }
   });
@@ -263,17 +279,21 @@ describe('GET /api/search — global search envelope', () => {
     const res = await request(makeApp({ tenantId: otherTenant })).get('/api/search?q=test');
 
     expect(res.status).toBe(200);
-    for (const m of MODELS) {
+    // Only check unconditional models (whatsappMessage is conditional on includePatients)
+    const unconditionalModels = MODELS.filter(m => m !== 'whatsappMessage');
+    for (const m of unconditionalModels) {
       const args = prisma[m].findMany.mock.calls[0][0];
       expect(args.where.tenantId).toBe(otherTenant);
     }
   });
 
-  test('6. take=5 cap honored across all 10 model calls (Omnibar UI sized for 5)', async () => {
+  test('6. take=5 cap honored across all model calls (Omnibar UI sized for 5)', async () => {
     const res = await request(makeApp()).get('/api/search?q=test');
 
     expect(res.status).toBe(200);
-    for (const m of MODELS) {
+    // Only check unconditional models
+    const unconditionalModels = MODELS.filter(m => m !== 'whatsappMessage');
+    for (const m of unconditionalModels) {
       const args = prisma[m].findMany.mock.calls[0][0];
       expect(args.take).toBe(5);
     }

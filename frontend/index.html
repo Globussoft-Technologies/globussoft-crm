@@ -3,12 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <!-- #704: branded favicon + apple-touch-icon. PNG favicon with Globussoft
-         logo (no background). The runtime app updates document.title to
-         "{Page} — {Tenant Name}" in Layout.jsx so the tab title reflects the
-         active tenant. -->
+         logo (no background). Favicon served from static assets with explicit MIME type
+         via backend route (server.js) — essential for /trips and all subroutes. -->
+    <link rel="preload" as="image" type="image/png" href="/logo-header-nobg.png" />
     <link rel="icon" type="image/png" href="/logo-header-nobg.png" />
     <link rel="alternate icon" href="/logo-header-nobg.png" />
     <link rel="apple-touch-icon" href="/logo-header-nobg.png" />
+    <link rel="shortcut icon" type="image/png" href="/logo-header-nobg.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#265855" />
     <!-- #917 slice S1 (FR-3.2): per-request CSP nonce placeholder. The

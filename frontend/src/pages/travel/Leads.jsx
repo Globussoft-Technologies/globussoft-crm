@@ -134,6 +134,14 @@ export default function TravelLeads() {
       });
   }, [user?.role]);
 
+  // Initialize subBrand filter on mount. If the user is restricted to a single
+  // brand, auto-select it. Otherwise use activeSubBrand if available.
+  useEffect(() => {
+    if (!user || subBrand) return;
+    const initial = defaultSubBrandFor(user, activeSubBrand);
+    if (initial) setSubBrand(initial);
+  }, [user?.id, activeSubBrand]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const setUrlParam = (key, value) => {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);

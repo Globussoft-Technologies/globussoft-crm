@@ -373,6 +373,7 @@ export default function TravelWhatsAppChat() {
     try {
       const data = await fetchApi('/api/travel/whatsapp/status');
       setWatiStatus(data || { enabled: false, connected: false, state: 'DISCONNECTED' });
+      const wasConnected = waConnectedRef.current;
       waConnectedRef.current = !!data?.connected;
       if (data?.qr) setQrImage(data.qr);
       // If a background reconnect brought us online while the modal is open,
@@ -380,6 +381,16 @@ export default function TravelWhatsAppChat() {
       if (data?.connected) {
         setShowQrModal(false);
         setConnecting(false);
+      }
+      // Reconcile the thread list against the just-learned connection state.
+      // waConnectedRef starts optimistically `true` (see its declaration) so
+      // the mount-time loadList() race can populate the list with real chats
+      // BEFORE this status check resolves `connected: false` — the live-mirror
+      // rule inside loadList() only clears the list on its NEXT call, so
+      // without this the stale thread list sits visible next to a "not
+      // connected" status pill until the next 10s poll tick.
+      if (wasConnected !== waConnectedRef.current) {
+        loadList();
       }
       return data;
     } catch {
@@ -389,6 +400,7 @@ export default function TravelWhatsAppChat() {
   };
   useEffect(() => {
     refreshWaStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ─── QR connect lifecycle (admin) ───────────────────────────

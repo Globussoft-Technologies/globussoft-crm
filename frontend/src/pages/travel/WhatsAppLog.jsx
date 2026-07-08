@@ -8,13 +8,17 @@
 // tenants never reach it (their WhatsApp surfaces are separate and
 // untouched).
 //
-// Endpoint consumed (existing, tenant-scoped via verifyToken — no new
-// backend surface):
-//   GET /api/whatsapp/messages?status=&direction=&page=&limit=
+// Endpoints consumed (tenant-scoped via verifyToken):
+//   GET /api/whatsapp/messages?status=&direction=&page=&limit= (existing)
 //     → { messages: [{ id, to, from, body, direction, status,
 //          templateName, errorMessage, createdAt,
 //          contact?: { id, name, phone } }],
 //         pagination: { total, page, limit, pages } }
+//   DELETE /api/whatsapp/messages/dispatch-log (2026-07-08, ADMIN only)
+//     → { success, deletedCount } — permanently clears every logged
+//       dispatch with no linked chat thread (threadId=null). Live customer
+//       chat conversations (WhatsAppMessage rows with a threadId) are never
+//       touched by this action.
 //
 // Status semantics (watiClient contract):
 //   QUEUED  — stub mode (WATI_API_ENDPOINT / WATI_ACCESS_TOKEN not set):
@@ -24,8 +28,9 @@
 //   FAILED  — Wati rejected; errorMessage carries the reason.
 
 import { useEffect, useState } from "react";
-import { MessageSquare, RefreshCw, AlertTriangle } from "lucide-react";
+import { MessageSquare, RefreshCw, AlertTriangle, Trash2 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
+import { useNotify } from "../../utils/notify";
 
 const STATUS_FILTERS = [
   { value: "", label: "All statuses" },
@@ -60,6 +65,7 @@ function fmtDateTime(iso) {
 }
 
 export default function TravelWhatsAppLog() {
+  const notify = useNotify();
   const [messages, setMessages] = useState([]);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
@@ -99,6 +105,34 @@ export default function TravelWhatsAppLog() {
   const onDirectionChange = (v) => { setDirectionFilter(v); setPage(1); };
 
   const anyQueued = messages.some((m) => m.status === "QUEUED");
+
+  // "Clear dispatch log" (2026-07-08) — permanently deletes every logged
+  // dispatch (OTPs, cron reminders, itinerary/boarding-pass pushes) for
+  // this tenant. Backend scopes the delete to threadId=null rows only, so
+  // messages that are part of a live customer chat thread are never
+  // touched — see routes/whatsapp.js's DELETE /messages/dispatch-log.
+  const [clearing, setClearing] = useState(false);
+  const handleClearLog = async () => {
+    const ok = await notify.confirm({
+      title: "Clear dispatch log",
+      message: "This permanently deletes all WhatsApp dispatch log entries for this tenant (OTPs, reminders, itinerary/boarding-pass pushes). This cannot be undone. Live chat conversations are not affected.",
+      confirmText: "Clear log",
+      cancelText: "Cancel",
+      destructive: true,
+    });
+    if (!ok) return;
+    setClearing(true);
+    try {
+      const res = await fetchApi("/api/whatsapp/messages/dispatch-log", { method: "DELETE" });
+      notify.success(`Dispatch log cleared (${res?.deletedCount ?? 0} message${res?.deletedCount === 1 ? "" : "s"} deleted).`);
+      setPage(1);
+      load();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to clear dispatch log.");
+    } finally {
+      setClearing(false);
+    }
+  };
 
   return (
     <div
@@ -144,14 +178,29 @@ export default function TravelWhatsAppLog() {
             message{total === 1 ? "" : "s"}.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={load}
-          style={secondaryBtn}
-          aria-label="Refresh messages"
-        >
-          <RefreshCw size={14} aria-hidden /> Refresh
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            onClick={load}
+            style={secondaryBtn}
+            aria-label="Refresh messages"
+          >
+            <RefreshCw size={14} aria-hidden /> Refresh
+          </button>
+          <button
+            type="button"
+            onClick={handleClearLog}
+            disabled={clearing || total === 0}
+            style={{
+              ...secondaryBtn,
+              color: "var(--danger-color, #f43f5e)",
+              opacity: clearing || total === 0 ? 0.5 : 1,
+            }}
+            aria-label="Clear dispatch log"
+          >
+            <Trash2 size={14} aria-hidden /> {clearing ? "Clearing…" : "Clear dispatch log"}
+          </button>
+        </div>
       </header>
 
       {anyQueued && (

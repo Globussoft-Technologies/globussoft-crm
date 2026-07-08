@@ -148,9 +148,10 @@ import { launchCallifiedSSO } from "../utils/callified";
 import { useNotify } from "../utils/notify";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { usePermissions } from "../hooks/usePermissions";
-// Branding Wave 4 G096: per-sub-brand BrandKit lookup for the pinned logo
-// shown at the top of the travel sidebar (FR-3.3.a).
-import { useBrandKit, brandLogoUrl } from "../hooks/useBrandKit";
+// Branding refactor (2026-07-08): the sidebar shows exactly ONE logo, driven
+// by the fallback-resolved effective brand for the active sub-brand — never
+// a separate, always-on tenant-wide logo stacked alongside a sub-brand logo.
+import { useEffectiveBrand } from "../hooks/useEffectiveBrand";
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
@@ -168,11 +169,14 @@ const Sidebar = ({
   const notify = useNotify();
   const navigate = useNavigate();
   const { activeSubBrand, setActiveSubBrand } = useActiveSubBrand();
-  // G096: BrandKit for the active sub-brand. Module-level cache keeps this
-  // cheap on every sidebar re-render; null subBrand resolves to the
-  // tenant-wide (subBrand=null) kit which is also fine for the pinned-logo
-  // slot — it shows the tenant default until a sub-brand is selected.
-  const { brandKit: activeBrandKit } = useBrandKit(activeSubBrand);
+  // Branding refactor (2026-07-08): fallback-resolved effective brand for
+  // the active sub-brand (subBrand kit → tenant default-brand →
+  // Tenant.logoUrl/brandColor → system default). This is the SINGLE source
+  // the sidebar's one logo reads from — non-travel tenants pass subBrand=null
+  // and get the tenant-wide kit / Tenant.logoUrl, unchanged from before.
+  const { effective: effectiveBrand } = useEffectiveBrand(
+    tenant?.vertical === "travel" ? activeSubBrand : null,
+  );
   const role = user?.role || "USER";
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "MANAGER";
@@ -478,6 +482,23 @@ const Sidebar = ({
       !subBrandAccess.includes(activeSubBrand)
     ) {
       setActiveSubBrand(null);
+      return;
+    }
+    // Single-brand-scoped user (e.g. an "RFU Advisor" with
+    // subBrandAccess=["rfu"]): there's no switcher to pick a brand from (see
+    // soleBrand below), so without this, activeSubBrand stays null forever
+    // and branding/data silently falls through to the tenant-wide default
+    // even though the read-only "RFU" chip visually claims they're on RFU.
+    // Auto-select their one accessible brand so branding + scoping actually
+    // match what the chip shows. Multi-brand users are untouched — they
+    // pick explicitly via the switcher.
+    if (
+      isTravel &&
+      !activeSubBrand &&
+      subBrandAccess !== null &&
+      subBrandAccess.length === 1
+    ) {
+      setActiveSubBrand(subBrandAccess[0]);
     }
   }, [isTravel, activeSubBrand, subBrandAccess, setActiveSubBrand]);
   // Stable identity for the sub-brand switcher's onChange — without this,
@@ -520,7 +541,11 @@ const Sidebar = ({
     [setActiveSubBrand, navigate],
   );
   const brand = tenant?.name || "Globussoft";
-  const logoUrl = tenant?.logoUrl || null;
+  // Single logo source (2026-07-08): the active sub-brand's fallback-resolved
+  // logo when one exists, else the tenant-wide default — never both shown
+  // at once. Non-travel tenants (effectiveBrand always resolved with
+  // subBrand=null) get exactly the old tenant.logoUrl behaviour.
+  const logoUrl = effectiveBrand?.logoUrl || tenant?.logoUrl || null;
   const brandColor = tenant?.brandColor || null;
   // Inline style applied to wellness section labels — overrides the gold
   // accent (#E0A68B) defined in wellness.css when a tenant brand color is set.
@@ -963,10 +988,12 @@ const Sidebar = ({
             subBrandAccess,
             activeSubBrand,
             onSubBrandChange: handleSubBrandChange,
-            // G096: BrandKit-driven pinned logo for the active sub-brand.
-            // Resolved here at the parent (hooks must run unconditionally;
-            // safe because the hook short-circuits when subBrand is null).
-            brandKit: activeBrandKit,
+            // Branding refactor (2026-07-08): the pinned second logo strip
+            // was removed — the single top-of-sidebar logo (driven by
+            // effectiveBrand) already reflects the active sub-brand, so a
+            // second logo here would just duplicate it. The accent color
+            // underline is preserved via accentColor below.
+            accentColor: effectiveBrand?.primaryColor || null,
           })}
 
         <nav
@@ -1583,7 +1610,7 @@ function renderTravelSubBrandHeader({
   subBrandAccess = null,
   activeSubBrand = null,
   onSubBrandChange = () => {},
-  brandKit = null,
+  accentColor = null,
 }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
   const ALL_SUB_BRANDS = [
@@ -1597,12 +1624,6 @@ function renderTravelSubBrandHeader({
       ? ALL_SUB_BRANDS
       : ALL_SUB_BRANDS.filter((s) => subBrandAccess.includes(s.value));
   const showSwitcher = visibleSubBrands.length >= 2;
-  // G096: pinned logo URL for the active sub-brand (FR-3.3.a). Renders only
-  // when the active BrandKit row carries a logoUrl — falls back silently to
-  // no logo when missing (the global brand image at the top of the sidebar
-  // is already shown adjacent to this section).
-  const pinnedLogoUrl = brandLogoUrl(brandKit);
-  const pinnedAccent = brandKit?.primaryColor || null;
   // Single-brand scoped user (e.g. a TMC-only manager): there's nothing to
   // switch between, so we don't render the dropdown — but we DO surface a
   // static read-only chip so they can see which sub-brand they're scoped to
@@ -1614,36 +1635,16 @@ function renderTravelSubBrandHeader({
       : null;
   return (
     <div style={{ flexShrink: 0 }}>
-      {/* G096 (FR-3.3.a): pinned sub-brand logo at the top of the travel
-          sidebar section. Shows only when the active BrandKit carries a
-          logoUrl. The accent border underneath is driven by the kit's
-          primaryColor when present — a subtle visual cue that "this is
-          the brand you're operating under" without disrupting the
-          existing label + switcher chrome below. */}
-      {pinnedLogoUrl && (
+      {/* Branding refactor (2026-07-08): the pinned sub-brand LOGO strip was
+          removed — the single top-of-sidebar logo already reflects the
+          active sub-brand (see Sidebar's `logoUrl` const). This thin accent
+          strip is the only remaining visual cue for "this is the brand
+          you're operating under" when that brand has its own color. */}
+      {accentColor && (
         <div
-          data-testid="travel-sidebar-pinned-logo"
-          style={{
-            padding: "8px 12px 6px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "flex-start",
-            borderBottom: pinnedAccent
-              ? `2px solid ${pinnedAccent}`
-              : "1px solid var(--border-color)",
-            marginBottom: 4,
-          }}
-        >
-          <img
-            src={pinnedLogoUrl}
-            alt={`${activeSubBrand || "Brand"} logo`}
-            style={{
-              maxHeight: 32,
-              maxWidth: 160,
-              objectFit: "contain",
-            }}
-          />
-        </div>
+          data-testid="travel-sidebar-accent-strip"
+          style={{ height: 2, background: accentColor, marginBottom: 4 }}
+        />
       )}
       <div style={labelStyle}>Travel</div>
       {soleBrand && (

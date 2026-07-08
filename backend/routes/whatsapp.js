@@ -327,6 +327,38 @@ router.get("/messages", verifyToken, async (req, res) => {
   }
 });
 
+// DELETE /api/whatsapp/messages/dispatch-log — ADMIN only (2026-07-08).
+//
+// Powers the "Clear dispatch log" button on the travel WhatsApp dispatch
+// log page (frontend/src/pages/travel/WhatsAppLog.jsx). WhatsAppMessage is
+// the SAME table the interactive WhatsApp Chat/Inbox feature uses (Sync
+// Lead, live customer conversations) — a naive tenant-wide deleteMany would
+// destroy real chat history, not just automated dispatches. Scoped to
+// `threadId: null` ONLY: rows with no linked WhatsAppThread are exactly the
+// automated sends (OTPs, cron reminders, boarding-pass/itinerary pushes)
+// that were never part of an interactive chat — see
+// services/watiClient.js's persistMessageRow() comment, which explicitly
+// documents thread-linked vs thread-less rows sharing this one persist
+// path. Messages inside an active chat thread are never touched.
+router.delete("/messages/dispatch-log", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId, threadId: null };
+    const { count } = await prisma.whatsAppMessage.deleteMany({ where });
+    await writeAudit(
+      "WhatsAppMessage",
+      "CLEAR_DISPATCH_LOG",
+      0,
+      req.user.userId,
+      req.user.tenantId,
+      { deletedCount: count },
+    );
+    res.json({ success: true, deletedCount: count });
+  } catch (err) {
+    console.error("[whatsapp] clear dispatch log error:", err.message);
+    res.status(500).json({ error: "Failed to clear dispatch log" });
+  }
+});
+
 // ─── WhatsApp Stats — tenant-wide aggregate ────────────────────────────────
 //
 // GET /api/whatsapp/stats — first /stats endpoint on the WhatsApp route.

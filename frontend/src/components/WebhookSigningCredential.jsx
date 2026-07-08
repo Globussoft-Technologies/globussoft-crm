@@ -90,9 +90,19 @@ export default function WebhookSigningCredential() {
         <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <ShieldCheck size={20} color="var(--primary-color, var(--accent-color))" /> Webhook Signing Credential
         </h3>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '0.75rem' }}>
           One HMAC secret signs every outbound webhook for your account. Configure it in GlobusPhone (or any receiver)
           so it can verify each delivery. The secret is shown only once — rotate if you lose it.
+        </p>
+        {/* Partners have twice pasted this secret into an X-API-Key field —
+            it copies as a bare 64-hex string that looks like a plausible API
+            key. Disambiguate at the source, regardless of what partner docs say. */}
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'flex-start', gap: '0.4rem' }}>
+          <AlertTriangle size={15} color="#f59e0b" style={{ flexShrink: 0, marginTop: 2 }} />
+          <span>
+            This is a webhook signing secret, <strong>not</strong> your API key. For API keys, go to{' '}
+            <a href="/developer" style={{ color: 'var(--primary-color, var(--accent-color))', fontWeight: 600 }}>Developer → API Keys</a>.
+          </span>
         </p>
 
         {/* Not entitled → disable generation, point to /pricing. */}
@@ -229,8 +239,17 @@ export default function WebhookSigningCredential() {
               </code>
             </div>
 
-            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0 0 1.25rem' }}>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0 0 0.75rem' }}>
               Paste this into GlobusPhone (or any receiver) as <code style={{ fontFamily: 'monospace', color: 'var(--text-primary)' }}>WEBHOOK_HMAC_SECRET_CRM</code>.
+            </p>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0 0 1.25rem', display: 'flex', alignItems: 'flex-start', gap: '0.4rem' }}>
+              <AlertTriangle size={14} color="#f59e0b" style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>
+                This is a webhook signing secret, <strong>not</strong> your API key. Do not use it as an{' '}
+                <code style={{ fontFamily: 'monospace', color: 'var(--text-primary)' }}>X-API-Key</code> — API keys start with{' '}
+                <code style={{ fontFamily: 'monospace', color: 'var(--text-primary)' }}>glbs_</code> and are generated from{' '}
+                <a href="/developer" style={{ color: 'var(--primary-color, var(--accent-color))', fontWeight: 600 }}>Developer → API Keys</a>.
+              </span>
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>

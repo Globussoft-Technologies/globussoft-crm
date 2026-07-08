@@ -189,6 +189,28 @@ describe('<WebhookSigningCredential />', () => {
     });
   });
 
+  // Wrong-secret disambiguation (partners twice pasted this secret into an
+  // X-API-Key field): both the card body and the show-once reveal modal must
+  // say it is NOT an API key and point at Developer → API Keys.
+  it('card body warns the secret is NOT an API key and links to Developer → API Keys', async () => {
+    fetchApiMock.mockImplementation(withCred(credActive));
+    render(<WebhookSigningCredential />);
+    await screen.findByText('whid_abcd1234');
+    expect(screen.getByText(/This is a webhook signing secret/i)).toBeInTheDocument();
+    expect(screen.getByText(/For API keys, go to/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Developer → API Keys/i })).toHaveAttribute('href', '/developer');
+  });
+
+  it('reveal modal warns the show-once secret must not be used as an X-API-Key', async () => {
+    fetchApiMock.mockImplementation(withCred(credNone(true)));
+    render(<WebhookSigningCredential />);
+    fireEvent.click(await screen.findByRole('button', { name: /Generate signing secret/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Do not use it as an/i)).toBeInTheDocument();
+    expect(within(dialog).getByText('glbs_')).toBeInTheDocument();
+    expect(within(dialog).getByRole('link', { name: /Developer → API Keys/i })).toHaveAttribute('href', '/developer');
+  });
+
   it('non-admin (GET rejects with 403) renders nothing', async () => {
     fetchApiMock.mockImplementation(() => Promise.reject(Object.assign(new Error('forbidden'), { status: 403 })));
     const { container } = render(<WebhookSigningCredential />);

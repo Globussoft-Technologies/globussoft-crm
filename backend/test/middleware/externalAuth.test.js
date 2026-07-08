@@ -229,8 +229,8 @@ describe('externalAuth', () => {
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
 
-  test('returns 401 malformed when hex segment is shorter than 32 chars', async () => {
-    // Per regex /^glbs_[a-f0-9]{32,}$/i — 31 hex chars fails.
+  test('returns 401 malformed when hex segment is shorter than 48 chars', async () => {
+    // Per regex /^glbs_[a-f0-9]{48,96}$/i — 31 hex chars fails.
     const { req, res, next } = makeReqResNext({
       headers: { 'x-api-key': 'glbs_' + 'a'.repeat(31) },
     });
@@ -334,95 +334,95 @@ describe('externalAuth', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Raw hex key support wave (+6 cases): accept raw hex keys from external
-  // partners (e.g. GlobusPhone) without glbs_ prefix. Both formats valid.
+  // Wrong-secret detection wave: the glbs_ prefix is required again (the
+  // f9cfd96f raw-hex leniency never matched a real key — all three ApiKey
+  // insert sites mint glbs_-prefixed secrets). A bare 64-hex value is the
+  // exact shape of the per-tenant webhook signing secret (routes/settings.js,
+  // shown once on the Settings page) and gets a specific 401 pointing at
+  // Developer → API Keys; other bare hex stays generic "Malformed API key".
+  // Neither reaches the DB lookup.
   // -------------------------------------------------------------------------
 
-  test('accepts raw hex key (48 chars) without glbs_ prefix', async () => {
-    const rawKey = '83000168aabbccddeeff0011223344556677889900112233445566778899';
-    findUniqueMock.mockResolvedValueOnce({
-      id: 300,
-      tenantId: 9,
-      userId: 5,
-      keySecret: rawKey,
-      tenant: { id: 9, isActive: true },
-    });
+  const WEBHOOK_SECRET_ERROR =
+    'This looks like a webhook signing secret, not an API key. API keys start with glbs_ — generate one from Developer → API Keys.';
+
+  test('bare 64-hex (webhook signing secret shape) returns the wrong-secret 401 without a DB lookup', async () => {
+    // crypto.randomBytes(32).toString('hex') shape — what Settings hands out.
+    const webhookSecretShaped = 'b'.repeat(32) + '0'.repeat(32);
     const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': rawKey },
+      headers: { 'x-api-key': webhookSecretShaped },
     });
     await externalAuth(req, res, next);
-    expect(next).toHaveBeenCalledOnce();
-    expect(res.status).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: WEBHOOK_SECRET_ERROR });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('bare 64-hex with uppercase hex also hits the wrong-secret 401', async () => {
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': 'F'.repeat(64) },
+    });
+    await externalAuth(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: WEBHOOK_SECRET_ERROR });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  test('bare 48-hex (not webhook-secret shape) returns generic malformed 401', async () => {
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': 'c'.repeat(48) },
+    });
+    await externalAuth(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Malformed API key' });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  test('bare 96-hex returns generic malformed 401', async () => {
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': 'a'.repeat(96) },
+    });
+    await externalAuth(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Malformed API key' });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  test('glbs_-prefixed 64-hex is format-valid and proceeds to the DB lookup', async () => {
+    // Guard: the prefix check dominates — a prefixed key whose hex segment
+    // happens to be 64 chars must NOT trip the wrong-secret branch.
+    findUniqueMock.mockResolvedValueOnce(null);
+    const prefixed64 = 'glbs_' + 'd'.repeat(64);
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': prefixed64 },
+    });
+    await externalAuth(req, res, next);
     expect(findUniqueMock).toHaveBeenCalledWith({
-      where: { keySecret: rawKey },
+      where: { keySecret: prefixed64 },
       include: { tenant: true },
     });
-  });
-
-  test('accepts raw hex key at maximum length (96 chars)', async () => {
-    const rawKey = 'a'.repeat(96);
-    findUniqueMock.mockResolvedValueOnce({
-      id: 301,
-      tenantId: 10,
-      userId: 6,
-      keySecret: rawKey,
-      tenant: { id: 10, isActive: true },
-    });
-    const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': rawKey },
-    });
-    await externalAuth(req, res, next);
-    expect(next).toHaveBeenCalledOnce();
-    expect(res.status).not.toHaveBeenCalled();
-  });
-
-  test('returns 401 malformed when raw hex is too short (< 48 chars)', async () => {
-    const tooShort = 'a'.repeat(47);
-    const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': tooShort },
-    });
-    await externalAuth(req, res, next);
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Malformed API key' });
-    expect(findUniqueMock).not.toHaveBeenCalled();
-  });
-
-  test('returns 401 malformed when raw hex is too long (> 96 chars)', async () => {
-    const tooLong = 'b'.repeat(97);
-    const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': tooLong },
-    });
-    await externalAuth(req, res, next);
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Malformed API key' });
-    expect(findUniqueMock).not.toHaveBeenCalled();
-  });
-
-  test('returns 401 invalid when raw hex key not found in database', async () => {
-    findUniqueMock.mockResolvedValueOnce(null);
-    const rawKey = 'c'.repeat(48);
-    const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': rawKey },
-    });
-    await externalAuth(req, res, next);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: 'Invalid API key' });
   });
 
-  test('accepts raw hex key with mixed case (A-F uppercase)', async () => {
-    const mixedKey = 'F'.repeat(24) + '0'.repeat(24);
-    findUniqueMock.mockResolvedValueOnce({
-      id: 302,
-      tenantId: 11,
-      userId: 7,
-      keySecret: mixedKey,
-      tenant: { id: 11, isActive: true },
-    });
+  test('glbs_ key with hex segment shorter than 48 returns generic malformed 401', async () => {
     const { req, res, next } = makeReqResNext({
-      headers: { 'x-api-key': mixedKey },
+      headers: { 'x-api-key': 'glbs_' + 'a'.repeat(47) },
     });
     await externalAuth(req, res, next);
-    expect(next).toHaveBeenCalledOnce();
-    expect(res.status).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Malformed API key' });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  test('glbs_ key with hex segment longer than 96 returns generic malformed 401', async () => {
+    const { req, res, next } = makeReqResNext({
+      headers: { 'x-api-key': 'glbs_' + 'b'.repeat(97) },
+    });
+    await externalAuth(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Malformed API key' });
+    expect(findUniqueMock).not.toHaveBeenCalled();
   });
 });

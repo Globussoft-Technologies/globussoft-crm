@@ -61,19 +61,24 @@ async function requireTravelTenant(req, res, next) {
  * full access. Admins always get null (full access regardless of the
  * subBrandAccess column).
  *
- * For non-ADMIN users: if subBrandAccess is not set (NULL), returns empty
- * Set to DENY ALL access. This prevents data leakage when staff are created
- * without explicit sub-brand assignments.
+ * Access policy (per #976 — the null-vs-"[]" distinction is load-bearing):
+ *   - ADMIN                         → null  (full access, ignores column)
+ *   - non-ADMIN, column NULL/unset  → null  (full access — an unset column
+ *       means "no sub-brand restriction has been applied", so MANAGER/USER
+ *       retain the tenant-wide access their RBAC role already grants. This
+ *       is back-compatible with historical rows and keeps read-only meta
+ *       endpoints + verifyRole-gated MANAGER actions working.)
+ *   - non-ADMIN, explicit "[]"      → empty Set (deny-all — the natural way
+ *       to express "onboarded but not yet granted any sub-brand")
+ *   - non-ADMIN, JSON array         → Set of the recognised sub-brands
  *
- * Returns an empty Set on:
+ * Returns an empty Set on (treat as "deny everything" — per-route
+ * convention short-circuits to an all-zeros / no-op envelope so the
+ * dashboard tile renders cleanly rather than 403'ing):
  *   - User row missing (lookup failure)
- *   - Non-ADMIN user with unset subBrandAccess column (security: deny-all)
  *   - Malformed JSON in the subBrandAccess column
- *   - Explicit empty array `"[]"` (the natural way to express "not-yet-onboarded")
- *
- * Callers should treat an empty Set as "deny everything" (the per-route
- * convention is to short-circuit to an all-zeros / no-op envelope so the
- * dashboard tile renders cleanly rather than 403'ing).
+ *   - Explicit empty array `"[]"`
+ *   - Array whose entries all fail the VALID_SUB_BRANDS filter
  *
  * Non-array JSON (e.g. `'{"tmc":true}'`) preserves the null/full-access
  * fallback because the shape is malformed-but-non-array — we can't tell
@@ -88,10 +93,11 @@ async function getSubBrandAccessSet(userId) {
   });
   if (!user) return new Set();
   if (user.role === "ADMIN") return null;
-  // For non-ADMIN users: if subBrandAccess is not set, deny all access (empty Set)
-  // instead of allowing full access. This prevents data leakage when staff are
-  // created without explicit sub-brand assignments.
-  if (!user.subBrandAccess) return new Set();
+  // Column NULL/unset → null (full access). An unset column means no
+  // sub-brand restriction has been applied, so non-ADMIN users keep the
+  // tenant-wide visibility their RBAC role already grants. Deny-all is
+  // expressed explicitly via "[]" (handled below), never by omission.
+  if (!user.subBrandAccess) return null;
   try {
     const arr = JSON.parse(user.subBrandAccess);
     if (!Array.isArray(arr)) return null; // malformed (non-array) → full access (preserved)

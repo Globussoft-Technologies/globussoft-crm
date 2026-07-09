@@ -173,25 +173,34 @@ const ContactDetail = () => {
                 WhatsApp thread, or fully regenerated as one narrative here.
                 Shown whenever the contact already has a summary OR came in
                 through any WhatsApp-flavoured source (direct auto-capture
-                "whatsapp" or multichannel intake "inbound:whatsapp") — the
-                Summarize button itself 404/409s harmlessly if there's no
-                WhatsApp history to read yet. */}
+                "whatsapp" or multichannel intake "inbound:whatsapp").
+                The manual "Summarize" (re-summarize-from-scratch) button is
+                WhatsApp-specific — POST /:id/summarize-chat only ever reads
+                WhatsAppMessage rows (lib/leadConversationSummary.js), so it
+                404/409s with a WhatsApp-flavoured error message for any other
+                source (gmail, whatsapp-extension, etc). Those sources already
+                got their one-time summary written into description at
+                capture time (routes/leads_extension_capture.js) — there's no
+                raw message log behind them to re-summarize from, so the
+                button is hidden rather than shown-and-broken. */}
             {(contact.description || /whatsapp/i.test(contact.source || '')) && (
               <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', gap: '0.5rem' }}>
                   <h4 style={{ fontSize: '0.85rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                     <MessageSquareText size={14} /> Chat Summary
                   </h4>
-                  <button
-                    type="button"
-                    onClick={handleSummarizeChat}
-                    disabled={summarizing}
-                    className="btn-secondary"
-                    title="Regenerate a full narrative summary from the entire WhatsApp history"
-                    style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem', display: 'flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <Sparkles size={13} /> {summarizing ? 'Summarizing…' : 'Summarize'}
-                  </button>
+                  {/^whatsapp$/i.test(contact.source || '') || contact.source === 'inbound:whatsapp' ? (
+                    <button
+                      type="button"
+                      onClick={handleSummarizeChat}
+                      disabled={summarizing}
+                      className="btn-secondary"
+                      title="Regenerate a full narrative summary from the entire WhatsApp history"
+                      style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <Sparkles size={13} /> {summarizing ? 'Summarizing…' : 'Summarize'}
+                    </button>
+                  ) : null}
                 </div>
                 {summarizeError && (
                   <p style={{ color: '#ef4444', fontSize: '0.75rem', margin: '0 0 0.5rem' }}>{summarizeError}</p>

@@ -178,6 +178,14 @@ app.use(
       // Allow requests with no origin (server-to-server, curl, Postman)
       if (!origin || ALLOWED_ORIGINS.includes(origin))
         return callback(null, true);
+      // GlobusCRM browser extension (2026-07-09) — chrome-extension://<id>
+      // origins. The id is regenerated on every unpacked reload/reinstall
+      // (and again once published to the Chrome Web Store), so an exact-
+      // match allowlist entry would break on the next reload. Mirrors the
+      // same allowance in middleware/originCheck.js — see that file's
+      // comment for the trust-boundary rationale (verifyToken's JWT bearer
+      // check is what actually gates these routes).
+      if (origin.startsWith("chrome-extension://")) return callback(null, true);
       // #657 — for unknown origins, do NOT error-out (which sends a 500
       // and breaks the originCheck layer below). Just decline to set the
       // Access-Control-Allow-Origin response header — the browser will
@@ -1301,6 +1309,10 @@ app.use("/api/travel", require("./routes/travel_search"));
 // /api/travel/inbound/leads/:channel handler so both surfaces share one
 // envelope, idempotency contract, Touchpoint write, and cooldown gate.
 app.use("/api/leads", require("./routes/leads_intake"));
+// Browser-extension lead capture (Gmail/WhatsApp Web scraping) — vertical-
+// agnostic, authenticated as a normal logged-in staff user (verifyToken),
+// distinct from the travel-specific multi-channel intake above.
+app.use("/api/leads", require("./routes/leads_extension_capture"));
 app.use(
   "/api/travel/itinerary-templates",
   require("./routes/travel_itinerary_templates"),

@@ -93,14 +93,14 @@ export function subBrandShortLabel(subBrand) {
 export function accessibleSubBrands(user) {
   if (user?.role === "ADMIN") return [...SUB_BRAND_IDS];
   const raw = user?.subBrandAccess;
-  if (!raw) return [...SUB_BRAND_IDS];
+  if (!raw) return [...SUB_BRAND_IDS]; // unset → no restriction declared → full access
   try {
     const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!Array.isArray(arr) || arr.length === 0) return [...SUB_BRAND_IDS];
+    if (!Array.isArray(arr) || arr.length === 0) return [...SUB_BRAND_IDS]; // empty/malformed → full access
     const filtered = SUB_BRAND_IDS.filter((id) => arr.includes(id));
-    return filtered.length ? filtered : [...SUB_BRAND_IDS];
+    return filtered.length ? filtered : [...SUB_BRAND_IDS]; // no valid brands → full access
   } catch {
-    return [...SUB_BRAND_IDS];
+    return [...SUB_BRAND_IDS]; // parse error → full access
   }
 }
 
@@ -115,6 +115,7 @@ export function accessibleSubBrands(user) {
 // fall through to the first accessible brand.
 export function defaultSubBrandFor(user, activeSubBrand, preferred) {
   const brands = accessibleSubBrands(user);
+  if (brands.length === 0) return null; // No access; don't default to anything
   if (brands.length === 1) return brands[0];
   if (activeSubBrand && brands.includes(activeSubBrand)) return activeSubBrand;
   if (preferred && brands.includes(preferred)) return preferred;

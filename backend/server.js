@@ -1655,6 +1655,29 @@ const {
 } = require("./services/brochureEngineBridge");
 app.use("/brochure-assets", express.static(BROCHURE_ASSETS_DIR));
 app.use("/api/brochure-assets", express.static(BROCHURE_ASSETS_DIR));
+
+// Favicon explicit handler — serves logo-header-nobg.png with correct MIME type.
+// Essential for /trips (server-rendered) and any subroute that doesn't benefit
+// from the SPA's frontend dist static serving. Without this, favicon requests
+// from /trips, /api/*, and other non-SPA paths would 404 or get wrong MIME type.
+// Mounted BEFORE the generic static mount so this explicit handler wins.
+app.get("/logo-header-nobg.png", (req, res) => {
+  const logoPath = path.join(__dirname, "..", "frontend", "dist", "logo-header-nobg.png");
+  res.type("image/png");
+  res.set("Cache-Control", "public, max-age=31536000, immutable");
+  res.sendFile(logoPath, (err) => {
+    if (err) {
+      // Fallback to public folder if dist doesn't exist (dev mode)
+      const fallbackPath = path.join(__dirname, "..", "frontend", "public", "logo-header-nobg.png");
+      res.sendFile(fallbackPath, (fallbackErr) => {
+        if (fallbackErr) {
+          res.status(404).json({ error: "Favicon not found" });
+        }
+      });
+    }
+  });
+});
+
 // Health Check Endpoint
 const prisma = require("./lib/prisma");
 

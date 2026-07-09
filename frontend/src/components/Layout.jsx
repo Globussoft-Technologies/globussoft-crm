@@ -216,16 +216,10 @@ const Layout = () => {
     if (token) setupPush(token).catch(() => {});
   }, [token]);
 
-  // #704: tenant-aware document.title so operators with many open tabs can
-  // identify the CRM tab quickly. Falls back to the static "Globussoft CRM"
-  // when tenant hasn't loaded yet (pre-login, splash, transient).
+  // Document title set to constant "Globussoft CRM" for all pages and tenants
   useEffect(() => {
-    const brand = tenant?.name?.trim();
-    const next = brand ? `${brand} — CRM` : "Globussoft CRM";
-    if (document.title !== next) {
-      document.title = next;
-    }
-  }, [tenant?.name]);
+    document.title = "Globussoft CRM";
+  }, []);
 
   // Fetch subscription status to show trial banner and modal
   useEffect(() => {

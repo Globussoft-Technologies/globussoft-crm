@@ -10289,6 +10289,163 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
 
   # ════════════════════════════════════════════════════════════════════
+  # TRAVEL — WHATSAPP (Q9, Wati transport)
+  # ════════════════════════════════════════════════════════════════════
+  /travel/whatsapp/status:
+    get:
+      summary: Read the travel WhatsApp connection status
+      description: |
+        Returns whether the Wati credential is configured + last-sync
+        metadata. Distinct from `/api/whatsapp/*` (Meta Cloud, wellness/
+        generic) — this is the travel-tenant Wati transport (Q9).
+      tags: [Travel — Operations]
+      responses:
+        "200":
+          description: Status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configured: { type: boolean }
+                  provider: { type: string, example: "wati" }
+                  lastSyncAt:
+                    { type: string, format: date-time, nullable: true }
+                  webhookHealthy: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /travel/whatsapp/media:
+    get:
+      summary: "[PUBLIC] Proxy media download from Wati"
+      description: Authenticated media download proxy — proxies a Wati media URL with the configured tenant credentials.
+      tags: [Travel — Operations]
+      security: []
+      parameters:
+        - in: query
+          name: messageId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Media bytes.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /travel/whatsapp/templates:
+    get:
+      summary: List Wati-side approved templates
+      tags: [Travel — Operations]
+      responses:
+        "200":
+          description: Templates.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        language: { type: string }
+                        category: { type: string }
+                        status: { type: string }
+  /travel/whatsapp/send:
+    post:
+      summary: Send a WhatsApp template message via Wati
+      tags: [Travel — Operations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, templateName]
+              properties:
+                to: { type: string, description: E.164 phone. }
+                templateName: { type: string }
+                language: { type: string, default: "en" }
+                variables:
+                  type: array
+                  items: { type: string }
+                contactId: { type: integer, nullable: true }
+            example:
+              to: "+919876543210"
+              templateName: "trip_payment_reminder"
+              language: "en"
+              variables: ["Asha", "TINV-2026-0091", "₹25,000"]
+              contactId: 421
+      responses:
+        "200":
+          description: Sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messageId: { type: string }
+                  delivered: { type: boolean }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "503": { description: Wati provider unreachable. }
+  /travel/whatsapp/send-media:
+    post:
+      summary: Send a WhatsApp media message (image, doc, etc.)
+      tags: [Travel — Operations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, mediaUrl, mediaType]
+              properties:
+                to: { type: string }
+                mediaUrl: { type: string, format: uri }
+                mediaType: { type: string, enum: [image, document, video] }
+                caption: { type: string }
+      responses:
+        "200": { description: Sent. }
+        "400": { $ref: "#/components/responses/ValidationError" }
+  /travel/whatsapp/sync:
+    post:
+      summary: Trigger a Wati conversation sync (operator manual)
+      description: Pulls fresh conversations from Wati; idempotent.
+      tags: [Travel — Operations]
+      responses:
+        "200":
+          description: Sync stats.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversationsFetched: { type: integer }
+                  messagesIngested: { type: integer }
+  /travel/whatsapp/webhook:
+    get:
+      summary: "[PUBLIC] Wati webhook verification handshake"
+      tags: [Travel — Operations]
+      security: []
+      responses:
+        "200": { description: Verified. }
+    post:
+      summary: "[PUBLIC] Wati inbound webhook"
+      description: Inbound message + status updates from Wati. Signature-verified inside the handler.
+      tags: [Travel — Operations]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Wati-side payload shape (eventType, message, contact, etc.).
+      responses:
+        "200": { description: Acknowledged. }
+
+  # ════════════════════════════════════════════════════════════════════
   # TRAVEL — ENGINE WEIGHTS + QUOTE/ITINERARY TEMPLATES + STALL/CURRICULUM/POIS
   # ════════════════════════════════════════════════════════════════════
   /travel/engine-weights:
@@ -11479,160 +11636,3 @@ paths:
                 error: "channel is required in body for the canonical /api/leads/intake alias"
                 code: "MISSING_CHANNEL"
         "429": { $ref: "#/components/responses/RateLimited" }
-
-  # ════════════════════════════════════════════════════════════════════
-  # TRAVEL — WHATSAPP (Q9, Wati transport)
-  # ════════════════════════════════════════════════════════════════════
-  /travel/whatsapp/status:
-    get:
-      summary: Read the travel WhatsApp connection status
-      description: |
-        Returns whether the Wati credential is configured + last-sync
-        metadata. Distinct from `/api/whatsapp/*` (Meta Cloud, wellness/
-        generic) — this is the travel-tenant Wati transport (Q9).
-      tags: [Travel — Operations]
-      responses:
-        "200":
-          description: Status.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  configured: { type: boolean }
-                  provider: { type: string, example: "wati" }
-                  lastSyncAt:
-                    { type: string, format: date-time, nullable: true }
-                  webhookHealthy: { type: boolean }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-  /travel/whatsapp/media:
-    get:
-      summary: "[PUBLIC] Proxy media download from Wati"
-      description: Authenticated media download proxy — proxies a Wati media URL with the configured tenant credentials.
-      tags: [Travel — Operations]
-      security: []
-      parameters:
-        - in: query
-          name: messageId
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: Media bytes.
-          content:
-            application/octet-stream:
-              schema: { type: string, format: binary }
-        "404": { $ref: "#/components/responses/NotFound" }
-  /travel/whatsapp/templates:
-    get:
-      summary: List Wati-side approved templates
-      tags: [Travel — Operations]
-      responses:
-        "200":
-          description: Templates.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  templates:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        name: { type: string }
-                        language: { type: string }
-                        category: { type: string }
-                        status: { type: string }
-  /travel/whatsapp/send:
-    post:
-      summary: Send a WhatsApp template message via Wati
-      tags: [Travel — Operations]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [to, templateName]
-              properties:
-                to: { type: string, description: E.164 phone. }
-                templateName: { type: string }
-                language: { type: string, default: "en" }
-                variables:
-                  type: array
-                  items: { type: string }
-                contactId: { type: integer, nullable: true }
-            example:
-              to: "+919876543210"
-              templateName: "trip_payment_reminder"
-              language: "en"
-              variables: ["Asha", "TINV-2026-0091", "₹25,000"]
-              contactId: 421
-      responses:
-        "200":
-          description: Sent.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  messageId: { type: string }
-                  delivered: { type: boolean }
-        "400": { $ref: "#/components/responses/ValidationError" }
-        "503": { description: Wati provider unreachable. }
-  /travel/whatsapp/send-media:
-    post:
-      summary: Send a WhatsApp media message (image, doc, etc.)
-      tags: [Travel — Operations]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [to, mediaUrl, mediaType]
-              properties:
-                to: { type: string }
-                mediaUrl: { type: string, format: uri }
-                mediaType: { type: string, enum: [image, document, video] }
-                caption: { type: string }
-      responses:
-        "200": { description: Sent. }
-        "400": { $ref: "#/components/responses/ValidationError" }
-  /travel/whatsapp/sync:
-    post:
-      summary: Trigger a Wati conversation sync (operator manual)
-      description: Pulls fresh conversations from Wati; idempotent.
-      tags: [Travel — Operations]
-      responses:
-        "200":
-          description: Sync stats.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  conversationsFetched: { type: integer }
-                  messagesIngested: { type: integer }
-  /travel/whatsapp/webhook:
-    get:
-      summary: "[PUBLIC] Wati webhook verification handshake"
-      tags: [Travel — Operations]
-      security: []
-      responses:
-        "200": { description: Verified. }
-    post:
-      summary: "[PUBLIC] Wati inbound webhook"
-      description: Inbound message + status updates from Wati. Signature-verified inside the handler.
-      tags: [Travel — Operations]
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              description: Wati-side payload shape (eventType, message, contact, etc.).
-      responses:
-        "200": { description: Acknowledged. }

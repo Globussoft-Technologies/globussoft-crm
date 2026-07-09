@@ -61,19 +61,25 @@ async function requireTravelTenant(req, res, next) {
  * full access. Admins always get null (full access regardless of the
  * subBrandAccess column).
  *
- * Returns an empty Set on lookup failure (user row missing), on malformed
- * JSON in the subBrandAccess column, or on an explicit empty array `"[]"`
- * (the natural way to express "not-yet-onboarded — no sub-brand grants").
- * Callers should treat an empty Set as "deny everything" (the per-route
- * convention is to short-circuit to an all-zeros / no-op envelope so the
- * dashboard tile renders cleanly rather than 403'ing).
+ * Access policy (per #976 — the null-vs-"[]" distinction is load-bearing):
+ *   - ADMIN                         → null  (full access, ignores column)
+ *   - non-ADMIN, column NULL/unset  → null  (full access — an unset column
+ *       means "no sub-brand restriction has been applied", so MANAGER/USER
+ *       retain the tenant-wide access their RBAC role already grants. This
+ *       is back-compatible with historical rows and keeps read-only meta
+ *       endpoints + verifyRole-gated MANAGER actions working.)
+ *   - non-ADMIN, explicit "[]"      → empty Set (deny-all — the natural way
+ *       to express "onboarded but not yet granted any sub-brand")
+ *   - non-ADMIN, JSON array         → Set of the recognised sub-brands
  *
- * Distinguishing the deny-all (`new Set()`) path from the full-access
- * (`null`) path matters because:
- *   - `null` from a missing/unset subBrandAccess column means "no scope
- *     restriction declared" → fall back to tenant-wide access (admin-like).
- *   - `new Set()` from an explicit `"[]"` means "scope declared and it's
- *     empty" → deny everything inside the tenant. (Per #976.)
+ * Returns an empty Set on (treat as "deny everything" — per-route
+ * convention short-circuits to an all-zeros / no-op envelope so the
+ * dashboard tile renders cleanly rather than 403'ing):
+ *   - User row missing (lookup failure)
+ *   - Malformed JSON in the subBrandAccess column
+ *   - Explicit empty array `"[]"`
+ *   - Array whose entries all fail the VALID_SUB_BRANDS filter
+ *
  * Non-array JSON (e.g. `'{"tmc":true}'`) preserves the null/full-access
  * fallback because the shape is malformed-but-non-array — we can't tell
  * whether the operator intended deny-all or just typo'd a non-array
@@ -87,6 +93,10 @@ async function getSubBrandAccessSet(userId) {
   });
   if (!user) return new Set();
   if (user.role === "ADMIN") return null;
+  // Column NULL/unset → null (full access). An unset column means no
+  // sub-brand restriction has been applied, so non-ADMIN users keep the
+  // tenant-wide visibility their RBAC role already grants. Deny-all is
+  // expressed explicitly via "[]" (handled below), never by omission.
   if (!user.subBrandAccess) return null;
   try {
     const arr = JSON.parse(user.subBrandAccess);

@@ -34,15 +34,10 @@ export default function SurveyPublic() {
     return () => { cancelled = true; };
   }, [id]);
 
-  // Update document.title to the tenant brand on the public route, so the
-  // browser tab doesn't expose the internal product name to recipients.
+  // Document title set to constant "Globussoft CRM"
   useEffect(() => {
-    if (survey?.brand?.name) {
-      const prev = document.title;
-      document.title = survey.brand.name;
-      return () => { document.title = prev; };
-    }
-  }, [survey]);
+    document.title = "Globussoft CRM";
+  }, []);
 
   const submit = async (e) => {
     e.preventDefault();

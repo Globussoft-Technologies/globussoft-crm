@@ -8,6 +8,7 @@ const multer = require("multer");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyRole } = require("../middleware/auth");
+const { hasModuleAction } = require("../middleware/fieldFilter");
 
 // Compose-mail attachments: memory storage so the buffer can be base64'd
 // straight into the SendGrid payload without a disk round-trip. multer is a
@@ -166,7 +167,12 @@ if (SENDGRID_API_KEY) {
 // Pre-this-change the Sent folder UI had nothing to query against — the
 // only filtering surface was GET /api/email?folder=sent which returns a
 // `{total}` count for the sidebar, not the row list.
-router.get("/inbox", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.get("/inbox", async (req, res) => {
+  const canAccess = await hasModuleAction(req.user, "Communications", "READ");
+  if (!canAccess) {
+    return res.status(403).json({ error: "You don't have permission to access Communications" });
+  }
+
   try {
     const where = { tenantId: req.user.tenantId };
     if (req.query.folder === 'sent') where.direction = 'OUTBOUND';
@@ -219,7 +225,12 @@ function parseRecipients(toField) {
 // Multi-recipient calls expose the full per-recipient breakdown via `results` /
 // `failures`. Mailgun is called once per valid recipient (no BCC fan-out — keeps
 // per-recipient tracking pixels distinct).
-router.post("/send-email", verifyRole(["ADMIN", "MANAGER"]), composeAttachmentUpload, async (req, res) => {
+router.post("/send-email", composeAttachmentUpload, async (req, res) => {
+  const canAccess = await hasModuleAction(req.user, "Communications", "WRITE");
+  if (!canAccess) {
+    return res.status(403).json({ error: "You don't have permission to access Communications" });
+  }
+
   try {
     const { to, cc, bcc, subject, body, contactId } = req.body;
     if (!to || !subject) return res.status(400).json({ error: "Recipient and subject required" });
@@ -427,7 +438,12 @@ router.post("/send-email", verifyRole(["ADMIN", "MANAGER"]), composeAttachmentUp
 });
 
 // GET all call logs — scoped to tenant
-router.get("/calls", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.get("/calls", async (req, res) => {
+  const canAccess = await hasModuleAction(req.user, "Communications", "READ");
+  if (!canAccess) {
+    return res.status(403).json({ error: "You don't have permission to access Communications" });
+  }
+
   try {
     const calls = await prisma.callLog.findMany({
       where: { tenantId: req.user.tenantId },
@@ -442,7 +458,12 @@ router.get("/calls", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
 });
 
 // POST to log a call
-router.post("/log-call", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.post("/log-call", async (req, res) => {
+  const canAccess = await hasModuleAction(req.user, "Communications", "WRITE");
+  if (!canAccess) {
+    return res.status(403).json({ error: "You don't have permission to access Communications" });
+  }
+
   try {
     const { duration, notes, contactId, direction, recordingUrl } = req.body;
     const callLog = await prisma.callLog.create({
@@ -501,7 +522,12 @@ router.get("/track/:trackingId/click", async (req, res) => {
 });
 
 // Get tracking stats for an email
-router.get("/tracking/:emailId", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.get("/tracking/:emailId", async (req, res) => {
+  const canAccess = await hasModuleAction(req.user, "Communications", "READ");
+  if (!canAccess) {
+    return res.status(403).json({ error: "You don't have permission to access Communications" });
+  }
+
   try {
     const tracks = await prisma.emailTracking.findMany({
       where: { emailId: parseInt(req.params.emailId), tenantId: req.user.tenantId },

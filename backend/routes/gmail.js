@@ -180,12 +180,10 @@ async function getAuthorizedClientForUser(userId, tenantId) {
 router.get("/connect", verifyToken, (req, res) => {
   try {
     if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-      return res
-        .status(500)
-        .json({
-          error: "Google OAuth credentials not configured on server",
-          code: "NOT_CONFIGURED",
-        });
+      return res.status(500).json({
+        error: "Google OAuth credentials not configured on server",
+        code: "NOT_CONFIGURED",
+      });
     }
     const oauth2Client = buildOAuthClient();
     const state = encodeState({
@@ -223,7 +221,15 @@ router.get("/callback", async (req, res) => {
   }
   try {
     const oauth2Client = buildOAuthClient();
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+      throw new Error(
+        "Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET in env",
+      );
+    }
     const { tokens } = await oauth2Client.getToken(code);
+    if (!tokens || !tokens.access_token) {
+      throw new Error("No access token received from Google");
+    }
     const userId = parseInt(decoded.userId, 10);
     const tenantId = decoded.tenantId ? parseInt(decoded.tenantId, 10) : 1;
 
@@ -270,7 +276,16 @@ router.get("/callback", async (req, res) => {
       <p>Redirecting…</p>
     `);
   } catch (err) {
-    console.error("[gmail] /callback error:", err);
+    console.error("[gmail] /callback error:", err.message || err);
+    console.error("[gmail] Redirect URI used:", GMAIL_REDIRECT_URI);
+    console.error(
+      "[gmail] Client ID:",
+      GOOGLE_CLIENT_ID ? "✓ set" : "✗ missing",
+    );
+    console.error(
+      "[gmail] Client Secret:",
+      GOOGLE_CLIENT_SECRET ? "✓ set" : "✗ missing",
+    );
     res.redirect(
       `${FRONTEND_URL}/gmail?error=${encodeURIComponent("token_exchange_failed")}`,
     );
@@ -378,12 +393,10 @@ router.get("/messages", verifyToken, async (req, res) => {
     });
   } catch (err) {
     if (isReauthError(err)) {
-      return res
-        .status(401)
-        .json({
-          error: "Your Gmail connection has expired. Please reconnect.",
-          code: "RECONNECT_REQUIRED",
-        });
+      return res.status(401).json({
+        error: "Your Gmail connection has expired. Please reconnect.",
+        code: "RECONNECT_REQUIRED",
+      });
     }
     if (isGmailNotEnabledError(err)) {
       return res
@@ -424,12 +437,10 @@ router.get("/messages/:messageId", verifyToken, async (req, res) => {
     return res.json(parseGmailMessage(full.data));
   } catch (err) {
     if (isReauthError(err)) {
-      return res
-        .status(401)
-        .json({
-          error: "Your Gmail connection has expired. Please reconnect.",
-          code: "RECONNECT_REQUIRED",
-        });
+      return res.status(401).json({
+        error: "Your Gmail connection has expired. Please reconnect.",
+        code: "RECONNECT_REQUIRED",
+      });
     }
     if (isGmailNotEnabledError(err)) {
       return res
@@ -473,12 +484,10 @@ router.post(
         (typeof text === "string" && text.length) ||
         (typeof html === "string" && html.length);
       if (!hasBody) {
-        return res
-          .status(400)
-          .json({
-            error: "`text` or `html` body is required",
-            code: "MISSING_FIELDS",
-          });
+        return res.status(400).json({
+          error: "`text` or `html` body is required",
+          code: "MISSING_FIELDS",
+        });
       }
 
       const userId = req.user.userId;
@@ -559,12 +568,10 @@ router.post(
       });
     } catch (err) {
       if (isReauthError(err)) {
-        return res
-          .status(401)
-          .json({
-            error: "Your Gmail connection has expired. Please reconnect.",
-            code: "RECONNECT_REQUIRED",
-          });
+        return res.status(401).json({
+          error: "Your Gmail connection has expired. Please reconnect.",
+          code: "RECONNECT_REQUIRED",
+        });
       }
       if (isGmailNotEnabledError(err)) {
         return res

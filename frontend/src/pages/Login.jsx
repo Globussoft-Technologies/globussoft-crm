@@ -48,51 +48,15 @@ const Login = () => {
   // sessionStorage-vs-localStorage trade-off.
   const [rememberMe, setRememberMe] = useState(true);
 
-  // Organization picker. The same email can now belong to more than one org
-  // (User.email is unique per-tenant, not globally), so login sends the chosen
-  // org as `loginTenantId`. Empty = "let the server pick the first match",
-  // which keeps single-org emails (incl. the demo quick-logins) working.
-  const [orgs, setOrgs] = useState([]);
-  const [organization, setOrganization] = useState("");
-  const [orgTenantId, setOrgTenantId] = useState("");
-
   const { setUser, setToken, setTenant } = useContext(AuthContext);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
   // Handoff params from the external Dr. Haror's marketing site:
-  //   ?tenantSlug=enhanced-wellness — pre-selects + locks the org dropdown
   //   ?next=/wellness/book-appointment?... — post-login landing path
   // safeNext() rejects external URLs so a hostile ?next= can't redirect off-app.
   const nextParam = searchParams.get("next");
-  const tenantSlugParam = searchParams.get("tenantSlug");
-  const lockedToTenantSlug = !!tenantSlugParam;
 
-  // Load the public tenant list to populate the Organization dropdown.
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/auth/public/tenants")
-      .then((r) => r.json())
-      .then((data) => { if (!cancelled) setOrgs(Array.isArray(data) ? data : []); })
-      .catch(() => { if (!cancelled) setOrgs([]); });
-    return () => { cancelled = true; };
-  }, []);
-
-  // When the marketing-site handoff passes ?tenantSlug=, pre-select the
-  // text field once the list arrives. The field is rendered disabled (below)
-  // so the user stays scoped to the clinic they started from.
-  useEffect(() => {
-    if (!tenantSlugParam || orgs.length === 0) return;
-    const match = orgs.find((t) => t.slug === tenantSlugParam);
-    if (match) {
-      setOrgTenantId((prev) =>
-        prev ? prev : String(match.id)
-      );
-      setOrganization((prev) =>
-        prev ? prev : match.name
-      );
-    }
-  }, [tenantSlugParam, orgs]);
   // Pre-fill email when redirected from the /get-started wizard.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -175,17 +139,6 @@ const Login = () => {
 
   const handleSsoLogin = (provider) => {
     window.location.href = `/api/sso/${provider}/start`;
-  };
-
-  const normalizeOrg = (s) => s.trim().toLowerCase().replace(/\s+/g, "");
-
-  const handleOrganizationChange = (e) => {
-    const text = e.target.value;
-    const match = orgs.find(
-      (t) => normalizeOrg(t.name) === normalizeOrg(text)
-    );
-    setOrganization(text);
-    setOrgTenantId(match ? String(match.id) : "");
   };
 
   const handleForgotPassword = async (e) => {
@@ -360,7 +313,7 @@ const Login = () => {
     }
   };
 
-  const performLogin = async (loginEmail, loginPassword, tenantId) => {
+  const performLogin = async (loginEmail, loginPassword) => {
     setError("");
     if (!loginEmail || !loginPassword) {
       setError("Please fill out all required fields");
@@ -370,12 +323,9 @@ const Login = () => {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // `loginTenantId` (not `tenantId` — that's stripped server-side) scopes
-        // the lookup to the chosen org. Omitted when no org is selected.
         body: JSON.stringify({
           email: loginEmail,
           password: loginPassword,
-          ...(tenantId ? { loginTenantId: Number(tenantId) } : {}),
         }),
       });
 
@@ -401,7 +351,7 @@ const Login = () => {
 
   const handleLogin = (e) => {
     e.preventDefault();
-    performLogin(email, password, orgTenantId);
+    performLogin(email, password);
   };
 
   const quickLogin = (qEmail, qPassword) => {
@@ -563,27 +513,6 @@ const Login = () => {
         {!require2FA && (
           <>
             <form onSubmit={handleLogin}>
-              <div style={{ marginBottom: "1rem" }}>
-                <label
-                  style={{
-                    display: "block",
-                    marginBottom: "0.5rem",
-                    fontSize: "0.875rem",
-                    color: "var(--text-secondary)",
-                  }}
-                >
-                  Organization
-                </label>
-                <input
-                  type="text"
-                  className="input-field"
-                  placeholder="Enter your organization name"
-                  value={organization}
-                  onChange={handleOrganizationChange}
-                  disabled={lockedToTenantSlug}
-                  title={lockedToTenantSlug ? "Scoped by the booking link you arrived from" : undefined}
-                />
-              </div>
               <div style={{ marginBottom: "1rem" }}>
                 <label
                   style={{

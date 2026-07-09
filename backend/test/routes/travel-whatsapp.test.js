@@ -64,6 +64,16 @@ prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+// Device-session governance (whatsappSessionGuard) + audit sink.
+prisma.whatsAppWebSession = {
+  updateMany: vi.fn(),
+  findMany: vi.fn(),
+  findFirst: vi.fn(),
+  findUnique: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+};
+prisma.auditLog = { ...(prisma.auditLog || {}), findFirst: vi.fn(), create: vi.fn() };
 
 import express from 'express';
 import request from 'supertest';
@@ -122,6 +132,18 @@ beforeEach(() => {
   prisma.tenant.findFirst.mockReset().mockResolvedValue(TRAVEL_TENANT);
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
+  // Device-session governance defaults: no stale rows, no lock, no cooldown,
+  // no existing claim → claim() takes the allow+create path.
+  prisma.whatsAppWebSession.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.whatsAppWebSession.findMany.mockReset().mockResolvedValue([]);
+  prisma.whatsAppWebSession.findFirst.mockReset().mockResolvedValue(null);
+  prisma.whatsAppWebSession.findUnique.mockReset().mockResolvedValue(null);
+  prisma.whatsAppWebSession.create.mockReset().mockResolvedValue({ id: 1, deviceId: 'device-A' });
+  prisma.whatsAppWebSession.update.mockReset().mockResolvedValue({ id: 1, deviceId: 'device-A' });
+  prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
+  prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
+  delete process.env.WA_DEVICE_LOCK;
+  delete process.env.WA_RELINK_COOLDOWN_MS;
   delete process.env.WATI_WEBHOOK_TOKEN;
 });
 
@@ -337,6 +359,94 @@ describe('WhatsApp Web QR lifecycle', () => {
     expect(prisma.whatsAppMessage.deleteMany).toHaveBeenCalledWith({ where: { tenantId: 3 } });
     expect(prisma.whatsAppThread.deleteMany).toHaveBeenCalledWith({ where: { tenantId: 3 } });
     expect(res.body.purged).toEqual({ threads: 2, messages: 6 });
+  });
+});
+
+// ─── Device-session governance (per-user device lock + relink cooldown) ──
+// The /connect route runs whatsappSessionGuard.claim() BEFORE launching the
+// shared session, so a blocked attempt returns 409 and never reaches the
+// engine. The whatsAppWebSession prisma model is mocked; NODE_ENV=test keeps
+// the engine in stub mode.
+
+describe('WhatsApp device-session lock', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  test('29. same user on another device → 409 WA_DEVICE_LOCKED (no connect, no claim)', async () => {
+    const connectSpy = vi.spyOn(watiClient, 'connect');
+    prisma.whatsAppWebSession.findMany.mockResolvedValue([
+      { id: 9, deviceId: 'device-B', deviceLabel: 'Yasin · Chrome on Windows', ip: '10.0.0.9', loginAt: new Date(Date.now() - 60_000) },
+    ]);
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/connect')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN', { userId: 7, tenantId: 3 })}`)
+      .send({ deviceId: 'device-A' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('WA_DEVICE_LOCKED');
+    expect(res.body.activeDevice).toMatchObject({ deviceLabel: 'Yasin · Chrome on Windows', ip: '10.0.0.9' });
+    // Blocked → the shared session was never touched and no claim row created.
+    expect(connectSpy).not.toHaveBeenCalled();
+    expect(prisma.whatsAppWebSession.create).not.toHaveBeenCalled();
+  });
+
+  test('30. recent disconnect + within cooldown → 409 WA_RELINK_COOLDOWN', async () => {
+    prisma.whatsAppWebSession.findFirst.mockResolvedValue({ logoutAt: new Date(Date.now() - 60_000) });
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/connect')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ deviceId: 'device-A' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('WA_RELINK_COOLDOWN');
+    expect(res.body.cooldownRemainingMs).toBeGreaterThan(0);
+  });
+
+  test('31. allowed connect records a claim row + returns 200 state', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/connect')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ deviceId: 'device-A' });
+    expect(res.status).toBe(200);
+    expect(res.body.connected).toBe(false);
+    expect(prisma.whatsAppWebSession.create).toHaveBeenCalledTimes(1);
+    const data = prisma.whatsAppWebSession.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({ tenantId: 3, userId: 7, deviceId: 'device-A', status: 'ACTIVE' });
+  });
+
+  test('32. WA_DEVICE_LOCK=off bypasses the gate (legacy behavior preserved)', async () => {
+    process.env.WA_DEVICE_LOCK = 'off';
+    prisma.whatsAppWebSession.findMany.mockResolvedValue([
+      { id: 9, deviceId: 'device-B', deviceLabel: 'other', ip: '1.1.1.1', loginAt: new Date() },
+    ]);
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/connect')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ deviceId: 'device-A' });
+    expect(res.status).toBe(200); // lock ignored → connect proceeds
+  });
+
+  test('33. POST /heartbeat (any role) refreshes an ACTIVE claim → { ok:true }', async () => {
+    prisma.whatsAppWebSession.findUnique.mockResolvedValue({ id: 3, status: 'ACTIVE' });
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/heartbeat')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ deviceId: 'device-A' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, lost: false });
+  });
+
+  test('34. POST /disconnect releases the claim (LOGGED_OUT + logoutAt)', async () => {
+    prisma.whatsAppWebSession.updateMany.mockResolvedValue({ count: 1 });
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/disconnect')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ logout: true, deviceId: 'device-A' });
+    expect(res.status).toBe(200);
+    // release() marks the row LOGGED_OUT + stamps logoutAt (starts cooldown).
+    const relCall = prisma.whatsAppWebSession.updateMany.mock.calls.find(
+      (c) => c[0].data && c[0].data.status === 'LOGGED_OUT',
+    );
+    expect(relCall).toBeTruthy();
+    expect(relCall[0].data.logoutAt).toBeInstanceOf(Date);
   });
 });
 

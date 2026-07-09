@@ -78,6 +78,29 @@ const prisma = require("../lib/prisma");
 // const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
 const watiClient = require("../services/whatsappWebClient");
 const { toE164 } = require("../utils/deduplication");
+// Per-user device-session governance (device lock + relink cooldown). This is a
+// thin claim layer over the SHARED tenant session — it never touches the
+// whatsappWebClient connection engine. See lib/whatsappSessionGuard.js.
+const waGuard = require("../lib/whatsappSessionGuard");
+
+// Human-friendly label for the "controlled from another device" warning:
+// the operator's name/email + a coarse browser/OS hint from the user-agent.
+function deviceLabelFor(req) {
+  const who = (req.user && (req.user.name || req.user.email)) || `user#${req.user && req.user.userId}`;
+  const ua = String(req.headers["user-agent"] || "");
+  let browser = "browser";
+  if (/edg/i.test(ua)) browser = "Edge";
+  else if (/chrome|crios/i.test(ua)) browser = "Chrome";
+  else if (/firefox|fxios/i.test(ua)) browser = "Firefox";
+  else if (/safari/i.test(ua)) browser = "Safari";
+  let os = "";
+  if (/windows/i.test(ua)) os = "Windows";
+  else if (/android/i.test(ua)) os = "Android";
+  else if (/iphone|ipad|ios/i.test(ua)) os = "iOS";
+  else if (/mac os|macintosh/i.test(ua)) os = "macOS";
+  else if (/linux/i.test(ua)) os = "Linux";
+  return `${who} · ${browser}${os ? ` on ${os}` : ""}`;
+}
 
 // Outbound media upload (paperclip in the travel chat) — memory storage,
 // 16MB cap (WhatsApp's own media ceiling, mirroring the Meta-track
@@ -240,6 +263,32 @@ router.post(
       // { reset:true } wipes any saved/stale session + kills a stuck Chromium
       // before relaunching — the escape hatch for a wedged "Generating QR…".
       const reset = Boolean(req.body && (req.body.reset === true || req.body.reset === "true"));
+
+      // ── Device-session gate (per-user device lock + per-tenant relink
+      // cooldown). Runs BEFORE any purge/connect so a blocked attempt neither
+      // wipes chats nor generates a QR. deviceId rides in the body (NOT stripped
+      // by stripDangerous); userId comes from the token. A caller with no
+      // deviceId degrades to allow (backward compatible).
+      const claim = await waGuard.claim(
+        req.travelTenant.id,
+        req.user.userId,
+        req.body && req.body.deviceId,
+        {
+          deviceLabel: deviceLabelFor(req),
+          ip: req.ip,
+          reset,
+          isConnected: watiClient.isConnected(req.travelTenant.id),
+        },
+      );
+      if (!claim.allowed) {
+        return res.status(409).json({
+          error: claim.message,
+          code: claim.code,
+          activeDevice: claim.activeDevice || null,
+          cooldownRemainingMs: claim.cooldownRemainingMs || null,
+        });
+      }
+
       // Only purge the mirror on an explicit RESET (fresh QR / new number). The
       // old `!connected` guard wiped ALL imported threads whenever the panel was
       // opened while the saved session was still resuming on boot (state is
@@ -266,6 +315,25 @@ router.get(
   async (req, res) => {
     const st = watiClient.getState(req.travelTenant.id);
     res.json({ state: st.state, connected: st.connected, qr: st.qr || null, phone: maskNumber(st.phone), lastError: st.lastError || null });
+  },
+);
+
+// POST /whatsapp/heartbeat — the device currently holding the control claim
+// pings this (~every 45s) so its lock doesn't go stale. NOT admin-gated (any
+// claim holder pings). Returns { ok, lost }: lost=true means the claim expired
+// or was taken by the user's other device, so the UI should stop pinging.
+router.post(
+  "/whatsapp/heartbeat",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const out = await waGuard.heartbeat(req.travelTenant.id, req.user.userId, req.body && req.body.deviceId);
+      res.json(out);
+    } catch (e) {
+      console.error("[travel-whatsapp] heartbeat error:", e.message);
+      res.status(500).json({ error: "Heartbeat failed", code: "WA_HEARTBEAT_FAILED" });
+    }
   },
 );
 
@@ -351,6 +419,9 @@ router.post(
     try {
       const logout = (req.body && (req.body.logout === true || req.body.logout === "true")) || false;
       const st = await watiClient.disconnect(req.travelTenant.id, { logout });
+      // Release this user's control claim + stamp logoutAt (starts the tenant
+      // relink cooldown). Best-effort — never blocks the disconnect response.
+      await waGuard.release(req.travelTenant.id, req.user.userId, req.body && req.body.deviceId, { logout });
       // The linked account is a live mirror — disconnecting clears the imported
       // chats so a fresh connect re-fetches from scratch (no stale threads).
       const purged = await watiClient.purgeChats(req.travelTenant.id);

@@ -390,18 +390,41 @@ function killBrowsersForDir(tenantId) {
 function killAllOrphanBrowsers() {
   if (process.env.NODE_ENV === "test") return; // never spawn shells under test
   try {
-    const { execSync } = require("child_process");
+    const { execFileSync } = require("child_process");
     if (process.platform === "win32") {
       const ps =
         `Get-CimInstance Win32_Process | ` +
         `Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*session-travel-*' } | ` +
         `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
       const encoded = Buffer.from(ps, "utf16le").toString("base64");
-      execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { stdio: "ignore", timeout: 15000 });
+      execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdio: "ignore", timeout: 15000 });
     } else {
-      execSync(`pkill -f "session-travel-" || true`, { stdio: "ignore", timeout: 15000, shell: "/bin/sh" });
+      // Use execFile (no shell) so the shell's own command line can't match the
+      // pgrep pattern and get killed before it finishes scanning. Then kill each
+      // matched PID explicitly, excluding this Node process as a safety net.
+      let pids = [];
+      try {
+        const out = execFileSync("pgrep", ["-f", "session-travel-"], { encoding: "utf8", timeout: 15000 });
+        pids = out
+          .split("\n")
+          .map((s) => parseInt(s.trim(), 10))
+          .filter((n) => Number.isFinite(n) && n !== process.pid);
+      } catch (pgrepErr) {
+        // pgrep exits 1 when nothing matches — that's a successful no-op.
+        if (pgrepErr.status !== 1) throw pgrepErr;
+      }
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch (killErr) {
+          // ESRCH = process already gone; ignore.
+          if (killErr.code !== "ESRCH") throw killErr;
+        }
+      }
+      if (pids.length) {
+        console.log(`[whatsappWeb] init: killed ${pids.length} orphan chromium process(es)`);
+      }
     }
-    console.log("[whatsappWeb] init: killed any orphan chromium processes from previous runs");
   } catch (e) {
     console.warn(`[whatsappWeb] init: orphan-kill best-effort failed: ${e.message}`);
   }

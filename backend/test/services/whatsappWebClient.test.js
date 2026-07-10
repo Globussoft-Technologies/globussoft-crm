@@ -72,6 +72,46 @@ describe('boot restore guard rails', () => {
     expect(typeof wa.killAllOrphanBrowsers).toBe('function');
     expect(() => wa.killAllOrphanBrowsers()).not.toThrow();
   });
+  test('killAllOrphanBrowsers uses pgrep and kills matched PIDs on Linux', () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const { execFileSync } = require('child_process');
+    const execSpy = vi.spyOn(require('child_process'), 'execFileSync').mockImplementation((cmd, args, opts) => {
+      if (cmd === 'pgrep' && args[0] === '-f') return '12345\n67890\n';
+      return '';
+    });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {});
+    try {
+      wa.killAllOrphanBrowsers();
+      expect(execSpy).toHaveBeenCalledWith('pgrep', ['-f', 'session-travel-'], expect.objectContaining({ encoding: 'utf8' }));
+      expect(killSpy).toHaveBeenCalledWith(12345, 'SIGKILL');
+      expect(killSpy).toHaveBeenCalledWith(67890, 'SIGKILL');
+      expect(killSpy).not.toHaveBeenCalledWith(process.pid, 'SIGKILL');
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      execSpy.mockRestore();
+      killSpy.mockRestore();
+    }
+  });
+  test('killAllOrphanBrowsers ignores pgrep exit 1 (no matches)', () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const { execFileSync } = require('child_process');
+    const execSpy = vi.spyOn(require('child_process'), 'execFileSync').mockImplementation((cmd, args, opts) => {
+      const err = new Error('No match');
+      err.status = 1;
+      throw err;
+    });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {});
+    try {
+      expect(() => wa.killAllOrphanBrowsers()).not.toThrow();
+      expect(killSpy).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      execSpy.mockRestore();
+      killSpy.mockRestore();
+    }
+  });
 });
 
 describe('phone helpers', () => {

@@ -16,6 +16,11 @@
   --warning-color: #f59e0b;
   --danger-color: #ef4444;
 
+  /* Info callout surface (pricing preview banner, POS hints). Dark default:
+     translucent blue tint that keeps white --text-primary readable. */
+  --info-bg: rgba(59, 130, 246, 0.12);
+  --info-border: rgba(59, 130, 246, 0.35);
+
   --border-color: rgba(255, 255, 255, 0.08);
 
   --font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -74,6 +79,10 @@
   --warning-color: #d97706;
   --danger-color: #dc2626;
 
+  /* Light theme: pale blue info surface with dark --text-primary. */
+  --info-bg: #eef6ff;
+  --info-border: #bcd7f0;
+
   --border-color: rgba(0, 0, 0, 0.1);
 
   --glass-bg: rgba(255, 255, 255, 0.5);
@@ -123,6 +132,10 @@
   --success-color: #10b981;
   --warning-color: #f59e0b;
   --danger-color: #ef4444;
+
+  /* Dark theme: translucent blue tint keeps white --text-primary readable. */
+  --info-bg: rgba(59, 130, 246, 0.12);
+  --info-border: rgba(59, 130, 246, 0.35);
 
   --border-color: rgba(255, 255, 255, 0.1);
 

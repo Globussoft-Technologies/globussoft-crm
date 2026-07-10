@@ -1,0 +1,206 @@
+name: Memory leak detection
+
+# Detects runaway memory growth in the backend server boot path and
+# frontend build/test runs before it reaches production. Created after
+# PR #1211 deployed to crm.globusdemos.com and the backend RSS grew to
+# 7.8 GB within two minutes.
+#
+# The backend job boots the real server against a freshly-seeded MySQL
+# CI database (same setup as api_tests), samples RSS/heap every 10 s
+# for 3 min, and fails if memory more than doubles or crosses 1.5 GB.
+# A Node heap profile is always uploaded as an artifact for offline
+# analysis in Chrome DevTools.
+#
+# The frontend job runs the vitest suite with a tight heap ceiling so
+# a component-level leak surfaces as an OOM failure.
+
+on:
+  push:
+    branches: [main, staging_crm]
+  pull_request:
+    branches: [main, staging_crm]
+  workflow_dispatch:
+
+concurrency:
+  group: memory-leak-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── BACKEND: boot the server and watch RSS/heap growth ─────────────────
+  backend_memory_regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pw
+          MYSQL_DATABASE: gbscrm_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -pci_root_pw"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
+    env:
+      DATABASE_URL: "mysql://root:ci_root_pw@127.0.0.1:3306/gbscrm_ci"
+      JWT_SECRET: "ci_jwt_secret_for_memory_test_only"
+      DISABLE_CRONS: "1"
+      NODE_ENV: "test"
+      PORT: "5000"
+      WELLNESS_FIELD_KEY: "ci0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab"
+      WELLNESS_DEMO_OTP: "1234"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Wait for MySQL ready
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -uroot -pci_root_pw --silent; then
+              echo "MySQL ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Backend — install + schema + seed
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx prisma generate
+          npx prisma db push --skip-generate --accept-data-loss
+          node prisma/seed.js
+
+      - name: Boot server and sample memory for 3 min
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          mkdir -p heap_profiles
+          # Start the server with continuous heap profiling.
+          # Heap profiles are written to heap_profiles/ on exit.
+          node --heap-prof --heap-prof-dir=heap_profiles --heap-prof-interval=1048576 server.js > server.log 2>&1 &
+          SERVER_PID=$!
+          echo "server pid=$SERVER_PID"
+
+          # Wait for health endpoint
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 2 http://127.0.0.1:5000/api/health >/dev/null 2>&1; then
+              echo "server healthy after ${i}s"
+              break
+            fi
+            if ! kill -0 $SERVER_PID 2>/dev/null; then
+              echo "server died before becoming healthy"
+              cat server.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Sample memory every 10 s for 180 s (3 min).
+          # ps -o rss= returns KB; convert to MB for readability.
+          echo "time_s,rss_mb,heap_mb" > memory_samples.csv
+          BASELINE_RSS_KB=0
+          MAX_RSS_KB=0
+          for t in $(seq 0 10 180); do
+            RSS_KB=$(ps -o rss= -p $SERVER_PID | awk '{print $1}')
+            HEAP_MB=$(node -e "const v8=require('v8'); console.log(Math.round(v8.getHeapStatistics().used_heap_size/1024/1024))" 2>/dev/null || echo 0)
+            echo "${t},${RSS_KB},${HEAP_MB}" >> memory_samples.csv
+            echo "[${t}s] RSS=${RSS_KB}kb HeapUsed=${HEAP_MB}mb"
+            if [ "$BASELINE_RSS_KB" -eq 0 ] && [ "$t" -ge 20 ]; then
+              BASELINE_RSS_KB=$RSS_KB
+            fi
+            if [ "$RSS_KB" -gt "$MAX_RSS_KB" ]; then
+              MAX_RSS_KB=$RSS_KB
+            fi
+            sleep 10
+          done
+
+          # Stop the server cleanly so heap profiles flush.
+          kill $SERVER_PID || true
+          wait $SERVER_PID 2>/dev/null || true
+
+          # Compute thresholds.
+          BASELINE_MB=$((BASELINE_RSS_KB / 1024))
+          MAX_MB=$((MAX_RSS_KB / 1024))
+          # Fail if max RSS > 1.5 GB or more than double the 20-second baseline.
+          FAIL=0
+          if [ "$MAX_MB" -gt 1536 ]; then
+            echo "::error::Memory regression detected: max RSS ${MAX_MB}MB exceeds 1.5 GB ceiling"
+            FAIL=1
+          fi
+          if [ "$BASELINE_MB" -gt 0 ]; then
+            LIMIT_MB=$((BASELINE_MB * 2))
+            if [ "$MAX_MB" -gt "$LIMIT_MB" ]; then
+              echo "::error::Memory regression detected: max RSS ${MAX_MB}MB more than doubled baseline ${BASELINE_MB}MB"
+              FAIL=1
+            fi
+          fi
+
+          echo ""
+          echo "=== MEMORY SUMMARY ==="
+          echo "Baseline RSS (20s): ${BASELINE_MB} MB"
+          echo "Max RSS:            ${MAX_MB} MB"
+          cat memory_samples.csv
+
+          if [ "$FAIL" -eq 1 ]; then
+            echo "::error::Backend memory regression test failed. Download the heap profile artifact and open it in Chrome DevTools (Performance -> Memory -> Load)."
+            exit 1
+          fi
+          echo "::notice::Backend memory stable: baseline=${BASELINE_MB}MB max=${MAX_MB}MB"
+
+      - name: Upload server log + memory samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-memory-samples
+          path: |
+            backend/memory_samples.csv
+            backend/server.log
+
+      - name: Upload heap profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-heap-profile
+          path: backend/heap_profiles/*
+
+  # ── FRONTEND: run vitest under a tight heap ceiling ────────────────────
+  frontend_memory_regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend — install and test with heap ceiling
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          # Run vitest with a 1.5 GB old-space ceiling. A component/test
+          # leak that grows unbounded will hit this and crash the runner.
+          node --max-old-space-size=1536 ./node_modules/.bin/vitest run
+          echo "::notice::Frontend vitest completed within 1.5 GB heap ceiling"
+
+      - name: Build frontend (also exercises transform memory)
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          node --max-old-space-size=1536 ./node_modules/.bin/vite build --logLevel=error
+          echo "::notice::Frontend vite build completed within 1.5 GB heap ceiling"

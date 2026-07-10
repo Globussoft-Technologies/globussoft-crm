@@ -204,6 +204,20 @@ function originCheck(req, res, next) {
     });
   }
 
+  // GlobusCRM browser extension (Gmail/WhatsApp Web lead capture, 2026-07-09)
+  // — chrome-extension://<32-char-id> origins. The id is regenerated on
+  // every unpacked reload/reinstall and will be a THIRD id again once
+  // published to the Chrome Web Store, so an exact-match allowlist entry
+  // breaks the moment anyone reloads it. This route's real trust boundary
+  // is verifyToken's JWT bearer check (backend/routes/leads_extension_capture.js),
+  // not the Origin header — Origin here is just the CSRF defense-in-depth
+  // this middleware provides for browser-driven state changes, and a
+  // chrome-extension: page is not a web origin an attacker's site can
+  // forge (extension pages don't load third-party HTML into this context).
+  if (claimedOrigin.startsWith("chrome-extension://")) {
+    return next();
+  }
+
   if (!allowedSet.has(claimedOrigin)) {
     return res.status(403).json({
       error: "Request origin not in allowlist",

@@ -244,6 +244,7 @@ export const fetchApi = async (url, options = {}) => {
     // toast at this level means even pages that don't .catch() see feedback.
     const errData = await response.json().catch(() => ({}));
     const serverMsg = errData.error || errData.message;
+    const errorCode = errData.code || `HTTP_${response.status}`;
     let userMsg;
     if (response.status === 403) {
       // RBAC errors return a technical "requires module.action" string that's
@@ -259,15 +260,31 @@ export const fetchApi = async (url, options = {}) => {
     } else if (response.status === 404) {
       userMsg = serverMsg || 'Not found.';
     } else if (response.status >= 500) {
-      userMsg = serverMsg || 'Server error — please try again.';
+      // Never surface the raw server error text for a 5xx — it can be a raw
+      // Prisma/driver message (column names, table names, connection
+      // strings) that leaks internals to whoever's looking at the screen.
+      // The error CODE is safe (an enum-like string, no data) and is what a
+      // developer needs to correlate this toast with the matching backend
+      // log line — so it rides along in small print / the console, not the
+      // headline message.
+      userMsg = 'Something went wrong on our end. Please try again — if it keeps happening, contact support.';
+      console.error(`[api] ${response.status} ${errorCode} on ${url}:`, serverMsg || '(no server message)');
     } else {
       userMsg = serverMsg || `Request failed (${response.status}).`;
     }
 
-    if (!silent && _globalNotify) _globalNotify.error(userMsg);
+    if (!silent && _globalNotify) {
+      // Append the error code in the toast for 5xx so a dev (or a user
+      // screenshotting for support) can see it without opening DevTools —
+      // it's a stable enum string, safe to show, and short enough to not
+      // clutter the toast.
+      const toastMsg = response.status >= 500 ? `${userMsg} (${errorCode})` : userMsg;
+      _globalNotify.error(toastMsg);
+    }
     const err = new Error(userMsg);
     err.status = response.status;
     err.code = errData.code || null;
+    err.serverMessage = serverMsg || null;
     err.data = errData;
     throw err;
   }

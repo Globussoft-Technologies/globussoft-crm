@@ -86,7 +86,9 @@ const waGuard = require("../lib/whatsappSessionGuard");
 // Human-friendly label for the "controlled from another device" warning:
 // the operator's name/email + a coarse browser/OS hint from the user-agent.
 function deviceLabelFor(req) {
-  const who = (req.user && (req.user.name || req.user.email)) || `user#${req.user && req.user.userId}`;
+  const who =
+    (req.user && (req.user.name || req.user.email)) ||
+    `user#${req.user && req.user.userId}`;
   const ua = String(req.headers["user-agent"] || "");
   let browser = "browser";
   if (/edg/i.test(ua)) browser = "Edge";
@@ -94,6 +96,7 @@ function deviceLabelFor(req) {
   else if (/firefox|fxios/i.test(ua)) browser = "Firefox";
   else if (/safari/i.test(ua)) browser = "Safari";
   let os = "";
+
   if (/windows/i.test(ua)) os = "Windows";
   else if (/android/i.test(ua)) os = "Android";
   else if (/iphone|ipad|ios/i.test(ua)) os = "iOS";
@@ -132,11 +135,7 @@ async function matchContact(tenantId, phoneE164) {
     return await prisma.contact.findFirst({
       where: {
         tenantId,
-        OR: [
-          { phone: phoneE164 },
-          { phone: digits },
-          { phone: `+${digits}` },
-        ],
+        OR: [{ phone: phoneE164 }, { phone: digits }, { phone: `+${digits}` }],
       },
       select: { id: true, name: true },
     });
@@ -151,9 +150,14 @@ async function matchContact(tenantId, phoneE164) {
 // the chat's reaction pills render unchanged. Empty emoji = removal.
 async function applyReaction({ tenantId, phone, item, io }) {
   try {
-    const targetRef = item.replyContextId || item.contextId || item.reactionMessageId
-      || (item.reaction && item.reaction.message_id) || null;
-    const emoji = (item.reaction && item.reaction.emoji) || item.text || item.emoji || "";
+    const targetRef =
+      item.replyContextId ||
+      item.contextId ||
+      item.reactionMessageId ||
+      (item.reaction && item.reaction.message_id) ||
+      null;
+    const emoji =
+      (item.reaction && item.reaction.emoji) || item.text || item.emoji || "";
     if (!targetRef) return;
     const target = await prisma.whatsAppMessage.findFirst({
       where: { tenantId, providerMsgId: String(targetRef) },
@@ -161,9 +165,18 @@ async function applyReaction({ tenantId, phone, item, io }) {
     });
     if (!target) return;
     let reactions = [];
-    try { reactions = JSON.parse(target.reactionsJson || "[]"); } catch { reactions = []; }
+    try {
+      reactions = JSON.parse(target.reactionsJson || "[]");
+    } catch {
+      reactions = [];
+    }
     reactions = reactions.filter((r) => r.fromPhone !== phone);
-    if (emoji) reactions.push({ emoji, fromPhone: phone, addedAt: new Date().toISOString() });
+    if (emoji)
+      reactions.push({
+        emoji,
+        fromPhone: phone,
+        addedAt: new Date().toISOString(),
+      });
     await prisma.whatsAppMessage.update({
       where: { id: target.id },
       data: { reactionsJson: JSON.stringify(reactions) },
@@ -178,7 +191,9 @@ async function applyReaction({ tenantId, phone, item, io }) {
       });
     }
   } catch (e) {
-    console.error(`[travel-whatsapp] reaction apply failed (non-fatal): ${e.message}`);
+    console.error(
+      `[travel-whatsapp] reaction apply failed (non-fatal): ${e.message}`,
+    );
   }
 }
 
@@ -198,9 +213,14 @@ router.get("/whatsapp/media", async (req, res) => {
     }
     const upstream = await watiClient.getMediaResponse(fileName);
     if (!upstream) {
-      return res.status(404).json({ error: "media unavailable (stub mode or not found)" });
+      return res
+        .status(404)
+        .json({ error: "media unavailable (stub mode or not found)" });
     }
-    res.set("Content-Type", upstream.headers.get("content-type") || "application/octet-stream");
+    res.set(
+      "Content-Type",
+      upstream.headers.get("content-type") || "application/octet-stream",
+    );
     res.set("Cache-Control", "private, max-age=86400");
     const buf = Buffer.from(await upstream.arrayBuffer());
     res.send(buf);
@@ -262,7 +282,9 @@ router.post(
     try {
       // { reset:true } wipes any saved/stale session + kills a stuck Chromium
       // before relaunching — the escape hatch for a wedged "Generating QR…".
-      const reset = Boolean(req.body && (req.body.reset === true || req.body.reset === "true"));
+      const reset = Boolean(
+        req.body && (req.body.reset === true || req.body.reset === "true"),
+      );
 
       // ── Device-session gate (per-user device lock + per-tenant relink
       // cooldown). Runs BEFORE any purge/connect so a blocked attempt neither
@@ -302,7 +324,12 @@ router.post(
       res.json({ ...st, phone: maskNumber(st.phone) });
     } catch (e) {
       console.error("[travel-whatsapp] connect error:", e.message);
-      res.status(500).json({ error: "Failed to start WhatsApp Web session", code: "WA_CONNECT_FAILED" });
+      res
+        .status(500)
+        .json({
+          error: "Failed to start WhatsApp Web session",
+          code: "WA_CONNECT_FAILED",
+        });
     }
   },
 );
@@ -314,7 +341,13 @@ router.get(
   requireTravelTenant,
   async (req, res) => {
     const st = watiClient.getState(req.travelTenant.id);
-    res.json({ state: st.state, connected: st.connected, qr: st.qr || null, phone: maskNumber(st.phone), lastError: st.lastError || null });
+    res.json({
+      state: st.state,
+      connected: st.connected,
+      qr: st.qr || null,
+      phone: maskNumber(st.phone),
+      lastError: st.lastError || null,
+    });
   },
 );
 
@@ -328,11 +361,17 @@ router.post(
   requireTravelTenant,
   async (req, res) => {
     try {
-      const out = await waGuard.heartbeat(req.travelTenant.id, req.user.userId, req.body && req.body.deviceId);
+      const out = await waGuard.heartbeat(
+        req.travelTenant.id,
+        req.user.userId,
+        req.body && req.body.deviceId,
+      );
       res.json(out);
     } catch (e) {
       console.error("[travel-whatsapp] heartbeat error:", e.message);
-      res.status(500).json({ error: "Heartbeat failed", code: "WA_HEARTBEAT_FAILED" });
+      res
+        .status(500)
+        .json({ error: "Heartbeat failed", code: "WA_HEARTBEAT_FAILED" });
     }
   },
 );
@@ -348,12 +387,29 @@ router.post(
 function notReadyResponse(tenantId) {
   const st = watiClient.getState(tenantId) || {};
   if (st.state === "INITIALIZING" || st.state === "AUTHENTICATED") {
-    return { status: 409, body: { error: "WhatsApp is reconnecting after a restart — please wait a few seconds and try again.", code: "WA_RECONNECTING" } };
+    return {
+      status: 409,
+      body: {
+        error:
+          "WhatsApp is reconnecting after a restart — please wait a few seconds and try again.",
+        code: "WA_RECONNECTING",
+      },
+    };
   }
   if (st.state === "QR" || st.qr) {
-    return { status: 409, body: { error: "Scan the WhatsApp QR to connect.", code: "WA_NEEDS_QR" } };
+    return {
+      status: 409,
+      body: { error: "Scan the WhatsApp QR to connect.", code: "WA_NEEDS_QR" },
+    };
   }
-  return { status: 409, body: { error: "WhatsApp is not connected — open the WhatsApp panel and scan the QR.", code: "WA_NOT_CONNECTED" } };
+  return {
+    status: 409,
+    body: {
+      error:
+        "WhatsApp is not connected — open the WhatsApp panel and scan the QR.",
+      code: "WA_NOT_CONNECTED",
+    },
+  };
 }
 
 router.post(
@@ -371,7 +427,9 @@ router.post(
       res.json(result);
     } catch (e) {
       console.error("[travel-whatsapp] import error:", e.message);
-      res.status(500).json({ error: "Failed to import chats", code: "WA_IMPORT_FAILED" });
+      res
+        .status(500)
+        .json({ error: "Failed to import chats", code: "WA_IMPORT_FAILED" });
     }
   },
 );
@@ -389,7 +447,8 @@ router.post(
   async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
+      if (!Number.isFinite(id))
+        return res.status(400).json({ error: "invalid id" });
       const thread = await prisma.whatsAppThread.findFirst({
         where: { id, tenantId: req.travelTenant.id },
         select: { id: true },
@@ -399,11 +458,19 @@ router.post(
         const nr = notReadyResponse(req.travelTenant.id);
         return res.status(nr.status).json(nr.body);
       }
-      const result = await watiClient.backfillThreadHistory(req.travelTenant.id, id);
+      const result = await watiClient.backfillThreadHistory(
+        req.travelTenant.id,
+        id,
+      );
       res.json(result);
     } catch (e) {
       console.error("[travel-whatsapp] backfill-history error:", e.message);
-      res.status(500).json({ error: "Failed to backfill history", code: "WA_BACKFILL_FAILED" });
+      res
+        .status(500)
+        .json({
+          error: "Failed to backfill history",
+          code: "WA_BACKFILL_FAILED",
+        });
     }
   },
 );
@@ -417,18 +484,31 @@ router.post(
   verifyRole(["ADMIN"]),
   async (req, res) => {
     try {
-      const logout = (req.body && (req.body.logout === true || req.body.logout === "true")) || false;
+      const logout =
+        (req.body &&
+          (req.body.logout === true || req.body.logout === "true")) ||
+        false;
       const st = await watiClient.disconnect(req.travelTenant.id, { logout });
       // Release this user's control claim + stamp logoutAt (starts the tenant
       // relink cooldown). Best-effort — never blocks the disconnect response.
-      await waGuard.release(req.travelTenant.id, req.user.userId, req.body && req.body.deviceId, { logout });
+      await waGuard.release(
+        req.travelTenant.id,
+        req.user.userId,
+        req.body && req.body.deviceId,
+        { logout },
+      );
       // The linked account is a live mirror — disconnecting clears the imported
       // chats so a fresh connect re-fetches from scratch (no stale threads).
       const purged = await watiClient.purgeChats(req.travelTenant.id);
       res.json({ ...st, purged });
     } catch (e) {
       console.error("[travel-whatsapp] disconnect error:", e.message);
-      res.status(500).json({ error: "Failed to disconnect WhatsApp Web session", code: "WA_DISCONNECT_FAILED" });
+      res
+        .status(500)
+        .json({
+          error: "Failed to disconnect WhatsApp Web session",
+          code: "WA_DISCONNECT_FAILED",
+        });
     }
   },
 );
@@ -450,7 +530,12 @@ router.get(
       res.json(me);
     } catch (e) {
       console.error("[travel-whatsapp] me error:", e.message);
-      res.status(500).json({ error: "Failed to load WhatsApp profile", code: "WA_ME_FAILED" });
+      res
+        .status(500)
+        .json({
+          error: "Failed to load WhatsApp profile",
+          code: "WA_ME_FAILED",
+        });
     }
   },
 );
@@ -462,14 +547,23 @@ router.put(
   verifyRole(["ADMIN"]),
   async (req, res) => {
     try {
-      const name = typeof req.body?.name === "string" ? req.body.name : undefined;
-      const about = typeof req.body?.about === "string" ? req.body.about : undefined;
-      const out = await watiClient.setOwnProfile(req.travelTenant.id, { name, about });
+      const name =
+        typeof req.body?.name === "string" ? req.body.name : undefined;
+      const about =
+        typeof req.body?.about === "string" ? req.body.about : undefined;
+      const out = await watiClient.setOwnProfile(req.travelTenant.id, {
+        name,
+        about,
+      });
       res.json(out);
     } catch (e) {
       console.error("[travel-whatsapp] me update error:", e.message);
-      res.status(e.message === "WhatsApp not connected" ? 409 : 500)
-        .json({ error: e.message || "Failed to update WhatsApp profile", code: "WA_ME_UPDATE_FAILED" });
+      res
+        .status(e.message === "WhatsApp not connected" ? 409 : 500)
+        .json({
+          error: e.message || "Failed to update WhatsApp profile",
+          code: "WA_ME_UPDATE_FAILED",
+        });
     }
   },
 );
@@ -483,14 +577,24 @@ router.post(
   async (req, res) => {
     try {
       if (!req.file || !req.file.buffer || !req.file.buffer.length) {
-        return res.status(400).json({ error: "image file is required", code: "MISSING_FILE" });
+        return res
+          .status(400)
+          .json({ error: "image file is required", code: "MISSING_FILE" });
       }
-      const out = await watiClient.setOwnProfilePicture(req.travelTenant.id, req.file.buffer, req.file.mimetype);
+      const out = await watiClient.setOwnProfilePicture(
+        req.travelTenant.id,
+        req.file.buffer,
+        req.file.mimetype,
+      );
       res.json(out);
     } catch (e) {
       console.error("[travel-whatsapp] me avatar error:", e.message);
-      res.status(e.message === "WhatsApp not connected" ? 409 : 500)
-        .json({ error: e.message || "Failed to set profile picture", code: "WA_ME_AVATAR_FAILED" });
+      res
+        .status(e.message === "WhatsApp not connected" ? 409 : 500)
+        .json({
+          error: e.message || "Failed to set profile picture",
+          code: "WA_ME_AVATAR_FAILED",
+        });
     }
   },
 );
@@ -506,8 +610,12 @@ router.delete(
       res.json(out);
     } catch (e) {
       console.error("[travel-whatsapp] me avatar delete error:", e.message);
-      res.status(e.message === "WhatsApp not connected" ? 409 : 500)
-        .json({ error: e.message || "Failed to remove profile picture", code: "WA_ME_AVATAR_DEL_FAILED" });
+      res
+        .status(e.message === "WhatsApp not connected" ? 409 : 500)
+        .json({
+          error: e.message || "Failed to remove profile picture",
+          code: "WA_ME_AVATAR_DEL_FAILED",
+        });
     }
   },
 );
@@ -537,7 +645,9 @@ async function resolveTemplate(templateName) {
     }
     return _tplCache.byName.get(templateName) || null;
   } catch (e) {
-    console.error(`[travel-whatsapp] template resolve failed (positional fallback): ${e.message}`);
+    console.error(
+      `[travel-whatsapp] template resolve failed (positional fallback): ${e.message}`,
+    );
     return null;
   }
 }
@@ -573,8 +683,13 @@ const MEDIA_MIME = {
 function extractMedia(m) {
   const type = String(m.type || "").toLowerCase();
   if (!type || type === "text" || type === "reaction") return null;
-  const pathCandidate = [m.data, m.mediaPath, m.filePath, m.fileName, m.finalFileName]
-    .find((v) => typeof v === "string" && v.length > 3 && /[/.]/.test(v));
+  const pathCandidate = [
+    m.data,
+    m.mediaPath,
+    m.filePath,
+    m.fileName,
+    m.finalFileName,
+  ].find((v) => typeof v === "string" && v.length > 3 && /[/.]/.test(v));
   if (!pathCandidate && !MEDIA_MIME[type]) return null;
   return {
     metaType: type,
@@ -594,7 +709,9 @@ let s3Service = null;
 try {
   s3Service = require("../services/s3Service");
 } catch {
-  console.warn("[travel-whatsapp] s3Service unavailable — Wati media will serve via the streaming proxy");
+  console.warn(
+    "[travel-whatsapp] s3Service unavailable — Wati media will serve via the streaming proxy",
+  );
 }
 
 async function resolveInboundMediaUrl({ tenantId, fileName, mediaType }) {
@@ -605,11 +722,21 @@ async function resolveInboundMediaUrl({ tenantId, fileName, mediaType }) {
     const upstream = await watiClient.getMediaResponse(fileName);
     if (!upstream) return proxyUrl;
     const bytes = Buffer.from(await upstream.arrayBuffer());
-    const mime = upstream.headers.get("content-type") || mediaType || "application/octet-stream";
+    const mime =
+      upstream.headers.get("content-type") ||
+      mediaType ||
+      "application/octet-stream";
     const baseName = fileName.split("/").pop() || "wati-media";
-    return await s3Service.uploadFile(bytes, baseName, mime, `whatsapp/${tenantId}/wati-media`);
+    return await s3Service.uploadFile(
+      bytes,
+      baseName,
+      mime,
+      `whatsapp/${tenantId}/wati-media`,
+    );
   } catch (e) {
-    console.error(`[travel-whatsapp] media S3 persist failed (proxy fallback): ${e.message}`);
+    console.error(
+      `[travel-whatsapp] media S3 persist failed (proxy fallback): ${e.message}`,
+    );
     return proxyUrl;
   }
 }
@@ -627,18 +754,25 @@ router.get(
   async (_req, res) => {
     try {
       const out = await watiClient.getMessageTemplates();
-      const templates = (out.templates || []).map((t) => ({
-        // Wati names the template `elementName`; older payloads use `name`.
-        name: t.elementName || t.name || "",
-        body: t.body || t.bodyOriginal || "",
-        status: String(t.status || "").toUpperCase(),
-        language: (t.language && (t.language.value || t.language)) || "en",
-        category: t.category || null,
-      })).filter((t) => t.name);
+      const templates = (out.templates || [])
+        .map((t) => ({
+          // Wati names the template `elementName`; older payloads use `name`.
+          name: t.elementName || t.name || "",
+          body: t.body || t.bodyOriginal || "",
+          status: String(t.status || "").toUpperCase(),
+          language: (t.language && (t.language.value || t.language)) || "en",
+          category: t.category || null,
+        }))
+        .filter((t) => t.name);
       res.json({ templates, stub: out.stub === true });
     } catch (e) {
       console.error("[travel-whatsapp] templates error:", e.message);
-      res.status(502).json({ error: "Failed to load Wati templates", code: "WATI_TEMPLATES_FAILED" });
+      res
+        .status(502)
+        .json({
+          error: "Failed to load Wati templates",
+          code: "WATI_TEMPLATES_FAILED",
+        });
     }
   },
 );
@@ -655,11 +789,18 @@ router.post(
       const { to, body, templateName, parameters } = req.body || {};
       const phone = threadPhone(to);
       if (!phone) {
-        return res.status(400).json({ error: "to (phone) is required", code: "MISSING_TO" });
+        return res
+          .status(400)
+          .json({ error: "to (phone) is required", code: "MISSING_TO" });
       }
       const text = typeof body === "string" ? body.trim() : "";
       if (!templateName && !text) {
-        return res.status(400).json({ error: "body or templateName required", code: "MISSING_BODY" });
+        return res
+          .status(400)
+          .json({
+            error: "body or templateName required",
+            code: "MISSING_BODY",
+          });
       }
 
       // Opt-out gate — same semantics (and code) as the Meta-track send so
@@ -670,7 +811,8 @@ router.post(
       });
       if (optOut) {
         return res.status(422).json({
-          error: "Contact has opted out of WhatsApp messages (CONTACT_OPTED_OUT)",
+          error:
+            "Contact has opted out of WhatsApp messages (CONTACT_OPTED_OUT)",
           code: "CONTACT_OPTED_OUT",
         });
       }
@@ -723,7 +865,9 @@ router.post(
         // Persist the FULL rendered message (variables substituted) so the
         // chat bubble shows what the recipient actually received — not a
         // "[template] name" stub.
-        const rendered = tpl ? renderTemplateBody(tpl.body, paramNames, values) : null;
+        const rendered = tpl
+          ? renderTemplateBody(tpl.body, paramNames, values)
+          : null;
         result = await watiClient.sendTemplateMessage({
           ...common,
           templateName: String(templateName),
@@ -751,7 +895,12 @@ router.post(
       });
     } catch (e) {
       console.error("[travel-whatsapp] send error:", e.message);
-      return res.status(500).json({ error: "Failed to send WhatsApp message", code: "SEND_FAILED" });
+      return res
+        .status(500)
+        .json({
+          error: "Failed to send WhatsApp message",
+          code: "SEND_FAILED",
+        });
     }
   },
 );
@@ -763,9 +912,16 @@ async function persistOutboundMedia({ tenantId, buffer, filename, mimeType }) {
   const safeName = `${crypto.randomUUID()}-${String(filename || "file").replace(/[^\w.-]/g, "_")}`;
   if (s3Service && process.env.AWS_S3_BUCKET_NAME) {
     try {
-      return await s3Service.uploadFile(buffer, safeName, mimeType, `whatsapp/${tenantId}/wati-media`);
+      return await s3Service.uploadFile(
+        buffer,
+        safeName,
+        mimeType,
+        `whatsapp/${tenantId}/wati-media`,
+      );
     } catch (e) {
-      console.error(`[travel-whatsapp] outbound media S3 persist failed (local fallback): ${e.message}`);
+      console.error(
+        `[travel-whatsapp] outbound media S3 persist failed (local fallback): ${e.message}`,
+      );
     }
   }
   try {
@@ -774,7 +930,9 @@ async function persistOutboundMedia({ tenantId, buffer, filename, mimeType }) {
     fs.writeFileSync(path.join(dir, safeName), buffer);
     return `/uploads/wati-media/${safeName}`;
   } catch (e) {
-    console.error(`[travel-whatsapp] outbound media local persist failed: ${e.message}`);
+    console.error(
+      `[travel-whatsapp] outbound media local persist failed: ${e.message}`,
+    );
     return null;
   }
 }
@@ -795,12 +953,17 @@ router.post(
     try {
       const phone = threadPhone(req.body && req.body.to);
       if (!phone) {
-        return res.status(400).json({ error: "to (phone) is required", code: "MISSING_TO" });
+        return res
+          .status(400)
+          .json({ error: "to (phone) is required", code: "MISSING_TO" });
       }
       if (!req.file || !req.file.buffer || !req.file.buffer.length) {
-        return res.status(400).json({ error: "file is required", code: "MISSING_FILE" });
+        return res
+          .status(400)
+          .json({ error: "file is required", code: "MISSING_FILE" });
       }
-      const caption = typeof req.body.caption === "string" ? req.body.caption.trim() : "";
+      const caption =
+        typeof req.body.caption === "string" ? req.body.caption.trim() : "";
 
       const optOut = await prisma.whatsAppOptOut.findFirst({
         where: { tenantId: req.travelTenant.id, contactPhone: phone },
@@ -808,14 +971,20 @@ router.post(
       });
       if (optOut) {
         return res.status(422).json({
-          error: "Contact has opted out of WhatsApp messages (CONTACT_OPTED_OUT)",
+          error:
+            "Contact has opted out of WhatsApp messages (CONTACT_OPTED_OUT)",
           code: "CONTACT_OPTED_OUT",
         });
       }
 
       const contact = await matchContact(req.travelTenant.id, phone);
       const thread = await prisma.whatsAppThread.upsert({
-        where: { tenantId_contactPhone: { tenantId: req.travelTenant.id, contactPhone: phone } },
+        where: {
+          tenantId_contactPhone: {
+            tenantId: req.travelTenant.id,
+            contactPhone: phone,
+          },
+        },
         create: {
           tenantId: req.travelTenant.id,
           contactPhone: phone,
@@ -856,8 +1025,10 @@ router.post(
         // surfacing the cryptic raw line.
         const friendly = /failed to send file/i.test(result.error || "")
           ? "Wati refused the file upload — this Wati plan/trial doesn't allow media sends via the API (text messages still work). Try sending media from the Wati dashboard, or upgrade the Wati plan."
-          : (result.error || "Wati media send failed");
-        return res.status(502).json({ error: friendly, code: "WATI_SEND_FAILED" });
+          : result.error || "Wati media send failed";
+        return res
+          .status(502)
+          .json({ error: friendly, code: "WATI_SEND_FAILED" });
       }
       return res.status(201).json({
         success: true,
@@ -869,7 +1040,9 @@ router.post(
       });
     } catch (e) {
       console.error("[travel-whatsapp] send-media error:", e.message);
-      return res.status(500).json({ error: "Failed to send media", code: "SEND_MEDIA_FAILED" });
+      return res
+        .status(500)
+        .json({ error: "Failed to send media", code: "SEND_MEDIA_FAILED" });
     }
   },
 );
@@ -1149,12 +1322,16 @@ router.post("/whatsapp/webhook", async (req, res) => {
         return res.status(401).json({ error: "invalid webhook token" });
       }
     } else {
-      console.warn("[travel-whatsapp] webhook accepted WITHOUT token guard — set WATI_WEBHOOK_TOKEN for production");
+      console.warn(
+        "[travel-whatsapp] webhook accepted WITHOUT token guard — set WATI_WEBHOOK_TOKEN for production",
+      );
     }
 
     const tenantId = await resolveWebhookTenant(req);
     if (!tenantId) {
-      console.error("[travel-whatsapp] webhook: no travel tenant resolvable — event dropped");
+      console.error(
+        "[travel-whatsapp] webhook: no travel tenant resolvable — event dropped",
+      );
       return res.json({ received: true, dropped: true });
     }
 
@@ -1167,18 +1344,33 @@ router.post("/whatsapp/webhook", async (req, res) => {
     // liberally on the verb. Failure wins the tie-break: Meta rejections
     // (e.g. "(#131037) display name approval") must flip the row to FAILED
     // with the reason, or the operator sees a grey SENT tick forever.
-    if (/delivered/i.test(eventType) || /read/i.test(eventType) || /fail/i.test(eventType)) {
+    if (
+      /delivered/i.test(eventType) ||
+      /read/i.test(eventType) ||
+      /fail/i.test(eventType)
+    ) {
       const providerMsgId = p.whatsappMessageId || p.id || null;
       const newStatus = /fail/i.test(eventType)
         ? "FAILED"
-        : /read/i.test(eventType) ? "READ" : "DELIVERED";
+        : /read/i.test(eventType)
+          ? "READ"
+          : "DELIVERED";
       if (providerMsgId) {
-        const failDetail = newStatus === "FAILED"
-          ? String(p.failedDetail || p.failureReason || p.errorMessage || "send failed at provider")
-          : null;
+        const failDetail =
+          newStatus === "FAILED"
+            ? String(
+                p.failedDetail ||
+                  p.failureReason ||
+                  p.errorMessage ||
+                  "send failed at provider",
+              )
+            : null;
         const updated = await prisma.whatsAppMessage.updateMany({
           where: { tenantId, providerMsgId: String(providerMsgId) },
-          data: { status: newStatus, ...(failDetail ? { errorMessage: failDetail } : {}) },
+          data: {
+            status: newStatus,
+            ...(failDetail ? { errorMessage: failDetail } : {}),
+          },
         });
         if (updated.count > 0 && req.io) {
           req.io.to(`tenant:${tenantId}`).emit("whatsapp:status", {
@@ -1193,10 +1385,19 @@ router.post("/whatsapp/webhook", async (req, res) => {
     }
 
     // ── Inbound reaction (no own bubble — attaches to the target) ──
-    if (String(p.type || "").toLowerCase() === "reaction" && p.owner !== true && (p.waId || p.from)) {
+    if (
+      String(p.type || "").toLowerCase() === "reaction" &&
+      p.owner !== true &&
+      (p.waId || p.from)
+    ) {
       const reactPhone = threadPhone(p.waId || p.from);
       if (reactPhone) {
-        await applyReaction({ tenantId, phone: reactPhone, item: p, io: req.io });
+        await applyReaction({
+          tenantId,
+          phone: reactPhone,
+          item: p,
+          io: req.io,
+        });
       }
       return res.json({ received: true, reaction: true });
     }
@@ -1204,16 +1405,25 @@ router.post("/whatsapp/webhook", async (req, res) => {
     // ── Inbound customer message ─────────────────────────────────
     // owner === true marks operator-sent echoes (sessionMessageSent /
     // templateMessageSent) — we already persisted those at send time.
-    const isInbound = eventType === "message" && p.owner !== true && (p.waId || p.from);
+    const isInbound =
+      eventType === "message" && p.owner !== true && (p.waId || p.from);
     if (!isInbound) {
-      return res.json({ received: true, ignored: eventType || "(no eventType)" });
+      return res.json({
+        received: true,
+        ignored: eventType || "(no eventType)",
+      });
     }
 
     const phone = threadPhone(p.waId || p.from);
-    if (!phone) return res.json({ received: true, dropped: "unparseable waId" });
+    if (!phone)
+      return res.json({ received: true, dropped: "unparseable waId" });
     const media = extractMedia(p);
     const webhookMediaUrl = media
-      ? await resolveInboundMediaUrl({ tenantId, fileName: media.fileName, mediaType: media.mediaType })
+      ? await resolveInboundMediaUrl({
+          tenantId,
+          fileName: media.fileName,
+          mediaType: media.mediaType,
+        })
       : null;
     const body = typeof p.text === "string" && p.text !== "" ? p.text : null;
 
@@ -1233,9 +1443,13 @@ router.post("/whatsapp/webhook", async (req, res) => {
         status: "OPEN",
         snoozedUntil: null,
       };
-      if (!existing.assignedToId) updates.unreadCount = (existing.unreadCount || 0) + 1;
+      if (!existing.assignedToId)
+        updates.unreadCount = (existing.unreadCount || 0) + 1;
       if (!existing.contactId && contact) updates.contactId = contact.id;
-      thread = await prisma.whatsAppThread.update({ where: { id: existing.id }, data: updates });
+      thread = await prisma.whatsAppThread.update({
+        where: { id: existing.id },
+        data: updates,
+      });
     } else {
       thread = await prisma.whatsAppThread.create({
         data: {
@@ -1260,7 +1474,7 @@ router.post("/whatsapp/webhook", async (req, res) => {
         direction: "INBOUND",
         status: "DELIVERED",
         providerMsgId: p.whatsappMessageId || p.id || null,
-        metaType: media ? media.metaType : (p.type ? String(p.type) : "text"),
+        metaType: media ? media.metaType : p.type ? String(p.type) : "text",
         tenantId,
         threadId: thread.id,
         contactId: contact ? contact.id : null,
@@ -1280,7 +1494,11 @@ router.post("/whatsapp/webhook", async (req, res) => {
       });
     }
 
-    return res.json({ received: true, threadId: thread.id, messageId: message.id });
+    return res.json({
+      received: true,
+      threadId: thread.id,
+      messageId: message.id,
+    });
   } catch (e) {
     console.error("[travel-whatsapp] webhook error:", e.message);
     return res.json({ received: true, error: true });

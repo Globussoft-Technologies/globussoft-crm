@@ -20,7 +20,6 @@
 
 const express = require("express");
 const router = express.Router();
-const prisma = require("../lib/prisma");
 const whatsappWebClient = require("../services/whatsappWebClient");
 
 // Shared-secret auth middleware — validates X-Internal-Key header
@@ -42,7 +41,7 @@ function requireGatewayKey(req, res, next) {
  * crashes on a backend hiccup.
  */
 router.post("/internal/whatsapp/events", requireGatewayKey, async (req, res) => {
-  const { type, tenantId, ...payload } = req.body || {};
+  let { type, tenantId, ...payload } = req.body || {};
 
   if (!type || !tenantId) {
     return res.status(400).json({ error: "type and tenantId required" });
@@ -52,15 +51,16 @@ router.post("/internal/whatsapp/events", requireGatewayKey, async (req, res) => 
     tenantId = Number(tenantId);
 
     switch (type) {
-      case "state":
+      case "state": {
         // Gateway session state change (QR, CONNECTED, AUTH_FAILURE, etc.)
         // Update internal cache so selector.getState() queries return accurate state.
         if (whatsappWebClient.applyGatewayState) {
           await whatsappWebClient.applyGatewayState(tenantId, payload);
         }
         break;
+      }
 
-      case "qr":
+      case "qr": {
         // QR code image (base64 data:image/png;...).
         // Emit to Socket.IO so the frontend's QR scanner can display it.
         // In the future, this would store it for multi-user access (e.g. a
@@ -73,29 +73,34 @@ router.post("/internal/whatsapp/events", requireGatewayKey, async (req, res) => 
           });
         }
         break;
+      }
 
-      case "inbound":
+      case "inbound": {
         // Inbound message DTO from the gateway. Apply it via the DTO consumer.
         if (whatsappWebClient.ingestInboundDTO) {
           await whatsappWebClient.ingestInboundDTO(tenantId, payload, { downloadMedia: false });
         }
         break;
+      }
 
-      case "ack":
+      case "ack": {
         // Outbound message ack (status update). Apply via the DTO consumer.
         if (whatsappWebClient.applyAckDTO) {
           await whatsappWebClient.applyAckDTO(tenantId, payload);
         }
         break;
+      }
 
-      case "imported":
+      case "imported": {
         // Chat import/backfill progress. Chats array contains basic chat metadata.
         // In the future, this would trigger a backfill of thread histories.
         console.log(`[whatsapp_gateway_webhook] imported ${(payload.chats || []).length} chats for tenant ${tenantId}`);
         break;
+      }
 
-      default:
+      default: {
         console.warn(`[whatsapp_gateway_webhook] unknown event type: ${type}`);
+      }
     }
 
     res.json({ ok: true });

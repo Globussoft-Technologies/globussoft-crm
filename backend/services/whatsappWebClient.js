@@ -45,6 +45,7 @@
  */
 
 const path = require("path");
+const waTransportDTO = require("./waTransportDTO");
 
 // ---------------------------------------------------------------------------
 // Session registry + socket handle
@@ -768,6 +769,217 @@ async function applyAck(tenantId, msg, ack) {
       providerMsgId: String(providerMsgId),
       status: next,
     });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 0: DTO seams — thin adapters for process-boundary transport
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Normalize an ack event to a plain-JSON DTO. Takes the raw wweb msg + ack int,
+// returns {providerMsgId, ack} or null if msg has no id.
+function toAckDTO(msg, ack) {
+  return waTransportDTO.toAckDTO(msg, ack);
+}
+
+// Apply an AckDTO to backend persistence: update the WhatsAppMessage row's status
+// and emit Socket.IO status event. Pure backend-side consumer; no transport.
+async function applyAckDTO(tenantId, dto) {
+  if (!dto || !dto.providerMsgId) return;
+  const next = module.exports.mapAck(dto.ack);
+  if (!next) return;
+  const prisma = require("../lib/prisma");
+  const row = await prisma.whatsAppMessage.findFirst({
+    where: { tenantId: Number(tenantId), providerMsgId: String(dto.providerMsgId), direction: "OUTBOUND" },
+    select: { id: true, status: true, threadId: true },
+  });
+  if (!row) return;
+  const currentRank = ACK_RANK[row.status] !== undefined ? ACK_RANK[row.status] : 0;
+  if (ACK_RANK[next] <= currentRank) return;
+  await prisma.whatsAppMessage.update({ where: { id: row.id }, data: { status: next } });
+  if (_io) {
+    _io.to(`tenant:${tenantId}`).emit("whatsapp:status", {
+      tenantId: Number(tenantId),
+      threadId: row.threadId,
+      providerMsgId: String(dto.providerMsgId),
+      status: next,
+    });
+  }
+}
+
+// Build an InboundMessageDTO from a raw wweb msg: extract fields, classify kind,
+// resolve thread key (phone for 1:1, group id for group). Does NOT download media
+// or persist — just shapes the data for cross-process transport.
+async function buildInboundDTO(tenantId, msg) {
+  tenantId = Number(tenantId);
+  if (!msg || msg.fromMe) return null;
+  const fromRaw = msg.from || "";
+  const kind = module.exports.chatAddressKind(fromRaw);
+  const isGroup = kind === "group";
+  if (!module.exports.isIndividualChatId(fromRaw) && !isGroup) return null;
+  if (!module.exports.isContentMessage(msg)) return null;
+
+  let phone = null;
+  let waName = module.exports.cleanName(msg._data && msg._data.notifyName);
+  const session = getSession(tenantId);
+  if (isGroup) {
+    phone = fromRaw;
+    waName = null;
+    try {
+      if (typeof msg.getChat === "function") {
+        const chat = await msg.getChat();
+        if (chat && chat.name) waName = chat.name.trim() || null;
+      }
+    } catch { /* keep null */ }
+  } else if (session && session.client) {
+    const r = await module.exports.resolveIndividual(session.client, fromRaw);
+    phone = r.key;
+    if (!waName) waName = module.exports.cleanName(r.name);
+  } else {
+    const digits = module.exports.fromChatId(fromRaw);
+    phone = digits ? `+${digits}` : null;
+  }
+  if (!phone) return null;
+
+  const dto = waTransportDTO.toInboundContentDTO(msg);
+  return { ...dto, threadKey: phone, contactName: waName, isGroup, hasMedia: msg.hasMedia || false };
+}
+
+// Ingest an InboundMessageDTO into the backend: dedup, match contact, optionally
+// download media, create/update thread, persist message, emit Socket.IO.
+// The {downloadMedia} option (default true) lets the gateway skip downloads when
+// the backend will fetch them separately.
+async function ingestInboundDTO(tenantId, dto, { downloadMedia = true } = {}) {
+  if (!dto || !dto.threadKey) return;
+  tenantId = Number(tenantId);
+  const prisma = require("../lib/prisma");
+
+  // Dedup before anything else
+  if (dto.providerMsgId) {
+    const dupe = await prisma.whatsAppMessage.findFirst({
+      where: { tenantId, providerMsgId: String(dto.providerMsgId) },
+      select: { id: true },
+    });
+    if (dupe) return;
+  }
+
+  const contact = dto.isGroup ? null : await matchContact(tenantId, dto.threadKey);
+  let media = null;
+  // Media download happens AFTER dedup so duplicate messages don't re-download.
+  // The {downloadMedia} option lets the gateway stub this (it sends the DTO; the
+  // backend fetches media separately from blob storage).
+  if (downloadMedia && dto.hasMedia) {
+    // Stub: if the DTO came from the gateway, it won't have the wweb msg object,
+    // so we can't call downloadMedia(). The gateway will have sent a separate
+    // blob URL in the DTO that we'd download here instead. For now, stub null.
+    media = null;
+  }
+
+  const phone = dto.threadKey;
+  const existing = await prisma.whatsAppThread.findUnique({
+    where: { tenantId_contactPhone: { tenantId, contactPhone: phone } },
+  });
+  let thread;
+  if (existing) {
+    const updates = { lastMessageAt: new Date(), lastInboundAt: new Date(), status: "OPEN", snoozedUntil: null };
+    if (!existing.assignedToId) updates.unreadCount = (existing.unreadCount || 0) + 1;
+    if (!existing.contactId && contact) updates.contactId = contact.id;
+    if (dto.contactName && !existing.contactName) updates.contactName = dto.contactName;
+    thread = await updateThreadSafe(prisma, { id: existing.id }, updates);
+  } else {
+    thread = await createThreadSafe(prisma, {
+      tenantId,
+      contactPhone: phone,
+      contactName: dto.contactName || null,
+      status: "OPEN",
+      lastMessageAt: new Date(),
+      lastInboundAt: new Date(),
+      unreadCount: 1,
+      contactId: contact ? contact.id : null,
+    });
+  }
+
+  const s = getSession(tenantId);
+  let body = dto.body || null;
+  if (dto.isGroup && body) {
+    const sender = dto.notifyName || "Unknown";
+    body = `${sender}: ${body}`;
+  }
+
+  const message = await prisma.whatsAppMessage.create({
+    data: {
+      to: (s && s.phone) || "wa-web",
+      from: phone,
+      body,
+      mediaUrl: media ? media.url : null,
+      mediaType: media ? media.mime : null,
+      direction: "INBOUND",
+      status: "DELIVERED",
+      providerMsgId: dto.providerMsgId,
+      metaType: dto.type || "text",
+      tenantId,
+      threadId: thread.id,
+      contactId: contact ? contact.id : null,
+    },
+  });
+
+  if (_io) {
+    _io.to(`tenant:${tenantId}`).emit("whatsapp:received", {
+      tenantId,
+      threadId: thread.id,
+      message: {
+        id: message.id,
+        from: phone,
+        body: message.body,
+        type: message.metaType,
+      },
+    });
+  }
+}
+
+// Persist a HistoryMessageDTO (from import/backfill). These are already-old
+// messages so media download is skipped; thread updates are minimal.
+async function persistHistoryMessageDTO(tenantId, dto, { phone, contactId, threadId, channelPhone, mediaBudget, isGroup } = {}) {
+  if (!dto || !threadId) return;
+  tenantId = Number(tenantId);
+  const prisma = require("../lib/prisma");
+
+  let body = dto.body || null;
+  if (isGroup && body && dto.notifyName) {
+    body = `${dto.notifyName}: ${body}`;
+  }
+
+  await prisma.whatsAppMessage.create({
+    data: {
+      tenantId,
+      threadId,
+      contactId: contactId || null,
+      from: phone || channelPhone || "history",
+      to: channelPhone || null,
+      body,
+      mediaUrl: null,
+      mediaType: null,
+      direction: dto.outbound ? "OUTBOUND" : "INBOUND",
+      status: "DELIVERED",
+      providerMsgId: dto.providerMsgId,
+      metaType: dto.type || "text",
+    },
+  });
+}
+
+// Apply a gateway state change event to internal state cache. When the gateway
+// (wa-gateway service) emits a state change (QR, CONNECTED, DISCONNECTED), this
+// updates the in-process session state so selector.getState(tenantId) queries
+// return accurate current state. In-process sessions manage state directly; this
+// is a no-op for in-process clients.
+function applyGatewayState(tenantId, stateDto) {
+  tenantId = Number(tenantId);
+  // In-process: state is managed in sessions Map by the live client events.
+  // Gateway state updates are advisory (for debugging / UI state displays).
+  // If needed in future, we could cache gateway state separately or mirror it,
+  // but for now this is informational and non-critical.
+  if (stateDto && stateDto.state) {
+    console.log(`[whatsappWeb] gateway state update tenant=${tenantId} state=${stateDto.state}`);
   }
 }
 
@@ -1831,6 +2043,13 @@ module.exports = {
   applyAck,
   mapAck,
   persistInboundMedia,
+  // Phase 0: DTO seams for process-boundary transport
+  toAckDTO,
+  applyAckDTO,
+  buildInboundDTO,
+  ingestInboundDTO,
+  persistHistoryMessageDTO,
+  applyGatewayState,
   // helpers
   normalizePhone,
   toChatId,

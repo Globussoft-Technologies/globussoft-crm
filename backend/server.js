@@ -1107,6 +1107,10 @@ app.use("/api/whatsapp-web", require("./routes/whatsapp_web"));
 // pipeline above applies, but the route handlers live in
 // routes/whatsapp_onboard.js. Feature-flagged via WHATSAPP_EMBEDDED_SIGNUP_ENABLED.
 app.use("/api/whatsapp/onboard", require("./routes/whatsapp_onboard"));
+// Phase 1-2: Gateway webhook for receiving normalized transport events from
+// wa-gateway. Mounted at /internal/ (outside /api/) to bypass global auth guard;
+// uses shared-secret X-Internal-Key auth instead.
+app.use("/internal/whatsapp", require("./routes/whatsapp_gateway_webhook"));
 app.use("/api/telephony", telephonyRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);

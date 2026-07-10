@@ -1111,10 +1111,6 @@ app.use("/api/whatsapp/onboard", require("./routes/whatsapp_onboard"));
 // wa-gateway. Mounted at /internal/ (outside /api/) to bypass global auth guard;
 // uses shared-secret X-Internal-Key auth instead.
 app.use("/internal/whatsapp", require("./routes/whatsapp_gateway_webhook"));
-// Temporary diagnostics for production memory investigations.
-// Gated by DEBUG_INTERNAL_ENDPOINTS + DEBUG_INTERNAL_KEY; remove once root
-// cause is identified.
-app.use("/internal/debug", require("./routes/debug_diagnostics")(require("express").Router()));
 app.use("/api/telephony", telephonyRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);

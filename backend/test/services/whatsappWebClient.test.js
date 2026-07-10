@@ -75,9 +75,8 @@ describe('boot restore guard rails', () => {
   test('killAllOrphanBrowsers uses pgrep and kills matched PIDs on Linux', () => {
     const originalNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
-    const { execFileSync } = require('child_process');
-    const execSpy = vi.spyOn(require('child_process'), 'execFileSync').mockImplementation((cmd, args, opts) => {
-      if (cmd === 'pgrep' && args[0] === '-f') return '12345\n67890\n';
+    const execSpy = vi.spyOn(require('child_process'), 'execFileSync').mockImplementation((_cmd, args) => {
+      if (args[0] === '-f') return '12345\n67890\n';
       return '';
     });
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {});
@@ -96,8 +95,7 @@ describe('boot restore guard rails', () => {
   test('killAllOrphanBrowsers ignores pgrep exit 1 (no matches)', () => {
     const originalNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
-    const { execFileSync } = require('child_process');
-    const execSpy = vi.spyOn(require('child_process'), 'execFileSync').mockImplementation((cmd, args, opts) => {
+    const execSpy = vi.spyOn(require('child_process'), 'execFileSync').mockImplementation(() => {
       const err = new Error('No match');
       err.status = 1;
       throw err;

@@ -8,6 +8,14 @@ const prisma = require("./prisma");
 const bus = new EventEmitter();
 bus.setMaxListeners(100);
 
+// Defensive guard rails for misconfigured automation rules that would otherwise
+// emit events in a tight cascade and exhaust memory / CPU. Both are opt-out via
+// env (set to 0 to disable).
+const MAX_EVENT_CHAIN_DEPTH = (() => {
+  const v = parseInt(process.env.WORKFLOW_MAX_EVENT_CHAIN_DEPTH, 10);
+  return Number.isFinite(v) && v >= 0 ? v : 10;
+})();
+
 // Global io reference for routes to emit events with socket.io support
 let globalIo = null;
 
@@ -246,7 +254,12 @@ function renderTemplate(template, payload) {
  * @param {number} tenantId   tenant scope
  * @param {object} [io]       Socket.io server instance (optional, uses global if not provided)
  */
-async function emitEvent(eventName, payload, tenantId, io) {
+async function emitEvent(eventName, payload, tenantId, io, depth = 0) {
+  if (depth > MAX_EVENT_CHAIN_DEPTH) {
+    console.warn(`[WorkflowEngine] Event chain depth exceeded for ${eventName}; breaking potential cascade.`);
+    return;
+  }
+
   // Use provided io or fall back to global io reference
   const ioInstance = io || getIO();
   bus.emit(eventName, { payload, tenantId, io: ioInstance });
@@ -262,7 +275,7 @@ async function emitEvent(eventName, payload, tenantId, io) {
       if (!evaluateCondition(rule.condition, payload)) {
         continue;
       }
-      await executeAction(rule, payload, tenantId, io);
+      await executeAction(rule, payload, tenantId, io, depth);
     } catch (e) {
       console.error(`[WorkflowEngine] Rule ${rule.id} failed:`, e.message);
     }
@@ -276,8 +289,16 @@ async function emitEvent(eventName, payload, tenantId, io) {
 /**
  * Execute a single automation rule action.
  */
-async function executeAction(rule, payload, tenantId, io) {
-  const config = rule.targetState ? JSON.parse(rule.targetState) : {};
+async function executeAction(rule, payload, tenantId, io, depth = 0) {
+  let config = {};
+  if (rule.targetState) {
+    try {
+      config = JSON.parse(rule.targetState);
+    } catch (e) {
+      console.warn(`[WorkflowEngine] Rule ${rule.id} targetState is not valid JSON, treating as empty: ${e.message}`);
+      config = {};
+    }
+  }
 
   switch (rule.actionType) {
     case "send_email": {
@@ -429,7 +450,8 @@ async function executeAction(rule, payload, tenantId, io) {
             reason: created.reason,
           },
           tenantId,
-          io
+          io,
+          depth + 1
         );
       } catch (e) {
         console.error("[WorkflowEngine] approval.created emit failed:", e.message);

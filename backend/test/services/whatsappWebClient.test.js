@@ -64,6 +64,18 @@ beforeEach(() => {
   wa.init({ to: (room) => ({ emit: (ev, payload) => emits.push({ room, ev, payload }) }) });
 });
 
+describe('boot restore guard rails', () => {
+  test('restoreSessions is disabled under test env without launching Chrome', async () => {
+    const result = await wa.restoreSessions();
+    expect(result.restored).toBe(0);
+    expect(result.reason).toBe('disabled');
+  });
+  test('killAllOrphanBrowsers is exported and is a safe no-op under test', () => {
+    expect(typeof wa.killAllOrphanBrowsers).toBe('function');
+    expect(() => wa.killAllOrphanBrowsers()).not.toThrow();
+  });
+});
+
 describe('phone helpers', () => {
   test('normalizePhone adds 91 for bare 10-digit, strips non-digits', () => {
     expect(wa.normalizePhone('9811111102')).toBe('919811111102');

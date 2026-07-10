@@ -33,6 +33,7 @@ import { io as socketIO } from 'socket.io-client';
 import { Link } from 'react-router-dom';
 import { AuthContext } from '../../App';
 import { fetchApi, getAuthToken } from '../../utils/api';
+import { getDeviceId } from '../../utils/deviceId';
 import { useNotify } from '../../utils/notify';
 import { WhatsAppThreadsContext } from '../wellness/whatsapp/WhatsAppThreadsContext';
 import { ImageLightbox, openImage } from '../wellness/whatsapp/ImageLightbox';
@@ -97,6 +98,15 @@ export default function TravelWhatsAppChat() {
   const [showQrModal, setShowQrModal] = useState(false);
   const [qrImage, setQrImage] = useState(null);
   const [connecting, setConnecting] = useState(false);
+  // Device-session lock warning (per-user device lock / relink cooldown). Set
+  // from a 409 on /connect; shown inside the QR modal. null = no block.
+  // Shape: { code, message, activeDevice?, cooldownRemainingMs? }.
+  const [waLock, setWaLock] = useState(null);
+  // Anti-ban guidelines popup — opened from the caution headline in the QR modal.
+  const [showWaGuide, setShowWaGuide] = useState(false);
+  // Tracks whether THIS device currently holds the control claim, so we only
+  // warn "you lost control" to a device that actually had it (not to viewers).
+  const waHolderRef = useRef(false);
   // "My Profile" modal — view + edit the linked WhatsApp account's own DP /
   // name / about (admin).
   const [showProfile, setShowProfile] = useState(false);
@@ -409,13 +419,17 @@ export default function TravelWhatsAppChat() {
   // phone (WhatsApp → Linked devices) flips state to CONNECTED.
   const startConnect = async (reset = false) => {
     setQrImage(null);
+    setWaLock(null);
     setConnecting(true);
     setShowQrModal(true);
     try {
       const data = await fetchApi('/api/travel/whatsapp/connect', {
         method: 'POST',
-        body: JSON.stringify({ reset }),
+        body: JSON.stringify({ reset, deviceId: getDeviceId() }),
+        silent: true, // we surface connect errors ourselves (lock warning vs toast)
       });
+      // Connect was allowed → this device now holds the control claim.
+      waHolderRef.current = true;
       if (data?.qr) setQrImage(data.qr);
       setWatiStatus((prev) => ({ ...(prev || {}), ...data }));
       if (data?.connected) {
@@ -425,9 +439,15 @@ export default function TravelWhatsAppChat() {
       }
       await refreshWaStatus();
     } catch (err) {
+      setConnecting(false);
+      // Per-user device lock / relink cooldown → keep the modal open and show
+      // the structured warning instead of a bare toast.
+      if (err.code === 'WA_DEVICE_LOCKED' || err.code === 'WA_RELINK_COOLDOWN') {
+        setWaLock({ code: err.code, message: err.message, ...(err.data || {}) });
+        return;
+      }
       notify.error(err.message || 'Failed to start WhatsApp connection.');
       setShowQrModal(false);
-      setConnecting(false);
     }
   };
 
@@ -521,8 +541,9 @@ export default function TravelWhatsAppChat() {
     try {
       const data = await fetchApi('/api/travel/whatsapp/disconnect', {
         method: 'POST',
-        body: JSON.stringify({ logout }),
+        body: JSON.stringify({ logout, deviceId: getDeviceId() }),
       });
+      waHolderRef.current = false;
       const purged = data?.purged?.threads || 0;
       notify.info(`WhatsApp disconnected — cleared ${purged} chats.`);
       // Clear the open conversation + the now-empty list.
@@ -559,6 +580,40 @@ export default function TravelWhatsAppChat() {
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showQrModal]);
+
+  // ─── Device-session heartbeat ───────────────────────────────
+  // While this device is driving the connection (connected, or the QR modal is
+  // open mid-link), ping every 45s so the control claim doesn't go stale and
+  // free the per-user device lock. The backend only refreshes a claim that
+  // actually exists for this (user, device), so viewers pinging is a harmless
+  // no-op. If we learn our claim was lost (expired, or taken by this user's
+  // other device), tell the operator once.
+  useEffect(() => {
+    const active = watiStatus?.connected || showQrModal;
+    if (!active) return undefined;
+    let stopped = false;
+    const ping = async () => {
+      try {
+        const out = await fetchApi('/api/travel/whatsapp/heartbeat', {
+          method: 'POST',
+          body: JSON.stringify({ deviceId: getDeviceId() }),
+          silent: true,
+        });
+        if (out?.ok) {
+          waHolderRef.current = true;
+        } else if (out?.lost && waHolderRef.current) {
+          waHolderRef.current = false;
+          if (!stopped) notify.info('WhatsApp control moved to another of your devices.');
+        }
+      } catch {
+        /* transient — next tick retries */
+      }
+    };
+    ping();
+    const id = setInterval(ping, 45000);
+    return () => { stopped = true; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watiStatus?.connected, showQrModal]);
 
   // ─── Load APPROVED templates for the picker ─────────────────
   // Travel diff: templates come from the WATI account (the travel
@@ -1603,79 +1658,300 @@ export default function TravelWhatsAppChat() {
         {showQrModal && (
           <div
             data-testid="wa-qr-modal"
-            onClick={() => { setShowQrModal(false); setConnecting(false); }}
+            onClick={() => { setShowQrModal(false); setConnecting(false); setWaLock(null); setShowWaGuide(false); }}
             style={{
               position: 'fixed', inset: 0, zIndex: 1000,
               background: 'rgba(0,0,0,0.5)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: '1rem',
             }}
           >
             <div
               onClick={(e) => e.stopPropagation()}
               style={{
-                background: 'var(--bg-secondary, #fff)',
-                borderRadius: 12,
-                padding: '1.5rem',
-                width: 'min(92vw, 380px)',
-                textAlign: 'center',
+                background: 'var(--bg-color, #fff)',
+                borderRadius: 14,
+                padding: '1.75rem',
+                width: waLock ? 'min(94vw, 440px)' : 'min(96vw, 660px)',
+                maxHeight: '92vh', overflowY: 'auto',
                 border: '1px solid var(--border-color)',
+                boxShadow: '0 24px 60px rgba(0,0,0,0.35)',
               }}
             >
-              <h3 style={{ margin: '0 0 0.25rem', color: 'var(--text-primary)' }}>
-                Link WhatsApp
-              </h3>
-              <p style={{ margin: '0 0 1rem', fontSize: 13, color: 'var(--text-secondary)' }}>
-                On your phone open <b>WhatsApp → Linked devices → Link a device</b>, then scan this code.
-              </p>
+              {waLock ? (
+                <>
+                  <h3 style={{ margin: '0 0 0.75rem', color: 'var(--text-primary)', textAlign: 'center' }}>
+                    Can’t connect right now
+                  </h3>
+                  <div
+                    data-testid="wa-lock-warning"
+                    style={{
+                      margin: '0 0 1.25rem', padding: '0.9rem 1rem', textAlign: 'left',
+                      borderRadius: 10, fontSize: 13.5, lineHeight: 1.55,
+                      color: 'var(--text-primary)',
+                      background: 'var(--warning-bg, rgba(234,179,8,0.12))',
+                      border: '1px solid var(--warning-color, #eab308)',
+                    }}
+                  >
+                    <p style={{ margin: '0 0 0.5rem', fontWeight: 700 }}>
+                      {waLock.code === 'WA_RELINK_COOLDOWN'
+                        ? 'Reconnect cooldown active'
+                        : 'WhatsApp is controlled from another device'}
+                    </p>
+                    <p style={{ margin: 0, color: 'var(--text-primary)', opacity: 0.85 }}>{waLock.message}</p>
+                    {waLock.activeDevice && (
+                      <ul style={{ margin: '0.7rem 0 0', paddingLeft: 18, color: 'var(--text-primary)', opacity: 0.85 }}>
+                        {waLock.activeDevice.deviceLabel && (
+                          <li>Device: <b>{waLock.activeDevice.deviceLabel}</b></li>
+                        )}
+                        {waLock.activeDevice.loginAt && (
+                          <li>Connected: {new Date(waLock.activeDevice.loginAt).toLocaleString()}</li>
+                        )}
+                        {waLock.activeDevice.ip && <li>IP: {waLock.activeDevice.ip}</li>}
+                      </ul>
+                    )}
+                    {waLock.code === 'WA_RELINK_COOLDOWN' && waLock.cooldownRemainingMs > 0 && (
+                      <p style={{ margin: '0.7rem 0 0', color: 'var(--text-primary)', opacity: 0.85 }}>
+                        Try again in about {Math.ceil(waLock.cooldownRemainingMs / 60000)} minute(s).
+                      </p>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      data-testid="wa-lock-retry-btn"
+                      onClick={() => startConnect(false)}
+                      style={{
+                        fontSize: 13, fontWeight: 600, padding: '8px 18px',
+                        borderRadius: 8, border: 'none', cursor: 'pointer',
+                        color: '#fff', background: 'var(--primary-color, #25D366)',
+                      }}
+                    >
+                      Try again
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setShowQrModal(false); setConnecting(false); setWaLock(null); }}
+                      style={{
+                        fontSize: 13, padding: '8px 18px',
+                        borderRadius: 8, border: '1px solid var(--border-color)',
+                        cursor: 'pointer', background: 'transparent',
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h3 style={{ margin: '0 0 1.25rem', color: 'var(--text-primary)', textAlign: 'center', fontSize: 19 }}>
+                    Link WhatsApp
+                  </h3>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 250px), 1fr))',
+                    gap: 28, alignItems: 'center',
+                  }}>
+                    {/* Left — numbered connect steps + caution headline */}
+                    <div style={{ textAlign: 'left' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 14 }}>
+                        Scan to link this device
+                      </div>
+                      {[
+                        <>Open <b>WhatsApp</b> on your phone.</>,
+                        <>Go to <b>Settings → Linked devices → Link a device</b>.</>,
+                        <>Point your phone at this screen to scan the QR code.</>,
+                      ].map((step, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12 }}>
+                          <span style={{
+                            flex: '0 0 auto', width: 22, height: 22, borderRadius: '50%',
+                            border: '1.5px solid var(--text-primary)',
+                            color: 'var(--text-primary)',
+                            fontSize: 12, fontWeight: 700,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          }}>{i + 1}</span>
+                          <span style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-primary)' }}>{step}</span>
+                        </div>
+                      ))}
+
+                      {/* Highlighted caution headline — opens the full anti-ban
+                          guidelines in an in-place popup (no new tab / redirect). */}
+                      <button
+                        type="button"
+                        data-testid="wa-safety-open"
+                        onClick={() => setShowWaGuide(true)}
+                        style={{
+                          marginTop: 8, width: '100%', textAlign: 'left', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                          padding: '11px 13px', borderRadius: 10, fontSize: 12.5, fontWeight: 600,
+                          color: 'var(--text-primary)',
+                          background: 'var(--warning-bg, rgba(234,179,8,0.12))',
+                          border: '1px solid var(--warning-color, #eab308)',
+                        }}
+                      >
+                        <span>⚠️ Read WhatsApp safety measures</span>
+                        <span aria-hidden="true" style={{ opacity: 0.7 }}>›</span>
+                      </button>
+                    </div>
+
+                    {/* Right — QR / status */}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexDirection: 'column', gap: 10, minHeight: 260,
+                    }}>
+                      {qrImage ? (
+                        <img
+                          src={qrImage}
+                          alt="WhatsApp linking QR code"
+                          width={240}
+                          height={240}
+                          style={{ borderRadius: 10, background: '#fff', padding: 8 }}
+                        />
+                      ) : watiStatus?.state === 'AUTH_FAILURE' ? (
+                        <span style={{ color: 'var(--error-color, #ef4444)', fontSize: 13, padding: '0 8px', textAlign: 'center' }}>
+                          {watiStatus.lastError || 'Could not start WhatsApp. Try Reset & reconnect.'}
+                        </span>
+                      ) : (
+                        <span style={{ color: 'var(--text-secondary)', fontSize: 13, textAlign: 'center' }}>
+                          {connecting ? 'Starting WhatsApp… (first launch can take ~15–30s)' : 'Waiting for QR…'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: '1.5rem', flexWrap: 'wrap' }}>
+                    {/* Reset & reconnect: wipes a stale/locked session and forces a
+                        fresh QR — the fix when it sticks on "Starting WhatsApp…". */}
+                    <button
+                      type="button"
+                      data-testid="wa-reset-btn"
+                      onClick={() => startConnect(true)}
+                      style={{
+                        fontSize: 13, fontWeight: 600, padding: '8px 18px',
+                        borderRadius: 8, border: 'none', cursor: 'pointer',
+                        color: '#fff', background: 'var(--primary-color, #25D366)',
+                      }}
+                    >
+                      Reset &amp; reconnect
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setShowQrModal(false); setConnecting(false); setWaLock(null); }}
+                      style={{
+                        fontSize: 13, padding: '8px 18px',
+                        borderRadius: 8, border: '1px solid var(--border-color)',
+                        cursor: 'pointer', background: 'transparent',
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ─── Anti-ban guidelines popup (opened from the caution headline) ───
+            In-place overlay above the QR modal — no navigation / new tab. */}
+        {showWaGuide && (
+          <div
+            data-testid="wa-safety-guide"
+            onClick={() => setShowWaGuide(false)}
+            style={{
+              position: 'fixed', inset: 0, zIndex: 1100,
+              background: 'rgba(0,0,0,0.55)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: '1rem',
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: 'var(--bg-color, #fff)',
+                borderRadius: 14, padding: '1.75rem',
+                width: 'min(96vw, 560px)', maxHeight: '88vh', overflowY: 'auto',
+                border: '1px solid var(--border-color)',
+                boxShadow: '0 24px 60px rgba(0,0,0,0.4)',
+              }}
+            >
               <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                flexDirection: 'column', gap: 10,
-                minHeight: 260,
+                display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6,
+                paddingBottom: 12, borderBottom: '1px solid var(--border-color)',
               }}>
-                {qrImage ? (
-                  <img
-                    src={qrImage}
-                    alt="WhatsApp linking QR code"
-                    width={260}
-                    height={260}
-                    style={{ borderRadius: 8 }}
-                  />
-                ) : watiStatus?.state === 'AUTH_FAILURE' ? (
-                  <span style={{ color: 'var(--error-color, #ef4444)', fontSize: 13, padding: '0 8px' }}>
-                    {watiStatus.lastError || 'Could not start WhatsApp. Try Reset & reconnect.'}
-                  </span>
-                ) : (
-                  <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
-                    {connecting ? 'Starting WhatsApp… (first launch can take ~15–30s)' : 'Waiting for QR…'}
-                  </span>
-                )}
+                <span style={{
+                  flex: '0 0 auto', width: 34, height: 34, borderRadius: 9,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18,
+                  background: 'var(--warning-bg, rgba(234,179,8,0.14))',
+                  border: '1px solid var(--warning-color, #eab308)',
+                }}>⚠️</span>
+                <div>
+                  <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: 17 }}>WhatsApp safety measures</h3>
+                  <p style={{ margin: '2px 0 0', fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                    Follow these to keep this number safe and your service uninterrupted.
+                  </p>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: '1rem', flexWrap: 'wrap' }}>
-                {/* Reset & reconnect: wipes a stale/locked session and forces a
-                    fresh QR — the fix when it sticks on "Starting WhatsApp…". */}
+
+              {[
+                {
+                  h: 'Device connection limits',
+                  points: [
+                    <>Keep this number linked on <b>1–2 devices at most</b> — ideally just one.</>,
+                    <>Don’t sign this number into other WhatsApp web tools or third-party platforms.</>,
+                  ],
+                },
+                {
+                  h: 'Behave like a human',
+                  points: [
+                    <>Avoid rapid, repetitive or automated-looking message bursts — they trip spam filters.</>,
+                    <>Personalize messages (use the contact’s name) rather than blasting one identical template to many people.</>,
+                    <>Don’t operate your phone, WhatsApp Web and this CRM at the same time — overlapping activity looks suspicious and can get the number restricted.</>,
+                  ],
+                },
+                {
+                  h: 'Recommended best practices',
+                  points: [
+                    <>New or recently re-linked number? Warm up gradually — don’t send high volume right away.</>,
+                    <>Periodically review <b>Linked devices</b> on your phone and remove any you don’t recognize.</>,
+                  ],
+                },
+              ].map((sec, si) => (
+                <div key={si} style={{ marginTop: 16 }}>
+                  <div style={{
+                    fontSize: 13, fontWeight: 800, color: 'var(--text-primary)',
+                    marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.4,
+                    borderLeft: '3px solid var(--accent-color, var(--primary-color, #25D366))', paddingLeft: 8,
+                  }}>{sec.h}</div>
+                  <ul style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {sec.points.map((p, pi) => (
+                      <li key={pi} style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--text-primary)' }}>{p}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+
+              <p style={{
+                margin: '18px 0 0', padding: '10px 12px', borderRadius: 8,
+                fontSize: 12.5, lineHeight: 1.5, color: 'var(--text-secondary)',
+                background: 'var(--bg-tertiary, rgba(127,127,127,0.08))',
+              }}>
+                WhatsApp’s automated checks are sensitive — these habits keep your account safe and your service uninterrupted.
+              </p>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
                 <button
                   type="button"
-                  data-testid="wa-reset-btn"
-                  onClick={() => startConnect(true)}
+                  onClick={() => setShowWaGuide(false)}
                   style={{
-                    fontSize: 13, fontWeight: 600, padding: '6px 16px',
-                    borderRadius: 6, border: 'none', cursor: 'pointer',
+                    fontSize: 13, fontWeight: 600, padding: '8px 20px',
+                    borderRadius: 8, border: 'none', cursor: 'pointer',
                     color: '#fff', background: 'var(--primary-color, #25D366)',
                   }}
                 >
-                  Reset &amp; reconnect
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setShowQrModal(false); setConnecting(false); }}
-                  style={{
-                    fontSize: 13, padding: '6px 16px',
-                    borderRadius: 6, border: '1px solid var(--border-color)',
-                    cursor: 'pointer', background: 'transparent',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  Close
+                  Got it
                 </button>
               </div>
             </div>
@@ -1707,7 +1983,7 @@ export default function TravelWhatsAppChat() {
             <div
               onClick={(e) => e.stopPropagation()}
               style={{
-                background: 'var(--bg-secondary, #fff)', borderRadius: 12, padding: '1.5rem',
+                background: 'var(--bg-color, #fff)', borderRadius: 12, padding: '1.5rem',
                 width: 'min(94vw, 420px)', border: '1px solid var(--border-color)',
               }}
             >

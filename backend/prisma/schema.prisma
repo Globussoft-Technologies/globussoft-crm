@@ -2029,6 +2029,36 @@ model WhatsAppOptOut {
   @@index([tenantId, capturedAt])
 }
 
+// Device-session governance for the WhatsApp Web (QR-scan) transport. This is
+// NOT the WhatsApp connection itself — that stays a single tenant-scoped
+// in-memory session + LocalAuth store in services/whatsappWebClient.js. This
+// table only records WHICH CRM user, on WHICH device, currently controls the
+// connect/QR action, so we can (1) stop one user driving the same shared number
+// from two devices at once (per-user device lock) and (2) throttle fresh QR
+// relinks on the shared number (per-tenant cooldown) — both to reduce the
+// frequent-relink churn that gets Meta accounts suspended. Rows are reused on
+// reconnect (unique per tenant+user+device) so a device never accumulates dupes.
+// Stale rows (heartbeat lost) are expired lazily by whatsappSessionGuard — no cron.
+model WhatsAppWebSession {
+  id            Int       @id @default(autoincrement())
+  userId        Int // CRM user who owns this control claim
+  deviceId      String // stable browser fingerprint (localStorage uuid)
+  deviceLabel   String? // parsed user-agent + user name, for the "controlled elsewhere" warning
+  ip            String?
+  status        String    @default("ACTIVE") // ACTIVE | LOGGED_OUT | EXPIRED
+  loginAt       DateTime  @default(now())
+  logoutAt      DateTime?
+  lastHeartbeat DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenantId Int @default(1)
+
+  @@unique([tenantId, userId, deviceId])
+  @@index([tenantId, userId, status])
+  @@index([tenantId, status])
+}
+
 model WhatsAppTemplate {
   id             Int       @id @default(autoincrement())
   name           String

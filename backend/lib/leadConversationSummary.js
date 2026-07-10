@@ -251,14 +251,91 @@ async function narrativeSummarizeContact({ tenantId, contactId }) {
   };
 }
 
+// Deterministic fallback for consolidating capture blocks — used when the
+// LLM call throws entirely (both Gemini + OpenAI failed).
+function fallbackConsolidate(blockText) {
+  const blockCount = (blockText.match(/═{5,}/g) || []).length / 2 || 1;
+  return {
+    narrative: `The customer has ${Math.max(1, Math.round(blockCount))} recorded capture${blockCount === 1 ? "" : "s"} on file. AI consolidation was unavailable for this request — see the individual dated blocks below.`,
+    leadStage: "Follow-up Required",
+  };
+}
+
+async function consolidateCaptureBlocks({ tenantId, customerName, blockText }) {
+  const llmRouter = require("./llmRouter");
+  try {
+    const result = await llmRouter.routeRequest({
+      task: "lead-capture-consolidate",
+      tenantId,
+      payload: { customerName: customerName || null, blockText },
+    });
+    const parsed = result && result.text ? tryParseJson(result.text) : null;
+    if (parsed && parsed.narrative) {
+      return {
+        narrative: parsed.narrative,
+        leadStage: parsed.leadStage || "New Enquiry",
+      };
+    }
+  } catch (e) {
+    console.error(`[leadConversationSummary] capture-consolidate LLM call failed (using fallback): ${e.message}`);
+  }
+  return fallbackConsolidate(blockText);
+}
+
+// On-demand "Summarize again" for browser-extension-sourced leads
+// (gmail / whatsapp-extension, 2026-07-09). Unlike narrativeSummarizeContact
+// (which re-reads raw WhatsAppMessage rows from a live session), these
+// sources have NO raw message log — each capture already wrote a one-time
+// dated summary block straight into Contact.description
+// (routes/leads_extension_capture.js). This re-reads whatever's ALREADY in
+// description (however many dated blocks have piled up from repeat
+// captures) and asks the AI to consolidate them into one flowing narrative,
+// then REPLACES description with it — same replace-outright semantics as
+// narrativeSummarizeContact, just a different input source. Returns
+// { skipped: reason } or { replaced: true, contactId, leadStage }.
+async function consolidateCaptureContact({ tenantId, contactId }) {
+  const prisma = require("./prisma");
+
+  const contact = await prisma.contact.findFirst({
+    where: { tenantId, id: contactId },
+    select: { id: true, name: true, description: true },
+  });
+  if (!contact) return { skipped: "contact-not-found" };
+  if (!contact.description || !contact.description.trim()) {
+    return { skipped: "no-description" };
+  }
+
+  const summary = await consolidateCaptureBlocks({
+    tenantId,
+    customerName: contact.name,
+    blockText: contact.description,
+  });
+
+  const description = `${summary.narrative.trim()}\n\nCurrent Lead Stage: ${summary.leadStage || "New Enquiry"}.`;
+
+  await prisma.contact.update({
+    where: { id: contact.id },
+    data: { description },
+  });
+
+  return {
+    replaced: true,
+    contactId: contact.id,
+    leadStage: summary.leadStage,
+  };
+}
+
 module.exports = {
   syncLeadDescription,
   summarizeMessages,
   narrativeSummarizeContact,
   narrativeSummarizeMessages,
+  consolidateCaptureContact,
+  consolidateCaptureBlocks,
   renderBlock,
   formatDate,
   // test seams
   fallbackSummary,
   fallbackNarrative,
+  fallbackConsolidate,
 };

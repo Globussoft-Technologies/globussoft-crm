@@ -530,6 +530,36 @@ router.post('/:id/summarize-chat', async (req, res) => {
   }
 });
 
+// "Summarize again" (2026-07-09) — on-demand consolidation for browser-
+// extension-sourced leads (gmail / whatsapp-extension). These sources have
+// no raw message log to re-read (unlike /summarize-chat's WhatsAppMessage
+// rows) — each capture already wrote a one-time dated block straight into
+// Contact.description (routes/leads_extension_capture.js). This reads
+// whatever dated blocks have piled up from repeat captures and REPLACES
+// description with one consolidated AI narrative, same replace-outright
+// semantics as /summarize-chat, just fed the description text itself.
+router.post('/:id/resummarize-capture', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid contact ID' });
+    const leadConversationSummary = require('../lib/leadConversationSummary');
+    const result = await leadConversationSummary.consolidateCaptureContact({
+      tenantId: req.user.tenantId,
+      contactId: id,
+    });
+    if (result.skipped === 'contact-not-found') {
+      return res.status(404).json({ error: 'Contact not found' });
+    }
+    if (result.skipped === 'no-description') {
+      return res.status(409).json({ error: 'No captured history found for this contact yet.', code: 'NO_CAPTURE_HISTORY' });
+    }
+    res.json(result);
+  } catch (e) {
+    console.error('[contacts] resummarize-capture error:', e.message);
+    res.status(500).json({ error: 'Failed to consolidate summary', code: 'RESUMMARIZE_CAPTURE_FAILED' });
+  }
+});
+
 router.put('/:id', async (req, res) => {
   try {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });

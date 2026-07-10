@@ -180,6 +180,8 @@ describe('llmRouter — module shape', () => {
       // Lead conversation summary + full-history narrative summary (2026-07-07).
       "lead-conversation-summary": { primary: "gemini-flash", fallback: "gpt-4" },
       "lead-narrative-summary": { primary: "gemini-flash", fallback: "gpt-4" },
+      // Browser-extension lead capture consolidation (2026-07-09, PR #1210).
+      "lead-capture-consolidate": { primary: "gemini-flash", fallback: "gpt-4" },
       "marketing-flyer-copy": { primary: "gemini-flash", fallback: "groq-llama" },
       "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
       // TBO flight/hotel/transfer AI-estimate search fallback. 2026-06-23:
@@ -208,8 +210,9 @@ describe('llmRouter — module shape', () => {
     // 2026-06-19 'whatsapp-lead-qualify' + TBO 'flight-search' / 'hotel-search'
     // / 'transfer-search' + the 'airport-iata' name→code resolver +
     // 'landing-page-generate' (PR #1174) + 'quote-template-generate' (PR #1178) +
-    // 'lead-conversation-summary' + 'lead-narrative-summary' (PR #1203) = 21.
-    expect(r.VALID_TASKS).toHaveLength(21);
+    // 'lead-conversation-summary' + 'lead-narrative-summary' (PR #1203) +
+    // 'lead-capture-consolidate' (PR #1210) = 22.
+    expect(r.VALID_TASKS).toHaveLength(22);
   });
 });
 
@@ -462,7 +465,7 @@ describe('routeRequest', () => {
         // can render line items without a live LLM key.
         expect(() => JSON.parse(out.text)).not.toThrow();
         expect(Array.isArray(JSON.parse(out.text))).toBe(true);
-      } else if (task === 'lead-conversation-summary' || task === 'lead-narrative-summary') {
+      } else if (task === 'lead-conversation-summary' || task === 'lead-narrative-summary' || task === 'lead-capture-consolidate') {
         // Stub returns parseable JSON objects so lead summary consumers can
         // render the summary without a live LLM key.
         expect(() => JSON.parse(out.text)).not.toThrow();

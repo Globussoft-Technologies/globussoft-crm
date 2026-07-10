@@ -119,6 +119,18 @@ const TASK_ROUTING = {
   // Gemini-primary / OpenAI-fallback routing. Larger in (full thread) / small
   // out (a few paragraphs).
   "lead-narrative-summary": { primary: "gemini-flash", fallback: "gpt-4" },
+  // GlobusCRM browser-extension lead capture (2026-07-09) — "Summarize
+  // again" button on the Contact page for gmail / whatsapp-extension
+  // sourced leads. Unlike lead-narrative-summary (which re-reads raw
+  // WhatsAppMessage rows from a live session), extension captures have NO
+  // raw message log — each capture already wrote a one-time dated summary
+  // block straight into Contact.description (routes/leads_extension_capture.js).
+  // This task's INPUT is therefore the alreadysummarized block text itself
+  // (however many dated blocks have piled up), and its job is to consolidate
+  // them into one flowing narrative — same output shape as
+  // lead-narrative-summary so both share one render path, but a distinct
+  // prompt since the input is prose, not a raw message array.
+  "lead-capture-consolidate": { primary: "gemini-flash", fallback: "gpt-4" },
   // Marketing-flyer-copy (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 + AC-6.8).
   // 1K in / 1K out — short-form headline + body + CTA JSON. Routed to
   // gemini-flash for low-cost bulk-shape Gemini calls per PRD §9.1.
@@ -529,6 +541,11 @@ function buildStubText(task, _payload) {
         narrative: "The customer's WhatsApp conversation could not be summarised (synthetic — real Gemini narrative lands when GEMINI_API_KEY is set).",
         leadStage: "New Enquiry",
       });
+    case "lead-capture-consolidate":
+      return JSON.stringify({
+        narrative: "The customer's captured emails/chats could not be consolidated (synthetic — real Gemini narrative lands when GEMINI_API_KEY is set).",
+        leadStage: "New Enquiry",
+      });
     case "form-vs-call":
       return `${tag} Form-vs-call comparison: 85% match (synthetic). Real Claude comparison lands when Q11 keys arrive.`;
     case "search":
@@ -659,6 +676,8 @@ function buildPrompt(task, payload) {
       "You are a travel CRM assistant that writes a professional, business-focused NARRATIVE summary of a lead's entire WhatsApp relationship — flowing paragraphs, never a transcript, never bullet points. Given the customer's name and the FULL WhatsApp message history (with direction: inbound = customer, outbound = agent, and each message's date), return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"narrative\":string,\"leadStage\":string}. `narrative` should read like a case-file recap written by a colleague: 2-5 short paragraphs in chronological order, each covering one meaningful phase of the conversation (e.g. initial enquiry, a follow-up, a decision point), naming actual dates, destinations, dates of travel, services requested (hotels/flights/visa/etc), and actions the agent took. Do NOT restate every message — synthesize. Write in third person past tense, referring to the customer by name. `leadStage` is your best single current-status assessment, one of: \"New Enquiry\", \"Quotation Pending\", \"Follow-up Required\", \"Documents Awaited\", \"Booking In Progress\", \"Booking Confirmed\", \"Payment Pending\", \"Closed\", \"Not Interested\". Base everything ONLY on the messages given; never invent destinations, dates, or details not present. Return ONLY the JSON object.",
     "landing-page-generate":
       "You generate STRUCTURED travel-destination landing-page block JSON. The canonical consumer (landingPageGeneratorLLM.js) supplies the full prompt — this text-envelope entry is a safety net for routeRequest callers. Return a JSON object with keys suggestedTitle, suggestedSlug, seoMeta {metaTitle, metaDescription}, and blocks (array). NEVER include monetary values, testimonials, ratings, discounts, vendor names, partner names, or image URLs.",
+    "lead-capture-consolidate":
+      "You are a travel CRM assistant that consolidates a lead's captured email/WhatsApp history into ONE flowing narrative — flowing paragraphs, never a transcript, never bullet points. The input is NOT raw messages — it is a series of ALREADY-SUMMARIZED dated blocks (each with a Customer/Date/Purpose/Discussion Highlights/Lead Stage section) that were written one at a time as separate captures over time; your job is to read all of them and merge them into one coherent case-file recap. Given the customer's name and the full block text, return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"narrative\":string,\"leadStage\":string}. `narrative` should be 2-5 short paragraphs in chronological order, each covering one meaningful phase (initial contact, a follow-up, a decision point), naming actual dates, destinations, services requested, and outcomes — do NOT restate every block verbatim, synthesize across all of them. Write in third person past tense, referring to the customer by name. `leadStage` is your best single current-status assessment from the LATEST block's stage, one of: \"New Enquiry\", \"Quotation Pending\", \"Follow-up Required\", \"Documents Awaited\", \"Booking In Progress\", \"Booking Confirmed\", \"Payment Pending\", \"Closed\", \"Not Interested\". Base everything ONLY on the text given; never invent details not present. Return ONLY the JSON object.",
     reasoning:
       "You are a careful reasoning assistant for a travel CRM. Plain text.",
     search: "You answer with concise, well-sourced information. Plain text.",

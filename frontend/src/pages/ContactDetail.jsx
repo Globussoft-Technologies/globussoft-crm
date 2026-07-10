@@ -66,6 +66,26 @@ const ContactDetail = () => {
     }
   };
 
+  // "Summarize again" (2026-07-09) — consolidates a browser-extension-
+  // sourced lead's dated capture blocks (gmail / whatsapp-extension) into
+  // one AI narrative. Distinct from handleSummarizeChat above, which reads
+  // live WhatsAppMessage rows — extension captures have no raw message log,
+  // only the already-summarized blocks already sitting in description.
+  const [resummarizing, setResummarizing] = useState(false);
+  const [resummarizeError, setResummarizeError] = useState('');
+  const handleResummarizeCapture = async () => {
+    setResummarizing(true);
+    setResummarizeError('');
+    try {
+      await fetchApi(`/api/contacts/${id}/resummarize-capture`, { method: 'POST', body: JSON.stringify({}) });
+      loadContact();
+    } catch (err) {
+      setResummarizeError(err?.data?.error || err?.body?.error || err?.message || 'Failed to consolidate summary.');
+    } finally {
+      setResummarizing(false);
+    }
+  };
+
   const loadAttachments = () => {
     fetchApi(`/api/contacts/${id}/attachments`).then(data => setAttachments(Array.isArray(data) ? data : [])).catch(() => {});
   };
@@ -200,10 +220,32 @@ const ContactDetail = () => {
                     >
                       <Sparkles size={13} /> {summarizing ? 'Summarizing…' : 'Summarize'}
                     </button>
+                  ) : contact.description ? (
+                    // Browser-extension-sourced leads (gmail / whatsapp-extension)
+                    // have no raw message log to re-read — each capture already
+                    // wrote a one-time dated block into description. Offer to
+                    // (re-)consolidate via a distinct endpoint
+                    // (POST /:id/resummarize-capture) that feeds the existing
+                    // block text to the AI instead of WhatsApp rows — shown
+                    // even with just one block so the user can manually re-run
+                    // AI on it (e.g. if the first pass came out low-quality).
+                    <button
+                      type="button"
+                      onClick={handleResummarizeCapture}
+                      disabled={resummarizing}
+                      className="btn-secondary"
+                      title="Consolidate all captured summaries into one narrative"
+                      style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <Sparkles size={13} /> {resummarizing ? 'Summarizing…' : 'Summarize again'}
+                    </button>
                   ) : null}
                 </div>
                 {summarizeError && (
                   <p style={{ color: '#ef4444', fontSize: '0.75rem', margin: '0 0 0.5rem' }}>{summarizeError}</p>
+                )}
+                {resummarizeError && (
+                  <p style={{ color: '#ef4444', fontSize: '0.75rem', margin: '0 0 0.5rem' }}>{resummarizeError}</p>
                 )}
                 {contact.description ? (
                   <pre style={{

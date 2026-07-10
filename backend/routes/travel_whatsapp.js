@@ -324,12 +324,10 @@ router.post(
       res.json({ ...st, phone: maskNumber(st.phone) });
     } catch (e) {
       console.error("[travel-whatsapp] connect error:", e.message);
-      res
-        .status(500)
-        .json({
-          error: "Failed to start WhatsApp Web session",
-          code: "WA_CONNECT_FAILED",
-        });
+      res.status(500).json({
+        error: "Failed to start WhatsApp Web session",
+        code: "WA_CONNECT_FAILED",
+      });
     }
   },
 );
@@ -465,12 +463,10 @@ router.post(
       res.json(result);
     } catch (e) {
       console.error("[travel-whatsapp] backfill-history error:", e.message);
-      res
-        .status(500)
-        .json({
-          error: "Failed to backfill history",
-          code: "WA_BACKFILL_FAILED",
-        });
+      res.status(500).json({
+        error: "Failed to backfill history",
+        code: "WA_BACKFILL_FAILED",
+      });
     }
   },
 );
@@ -503,12 +499,10 @@ router.post(
       res.json({ ...st, purged });
     } catch (e) {
       console.error("[travel-whatsapp] disconnect error:", e.message);
-      res
-        .status(500)
-        .json({
-          error: "Failed to disconnect WhatsApp Web session",
-          code: "WA_DISCONNECT_FAILED",
-        });
+      res.status(500).json({
+        error: "Failed to disconnect WhatsApp Web session",
+        code: "WA_DISCONNECT_FAILED",
+      });
     }
   },
 );
@@ -530,12 +524,10 @@ router.get(
       res.json(me);
     } catch (e) {
       console.error("[travel-whatsapp] me error:", e.message);
-      res
-        .status(500)
-        .json({
-          error: "Failed to load WhatsApp profile",
-          code: "WA_ME_FAILED",
-        });
+      res.status(500).json({
+        error: "Failed to load WhatsApp profile",
+        code: "WA_ME_FAILED",
+      });
     }
   },
 );
@@ -558,12 +550,10 @@ router.put(
       res.json(out);
     } catch (e) {
       console.error("[travel-whatsapp] me update error:", e.message);
-      res
-        .status(e.message === "WhatsApp not connected" ? 409 : 500)
-        .json({
-          error: e.message || "Failed to update WhatsApp profile",
-          code: "WA_ME_UPDATE_FAILED",
-        });
+      res.status(e.message === "WhatsApp not connected" ? 409 : 500).json({
+        error: e.message || "Failed to update WhatsApp profile",
+        code: "WA_ME_UPDATE_FAILED",
+      });
     }
   },
 );
@@ -589,12 +579,10 @@ router.post(
       res.json(out);
     } catch (e) {
       console.error("[travel-whatsapp] me avatar error:", e.message);
-      res
-        .status(e.message === "WhatsApp not connected" ? 409 : 500)
-        .json({
-          error: e.message || "Failed to set profile picture",
-          code: "WA_ME_AVATAR_FAILED",
-        });
+      res.status(e.message === "WhatsApp not connected" ? 409 : 500).json({
+        error: e.message || "Failed to set profile picture",
+        code: "WA_ME_AVATAR_FAILED",
+      });
     }
   },
 );
@@ -610,12 +598,10 @@ router.delete(
       res.json(out);
     } catch (e) {
       console.error("[travel-whatsapp] me avatar delete error:", e.message);
-      res
-        .status(e.message === "WhatsApp not connected" ? 409 : 500)
-        .json({
-          error: e.message || "Failed to remove profile picture",
-          code: "WA_ME_AVATAR_DEL_FAILED",
-        });
+      res.status(e.message === "WhatsApp not connected" ? 409 : 500).json({
+        error: e.message || "Failed to remove profile picture",
+        code: "WA_ME_AVATAR_DEL_FAILED",
+      });
     }
   },
 );
@@ -767,12 +753,10 @@ router.get(
       res.json({ templates, stub: out.stub === true });
     } catch (e) {
       console.error("[travel-whatsapp] templates error:", e.message);
-      res
-        .status(502)
-        .json({
-          error: "Failed to load Wati templates",
-          code: "WATI_TEMPLATES_FAILED",
-        });
+      res.status(502).json({
+        error: "Failed to load Wati templates",
+        code: "WATI_TEMPLATES_FAILED",
+      });
     }
   },
 );
@@ -795,12 +779,10 @@ router.post(
       }
       const text = typeof body === "string" ? body.trim() : "";
       if (!templateName && !text) {
-        return res
-          .status(400)
-          .json({
-            error: "body or templateName required",
-            code: "MISSING_BODY",
-          });
+        return res.status(400).json({
+          error: "body or templateName required",
+          code: "MISSING_BODY",
+        });
       }
 
       // Opt-out gate — same semantics (and code) as the Meta-track send so
@@ -895,12 +877,10 @@ router.post(
       });
     } catch (e) {
       console.error("[travel-whatsapp] send error:", e.message);
-      return res
-        .status(500)
-        .json({
-          error: "Failed to send WhatsApp message",
-          code: "SEND_FAILED",
-        });
+      return res.status(500).json({
+        error: "Failed to send WhatsApp message",
+        code: "SEND_FAILED",
+      });
     }
   },
 );

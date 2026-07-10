@@ -216,10 +216,11 @@ const Layout = () => {
     if (token) setupPush(token).catch(() => {});
   }, [token]);
 
-  // Document title set to constant "Globussoft CRM" for all pages and tenants
+  // #704: document.title reflects tenant.name so operators with many open
+  // tabs can pick out the CRM tab fast. Falls back to the app-wide brand.
   useEffect(() => {
-    document.title = "Globussoft CRM";
-  }, []);
+    document.title = tenant?.name ? `${tenant.name} — CRM` : "Globussoft CRM";
+  }, [tenant?.name]);
 
   // Fetch subscription status to show trial banner and modal
   useEffect(() => {

@@ -106,6 +106,8 @@ prisma.task = prisma.task || {};
 prisma.task.findMany = vi.fn().mockResolvedValue([]);
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
 prisma.auditLog = {
   findFirst: vi.fn(),
   create: vi.fn(),
@@ -157,6 +159,8 @@ beforeEach(() => {
   prisma.activity.create.mockResolvedValue({ id: 100 });
   prisma.activity.findMany.mockResolvedValue([]);
   prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'USD' });
+  prisma.user.findUnique.mockReset();
+  prisma.user.findUnique.mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   eventBus.emitEvent.mockClear();
 });
 

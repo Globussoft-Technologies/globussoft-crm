@@ -134,12 +134,18 @@ export default function TravelLeads() {
       });
   }, [user?.role]);
 
-  // Initialize subBrand filter on mount. If the user is restricted to a single
-  // brand, auto-select it. Otherwise use activeSubBrand if available.
+  // Initialize subBrand filter on mount. Only auto-select when the user is
+  // restricted to a single brand or has an explicit active sidebar preference.
+  // Multi-brand admins start on "All sub-brands" so the filter test contract
+  // (and the "All leads" default view) is preserved.
   useEffect(() => {
     if (!user || subBrand) return;
-    const initial = defaultSubBrandFor(user, activeSubBrand);
-    if (initial) setSubBrand(initial);
+    const brands = accessibleSubBrands(user);
+    if (brands.length === 1) {
+      setSubBrand(brands[0]);
+    } else if (activeSubBrand && brands.includes(activeSubBrand)) {
+      setSubBrand(activeSubBrand);
+    }
   }, [user?.id, activeSubBrand]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setUrlParam = (key, value) => {

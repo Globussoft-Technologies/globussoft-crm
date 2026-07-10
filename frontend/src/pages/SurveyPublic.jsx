@@ -34,10 +34,10 @@ export default function SurveyPublic() {
     return () => { cancelled = true; };
   }, [id]);
 
-  // Document title set to constant "Globussoft CRM"
+  // Reflect the survey's brand in the tab title; fall back to the app brand.
   useEffect(() => {
-    document.title = "Globussoft CRM";
-  }, []);
+    document.title = survey?.brand?.name || "Globussoft CRM";
+  }, [survey?.brand?.name]);
 
   const submit = async (e) => {
     e.preventDefault();

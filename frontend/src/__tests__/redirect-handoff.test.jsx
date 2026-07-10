@@ -233,18 +233,10 @@ describe('Marketing-site → CRM redirect handoff', () => {
         ['/api/auth/login', { token: 'jwt-abc', user: { id: 7, role: 'CUSTOMER' }, tenant: WELLNESS_TENANT_RESPONSE }],
       ]);
       const nextPath = '/wellness/book-appointment?serviceId=434&time=15:00';
-      renderAt(Login, `/login?tenantSlug=enhanced-wellness&next=${encodeURIComponent(nextPath)}`);
+      renderAt(Login, `/login?next=${encodeURIComponent(nextPath)}`);
 
-      // Wait for the organization text field to pre-fill with enhanced-wellness name.
-      // Field is now a text input — value is the org name, not the tenant id.
-      await waitFor(() => {
-        const orgInput = screen.getByPlaceholderText(/Enter your organization name/i);
-        expect(orgInput).toBeDisabled();
-        expect(orgInput.value).toBe("Dr. Haror's Wellness");
-      });
-
-      // Labels in Login.jsx aren't associated via htmlFor/id, so getByLabelText
-      // can't find these inputs — match by placeholder instead.
+      // Login.jsx no longer has a tenant/organization picker — just email + password.
+      // Labels aren't associated via htmlFor/id, so match by placeholder.
       fireEvent.change(screen.getByPlaceholderText('admin@globussoft.com'), {
         target: { value: 'patient@example.com' },
       });
@@ -274,15 +266,9 @@ describe('Marketing-site → CRM redirect handoff', () => {
         // up here in case the role guard changes in future.
         ['/api/pages/me', { pages: [{ path: '/home' }] }],
       ]);
-      renderAt(Login, '/login?tenantSlug=enhanced-wellness&next=%2F%2Fevil.com%2Fphish');
+      renderAt(Login, '/login?next=%2F%2Fevil.com%2Fphish');
 
-      await waitFor(() => {
-        const orgInput = screen.getByPlaceholderText(/Enter your organization name/i);
-        expect(orgInput).toBeDisabled();
-      });
-
-      // Login.jsx no longer pre-fills demo creds (commit 46247368) — fill the
-      // required fields by placeholder so performLogin reaches the navigate.
+      // Login.jsx no longer has a tenant/organization picker — just email + password.
       fireEvent.change(screen.getByPlaceholderText('admin@globussoft.com'), {
         target: { value: 'patient@example.com' },
       });

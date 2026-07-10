@@ -170,21 +170,29 @@ describe('utils/api — fetchApi', () => {
     expect(out).toBe(true);
   });
 
-  it('throws on 500 using server error message', async () => {
+  it('throws safe message on 5xx but preserves server message on err.serverMessage', async () => {
     mockFetch({ status: 500, body: { message: 'boom' } });
-    await expect(fetchApi('/api/crash')).rejects.toThrow('boom');
+    await expect(fetchApi('/api/crash')).rejects.toMatchObject({
+      message: 'Something went wrong on our end. Please try again — if it keeps happening, contact support.',
+      serverMessage: 'boom',
+      status: 500,
+    });
   });
 
-  it('throws status-bucketed default message when JSON parse fails (5xx path)', async () => {
-    // Pre-#275 the helper said "API Request Failed". Post-fix the default copy
-    // is bucketed by status: 5xx → "Server error — please try again.", 403 →
-    // permission, 404 → not-found, otherwise → "Request failed (<status>)."
+  it('throws safe fallback message when JSON parse fails (5xx path)', async () => {
+    // Post-#1207: 5xx errors never surface raw backend text (it may leak
+    // Prisma/driver internals). The user-facing message is a safe fallback
+    // and the error code rides on err.code for support correlation.
     vi.spyOn(global, 'fetch').mockResolvedValue({
       ok: false,
       status: 500,
       json: () => Promise.reject(new Error('parse fail')),
     });
-    await expect(fetchApi('/api/crash')).rejects.toThrow('Server error');
+    await expect(fetchApi('/api/crash')).rejects.toMatchObject({
+      message: 'Something went wrong on our end. Please try again — if it keeps happening, contact support.',
+      code: null,
+      status: 500,
+    });
   });
 
   it('on 401: clears in-memory + sessionStorage token and redirects to /login', async () => {

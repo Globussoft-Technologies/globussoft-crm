@@ -434,6 +434,24 @@ describe('emitEvent — prisma async tail (rule fan-out + webhook delivery)', ()
     // Both rules attempted — sibling not aborted by predecessor's failure.
     expect(prisma.notification.create).toHaveBeenCalledTimes(2);
   });
+
+  test('breaks a call that already exceeds the configured event chain depth cap', async () => {
+    // Calling emitEvent with depth > MAX should short-circuit and warn,
+    // preventing runaway cascades from misconfigured rules.
+    prisma.automationRule.findMany.mockResolvedValueOnce([
+      { id: 1, name: 'loop', triggerType: 'evt', actionType: 'send_sms', condition: null, targetState: null },
+    ]);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await emitEvent('evt', { userId: 5 }, 42, null, 11);
+
+    const depthWarnings = warnSpy.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && c[0].includes('Event chain depth exceeded')
+    );
+    expect(depthWarnings.length).toBeGreaterThanOrEqual(1);
+    // No rules should have been evaluated once we short-circuit.
+    expect(prisma.automationRule.findMany).not.toHaveBeenCalled();
+  });
 });
 
 describe('executeAction — send_notification', () => {
@@ -792,6 +810,22 @@ describe('executeAction — create_approval', () => {
       (c) => c[0]?.where?.triggerType === 'approval.created'
     );
     expect(approvalCalls.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('executeAction — malformed targetState', () => {
+  test('treats non-JSON targetState as empty config and still writes audit log', async () => {
+    const rule = {
+      id: 1, name: 'r', triggerType: 'evt', actionType: 'send_sms',
+      targetState: 'amount > 100000',
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await executeAction(rule, { phone: '9999999999' }, 42);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('targetState is not valid JSON')
+    );
+    warnSpy.mockRestore();
+    expect(prisma.auditLog.create).toHaveBeenCalled();
   });
 });
 

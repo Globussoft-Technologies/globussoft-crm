@@ -68,6 +68,32 @@ const STATE = Object.freeze({
 
 const AUTH_DIR = path.join(__dirname, "..", ".wwebjs_auth");
 
+// Boot-restore guard rails. Puppeteer/Chrome is the single largest memory user
+// in this process; on boxes with saved .wwebjs_auth profiles we have seen
+// restoreSessions() push Node RSS past 16 GB and crash the backend. These flags
+// let operators opt out of auto-restore, cap how many sessions we revive, and
+// refuse to launch Chrome when the process is already under memory pressure.
+const RESTORE_ON_BOOT = !/^(0|false|no|disabled)$/i.test(
+  process.env.WHATSAPP_WEB_RESTORE_ON_BOOT || "1"
+);
+const MAX_RESTORE_SESSIONS = (() => {
+  const v = parseInt(process.env.WHATSAPP_WEB_MAX_RESTORE_SESSIONS, 10);
+  return Number.isFinite(v) && v >= 0 ? v : 4;
+})();
+const RESTORE_MEMORY_MB_CAP = (() => {
+  const v = parseInt(process.env.WHATSAPP_WEB_RESTORE_MEMORY_MB_CAP, 10);
+  return Number.isFinite(v) && v >= 256 ? v : 2048;
+})();
+
+function getMemoryMB() {
+  try {
+    const usage = process.memoryUsage();
+    return Math.round((usage.rss || usage.heapUsed || 0) / 1024 / 1024);
+  } catch {
+    return 0;
+  }
+}
+
 // Puppeteer/whatsapp-web.js emit async errors from deep inside Chromium when a
 // session is torn down (phone unlinks → LOGOUT, browser closes mid-inject, a
 // frame detaches during navigation). These surface as unhandledRejection /
@@ -107,6 +133,11 @@ function init(io) {
   _io = io;
   console.log("[whatsappWeb] init — socket handle attached; restoring previously-linked sessions…");
   module.exports.installPuppeteerCrashGuard();
+  // Before restoring anything, kill any Chromium processes left behind by a
+  // previous crashed/restarted Node process. Their profiles are locked and they
+  // hold memory; if we launch fresh Chromes on top of them we multiply the
+  // footprint and can OOM the box.
+  module.exports.killAllOrphanBrowsers();
   // Auto-restore on boot: re-initialize every tenant that was linked before the
   // restart. LocalAuth persisted their creds to .wwebjs_auth/session-travel-<id>,
   // so connect() resumes WITHOUT a new QR. Fire-and-forget so server startup is
@@ -125,6 +156,19 @@ function init(io) {
 // the existing restore watchdog as an actionable "Reset & reconnect".
 async function restoreSessions() {
   if (!canLaunch()) return { restored: 0, reason: "disabled" };
+  if (!RESTORE_ON_BOOT) {
+    console.log("[whatsappWeb] boot-restore: WHATSAPP_WEB_RESTORE_ON_BOOT is off — skipping session restore");
+    return { restored: 0, reason: "restore-on-boot-disabled" };
+  }
+
+  const memMB = getMemoryMB();
+  if (memMB > RESTORE_MEMORY_MB_CAP) {
+    console.warn(
+      `[whatsappWeb] boot-restore: skipped — process already using ${memMB} MB (cap ${RESTORE_MEMORY_MB_CAP} MB)`
+    );
+    return { restored: 0, reason: "memory-pressure" };
+  }
+
   const fs = require("fs"); // required locally — this module loads fs lazily per-function
   let entries = [];
   try {
@@ -139,9 +183,19 @@ async function restoreSessions() {
     if (m) tenantIds.push(Number(m[1]));
   }
   if (!tenantIds.length) return { restored: 0 };
-  console.log(`[whatsappWeb] boot-restore: re-initializing ${tenantIds.length} saved session(s): ${tenantIds.join(", ")}`);
+
+  const capped = MAX_RESTORE_SESSIONS > 0 && tenantIds.length > MAX_RESTORE_SESSIONS
+    ? tenantIds.slice(0, MAX_RESTORE_SESSIONS)
+    : tenantIds;
+  if (capped.length < tenantIds.length) {
+    console.warn(
+      `[whatsappWeb] boot-restore: capping from ${tenantIds.length} to ${capped.length} saved session(s) (WHATSAPP_WEB_MAX_RESTORE_SESSIONS)`
+    );
+  }
+
+  console.log(`[whatsappWeb] boot-restore: re-initializing ${capped.length} saved session(s): ${capped.join(", ")}`);
   let i = 0;
-  for (const tenantId of tenantIds) {
+  for (const tenantId of capped) {
     if (i > 0) await new Promise((r) => setTimeout(r, 1500)); // stagger Chrome launches
     i += 1;
     module.exports
@@ -149,7 +203,7 @@ async function restoreSessions() {
       .then(() => console.log(`[whatsappWeb] boot-restore: tenant ${tenantId} resuming from saved session`))
       .catch((err) => console.warn(`[whatsappWeb] boot-restore tenant ${tenantId} failed: ${err.message}`));
   }
-  return { restored: tenantIds.length };
+  return { restored: capped.length };
 }
 
 function getSession(tenantId) {
@@ -327,6 +381,29 @@ function killBrowsersForDir(tenantId) {
     console.log(`[whatsappWeb] tenant ${tenantId} killed any orphan chromium holding ${marker}`);
   } catch (e) {
     console.warn(`[whatsappWeb] tenant ${tenantId} orphan-kill best-effort failed: ${e.message}`);
+  }
+}
+
+// Kill every Chromium whose command line references any session-travel-* profile.
+// Used once at init() to clean up zombies left by a previous crash/restart before
+// we spawn fresh browsers. Best-effort no-op.
+function killAllOrphanBrowsers() {
+  if (process.env.NODE_ENV === "test") return; // never spawn shells under test
+  try {
+    const { execSync } = require("child_process");
+    if (process.platform === "win32") {
+      const ps =
+        `Get-CimInstance Win32_Process | ` +
+        `Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*session-travel-*' } | ` +
+        `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+      const encoded = Buffer.from(ps, "utf16le").toString("base64");
+      execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { stdio: "ignore", timeout: 15000 });
+    } else {
+      execSync(`pkill -f "session-travel-" || true`, { stdio: "ignore", timeout: 15000, shell: "/bin/sh" });
+    }
+    console.log("[whatsappWeb] init: killed any orphan chromium processes from previous runs");
+  } catch (e) {
+    console.warn(`[whatsappWeb] init: orphan-kill best-effort failed: ${e.message}`);
   }
 }
 
@@ -2017,6 +2094,7 @@ module.exports = {
   shutdown,
   clearSession,
   killBrowsersForDir,
+  killAllOrphanBrowsers,
   clearStaleLocks,
   resolveChromePath,
   getState,

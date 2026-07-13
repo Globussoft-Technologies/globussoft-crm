@@ -6,7 +6,7 @@ import { setAuthToken } from "../utils/api";
 import { invalidatePermissionCache } from "../hooks/usePermissions";
 import { safeNext } from "../utils/safeNext";
 import PasswordInput from "../components/PasswordInput";
-import EmailOtpField from "../components/EmailOtpField";
+import ContactVerificationField from "../components/ContactVerificationField";
 
 // Self-service customer registration page (public, no auth required).
 // Backend handler at POST /api/auth/customer/register creates a User row with
@@ -57,8 +57,9 @@ export default function CustomerRegister() {
 
   const [tenants, setTenants] = useState([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);
-  // Email-OTP verification gate — null until the customer verifies their email.
-  const [emailVerificationToken, setEmailVerificationToken] = useState(null);
+  // Contact verification gate — null until the customer verifies their email or phone.
+  const [verificationToken, setVerificationToken] = useState(null);
+  const [verifiedContact, setVerifiedContact] = useState(null); // { type: 'email'|'phone', value }
   const [form, setForm] = useState({
     email: initialEmail,
     name: initialName,
@@ -132,6 +133,10 @@ export default function CustomerRegister() {
 
   const validate = () => {
     const e = {};
+    // Email is always required — it's the account login credential and a required
+    // DB field. When email verification was used the field is already populated
+    // from the verified contact; when phone verification was used the user enters
+    // it separately via the extra email input shown below the verification widget.
     if (!form.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
       e.email = "Enter a valid email";
     }
@@ -168,16 +173,20 @@ export default function CustomerRegister() {
       // a portal Contact and sign them straight in there.
       const selectedTenant = tenants.find((t) => String(t.id) === String(form.tenantId));
       if (selectedTenant?.vertical === "travel") {
+        const portalPayload = {
+          email: form.email.trim().toLowerCase(),
+          password: form.password,
+          name: form.name.trim(),
+          registrationTenantId: parseInt(form.tenantId, 10),
+          verificationToken,
+        };
+        if (verifiedContact?.type === "phone") {
+          portalPayload.phone = verifiedContact.value;
+        }
         const pres = await fetch("/api/portal/register", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: form.email.trim().toLowerCase(),
-            password: form.password,
-            name: form.name.trim(),
-            registrationTenantId: parseInt(form.tenantId, 10),
-            verificationToken: emailVerificationToken,
-          }),
+          body: JSON.stringify(portalPayload),
         });
         const pdata = await pres.json().catch(() => ({}));
         if (!pres.ok) {
@@ -199,19 +208,23 @@ export default function CustomerRegister() {
         return;
       }
 
+      const customerPayload = {
+        email: form.email.trim().toLowerCase(),
+        password: form.password,
+        name: form.name.trim(),
+        // #646: the global stripDangerous middleware on the backend deletes
+        // `tenantId` from every request body. The route accepts the chosen
+        // org under `registrationTenantId`, a non-stripped name.
+        registrationTenantId: parseInt(form.tenantId, 10),
+        verificationToken,
+      };
+      if (verifiedContact?.type === "phone") {
+        customerPayload.phone = verifiedContact.value;
+      }
       const res = await fetch("/api/auth/customer/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: form.email.trim().toLowerCase(),
-          password: form.password,
-          name: form.name.trim(),
-          // #646: the global stripDangerous middleware on the backend deletes
-          // `tenantId` from every request body. The route accepts the chosen
-          // org under `registrationTenantId`, a non-stripped name.
-          registrationTenantId: parseInt(form.tenantId, 10),
-          verificationToken: emailVerificationToken,
-        }),
+        body: JSON.stringify(customerPayload),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -310,16 +323,36 @@ export default function CustomerRegister() {
 
         <form onSubmit={handleSubmit} noValidate>
           <div style={{ marginBottom: "1rem" }}>
-            <EmailOtpField
-              value={form.email}
-              onChange={update("email")}
+            <ContactVerificationField
               purpose="customer-register"
-              onVerifiedChange={setEmailVerificationToken}
-              label="Email"
-              placeholder="you@example.com"
+              onVerifiedChange={setVerificationToken}
+              onContactChange={(contact) => {
+                setVerifiedContact(contact);
+                if (contact?.type === "email") setForm((prev) => ({ ...prev, email: contact.value }));
+              }}
               inputClassName="input-field"
               disabled={isLoading}
             />
+            {verifiedContact?.type === "phone" && (
+              <div style={{ marginTop: "0.75rem" }}>
+                <label style={{ display: "block", fontSize: "0.8rem", color: "var(--text-secondary)", marginBottom: "0.25rem", fontWeight: 500 }}>
+                  Account Email
+                </label>
+                <input
+                  type="email"
+                  className="input-field"
+                  placeholder="name@company.com"
+                  value={form.email}
+                  onChange={update("email")}
+                  disabled={isLoading}
+                  required
+                  autoComplete="email"
+                />
+                <small style={{ display: "block", marginTop: "0.25rem", color: "var(--text-secondary)", fontSize: "0.7rem" }}>
+                  Your email is used for account login and notifications.
+                </small>
+              </div>
+            )}
             {errors.email && (
               <div style={{ color: "var(--danger-color, #ef4444)", fontSize: "0.78rem", marginTop: 4 }}>{errors.email}</div>
             )}
@@ -472,10 +505,10 @@ export default function CustomerRegister() {
           <button
             type="submit"
             className="btn-primary"
-            disabled={isLoading || !emailVerificationToken}
-            style={{ width: "100%", opacity: !emailVerificationToken ? 0.6 : 1 }}
+            disabled={isLoading || !verificationToken}
+            style={{ width: "100%", opacity: !verificationToken ? 0.6 : 1 }}
           >
-            {isLoading ? "Creating account…" : !emailVerificationToken ? "Verify your email to continue" : "Create account"}
+            {isLoading ? "Creating account…" : !verificationToken ? "Verify your email or phone to continue" : "Create account"}
           </button>
         </form>
 

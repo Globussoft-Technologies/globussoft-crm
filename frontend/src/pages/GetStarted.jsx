@@ -5,7 +5,7 @@ import { AuthContext, ThemeContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import PasswordInput from '../components/PasswordInput';
-import EmailOtpField from '../components/EmailOtpField';
+import ContactVerificationField from '../components/ContactVerificationField';
 
 const C = {
   bg: '#f8fafc', bg2: '#ffffff', text: '#1e293b', text2: '#334155', text3: '#64748b', text4: '#94a3b8',
@@ -89,6 +89,8 @@ export default function GetStarted() {
   // backend register gate when REQUIRE_EMAIL_OTP=1, and gates the email-step
   // "Continue" button regardless (so the page is always OTP-safe).
   const [emailVerificationToken, setEmailVerificationToken] = useState(persisted?.emailVerificationToken || null);
+  // Tracks which contact (email or phone) was verified, so we can send the right field in the register call
+  const [verifiedContact, setVerifiedContact] = useState(null);
 
   // Load Razorpay SDK once
   useEffect(() => {
@@ -131,12 +133,18 @@ export default function GetStarted() {
   const handleCheckEmail = async (e) => {
     e.preventDefault();
     setError('');
-    if (!email || !email.includes('@')) {
-      setError('Please enter a valid email address');
+    if (!emailVerificationToken) {
+      setError('Please verify your email or phone to continue');
       return;
     }
-    if (!emailVerificationToken) {
-      setError('Please verify your email to continue');
+    // If verified via phone, skip the email-exists check and go straight to profile
+    if (verifiedContact?.type === 'phone') {
+      setEmailChecked(true);
+      setStep('profile');
+      return;
+    }
+    if (!email || !email.includes('@')) {
+      setError('Please enter a valid email address');
       return;
     }
     setLoading(true);
@@ -154,7 +162,7 @@ export default function GetStarted() {
       setEmailChecked(true);
       setStep('profile');
     } catch (err) {
-      setError('Unable to verify email. Please try again.');
+      setError('Unable to verify contact. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -180,18 +188,33 @@ export default function GetStarted() {
 
     setLoading(true);
     try {
+      const accountEmail = verifiedContact?.type === 'email'
+        ? (verifiedContact.value || email)
+        : email;
+
+      if (!accountEmail || !accountEmail.includes('@')) {
+        setError('A valid email address is required for your account.');
+        setLoading(false);
+        return;
+      }
+
+      const registerPayload = {
+        email: accountEmail,
+        password,
+        name: name.trim(),
+        organizationName: organizationName.trim(),
+        vertical,
+        themePreference,
+        verificationToken: emailVerificationToken,
+      };
+      if (verifiedContact?.type === 'phone') {
+        registerPayload.phone = verifiedContact.value;
+      }
+
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email,
-          password,
-          name: name.trim(),
-          organizationName: organizationName.trim(),
-          vertical,
-          themePreference,
-          verificationToken: emailVerificationToken,
-        }),
+        body: JSON.stringify(registerPayload),
       });
       const data = await res.json();
       if (res.ok && data.token) {
@@ -211,10 +234,11 @@ export default function GetStarted() {
 
         setStep('plan');
       } else if (data.code === 'EMAIL_NOT_VERIFIED' || data.code === 'EMAIL_VERIFICATION_REQUIRED') {
-        // Verification token expired between the email step and submit — bounce
+        // Verification token expired between the contact step and submit — bounce
         // back to re-verify rather than leaving them stuck on a generic error.
         setEmailVerificationToken(null);
-        setError('Your email verification expired — please verify your email again.');
+        setVerifiedContact(null);
+        setError('Your verification expired — please verify your email or phone again.');
         setStep('email');
       } else {
         setError(data.error || 'Registration failed. Please try again.');
@@ -386,16 +410,18 @@ export default function GetStarted() {
           {step === 'email' && (
             <>
               <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: 8 }}>Let's get started</h1>
-              <p style={{ color: C.text3, marginBottom: 28 }}>Enter your work email and verify it with the code we send you.</p>
+              <p style={{ color: C.text3, marginBottom: 28 }}>Verify your email or phone number to continue.</p>
               <form onSubmit={handleCheckEmail}>
                 <div style={{ marginBottom: 20 }}>
-                  <EmailOtpField
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                  <ContactVerificationField
                     purpose="signup"
-                    onVerifiedChange={setEmailVerificationToken}
-                    label="Work email"
-                    placeholder="you@company.com"
+                    onVerifiedChange={(token) => {
+                      setEmailVerificationToken(token);
+                    }}
+                    onContactChange={(contact) => {
+                      setVerifiedContact(contact);
+                      if (contact?.type === 'email') setEmail(contact.value);
+                    }}
                     inputStyle={inputStyle}
                     labelStyle={labelStyle}
                   />
@@ -414,7 +440,7 @@ export default function GetStarted() {
                   {loading
                     ? <Loader size={18} className="spin" />
                     : !emailVerificationToken
-                      ? 'Verify your email to continue'
+                      ? 'Verify your email or phone to continue'
                       : <>Continue <ArrowRight size={18} /></>}
                 </button>
               </form>
@@ -437,6 +463,23 @@ export default function GetStarted() {
                     style={inputStyle}
                   />
                 </div>
+                {verifiedContact?.type === 'phone' && (
+                  <div style={{ marginBottom: 16 }}>
+                    <label style={labelStyle}>Account Email</label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="name@company.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      style={inputStyle}
+                      autoComplete="email"
+                    />
+                    <p style={{ fontSize: '0.75rem', color: C.text3, marginTop: 4 }}>
+                      Your email is used for login and notifications.
+                    </p>
+                  </div>
+                )}
                 <div style={{ marginBottom: 16 }}>
                   <label style={labelStyle}>Organization name</label>
                   <input

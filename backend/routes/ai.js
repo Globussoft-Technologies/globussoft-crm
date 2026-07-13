@@ -2,6 +2,7 @@ const express = require("express");
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true }); // load root .env for GEMINI_API_KEY
 const { verifyToken } = require("../middleware/auth");
+const { llmLimiter } = require("../middleware/apiRateLimiters");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const router = express.Router();
@@ -22,7 +23,7 @@ if (GEMINI_KEY) {
 }
 
 // ── AI Email Draft ────────────────────────────────────────────────
-router.post("/draft", verifyToken, async (req, res) => {
+router.post("/draft", verifyToken, llmLimiter, async (req, res) => {
   try {
     const { context, recipientEmail, tone, contactId } = req.body;
     if (!context) return res.status(400).json({ error: "Please provide a subject or context." });
@@ -89,7 +90,7 @@ Requirements:
 });
 
 // ── AI Reply Suggestion ───────────────────────────────────────────
-router.post("/reply", verifyToken, async (req, res) => {
+router.post("/reply", verifyToken, llmLimiter, async (req, res) => {
   try {
     const { originalEmail, tone } = req.body;
     if (!originalEmail) return res.status(400).json({ error: "Original email content required." });
@@ -121,7 +122,7 @@ Requirements:
 });
 
 // ── AI Subject Line Suggestions ───────────────────────────────────
-router.post("/subject-lines", verifyToken, async (req, res) => {
+router.post("/subject-lines", verifyToken, llmLimiter, async (req, res) => {
   try {
     const { context, count } = req.body;
     if (!context) return res.status(400).json({ error: "Context required." });

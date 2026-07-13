@@ -13,6 +13,7 @@ const router = express.Router();
 
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
+const { llmLimiter } = require("../middleware/apiRateLimiters");
 const { analyzeMessage } = require("../cron/sentimentEngine");
 
 /**
@@ -22,7 +23,7 @@ const { analyzeMessage } = require("../cron/sentimentEngine");
  *
  * Stateless ad-hoc analysis (does not touch the DB).
  */
-router.post("/analyze", verifyToken, async (req, res) => {
+router.post("/analyze", verifyToken, llmLimiter, async (req, res) => {
   try {
     const { text } = req.body || {};
     if (!text || typeof text !== "string") {
@@ -40,7 +41,7 @@ router.post("/analyze", verifyToken, async (req, res) => {
  * POST /api/sentiment/analyze-message/:emailId
  * Analyze a specific email (current tenant only) and persist the result.
  */
-router.post("/analyze-message/:emailId", verifyToken, async (req, res) => {
+router.post("/analyze-message/:emailId", verifyToken, llmLimiter, async (req, res) => {
   try {
     const emailId = parseInt(req.params.emailId, 10);
     if (Number.isNaN(emailId)) {
@@ -74,7 +75,7 @@ router.post("/analyze-message/:emailId", verifyToken, async (req, res) => {
  *
  * Tenant-scoped — silently ignores ids that don't belong to this tenant.
  */
-router.post("/analyze-batch", verifyToken, async (req, res) => {
+router.post("/analyze-batch", verifyToken, llmLimiter, async (req, res) => {
   try {
     const { emailIds } = req.body || {};
     if (!Array.isArray(emailIds) || emailIds.length === 0) {

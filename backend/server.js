@@ -819,7 +819,7 @@ const wellnessCsvRoutes = require("./routes/wellnessCsv");
 // Both routes are public on purpose — docs discoverability is the
 // whole point. The Nginx site config additionally proxies `/api-docs*`
 // to the backend (commit applied via scripts/apply-api-docs-nginx.py
-// closing #542).
+// closing #542). The button was removed from the Developer page UI.
 const swaggerDocument = YAML.load(path.join(__dirname, "swagger.yaml"));
 app.get("/api-docs/swagger.json", (req, res) => {
   res.json(swaggerDocument);
@@ -1934,6 +1934,16 @@ const _gracefulShutdown = (signal) => {
   // boot even though the phone still has the device linked. Best-effort + time-
   // boxed so a hung client can't block the rest of shutdown.
   Promise.resolve()
+    .then(() => {
+      // Kill in-flight brochure engine subprocesses FIRST — they're disposable
+      // (the operator can re-run), and their Chromes would otherwise survive
+      // the restart as orphans reparented to init.
+      try {
+        require("./services/brochureEngineBridge").shutdown();
+      } catch (e) {
+        console.warn("[shutdown] brochure bridge shutdown warn:", e && e.message);
+      }
+    })
     .then(() => require("./services/whatsappWebClient").shutdown())
     .catch((e) =>
       console.warn("[shutdown] whatsapp shutdown warn:", e && e.message),

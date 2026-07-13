@@ -1,5 +1,6 @@
 const express = require("express");
 const { verifyToken } = require("../middleware/auth");
+const { pushSendLimiter } = require("../middleware/apiRateLimiters");
 const pushService = require("../services/pushService");
 
 const router = express.Router();
@@ -58,7 +59,7 @@ router.delete("/unsubscribe", verifyToken, async (req, res) => {
 });
 
 // Send push to specific users (ADMIN/MANAGER)
-router.post("/send", verifyToken, async (req, res) => {
+router.post("/send", verifyToken, pushSendLimiter, async (req, res) => {
   try {
     const { userIds, title, body, url, icon } = req.body;
     if (!title || !body) return res.status(400).json({ error: "Title and body required" });
@@ -105,7 +106,7 @@ router.post("/send", verifyToken, async (req, res) => {
 //      affecting the general /send path.
 //
 // Body fields are all optional; sensible defaults if absent.
-router.post("/send-test", verifyToken, async (req, res) => {
+router.post("/send-test", verifyToken, pushSendLimiter, async (req, res) => {
   try {
     const { title, body, url, icon } = req.body || {};
     const finalTitle = title || "Test notification";
@@ -134,7 +135,7 @@ router.post("/send-test", verifyToken, async (req, res) => {
 });
 
 // Send marketing push to all visitor subscriptions in this tenant
-router.post("/send-campaign", verifyToken, async (req, res) => {
+router.post("/send-campaign", verifyToken, pushSendLimiter, async (req, res) => {
   try {
     const { title, body, url, icon } = req.body;
     if (!title || !body) return res.status(400).json({ error: "Title and body required" });

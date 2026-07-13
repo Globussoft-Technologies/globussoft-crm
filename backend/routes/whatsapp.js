@@ -35,6 +35,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { whatsappSendLimiter, webhookLimiter } = require("../middleware/apiRateLimiters");
 const {
   sendTemplate,
   sendText,
@@ -94,7 +95,7 @@ function isStopKeyword(body) {
 }
 
 // ─── Send WhatsApp Message ─────────────────────────────────────────────────
-router.post("/send", verifyToken, async (req, res) => {
+router.post("/send", verifyToken, whatsappSendLimiter, async (req, res) => {
   try {
     const { to, body, templateName, parameters, contactId } = req.body;
 
@@ -2140,7 +2141,7 @@ router.get("/webhook", async (req, res) => {
 
 // ─── Meta Webhook POST (TOMBSTONE) ─────────────────────────────────────────
 // See the GET /webhook stub above for the full P1 explanation.
-router.post("/webhook", async (req, res) => {
+router.post("/webhook", webhookLimiter, async (req, res) => {
   console.error(
     "[whatsapp routes/whatsapp.js] LEGACY POST /webhook reached — " +
       "mount order is wrong; routes/whatsapp_webhook.js must be mounted " +

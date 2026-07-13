@@ -9,6 +9,7 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyRole } = require("../middleware/auth");
 const { hasModuleAction } = require("../middleware/fieldFilter");
+const { emailSendLimiter } = require("../middleware/apiRateLimiters");
 
 // Compose-mail attachments: memory storage so the buffer can be base64'd
 // straight into the SendGrid payload without a disk round-trip. multer is a
@@ -225,7 +226,7 @@ function parseRecipients(toField) {
 // Multi-recipient calls expose the full per-recipient breakdown via `results` /
 // `failures`. Mailgun is called once per valid recipient (no BCC fan-out — keeps
 // per-recipient tracking pixels distinct).
-router.post("/send-email", composeAttachmentUpload, async (req, res) => {
+router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req, res) => {
   const canAccess = await hasModuleAction(req.user, "Communications", "WRITE");
   if (!canAccess) {
     return res.status(403).json({ error: "You don't have permission to access Communications" });

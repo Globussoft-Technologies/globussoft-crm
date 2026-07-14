@@ -375,6 +375,66 @@ describe('POST /create-order — Razorpay order creation', () => {
     // falls back to the plan's own `currency` column.
     expect(razorpayService.createOrder).toHaveBeenCalledWith(1999, 2, 'INR');
   });
+
+  test('annual billing period multiplies the per-month rate × 12 before charging Razorpay', async () => {
+    // The pricing JSON stores `annual: 499` (per-month rate for annual plan).
+    // When billingPeriod='annual', the route must charge 499 × 12 = 5988,
+    // not 499 — matching the annual total shown on the /pricing card.
+    prisma.subscriptionPlan.findUnique.mockResolvedValue({
+      id: 1,
+      name: 'Starter',
+      price: 499,
+      currency: 'INR',
+      billingIntervalDays: 365,
+      pricing: JSON.stringify({
+        inr: { annual: 499, monthly: 649, yearAnnualLabel: '₹5,988 /user/year', yearMonthlyLabel: '₹7,788 /user/year' },
+        usd: { annual: 6, monthly: 8, yearAnnualLabel: '$72 /user/year', yearMonthlyLabel: '$96 /user/year' },
+      }),
+    });
+    razorpayService.createOrder.mockResolvedValue({
+      id: 'order_annual_inr',
+      amount: 598800, // 5988 × 100 paise
+      currency: 'INR',
+    });
+
+    const res = await authedPost(makeApp(), '/api/subscriptions/create-order', {
+      planId: 1,
+      currency: 'inr',
+      billingPeriod: 'annual',
+    });
+
+    expect(res.status).toBe(200);
+    // chargeAmount must be 499 × 12 = 5988, not 499.
+    expect(razorpayService.createOrder).toHaveBeenCalledWith(5988, 1, 'INR');
+  });
+
+  test('monthly billing period charges the per-month rate as-is (no ×12)', async () => {
+    prisma.subscriptionPlan.findUnique.mockResolvedValue({
+      id: 1,
+      name: 'Starter',
+      price: 649,
+      currency: 'INR',
+      billingIntervalDays: 30,
+      pricing: JSON.stringify({
+        inr: { annual: 499, monthly: 649, yearAnnualLabel: '₹5,988 /user/year', yearMonthlyLabel: '₹7,788 /user/year' },
+      }),
+    });
+    razorpayService.createOrder.mockResolvedValue({
+      id: 'order_monthly_inr',
+      amount: 64900,
+      currency: 'INR',
+    });
+
+    const res = await authedPost(makeApp(), '/api/subscriptions/create-order', {
+      planId: 1,
+      currency: 'inr',
+      billingPeriod: 'monthly',
+    });
+
+    expect(res.status).toBe(200);
+    // Monthly rate used as-is — no multiplication.
+    expect(razorpayService.createOrder).toHaveBeenCalledWith(649, 1, 'INR');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────

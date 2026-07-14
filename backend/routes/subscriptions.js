@@ -386,7 +386,9 @@ router.post('/create-order', verifyToken, verifyRole(['ADMIN']), async (req, res
           const raw = String(bucket[per]).replace(/,/g, '').trim();
           const parsedAmount = parseFloat(raw);
           if (!Number.isNaN(parsedAmount) && parsedAmount > 0) {
-            chargeAmount = parsedAmount;
+            // For annual billing, the stored value is the per-month rate.
+            // Charge the full annual total (per-month × 12).
+            chargeAmount = per === 'annual' ? parsedAmount * 12 : parsedAmount;
             chargeCurrency = cur === 'usd' ? 'USD' : 'INR';
           }
         }

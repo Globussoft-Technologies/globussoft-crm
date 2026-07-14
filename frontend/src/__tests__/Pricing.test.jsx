@@ -184,9 +184,10 @@ describe('<Pricing /> -- public marketing pricing page', () => {
     // Currency buttons render both options.
     expect(screen.getByRole('button', { name: /\$ USD/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /INR/ })).toBeInTheDocument();
-    // USD-mode default: confirm the year-equivalent label is in dollars
-    // (which is unique per tier so getByText works).
-    expect(screen.getByText(/\$72 \/user\/year/i)).toBeInTheDocument();
+    // USD-mode default: confirm the billing label reads "billed annually"
+    // and the small per-month rate line renders for the starter tier.
+    expect(screen.getAllByText(/\/user\/year, billed annually/i).length).toBe(3);
+    expect(screen.getByText(/\$6\/user\/month/i)).toBeInTheDocument();
   });
 
   it('renders the three plan names (Starter / Professional / Enterprise) and the MOST POPULAR badge on Professional', () => {
@@ -201,18 +202,18 @@ describe('<Pricing /> -- public marketing pricing page', () => {
     expect(screen.getByText(/MOST POPULAR/i)).toBeInTheDocument();
   });
 
-  it('renders the default USD-annual prices via the year-equivalent labels: $72 / $216 / $348', () => {
+  it('renders the default USD-annual prices: big number is annual total (72/216/348), small line is per-month rate', () => {
     renderPricing();
-    // The big-number price and the symbol are in separate spans; the
-    // comparison-table header concatenates them as "$6/mo". Use the
-    // year-equivalent label which is uniquely formatted per tier in
-    // USD-annual mode and unambiguous.
-    expect(screen.getByText(/\$72 \/user\/year/i)).toBeInTheDocument();
-    expect(screen.getByText(/\$216 \/user\/year/i)).toBeInTheDocument();
-    expect(screen.getByText(/\$348 \/user\/year/i)).toBeInTheDocument();
-    // The "/user/month, billed annually" copy appears on each of the
-    // three plan cards.
-    const annualLabels = screen.getAllByText(/\/user\/month, billed annually/i);
+    // Annual mode: big number shows the annual total extracted from
+    // yearAnnualLabel ("72", "216", "348"). The year-equivalent label
+    // text is still present in the small secondary line as "$6/user/month" etc.
+    // Use the unique per-tier secondary labels to confirm the swap.
+    expect(screen.getByText(/\$6\/user\/month/i)).toBeInTheDocument();
+    expect(screen.getByText(/\$18\/user\/month/i)).toBeInTheDocument();
+    expect(screen.getByText(/\$29\/user\/month/i)).toBeInTheDocument();
+    // The "/user/year, billed annually" billing copy appears on each of the
+    // three plan cards (was "/user/month, billed annually" before the swap).
+    const annualLabels = screen.getAllByText(/\/user\/year, billed annually/i);
     expect(annualLabels.length).toBe(3);
     // The currency symbol ($) appears on each price card AND each
     // comparison-table column header. At minimum 3 (one per tier card).
@@ -220,31 +221,34 @@ describe('<Pricing /> -- public marketing pricing page', () => {
     expect(dollarSymbols.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('toggling Monthly flips the displayed year-equivalent labels to monthly tier: $96 / $264 / $432', () => {
+  it('toggling Monthly shows per-month rates as the big number with billed-monthly label', () => {
     renderPricing();
     // The "Monthly" label is a clickable span next to the toggle.
     fireEvent.click(screen.getByText(/^Monthly$/i));
-    // After the flip, the monthly year-equivalent labels render.
-    expect(screen.getByText(/\$96 \/user\/year/i)).toBeInTheDocument();
-    expect(screen.getByText(/\$264 \/user\/year/i)).toBeInTheDocument();
-    expect(screen.getByText(/\$432 \/user\/year/i)).toBeInTheDocument();
-    // The /user/month copy now reads "billed monthly".
+    // In monthly mode the big number IS the monthly rate; small line also
+    // shows the same monthly rate. The billing label reads "billed monthly".
     const monthlyLabels = screen.getAllByText(/\/user\/month, billed monthly/i);
     expect(monthlyLabels.length).toBe(3);
-    // The annual-tier year labels ($72 / $216 / $348) no longer render.
-    expect(screen.queryByText(/\$72 \/user\/year/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/\$216 \/user\/year/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/\$348 \/user\/year/i)).not.toBeInTheDocument();
+    // The secondary per-month line renders the monthly rates.
+    expect(screen.getByText(/\$8\/user\/month/i)).toBeInTheDocument();
+    expect(screen.getByText(/\$22\/user\/month/i)).toBeInTheDocument();
+    expect(screen.getByText(/\$36\/user\/month/i)).toBeInTheDocument();
+    // The annual billing label is gone.
+    expect(screen.queryByText(/\/user\/year, billed annually/i)).not.toBeInTheDocument();
   });
 
-  it('toggling currency to INR swaps prices to the rupee tier: 5,988 / 17,988 / 29,988 per-year', () => {
+  it('toggling currency to INR swaps prices: big number is annual total, small line is per-month rate', () => {
     renderPricing();
     // Click the INR currency button.
     fireEvent.click(screen.getByRole('button', { name: /INR/ }));
-    // The INR-annual year-equivalent labels render.
-    expect(screen.getByText(/5,988 \/user\/year/i)).toBeInTheDocument();
-    expect(screen.getByText(/17,988 \/user\/year/i)).toBeInTheDocument();
-    expect(screen.getByText(/29,988 \/user\/year/i)).toBeInTheDocument();
+    // Annual mode + INR: big number is the annual total (5,988 / 17,988 / 29,988).
+    // The small secondary line shows the per-month rate (499 / 1,499 / 2,499).
+    expect(screen.getByText(/499\/user\/month/i)).toBeInTheDocument();
+    expect(screen.getByText(/1,499\/user\/month/i)).toBeInTheDocument();
+    expect(screen.getByText(/2,499\/user\/month/i)).toBeInTheDocument();
+    // Billing label reads /user/year, billed annually.
+    const annualLabels = screen.getAllByText(/\/user\/year, billed annually/i);
+    expect(annualLabels.length).toBe(3);
     // The USD year labels no longer render.
     expect(screen.queryByText(/\$72 \/user\/year/i)).not.toBeInTheDocument();
   });

@@ -1483,28 +1483,22 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
       onClose={onClose}
       width={760}
     >
-      {/* Sticky search bar — pins to the top of the modal's scroll
-          container so it stays in reach while the admin scrolls
-          through 40+ modules. Filters by module name, description,
-          page-catalog "Unlocks" labels, and action names. */}
+      {/* Search bar — sticks to top of the scrollable body */}
       <div
         style={{
           position: 'sticky',
           top: 0,
-          zIndex: 2,
-          marginBottom: '0.75rem',
-          background: 'var(--surface-color)',
-          paddingBottom: '0.5rem',
-          // Negative margin + matching padding pulls the sticky band out
-          // to the ModalShell's left/right edges so the row visually
-          // anchors to the modal's chrome instead of looking like a
-          // floating widget inside the content padding.
+          zIndex: 10,
+          background: 'var(--bg-color)',
+          paddingTop: '0.25rem',
+          paddingBottom: '0.75rem',
           marginLeft: '-1.25rem',
           marginRight: '-1.25rem',
           paddingLeft: '1.25rem',
           paddingRight: '1.25rem',
-          paddingTop: '0.25rem',
           borderBottom: '1px solid var(--border-color)',
+          boxShadow: '0 3px 10px rgba(0,0,0,0.2)',
+          marginBottom: '0.75rem',
         }}
       >
         <div style={{ position: 'relative' }}>
@@ -1517,7 +1511,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
             style={{
               width: '100%',
               boxSizing: 'border-box',
-              padding: '0.55rem 2.2rem 0.55rem 0.85rem',
+              padding: '0.6rem 2.4rem 0.6rem 0.85rem',
               fontSize: '0.9rem',
               borderRadius: 8,
               border: '1px solid var(--border-color)',
@@ -1537,16 +1531,22 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
                 top: '50%',
                 right: '0.5rem',
                 transform: 'translateY(-50%)',
-                background: 'transparent',
+                background: 'var(--text-secondary)',
                 border: 'none',
-                color: 'var(--text-secondary)',
+                borderRadius: '50%',
+                color: 'var(--bg-color)',
                 cursor: 'pointer',
-                fontSize: '1.1rem',
-                lineHeight: 1,
-                padding: '0.2rem 0.35rem',
+                padding: 0,
+                width: '1.25rem',
+                height: '1.25rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                opacity: 0.85,
               }}
             >
-              ×
+              <X size={12} strokeWidth={3} />
             </button>
           )}
         </div>
@@ -2896,66 +2896,75 @@ function ModalShell({ title, subtitle, onClose, width = 480, children }) {
           width: '100%',
           maxWidth: width,
           maxHeight: '90vh',
-          overflow: 'auto',
-          // Opaque `--bg-color` (light: #f0f2f5, dark: #0b0c10) so the
-          // panel reads as a solid slab against the dimmed page — mirrors
-          // the travel `Trips.jsx` New Trip modal pattern. The prior
-          // `--surface-color` (translucent rgba) + `.glass` class (16px
-          // backdrop-blur) washed the matrix out in light mode: form
-          // controls, dashed-border picker buttons and `--subtle-bg-*`
-          // widget cards all sat on a low-contrast translucent panel,
-          // making the per-row borders and section headers read flat.
-          // Opaque slab + dropped `.glass` blur gives every popup on
-          // this page (Create / Edit / Permissions matrix / Widgets /
-          // Users / Delete confirm) the same crisp shape as Trips.
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
           background: 'var(--bg-color)',
           color: 'var(--text-primary)',
           borderRadius: 12,
           border: '1px solid var(--border-color)',
-          padding: '1.25rem',
           boxShadow: '0 18px 40px rgba(0,0,0,0.45)',
         }}
       >
+        {/* Fixed header — title + close button, never scrolls */}
         <div
           style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'space-between',
-            gap: '0.5rem',
-            marginBottom: subtitle ? '0.5rem' : '1rem',
+            flexShrink: 0,
+            padding: '1.25rem 1.25rem 0 1.25rem',
           }}
         >
-          <div>
-            <h2 style={{ margin: 0, fontSize: '1.1rem' }}>{title}</h2>
-            {subtitle && (
-              <p
-                style={{
-                  margin: '0.2rem 0 0',
-                  color: 'var(--text-secondary)',
-                  fontSize: '0.8rem',
-                }}
-              >
-                {subtitle}
-              </p>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
+          <div
             style={{
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'var(--text-secondary)',
-              padding: '0.25rem',
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: '0.5rem',
+              marginBottom: subtitle ? '0.5rem' : '1rem',
             }}
           >
-            <X size={18} />
-          </button>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>{title}</h2>
+              {subtitle && (
+                <p
+                  style={{
+                    margin: '0.2rem 0 0',
+                    color: 'var(--text-secondary)',
+                    fontSize: '0.8rem',
+                  }}
+                >
+                  {subtitle}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                color: 'var(--text-secondary)',
+                padding: '0.25rem',
+                flexShrink: 0,
+              }}
+            >
+              <X size={18} />
+            </button>
+          </div>
+          {subtitle && <div style={{ marginBottom: '0.75rem' }} />}
         </div>
-        {subtitle && <div style={{ marginBottom: '0.75rem' }} />}
-        {children}
+        {/* Scrollable body — only this region scrolls */}
+        <div
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '0 1.25rem 1.25rem 1.25rem',
+          }}
+        >
+          {children}
+        </div>
       </div>
     </div>,
     document.body,

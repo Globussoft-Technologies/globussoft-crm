@@ -9,6 +9,16 @@ import { Link, useNavigate } from 'react-router-dom';
 import PasswordInput from '../components/PasswordInput';
 import { AuthContext } from '../App';
 
+function passwordStrength(p) {
+  let s = 0;
+  if (p.length >= 8) s += 1;
+  if (/[A-Z]/.test(p)) s += 1;
+  if (/[a-z]/.test(p)) s += 1;
+  if (/[0-9]/.test(p)) s += 1;
+  if (/[^A-Za-z0-9]/.test(p)) s += 1;
+  return s;
+}
+
 export default function ResetPassword() {
   const navigate = useNavigate();
   const { setToken } = useContext(AuthContext);
@@ -18,6 +28,11 @@ export default function ResetPassword() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [done, setDone] = useState(false);
+
+  const strength = passwordStrength(password);
+  const strengthLabel = strength <= 2 ? 'Weak' : strength === 3 ? 'Fair' : strength === 4 ? 'Good' : 'Strong';
+  const strengthColor = strength <= 2 ? '#ef4444' : strength === 3 ? '#f59e0b' : '#10b981';
+  const passwordsMatch = confirm.length > 0 && password === confirm;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -108,10 +123,6 @@ export default function ResetPassword() {
           </div>
         ) : (
           <form onSubmit={submit} style={{ marginTop: 8 }}>
-            <p style={{ margin: '0 0 1.25rem', fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-              Enter a new password — at least 8 characters, with one letter and one number.
-            </p>
-
             <div style={{ marginBottom: '1rem' }}>
               <label style={{
                 display: 'block', marginBottom: 6, fontSize: 13, fontWeight: 600,
@@ -127,6 +138,22 @@ export default function ResetPassword() {
                 required
                 minLength={8}
               />
+              {password && (
+                <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 1, height: 4, background: 'var(--border-color)', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{
+                      width: `${(strength / 5) * 100}%`,
+                      height: '100%',
+                      background: strengthColor,
+                      transition: 'width 0.15s, background 0.15s',
+                    }} />
+                  </div>
+                  <span style={{ fontSize: 11, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{strengthLabel}</span>
+                </div>
+              )}
+              <small style={{ display: 'block', marginTop: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
+                At least 8 characters, including a letter and a number.
+              </small>
             </div>
 
             <div style={{ marginBottom: '0.5rem' }}>
@@ -143,6 +170,18 @@ export default function ResetPassword() {
                 autoComplete="new-password"
                 required
               />
+              {confirm && (
+                <div style={{
+                  marginTop: 6, display: 'flex', alignItems: 'center', gap: 6,
+                  fontSize: 12, color: passwordsMatch ? '#10b981' : '#ef4444',
+                }}>
+                  {passwordsMatch ? (
+                    <><span>✓</span><span>Passwords match</span></>
+                  ) : (
+                    <><span>✕</span><span>Passwords don't match</span></>
+                  )}
+                </div>
+              )}
             </div>
 
             {error && (

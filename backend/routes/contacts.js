@@ -453,7 +453,8 @@ router.post('/', async (req, res) => {
 });
 
 // Bulk assign agent to multiple contacts (must be before /:id routes)
-router.put('/bulk-assign', async (req, res) => {
+// Restricted to ADMIN only — only admins may reassign leads between staff.
+router.put('/bulk-assign', verifyRole(['ADMIN']), async (req, res) => {
   try {
     const { contactIds, assignedToId } = req.body;
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
@@ -822,8 +823,8 @@ router.post('/import-csv', async (req, res) => {
   }
 });
 
-// Assign agent to a contact
-router.put('/:id/assign', async (req, res) => {
+// Assign agent to a contact — restricted to ADMIN only.
+router.put('/:id/assign', verifyRole(['ADMIN']), async (req, res) => {
   try {
     const { assignedToId } = req.body;
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });

@@ -6,7 +6,7 @@
  * Scope — the SUT is a pure PRESENTATION SHELL (declarative, no useState /
  * useEffect / fetch / mutation). It renders a heading, an optional sub-copy
  * line interpolating tenant.name + user.name|user.email from AuthContext,
- * a "Phase 2 — TS21 scaffold" status pill, an advisory blurb, and 4 nav
+ * an advisory blurb, and 4 nav
  * cards each wrapping a react-router <Link> to a deeper Travel Stall surface
  * pre-filtered with `?subBrand=travelstall`. There is NO loading state, NO
  * KPI tile, NO filter chrome, NO mutation surface, NO RBAC gating in the
@@ -16,8 +16,7 @@
  *   1. Page chrome — heading: <h1> "Travel Stall" renders (the Sparkles
  *      icon is decorative, asserted aria-hidden by surfacing the heading
  *      via getByRole('heading')).
- *   2. Page chrome — Phase 2 status pill: "Phase 2 — TS21 scaffold" badge
- *      text renders verbatim (signals to operators this is a scaffold).
+ *   2. Page chrome — Phase 2 status pill removed (no longer rendered).
  *   3. Sub-copy — full interpolation: when AuthContext exposes both
  *      tenant.name and user.name, the sub-copy reads
  *      "Family holidays operator console · <tenant.name> · <user.name>"
@@ -167,9 +166,9 @@ describe('<TravelStallDashboard /> — page chrome', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders the "Phase 2 — TS21 scaffold" status pill', () => {
+  it('does not render the Phase 2 scaffold status pill', () => {
     renderPage();
-    expect(screen.getByText(/Phase 2 — TS21 scaffold/)).toBeInTheDocument();
+    expect(screen.queryByText(/Phase 2 — TS21 scaffold/)).not.toBeInTheDocument();
   });
 
   it('renders the advisory blurb about per-card sub-brand filtering', () => {

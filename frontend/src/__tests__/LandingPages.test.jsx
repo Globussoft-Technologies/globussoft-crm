@@ -225,16 +225,18 @@ describe('<LandingPages /> — index page surface', () => {
     expect(editLinks.some((a) => a.getAttribute('href') === '/landing-pages/builder/12')).toBe(true);
   });
 
-  it('publish-toggle reads "Publish" for DRAFT + "Unpublish" for PUBLISHED; clicking fires the matching POST', async () => {
+  it('publish-toggle reads "Publish" for DRAFT + "Unpublish" for PUBLISHED', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
     // Both buttons render on first paint — one for each row.
     expect(screen.getByRole('button', { name: /^Publish$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Unpublish$/i })).toBeInTheDocument();
+  });
 
-    // Click Unpublish (row 11, PUBLISHED → unpublish). loadPages() then
-    // re-fires GET /api/landing-pages which under the default mock returns
-    // the SAME samplePages array, so the buttons render again afterwards.
+  it('clicking Unpublish fires POST /api/landing-pages/:id/unpublish', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
     fetchApiMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /^Unpublish$/i }));
     await waitFor(() => {
@@ -243,20 +245,61 @@ describe('<LandingPages /> — index page surface', () => {
       );
       expect(call).toBeTruthy();
     });
+  });
 
-    // Re-query the Publish button (post-rerender — the original reference
-    // detaches after loadPages() refetches).
-    fetchApiMock.mockClear();
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Publish$/i })).toBeInTheDocument();
+  it('clicking Publish fires POST /api/landing-pages/:id/publish when no other page is PUBLISHED', async () => {
+    // The hard-block rule: if any other page is already PUBLISHED, the Publish
+    // button is disabled and clicking it calls notify.error instead of the API.
+    // This test uses a dataset where BOTH pages are DRAFT so the Publish call
+    // can go through.
+    const allDraftPages = [
+      { id: 11, title: 'Spring Launch', slug: 'spring-launch', status: 'DRAFT', visits: 0, submissions: 0 },
+      { id: 12, title: 'Winter Promo Draft', slug: 'winter-promo', status: 'DRAFT', visits: 0, submissions: 0 },
+    ];
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/landing-pages' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(allDraftPages);
+      }
+      if (url === '/api/landing-pages/templates/list') return Promise.resolve(sampleTemplates);
+      if (opts?.method === 'POST') return Promise.resolve({ ok: true });
+      return Promise.resolve(null);
     });
-    fireEvent.click(screen.getByRole('button', { name: /^Publish$/i }));
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    // With two DRAFT pages both Publish buttons are enabled. Click the first.
+    fetchApiMock.mockClear();
+    const publishBtns = screen.getAllByRole('button', { name: /^Publish$/i });
+    expect(publishBtns.length).toBe(2); // one per DRAFT card
+    fireEvent.click(publishBtns[0]);
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/landing-pages/12/publish' && o?.method === 'POST',
+        ([u, o]) => typeof u === 'string' && u.endsWith('/publish') && o?.method === 'POST',
       );
       expect(call).toBeTruthy();
     });
+  });
+
+  it('clicking Publish when another page is already PUBLISHED calls notify.error (hard-block)', async () => {
+    // samplePages has id=11 as PUBLISHED and id=12 as DRAFT.
+    // The hard-block must prevent publishing id=12 and call notify.error instead.
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    fetchApiMock.mockClear();
+    // The Publish button for the DRAFT page (id=12) should be disabled by the SUT.
+    // Clicking it should fire notify.error, not the API.
+    const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
+    fireEvent.click(publishBtn);
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalled();
+    });
+    // No publish API call should have fired.
+    const publishCall = fetchApiMock.mock.calls.find(
+      ([u, o]) => typeof u === 'string' && u.endsWith('/publish') && o?.method === 'POST',
+    );
+    expect(publishCall).toBeUndefined();
   });
 
   it('clicking the header Create Page button opens the template picker with templates + Blank Page tile', async () => {

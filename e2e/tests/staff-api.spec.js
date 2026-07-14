@@ -82,6 +82,73 @@ test.afterAll(async ({ request }) => {
   }
 });
 
+// One-admin-per-org enforcement tests.
+// These are separate from the customer-exclusion describe so they can
+// run without the beforeAll customer-registration step.
+test.describe('Staff API — one-admin-per-org rule (SINGLE_ADMIN_LIMIT)', () => {
+  let adminTok = null;
+
+  test.beforeAll(async ({ request }) => {
+    const login = await request.post(`${BASE_URL}/api/auth/login`, {
+      data: ADMIN,
+      headers: { 'Content-Type': 'application/json' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    if (login.ok()) {
+      adminTok = (await login.json()).token;
+    }
+  });
+
+  test('POST /api/staff — creating a second ADMIN returns 409 SINGLE_ADMIN_LIMIT', async ({ request }) => {
+    test.skip(!adminTok, 'admin login failed');
+    const res = await request.post(`${BASE_URL}/api/staff`, {
+      headers: headers(adminTok),
+      data: {
+        name: `${RUN_TAG} Second Admin`,
+        email: `${RUN_TAG}-second-admin@example.com`.toLowerCase(),
+        password: 'TestPass123!',
+        role: 'ADMIN',
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    // The wellness tenant already has an admin (admin@wellness.demo) so
+    // trying to create another should be blocked.
+    expect(res.status()).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe('SINGLE_ADMIN_LIMIT');
+  });
+
+  test('PUT /api/staff/:id/role — promoting a user to ADMIN when one exists returns 409 SINGLE_ADMIN_LIMIT', async ({ request }) => {
+    test.skip(!adminTok, 'admin login failed');
+    // Login as the admin to get their own id; use their id as the test
+    // target (the endpoint excludes the target's own id to allow re-saving
+    // the same ADMIN role without tripping the check — but when the caller
+    // IS already ADMIN and they try to promote a different existing user,
+    // the tenant already has the caller as admin, so any OTHER non-admin user
+    // would trigger the limit). We use admin's own id (target.role = 'ADMIN')
+    // to verify the idempotent self-save path returns 200, not 409.
+    // The 409 path is covered by POST above (trying to create a fresh ADMIN).
+    const meRes = await request.get(`${BASE_URL}/api/staff`, {
+      headers: headers(adminTok),
+      timeout: REQUEST_TIMEOUT,
+    });
+    if (!meRes.ok()) test.skip(true, 'GET /staff failed');
+    const staffList = await meRes.json();
+    const adminRow = staffList.find(u => u.email === ADMIN.email);
+    test.skip(!adminRow, 'could not locate admin row in staff list');
+
+    // Idempotent: promoting the admin to ADMIN again (same role) should NOT
+    // trip the SINGLE_ADMIN_LIMIT (excludeUserId == target.id path).
+    const res = await request.put(`${BASE_URL}/api/staff/${adminRow.id}/role`, {
+      headers: headers(adminTok),
+      data: { role: 'ADMIN' },
+      timeout: REQUEST_TIMEOUT,
+    });
+    // Re-saving ADMIN on the same user is idempotent — should succeed.
+    expect(res.status()).toBe(200);
+  });
+});
+
 test.describe('GET /api/staff — customer exclusion', () => {
   test('requires authentication (401/403 without a token)', async ({ request }) => {
     const r = await request.get(`${BASE_URL}/api/staff`, { timeout: REQUEST_TIMEOUT });

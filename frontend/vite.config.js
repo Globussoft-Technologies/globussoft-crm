@@ -77,13 +77,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path,
       },
-      // /trips renders the currently featured published landing page
-      // as server-rendered HTML. Must proxy to the backend, not the SPA.
-      '/trips': {
-        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
-        changeOrigin: true,
-        rewrite: (path) => path,
-      },
+      // /trips is NOT proxied — Vite serves the SPA shell here.
+      // TripsResolver fetches /api/landing-pages/public/featured:
+      //   - featured page exists → window.location.replace('/trips') hits
+      //     Express directly (port 5000) via the backend, serves HTML inline.
+      //   - no featured page → TripsLanding fallback renders in the SPA.
     }
   },
   build: {

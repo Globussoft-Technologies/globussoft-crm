@@ -843,6 +843,15 @@ test.describe('Contacts API — PUT /bulk-assign', () => {
     const after = await (await get(request, token, `/api/contacts/${a.id}`)).json();
     expect(after.assignedToId).toBeNull();
   });
+
+  test('403 when non-ADMIN (USER role) attempts bulk-assign', async ({ request }) => {
+    const { token } = await getUser(request);
+    const res = await put(request, token, '/api/contacts/bulk-assign', {
+      contactIds: [1],
+      assignedToId: 1,
+    });
+    expect(res.status()).toBe(403);
+  });
 });
 
 // ─── PUT /api/contacts/:id/assign ───────────────────────────────────
@@ -877,6 +886,14 @@ test.describe('Contacts API — PUT /:id/assign', () => {
     });
     expect(res.status()).toBe(200);
     expect((await res.json()).assignedToId).toBeNull();
+  });
+
+  test('403 when non-ADMIN (USER role) attempts single assign', async ({ request }) => {
+    const { token } = await getUser(request);
+    const res = await put(request, token, '/api/contacts/1/assign', {
+      assignedToId: 1,
+    });
+    expect(res.status()).toBe(403);
   });
 });
 

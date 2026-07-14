@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
 import { useParams, useSearchParams, Link } from 'react-router-dom';
-import { ArrowLeft, Save, Eye, Monitor, Smartphone, Plus, Trash2, ChevronUp, ChevronDown, Type, AlignLeft, Image, MousePointerClick, FileInput, Minus, Space, Video, Upload, Undo2, Redo2, Columns, MapPin, Building2, Sparkles, ListChecks, CalendarDays, IndianRupee, HelpCircle, MessageSquare, AlertCircle, CheckCircle2, Globe, Film, Shield, FileDown, PhoneCall, History, X, RotateCcw, UserPlus, Search } from 'lucide-react';
+import { ArrowLeft, Save, Eye, Monitor, Smartphone, Plus, Trash2, ChevronUp, ChevronDown, Type, AlignLeft, Image, MousePointerClick, FileInput, Minus, Space, Video, Upload, Undo2, Redo2, Columns, MapPin, Building2, Sparkles, ListChecks, CalendarDays, IndianRupee, HelpCircle, MessageSquare, AlertCircle, CheckCircle2, Globe, Film, Shield, FileDown, PhoneCall, History, X, RotateCcw, UserPlus, Search, Copy, Star, ExternalLink } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { isUploadedS3Url } from '../utils/uploadDisplay';
@@ -228,6 +228,10 @@ export default function LandingPageBuilder() {
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [restoringVersionId, setRestoringVersionId] = useState(null);
   const [selectedVersion, setSelectedVersion] = useState(null);
+  const [urlCopied, setUrlCopied] = useState(false);
+  const [featuringPage, setFeaturingPage] = useState(false);
+  // Hard-block publish: track all pages so we can detect another live page.
+  const [allPages, setAllPages] = useState([]);
 
   // #449: hide the global app sidebar while the builder is mounted. The
   // builder is a 3-column layout that competes with the global Sidebar +
@@ -269,6 +273,13 @@ export default function LandingPageBuilder() {
     fetchApi('/api/lead-routing')
       .then(rules => Array.isArray(rules) ? setRoutingRules(rules) : setRoutingRules([]))
       .catch(() => setRoutingRules([]));
+  }, []);
+
+  // Fetch all pages so we can hard-block publish when another page is live.
+  useEffect(() => {
+    fetchApi('/api/landing-pages')
+      .then(res => setAllPages(Array.isArray(res) ? res : (res?.pages || [])))
+      .catch(() => setAllPages([]));
   }, []);
 
   // Fetch TMC trips for the "Link to trip" picker. Travel admins only;
@@ -433,6 +444,12 @@ export default function LandingPageBuilder() {
 
   const handlePublish = async () => {
     if (!page?.id || publishing) return;
+    // Hard-block: only one page can be live at a time.
+    const currentLive = allPages.find(p => p.status === 'PUBLISHED' && p.id !== page.id);
+    if (currentLive) {
+      notify.error(`"${currentLive.title}" is currently live. Unpublish it before publishing this page. You can save this as a draft in the meantime.`);
+      return;
+    }
     setPublishing(true);
     try {
       if (isDirty) await handleSave(false);
@@ -455,7 +472,7 @@ export default function LandingPageBuilder() {
 
   const handleUnpublish = async () => {
     if (!page?.id) return;
-    const ok = await notify.confirm(`Unpublish "${page.title}"? The public URL /trips will return 404 until you re-publish.`);
+    const ok = await notify.confirm(`Unpublish "${page.title}"? This will take the page offline. You can re-publish it any time.`);
     if (!ok) return;
     try {
       await fetchApi(`/api/landing-pages/${page.id}/unpublish`, { method: 'POST' });
@@ -464,6 +481,37 @@ export default function LandingPageBuilder() {
     } catch (err) {
       notify.error(err?.message || 'Unpublish failed.');
     }
+  };
+
+  // ── Feature / unfeature ──────────────────────────────────────────
+  const handleSetFeatured = async () => {
+    if (!page?.id || featuringPage) return;
+    setFeaturingPage(true);
+    try {
+      if (page.isFeatured) {
+        await fetchApi(`/api/landing-pages/${page.id}/unfeature`, { method: 'POST' });
+        setPage({ ...page, isFeatured: false, featuredAt: null });
+        notify.success('Removed as featured trip.');
+      } else {
+        await fetchApi(`/api/landing-pages/${page.id}/feature`, { method: 'POST' });
+        setPage({ ...page, isFeatured: true, featuredAt: new Date().toISOString() });
+        notify.success('Set as featured! /trips now points to this page.');
+      }
+    } catch (err) {
+      notify.error(err?.message || 'Failed to update featured status.');
+    } finally {
+      setFeaturingPage(false);
+    }
+  };
+
+  const handleCopyUrl = () => {
+    const url = page?.status === 'PUBLISHED'
+      ? `${window.location.origin}/trips`
+      : `${window.location.origin}/p/${page?.slug}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setUrlCopied(true);
+      setTimeout(() => setUrlCopied(false), 2000);
+    });
   };
 
   // ── Version history ──────────────────────────────────────────────
@@ -696,9 +744,11 @@ export default function LandingPageBuilder() {
           <Eye size={14} /> Preview
         </button>
         {page.status === 'PUBLISHED' && (
-          <a href={`${window.location.origin}/trips`} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.35rem 0.7rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-primary)', textDecoration: 'none' }}>
-            <Globe size={14} /> Open live
-          </a>
+          <>
+            <a href={`${window.location.origin}/trips`} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.35rem 0.7rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-primary)', textDecoration: 'none' }}>
+              <Globe size={14} /> Open live
+            </a>
+          </>
         )}
         {/* Link-to-trip picker — only renders when the operator has at
             least one TMC trip available. Hidden on tenants without
@@ -818,16 +868,24 @@ export default function LandingPageBuilder() {
           >
             <Globe size={13} /> Unpublish
           </button>
-        ) : (
-          <button
-            onClick={handlePublish}
-            disabled={publishing || !slugIsValid}
-            title={!slugIsValid ? 'Fix the slug first' : 'Publish — runs the readiness check then makes the page public'}
-            style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.35rem 0.95rem', border: 'none', borderRadius: 6, background: slugIsValid ? '#10b981' : 'var(--subtle-bg)', cursor: publishing || !slugIsValid ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: '#fff', fontWeight: 600, opacity: publishing ? 0.7 : 1 }}
-          >
-            <Globe size={13} /> {publishing ? 'Publishing…' : 'Publish'}
-          </button>
-        )}
+        ) : (() => {
+          const blockedBy = allPages.find(p => p.status === 'PUBLISHED' && p.id !== page.id);
+          const isBlocked = !!blockedBy;
+          return (
+            <button
+              onClick={handlePublish}
+              disabled={publishing || !slugIsValid || isBlocked}
+              title={
+                !slugIsValid ? 'Fix the slug first'
+                : isBlocked ? `"${blockedBy.title}" is currently live — unpublish it first`
+                : 'Publish — runs the readiness check then makes the page public'
+              }
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.35rem 0.95rem', border: 'none', borderRadius: 6, background: (!slugIsValid || isBlocked) ? 'var(--subtle-bg)' : '#10b981', cursor: (publishing || !slugIsValid || isBlocked) ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: '#fff', fontWeight: 600, opacity: (publishing || isBlocked) ? 0.5 : 1 }}
+            >
+              <Globe size={13} /> {publishing ? 'Publishing…' : 'Publish'}
+            </button>
+          );
+        })()}
       </div>
 
       {/* Phase D1 — template-driven page editor takes over when the
@@ -878,8 +936,42 @@ export default function LandingPageBuilder() {
               <div><strong>Slug:</strong> /p/{page.slug || '—'}</div>
               <div><strong>Status:</strong> {page.status}</div>
               {page.status === 'PUBLISHED' && (
-                <div style={{ marginTop: '0.6rem' }}>
-                  <a href={`${window.location.origin}/trips`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-color)' }}>Open public page →</a>
+                <div style={{ marginTop: '0.9rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.9rem' }}>
+                  <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <ExternalLink size={11} /> Public Link
+                  </div>
+                  {/* Copyable URL row */}
+                  <div style={{ display: 'flex', gap: 4, marginBottom: '0.5rem' }}>
+                    <input
+                      readOnly
+                      value={`${window.location.origin}/trips`}
+                      style={{ flex: 1, fontSize: '0.72rem', padding: '5px 7px', borderRadius: 5, border: '1px solid var(--border-color)', background: 'var(--subtle-bg, #f9fafb)', color: 'var(--text-primary)', minWidth: 0, cursor: 'text' }}
+                      onClick={e => e.target.select()}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCopyUrl}
+                      title="Copy public URL"
+                      style={{ padding: '5px 8px', borderRadius: 5, border: '1px solid var(--border-color)', background: urlCopied ? '#10b981' : 'var(--surface-color)', color: urlCopied ? '#fff' : 'var(--text-primary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3, fontSize: '0.72rem', fontWeight: 600, flexShrink: 0, transition: 'background 0.2s' }}
+                    >
+                      <Copy size={11} /> {urlCopied ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  {/* Open in new tab */}
+                  <a
+                    href={`${window.location.origin}/trips`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.72rem', color: 'var(--accent-color)', textDecoration: 'none', marginBottom: '0.7rem' }}
+                  >
+                    <ExternalLink size={11} /> Open in new tab
+                  </a>
+                  {/* Featured status — informational only (publish = featured) */}
+                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '0.6rem' }}>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                      <span style={{ color: '#f59e0b', fontWeight: 600 }}>★ Live — /trips is pointing here</span>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

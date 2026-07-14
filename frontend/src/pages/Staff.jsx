@@ -539,7 +539,9 @@ export default function Staff() {
       setEditing(null);
       loadStaff();
     } catch (err) {
-      notify.error(err.message || 'Failed to update staff member.');
+      // fetchApi already auto-toasts 4xx errors (including SINGLE_ADMIN_LIMIT 409).
+      // Only show a fallback toast for cases where fetchApi didn't surface one.
+      if (!err.status) notify.error(err.message || 'Failed to update staff member.');
     } finally {
       setSavingEdit(false);
     }
@@ -605,7 +607,8 @@ export default function Staff() {
       setCreating(null);
       loadStaff();
     } catch (err) {
-      notify.error(err.message || 'Failed to add staff member.');
+      // fetchApi already auto-toasts 4xx errors (including SINGLE_ADMIN_LIMIT 409).
+      if (!err.status) notify.error(err.message || 'Failed to add staff member.');
     } finally {
       setSavingCreate(false);
     }

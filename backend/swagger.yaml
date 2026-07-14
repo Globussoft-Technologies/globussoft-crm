@@ -9246,6 +9246,208 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
 
   # ════════════════════════════════════════════════════════════════════
+  # TRAVEL — PAYABLE BATCHES (G022)
+  # ════════════════════════════════════════════════════════════════════
+  /travel/payable-batches:
+    get:
+      summary: List supplier-payable batches
+      description: |
+        Tenant-scoped. State machine:
+        draft → approved → sent_to_bank → settled (cancelled is terminal).
+      tags: [Travel — Quotes & Billing]
+      parameters:
+        - in: query
+          name: status
+          schema:
+            {
+              type: string,
+              enum: [draft, approved, sent_to_bank, settled, cancelled],
+            }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Batches.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  payableBatches:
+                    type: array
+                    items: { $ref: "#/components/schemas/PayableBatch" }
+                  total: { type: integer }
+              example:
+                payableBatches:
+                  - id: 4
+                    batchNumber: "TPB-2026-0004"
+                    status: "approved"
+                    paymentMethod: "neft"
+                    totalAmount: "320000.00"
+                total: 1
+    post:
+      summary: Create a draft batch from a set of payable IDs (ADMIN/MANAGER)
+      tags: [Travel — Quotes & Billing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payableIds, paymentMethod]
+              properties:
+                payableIds:
+                  type: array
+                  items: { type: integer }
+                paymentMethod:
+                  {
+                    type: string,
+                    enum: [bank_transfer, upi, cheque, rtgs, neft, wire],
+                  }
+                currency: { type: string, default: "INR" }
+                notes: { type: string, nullable: true }
+            example:
+              payableIds: [7, 12, 19]
+              paymentMethod: "neft"
+              notes: "Mid-month run"
+      responses:
+        "201":
+          description: Batch created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PayableBatch" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+  /travel/payable-batches/{id}:
+    get:
+      summary: Read a payable batch with linked payables
+      tags: [Travel — Quotes & Billing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Batch detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PayableBatch" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Update a draft batch (ADMIN/MANAGER)
+      tags: [Travel — Quotes & Billing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                paymentMethod: { type: string }
+                notes: { type: string, nullable: true }
+      responses:
+        "200": { description: Updated. }
+        "409": { description: Batch not in draft state. }
+  /travel/payable-batches/{id}/add-payable:
+    post:
+      summary: Attach a payable to a draft batch
+      tags: [Travel — Quotes & Billing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payableId]
+              properties:
+                payableId: { type: integer }
+      responses:
+        "200": { description: Attached. }
+        "409": { description: Batch not in draft state. }
+  /travel/payable-batches/{id}/remove-payable:
+    post:
+      summary: Detach a payable from a draft batch
+      tags: [Travel — Quotes & Billing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payableId]
+              properties:
+                payableId: { type: integer }
+      responses:
+        "200": { description: Detached. }
+  /travel/payable-batches/{id}/approve:
+    post:
+      summary: Approve a draft batch (ADMIN)
+      tags: [Travel — Quotes & Billing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200": { description: Approved. }
+        "409": { description: Invalid status transition. }
+  /travel/payable-batches/{id}/send-to-bank:
+    post:
+      summary: Mark the batch as sent to bank (ADMIN)
+      tags: [Travel — Quotes & Billing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200": { description: Transitioned. }
+        "409": { description: Invalid status transition. }
+  /travel/payable-batches/{id}/settle:
+    post:
+      summary: Settle a sent batch — auto-flips every child payable to paid
+      tags: [Travel — Quotes & Billing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: Settled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batch: { $ref: "#/components/schemas/PayableBatch" }
+                  payablesPaid: { type: integer }
+        "409": { description: Invalid status transition. }
+  /travel/payable-batches/{id}/cancel:
+    post:
+      summary: Cancel the batch — releases children back to free payables (ADMIN)
+      tags: [Travel — Quotes & Billing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cancelReason]
+              properties:
+                cancelReason: { type: string }
+      responses:
+        "200": { description: Cancelled. }
+        "400": { $ref: "#/components/responses/ValidationError" }
+  /travel/payable-batches/{id}/payment-csv:
+    get:
+      summary: Export the batch as a bank-friendly CSV (RFC 4180)
+      description: |
+        Columns:
+        `batchNumber,paymentMethod,supplierName,supplierGstin,bankAccountMasked,
+        amount,currency,description,poNumber,reference`
+      tags: [Travel — Quotes & Billing]
+      parameters: [{ $ref: "#/components/parameters/IdPath" }]
+      responses:
+        "200":
+          description: text/csv.
+          content:
+            text/csv:
+              schema: { type: string }
+
+  # ════════════════════════════════════════════════════════════════════
   # TRAVEL — SUPPLIER COMMISSIONS (G045)
   # ════════════════════════════════════════════════════════════════════
   /travel/suppliers/{id}/commission-entries:
@@ -9478,208 +9680,6 @@ paths:
                   distinctSuppliers: { type: integer }
                   counts: { type: object }
                   totals: { type: object }
-
-  # ════════════════════════════════════════════════════════════════════
-  # TRAVEL — PAYABLE BATCHES (G022)
-  # ════════════════════════════════════════════════════════════════════
-  /travel/payable-batches:
-    get:
-      summary: List supplier-payable batches
-      description: |
-        Tenant-scoped. State machine:
-        draft → approved → sent_to_bank → settled (cancelled is terminal).
-      tags: [Travel — Quotes & Billing]
-      parameters:
-        - in: query
-          name: status
-          schema:
-            {
-              type: string,
-              enum: [draft, approved, sent_to_bank, settled, cancelled],
-            }
-        - in: query
-          name: limit
-          schema: { type: integer, default: 50 }
-        - in: query
-          name: offset
-          schema: { type: integer, default: 0 }
-      responses:
-        "200":
-          description: Batches.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  payableBatches:
-                    type: array
-                    items: { $ref: "#/components/schemas/PayableBatch" }
-                  total: { type: integer }
-              example:
-                payableBatches:
-                  - id: 4
-                    batchNumber: "TPB-2026-0004"
-                    status: "approved"
-                    paymentMethod: "neft"
-                    totalAmount: "320000.00"
-                total: 1
-    post:
-      summary: Create a draft batch from a set of payable IDs (ADMIN/MANAGER)
-      tags: [Travel — Quotes & Billing]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [payableIds, paymentMethod]
-              properties:
-                payableIds:
-                  type: array
-                  items: { type: integer }
-                paymentMethod:
-                  {
-                    type: string,
-                    enum: [bank_transfer, upi, cheque, rtgs, neft, wire],
-                  }
-                currency: { type: string, default: "INR" }
-                notes: { type: string, nullable: true }
-            example:
-              payableIds: [7, 12, 19]
-              paymentMethod: "neft"
-              notes: "Mid-month run"
-      responses:
-        "201":
-          description: Batch created.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PayableBatch" }
-        "400": { $ref: "#/components/responses/ValidationError" }
-  /travel/payable-batches/{id}:
-    get:
-      summary: Read a payable batch with linked payables
-      tags: [Travel — Quotes & Billing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      responses:
-        "200":
-          description: Batch detail.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PayableBatch" }
-        "404": { $ref: "#/components/responses/NotFound" }
-    put:
-      summary: Update a draft batch (ADMIN/MANAGER)
-      tags: [Travel — Quotes & Billing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                paymentMethod: { type: string }
-                notes: { type: string, nullable: true }
-      responses:
-        "200": { description: Updated. }
-        "409": { description: Batch not in draft state. }
-  /travel/payable-batches/{id}/add-payable:
-    post:
-      summary: Attach a payable to a draft batch
-      tags: [Travel — Quotes & Billing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [payableId]
-              properties:
-                payableId: { type: integer }
-      responses:
-        "200": { description: Attached. }
-        "409": { description: Batch not in draft state. }
-  /travel/payable-batches/{id}/remove-payable:
-    post:
-      summary: Detach a payable from a draft batch
-      tags: [Travel — Quotes & Billing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [payableId]
-              properties:
-                payableId: { type: integer }
-      responses:
-        "200": { description: Detached. }
-  /travel/payable-batches/{id}/approve:
-    post:
-      summary: Approve a draft batch (ADMIN)
-      tags: [Travel — Quotes & Billing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      responses:
-        "200": { description: Approved. }
-        "409": { description: Invalid status transition. }
-  /travel/payable-batches/{id}/send-to-bank:
-    post:
-      summary: Mark the batch as sent to bank (ADMIN)
-      tags: [Travel — Quotes & Billing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      responses:
-        "200": { description: Transitioned. }
-        "409": { description: Invalid status transition. }
-  /travel/payable-batches/{id}/settle:
-    post:
-      summary: Settle a sent batch — auto-flips every child payable to paid
-      tags: [Travel — Quotes & Billing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      responses:
-        "200":
-          description: Settled.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  batch: { $ref: "#/components/schemas/PayableBatch" }
-                  payablesPaid: { type: integer }
-        "409": { description: Invalid status transition. }
-  /travel/payable-batches/{id}/cancel:
-    post:
-      summary: Cancel the batch — releases children back to free payables (ADMIN)
-      tags: [Travel — Quotes & Billing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [cancelReason]
-              properties:
-                cancelReason: { type: string }
-      responses:
-        "200": { description: Cancelled. }
-        "400": { $ref: "#/components/responses/ValidationError" }
-  /travel/payable-batches/{id}/payment-csv:
-    get:
-      summary: Export the batch as a bank-friendly CSV (RFC 4180)
-      description: |
-        Columns:
-        `batchNumber,paymentMethod,supplierName,supplierGstin,bankAccountMasked,
-        amount,currency,description,poNumber,reference`
-      tags: [Travel — Quotes & Billing]
-      parameters: [{ $ref: "#/components/parameters/IdPath" }]
-      responses:
-        "200":
-          description: text/csv.
-          content:
-            text/csv:
-              schema: { type: string }
 
   # ════════════════════════════════════════════════════════════════════
   # TRAVEL — SETTLEMENT TIMELINE (G024) + INVOICE LEDGERS (G030-G034) + FX

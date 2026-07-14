@@ -637,3 +637,46 @@ test.describe('Landing pages API — auth gate', () => {
     expect([401, 403]).toContain(res.status());
   });
 });
+
+// ── GET /api/landing-pages/public/featured-html ─────────────────────
+//
+// New public endpoint added in this diff. Returns the rendered HTML of the
+// currently featured+published landing page, or 404 when none exists.
+// Auth-exempt — listed under the /landing-pages/public openPaths entry in
+// server.js so no token is required.
+
+test.describe('Landing pages API — GET /public/featured-html', () => {
+  test('GET /public/featured-html is auth-exempt (no 401/403)', async ({ request }) => {
+    // The endpoint is in the public openPaths — a request without a token
+    // must NOT return 401 or 403. It will either return 200 (featured page
+    // exists) or 404 (no featured page in this tenant/demo state).
+    const res = await request.get(`${BASE_URL}/api/landing-pages/public/featured-html`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([200, 404]).toContain(res.status());
+    // Must NOT be an auth rejection.
+    expect([401, 403]).not.toContain(res.status());
+  });
+
+  test('GET /public/featured-html returns HTML content-type when a featured page exists', async ({ request }) => {
+    // Only assert content-type when the response is 200 (a featured+published
+    // page exists in this demo/CI state). Skip the content-type assertion
+    // on 404 since the body there is JSON { error, code }.
+    const res = await request.get(`${BASE_URL}/api/landing-pages/public/featured-html`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    if (res.status() === 200) {
+      const ct = res.headers()['content-type'] || '';
+      expect(ct).toContain('text/html');
+      const body = await res.text();
+      // Rendered HTML always starts with doctype / html tag or at minimum contains
+      // an <html> or <body> element from the renderer.
+      expect(body.length).toBeGreaterThan(0);
+    } else {
+      // 404 shape: { error, code: 'NO_FEATURED_PAGE' }
+      expect(res.status()).toBe(404);
+      const body = await res.json();
+      expect(body.code).toBe('NO_FEATURED_PAGE');
+    }
+  });
+});

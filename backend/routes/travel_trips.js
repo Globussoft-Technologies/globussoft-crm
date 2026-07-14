@@ -1861,14 +1861,15 @@ router.get(
 // GET /trips/:id/registrations/:rid/documents/:docType/view-url
 // Mints a short-lived (5-min) signed URL for a passport or Aadhaar scan
 // uploaded via the public microsite and stored in PendingTripRegistration.
-// ADMIN+MANAGER only — operators need to view documents before approving.
+// All authenticated travel users (including USER/agent role) can view documents —
+// document access is controlled by trip tenancy, not by role.
 // Returns { url } — the signed URL is valid for DEFAULT_VIEW_TTL_SEC seconds.
 router.get(
   "/trips/:id/registrations/:rid/documents/:docType/view-url",
   verifyToken,
   requireTravelTenant,
   requireTmcAccess,
-  verifyRole(["ADMIN", "MANAGER"]),
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
   async (req, res) => {
     try {
       const { draft } = await loadPendingRegistration(req);

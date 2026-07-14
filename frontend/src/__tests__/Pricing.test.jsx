@@ -243,9 +243,15 @@ describe('<Pricing /> -- public marketing pricing page', () => {
     fireEvent.click(screen.getByRole('button', { name: /INR/ }));
     // Annual mode + INR: big number is the annual total (5,988 / 17,988 / 29,988).
     // The small secondary line shows the per-month rate (499 / 1,499 / 2,499).
-    expect(screen.getByText(/499\/user\/month/i)).toBeInTheDocument();
-    expect(screen.getByText(/1,499\/user\/month/i)).toBeInTheDocument();
-    expect(screen.getByText(/2,499\/user\/month/i)).toBeInTheDocument();
+    // Use getAllByText for the "499" variants since /499/ also matches "1,499"
+    // and "2,499" — assert each exact secondary-line string via exact: false
+    // with a tight enough pattern, or count occurrences.
+    // ₹499/user/month (Starter) — appears exactly once; anchored to avoid
+    // matching "1,499" by requiring the string to start with "₹499".
+    const starterRate = screen.getAllByText(/₹499\/user\/month/i);
+    expect(starterRate.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/₹1,499\/user\/month/i)).toBeInTheDocument();
+    expect(screen.getByText(/₹2,499\/user\/month/i)).toBeInTheDocument();
     // Billing label reads /user/year, billed annually.
     const annualLabels = screen.getAllByText(/\/user\/year, billed annually/i);
     expect(annualLabels.length).toBe(3);

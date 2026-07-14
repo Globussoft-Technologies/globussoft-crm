@@ -145,6 +145,56 @@ function _resetPuppeteerCacheForTests() {
   _puppeteerResolution = null;
 }
 
+// ---------------------------------------------------------------------------
+// PNG render resource guards
+// ---------------------------------------------------------------------------
+
+// Each PNG render used to launch a fresh headless Chromium. Under bulk cron
+// usage that can spawn dozens of Chrome processes simultaneously and exhaust
+// RAM. We keep a small concurrency cap so at most N renders run at once.
+const PNG_MAX_CONCURRENT = (() => {
+  const v = parseInt(process.env.FLYER_RENDER_PNG_MAX_CONCURRENT, 10);
+  return Number.isFinite(v) && v >= 1 ? v : 2;
+})();
+
+// Hard ceiling on how long any single puppeteer step may hang. A stuck
+// `page.setContent` or `page.screenshot` would otherwise hold the concurrency
+// slot (and a Chrome process) forever.
+const PNG_RENDER_TIMEOUT_MS = (() => {
+  const v = parseInt(process.env.FLYER_RENDER_PNG_TIMEOUT_MS, 10);
+  return Number.isFinite(v) && v >= 5_000 ? v : 45_000;
+})();
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
+    ),
+  ]);
+}
+
+const _pngConcurrency = { running: 0, queue: [] };
+
+async function _acquirePngSlot() {
+  if (_pngConcurrency.running < PNG_MAX_CONCURRENT) {
+    _pngConcurrency.running += 1;
+    return;
+  }
+  await new Promise((resolve) => _pngConcurrency.queue.push(resolve));
+  // We have been resumed into a slot; the runner that released the slot already
+  // incremented the running counter.
+}
+
+function _releasePngSlot() {
+  _pngConcurrency.running = Math.max(0, _pngConcurrency.running - 1);
+  const next = _pngConcurrency.queue.shift();
+  if (next) {
+    _pngConcurrency.running += 1;
+    next();
+  }
+}
+
 /**
  * The 5 supported `format` values + their dispatch metadata. Keyed for
  * O(1) format-validity lookup + tidy switch dispatch in renderFlyer.
@@ -273,7 +323,7 @@ function applyDataOverrides(template, data) {
  */
 const STUB_PNG_BUFFER = Buffer.from(
   "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63000100000005000100" +
-    "0d0a2db40000000049454e44ae426082",
+  "0d0a2db40000000049454e44ae426082",
   "hex",
 );
 
@@ -440,34 +490,6 @@ function buildStubPngResponse(formatMeta) {
 }
 
 /**
- * Render concurrency gate — each real PNG render spawns a full Chromium
- * (~300–500 MB transient). Uncapped bursts of flyer requests, stacked on top
- * of resident WhatsApp Web sessions, were a direct OOM contributor on small
- * VPS boxes. Extra callers queue FIFO instead of launching in parallel.
- * FLYER_RENDER_CONCURRENCY overrides the default (2); clamped to [1, 8].
- */
-const RENDER_CONCURRENCY = (() => {
-  const v = parseInt(process.env.FLYER_RENDER_CONCURRENCY, 10);
-  return Number.isFinite(v) && v >= 1 ? Math.min(v, 8) : 2;
-})();
-let _renderActive = 0;
-const _renderWaiters = [];
-function _acquireRenderSlot() {
-  if (_renderActive < RENDER_CONCURRENCY) {
-    _renderActive++;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => _renderWaiters.push(resolve)).then(() => {
-    _renderActive++;
-  });
-}
-function _releaseRenderSlot() {
-  _renderActive = Math.max(0, _renderActive - 1);
-  const next = _renderWaiters.shift();
-  if (next) next();
-}
-
-/**
  * Render the PNG path. When Puppeteer is installed AND the
  * `FLYER_RENDER_FORCE_STUB` env var is not truthy, launches headless
  * Chrome + screenshots a viewport-sized page (real render). Otherwise
@@ -501,39 +523,79 @@ async function renderPngBranch({ template, formatMeta }) {
   // Concurrency gate: each real render spawns a full Chromium (~300–500 MB).
   // An uncapped burst of flyer requests alongside resident WhatsApp sessions
   // can OOM the box — queue extra callers FIFO instead of launching in parallel.
-  await module.exports._acquireRenderSlot();
+  await module.exports._acquirePngSlot();
   try {
     return await renderPngReal(resolution.puppeteer, template, formatMeta);
   } finally {
-    module.exports._releaseRenderSlot();
+    module.exports._releasePngSlot();
   }
 }
 
 async function renderPngReal(puppeteer, template, formatMeta) {
   const html = buildHtmlShellForPng(template, formatMeta.widthPx, formatMeta.heightPx);
 
-  // Real Puppeteer branch. Wrapped in try/finally so a failed page
-  // close or a Chrome crash mid-render doesn't leak a child process.
+  // Real Puppeteer branch. The concurrency slot is already held by the
+  // caller (renderPngBranch) — do NOT acquire a second one here, that would
+  // deadlock every render past PNG_MAX_CONCURRENT (each in-flight caller
+  // holds the outer slot while waiting forever on an inner one nobody
+  // releases until the outer holder finishes, which never happens).
+  //
+  // We time-box every puppeteer step so a hung Chrome cannot hold resources
+  // forever, AND pass puppeteer's own `timeout`/`protocolTimeout` launch
+  // options — these are native puppeteer/CDP-level guards that actually
+  // terminate the underlying Chromium process on expiry, unlike a bare
+  // Promise.race (which only abandons the JS promise; the OS process can
+  // keep running). Page and browser are closed in finally; if close ALSO
+  // hangs past its own timeout, the process is left for the OS/container
+  // to reap — protocolTimeout is what keeps that case rare.
   let browser = null;
+  let page = null;
   try {
-    browser = await puppeteer.launch({
-      headless: true,
-      // --disable-dev-shm-usage: Linux/Docker /dev/shm defaults to 64 MB and
-      // Chromium crashes or wedges against it. timeout caps a hung launch;
-      // protocolTimeout caps any wedged CDP call so a stuck render can't
-      // hold the concurrency slot (and its ~400 MB) forever.
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-      timeout: 30000,
-      protocolTimeout: 60000,
-    });
-    const page = await browser.newPage();
-    await page.setViewport({
-      width: formatMeta.widthPx,
-      height: formatMeta.heightPx,
-      deviceScaleFactor: 1,
-    });
-    await page.setContent(html, { waitUntil: "networkidle0" });
-    const buffer = await page.screenshot({ type: "png", omitBackground: false });
+    browser = await withTimeout(
+      puppeteer.launch({
+        headless: true,
+        // Minimal, low-RAM Chromium flags. --disable-dev-shm-usage is critical
+        // in Docker / low-mem containers to avoid /dev/shm exhaustion; the
+        // others trim GPU/zygote overhead since we only screenshot a static page.
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-accelerated-2d-canvas",
+          "--no-first-run",
+          "--no-zygote",
+          "--disable-gpu",
+        ],
+        // Native puppeteer guards (restored from a teammate's earlier PR that
+        // a merge conflict had dropped): timeout caps a hung launch;
+        // protocolTimeout caps any wedged CDP call so a stuck render can't
+        // hold the concurrency slot (and its ~400 MB) forever.
+        timeout: 30_000,
+        protocolTimeout: 60_000,
+      }),
+      20_000,
+      "puppeteer.launch",
+    );
+    page = await browser.newPage();
+    await withTimeout(
+      page.setViewport({
+        width: formatMeta.widthPx,
+        height: formatMeta.heightPx,
+        deviceScaleFactor: 1,
+      }),
+      10_000,
+      "page.setViewport",
+    );
+    await withTimeout(
+      page.setContent(html, { waitUntil: "networkidle0" }),
+      PNG_RENDER_TIMEOUT_MS,
+      "page.setContent",
+    );
+    const buffer = await withTimeout(
+      page.screenshot({ type: "png", omitBackground: false }),
+      PNG_RENDER_TIMEOUT_MS,
+      "page.screenshot",
+    );
     return {
       buffer,
       mimeType: formatMeta.mimeType,
@@ -543,8 +605,15 @@ async function renderPngReal(puppeteer, template, formatMeta) {
       engine: "puppeteer-headless",
     };
   } finally {
+    if (page) {
+      try {
+        if (typeof page.close === "function") {
+          await withTimeout(page.close(), 5_000, "page.close");
+        }
+      } catch (_e) { /* ignore close errors */ }
+    }
     if (browser) {
-      try { await browser.close(); } catch (_e) { /* ignore close errors */ }
+      try { await withTimeout(browser.close(), 10_000, "browser.close"); } catch (_e) { /* ignore close errors */ }
     }
   }
 }
@@ -585,6 +654,6 @@ module.exports = {
   _tryRequirePuppeteer: tryRequirePuppeteer,
   // Render-concurrency gate internals (used by renderPngBranch; exposed for
   // unit-test introspection only, same convention as _tryRequirePuppeteer).
-  _acquireRenderSlot,
-  _releaseRenderSlot,
+  _acquirePngSlot,
+  _releasePngSlot,
 };

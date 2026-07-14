@@ -41,6 +41,7 @@ prisma.whatsAppThread = {
   deleteMany: vi.fn(),
 };
 prisma.contact = { ...(prisma.contact || {}), findFirst: vi.fn() };
+prisma.whatsAppOptOut = { ...(prisma.whatsAppOptOut || {}), findUnique: vi.fn() };
 
 const wa = requireCJS('../../services/whatsappWebClient');
 
@@ -58,6 +59,7 @@ beforeEach(() => {
   prisma.whatsAppMessage.deleteMany.mockReset().mockResolvedValue({ count: 6 });
   prisma.whatsAppThread.deleteMany.mockReset().mockResolvedValue({ count: 2 });
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  prisma.whatsAppOptOut.findUnique.mockReset().mockResolvedValue(null);
   // Fake socket so emit-bearing paths are observable.
   wa.init({ to: (room) => ({ emit: (ev, payload) => emits.push({ room, ev, payload }) }) });
 });
@@ -266,7 +268,7 @@ describe('shutdown (graceful teardown so the auth store flushes — prevents "lo
     s.client = { destroy: () => new Promise(() => {}) }; // never resolves
     s.state = 'CONNECTED';
     // perClientTimeoutMs short so the test is fast; shutdown still resolves.
-    await expect(wa.shutdown({ perClientTimeoutMs: 20 })).resolves.toEqual({ closed: 1 });
+    await expect(wa.shutdown({ perClientTimeoutMs: 20 })).resolves.toMatchObject({ closed: 1 });
     // Drop the never-resolving client so it can't stall later teardown paths.
     s.client = null;
   });
@@ -275,6 +277,57 @@ describe('shutdown (graceful teardown so the auth store flushes — prevents "lo
     // Stub sessions (client:null) are skipped — shutdown stays fast + resolves.
     const out = await wa.shutdown();
     expect(out).toHaveProperty('closed');
+  });
+});
+
+describe('destroyClientAndOrphans (memory-leak cleanup helper)', () => {
+  test('destroys the client, nulls the handle, and kills orphan browsers', async () => {
+    await wa.connect(TENANT);
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const s = wa.getSession(TENANT);
+    s.client = { destroy };
+    s.state = 'CONNECTED';
+    const killSpy = vi.spyOn(wa, 'killBrowsersForDir').mockImplementation(() => {});
+
+    await wa.destroyClientAndOrphans(TENANT);
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(s.client).toBeNull();
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    killSpy.mockRestore();
+  });
+
+  test('is safe when there is no session', async () => {
+    await expect(wa.destroyClientAndOrphans(999999)).resolves.toBeUndefined();
+  });
+});
+
+describe('scheduleSessionPrune (prevents dead-session registry growth)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test('removes a DISCONNECTED session after the prune delay', async () => {
+    await wa.connect(TENANT);
+    const s = wa.getSession(TENANT);
+    s.state = 'DISCONNECTED';
+    wa.scheduleSessionPrune(TENANT);
+    expect(wa.getSession(TENANT)).toBe(s);
+    vi.advanceTimersByTime(300_000);
+    expect(wa.getSession(TENANT)).toBeNull();
+  });
+
+  test('does NOT prune a session that changed state before the timer fired', async () => {
+    await wa.connect(TENANT);
+    const s = wa.getSession(TENANT);
+    s.state = 'AUTH_FAILURE';
+    wa.scheduleSessionPrune(TENANT);
+    s.state = 'CONNECTED';
+    vi.advanceTimersByTime(300_000);
+    expect(wa.getSession(TENANT)).toBe(s);
   });
 });
 
@@ -414,5 +467,26 @@ describe('ingestInbound', () => {
     const updateData = prisma.whatsAppThread.update.mock.calls[0][0].data;
     expect(updateData.unreadCount).toBeUndefined();
     expect(updateData.status).toBe('OPEN');
+  });
+
+  test('opted-out 1:1 number is dropped — no thread/message row, no emit', async () => {
+    prisma.whatsAppOptOut.findUnique.mockResolvedValue({ id: 9, contactPhone: '+919811111102' });
+    const out = await wa.ingestInbound(TENANT, inboundMsg());
+    expect(out).toBeUndefined();
+    expect(prisma.whatsAppOptOut.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_contactPhone: { tenantId: 3, contactPhone: '+919811111102' } },
+    });
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppThread.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppThread.update).not.toHaveBeenCalled();
+    expect(emits).toHaveLength(0);
+  });
+
+  test('opted-out check is skipped for group chats — group message still ingested', async () => {
+    prisma.whatsAppOptOut.findUnique.mockResolvedValue({ id: 9, contactPhone: '120363999@g.us' });
+    const out = await wa.ingestInbound(TENANT, inboundMsg({ from: '120363999@g.us', body: 'hi team' }));
+    expect(out).toMatchObject({ threadId: 11 });
+    expect(prisma.whatsAppOptOut.findUnique).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalled();
   });
 });

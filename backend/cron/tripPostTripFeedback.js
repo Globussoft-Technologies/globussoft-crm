@@ -19,7 +19,7 @@
 // reuse here). When Wati creds land, the dispatch loop adds a
 // WhatsAppMessage row keyed to schoolContact.phone with the survey link.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 // WhatsApp transport swap (Q9): Wati REST is COMMENTED OUT (kept on disk, not removed);
@@ -169,15 +169,13 @@ async function runPostTripFeedbackForAllTravelTenants() {
 }
 
 function initTripPostTripFeedbackCron() {
-  // 06:13 IST — :13 minute jitter per the standing rule (avoid :00 / :30
-  // clustering across the cron fleet). The actual time of day matches the
-  // PRD §6.3 "daily 06:00 IST" specification approximately.
-  cron.schedule("13 6 * * *", () => {
-    runPostTripFeedbackForAllTravelTenants().catch((e) =>
-      console.error("[TripPostTripFeedback] cron fail:", e.message),
-    );
-  });
-  console.log("[TripPostTripFeedback] cron initialized (daily 06:13 IST)");
+  // 06:13 IST — matches the PRD §6.3 "daily 06:00 IST" specification approximately.
+  cronRegistry.register({
+    name: "tripPostTripFeedback",
+    description: "Creates a post-trip feedback Survey for recently-returned TmcTrips (daily 06:13 IST)",
+    defaultSchedule: "13 6 * * *",
+    tickFn: runPostTripFeedbackForAllTravelTenants,
+  }).catch((e) => console.error("[TripPostTripFeedback] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

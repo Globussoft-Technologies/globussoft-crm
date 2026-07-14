@@ -16,7 +16,7 @@
 // fails repeatedly until the token actually expires, the expired-branch
 // catches it.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { encryptCredential, decryptCredential } = require("../lib/credentialMasking");
 const provider = require("../services/whatsappProvider");
@@ -162,8 +162,12 @@ async function tick() {
 }
 
 function initWhatsappTokenRefreshCron() {
-  cron.schedule(TICK_CRON, () => { tick(); });
-  console.log(`[whatsappTokenRefreshEngine] initialized (cron: ${TICK_CRON})`);
+  cronRegistry.register({
+    name: "whatsappTokenRefreshEngine",
+    description: "Proactive WhatsApp token refresh (7d before expiry) + expiry Notification (daily 04:30)",
+    defaultSchedule: TICK_CRON,
+    tickFn: tick,
+  }).catch((e) => console.error("[whatsappTokenRefreshEngine] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

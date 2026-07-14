@@ -1,8 +1,25 @@
-const cron = require('node-cron');
+const cronRegistry = require('../lib/cronRegistry');
 const prisma = require("../lib/prisma");
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { estimateLlmCost } = require("../lib/apiPricing");
+
+// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
+// persistLlmCallLog helper so this direct Gemini call is visible to the
+// Super Admin "API Analytics" dashboard. A DB hiccup here must NEVER break
+// lead-score recomputation, hence the nested try/catch and the un-awaited
+// .catch() on the create.
+function persistLlmCallLog(data) {
+  try {
+    const prismaClient = require("../lib/prisma");
+    prismaClient.llmCallLog.create({ data }).catch((e) =>
+      console.error(`[LeadScoringEngine] LlmCallLog persist failed (non-fatal): ${e.message}`),
+    );
+  } catch (e) {
+    console.error(`[LeadScoringEngine] LlmCallLog require failed (non-fatal): ${e.message}`);
+  }
+}
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 let aiModel = null;
@@ -60,12 +77,46 @@ Provide ONLY a single integer score from 1-99. No explanation.`;
     const result = await aiModel.generateContent(prompt);
     const scoreText = result.response.text().trim();
     const score = parseInt(scoreText);
+    const usage = result.response.usageMetadata || {};
+    const promptTokens = usage.promptTokenCount || 0;
+    const completionTokens = usage.candidatesTokenCount || 0;
+    persistLlmCallLog({
+      tenantId: contact.tenantId || 1,
+      task: "lead-scoring",
+      model: "gemini-2.5-flash",
+      provider: "gemini",
+      reason: null,
+      promptTokens,
+      completionTokens,
+      totalTokens: promptTokens + completionTokens,
+      costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
+      stub: false,
+      userId: null,
+      surface: "leadScoringEngine",
+      status: "success",
+    });
 
     if (!isNaN(score) && score >= 1 && score <= 99) {
       console.log(`[LeadScoringEngine] Gemini scored ${contact.name}: ${score}`);
       return score;
     }
   } catch (err) {
+    persistLlmCallLog({
+      tenantId: (contact && contact.tenantId) || 1,
+      task: "lead-scoring",
+      model: "gemini-2.5-flash",
+      provider: "gemini",
+      reason: null,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      costEstimate: 0,
+      stub: false,
+      userId: null,
+      surface: "leadScoringEngine",
+      status: "failed",
+      errorMessage: err.message,
+    });
     console.warn("[LeadScoringEngine] Gemini scoring failed:", err.message);
   }
 
@@ -456,17 +507,25 @@ async function tickLeadScoringEngine(io) {
 /**
  * Initialise the cron job (every 10 minutes).
  * Call this from server.js, passing the socket.io `io` instance.
+ *
+ * Super Admin Portal / Cron Maintenance — scheduling now goes through the
+ * central registry (lib/cronRegistry.js) instead of a local cron.schedule()
+ * call, so this engine's enabled state + schedule are admin-editable and
+ * take effect without a server restart. `io` is captured by closure since
+ * cronRegistry's tickFn contract takes no arguments. runImmediately
+ * reproduces the historical "run once at startup" behavior.
  */
 function initLeadScoringCron(io) {
-  // Run once at startup to immediately populate scores
-  tickLeadScoringEngine(io).catch(console.error);
-
-  cron.schedule('*/10 * * * *', () => {
-    console.log('[LeadScoring] Cron tick — rescoring all contacts...');
-    tickLeadScoringEngine(io).catch(console.error);
-  });
-
-  console.log('[LeadScoring] Cron initialized (every 10 minutes).');
+  cronRegistry.register({
+    name: 'leadScoringEngine',
+    description: 'Recomputes Contact.aiScore for stale/unscored contacts (multi-factor formula + Gemini)',
+    defaultSchedule: '*/10 * * * *',
+    runImmediately: true,
+    tickFn: () => {
+      console.log('[LeadScoring] Cron tick — rescoring all contacts...');
+      return tickLeadScoringEngine(io);
+    },
+  }).catch((e) => console.error('[LeadScoring] cronRegistry registration failed:', e.message));
 }
 
 module.exports = { initLeadScoringCron, tickLeadScoringEngine, computeScore };

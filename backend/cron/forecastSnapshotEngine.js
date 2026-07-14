@@ -1,4 +1,4 @@
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -204,12 +204,12 @@ async function upsertWeeklyForecast({ tenantId, userId, period, metrics, weekSta
 
 function initForecastSnapshotCron() {
   // Every Monday at 1 AM
-  cron.schedule("0 1 * * 1", () => {
-    runForecastSnapshot().catch((err) =>
-      console.error("[ForecastSnapshot] Scheduled run failed:", err.message)
-    );
-  });
-  console.log("[ForecastSnapshot] cron initialized");
+  cronRegistry.register({
+    name: "forecastSnapshotEngine",
+    description: "Weekly revenue forecast snapshot (Mondays 01:00)",
+    defaultSchedule: "0 1 * * 1",
+    tickFn: runForecastSnapshot,
+  }).catch((e) => console.error("[ForecastSnapshot] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

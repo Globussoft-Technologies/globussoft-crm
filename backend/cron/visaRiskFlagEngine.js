@@ -65,7 +65,7 @@
 // The Notification row is the visible SHELL output; advisor dashboard
 // surfaces them under the Visa Sure queue.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 
 const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
@@ -537,12 +537,12 @@ async function runRiskFlaggingForAllTravelTenants() {
 function initVisaRiskFlagCron() {
   // Every 6 hours per the SHELL dispatch contract. Real engine cadence
   // tightens to 15 min once PC-1..PC-5 resolve (PRD §4 latency target).
-  cron.schedule("0 */6 * * *", () => {
-    runRiskFlaggingForAllTravelTenants().catch((e) =>
-      console.error("[VisaRiskFlag] cron fail:", e.message),
-    );
-  });
-  console.log("[VisaRiskFlag] cron initialized (every 6 hours)");
+  cronRegistry.register({
+    name: "visaRiskFlagEngine",
+    description: "Flags at-risk VisaApplication rows (complex-case/rejection-history/stale) — every 6h",
+    defaultSchedule: "0 */6 * * *",
+    tickFn: runRiskFlaggingForAllTravelTenants,
+  }).catch((e) => console.error("[VisaRiskFlag] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

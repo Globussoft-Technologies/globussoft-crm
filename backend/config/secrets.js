@@ -32,4 +32,13 @@ const JWT_SECRET = process.env.JWT_SECRET || DEV_FALLBACK_SECRET;
 const PORTAL_JWT_SECRET =
   process.env.PORTAL_JWT_SECRET || process.env.JWT_SECRET || DEV_FALLBACK_SECRET;
 
-module.exports = { JWT_SECRET, PORTAL_JWT_SECRET };
+// Super Admin Portal JWTs (/super-admin). Deliberately its OWN secret, never
+// falling back to JWT_SECRET — Super Admin auth doesn't use the app User
+// table at all (env-based credentials only), so its tokens must not be
+// forgeable with a leaked regular-user JWT_SECRET and vice versa. No dev
+// fallback either: an unset SUPER_ADMIN_JWT_SECRET disables the portal
+// entirely (see middleware/superAdminAuth.js) rather than silently running
+// on a guessable shared default.
+const SUPER_ADMIN_JWT_SECRET = process.env.SUPER_ADMIN_JWT_SECRET || null;
+
+module.exports = { JWT_SECRET, PORTAL_JWT_SECRET, SUPER_ADMIN_JWT_SECRET };

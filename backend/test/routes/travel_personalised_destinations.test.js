@@ -52,10 +52,10 @@ const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 // here mirrors backend/test/lib/llmRouter.test.js's prismaMock approach.
 const llmRouterMock = {
   routeRequest: vi.fn().mockResolvedValue({
-    text: '[STUB-REASONING] Reasoning output (synthetic). Real Claude/GPT lands when Q11 keys arrive.',
+    text: '[STUB-REASONING] Reasoning output (synthetic). Real Gemini Flash/GPT lands when Q11 keys arrive.',
     finishReason: 'stop',
     usage: { promptTokens: 42, completionTokens: 24, totalTokens: 66 },
-    model: 'claude-opus-4-7',
+    model: 'gemini-flash',
     stub: true,
   }),
 };
@@ -111,10 +111,10 @@ beforeEach(() => {
   // test starts from a known-happy router. Cases that need a different
   // router behaviour (errors, budget-cap) override per case.
   llmRouterMock.routeRequest.mockResolvedValue({
-    text: '[STUB-REASONING] Reasoning output (synthetic). Real Claude/GPT lands when Q11 keys arrive.',
+    text: '[STUB-REASONING] Reasoning output (synthetic). Real Gemini Flash/GPT lands when Q11 keys arrive.',
     finishReason: 'stop',
     usage: { promptTokens: 42, completionTokens: 24, totalTokens: 66 },
-    model: 'claude-opus-4-7',
+    model: 'gemini-flash',
     stub: true,
   });
 });
@@ -159,7 +159,7 @@ describe('happy path — stub-mode envelope shape', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       text: expect.stringContaining('[STUB-REASONING]'),
-      model: 'claude-opus-4-7',
+      model: 'gemini-flash',
       stub: true,
       finishReason: 'stop',
       destinations: null,

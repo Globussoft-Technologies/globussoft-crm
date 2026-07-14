@@ -18,7 +18,7 @@
 // type='warning'). Each diagnostic gets at most ONE escalation alert
 // across its lifecycle.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 // WhatsApp transport swap (Q9): Wati REST is COMMENTED OUT (kept on disk, not removed);
@@ -222,14 +222,13 @@ async function runDiagnosticAlertsForAllTravelTenants() {
 }
 
 function initTravelDiagnosticAlertsCron() {
-  // Every 5 minutes — :07 offset per the standing rule (avoid the :00 /
-  // :05 cluster). PRD §6.3 specifies "every 5 min."
-  cron.schedule("*/5 * * * *", () => {
-    runDiagnosticAlertsForAllTravelTenants().catch((e) =>
-      console.error("[TravelDiagnosticAlerts] cron fail:", e.message),
-    );
-  });
-  console.log("[TravelDiagnosticAlerts] cron initialized (every 5 min)");
+  // Every 5 minutes. PRD §6.3 specifies "every 5 min."
+  cronRegistry.register({
+    name: "travelDiagnosticAdvisorAlerts",
+    description: "Flags stalled (>30 min, no advisor outreach) travel diagnostics (every 5 min)",
+    defaultSchedule: "*/5 * * * *",
+    tickFn: runDiagnosticAlertsForAllTravelTenants,
+  }).catch((e) => console.error("[TravelDiagnosticAlerts] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

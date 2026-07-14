@@ -296,8 +296,8 @@ describe('fetchStrategy — full TeeOutput.imageStrategy', () => {
       { url: 'https://pex.example/dup-a.jpg', attribution: { providerId: 'pexels' } },
       { url: 'https://pex.example/dup-b.jpg', attribution: { providerId: 'pexels' } },
     ]);
-    // AI fallback is last-resort and may hit real network (Gemini/DALL-E)
-    // in CI; pin it to a fast, predictable unique URL so the dedup loop
+    // AI fallback is last-resort and may hit real network (DALL-E) in CI;
+    // pin it to a fast, predictable unique URL so the dedup loop
     // converges without timing out.
     let aiCounter = 0;
     vi.spyOn(aiImageFallbackProvider, 'search').mockImplementation(async () => {

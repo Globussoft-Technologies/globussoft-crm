@@ -66,9 +66,9 @@ const { getBudgetCap, evaluateCap } = require("./tenantSettings");
 const TASK_ROUTING = {
   search: { primary: "perplexity-sonar", fallback: null },
   citation: { primary: "perplexity-sonar", fallback: null },
-  reasoning: { primary: "claude-opus-4-7", fallback: "gpt-4" },
-  "talking-points": { primary: "claude-opus-4-7", fallback: "gpt-4" },
-  "form-vs-call": { primary: "claude-opus-4-7", fallback: "gpt-4" },
+  reasoning: { primary: "gemini-flash", fallback: "gpt-4" },
+  "talking-points": { primary: "gemini-flash", fallback: "gpt-4" },
+  "form-vs-call": { primary: "gemini-flash", fallback: "gpt-4" },
   "bulk-text": { primary: "gemini-flash", fallback: "groq-llama" },
   "call-summary": { primary: "gemini-flash", fallback: null },
   // Itinerary-suggest (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.6 + AI_SURFACES §3
@@ -318,10 +318,10 @@ async function llmEnabled(task, tenantId) {
 
 function pickModel(task) {
   if (!TASK_ROUTING[task]) {
-    // Unknown task → reasoning catch-all (Claude). PRD prefers a
-    // high-quality default for unknown classes — talking-points/
-    // form-vs-call quality matters more than bulk-text/call-summary.
-    return { task, model: "claude-opus-4-7", reason: "unknown-task-fallback" };
+    // Unknown task → reasoning catch-all (Gemini Flash). Matches the
+    // "reasoning"/"talking-points"/"form-vs-call" primary (2026-07-14 —
+    // Claude Opus removed as a cost-saving swap, see TASK_ROUTING above).
+    return { task, model: "gemini-flash", reason: "unknown-task-fallback" };
   }
   return { task, model: TASK_ROUTING[task].primary, reason: "primary" };
 }
@@ -475,18 +475,21 @@ async function routeRequest({ task, payload, tenantId } = {}) {
   // own PrismaClient don't trigger a circular-import bomb.
   try {
     const prisma = require("./prisma");
+    const { inferProvider } = require("./apiPricing");
     prisma.llmCallLog
       .create({
         data: {
           tenantId: tenantId || 1,
           task,
           model,
+          provider: inferProvider(model),
           reason,
           promptTokens: tokensIn,
           completionTokens: tokensOut,
           totalTokens: tokensIn + tokensOut,
-          costEstimate: 0, // stub mode = $0; real-mode wire-in adds per-token pricing
+          costEstimate: 0, // stub mode = $0 — no real API call was made, so no real cost
           stub: true,
+          status: "success",
           userId: (payload && payload.__userId) || null,
           surface: (payload && payload.__surface) || null,
         },
@@ -525,7 +528,7 @@ function buildStubText(task, _payload) {
   const tag = `[STUB-${task.toUpperCase()}]`;
   switch (task) {
     case "talking-points":
-      return `${tag} Lead profile suggests: (1) confirm budget tier, (2) ask about prior travel, (3) probe destination flexibility. Synthetic content — real Claude reasoning lands when Q11 keys arrive.`;
+      return `${tag} Lead profile suggests: (1) confirm budget tier, (2) ask about prior travel, (3) probe destination flexibility. Synthetic content — real Gemini Flash reasoning lands when Q11 keys arrive.`;
     case "call-summary":
       return `${tag} Call summary: customer expressed interest in trip, advisor walked through options, follow-up scheduled. Synthetic content — real Gemini summary lands when Q11 keys arrive.`;
     case "lead-conversation-summary":
@@ -547,7 +550,7 @@ function buildStubText(task, _payload) {
         leadStage: "New Enquiry",
       });
     case "form-vs-call":
-      return `${tag} Form-vs-call comparison: 85% match (synthetic). Real Claude comparison lands when Q11 keys arrive.`;
+      return `${tag} Form-vs-call comparison: 85% match (synthetic). Real Gemini Flash comparison lands when Q11 keys arrive.`;
     case "search":
     case "citation":
       return `${tag} Cited search result: "Synthetic citation pending Q11 Perplexity key." (https://example.invalid/q11-stub)`;
@@ -596,12 +599,12 @@ function buildStubText(task, _payload) {
         { lineType: "service", description: "Travel insurance per person", quantity: 2, unitPrice: 1200, currency: "INR" },
       ]);
     case "reasoning":
-      return `${tag} Reasoning output (synthetic). Real Claude/GPT lands when Q11 keys arrive.`;
+      return `${tag} Reasoning output (synthetic). Real Gemini Flash/GPT lands when Q11 keys arrive.`;
     default:
       // Unknown task → still produce SOMETHING so the consumer
       // doesn't bomb on a null/empty response. Tag uses the
       // raw task name so the operator can spot config drift.
-      return `${tag} Reasoning output (synthetic). Real Claude/GPT lands when Q11 keys arrive.`;
+      return `${tag} Reasoning output (synthetic). Real Gemini Flash/GPT lands when Q11 keys arrive.`;
   }
 }
 
@@ -851,68 +854,100 @@ async function callGemini(modelId, system, user, apiKey, maxTokens) {
   throw lastErr || new Error("gemini call failed");
 }
 
+// Fire-and-forget LlmCallLog write shared by the success + failure paths
+// below — a DB-write failure must never mask the real call's outcome.
+function persistLlmCallLog(data) {
+  try {
+    const prisma = require("./prisma");
+    prisma.llmCallLog.create({ data }).catch((e) =>
+      console.error(`[llm-router] LlmCallLog persist failed (non-fatal): ${e.message}`),
+    );
+  } catch (e) {
+    console.error(`[llm-router] LlmCallLog require failed (non-fatal): ${e.message}`);
+  }
+}
+
 async function realProviderCall({ task, model, payload, tenantId }) {
   const provider = providerForModel(model);
-  const envVar = ENV_FOR_MODEL[model];
-  const apiKey = envVar && process.env[envVar];
-  if (!apiKey) throw new Error(`no API key for ${model}`);
-  const modelId = resolveRealModelId(model);
-  const { system, user } = buildPrompt(task, payload);
-  const maxTokens = 4096;
+  const { estimateLlmCost } = require("./apiPricing");
+  const baseLogFields = {
+    tenantId: tenantId || 1,
+    task,
+    model,
+    provider,
+    stub: false,
+    userId: (payload && payload.__userId) || null,
+    surface: (payload && payload.__surface) || null,
+  };
 
-  let out;
-  if (provider === "anthropic") out = await callAnthropic(modelId, system, user, apiKey, maxTokens);
-  else if (provider === "openai") {
-    // gpt-4o-search-preview browses the live web when web_search_options is set;
-    // regular gpt-4o has no web access, so only enable it for the search model.
-    const extra = /search/.test(modelId) ? { web_search_options: {} } : {};
-    out = await callOpenAICompatible("https://api.openai.com/v1", modelId, system, user, apiKey, maxTokens, extra);
+  let apiKey, modelId, system, user;
+  try {
+    const envVar = ENV_FOR_MODEL[model];
+    apiKey = envVar && process.env[envVar];
+    if (!apiKey) throw new Error(`no API key for ${model}`);
+    modelId = resolveRealModelId(model);
+    ({ system, user } = buildPrompt(task, payload));
+  } catch (e) {
+    persistLlmCallLog({
+      ...baseLogFields,
+      reason: "real",
+      costEstimate: 0,
+      status: "failed",
+      errorMessage: e.message,
+    });
+    throw e;
   }
-  else if (provider === "perplexity") out = await callOpenAICompatible("https://api.perplexity.ai", modelId, system, user, apiKey, maxTokens);
-  else if (provider === "gemini") out = await callGemini(modelId, system, user, apiKey, maxTokens);
-  else if (provider === "groq") out = await callOpenAICompatible("https://api.groq.com/openai/v1", modelId, system, user, apiKey, maxTokens);
-  else throw new Error(`unknown provider for ${model}`);
+
+  const maxTokens = 4096;
+  let out;
+  try {
+    if (provider === "anthropic") out = await callAnthropic(modelId, system, user, apiKey, maxTokens);
+    else if (provider === "openai") {
+      // gpt-4o-search-preview browses the live web when web_search_options is set;
+      // regular gpt-4o has no web access, so only enable it for the search model.
+      const extra = /search/.test(modelId) ? { web_search_options: {} } : {};
+      out = await callOpenAICompatible("https://api.openai.com/v1", modelId, system, user, apiKey, maxTokens, extra);
+    }
+    else if (provider === "perplexity") out = await callOpenAICompatible("https://api.perplexity.ai", modelId, system, user, apiKey, maxTokens);
+    else if (provider === "gemini") out = await callGemini(modelId, system, user, apiKey, maxTokens);
+    else if (provider === "groq") out = await callOpenAICompatible("https://api.groq.com/openai/v1", modelId, system, user, apiKey, maxTokens);
+    else throw new Error(`unknown provider for ${model}`);
+  } catch (e) {
+    // Failure path — log WHY (errorMessage), no tokens/cost since no
+    // successful response came back. Powers the API Analytics "failures"
+    // view: every failed external call is visible with its real error text.
+    persistLlmCallLog({
+      ...baseLogFields,
+      reason: "real",
+      costEstimate: 0,
+      status: "failed",
+      errorMessage: e.message,
+    });
+    throw e;
+  }
 
   const tokensIn =
     out.tokensIn || estimateTokens(JSON.stringify(payload || {}));
   const tokensOut = out.tokensOut || estimateTokens(out.text);
+  const costEstimate = estimateLlmCost(model, tokensIn, tokensOut);
 
   // Token-only telemetry — NEVER log payload content (PII discipline).
   console.log(
     `[llm-router] task=${task} model=${model} (${modelId}) tenant=${tenantId || "?"} ` +
-    `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$0.0000 stub=false reason=real`,
+    `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$${costEstimate.toFixed(6)} stub=false reason=real`,
   );
 
   // Persist one LlmCallLog row (best-effort, fire-and-forget) — mirrors the
   // stub path so the admin spend dashboard counts real calls too.
-  try {
-    const prisma = require("./prisma");
-    prisma.llmCallLog
-      .create({
-        data: {
-          tenantId: tenantId || 1,
-          task,
-          model,
-          reason: "real",
-          promptTokens: tokensIn,
-          completionTokens: tokensOut,
-          totalTokens: tokensIn + tokensOut,
-          costEstimate: 0, // real per-token pricing is a follow-up; tokens are real
-          stub: false,
-          userId: (payload && payload.__userId) || null,
-          surface: (payload && payload.__surface) || null,
-        },
-      })
-      .catch((e) =>
-        console.error(
-          `[llm-router] LlmCallLog persist failed (non-fatal): ${e.message}`,
-        ),
-      );
-  } catch (e) {
-    console.error(
-      `[llm-router] LlmCallLog require failed (non-fatal): ${e.message}`,
-    );
-  }
+  persistLlmCallLog({
+    ...baseLogFields,
+    reason: "real",
+    promptTokens: tokensIn,
+    completionTokens: tokensOut,
+    totalTokens: tokensIn + tokensOut,
+    costEstimate,
+    status: "success",
+  });
 
   return {
     text: out.text || "",

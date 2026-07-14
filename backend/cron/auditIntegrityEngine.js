@@ -1,4 +1,4 @@
-const cron = require('node-cron');
+const cronRegistry = require('../lib/cronRegistry');
 const prisma = require('../lib/prisma');
 const { computeHash, genesisFor } = require('../lib/audit');
 
@@ -128,13 +128,12 @@ async function runAuditIntegritySweep() {
 function initAuditIntegrityCron() {
   // Daily at 04:00 server time (after the 03:00 retention sweep has finished
   // so we record the post-retention chain head).
-  cron.schedule('0 4 * * *', () => {
-    console.log('[AuditIntegrity] Cron tick — running daily integrity sweep...');
-    runAuditIntegritySweep().catch((err) =>
-      console.error('[AuditIntegrity] Cron failure:', err)
-    );
-  });
-  console.log('[AuditIntegrity] Cron scheduled: daily at 04:00.');
+  cronRegistry.register({
+    name: 'auditIntegrityEngine',
+    description: 'Daily audit hash-chain integrity sweep',
+    defaultSchedule: '0 4 * * *',
+    tickFn: runAuditIntegritySweep,
+  }).catch((e) => console.error('[AuditIntegrity] cronRegistry registration failed:', e.message));
 }
 
 module.exports = { initAuditIntegrityCron, runAuditIntegritySweep };

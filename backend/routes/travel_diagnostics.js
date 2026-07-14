@@ -1514,8 +1514,9 @@ router.patch(
 //
 // PRD §4.2 + §6.1: generate an advisor talking-points brief for a
 // completed diagnostic via the LLM router (per PRD §9.1 this is a
-// reasoning task → Claude Opus primary, GPT-4 fallback). First consumer
-// of the lib/llmRouter.js scaffold (commit 583c06b) — until Q11 API
+// reasoning task → Gemini Flash primary, GPT-4 fallback — 2026-07-14
+// swap off Claude Opus, see backend/lib/llmRouter.js TASK_ROUTING).
+// First consumer of the lib/llmRouter.js scaffold (commit 583c06b) — until Q11 API
 // keys land the router returns deterministic [STUB-TALKING-POINTS]
 // synthetic text so the advisor UI can render SOMETHING and tests can
 // pin the contract.
@@ -1729,7 +1730,7 @@ router.post(
       });
 
       // Parse the LLM text for a confidence percentage. The stub
-      // returns "85% match (synthetic)"; real Claude output is
+      // returns "85% match (synthetic)"; real Gemini Flash output is
       // expected to surface a "\d+%" token in the prose. When
       // absent we return null + classify as "unknown" so the UI
       // can render an advisor-review prompt rather than guessing.

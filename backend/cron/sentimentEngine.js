@@ -16,8 +16,24 @@
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
+const { estimateLlmCost } = require("../lib/apiPricing");
+
+// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
+// persistLlmCallLog helper so this direct Gemini call is visible to the
+// Super Admin "API Analytics" dashboard. A DB hiccup here must NEVER break
+// sentiment scoring, hence the nested try/catch and the un-awaited .catch().
+function persistLlmCallLog(data) {
+  try {
+    const prismaClient = require("../lib/prisma");
+    prismaClient.llmCallLog.create({ data }).catch((e) =>
+      console.error(`[Sentiment] LlmCallLog persist failed (non-fatal): ${e.message}`),
+    );
+  } catch (e) {
+    console.error(`[Sentiment] LlmCallLog require failed (non-fatal): ${e.message}`);
+  }
+}
 
 let genAI = null;
 let geminiModel = null;
@@ -109,9 +125,43 @@ async function analyzeMessage(text) {
         `Text: "${safeText.slice(0, 4000)}"`;
       const result = await geminiModel.generateContent(prompt);
       const raw = result.response.text();
+      const usage = result.response.usageMetadata || {};
+      const promptTokens = usage.promptTokenCount || 0;
+      const completionTokens = usage.candidatesTokenCount || 0;
+      persistLlmCallLog({
+        tenantId: 1,
+        task: "sentiment",
+        model: "gemini-2.5-flash",
+        provider: "gemini",
+        reason: null,
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+        costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
+        stub: false,
+        userId: null,
+        surface: "sentimentEngine",
+        status: "success",
+      });
       const parsed = parseGeminiResponse(raw);
       if (parsed) return parsed;
     } catch (err) {
+      persistLlmCallLog({
+        tenantId: 1,
+        task: "sentiment",
+        model: "gemini-2.5-flash",
+        provider: "gemini",
+        reason: null,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        costEstimate: 0,
+        stub: false,
+        userId: null,
+        surface: "sentimentEngine",
+        status: "failed",
+        errorMessage: err.message,
+      });
       console.warn("[Sentiment] Gemini call failed, falling back to rules:", err.message);
     }
   }
@@ -162,16 +212,20 @@ async function tickSentimentEngine() {
  * Initialise the cron job (every 15 minutes). Safe to call once at boot.
  */
 function initSentimentCron() {
-  // Run shortly after boot so fresh deploys catch up immediately.
+  cronRegistry.register({
+    name: "sentimentEngine",
+    description: "Customer sentiment analysis over recent inbound messages (every 15 min)",
+    defaultSchedule: "*/15 * * * *",
+    tickFn: tickSentimentEngine,
+  }).catch((e) => console.error("[Sentiment] cronRegistry registration failed:", e.message));
+
+  // Run shortly after boot so fresh deploys catch up immediately — routed
+  // through cronRegistry.runTick (not a bare tickSentimentEngine() call) so
+  // this startup pass is also captured as a CronExecutionLog row.
   setTimeout(() => {
-    tickSentimentEngine().catch(err => console.error("[Sentiment] Initial tick error:", err));
+    cronRegistry.runTick("sentimentEngine", "startup").catch((err) =>
+      console.error("[Sentiment] Initial tick error:", err));
   }, 15_000);
-
-  cron.schedule("*/15 * * * *", () => {
-    tickSentimentEngine().catch(err => console.error("[Sentiment] Cron tick error:", err));
-  });
-
-  console.log("[Sentiment] Cron initialized (every 15 minutes).");
 }
 
 module.exports = {

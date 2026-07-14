@@ -182,13 +182,10 @@ describe('<Developer /> — page surface, API key + webhook CRUD, agent activity
     vi.useRealTimers();
   });
 
-  it('mount: renders heading + Swagger CTA + section headings, fires initial GETs', async () => {
+  it('mount: renders heading + section headings, fires initial GETs', async () => {
     renderDeveloper();
     expect(
       screen.getByRole('heading', { name: /Developer Ecosystem/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('link', { name: /View Swagger OpenAPI Docs/i }),
     ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /API Credentials/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^Webhooks$/i })).toBeInTheDocument();

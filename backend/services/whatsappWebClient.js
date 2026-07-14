@@ -107,6 +107,18 @@ function init(io) {
   _io = io;
   console.log("[whatsappWeb] init — socket handle attached; restoring previously-linked sessions…");
   module.exports.installPuppeteerCrashGuard();
+  // Reap orphan Chromiums a previous unclean exit left holding the saved
+  // session dirs (pm2 SIGKILL doesn't propagate to Chrome children) BEFORE
+  // restoreSessions() launches fresh ones — otherwise old + new stack.
+  // killBrowsersForDir targets ONLY chromes whose cmdline references the
+  // exact session dir; it's a no-op under test and when no dir exists.
+  try {
+    const fs = require("fs");
+    for (const e of fs.readdirSync(AUTH_DIR, { withFileTypes: true })) {
+      const m = /^session-travel-(\d+)$/.exec(e.name);
+      if (m) module.exports.killBrowsersForDir(Number(m[1]));
+    }
+  } catch { /* no auth dir yet — nothing to sweep */ }
   // Auto-restore on boot: re-initialize every tenant that was linked before the
   // restart. LocalAuth persisted their creds to .wwebjs_auth/session-travel-<id>,
   // so connect() resumes WITHOUT a new QR. Fire-and-forget so server startup is
@@ -370,6 +382,46 @@ function clearStaleLocks(tenantId) {
 // next connect gets a fresh QR. Used by reset + logout. Destroy is raced
 // against a timeout so a stuck client can't block the wipe; a leftover
 // Chromium (locked dir) is then force-killed before the wipe.
+// Reap the Chromium behind a TERMINALLY-dead session (phone-side logout,
+// auth_failure, stuck-restore watchdog, initialize failure). whatsapp-web.js
+// does NOT close the browser on LOGOUT / AUTH_FAILURE — without this, each
+// occurrence leaks a ~1 GB Chromium until the next restart, stacking with the
+// pm2-SIGKILL orphans into the OOM death spiral.
+//
+// Re-entrancy: destroy() fires a second "disconnected" event whose reason
+// ("NAVIGATION") doesn't match /logout/ — manualClose=true stops the auto-
+// reconnect timer from spawning a fresh Chromium right after we kill this one.
+// The session RECORD is kept (only the client is nulled) so the UI retains
+// lastError and the reconnect guard keeps seeing manualClose.
+//
+// wipe: also remove the dead LocalAuth creds (phone-side logout — the server
+// has already invalidated them) so the next connect() goes straight to a
+// fresh QR instead of looping through auth_failure first.
+function reapDeadClient(tenantId, s, { wipe = false } = {}) {
+  if (!s || !s.client) return;
+  const dead = s.client;
+  s.client = null;
+  s.manualClose = true;
+  Promise.resolve()
+    .then(() => dead.destroy())
+    .catch((e) =>
+      console.warn(`[whatsappWeb] tenant ${tenantId} dead-client destroy warn: ${e.message}`),
+    )
+    .finally(() => {
+      module.exports.killBrowsersForDir(tenantId);
+      if (wipe) {
+        try {
+          const fs = require("fs");
+          const dir = path.join(AUTH_DIR, `session-travel-${tenantId}`);
+          fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+          console.log(`[whatsappWeb] tenant ${tenantId} dead session wiped (fresh QR on next connect)`);
+        } catch (e) {
+          console.warn(`[whatsappWeb] tenant ${tenantId} dead-session wipe failed: ${e.message}`);
+        }
+      }
+    });
+}
+
 async function clearSession(tenantId, { wipe = true } = {}) {
   tenantId = Number(tenantId);
   const s = getSession(tenantId);
@@ -387,8 +439,7 @@ async function clearSession(tenantId, { wipe = true } = {}) {
   sessions.delete(tenantId);
   // Free any orphan Chromium still holding the dir (cross-process lock).
   module.exports.killBrowsersForDir(tenantId);
-  if (wipe) {
-    try {
+  if (wipe) {    try {
       const fs = require("fs");
       const dir = path.join(AUTH_DIR, `session-travel-${tenantId}`);
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
@@ -515,6 +566,9 @@ async function _connectImpl(tenantId, { reset = false } = {}) {
       s.state = STATE.AUTH_FAILURE;
       s.lastError = "Timed out starting WhatsApp (the saved session may be stale). Click “Reset & reconnect” to get a fresh QR.";
       console.error(`[whatsappWeb] tenant ${tenantId} QR watchdog fired — stuck in ${s.state}`);
+      // The stuck Chromium is still alive (that's why it never reached QR/
+      // ready) — reap it instead of leaving it as an orphan.
+      module.exports.reapDeadClient(tenantId, s);
       module.exports.emitState(tenantId);
     }
   }, QR_WATCHDOG_MS);
@@ -528,6 +582,8 @@ async function _connectImpl(tenantId, { reset = false } = {}) {
       if (s.watchdog) { clearTimeout(s.watchdog); s.watchdog = null; }
       s.state = STATE.AUTH_FAILURE;
       s.lastError = e.message;
+      // Best-effort reap — a half-launched browser may still be alive.
+      module.exports.reapDeadClient(tenantId, s);
     }
     module.exports.emitState(tenantId);
   });
@@ -650,6 +706,11 @@ function wireEvents(client, tenantId) {
     s.state = STATE.AUTH_FAILURE;
     s.lastError = String(msg || "authentication failed");
     console.error(`[whatsappWeb] tenant ${tenantId} auth_failure: ${s.lastError}`);
+    // The browser behind a failed auth can never recover (WhatsApp rejected
+    // the creds) — reap it so it doesn't sit as a ~1 GB orphan. The LocalAuth
+    // dir is KEPT: the UI's "Reset & reconnect" button owns the wipe, and an
+    // auth_failure during boot-restore may be transient corruption worth a retry.
+    module.exports.reapDeadClient(tenantId, s);
     module.exports.emitState(tenantId);
   });
 
@@ -681,10 +742,20 @@ function wireEvents(client, tenantId) {
     const s = getSession(tenantId);
     console.warn(`[whatsappWeb] tenant ${tenantId} disconnected: ${reason}`);
     const deliberate = !!(s && s.manualClose);
+    // A phone-side logout (or WhatsApp force-unlinking a duplicate device)
+    // kills the session server-side but NOT the Chromium process — reap it
+    // or it leaks ~1 GB until the next restart. The LocalAuth creds are dead
+    // too (server invalidated them): wipe so the next connect() issues a
+    // fresh QR directly instead of looping through auth_failure first.
+    const isLogout = /logout/i.test(String(reason || ""));
     if (s) {
       s.state = STATE.DISCONNECTED;
       s.lastError = String(reason || "disconnected");
-      s.client = null;
+      if (isLogout && !deliberate) {
+        module.exports.reapDeadClient(tenantId, s, { wipe: true });
+      } else {
+        s.client = null;
+      }
     }
     module.exports.emitState(tenantId);
     // NOTE: we deliberately do NOT purge the imported chats on a transient
@@ -698,7 +769,6 @@ function wireEvents(client, tenantId) {
     // "disconnected" while the phone still shows the device linked. Skipped
     // when the operator deliberately disconnected, or when the phone unlinked
     // the device (reason mentions "logout" → a fresh QR scan is required).
-    const isLogout = /logout/i.test(String(reason || ""));
     if (!deliberate && !isLogout) {
       setTimeout(() => {
         const cur = getSession(tenantId);
@@ -2016,6 +2086,7 @@ module.exports = {
   disconnect,
   shutdown,
   clearSession,
+  reapDeadClient,
   killBrowsersForDir,
   clearStaleLocks,
   resolveChromePath,

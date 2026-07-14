@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { smsSendLimiter, webhookLimiter } = require("../middleware/apiRateLimiters");
 const { normalizePhone, substituteVars, sendSms, resolveProviderConfig } = require("../services/smsProvider");
 const {
   encryptCredential,
@@ -17,7 +18,7 @@ const { writeAudit } = require("../lib/audit");
 const SMS_SECRET_FIELDS = ["apiKey", "authToken"];
 
 // ─── Send SMS ────────────────────────────────────────────────────────────────
-router.post("/send", verifyToken, async (req, res) => {
+router.post("/send", verifyToken, smsSendLimiter, async (req, res) => {
   try {
     const { to, body, contactId, templateId } = req.body;
 
@@ -130,7 +131,7 @@ function parseSmsRecipients(to) {
   return String(to).split(/[,\s\n]+/).map(s => s.trim()).filter(Boolean);
 }
 
-router.post("/send-bulk", verifyToken, async (req, res) => {
+router.post("/send-bulk", verifyToken, smsSendLimiter, async (req, res) => {
   try {
     const { to, body, contactId, templateId } = req.body;
 
@@ -783,7 +784,7 @@ router.post("/drain", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
 
 // ─── Webhook (NO AUTH) — Delivery status + inbound SMS ──────────────────────
 // Tenant inferred from existing message or matched contact, defaulting to 1.
-router.post("/webhook/:provider", async (req, res) => {
+router.post("/webhook/:provider", webhookLimiter, async (req, res) => {
   try {
     const { provider } = req.params;
 

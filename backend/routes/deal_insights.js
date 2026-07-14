@@ -4,6 +4,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override
 
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { llmLimiter } = require("../middleware/apiRateLimiters");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const router = express.Router();
@@ -358,7 +359,7 @@ async function persistInsights(dealId, tenantId, candidates) {
 }
 
 // ── POST /generate/:dealId : run rules + AI for this deal ─────────
-router.post("/generate/:dealId", async (req, res) => {
+router.post("/generate/:dealId", llmLimiter, async (req, res) => {
   try {
     const dealId = parseInt(req.params.dealId);
     if (isNaN(dealId)) return res.status(400).json({ error: "Invalid dealId" });

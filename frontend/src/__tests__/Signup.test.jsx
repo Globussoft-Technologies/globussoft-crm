@@ -153,7 +153,7 @@ describe('<Signup /> — page surface', () => {
     // The email field now has a Validate (OTP) button, and the submit button
     // is gated until the email is verified.
     expect(screen.getByTestId('otp-validate')).toBeInTheDocument();
-    const submit = screen.getByRole('button', { name: /Verify your email to continue/i });
+    const submit = screen.getByRole('button', { name: /Verify your email or phone to continue/i });
     expect(submit).toBeDisabled();
     // Sign-in link routes back to /login.
     const signInLink = screen.getByRole('link', { name: /Sign in/i });
@@ -183,7 +183,7 @@ describe('<Signup /> — page surface', () => {
     fireEvent.change(screen.getByPlaceholderText('John Doe'), { target: { value: 'Priya Sharma' } });
     fireEvent.change(screen.getByPlaceholderText('name@company.com'), { target: { value: 'priya@acme.example' } });
     fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'sup3rsecret' } });
-    expect(screen.getByRole('button', { name: /Verify your email to continue/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Verify your email or phone to continue/i })).toBeDisabled();
     // Verify → the submit unlocks.
     fireEvent.click(screen.getByTestId('otp-validate'));
     fireEvent.change(await screen.findByTestId('otp-code'), { target: { value: '123456' } });

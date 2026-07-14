@@ -6788,6 +6788,22 @@ model EmailVerificationOtp {
   @@index([email, purpose])
 }
 
+/// Phone OTP verification — mirrors EmailVerificationOtp but for phone numbers.
+/// Pre-registration, identity-by-phone. Codes are bcrypt-hashed, expire in ~10 min.
+/// NOT tenant-scoped (at signup time no tenant exists yet).
+model PhoneVerificationOtp {
+  id        Int       @id @default(autoincrement())
+  phone     String
+  purpose   String // signup | customer-register
+  otpHash   String
+  expiresAt DateTime
+  usedAt    DateTime?
+  attempts  Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@index([phone, purpose])
+}
+
 /// Password-reset tokens, persisted to the DB so they survive backend
 /// restarts / redeploys / multiple instances (the old in-memory Map lost every
 /// outstanding link on any restart → "Invalid or expired" immediately).

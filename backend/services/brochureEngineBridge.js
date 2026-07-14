@@ -78,7 +78,65 @@ const GENERATED_DIR = process.env.GENERATED_DIR
 // on the child's "close" so the map never leaks PIDs.
 const RUNNING_CHILDREN = new Map();
 
+// ─── Memory-safety guards ────────────────────────────────────────────────
+// Each run spawns a tsx subprocess (~150 MB) which launches up to TWO headless
+// Chromes (measure pass + PDF render at deviceScaleFactor 2, ~500–800 MB peak).
+// Uncapped concurrency + unreachable kills were OOM contributors on small VPS
+// boxes (see docs/BACKEND_MEMORY_AND_STORAGE_OPTIMIZATION.md).
+
+// Max concurrent engine runs. Extra Generate clicks reject fast (the route
+// marks the run failed with this message) instead of stacking Chromes.
+const MAX_CONCURRENT_RUNS = (() => {
+  const v = parseInt(process.env.BROCHURE_MAX_CONCURRENCY, 10);
+  return Number.isFinite(v) && v >= 1 ? Math.min(v, 8) : 2;
+})();
+
+// Wall-clock cap per run. The LLM phase is unbounded by design, but a wedged
+// engine (stuck provider call, hung Chrome past protocol timeouts) must not
+// hold its subprocess + Chromium forever. Default 8 minutes.
+const RUN_TIMEOUT_MS = (() => {
+  const v = parseInt(process.env.BROCHURE_RUN_TIMEOUT_MS, 10);
+  return Number.isFinite(v) && v >= 60_000 ? v : 8 * 60_000;
+})();
+
+// Kill a subprocess AND its whole process tree. The engine's Chromium is a
+// child of the tsx subprocess — a plain child.kill() (or SIGKILL after
+// SIGTERM) orphans the browser, leaking ~0.5–0.8 GB per cancelled run.
+// Linux/macOS: the child is spawned detached (own process group) → signal the
+// group. Windows: taskkill /T walks the tree.
+function killTree(child, { force = false } = {}) {
+  if (!child || child.killed) return;
+  const sig = force ? "SIGKILL" : "SIGTERM";
+  try {
+    if (process.platform === "win32") {
+      // /T = tree, /F = force. execFileSync throws if the PID is already gone.
+      require("child_process").execFileSync(
+        "taskkill",
+        ["/PID", String(child.pid), "/T", "/F"],
+        { stdio: "ignore" },
+      );
+    } else {
+      // Negative PID → the whole process group (requires detached: true).
+      try {
+        process.kill(-child.pid, sig);
+      } catch {
+        child.kill(sig); // fallback: direct signal (group may not exist)
+      }
+    }
+  } catch {
+    /* already gone — best-effort */
+  }
+}
+
 function startRun({ runId, tenantId, sectorKey, goal, styleKey, brand, models, strategy, onEvent }) {
+  // Concurrency gate — reject fast rather than stacking subprocesses + Chromes.
+  if (RUNNING_CHILDREN.size >= MAX_CONCURRENT_RUNS) {
+    return Promise.reject(
+      new Error(
+        `Another brochure run is in progress (max ${MAX_CONCURRENT_RUNS} concurrent) — try again shortly. (BROCHURE_BUSY)`,
+      ),
+    );
+  }
   return new Promise((resolve, reject) => {
     const brief = JSON.stringify({ runId, sectorKey, goal, styleKey, brand, models, strategy });
     const child = spawn(process.execPath, [TSX_CLI, BRIDGE_SCRIPT], {
@@ -86,8 +144,22 @@ function startRun({ runId, tenantId, sectorKey, goal, styleKey, brand, models, s
       env: { ...process.env, BROCHURE_BRIEF: brief },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      // Own process group on POSIX so killTree can signal the group (child +
+      // its Chromium) with process.kill(-pid). Ignored on Windows.
+      detached: process.platform !== "win32",
     });
     if (runId) RUNNING_CHILDREN.set(runId, child);
+
+    // Wall-clock run timeout — a wedged engine must not hold its subprocess
+    // (+ Chromium) forever. Reuses the cancel path but with a distinct reason.
+    const timeout = setTimeout(() => {
+      if (RUNNING_CHILDREN.get(runId) === child) {
+        child.__timedOut = true;
+        killTree(child);
+        setTimeout(() => killTree(child, { force: true }), 2000).unref?.();
+      }
+    }, RUN_TIMEOUT_MS);
+    timeout.unref?.();
 
     let stdoutBuf = "";
     let stderrBuf = "";
@@ -121,11 +193,17 @@ function startRun({ runId, tenantId, sectorKey, goal, styleKey, brand, models, s
     });
 
     child.on("close", async (code) => {
+      clearTimeout(timeout);
       if (runId) RUNNING_CHILDREN.delete(runId);
       // Operator cancelled the run (Stop button) — the child was killed, so there's
       // no JSON result to parse. Surface a clean, detectable CANCELLED rejection.
       if (child.__cancelled) {
         return reject(new Error("RUN_CANCELLED"));
+      }
+      if (child.__timedOut) {
+        return reject(
+          new Error(`Brochure run exceeded the ${Math.round(RUN_TIMEOUT_MS / 60000)}-minute limit and was stopped. (RUN_TIMEOUT)`),
+        );
       }
       // Flush any trailing stderr bytes that didn't end with \n.
       if (stderrBuf.trim() && typeof onEvent === "function") {
@@ -336,25 +414,44 @@ function cancelRun(runId) {
   if (!child) return false;
   child.__cancelled = true;
   try {
-    child.kill("SIGTERM");
-    // Hard-stop after a grace period if the process ignores SIGTERM (tsx + Chromium
-    // can hold on). unref so this timer never keeps the backend alive.
-    setTimeout(() => {
-      try {
-        if (!child.killed) child.kill("SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    }, 2000).unref?.();
+    // Tree-kill so the engine's Chromium dies WITH the bridge subprocess —
+    // a plain child.kill() orphans the browser (~0.5–0.8 GB per cancel).
+    killTree(child);
+    // Hard-stop after a grace period if the tree ignores SIGTERM.
+    setTimeout(() => killTree(child, { force: true }), 2000).unref?.();
   } catch {
     return false;
   }
   return true;
 }
 
+/**
+ * Kill every in-flight run's process tree. Called from server.js's graceful
+ * shutdown so a pm2 restart doesn't leave engine subprocesses + their Chromes
+ * reparented to init and holding RAM (they were invisible to the old shutdown
+ * path, accumulating across every restart cycle).
+ */
+function shutdown() {
+  let killed = 0;
+  for (const [, child] of RUNNING_CHILDREN) {
+    child.__cancelled = true;
+    killTree(child);
+    killed++;
+  }
+  if (killed) {
+    // Best-effort hard-stop stragglers after a grace period.
+    setTimeout(() => {
+      for (const [, child] of RUNNING_CHILDREN) killTree(child, { force: true });
+    }, 2000).unref?.();
+    console.log(`[brochureBridge] shutdown — killed ${killed} in-flight engine run(s)`);
+  }
+  return { killed };
+}
+
 module.exports = {
   startRun,
   cancelRun,
+  shutdown,
   listModels,
   listSectors,
   ENGINE_ROOT,

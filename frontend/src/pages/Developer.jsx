@@ -168,9 +168,6 @@ export default function Developer() {
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Developer Ecosystem</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>REST Extensibility, Bearer API Keys, and Outbound Webhook Streams.</p>
         </div>
-        <a href="/api-docs" target="_blank" rel="noreferrer" className="btn-primary" style={{ padding: '0.75rem 1.5rem', textDecoration: 'none', display: 'flex', alignItems: 'center' }}>
-          View Swagger OpenAPI Docs
-        </a>
       </header>
 
       {/* Agent activity feed — live tail of background agents the

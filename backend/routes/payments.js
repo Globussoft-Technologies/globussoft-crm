@@ -11,6 +11,7 @@ require("dotenv").config({
 
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
+const { paymentLimiter } = require("../middleware/apiRateLimiters");
 const {
   getTenantRazorpayClient,
   getTenantRazorpayCreds,
@@ -1018,7 +1019,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // POST /create-stripe-intent
-router.post("/create-stripe-intent", async (req, res) => {
+router.post("/create-stripe-intent", paymentLimiter, async (req, res) => {
   try {
     const stripe = getStripe();
     if (!stripe)
@@ -1101,7 +1102,7 @@ router.post("/create-stripe-intent", async (req, res) => {
 // does `window.location.href = url`, Stripe handles the card form, then
 // redirects back to FRONTEND_URL/invoices with ?stripe=success&session_id=…
 // which the page detects on mount and POSTs to /confirm-stripe-session.
-router.post("/create-stripe-checkout-session", async (req, res) => {
+router.post("/create-stripe-checkout-session", paymentLimiter, async (req, res) => {
   try {
     const stripe = getStripe();
     if (!stripe)
@@ -1189,7 +1190,7 @@ router.post("/create-stripe-checkout-session", async (req, res) => {
 });
 
 // POST /create-razorpay-order
-router.post("/create-razorpay-order", async (req, res) => {
+router.post("/create-razorpay-order", paymentLimiter, async (req, res) => {
   try {
     const tenantId = tenantOf(req);
     // Customer payment (customer → tenant) — use the TENANT's own Razorpay
@@ -1267,7 +1268,7 @@ router.post("/create-razorpay-order", async (req, res) => {
 });
 
 // POST /confirm-razorpay
-router.post("/confirm-razorpay", async (req, res) => {
+router.post("/confirm-razorpay", paymentLimiter, async (req, res) => {
   try {
     const tenantId = tenantOf(req);
     const {
@@ -1344,7 +1345,7 @@ router.post("/confirm-razorpay", async (req, res) => {
 // already marked the Payment SUCCESS, returns the existing row. If it hasn't,
 // retrieves the session from Stripe and marks SUCCESS when payment_status=paid.
 // This means the flow works even when no webhook listener is running locally.
-router.post("/confirm-stripe-session", async (req, res) => {
+router.post("/confirm-stripe-session", paymentLimiter, async (req, res) => {
   try {
     const stripe = getStripe();
     if (!stripe)

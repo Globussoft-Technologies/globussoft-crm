@@ -265,18 +265,37 @@ export default function Pricing() {
   // Read the price for a given plan from its pricing JSON for the current
   // (currency, billing-period) selection. Falls back to the plan's legacy
   // single `price`+`currency` columns when pricing JSON is absent.
-  const getPrice = (plan) => {
+  // Returns the per-month price for the secondary "small" line
+  const getMonthlyRate = (plan) => {
     const bucket = plan?.pricing && plan.pricing[currency];
     if (bucket) return annual ? bucket.annual : bucket.monthly;
-    // Legacy fallback — only the price's own currency makes sense to show.
+    if (plan?.currency && plan.currency.toLowerCase() === currency) return plan.price;
+    return plan?.price ?? '';
+  };
+
+  // Returns the total price that will actually be charged (annual total or monthly rate)
+  const getPrice = (plan) => {
+    const bucket = plan?.pricing && plan.pricing[currency];
+    if (bucket) {
+      if (annual) {
+        // Strip the " /user/year" suffix and return just the number/amount string
+        const label = bucket.yearAnnualLabel || '';
+        // yearAnnualLabel looks like "₹5,988 /user/year" or "$72 /user/year"
+        // Extract the numeric part after the currency symbol
+        const match = label.match(/[\d,]+/);
+        return match ? match[0] : bucket.annual;
+      }
+      return bucket.monthly;
+    }
     if (plan?.currency && plan.currency.toLowerCase() === currency) return plan.price;
     return plan?.price ?? '';
   };
 
   const getYearLabel = (plan) => {
     const bucket = plan?.pricing && plan.pricing[currency];
-    if (bucket) return annual ? bucket.yearAnnualLabel : bucket.yearMonthlyLabel;
-    return '';
+    if (!bucket) return '';
+    const rate = annual ? bucket.annual : bucket.monthly;
+    return `${sym}${rate}/user/month`;
   };
 
   // Card / CTA styling derives from the plan's accent + popular fields so
@@ -383,7 +402,9 @@ export default function Pricing() {
                   <span style={{ fontSize: '1.35rem', fontWeight: 700, color: C.text3, alignSelf: 'flex-start', marginTop: 4 }}>{prices.sym}</span>
                   <span style={{ fontSize: '3.25rem', fontWeight: 800, color: C.text, lineHeight: 1, letterSpacing: '-0.04em' }}>{getPrice(plan)}</span>
                 </div>
-                <div style={{ fontSize: '0.75rem', color: C.text4, marginTop: 6 }}>/user/month, billed {annual ? 'annually' : 'monthly'}</div>
+                <div style={{ fontSize: '0.75rem', color: C.text4, marginTop: 6 }}>
+                  {annual ? '/user/year, billed annually' : '/user/month, billed monthly'}
+                </div>
                 <div style={{ fontSize: '0.69rem', color: C.text4, marginTop: 3, opacity: 0.8 }}>{getYearLabel(plan)}</div>
               </div>
 
@@ -485,13 +506,13 @@ export default function Pricing() {
                   return (
                     <>
                       <th style={{ background: C.bg, padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', color: C.text, borderBottom: `1px solid ${C.border}` }}>
-                        {starter?.name || 'Starter'}<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: C.text4, marginTop: 2 }}>{prices.sym}{starter ? getPrice(starter) : ''}/mo</span>
+                        {starter?.name || 'Starter'}<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: C.text4, marginTop: 2 }}>{prices.sym}{starter ? getMonthlyRate(starter) : ''}/mo</span>
                       </th>
                       <th style={{ background: C.proBg, padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', color: C.pro, borderBottom: `1px solid ${C.border}` }}>
-                        {pro?.name || 'Professional'}<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: 'rgba(124,58,237,0.5)', marginTop: 2 }}>{prices.sym}{pro ? getPrice(pro) : ''}/mo</span>
+                        {pro?.name || 'Professional'}<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: 'rgba(124,58,237,0.5)', marginTop: 2 }}>{prices.sym}{pro ? getMonthlyRate(pro) : ''}/mo</span>
                       </th>
                       <th style={{ background: C.bg, padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', color: C.text, borderBottom: `1px solid ${C.border}` }}>
-                        {ent?.name || 'Enterprise'}<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: C.text4, marginTop: 2 }}>{prices.sym}{ent ? getPrice(ent) : ''}/mo</span>
+                        {ent?.name || 'Enterprise'}<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: C.text4, marginTop: 2 }}>{prices.sym}{ent ? getMonthlyRate(ent) : ''}/mo</span>
                       </th>
                     </>
                   );

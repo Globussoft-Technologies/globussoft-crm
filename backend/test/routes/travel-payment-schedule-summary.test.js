@@ -186,6 +186,57 @@ describe('GET /api/travel/payment-schedules/upcoming', () => {
     );
   });
 
+  test('a PAID milestone with a past dueDate gets daysUntilDue: null, NOT a negative "overdue" count (settled status overrides pure date math)', async () => {
+    const rows = [
+      makeMilestone({
+        id: 3, status: 'paid', dueDate: new Date(Date.now() - 14 * 86_400_000),
+        invoice: { invoiceNum: 'TINV-2026-0014', subBrand: 'rfu', contactId: 333 },
+      }),
+    ];
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue(rows);
+    prisma.travelPaymentSchedule.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/payment-schedules/upcoming')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.milestones[0].status).toBe('paid');
+    expect(res.body.milestones[0].daysUntilDue).toBeNull();
+  });
+
+  test('a WAIVED milestone with a past dueDate also gets daysUntilDue: null', async () => {
+    const rows = [
+      makeMilestone({
+        id: 4, status: 'waived', dueDate: new Date(Date.now() - 5 * 86_400_000),
+      }),
+    ];
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue(rows);
+    prisma.travelPaymentSchedule.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/payment-schedules/upcoming')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.body.milestones[0].daysUntilDue).toBeNull();
+  });
+
+  test('a PENDING milestone with a past dueDate KEEPS its real negative daysUntilDue (only paid/waived are suppressed)', async () => {
+    const rows = [
+      makeMilestone({
+        id: 5, status: 'pending', dueDate: new Date(Date.now() - 3 * 86_400_000),
+      }),
+    ];
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue(rows);
+    prisma.travelPaymentSchedule.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/payment-schedules/upcoming')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.body.milestones[0].daysUntilDue).toBeLessThan(0);
+  });
+
   test('?status=pending narrows the prisma where filter', async () => {
     prisma.travelPaymentSchedule.findMany.mockResolvedValue([]);
     prisma.travelPaymentSchedule.count.mockResolvedValue(0);

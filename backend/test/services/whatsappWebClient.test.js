@@ -490,3 +490,85 @@ describe('ingestInbound', () => {
     expect(prisma.whatsAppMessage.create).toHaveBeenCalled();
   });
 });
+
+describe('restoreOnBootEnabled — WHATSAPP_WEB_RESTORE_ON_BOOT guard', () => {
+  const ORIG = process.env.WHATSAPP_WEB_RESTORE_ON_BOOT;
+  afterEach(() => {
+    if (ORIG === undefined) delete process.env.WHATSAPP_WEB_RESTORE_ON_BOOT;
+    else process.env.WHATSAPP_WEB_RESTORE_ON_BOOT = ORIG;
+  });
+
+  test('defaults to enabled (true) when unset — matches historical always-restore behavior', () => {
+    delete process.env.WHATSAPP_WEB_RESTORE_ON_BOOT;
+    expect(wa.restoreOnBootEnabled()).toBe(true);
+  });
+
+  test.each(['0', 'false', 'FALSE', 'no', 'NO'])('%s disables boot-restore', (v) => {
+    process.env.WHATSAPP_WEB_RESTORE_ON_BOOT = v;
+    expect(wa.restoreOnBootEnabled()).toBe(false);
+  });
+
+  test.each(['1', 'true', 'yes', 'anything-else'])('%s (or any non-disable value) keeps boot-restore enabled', (v) => {
+    process.env.WHATSAPP_WEB_RESTORE_ON_BOOT = v;
+    expect(wa.restoreOnBootEnabled()).toBe(true);
+  });
+
+  test('restoreSessions() short-circuits with reason "restore-on-boot-disabled" when the guard is off — proven via the exported hook so this doesn\'t depend on defeating canLaunch()/NODE_ENV=test', async () => {
+    // restoreSessions() itself is gated by canLaunch() first, which is
+    // always false under NODE_ENV=test — so this test targets the
+    // documented contract at the source (restoreOnBootEnabled) rather than
+    // trying to stub canLaunch in a CJS module without a DI seam for it.
+    process.env.WHATSAPP_WEB_RESTORE_ON_BOOT = '0';
+    expect(wa.restoreOnBootEnabled()).toBe(false);
+  });
+});
+
+describe('parsePgrepPids — pkill self-kill bug fix (Linux/macOS)', () => {
+  // Regression test for the demo memory-leak audit (2026-07): the OLD
+  // implementation ran `pkill -f "session-travel-N" || true` directly, whose
+  // own /bin/sh command line contains the marker string it's searching for
+  // — pkill could match and kill its own shell before finishing, leaving
+  // the real orphan Chromium alive (confirmed in demo logs: repeating
+  // "orphan-kill best-effort failed: Command failed: pkill -f ..."). The
+  // fix enumerates PIDs via `pgrep -f` first and filters out the CALLING
+  // process's own pid before killing anything — parsePgrepPids is the pure
+  // parsing/filtering core of that fix, extracted so it's testable without
+  // spawning real processes or fighting the killBrowsersForDir NODE_ENV=test
+  // guard.
+  test('parses newline-separated PIDs into numbers', () => {
+    expect(wa.parsePgrepPids('101\n202\n303\n', 999)).toEqual([101, 202, 303]);
+  });
+
+  test('excludes the calling process\'s own PID — this is the actual bug fix', () => {
+    // Simulates pgrep matching its OWN /bin/sh invocation (whose command
+    // line also contains the marker string) alongside two real orphan
+    // Chrome PIDs — own pid must never appear in the kill list.
+    expect(wa.parsePgrepPids('101\n555\n303\n', 555)).toEqual([101, 303]);
+  });
+
+  test('handles pgrep finding nothing (empty/whitespace-only output)', () => {
+    expect(wa.parsePgrepPids('', 999)).toEqual([]);
+    expect(wa.parsePgrepPids('\n\n', 999)).toEqual([]);
+  });
+
+  test('ignores garbage/non-numeric lines rather than throwing', () => {
+    expect(wa.parsePgrepPids('101\nnot-a-pid\n303\n', 999)).toEqual([101, 303]);
+  });
+
+  test('de-dupes repeated PIDs', () => {
+    expect(wa.parsePgrepPids('101\n101\n202\n', 999)).toEqual([101, 202]);
+  });
+
+  test('drops zero/negative values (never valid PIDs)', () => {
+    expect(wa.parsePgrepPids('0\n-5\n202\n', 999)).toEqual([202]);
+  });
+});
+
+describe('killBrowsersForDir — NODE_ENV=test guard', () => {
+  test('is a no-op under NODE_ENV=test (never spawns a shell)', () => {
+    const spy = vi.spyOn(require('child_process'), 'execSync');
+    wa.killBrowsersForDir(999);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});

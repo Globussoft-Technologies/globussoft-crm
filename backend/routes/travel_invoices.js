@@ -6500,7 +6500,9 @@ router.post(
 //
 // Decisions:
 //   - daysUntilDue is JS-computed (Math.floor((due - now) / 86_400_000)).
-//     Negative ⇒ overdue. NULL dueDate ⇒ daysUntilDue is null.
+//     Negative ⇒ overdue. NULL dueDate ⇒ daysUntilDue is null. Also NULL for
+//     status paid/waived — a settled milestone's original dueDate would
+//     otherwise still read as "N days overdue" next to its own Paid badge.
 //   - summary is computed across the SAME page returned (post-limit/offset),
 //     not the full unpaginated set — operator pagers want the current-page
 //     totals. Callers wanting full-population totals should iterate pages
@@ -6637,8 +6639,15 @@ router.get(
             : r.dueDate
               ? new Date(r.dueDate).getTime()
               : null;
+        // A milestone that's already settled (paid/waived) keeps its
+        // original dueDate in the DB, so pure date math would still report
+        // it "N days overdue" even though there's nothing left to chase —
+        // contradicting its own Paid/Waived badge. Null it out (renders as
+        // "—" client-side) for those terminal statuses only; pending/
+        // partial/overdue rows keep the real countdown.
+        const isSettled = r.status === "paid" || r.status === "waived";
         const daysUntilDue =
-          dueMs == null ? null : Math.floor((dueMs - nowMs) / 86_400_000);
+          dueMs == null || isSettled ? null : Math.floor((dueMs - nowMs) / 86_400_000);
         return {
           id: r.id,
           invoiceId: r.invoiceId,

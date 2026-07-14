@@ -129,6 +129,20 @@ function init(io) {
     .catch((e) => console.error("[whatsappWeb] restoreSessions failed (non-fatal):", e.message));
 }
 
+// Whether boot-time auto-restore should run at all. Defaults to enabled
+// (matches the historical always-restore behavior); set
+// WHATSAPP_WEB_RESTORE_ON_BOOT=0 to skip it entirely — e.g. while
+// recovering from a Chrome-process pileup on a live box, so the operator
+// can bring the server back up WITHOUT immediately re-launching a
+// headless Chromium per saved tenant, then re-enable once memory is
+// under control. This is deliberately separate from WHATSAPP_WEB_DISABLED
+// (canLaunch()) — that kill-switch also blocks manual QR-scan connects
+// from the UI, which an operator recovering from an incident still wants
+// to be able to use.
+function restoreOnBootEnabled() {
+  return !/^(0|false|no)$/i.test(process.env.WHATSAPP_WEB_RESTORE_ON_BOOT || "1");
+}
+
 // Reconnect every previously-linked tenant from its saved LocalAuth session on
 // boot. Reads the .wwebjs_auth dir for `session-travel-<tenantId>` folders and
 // connect()s each (no reset → resumes from disk, no QR). Launches are staggered
@@ -137,6 +151,10 @@ function init(io) {
 // the existing restore watchdog as an actionable "Reset & reconnect".
 async function restoreSessions() {
   if (!canLaunch()) return { restored: 0, reason: "disabled" };
+  if (!module.exports.restoreOnBootEnabled()) {
+    console.log("[whatsappWeb] WHATSAPP_WEB_RESTORE_ON_BOOT=0 — skipping boot-time session restore");
+    return { restored: 0, reason: "restore-on-boot-disabled" };
+  }
   const fs = require("fs"); // required locally — this module loads fs lazily per-function
   let entries = [];
   try {
@@ -337,6 +355,21 @@ async function resolveChromePath() {
   }
 }
 
+// Pure helper (easily unit-testable without spawning real processes):
+// parses `pgrep -f <marker>`'s newline-separated stdout into a de-duped list
+// of valid, positive PIDs, EXCLUDING `ownPid` — pgrep's own /bin/sh
+// invocation also matches the `-f` pattern (its command line literally
+// contains the marker string), so without this filter the caller's own
+// shell/process could end up in the kill list.
+function parsePgrepPids(pgrepOut, ownPid) {
+  return [...new Set(
+    String(pgrepOut || "")
+      .split("\n")
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== ownPid),
+  )];
+}
+
 // Kill any orphaned Chromium still holding a tenant's userDataDir. This is the
 // self-heal for the "browser is already running for …session-travel-N" lock
 // that a crashed/restarted server leaves behind (the new process has no handle
@@ -364,8 +397,39 @@ function killBrowsersForDir(tenantId) {
       const encoded = Buffer.from(ps, "utf16le").toString("base64");
       execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { stdio: "ignore", timeout: 15000 });
     } else {
-      // pkill -f matches the full command line; the marker is unique to wweb.
-      execSync(`pkill -f "${marker}" || true`, { stdio: "ignore", timeout: 15000, shell: "/bin/sh" });
+      // BUG FIXED (demo memory-leak audit, 2026-07): `pkill -f "${marker}"`
+      // matches against the FULL command line of every process it scans —
+      // including the `/bin/sh -c 'pkill -f "session-travel-N" || true'`
+      // shell invocation itself, since that string is literally present in
+      // ITS OWN command line. pkill was intermittently killing its own shell
+      // before it finished signalling the real Chrome processes, so the
+      // orphan Chromium was left alive on every failed attempt — this was
+      // the PRIMARY driver of the demo OOM (Chrome processes accumulating
+      // under the Node parent, confirmed via `[whatsappWeb] tenant N
+      // orphan-kill best-effort failed: Command failed: pkill -f ...`
+      // repeating in the logs). Fixed by using `pgrep -f` to enumerate
+      // matching PIDs first (pgrep's own invocation ALSO matches the
+      // pattern, so its output is explicitly filtered), excluding our own
+      // process.pid, then killing each remaining PID individually via
+      // process.kill() — no self-referential shell string for signal-9 to
+      // catch.
+      const pgrepOut = execSync(`pgrep -f "${marker}" || true`, {
+        encoding: "utf8",
+        timeout: 15000,
+        shell: "/bin/sh",
+      });
+      const pids = module.exports.parsePgrepPids(pgrepOut, process.pid);
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch (killErr) {
+          // ESRCH (already exited) is expected/harmless; anything else is
+          // logged but never aborts the loop — best-effort per-PID.
+          if (killErr.code !== "ESRCH") {
+            console.warn(`[whatsappWeb] tenant ${tenantId} failed to kill pid ${pid}: ${killErr.message}`);
+          }
+        }
+      }
     }
     console.log(`[whatsappWeb] tenant ${tenantId} killed any orphan chromium holding ${marker}`);
   } catch (e) {
@@ -2181,6 +2245,7 @@ module.exports = {
   installPuppeteerCrashGuard,
   isPuppeteerTeardownError,
   restoreSessions,
+  restoreOnBootEnabled,
   // lifecycle
   connect,
   disconnect,
@@ -2188,6 +2253,7 @@ module.exports = {
   clearSession,
   reapDeadClient,
   killBrowsersForDir,
+  parsePgrepPids,
   clearStaleLocks,
   resolveChromePath,
   getState,

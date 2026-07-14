@@ -23,7 +23,7 @@
 // Travel-only: WebCheckin rows exist only in the travel vertical, so this
 // no-ops for wellness/generic tenants.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const emailSender = require("../lib/emailSender");
 const content = require("../lib/webCheckinContent");
@@ -134,10 +134,12 @@ async function runWebCheckinTick(now = new Date()) {
 // and the existing webCheckinScheduler's :13/:28/:43/:58). The 12h milestone
 // windows mean an hourly tick reliably fires each of T-36/24/12h once.
 function initWebCheckinCron() {
-  cron.schedule("47 * * * *", () => {
-    runWebCheckinTick().catch((e) => console.error("[WebCheckinEmail] tick error:", e.message));
-  });
-  console.log("[WebCheckinEmail] cron scheduled (hourly :47)");
+  cronRegistry.register({
+    name: "webCheckinEngine",
+    description: "Web check-in reminder emails at T-36h/T-24h/T-12h before departure (hourly :47)",
+    defaultSchedule: "47 * * * *",
+    tickFn: runWebCheckinTick,
+  }).catch((e) => console.error("[WebCheckinEmail] cronRegistry registration failed:", e.message));
 }
 
 module.exports = { runWebCheckinTick, initWebCheckinCron, PAID_STATUSES };

@@ -1,5 +1,4 @@
-const cron = require("node-cron");
-
+const cronRegistry = require("../lib/cronRegistry");
 
 const prisma = require("../lib/prisma");
 
@@ -238,26 +237,30 @@ function formatIndiaMARTDate(date) {
  * Initialize the marketplace sync cron job.
  * Runs every 5 minutes, syncs all active providers.
  */
-function initMarketplaceCron(io) {
-  cron.schedule("*/5 * * * *", async () => {
-    // Wrap the tick body in try/catch so a partner-API throw or a Prisma blip
-    // doesn't surface as an unhandledPromiseRejection (strict Node settings
-    // could kill the process). Mirrors every other engine in backend/cron/.
+async function tick(io) {
+  console.log("[MarketplaceEngine] Running sync cycle...");
+  const configs = await prisma.marketplaceConfig.findMany({ where: { isActive: true } });
+  for (const config of configs) {
     try {
-      console.log("[MarketplaceEngine] Running sync cycle...");
-      const configs = await prisma.marketplaceConfig.findMany({ where: { isActive: true } });
-      for (const config of configs) {
-        try {
-          await syncMarketplace(config.tenantId, config.provider, io);
-        } catch (perProviderErr) {
-          console.error(`[MarketplaceEngine] tenantId=${config.tenantId} provider=${config.provider} sync error:`, perProviderErr && perProviderErr.message);
-        }
-      }
-    } catch (tickErr) {
-      console.error("[MarketplaceEngine] tick error:", tickErr && tickErr.message);
+      await syncMarketplace(config.tenantId, config.provider, io);
+    } catch (perProviderErr) {
+      console.error(`[MarketplaceEngine] tenantId=${config.tenantId} provider=${config.provider} sync error:`, perProviderErr && perProviderErr.message);
     }
-  });
-  console.log("[MarketplaceEngine] Cron scheduled: every 5 minutes");
+  }
+}
+
+// defaultEnabled:false — no tenant currently has an active MarketplaceConfig,
+// so this ships DISABLED by default (visible + one-click enable in the
+// Super Admin Cron Maintenance table, but not burning a tick every 5 min
+// until an admin actually needs it).
+function initMarketplaceCron(io) {
+  cronRegistry.register({
+    name: "marketplaceEngine",
+    description: "Syncs IndiaMART/JustDial/TradeIndia leads for active MarketplaceConfig rows",
+    defaultSchedule: "*/5 * * * *",
+    defaultEnabled: false,
+    tickFn: () => tick(io),
+  }).catch((e) => console.error("[MarketplaceEngine] cronRegistry registration failed:", e.message));
 }
 
 module.exports = { initMarketplaceCron, syncMarketplace };

@@ -14,7 +14,7 @@
  * Schedule: 09:00 IST daily (cron runs in server local time — use 03:30 UTC
  * if you need strict IST; for now we just say "daily morning" in cron syntax).
  */
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 
@@ -131,16 +131,13 @@ async function runLowStockForAllWellnessTenants() {
 function initLowStockCron() {
   // 09:00 IST = 03:30 UTC. node-cron uses server time by default; pass an
   // explicit IST timezone so behaviour is consistent across environments.
-  cron.schedule(
-    "0 9 * * *",
-    () => {
-      runLowStockForAllWellnessTenants().catch((e) =>
-        console.error("[LowStock] cron fail:", e.message)
-      );
-    },
-    { timezone: "Asia/Kolkata" }
-  );
-  console.log("[LowStock] cron initialized (daily 09:00 IST)");
+  cronRegistry.register({
+    name: "lowStockEngine",
+    description: "Daily wellness inventory low-stock Notification alerts",
+    defaultSchedule: "0 9 * * *",
+    cronOptions: { timezone: "Asia/Kolkata" },
+    tickFn: runLowStockForAllWellnessTenants,
+  }).catch((e) => console.error("[LowStock] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

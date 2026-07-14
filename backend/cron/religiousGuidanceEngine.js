@@ -25,7 +25,7 @@
 // Scoped to vertical=travel tenants per PRD; other verticals can
 // adopt the engine by widening the tenant query in a follow-up.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 // WhatsApp transport swap (Q9): Wati REST is COMMENTED OUT (kept on disk, not removed);
@@ -248,12 +248,12 @@ function initReligiousGuidanceCron() {
   // Daily 09:13 IST — :13 minute offset per the standing rule (avoid
   // :00 / :30 cluster). One daily fire scans the whole tenant's
   // upcoming-14d RFU window.
-  cron.schedule("13 9 * * *", () => {
-    runReligiousGuidanceForAllTravelTenants().catch((e) =>
-      console.error("[ReligiousGuidance] cron fail:", e.message),
-    );
-  });
-  console.log("[ReligiousGuidance] cron initialized (daily 09:13 IST)");
+  cronRegistry.register({
+    name: "religiousGuidanceEngine",
+    description: "Daily RFU religious-guidance packet delivery for upcoming-14d itineraries",
+    defaultSchedule: "13 9 * * *",
+    tickFn: runReligiousGuidanceForAllTravelTenants,
+  }).catch((e) => console.error("[ReligiousGuidance] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

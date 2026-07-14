@@ -65,6 +65,7 @@
  * Refs #902. PRD: docs/PRD_TRAVEL_GST_COMPLIANCE.md.
  */
 
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
 
@@ -222,6 +223,20 @@ async function runGstrFilingReminderEngine({ notify, now = new Date() } = {}) {
   return { processed, tier, daysToDeadline, errors };
 }
 
+// Super Admin Portal / Cron Maintenance — was previously wired via a raw
+// _cron.schedule("0 5 * * *", ...) call inline in server.js instead of an
+// init*Cron() function like every other engine. Moved to the same
+// cronRegistry.register() pattern so it's enable/disable/reschedule-able
+// from the Super Admin UI like the other 45 engines.
+function initCron() {
+  cronRegistry.register({
+    name: "gstrFilingReminderEngine",
+    description: "Tiered GSTR-1 filing deadline reminders for travel tenants (daily 05:00 UTC / 10:30 IST)",
+    defaultSchedule: "0 5 * * *",
+    tickFn: runGstrFilingReminderEngine,
+  }).catch((e) => console.error("[gstr-filing-reminder] cronRegistry registration failed:", e.message));
+}
+
 module.exports = {
   runGstrFilingReminderEngine,
   reminderTier,
@@ -230,4 +245,5 @@ module.exports = {
   defaultStubNotifier,
   writeAuditSafe,
   FILING_DEADLINE_DAY,
+  initCron,
 };

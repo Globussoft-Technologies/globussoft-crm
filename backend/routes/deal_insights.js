@@ -6,9 +6,26 @@ const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { llmLimiter } = require("../middleware/apiRateLimiters");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { estimateLlmCost } = require("../lib/apiPricing");
 
 const router = express.Router();
 const { formatMoney } = require("../utils/formatMoney");
+
+// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
+// persistLlmCallLog helper so this direct Gemini call is visible to the
+// Super Admin "API Analytics" dashboard. A DB hiccup here must NEVER break
+// deal-insight generation, hence the nested try/catch and the un-awaited
+// .catch() on the create.
+function persistLlmCallLog(data) {
+  try {
+    const prismaClient = require("../lib/prisma");
+    prismaClient.llmCallLog.create({ data }).catch((e) =>
+      console.error(`[DealInsights] LlmCallLog persist failed (non-fatal): ${e.message}`),
+    );
+  } catch (e) {
+    console.error(`[DealInsights] LlmCallLog require failed (non-fatal): ${e.message}`);
+  }
+}
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 let aiModel = null;
@@ -398,6 +415,24 @@ Recent activities: ${(deal.contact?.activities || []).slice(0, 3).map(a => `${a.
 
         const result = await aiModel.generateContent(prompt);
         const aiText = (result.response.text() || "").trim().replace(/^["']|["']$/g, "");
+        const usage = result.response.usageMetadata || {};
+        const promptTokens = usage.promptTokenCount || 0;
+        const completionTokens = usage.candidatesTokenCount || 0;
+        persistLlmCallLog({
+          tenantId: req.user.tenantId || 1,
+          task: "deal-insights",
+          model: "gemini-2.5-flash",
+          provider: "gemini",
+          reason: null,
+          promptTokens,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens,
+          costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
+          stub: false,
+          userId: req.user.userId || null,
+          surface: "deal-insights",
+          status: "success",
+        });
         if (aiText) {
           candidates.push({
             type: "NEXT_BEST_ACTION",
@@ -406,6 +441,22 @@ Recent activities: ${(deal.contact?.activities || []).slice(0, 3).map(a => `${a.
           });
         }
       } catch (aiErr) {
+        persistLlmCallLog({
+          tenantId: (req.user && req.user.tenantId) || 1,
+          task: "deal-insights",
+          model: "gemini-2.5-flash",
+          provider: "gemini",
+          reason: null,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          costEstimate: 0,
+          stub: false,
+          userId: (req.user && req.user.userId) || null,
+          surface: "deal-insights",
+          status: "failed",
+          errorMessage: aiErr.message,
+        });
         console.warn("[DealInsights] AI insight skipped:", aiErr.message);
       }
     }

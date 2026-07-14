@@ -1,4 +1,4 @@
-const cron = require('node-cron');
+const cronRegistry = require('../lib/cronRegistry');
 const nodemailer = require('nodemailer');
 const PDFDocument = require('pdfkit');
 
@@ -257,27 +257,28 @@ async function processSchedule(schedule) {
   }
 }
 
+async function tick() {
+  console.log('[Report Engine] Checking for due scheduled reports...');
+  const schedules = await prisma.reportSchedule.findMany({ where: { enabled: true } });
+  const now = new Date();
+
+  for (const schedule of schedules) {
+    // Use node-cron to check if this schedule should have run by now
+    const shouldRun = shouldScheduleRun(schedule, now);
+    if (shouldRun) {
+      await processSchedule(schedule);
+    }
+  }
+}
+
 function initReportCron() {
   // Check every hour for due report schedules
-  cron.schedule('0 * * * *', async () => {
-    console.log('[Report Engine] Checking for due scheduled reports...');
-    try {
-      const schedules = await prisma.reportSchedule.findMany({ where: { enabled: true } });
-      const now = new Date();
-
-      for (const schedule of schedules) {
-        // Use node-cron to check if this schedule should have run by now
-        const shouldRun = shouldScheduleRun(schedule, now);
-        if (shouldRun) {
-          await processSchedule(schedule);
-        }
-      }
-    } catch (err) {
-      console.error('[Report Engine] Cron tick error:', err);
-    }
-  });
-
-  console.log('[Report Engine] Initialized — checking every hour for due reports.');
+  cronRegistry.register({
+    name: 'reportEngine',
+    description: 'Hourly check for due ReportSchedule rows + email dispatch',
+    defaultSchedule: '0 * * * *',
+    tickFn: tick,
+  }).catch((e) => console.error('[Report Engine] cronRegistry registration failed:', e.message));
 }
 
 function shouldScheduleRun(schedule, now) {

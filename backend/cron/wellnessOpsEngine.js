@@ -8,7 +8,7 @@
  * SMS provider here — we just queue an SmsMessage row that the existing
  * provider worker will pick up.
  */
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 
@@ -305,10 +305,12 @@ async function runOpsForAllWellnessTenants() {
 
 function initWellnessOpsCron() {
   // Hourly — NPS sends are time-sensitive (catch the 72h window cleanly)
-  cron.schedule("17 * * * *", () => {
-    runOpsForAllWellnessTenants().catch((e) => console.error("[WellnessOps] cron fail:", e.message));
-  });
-  console.log("[WellnessOps] cron initialized (hourly NPS + retention)");
+  cronRegistry.register({
+    name: "wellnessOpsEngine",
+    description: "Hourly wellness NPS survey (72h post-visit) + 90-day junk-lead retention purge",
+    defaultSchedule: "17 * * * *",
+    tickFn: runOpsForAllWellnessTenants,
+  }).catch((e) => console.error("[WellnessOps] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

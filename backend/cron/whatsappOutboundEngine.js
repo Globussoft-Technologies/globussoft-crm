@@ -32,7 +32,7 @@
 //   or has no accessToken, the engine marks the row FAILED with a clear
 //   `lastError` rather than spinning indefinitely.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { decryptCredential } = require("../lib/credentialMasking");
 const { sendText, sendTemplate } = require("../services/whatsappProvider");
@@ -509,12 +509,19 @@ async function tick() {
   }
 }
 
+// Super Admin Portal / Cron Maintenance — scheduling now goes through the
+// central registry (lib/cronRegistry.js) instead of a local cron.schedule()
+// call, so this engine's enabled state + schedule are admin-editable and
+// take effect without a server restart.
 function initWhatsappOutboundCron(io) {
   if (io) socketIo = io;
-  cron.schedule(TICK_CRON, () => {
-    tick();
-  });
-  console.log(`[whatsappOutboundEngine] initialized (cron: ${TICK_CRON})`);
+  cronRegistry.register({
+    name: 'whatsappOutboundEngine',
+    description: 'Claims + sends PENDING WaOutboundJob rows via Meta Cloud API (30s tick)',
+    defaultSchedule: TICK_CRON,
+    tickFn: tick,
+  }).catch((e) => console.error('[whatsappOutboundEngine] cronRegistry registration failed:', e.message));
+  console.log(`[whatsappOutboundEngine] registered (default tick: ${TICK_CRON})`);
 }
 
 module.exports = {

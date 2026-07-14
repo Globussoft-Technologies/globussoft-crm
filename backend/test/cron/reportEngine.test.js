@@ -21,17 +21,22 @@
  * Mocking strategy:
  *   - createRequire + cache delete (matches backupEngine pattern).
  *   - lib/prisma — monkey-patch model methods.
- *   - node-cron — schedule mock so initReportCron registers cleanly.
+ *   - lib/cronRegistry — the SUT registers via cronRegistry.register({...})
+ *     (Super Admin Portal / Cron Maintenance retrofit) instead of calling
+ *     node-cron directly; we mock register() and capture the tickFn option.
+ *     Note: the SUT's own outer try/catch around the tick body moved to
+ *     cronRegistry.runTick (see test/lib/cronRegistry.test.js), so tick()
+ *     now PROPAGATES a findMany rejection instead of swallowing it itself.
  *
  * NOT covered (intentional):
  *   - Real SMTP delivery (SMTP_HOST defaults to ethereal.email → mock branch).
  *   - The exact PDF bytes (assert Buffer + sane length only).
  */
-import { describe, test, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, test, expect, vi, beforeEach } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
-const nodeCron = requireCJS('node-cron');
+const Module = requireCJS('node:module');
 
 // ── Patch prisma BEFORE requiring SUT ──────────────────────────────────
 import prisma from '../../lib/prisma.js';
@@ -52,10 +57,15 @@ prisma.reportSchedule = {
 };
 prisma.tenantSetting = { findUnique: vi.fn() };
 
-// ── Patch node-cron BEFORE requiring SUT ───────────────────────────────
-const originalSchedule = nodeCron.schedule;
-const scheduleMock = vi.fn();
-nodeCron.schedule = scheduleMock;
+// ── Fake cronRegistry module in require cache (BEFORE requiring SUT) ──
+const registerMock = vi.fn().mockResolvedValue({ name: 'reportEngine' });
+const cronRegistryPath = requireCJS.resolve('../../lib/cronRegistry.js');
+Module._cache[cronRegistryPath] = {
+  id: cronRegistryPath,
+  filename: cronRegistryPath,
+  loaded: true,
+  exports: { register: registerMock },
+};
 
 // ── Require SUT ───────────────────────────────────────────────────────
 const sutPath = requireCJS.resolve('../../cron/reportEngine.js');
@@ -76,7 +86,7 @@ beforeEach(() => {
   prisma.reportSchedule.findMany.mockReset();
   prisma.reportSchedule.update.mockReset();
   prisma.tenantSetting.findUnique.mockReset();
-  scheduleMock.mockReset();
+  registerMock.mockReset().mockResolvedValue({ name: 'reportEngine' });
 
   // Defaults
   prisma.user.findMany.mockResolvedValue([]);
@@ -95,10 +105,6 @@ beforeEach(() => {
   prisma.reportSchedule.update.mockResolvedValue({});
   prisma.reportSchedule.findMany.mockResolvedValue([]);
   prisma.tenantSetting.findUnique.mockResolvedValue(null);
-});
-
-afterAll(() => {
-  nodeCron.schedule = originalSchedule;
 });
 
 /** Build a ReportSchedule row. */
@@ -300,13 +306,15 @@ describe('cron/reportEngine — error containment + initReportCron registration'
     logSpy.mockRestore();
   });
 
-  test('initReportCron registers an hourly schedule', () => {
+  test('initReportCron registers an hourly schedule via cronRegistry', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     reportEngine.initReportCron();
     logSpy.mockRestore();
-    expect(scheduleMock).toHaveBeenCalledTimes(1);
-    expect(scheduleMock.mock.calls[0][0]).toBe('0 * * * *');
-    expect(typeof scheduleMock.mock.calls[0][1]).toBe('function');
+    expect(registerMock).toHaveBeenCalledTimes(1);
+    const opts = registerMock.mock.calls[0][0];
+    expect(opts.name).toBe('reportEngine');
+    expect(opts.defaultSchedule).toBe('0 * * * *');
+    expect(typeof opts.tickFn).toBe('function');
   });
 
   test('cron tick fetches enabled schedules and dispatches due ones', async () => {
@@ -317,7 +325,7 @@ describe('cron/reportEngine — error containment + initReportCron registration'
       schedule({ id: 1, lastRunAt: null }),
       schedule({ id: 2, lastRunAt: new Date(Date.now() - 3600 * 1000), frequency: 'weekly' }),
     ]);
-    const tick = scheduleMock.mock.calls[0][1];
+    const tick = registerMock.mock.calls[0][0].tickFn;
     await tick();
     logSpy.mockRestore();
     // findMany once on schedules + downstream deal.count from the one due schedule
@@ -330,16 +338,18 @@ describe('cron/reportEngine — error containment + initReportCron registration'
     expect(prisma.reportSchedule.update.mock.calls[0][0].where.id).toBe(1);
   });
 
-  test('cron tick: outer findMany rejection is logged, does not throw', async () => {
+  test('cron tick: a findMany rejection propagates — cronRegistry.runTick (not this engine) now owns tick-level fault isolation', async () => {
+    // Since the Super Admin Portal / Cron Maintenance retrofit, the outer
+    // "never let a tick reject" guarantee moved to cronRegistry.runTick
+    // (see test/lib/cronRegistry.test.js), so every engine's failures are
+    // uniformly captured as a CronExecutionLog row instead of each engine
+    // re-implementing its own outer try/catch.
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     reportEngine.initReportCron();
     prisma.reportSchedule.findMany.mockRejectedValue(new Error('DB lost'));
-    const tick = scheduleMock.mock.calls[0][1];
-    await expect(tick()).resolves.not.toThrow();
-    expect(errSpy).toHaveBeenCalled();
+    const tick = registerMock.mock.calls[0][0].tickFn;
+    await expect(tick()).rejects.toThrow('DB lost');
     logSpy.mockRestore();
-    errSpy.mockRestore();
   });
 
   test('shouldScheduleRun semantics: weekly schedule run 2h ago is NOT due (167h threshold)', async () => {
@@ -348,7 +358,7 @@ describe('cron/reportEngine — error containment + initReportCron registration'
     prisma.reportSchedule.findMany.mockResolvedValue([
       schedule({ id: 1, lastRunAt: new Date(Date.now() - 2 * 3600 * 1000), frequency: 'weekly' }),
     ]);
-    const tick = scheduleMock.mock.calls[0][1];
+    const tick = registerMock.mock.calls[0][0].tickFn;
     await tick();
     logSpy.mockRestore();
     expect(prisma.reportSchedule.update).not.toHaveBeenCalled();
@@ -360,7 +370,7 @@ describe('cron/reportEngine — error containment + initReportCron registration'
     prisma.reportSchedule.findMany.mockResolvedValue([
       schedule({ id: 99, lastRunAt: new Date(Date.now() - 25 * 3600 * 1000), frequency: 'daily' }),
     ]);
-    const tick = scheduleMock.mock.calls[0][1];
+    const tick = registerMock.mock.calls[0][0].tickFn;
     await tick();
     logSpy.mockRestore();
     expect(prisma.reportSchedule.update).toHaveBeenCalledTimes(1);
@@ -406,7 +416,7 @@ describe('cron/reportEngine — extended coverage (frequency windows + multi-sch
         frequency: 'monthly',
       }),
     ]);
-    const tick = scheduleMock.mock.calls[0][1];
+    const tick = registerMock.mock.calls[0][0].tickFn;
     await tick();
     logSpy.mockRestore();
     expect(prisma.reportSchedule.update).toHaveBeenCalledTimes(1);
@@ -417,7 +427,7 @@ describe('cron/reportEngine — extended coverage (frequency windows + multi-sch
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     reportEngine.initReportCron();
     prisma.reportSchedule.findMany.mockResolvedValue([]);
-    const tick = scheduleMock.mock.calls[0][1];
+    const tick = registerMock.mock.calls[0][0].tickFn;
     await tick();
     logSpy.mockRestore();
     expect(prisma.reportSchedule.findMany).toHaveBeenCalledTimes(1);
@@ -429,7 +439,7 @@ describe('cron/reportEngine — extended coverage (frequency windows + multi-sch
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     reportEngine.initReportCron();
     prisma.reportSchedule.findMany.mockResolvedValue([]);
-    const tick = scheduleMock.mock.calls[0][1];
+    const tick = registerMock.mock.calls[0][0].tickFn;
     await tick();
     logSpy.mockRestore();
     // The findMany clause is the only gate against disabled rows — pin it.
@@ -450,7 +460,7 @@ describe('cron/reportEngine — extended coverage (frequency windows + multi-sch
     prisma.deal.count
       .mockRejectedValueOnce(new Error('transient DB blip'))
       .mockResolvedValue(0);
-    const tick = scheduleMock.mock.calls[0][1];
+    const tick = registerMock.mock.calls[0][0].tickFn;
     await expect(tick()).resolves.not.toThrow();
     logSpy.mockRestore();
     errSpy.mockRestore();
@@ -504,7 +514,7 @@ describe('cron/reportEngine — extended coverage (frequency windows + multi-sch
         frequency: 'fortnightly', // not in the switch
       }),
     ]);
-    const tick = scheduleMock.mock.calls[0][1];
+    const tick = registerMock.mock.calls[0][0].tickFn;
     await tick();
     logSpy.mockRestore();
     expect(prisma.reportSchedule.update).toHaveBeenCalledTimes(1);

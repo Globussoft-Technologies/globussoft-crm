@@ -43,6 +43,7 @@ if (process.env.NODE_ENV !== 'test') {
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
 const { buildDestinationLandingPagePrompt } = require('./landingPagePrompts');
 const { guardLandingPageOutput, buildDeterministicFallback } = require('../lib/landingPageGuard');
+const { estimateLlmCost } = require('../lib/apiPricing');
 
 void KEYS;
 
@@ -156,7 +157,7 @@ function parseGeminiJson(raw) {
  * than the 7-block PR-B version. 4096 truncated mid-JSON on several
  * destinations during the quality-validation sweep.
  */
-async function callGeminiAttempt({ apiKey, modelName, prompt }) {
+async function callGeminiAttempt({ apiKey, modelName, prompt }, _usageOut) {
   const { GoogleGenerativeAI } = require('@google/generative-ai');
   const ai = new GoogleGenerativeAI(apiKey);
   const model = ai.getGenerativeModel({
@@ -174,6 +175,15 @@ async function callGeminiAttempt({ apiKey, modelName, prompt }) {
   const fullPrompt = `${prompt.system}\n\n${prompt.user}`;
   const res = await model.generateContent(fullPrompt);
   const text = res?.response?.text?.();
+  // Optional out-parameter — callers that want real token usage (for
+  // LlmCallLog cost estimation) pass a plain object here; we mutate it
+  // in place so callGeminiAttempt's return contract (a bare string) stays
+  // unchanged for existing callers (callGeminiForTee et al).
+  if (_usageOut && typeof _usageOut === 'object') {
+    const usage = (res && res.response && res.response.usageMetadata) || {};
+    _usageOut.promptTokens = usage.promptTokenCount || 0;
+    _usageOut.completionTokens = usage.candidatesTokenCount || 0;
+  }
   if (!text) throw new Error('Gemini returned an empty response');
   return text;
 }
@@ -206,9 +216,10 @@ async function callGemini({ destination, durationDays, audience, subBrand, tenan
   let raw;
   let modelUsed;
   let lastError;
+  const usageOut = {};
   for (const modelName of cascade) {
     try {
-      raw = await callGeminiAttempt({ apiKey, modelName, prompt });
+      raw = await callGeminiAttempt({ apiKey, modelName, prompt }, usageOut);
       modelUsed = modelName;
       lastError = null;
       break;
@@ -231,7 +242,12 @@ async function callGemini({ destination, durationDays, audience, subBrand, tenan
   }
   if (raw === undefined) throw lastError;
 
-  return { rawJson: parseGeminiJson(raw), modelUsed };
+  return {
+    rawJson: parseGeminiJson(raw),
+    modelUsed,
+    promptTokens: usageOut.promptTokens || 0,
+    completionTokens: usageOut.completionTokens || 0,
+  };
 }
 
 /**
@@ -377,27 +393,37 @@ function groqEnabled() {
 
 /**
  * Persist one LlmCallLog row best-effort. Mirrors the lib/llmRouter
- * pattern so the admin spend dashboard sees this task class. Token
- * counts are estimates (Gemini doesn't return per-request counts on
- * every model — we use string-length heuristics).
+ * pattern so the admin spend dashboard sees this task class. When the
+ * caller has real Gemini usageMetadata (promptTokens/completionTokens
+ * params), those are used for accurate cost estimation; otherwise falls
+ * back to the pre-existing string-length heuristic (Groq/OpenAI paths,
+ * or Gemini responses that omitted usageMetadata).
  */
-function persistCallLog({ tenantId, stub, realModeError, inputSize, outputSize, model, userId, surface }) {
+function persistCallLog({
+  tenantId, stub, realModeError, inputSize, outputSize, model, userId, surface,
+  provider, status, errorMessage, promptTokens, completionTokens,
+}) {
   try {
     const prisma = require('../lib/prisma');
+    const finalPromptTokens = typeof promptTokens === 'number' ? promptTokens : Math.ceil(inputSize / 4);
+    const finalCompletionTokens = typeof completionTokens === 'number' ? completionTokens : Math.ceil(outputSize / 4);
     prisma.llmCallLog
       .create({
         data: {
           tenantId: tenantId || 1,
           task: TASK_NAME,
           model,
+          provider: provider || 'gemini',
           reason: stub ? 'stub' : 'real',
-          promptTokens: Math.ceil(inputSize / 4),
-          completionTokens: Math.ceil(outputSize / 4),
-          totalTokens: Math.ceil((inputSize + outputSize) / 4),
-          costEstimate: 0,
+          promptTokens: finalPromptTokens,
+          completionTokens: finalCompletionTokens,
+          totalTokens: finalPromptTokens + finalCompletionTokens,
+          costEstimate: estimateLlmCost(model, finalPromptTokens, finalCompletionTokens),
           stub,
           userId: userId || null,
           surface: surface || null,
+          status: status || (realModeError && !stub ? 'failed' : 'success'),
+          errorMessage: errorMessage || null,
         },
       })
       .catch((e) => console.error(`[landingPageGeneratorLLM] LlmCallLog persist failed (non-fatal): ${e.message}`));
@@ -480,7 +506,7 @@ async function generateLandingPageContent(args = {}) {
 
   if (await module.exports.realModeEnabled(tenantId)) {
     try {
-      const { rawJson, modelUsed } = await module.exports.callGemini({ ...input, tenantId });
+      const { rawJson, modelUsed, promptTokens, completionTokens } = await module.exports.callGemini({ ...input, tenantId });
       const guardResult = guardLandingPageOutput(rawJson, input);
       const outputSize = JSON.stringify(guardResult.output).length;
       persistCallLog({
@@ -492,6 +518,10 @@ async function generateLandingPageContent(args = {}) {
         model: modelUsed || MODEL_PRIMARY,
         userId: __userId,
         surface: __surface,
+        provider: 'gemini',
+        status: 'success',
+        promptTokens,
+        completionTokens,
       });
       return {
         ...guardResult.output,
@@ -503,6 +533,21 @@ async function generateLandingPageContent(args = {}) {
       };
     } catch (e) {
       geminiError = e.message || String(e);
+      persistCallLog({
+        tenantId,
+        stub: false,
+        realModeError: null,
+        inputSize,
+        outputSize: 0,
+        model: MODEL_PRIMARY,
+        userId: __userId,
+        surface: __surface,
+        provider: 'gemini',
+        status: 'failed',
+        errorMessage: geminiError,
+        promptTokens: 0,
+        completionTokens: 0,
+      });
       console.error(
         `[landingPageGeneratorLLM] Gemini cascade exhausted: ${geminiError}`,
         e.stack ? `\n${e.stack}` : '',

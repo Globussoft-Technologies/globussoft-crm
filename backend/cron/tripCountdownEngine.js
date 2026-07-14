@@ -27,7 +27,7 @@
 // travelJourneyReminders.js, which only writes Notification rows — no email —
 // so the two don't double-send.)
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const emailSender = require("../lib/emailSender");
 const content = require("../lib/tripCountdownContent");
@@ -142,10 +142,12 @@ async function runTripCountdownTick(now = new Date()) {
 // Hourly tick (at :17). Daily-bucket idempotency means the first tick of each
 // day that sees a new days-to-go sends; later ticks that day are no-ops.
 function initTripCountdownCron() {
-  cron.schedule("17 * * * *", () => {
-    runTripCountdownTick().catch((e) => console.error("[TripCountdown] tick error:", e.message));
-  });
-  console.log("[TripCountdown] cron scheduled (hourly :17)");
+  cronRegistry.register({
+    name: "tripCountdownEngine",
+    description: "Pre-trip countdown nudge emails for PAID travel customers (hourly :17)",
+    defaultSchedule: "17 * * * *",
+    tickFn: runTripCountdownTick,
+  }).catch((e) => console.error("[TripCountdown] cronRegistry registration failed:", e.message));
 }
 
 module.exports = { runTripCountdownTick, initTripCountdownCron, daysToGo, PAID_STATUSES, AGREEMENT_SECURED };

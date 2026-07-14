@@ -31,7 +31,7 @@
 //
 // Travel-only: WebCheckin rows exist only in the travel vertical.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
 const { resolveAdapter: defaultResolveAdapter } = require("../services/airlineAdapters");
@@ -355,12 +355,12 @@ function initWebCheckinAutomationCron() {
   // Every 15 min, off-cluster (mirrors scheduler's jitter but offset by a few
   // minutes so automation claims `reminded` rows before the scheduler's
   // +30-min stall sweep can flip them to fallback-agent).
-  cron.schedule("8,23,38,53 * * * *", () => {
-    runWebCheckinAutomationTick().catch((e) =>
-      console.error("[WebCheckinAutomation] cron fail:", e.message),
-    );
-  });
-  console.log("[WebCheckinAutomation] cron initialized (every 15 min, off-minute jitter)");
+  cronRegistry.register({
+    name: "webCheckinAutomation",
+    description: "Performs airline web check-in for reminded/retry-eligible bookings (every 15 min)",
+    defaultSchedule: "8,23,38,53 * * * *",
+    tickFn: runWebCheckinAutomationTick,
+  }).catch((e) => console.error("[WebCheckinAutomation] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

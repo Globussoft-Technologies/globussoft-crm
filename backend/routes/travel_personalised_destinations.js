@@ -9,12 +9,13 @@
 // Stall, lands under SupplierCredential category "llm-key").
 //
 // Cred-swap behaviour: backend/lib/llmRouter.js routes "reasoning"
-// task to claude-opus-4-7 primary / gpt-4 fallback. Until Q11 keys
-// drop, the router returns deterministic synthetic text matching
-// the envelope shape { text, finishReason, usage, model, stub:true }.
-// The MOMENT Q11 keys land in ENV or SupplierCredential, this
-// endpoint switches over to real Claude reasoning with NO code
-// change here — the swap point is inside llmRouter.routeRequest.
+// task to gemini-flash primary / gpt-4 fallback (2026-07-14 swap off
+// Claude Opus). Until Q11 keys drop, the router returns deterministic
+// synthetic text matching the envelope shape
+// { text, finishReason, usage, model, stub:true }. The MOMENT Q11 keys
+// land in ENV or SupplierCredential, this endpoint switches over to
+// real Gemini Flash reasoning with NO code change here — the swap
+// point is inside llmRouter.routeRequest.
 //
 // Endpoint: POST /api/travel-personalised-destinations/recommend
 //   Body: { customerName, budgetINR, travelMonth, partySize,

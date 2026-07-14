@@ -1,4 +1,4 @@
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 
 /**
@@ -133,22 +133,23 @@ async function processDueCampaigns(options = {}) {
   return result;
 }
 
-function initCampaignCron() {
-  // Run every minute
-  cron.schedule("* * * * *", async () => {
-    try {
-      const r = await processDueCampaigns();
-      if (r.processed > 0) {
-        console.log(
-          `[CampaignEngine] tick: processed=${r.processed} dispatched=${r.dispatched} errors=${r.errors.length}`,
-        );
-      }
-    } catch (err) {
-      console.error("[CampaignEngine] Cron error:", err.message);
-    }
-  });
+async function tick() {
+  const r = await processDueCampaigns();
+  if (r.processed > 0) {
+    console.log(
+      `[CampaignEngine] tick: processed=${r.processed} dispatched=${r.dispatched} errors=${r.errors.length}`,
+    );
+  }
+  return r;
+}
 
-  console.log("[CampaignEngine] Campaign scheduling cron initialized (runs every minute)");
+function initCampaignCron() {
+  cronRegistry.register({
+    name: "campaignEngine",
+    description: "Dispatches scheduled Campaign rows once scheduledAt has passed",
+    defaultSchedule: "* * * * *",
+    tickFn: tick,
+  }).catch((e) => console.error("[CampaignEngine] cronRegistry registration failed:", e.message));
 }
 
 module.exports = { initCampaignCron, processDueCampaigns };

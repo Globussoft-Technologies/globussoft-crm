@@ -20,7 +20,7 @@
  * idempotency gate: once flipped, the cron will never re-fire for that lead.
  */
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { emitEvent } = require("../lib/eventBus");
 
@@ -134,12 +134,12 @@ async function tickLeadSlaBreaches() {
 }
 
 function initLeadSlaCron() {
-  cron.schedule("*/2 * * * *", () => {
-    tickLeadSlaBreaches().catch((e) =>
-      console.error("[LeadSLABreach] tick crashed:", e.message),
-    );
-  });
-  console.log("Lead SLA Breach Engine initialized (cron: */2 * * * *)");
+  cronRegistry.register({
+    name: "leadSlaEngine",
+    description: "Flips Contact.slaBreached + emits lead.sla_breached (every 2 min)",
+    defaultSchedule: "*/2 * * * *",
+    tickFn: tickLeadSlaBreaches,
+  }).catch((e) => console.error("[LeadSLABreach] cronRegistry registration failed:", e.message));
 }
 
 // Convenience runner for the manual-trigger endpoint and tests: scopes to a

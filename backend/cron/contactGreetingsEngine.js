@@ -19,7 +19,7 @@
 // verticals (wellness, generic) can adopt this engine by widening the
 // tenant query in a follow-up commit.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 // WhatsApp transport swap (Q9): Wati REST is COMMENTED OUT (kept on disk, not removed);
@@ -238,12 +238,12 @@ function initContactGreetingsCron() {
   // Daily 08:13 IST — :13 minute offset per the standing rule (avoid
   // :00 / :30 cluster). PRD §4.8 says "1-2d plug-in"; the cron itself
   // is one daily fire that scans the whole tenant's contact base.
-  cron.schedule("13 8 * * *", () => {
-    runContactGreetingsForAllTravelTenants().catch((e) =>
-      console.error("[ContactGreetings] cron fail:", e.message),
-    );
-  });
-  console.log("[ContactGreetings] cron initialized (daily 08:13 IST)");
+  cronRegistry.register({
+    name: "contactGreetingsEngine",
+    description: "Daily birthday/anniversary greeting Notifications for travel tenants",
+    defaultSchedule: "13 8 * * *",
+    tickFn: runContactGreetingsForAllTravelTenants,
+  }).catch((e) => console.error("[ContactGreetings] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

@@ -29,6 +29,34 @@ function isEnabled() {
   return Boolean(accountId && clientId && clientSecret);
 }
 
+// ── API Analytics logging ───────────────────────────────────────────
+// Fire-and-forget ApiCallLog row per Zoom API call — mirrors
+// serpApiClient.js's logApiCall. Zoom has no publicly documented flat
+// per-call price (tiered/negotiated plans), so costEstimate stays 0 — this
+// is a request-COUNT tracker, not a cost tracker, for this provider.
+function logApiCall({ endpoint, status, durationMs, errorMessage }) {
+  if (process.env.NODE_ENV === "test") return;
+  try {
+    const prisma = require("../lib/prisma");
+    prisma.apiCallLog
+      .create({
+        data: {
+          tenantId: 1,
+          provider: "zoom",
+          endpoint,
+          status,
+          costEstimate: 0,
+          durationMs,
+          surface: "zoomClient",
+          errorMessage: errorMessage || null,
+        },
+      })
+      .catch((e) => console.error(`[zoomClient] ApiCallLog persist failed (non-fatal): ${e.message}`));
+  } catch (e) {
+    console.error(`[zoomClient] ApiCallLog require failed (non-fatal): ${e.message}`);
+  }
+}
+
 // Exchange the Server-to-Server credentials for a short-lived access token.
 async function getAccessToken() {
   const { accountId, clientId, clientSecret } = creds();
@@ -49,7 +77,14 @@ async function getAccessToken() {
 // real API error so the caller can log + fall back gracefully.
 async function createMeeting({ topic, startTime, durationMins, timezone, agenda } = {}) {
   if (!isEnabled()) return null;
-  const token = await module.exports.getAccessToken();
+  const startedAt = Date.now();
+  let token;
+  try {
+    token = await module.exports.getAccessToken();
+  } catch (e) {
+    logApiCall({ endpoint: "createMeeting", status: "failed", durationMs: Date.now() - startedAt, errorMessage: e.message });
+    throw e;
+  }
   const body = {
     topic: String(topic || "Meeting").slice(0, 200),
     type: 2, // scheduled meeting
@@ -66,9 +101,11 @@ async function createMeeting({ topic, startTime, durationMins, timezone, agenda 
   });
   if (!r.ok) {
     const t = await r.text().catch(() => "");
+    logApiCall({ endpoint: "createMeeting", status: "failed", durationMs: Date.now() - startedAt, errorMessage: `Zoom create-meeting failed (${r.status}): ${t.slice(0, 200)}` });
     throw new Error(`Zoom create-meeting failed (${r.status}): ${t.slice(0, 200)}`);
   }
   const d = await r.json();
+  logApiCall({ endpoint: "createMeeting", status: "success", durationMs: Date.now() - startedAt });
   return {
     joinUrl: d.join_url || null,
     startUrl: d.start_url || null,

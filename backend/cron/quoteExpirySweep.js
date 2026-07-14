@@ -34,7 +34,7 @@
  *      same quote (because pass 2 sees status='Expired' and skips).
  */
 
-const cron = require('node-cron');
+const cronRegistry = require('../lib/cronRegistry');
 const realPrisma = require('../lib/prisma');
 const { writeAudit } = require('../lib/audit');
 
@@ -167,22 +167,27 @@ async function sweep({ now = new Date(), prisma = realPrisma } = {}) {
   return { quotesSwept, errors };
 }
 
+async function tick() {
+  const r = await sweep();
+  if (r.quotesSwept > 0 || r.errors.length > 0) {
+    console.log('[quoteExpirySweep]', r);
+  }
+}
+
+// Super Admin Portal / Cron Maintenance — scheduling now goes through the
+// central registry (lib/cronRegistry.js) instead of a local cron.schedule()
+// call, so this engine's enabled state + schedule are admin-editable and
+// take effect without a server restart. defaultSchedule/cronOptions below
+// are exactly what this engine hardcoded historically (09:00 IST daily) —
+// they're only USED as a fallback until (or unless) a CronConfig row exists.
 function initCron() {
-  // 09:00 IST = 03:30 UTC. node-cron uses server time by default; the
-  // explicit Asia/Kolkata timezone keeps behaviour consistent across
-  // demo (UTC-host) and operator-local-time deploys.
-  cron.schedule(
-    '0 9 * * *',
-    () => {
-      sweep().then((r) => {
-        if (r.quotesSwept > 0 || r.errors.length > 0) {
-          console.log('[quoteExpirySweep]', r);
-        }
-      }).catch((e) => console.error('[quoteExpirySweep] fail:', e.message));
-    },
-    { timezone: 'Asia/Kolkata' },
-  );
-  console.log('[quoteExpirySweep] cron initialized (daily 09:00 IST)');
+  cronRegistry.register({
+    name: 'quoteExpirySweep',
+    description: 'Daily sweep — flips Draft/Sent TravelQuotes past validUntil to Expired',
+    defaultSchedule: '0 9 * * *',
+    cronOptions: { timezone: 'Asia/Kolkata' },
+    tickFn: tick,
+  }).catch((e) => console.error('[quoteExpirySweep] cronRegistry registration failed:', e.message));
 }
 
 module.exports = {

@@ -4,6 +4,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override
 const { verifyToken } = require("../middleware/auth");
 const { llmLimiter } = require("../middleware/apiRateLimiters");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { estimateLlmCost } = require("../lib/apiPricing");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
@@ -73,8 +74,47 @@ Requirements:
 - Sign off as the sender (don't include a specific name, just "Best regards,")
 - Do not include a subject line in the output`;
 
-      const result = await model.generateContent(prompt);
+      let result;
+      try {
+        result = await model.generateContent(prompt);
+      } catch (genErr) {
+        persistLlmCallLog({
+          tenantId: (req.user && req.user.tenantId) || 1,
+          task: "email-draft",
+          model: "gemini-2.5-flash",
+          provider: "gemini",
+          reason: null,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          costEstimate: 0,
+          stub: false,
+          userId: null,
+          surface: "ai-email-draft",
+          status: "failed",
+          errorMessage: genErr.message,
+        });
+        throw genErr;
+      }
       const draft = result.response.text();
+      const usage = result.response.usageMetadata || {};
+      const promptTokens = usage.promptTokenCount || 0;
+      const completionTokens = usage.candidatesTokenCount || 0;
+      persistLlmCallLog({
+        tenantId: (req.user && req.user.tenantId) || 1,
+        task: "email-draft",
+        model: "gemini-2.5-flash",
+        provider: "gemini",
+        reason: null,
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+        costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
+        stub: false,
+        userId: null,
+        surface: "ai-email-draft",
+        status: "success",
+      });
       return res.json({ draft, model: "gemini-2.5-flash" });
     }
 
@@ -110,8 +150,48 @@ Requirements:
 - Be concise and actionable
 - End with appropriate sign-off`;
 
-      const result = await model.generateContent(prompt);
-      return res.json({ draft: result.response.text(), model: "gemini-2.5-flash" });
+      let result;
+      try {
+        result = await model.generateContent(prompt);
+      } catch (genErr) {
+        persistLlmCallLog({
+          tenantId: (req.user && req.user.tenantId) || 1,
+          task: "email-draft",
+          model: "gemini-2.5-flash",
+          provider: "gemini",
+          reason: null,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          costEstimate: 0,
+          stub: false,
+          userId: null,
+          surface: "ai-email-draft",
+          status: "failed",
+          errorMessage: genErr.message,
+        });
+        throw genErr;
+      }
+      const draft = result.response.text();
+      const usage = result.response.usageMetadata || {};
+      const promptTokens = usage.promptTokenCount || 0;
+      const completionTokens = usage.candidatesTokenCount || 0;
+      persistLlmCallLog({
+        tenantId: (req.user && req.user.tenantId) || 1,
+        task: "email-draft",
+        model: "gemini-2.5-flash",
+        provider: "gemini",
+        reason: null,
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+        costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
+        stub: false,
+        userId: null,
+        surface: "ai-email-draft",
+        status: "success",
+      });
+      return res.json({ draft, model: "gemini-2.5-flash" });
     }
 
     res.json({ draft: "Thank you for your email. I've reviewed your message and will follow up with a detailed response shortly.\n\nBest regards,", model: "fallback" });
@@ -132,8 +212,47 @@ router.post("/subject-lines", verifyToken, llmLimiter, async (req, res) => {
 
 Context: "${context}"`;
 
-      const result = await model.generateContent(prompt);
+      let result;
+      try {
+        result = await model.generateContent(prompt);
+      } catch (genErr) {
+        persistLlmCallLog({
+          tenantId: (req.user && req.user.tenantId) || 1,
+          task: "email-draft",
+          model: "gemini-2.5-flash",
+          provider: "gemini",
+          reason: null,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          costEstimate: 0,
+          stub: false,
+          userId: null,
+          surface: "ai-email-draft",
+          status: "failed",
+          errorMessage: genErr.message,
+        });
+        throw genErr;
+      }
       const lines = result.response.text().split("\n").filter(l => l.trim()).slice(0, count || 5);
+      const usage = result.response.usageMetadata || {};
+      const promptTokens = usage.promptTokenCount || 0;
+      const completionTokens = usage.candidatesTokenCount || 0;
+      persistLlmCallLog({
+        tenantId: (req.user && req.user.tenantId) || 1,
+        task: "email-draft",
+        model: "gemini-2.5-flash",
+        provider: "gemini",
+        reason: null,
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+        costEstimate: estimateLlmCost("gemini-2.5-flash", promptTokens, completionTokens),
+        stub: false,
+        userId: null,
+        surface: "ai-email-draft",
+        status: "success",
+      });
       return res.json({ subjects: lines });
     }
 
@@ -142,6 +261,22 @@ Context: "${context}"`;
     res.json({ subjects: [`Follow up: ${req.body.context}`, `RE: ${req.body.context}`] });
   }
 });
+
+// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
+// persistLlmCallLog helper so direct Gemini calls from this route are
+// visible to the Super Admin "API Analytics" dashboard. A DB hiccup here
+// must NEVER break email-draft generation, hence the nested try/catch and
+// the un-awaited .catch() on the create.
+function persistLlmCallLog(data) {
+  try {
+    const prismaClient = require("../lib/prisma");
+    prismaClient.llmCallLog.create({ data }).catch((e) =>
+      console.error(`[AI] LlmCallLog persist failed (non-fatal): ${e.message}`),
+    );
+  } catch (e) {
+    console.error(`[AI] LlmCallLog require failed (non-fatal): ${e.message}`);
+  }
+}
 
 // Resolve the SENDER's own organisation so AI-written emails represent the
 // tenant (e.g. "Travel Stall"), NOT the platform vendor that built the CRM.

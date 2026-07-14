@@ -1,4 +1,4 @@
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
@@ -137,12 +137,12 @@ async function processScheduledEmails() {
 }
 
 function initScheduledEmailCron() {
-  cron.schedule("* * * * *", () => {
-    processScheduledEmails().catch((err) => {
-      console.error("[scheduledEmailEngine] unhandled tick error:", err);
-    });
-  });
-  console.log("Scheduled Email Engine initialized (cron: * * * * *)");
+  cronRegistry.register({
+    name: "scheduledEmailEngine",
+    description: "Dispatches ScheduledEmail rows whose sendAt has passed (every minute)",
+    defaultSchedule: "* * * * *",
+    tickFn: processScheduledEmails,
+  }).catch((e) => console.error("[scheduledEmailEngine] cronRegistry registration failed:", e.message));
 }
 
 // G097 sub-brand anchor resolution. Reads Contact.subBrand → Tenant.defaultSubBrand

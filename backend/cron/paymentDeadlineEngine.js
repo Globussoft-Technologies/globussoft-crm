@@ -24,7 +24,7 @@
 // BEFORE sending so an hourly re-tick can't double-send. dayTag ∈
 // {d10,d9,d8,d7,overdue}.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const emailSender = require("../lib/emailSender");
 const content = require("../lib/paymentDeadlineContent");
@@ -227,10 +227,12 @@ async function runPaymentDeadlineTick(now = new Date()) {
 // contend). Day-bucket idempotency means the first tick that sees a new bucket
 // sends; later ticks that day are no-ops.
 function initPaymentDeadlineCron() {
-  cron.schedule("37 * * * *", () => {
-    runPaymentDeadlineTick().catch((e) => console.error("[PaymentDeadline] tick error:", e.message));
-  });
-  console.log("[PaymentDeadline] cron scheduled (hourly :37)");
+  cronRegistry.register({
+    name: "paymentDeadlineEngine",
+    description: "Pay-or-cancel deposit-deadline chase for accepted-unpaid travel bookings (hourly :37)",
+    defaultSchedule: "37 * * * *",
+    tickFn: runPaymentDeadlineTick,
+  }).catch((e) => console.error("[PaymentDeadline] cronRegistry registration failed:", e.message));
 }
 
 module.exports = { runPaymentDeadlineTick, initPaymentDeadlineCron, daysToGo, formatDeadline, userCanAccess };

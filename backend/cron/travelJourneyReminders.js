@@ -26,7 +26,7 @@
 // library. This cron triggers the EVENT; the actual message body comes
 // from per-tenant templates in a follow-up commit.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 // WhatsApp transport swap (Q9): Wati REST is COMMENTED OUT (kept on disk, not removed);
@@ -214,14 +214,13 @@ async function runJourneyRemindersForAllTravelTenants() {
 }
 
 function initTravelJourneyRemindersCron() {
-  // Every 30 minutes — :13 offset per the standing rule. PRD §6.3
-  // specifies "every 30 min."
-  cron.schedule("13,43 * * * *", () => {
-    runJourneyRemindersForAllTravelTenants().catch((e) =>
-      console.error("[TravelJourneyReminders] cron fail:", e.message),
-    );
-  });
-  console.log("[TravelJourneyReminders] cron initialized (every 30 min)");
+  // Every 30 minutes. PRD §6.3 specifies "every 30 min."
+  cronRegistry.register({
+    name: "travelJourneyReminders",
+    description: "RFU journey milestone reminders (T-7d/T-3d/T-1d/T-0/T+2d/T+7d), every 30 min",
+    defaultSchedule: "13,43 * * * *",
+    tickFn: runJourneyRemindersForAllTravelTenants,
+  }).catch((e) => console.error("[TravelJourneyReminders] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

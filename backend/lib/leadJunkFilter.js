@@ -17,6 +17,22 @@
  * Returns: { isJunk: boolean, score: 0..100, reasons: string[] }
  */
 const prisma = require("./prisma");
+const { estimateLlmCost } = require("./apiPricing");
+
+// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
+// persistLlmCallLog helper so this direct Gemini call is visible to the
+// Super Admin "API Analytics" dashboard. A DB hiccup here must NEVER break
+// lead ingestion, hence the nested try/catch and the un-awaited .catch().
+function persistLlmCallLog(data) {
+  try {
+    const prismaClient = require("./prisma");
+    prismaClient.llmCallLog.create({ data }).catch((e) =>
+      console.error(`[leadJunkFilter] LlmCallLog persist failed (non-fatal): ${e.message}`),
+    );
+  } catch (e) {
+    console.error(`[leadJunkFilter] LlmCallLog require failed (non-fatal): ${e.message}`);
+  }
+}
 
 // India mobile: 10 digits, starts with 6/7/8/9. We accept "+91" prefix or
 // the bare 10-digit local form.
@@ -115,7 +131,7 @@ async function classifyLead({ tenantId, name, phone, email, source }) {
   //   LEAD_JUNK_AI=1 in env. Uses Gemini to decide on borderline cases.
   if (!isJunk && score >= 26 && score <= 50 && process.env.LEAD_JUNK_AI === "1") {
     try {
-      const gemini = await aiClassify({ name, phone, email, source, reasons });
+      const gemini = await aiClassify({ tenantId, name, phone, email, source, reasons });
       if (gemini && typeof gemini.confidence === "number") {
         if (gemini.verdict === "junk" && gemini.confidence > 0.7) {
           reasons.push(`AI: ${gemini.reason || "classified as junk"}`);
@@ -132,18 +148,58 @@ async function classifyLead({ tenantId, name, phone, email, source }) {
 }
 
 // Light-weight Gemini wrapper — only loaded when LEAD_JUNK_AI=1
-async function aiClassify({ name, phone, email, source, reasons }) {
+async function aiClassify({ tenantId, name, phone, email, source, reasons }) {
   const { GoogleGenerativeAI } = require("@google/generative-ai");
   if (!process.env.GEMINI_API_KEY) return null;
+  const modelId = process.env.GEMINI_MODEL || "gemini-2.0-flash";
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || "gemini-2.0-flash" });
+  const model = genAI.getGenerativeModel({ model: modelId });
   const prompt = `Classify the following inbound CRM lead as either "junk" or "good".
 Return ONLY a JSON object: {"verdict":"junk"|"good","confidence":0.0-1.0,"reason":"short string"}.
 
 Lead: name="${name || ""}", phone="${phone || ""}", email="${email || ""}", source="${source || ""}"
 Pre-flagged signals: ${reasons.join("; ") || "none"}`;
-  const r = await model.generateContent(prompt);
+  let r;
+  try {
+    r = await model.generateContent(prompt);
+  } catch (e) {
+    persistLlmCallLog({
+      tenantId: tenantId || 1,
+      task: "junk-classification",
+      model: modelId,
+      provider: "gemini",
+      reason: null,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      costEstimate: 0,
+      stub: false,
+      userId: null,
+      surface: "leadJunkFilter",
+      status: "failed",
+      errorMessage: e.message,
+    });
+    throw e;
+  }
   const txt = r.response.text().replace(/```json|```/g, "").trim();
+  const usage = r.response.usageMetadata || {};
+  const promptTokens = usage.promptTokenCount || 0;
+  const completionTokens = usage.candidatesTokenCount || 0;
+  persistLlmCallLog({
+    tenantId: tenantId || 1,
+    task: "junk-classification",
+    model: modelId,
+    provider: "gemini",
+    reason: null,
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    costEstimate: estimateLlmCost(modelId, promptTokens, completionTokens),
+    stub: false,
+    userId: null,
+    surface: "leadJunkFilter",
+    status: "success",
+  });
   return JSON.parse(txt);
 }
 

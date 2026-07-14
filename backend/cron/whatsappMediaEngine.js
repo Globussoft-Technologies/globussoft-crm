@@ -17,7 +17,7 @@
 // days after upload. The first download attempt should happen within seconds
 // of the inbound webhook; if it doesn't, we re-resolve the URL each retry.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { decryptCredential } = require("../lib/credentialMasking");
 const { downloadMediaUrl, downloadMediaBytes } = require("../services/whatsappProvider");
@@ -160,12 +160,12 @@ async function tick() {
 }
 
 function initWhatsappMediaCron() {
-  cron.schedule(TICK_CRON, () => {
-    tick().catch((err) => {
-      console.error("[whatsappMediaEngine] unhandled tick error:", err);
-    });
-  });
-  console.log(`[whatsappMediaEngine] initialized (cron: ${TICK_CRON})`);
+  cronRegistry.register({
+    name: "whatsappMediaEngine",
+    description: "Downloads pending WhatsApp inbound media (60s tick)",
+    defaultSchedule: TICK_CRON,
+    tickFn: tick,
+  }).catch((e) => console.error("[whatsappMediaEngine] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

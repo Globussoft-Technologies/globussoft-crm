@@ -23,7 +23,7 @@
  *      can drop the visible markers entirely.
  */
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 
@@ -210,14 +210,12 @@ async function tickAppointmentReminders() {
 }
 
 function initAppointmentRemindersCron() {
-  cron.schedule("*/15 * * * *", () => {
-    tickAppointmentReminders().catch((e) =>
-      console.error("[AppointmentReminders] tick crashed:", e.message),
-    );
-  });
-  console.log(
-    "Appointment Reminders Engine initialized (cron: */15 * * * *)",
-  );
+  cronRegistry.register({
+    name: "appointmentRemindersEngine",
+    description: "Queues SMS reminders for wellness visits at T-24h/T-1h windows",
+    defaultSchedule: "*/15 * * * *",
+    tickFn: tickAppointmentReminders,
+  }).catch((e) => console.error("[AppointmentReminders] cronRegistry registration failed:", e.message));
 }
 
 // ── PRD Gap §12 #4e — No-show risk Notification fan-out ──────────────
@@ -417,16 +415,13 @@ async function runNoShowRiskForAllWellnessTenants() {
 function initNoShowRiskCron() {
   // Daily 08:30 IST — early enough for owners to act on the day's risks
   // before patients leave for work.
-  cron.schedule(
-    "30 8 * * *",
-    () => {
-      runNoShowRiskForAllWellnessTenants().catch((e) =>
-        console.error("[NoShowRisk] cron fail:", e.message),
-      );
-    },
-    { timezone: process.env.CRON_TIMEZONE || "Asia/Kolkata" },
-  );
-  console.log("[NoShowRisk] cron initialized (daily 08:30 IST)");
+  cronRegistry.register({
+    name: "noShowRiskEngine",
+    description: "Flags high no-show-risk wellness visits with an owner/doctor Notification",
+    defaultSchedule: "30 8 * * *",
+    cronOptions: { timezone: process.env.CRON_TIMEZONE || "Asia/Kolkata" },
+    tickFn: runNoShowRiskForAllWellnessTenants,
+  }).catch((e) => console.error("[NoShowRisk] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

@@ -23,7 +23,7 @@
  *   the step it is parked on has pauseOnReply=true — flips status='Paused'
  *   and clears nextRun. Idempotent via the sequenceReplyHandled timestamp.
  */
-const cron = require('node-cron');
+const cronRegistry = require('../lib/cronRegistry');
 const prisma = require('../lib/prisma');
 const { getSetting, KEYS } = require('../lib/tenantSettings');
 const { evaluateCondition, renderTemplate } = require('../lib/eventBus');
@@ -982,12 +982,12 @@ const tickSequenceEngine = async () => {
 };
 
 const initSequenceCron = () => {
-  cron.schedule('* * * * *', () => {
-    tickSequenceEngine().catch((err) => {
-      console.error('[sequenceEngine] unhandled tick error:', err);
-    });
-  });
-  console.log('Sequence Execution Engine initialized (cron: * * * * *)');
+  cronRegistry.register({
+    name: 'sequenceEngine',
+    description: 'Drip-sequence step execution — sends due SequenceEnrollment steps (every minute)',
+    defaultSchedule: '* * * * *',
+    tickFn: tickSequenceEngine,
+  }).catch((e) => console.error('[sequenceEngine] cronRegistry registration failed:', e.message));
 };
 
 module.exports = {

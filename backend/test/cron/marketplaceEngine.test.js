@@ -26,20 +26,24 @@
  *   - lib/prisma — re-use the existing singleton, monkey-patch model
  *     methods (mirrors slaBreachEngine.test.js).
  *   - global.fetch — vi.fn() reset per test.
- *   - node-cron — same monkey-patch dance.
+ *   - lib/cronRegistry — the SUT registers via cronRegistry.register({...})
+ *     (Super Admin Portal / Cron Maintenance retrofit) instead of calling
+ *     node-cron directly; we mock register() and capture the tickFn option
+ *     to drive tick-behavior assertions, same role the old node-cron
+ *     scheduleMock played.
  *
  * NOT covered (intentional):
  *   - formatIndiaMARTDate is exercised indirectly through the IndiaMART
  *     happy path; its exact string format is implementation-detail. We do
  *     not pin it as a separate assertion.
- *   - The 5-min cron schedule (initMarketplaceCron) — wires one schedule;
- *     we assert it was called.
+ *   - The 5-min cron schedule (initMarketplaceCron) — wires one
+ *     registration; we assert cronRegistry.register was called with the
+ *     right name/defaultSchedule/defaultEnabled.
  */
-import { describe, test, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
-const nodeCron = requireCJS('node-cron');
 
 // ── Fake deduplication module in require cache ─────────────────────────
 const findDupMock = vi.fn();
@@ -66,10 +70,15 @@ prisma.marketplaceLead = {
   create: vi.fn(),
 };
 
-// ── Patch node-cron BEFORE requiring SUT ───────────────────────────────
-const originalSchedule = nodeCron.schedule;
-const scheduleMock = vi.fn();
-nodeCron.schedule = scheduleMock;
+// ── Fake cronRegistry module in require cache (BEFORE requiring SUT) ──
+const registerMock = vi.fn().mockResolvedValue({ name: 'marketplaceEngine' });
+const cronRegistryPath = requireCJS.resolve('../../lib/cronRegistry.js');
+Module._cache[cronRegistryPath] = {
+  id: cronRegistryPath,
+  filename: cronRegistryPath,
+  loaded: true,
+  exports: { register: registerMock },
+};
 
 // ── Require SUT — destructured findDup ref captured against the fake ──
 const sutPath = requireCJS.resolve('../../cron/marketplaceEngine.js');
@@ -86,7 +95,7 @@ beforeEach(() => {
   prisma.marketplaceConfig.findMany.mockReset();
   prisma.marketplaceConfig.update.mockReset();
   prisma.marketplaceLead.create.mockReset();
-  scheduleMock.mockReset();
+  registerMock.mockReset().mockResolvedValue({ name: 'marketplaceEngine' });
 
   // Defaults
   findDupMock.mockResolvedValue(null);
@@ -99,10 +108,6 @@ beforeEach(() => {
 
 afterEach(() => {
   global.fetch = originalFetch;
-});
-
-afterAll(() => {
-  nodeCron.schedule = originalSchedule;
 });
 
 /** Build a fetch Response stub. */
@@ -450,13 +455,16 @@ describe('cron/marketplaceEngine — TradeIndia sync (soft-fail)', () => {
 });
 
 describe('cron/marketplaceEngine — initMarketplaceCron registration', () => {
-  test('initMarketplaceCron registers a 5-minute schedule', () => {
+  test('initMarketplaceCron registers via cronRegistry with the 5-minute default, disabled by default', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     marketplaceEngine.initMarketplaceCron(null);
     logSpy.mockRestore();
-    expect(scheduleMock).toHaveBeenCalledTimes(1);
-    expect(scheduleMock.mock.calls[0][0]).toBe('*/5 * * * *');
-    expect(typeof scheduleMock.mock.calls[0][1]).toBe('function');
+    expect(registerMock).toHaveBeenCalledTimes(1);
+    const opts = registerMock.mock.calls[0][0];
+    expect(opts.name).toBe('marketplaceEngine');
+    expect(opts.defaultSchedule).toBe('*/5 * * * *');
+    expect(opts.defaultEnabled).toBe(false);
+    expect(typeof opts.tickFn).toBe('function');
   });
 
   test('cron tick iterates active configs and dispatches syncMarketplace per provider', async () => {
@@ -471,7 +479,7 @@ describe('cron/marketplaceEngine — initMarketplaceCron registration', () => {
     // Each provider call will go through syncMarketplace; pre-stage findUnique
     // to return inactive so each is a fast no-op.
     prisma.marketplaceConfig.findUnique.mockResolvedValue({ isActive: false });
-    const tick = scheduleMock.mock.calls[0][1];
+    const tick = registerMock.mock.calls[0][0].tickFn;
     await tick();
     logSpy.mockRestore();
     // findMany scopes to active configs only.
@@ -702,7 +710,7 @@ describe('cron/marketplaceEngine — extension: cron-tick fault isolation', () =
       return { isActive: false };
     });
 
-    const tick = scheduleMock.mock.calls[0][1];
+    const tick = registerMock.mock.calls[0][0].tickFn;
     await tick(); // must not reject
     logSpy.mockRestore();
     errSpy.mockRestore();
@@ -710,28 +718,29 @@ describe('cron/marketplaceEngine — extension: cron-tick fault isolation', () =
     expect(prisma.marketplaceConfig.findUnique).toHaveBeenCalledTimes(2);
   });
 
-  test('outer-catch wrapper swallows prisma.findMany throw — tick stays alive', async () => {
-    // SUT lines 228-240: outer try/catch wraps the whole tick body. If
-    // findMany itself throws (DB connection blip), the tick MUST NOT reject —
-    // otherwise it surfaces as unhandledPromiseRejection and strict Node settings
-    // could kill the process.
+  test('a prisma.findMany throw propagates to the caller — cronRegistry.runTick (not this engine) now owns tick-level fault isolation', async () => {
+    // Since the Super Admin Portal / Cron Maintenance retrofit, the outer
+    // "never let a tick reject" guarantee moved to cronRegistry.runTick
+    // (see test/lib/cronRegistry.test.js's "thrown tickFn error is caught,
+    // logged as failed... and does not propagate" case) so every engine's
+    // failures are uniformly captured as a CronExecutionLog row instead of
+    // each engine re-implementing its own outer try/catch. This engine's
+    // tick() therefore no longer swallows a findMany throw itself — it
+    // propagates, and the registry is what contains it.
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     marketplaceEngine.initMarketplaceCron(null);
 
     prisma.marketplaceConfig.findMany.mockRejectedValue(new Error('DB_CONNECTION_LOST'));
 
-    const tick = scheduleMock.mock.calls[0][1];
-    // Tick must resolve (not reject) — guarded by outer try/catch.
-    await expect(tick()).resolves.toBeUndefined();
+    const tick = registerMock.mock.calls[0][0].tickFn;
+    await expect(tick()).rejects.toThrow('DB_CONNECTION_LOST');
     logSpy.mockRestore();
-    errSpy.mockRestore();
-    // Outer-catch path: findUnique never reached because the loop never started.
+    // Loop never started — findUnique never reached.
     expect(prisma.marketplaceConfig.findUnique).not.toHaveBeenCalled();
   });
 
   test('empty active configs list → tick is a graceful no-op (no provider work, no throw)', async () => {
-    // SUT line 230: findMany returns []. The for-loop body never runs. Pin this
+    // SUT: findMany returns []. The for-loop body never runs. Pin this
     // because a freshly-provisioned tenant with no configured marketplaces is the
     // STEADY STATE for most installs.
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -739,7 +748,7 @@ describe('cron/marketplaceEngine — extension: cron-tick fault isolation', () =
 
     prisma.marketplaceConfig.findMany.mockResolvedValue([]);
 
-    const tick = scheduleMock.mock.calls[0][1];
+    const tick = registerMock.mock.calls[0][0].tickFn;
     await expect(tick()).resolves.toBeUndefined();
     logSpy.mockRestore();
     // No syncMarketplace work → no findUnique, no fetch, no create.

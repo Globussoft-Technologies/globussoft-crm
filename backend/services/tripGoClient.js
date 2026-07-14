@@ -42,6 +42,36 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// ── API Analytics logging ───────────────────────────────────────────
+// Fire-and-forget ApiCallLog row per TripGo request — mirrors
+// serpApiClient.js's logApiCall. Must NEVER throw or block the caller;
+// this module's contract is "never throws" (callers fall through to the
+// LLM/stub tier on any hiccup).
+function logApiCall({ endpoint, status, durationMs, errorMessage }) {
+  if (process.env.NODE_ENV === "test") return;
+  try {
+    const prisma = require("../lib/prisma");
+    const { estimateFlatCost } = require("../lib/apiPricing");
+    const cost = estimateFlatCost("tripgo"); // null — no public flat rate; tracked as request count only
+    prisma.apiCallLog
+      .create({
+        data: {
+          tenantId: 1,
+          provider: "tripgo",
+          endpoint,
+          status,
+          costEstimate: cost || 0,
+          durationMs,
+          surface: "tripGoClient",
+          errorMessage: errorMessage || null,
+        },
+      })
+      .catch((e) => console.error(`[tripGoClient] ApiCallLog persist failed (non-fatal): ${e.message}`));
+  } catch (e) {
+    console.error(`[tripGoClient] ApiCallLog require failed (non-fatal): ${e.message}`);
+  }
+}
+
 function headers() {
   return { "X-TripGo-Key": KEY(), Accept: "application/json" };
 }
@@ -147,6 +177,7 @@ async function searchTransfers(q = {}, ax = axios) {
     return null;
   }
   if (!q.from || !q.to) return null;
+  const startedAt = Date.now();
   console.log(`[tripGoClient] searchTransfers: geocoding "${q.from}" → "${q.to}"`);
   const [from, to] = await Promise.all([
     module.exports.geocode(q.from, ax),
@@ -154,6 +185,7 @@ async function searchTransfers(q = {}, ax = axios) {
   ]);
   if (!from || !to) {
     console.log(`[tripGoClient] searchTransfers: could not geocode ${!from ? `origin "${q.from}"` : `destination "${q.to}"`} — falling through to LLM`);
+    logApiCall({ endpoint: "searchTransfers", status: "failed", durationMs: Date.now() - startedAt, errorMessage: "geocode failed for origin or destination" });
     return null; // couldn't resolve one endpoint → fall through
   }
   const params = {
@@ -163,24 +195,33 @@ async function searchTransfers(q = {}, ax = axios) {
     bestReturnedTripOnly: "false",
     modes: MODES,
   };
-  const resp = await ax.get(`${BASE}/routing.json`, {
-    params,
-    headers: headers(),
-    timeout: TIMEOUT_MS,
-    // axios serializes array params as modes=a&modes=b (repeat key) — TripGo's
-    // expected form.
-    paramsSerializer: (p) => {
-      const parts = [];
-      for (const [k, val] of Object.entries(p)) {
-        if (Array.isArray(val)) val.forEach((v) => parts.push(`${k}=${encodeURIComponent(v)}`));
-        else parts.push(`${k}=${encodeURIComponent(val)}`);
-      }
-      return parts.join("&");
-    },
-  });
+  let resp;
+  try {
+    resp = await ax.get(`${BASE}/routing.json`, {
+      params,
+      headers: headers(),
+      timeout: TIMEOUT_MS,
+      // axios serializes array params as modes=a&modes=b (repeat key) — TripGo's
+      // expected form.
+      paramsSerializer: (p) => {
+        const parts = [];
+        for (const [k, val] of Object.entries(p)) {
+          if (Array.isArray(val)) val.forEach((v) => parts.push(`${k}=${encodeURIComponent(v)}`));
+          else parts.push(`${k}=${encodeURIComponent(val)}`);
+        }
+        return parts.join("&");
+      },
+    });
+  } catch (e) {
+    logApiCall({ endpoint: "searchTransfers", status: "failed", durationMs: Date.now() - startedAt, errorMessage: e.message });
+    console.error(`[tripGoClient] routing request failed: ${e.message}`);
+    return null;
+  }
   const data = resp && resp.data;
   if (!data || data.error) {
-    console.error(`[tripGoClient] routing error: ${data && data.error ? JSON.stringify(data.error) : "empty response"}`);
+    const errMsg = data && data.error ? JSON.stringify(data.error) : "empty response";
+    logApiCall({ endpoint: "searchTransfers", status: "failed", durationMs: Date.now() - startedAt, errorMessage: errMsg });
+    console.error(`[tripGoClient] routing error: ${errMsg}`);
     return null;
   }
   const groupCount = Array.isArray(data.groups) ? data.groups.length : 0;
@@ -189,6 +230,7 @@ async function searchTransfers(q = {}, ax = axios) {
   if (groupCount > 0 && mapped.length === 0) {
     console.log("[tripGoClient] (TripGo routed it but no option had a moneyCost — falling through to LLM for a priced estimate)");
   }
+  logApiCall({ endpoint: "searchTransfers", status: "success", durationMs: Date.now() - startedAt });
   return mapped;
 }
 

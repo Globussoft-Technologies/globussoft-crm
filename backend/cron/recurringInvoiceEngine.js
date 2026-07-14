@@ -1,4 +1,4 @@
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 
@@ -112,9 +112,12 @@ async function processRecurringInvoices(io) {
 }
 
 function initRecurringInvoiceCron(io) {
-  // Run daily at 6 AM
-  cron.schedule("0 6 * * *", () => processRecurringInvoices(io));
-  console.log("[RecurringInvoice] Cron scheduled: daily at 6 AM");
+  cronRegistry.register({
+    name: "recurringInvoiceEngine",
+    description: "Generates due recurring invoices (daily 06:00)",
+    defaultSchedule: "0 6 * * *",
+    tickFn: () => processRecurringInvoices(io),
+  }).catch((e) => console.error("[RecurringInvoice] cronRegistry registration failed:", e.message));
 }
 
 module.exports = { initRecurringInvoiceCron, processRecurringInvoices };

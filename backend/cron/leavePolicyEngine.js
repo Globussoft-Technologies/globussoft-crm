@@ -77,7 +77,7 @@
  *     .runForTenant(<id>)"` directly. If a UI ask lands, the right place
  *     is /api/cron/leave-policy/run not a fresh route here.
  */
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 
 // Default fiscal year-end — month is 0-indexed in JS Date ergonomics.
@@ -325,10 +325,13 @@ async function tick() {
  */
 function initLeavePolicyCron() {
   // 02:30 IST = 21:00 UTC previous day. The cron runs in IST per server.
-  cron.schedule("30 2 * * *", () => {
-    tick().catch((e) => console.error("[LeavePolicy] tick crashed:", e.message));
-  }, { timezone: "Asia/Kolkata" });
-  console.log("[LeavePolicy] cron scheduled: 02:30 IST daily");
+  cronRegistry.register({
+    name: "leavePolicyEngine",
+    description: "Fiscal year-end leave carry-forward + encashment payouts",
+    defaultSchedule: "30 2 * * *",
+    cronOptions: { timezone: "Asia/Kolkata" },
+    tickFn: tick,
+  }).catch((e) => console.error("[LeavePolicy] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

@@ -731,7 +731,7 @@ jobs:
   # ── 7. DEPLOY: only runs if every upstream gate passes. ────────────────
   deploy:
     needs:
-      [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check]
+      [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check, deploy_staging]
     # All six gates mandatory:
     #   - build               (vite + node syntax)
     #   - api_tests           (Playwright API specs against ephemeral MySQL + seeded backend)
@@ -739,11 +739,13 @@ jobs:
     #   - lint                (ESLint — semantic checks + project-specific req.user.id rule)
     #   - frontend_unit_tests (G-21 — vitest + RTL over frontend/src/__tests__/)
     #   - migration_check     (G-23 — dry-run prisma migrate diff vs HEAD~1)
+    #   - deploy_staging      (serializes staging before prod so the two jobs
+    #                          don't race on prisma db push against the same DB)
     # Any failure blocks deploy.
     # The 'skipped' branch covers the workflow_dispatch.skip_tests=true
     # bypass for emergency hotfixes (still requires manual workflow_dispatch
     # — a regular push can never bypass).
-    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') }}
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') && (needs.deploy_staging.result == 'success' || needs.deploy_staging.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

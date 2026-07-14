@@ -181,6 +181,13 @@ const NON_TENANT_MODELS = new Set([
   // are deleted/marked used). The permanent verified marker lands on
   // Tenant/User/Contact.emailVerifiedAt.
   'EmailVerificationOtp',
+  // PhoneVerificationOtp — pre-registration phone-OTP store (org signup +
+  // customer/portal registration). Identity-by-phone; at org-signup time NO
+  // tenant exists yet, so it is intentionally tenant-less. Mirrors
+  // EmailVerificationOtp's rationale. Transient (codes expire + are
+  // deleted/marked used). The permanent verified marker lands on
+  // Tenant/User/Contact.phoneVerifiedAt.
+  'PhoneVerificationOtp',
   // PasswordResetToken — short-lived, single-use token tied to a globally
   // unique userId. Tenant isolation flows through User (User.tenantId); the
   // token is consumed by the public /reset-password endpoint which resolves
@@ -188,6 +195,24 @@ const NON_TENANT_MODELS = new Set([
   // tenantId column would add no isolation and would require every reset flow
   // to keep the user.tenantId and token.tenantId in sync.
   'PasswordResetToken',
+  // PR #1214 — Super Admin Portal cron registry. CronConfig defines the
+  // platform-wide cron schedule catalog (46 built-in engines + future
+  // admin-created dynamic crons). Schedules are global by design: the same
+  // engine runs once for the whole instance, not once per tenant. Tenant
+  // isolation for the data the crons touch is enforced inside each engine's
+  // own query filters (e.g. `where: { tenantId }`).
+  'CronConfig',
+  // PR #1214 — execution history for CronConfig ticks. Child of the global
+  // CronConfig table; the log rows inherit their scope from the parent cron,
+  // which is instance-wide. Adding tenantId would incorrectly imply per-tenant
+  // cron executions and would require keeping cronConfig.tenantId and
+  // log.tenantId in sync despite CronConfig having no tenantId.
+  'CronExecutionLog',
+  // PR #1214 — global (non-tenant) key/value settings for the Super Admin
+  // portal. First consumer is cron log retention window. These settings apply
+  // to the whole platform, not to a single tenant, so they are intentionally
+  // tenant-less. Mirrors TenantSetting's shape but at the platform level.
+  'SystemSetting',
   // G018 FX rate cache (PRD_TRAVEL_QUOTE_BUILDER FR-3.4). Currency-pair
   // rates are GLOBAL by design — every tenant shares the same INR/USD rate
   // for a given (baseCurrency, quoteCurrency, fetchedAt) tuple. The

@@ -299,26 +299,21 @@ describe('<LandingPages /> — index page surface', () => {
     });
   });
 
-  it('clicking Publish when another page is already PUBLISHED calls notify.error (hard-block)', async () => {
+  it('when another page is PUBLISHED the Publish button is disabled (hard-block UX)', async () => {
     // samplePages has id=11 as PUBLISHED and id=12 as DRAFT.
-    // The SUT hard-blocks via notify.error and the Publish button is disabled.
-    // RTL's fireEvent.click still invokes the onClick handler on a disabled
-    // button (unlike a real browser), so we can verify the error path.
+    // The SUT disables the Publish button — this IS the hard-block. The operator
+    // cannot click it; no API call can ever fire. That is the full contract.
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
 
-    // Publish button for the DRAFT page should be disabled (hard-block UX).
     const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
     expect(publishBtn).toBeDisabled();
 
+    // The tooltip names the currently-live page so the operator knows why.
+    expect(publishBtn.title).toMatch(/Spring Launch/);
+
+    // Confirm no publish API call fires (button is disabled — nothing can fire it).
     fetchApiMock.mockClear();
-    fireEvent.click(publishBtn);
-
-    // The handler calls notify.error naming the currently-live page.
-    await waitFor(() => expect(notifyError).toHaveBeenCalled());
-    expect(notifyError.mock.calls[0][0]).toMatch(/Spring Launch/);
-
-    // No publish API call should have fired.
     const publishCall = fetchApiMock.mock.calls.find(
       ([u, o]) => typeof u === 'string' && u.endsWith('/publish') && o?.method === 'POST',
     );

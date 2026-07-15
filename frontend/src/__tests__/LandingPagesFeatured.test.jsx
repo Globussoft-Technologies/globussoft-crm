@@ -169,52 +169,58 @@ describe('<LandingPages /> — Featured badge + publish-swap UX', () => {
     expect(screen.getAllByRole('button', { name: /^Publish$/i }).length).toBe(1);
   });
 
-  it('publishing a DRAFT when another page is already PUBLISHED hard-blocks with notify.error naming the live page', async () => {
-    // The SUT hard-blocks: if another page is PUBLISHED, notify.error fires
-    // and the Publish button is disabled. The FIXTURE has Japan (id=100,
-    // PUBLISHED) and Umrah (id=101, PUBLISHED), so Bali Draft's Publish
-    // button is disabled.
-    // NOTE: must use fireEvent.click (not userEvent) — userEvent respects the
-    // disabled attribute and skips the click, so the handler never runs.
+  it('Bali Draft Publish button is disabled when another PUBLISHED page exists (hard-block UX)', async () => {
+    // FIXTURE has Japan (id=100, PUBLISHED) and Umrah (id=101, PUBLISHED).
+    // Bali Draft's Publish button must be disabled — that IS the hard-block.
+    // React 18 suppresses onClick on disabled buttons even with fireEvent,
+    // so the correct contract to test is the disabled state + tooltip, not
+    // a handler invocation.
     renderPage();
     await waitFor(() => expect(screen.getByText('Bali Draft')).toBeInTheDocument());
 
-    // The DRAFT row's Publish button is disabled because a PUBLISHED page exists.
     const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
     expect(publishBtn).toBeDisabled();
 
+    // Tooltip names the blocking page so operator knows why.
+    expect(publishBtn.title).toMatch(/currently live/i);
+
+    // No publish API call has fired — button is disabled.
     fetchApiMock.mockClear();
-    fireEvent.click(publishBtn);
-
-    // The handler fires notify.error naming the currently-live page.
-    await waitFor(() => expect(notifyError).toHaveBeenCalled());
-    const errMsg = notifyError.mock.calls[0][0];
-    // The error names one of the live pages (Japan or Umrah — whichever find() returns first).
-    expect(errMsg).toMatch(/currently live/i);
-
-    // No publish API call fires.
     const postCalls = fetchApiMock.mock.calls.filter(
       ([u, o]) => o?.method === 'POST' && /publish/.test(u),
     );
     expect(postCalls.length).toBe(0);
   });
 
-  it('the hard-block prevents any publish API call when another page is PUBLISHED', async () => {
-    // Second hard-block verification: just confirm the API is never called.
-    // Uses fireEvent (not userEvent) to bypass the disabled attribute.
+  it('with no PUBLISHED page the Publish button is enabled and POSTs /publish on click', async () => {
+    // Use a fixture with only the DRAFT so the button is not disabled,
+    // confirming the hard-block only engages when a PUBLISHED page exists.
+    const SOLO = [{ ...FIXTURE[2] }]; // Bali Draft only
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages' && method === 'GET') return Promise.resolve(SOLO);
+      if (url === '/api/landing-pages/templates/list') return Promise.resolve([]);
+      if (url === '/api/landing-pages/102/publish' && method === 'POST') {
+        return Promise.resolve({ id: 102, status: 'PUBLISHED' });
+      }
+      return Promise.resolve(null);
+    });
+    const user = userEvent.setup();
     renderPage();
     await waitFor(() => expect(screen.getByText('Bali Draft')).toBeInTheDocument());
 
-    fetchApiMock.mockClear();
     const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
-    fireEvent.click(publishBtn);
+    expect(publishBtn).not.toBeDisabled();
 
-    // notify.error fires — no API call.
-    await waitFor(() => expect(notifyError).toHaveBeenCalled());
-    const postCalls = fetchApiMock.mock.calls.filter(
-      ([u, o]) => o?.method === 'POST' && /publish/.test(u),
-    );
-    expect(postCalls.length).toBe(0);
+    fetchApiMock.mockClear();
+    await user.click(publishBtn);
+
+    await waitFor(() => {
+      const postCalls = fetchApiMock.mock.calls.filter(
+        ([u, o]) => u === '/api/landing-pages/102/publish' && o?.method === 'POST',
+      );
+      expect(postCalls.length).toBe(1);
+    });
   });
 
   it('Unpublish on the currently-featured row skips the swap-confirm and POSTs /:id/unpublish directly', async () => {

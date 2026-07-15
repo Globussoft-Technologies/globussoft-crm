@@ -4,23 +4,22 @@
  *
  * SUT: frontend/src/pages/public/TripsResolver.jsx
  *
- * The backend now serves /trips as the server-rendered featured page.
- * For client-side navigations the resolver forces a full-page load to
- * /trips when a featured page exists, otherwise it renders the hardcoded
- * TripsLanding fallback.
+ * Resolution flow (updated):
+ *   1. GET /api/landing-pages/public/featured-html (no auth, Accept: text/html).
+ *      Returns rendered HTML of the live trip, or 404 if nothing published.
+ *   2. On 200 → write the HTML into the current document via document.open() /
+ *      document.write() / document.close(). URL stays at /trips.
+ *   3. On 404 / error → render the hardcoded TripsLanding fallback.
  *
- * We pin both branches plus the "no slug in response" defensive path
- * (treat as fallback). global.fetch is stubbed per test.
+ * global.fetch is stubbed per test. document.open/write/close are stubbed so
+ * jsdom doesn't actually blow away the test document.
  */
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
-// Stub the lazy-imported fallback so we don't load the full Japan page.
-// vi.mock('./pages/public/TripsLanding') would work from the test's
-// vantage but the resolver imports it via a relative `./TripsLanding`
-// path — match that exactly.
+// Stub the lazy-imported fallback so we don't load the full TripsLanding page.
 vi.mock('../pages/public/TripsLanding', () => ({
   default: () => <div data-testid="trips-fallback">FALLBACK TripsLanding</div>,
 }));
@@ -38,53 +37,63 @@ function renderResolver() {
 }
 
 describe('<TripsResolver />', () => {
-  let locationReplace;
+  let documentOpen;
+  let documentWrite;
+  let documentClose;
+  let origOpen;
+  let origWrite;
+  let origClose;
 
   beforeEach(() => {
     global.fetch = vi.fn();
-    locationReplace = vi.fn();
-    vi.stubGlobal('location', { ...window.location, replace: locationReplace });
+    // Stub document.open/write/close so the test document isn't replaced.
+    // Use direct property assignment on the real document object rather than
+    // vi.stubGlobal('document', {...}) — the latter replaces the entire
+    // document reference, which breaks RTL's render() because it needs the
+    // real document.body.appendChild to mount the React tree.
+    origOpen = document.open.bind(document);
+    origWrite = document.write.bind(document);
+    origClose = document.close.bind(document);
+    documentOpen = vi.fn();
+    documentWrite = vi.fn();
+    documentClose = vi.fn();
+    document.open = documentOpen;
+    document.write = documentWrite;
+    document.close = documentClose;
   });
 
-  it('redirects to the featured page /p/<slug> render URL when the featured endpoint returns a slug', async () => {
-    // The resolver redirects to /p/<slug> (the canonical landing-page render
-    // surface, reliably proxied to the backend) rather than the /trips vanity
-    // URL — redirecting to /trips re-mounts this resolver on a misconfigured
-    // web layer and loops forever.
+  afterEach(() => {
+    document.open = origOpen;
+    document.write = origWrite;
+    document.close = origClose;
+  });
+
+  it('writes the server-rendered HTML into the document when featured-html returns 200', async () => {
+    const TRIP_HTML = '<html><body><h1>Japan 2026</h1></body></html>';
     global.fetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ id: 1, slug: 'japan-2026', title: 'Japan 2026' }),
+      text: async () => TRIP_HTML,
     });
     renderResolver();
     await waitFor(() => {
-      expect(locationReplace).toHaveBeenCalledWith('/p/japan-2026');
+      expect(documentOpen).toHaveBeenCalled();
+      expect(documentWrite).toHaveBeenCalledWith(TRIP_HTML);
+      expect(documentClose).toHaveBeenCalled();
     });
-    // The fallback should NOT have rendered.
+    // The fallback should NOT have rendered (document.write replaced the page).
     expect(screen.queryByTestId('trips-fallback')).not.toBeInTheDocument();
-  });
-
-  it('URL-encodes the slug in the /p/<slug> redirect', async () => {
-    global.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ slug: 'summer sale/2026' }),
-    });
-    renderResolver();
-    await waitFor(() => {
-      expect(locationReplace).toHaveBeenCalledWith('/p/summer%20sale%2F2026');
-    });
   });
 
   it('falls back to the hardcoded TripsLanding on 404 NO_FEATURED_PAGE', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: false,
       status: 404,
-      json: async () => ({ code: 'NO_FEATURED_PAGE' }),
     });
     renderResolver();
     await waitFor(() => {
       expect(screen.getByTestId('trips-fallback')).toBeInTheDocument();
     });
-    expect(locationReplace).not.toHaveBeenCalled();
+    expect(documentWrite).not.toHaveBeenCalled();
   });
 
   it('falls back to the hardcoded TripsLanding on network error', async () => {
@@ -93,29 +102,31 @@ describe('<TripsResolver />', () => {
     await waitFor(() => {
       expect(screen.getByTestId('trips-fallback')).toBeInTheDocument();
     });
+    expect(documentWrite).not.toHaveBeenCalled();
   });
 
-  it('falls back when the response is 200 but missing a slug field', async () => {
+  it('falls back when the response is 200 but the HTML body is empty', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ id: 1, title: 'Stale' }),
+      text: async () => '',
     });
     renderResolver();
     await waitFor(() => {
       expect(screen.getByTestId('trips-fallback')).toBeInTheDocument();
     });
+    expect(documentWrite).not.toHaveBeenCalled();
   });
 
-  it('calls /api/landing-pages/public/featured with GET + Accept: application/json', async () => {
+  it('calls /api/landing-pages/public/featured-html with GET + Accept: text/html', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ slug: 'japan-2026' }),
+      text: async () => '<html><body>trip</body></html>',
     });
     renderResolver();
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     const [url, opts] = global.fetch.mock.calls[0];
-    expect(url).toBe('/api/landing-pages/public/featured');
+    expect(url).toBe('/api/landing-pages/public/featured-html');
     expect(opts?.method).toBe('GET');
-    expect(opts?.headers?.Accept).toBe('application/json');
+    expect(opts?.headers?.Accept).toBe('text/html');
   });
 });

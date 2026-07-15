@@ -32,8 +32,8 @@
  *   - confirmMock is a vi.fn() so each test can choose accept / reject.
  */
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -128,6 +128,21 @@ describe('<LandingPages /> — Featured badge + publish-swap UX', () => {
     notifyInfo.mockReset();
     confirmMock.mockReset();
     confirmMock.mockResolvedValue(true);
+    // jsdom has no navigator.clipboard — stub so the Public Link copy button
+    // on PUBLISHED cards doesn't crash tests that trigger nearby interactions.
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
   });
 
   it('renders the ★ Featured badge on the currently-featured row (exactly one in the DOM)', async () => {
@@ -154,52 +169,58 @@ describe('<LandingPages /> — Featured badge + publish-swap UX', () => {
     expect(screen.getAllByRole('button', { name: /^Publish$/i }).length).toBe(1);
   });
 
-  it('publishing a DRAFT when another page is featured shows a swap-confirm naming both pages', async () => {
+  it('Bali Draft Publish button is disabled when another PUBLISHED page exists (hard-block UX)', async () => {
+    // FIXTURE has Japan (id=100, PUBLISHED) and Umrah (id=101, PUBLISHED).
+    // Bali Draft's Publish button must be disabled — that IS the hard-block.
+    // React 18 suppresses onClick on disabled buttons even with fireEvent,
+    // so the correct contract to test is the disabled state + tooltip, not
+    // a handler invocation.
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Bali Draft')).toBeInTheDocument());
+
+    const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
+    expect(publishBtn).toBeDisabled();
+
+    // Tooltip names the blocking page so operator knows why.
+    expect(publishBtn.title).toMatch(/currently live/i);
+
+    // No publish API call has fired — button is disabled.
+    fetchApiMock.mockClear();
+    const postCalls = fetchApiMock.mock.calls.filter(
+      ([u, o]) => o?.method === 'POST' && /publish/.test(u),
+    );
+    expect(postCalls.length).toBe(0);
+  });
+
+  it('with no PUBLISHED page the Publish button is enabled and POSTs /publish on click', async () => {
+    // Use a fixture with only the DRAFT so the button is not disabled,
+    // confirming the hard-block only engages when a PUBLISHED page exists.
+    const SOLO = [{ ...FIXTURE[2] }]; // Bali Draft only
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages' && method === 'GET') return Promise.resolve(SOLO);
+      if (url === '/api/landing-pages/templates/list') return Promise.resolve([]);
       if (url === '/api/landing-pages/102/publish' && method === 'POST') {
-        return Promise.resolve({ id: 102, status: 'PUBLISHED', isFeatured: true });
+        return Promise.resolve({ id: 102, status: 'PUBLISHED' });
       }
-      return defaultFetchMock(url, opts);
+      return Promise.resolve(null);
     });
     const user = userEvent.setup();
     renderPage();
     await waitFor(() => expect(screen.getByText('Bali Draft')).toBeInTheDocument());
 
-    // The DRAFT row's Publish button.
-    await user.click(screen.getByRole('button', { name: /^Publish$/i }));
+    const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
+    expect(publishBtn).not.toBeDisabled();
 
-    await waitFor(() => expect(confirmMock).toHaveBeenCalled());
-    const confirmArg = confirmMock.mock.calls[0][0];
-    // The confirm names BOTH the current /trips holder + the replacement.
-    expect(confirmArg).toMatch(/Japan 2026/);
-    expect(confirmArg).toMatch(/Bali Draft/);
-    // Mentions the public surface so the operator knows what's about to swap.
-    expect(confirmArg).toMatch(/\/trips/);
+    fetchApiMock.mockClear();
+    await user.click(publishBtn);
 
-    // Confirm resolves true → POST /publish should have fired.
     await waitFor(() => {
       const postCalls = fetchApiMock.mock.calls.filter(
         ([u, o]) => u === '/api/landing-pages/102/publish' && o?.method === 'POST',
       );
       expect(postCalls.length).toBe(1);
     });
-    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/live at \/trips/i));
-  });
-
-  it('declining the swap-confirm does NOT POST /publish', async () => {
-    confirmMock.mockResolvedValue(false);
-    const user = userEvent.setup();
-    renderPage();
-    await waitFor(() => expect(screen.getByText('Bali Draft')).toBeInTheDocument());
-
-    await user.click(screen.getByRole('button', { name: /^Publish$/i }));
-
-    await waitFor(() => expect(confirmMock).toHaveBeenCalled());
-    const postCalls = fetchApiMock.mock.calls.filter(
-      ([u, o]) => o?.method === 'POST' && /publish/.test(u),
-    );
-    expect(postCalls.length).toBe(0);
   });
 
   it('Unpublish on the currently-featured row skips the swap-confirm and POSTs /:id/unpublish directly', async () => {

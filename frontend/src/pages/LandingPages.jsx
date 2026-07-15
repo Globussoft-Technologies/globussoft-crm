@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, BarChart3, Star, Sparkles, AlertCircle } from 'lucide-react';
+import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, BarChart3, Star, Sparkles, AlertCircle, ExternalLink } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { formatPercent } from '../utils/percent';
 import { useNotify } from '../utils/notify';
@@ -38,16 +38,23 @@ export default function LandingPages() {
   const [genError, setGenError] = useState(null);
   const navigate = useNavigate();
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
+  const [copiedId, setCopiedId] = useState(null);
+  const [featuringId, setFeaturingId] = useState(null);
   const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
   // Filter by createdAt so users can scope to "pages created this month" etc.
   // The analytics (visits/leads/conv) shown on each card are still all-time;
   // a per-page analytics-window filter belongs on the page-detail screen.
-  const visiblePages = (rangeStart && rangeEnd)
+  const visiblePages = ((rangeStart && rangeEnd)
     ? pages.filter((p) => {
         const ts = new Date(p.createdAt).getTime();
         return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
       })
-    : pages;
+    : pages
+  ).slice().sort((a, b) => {
+    // Pin: featured+published always first, then published, then drafts
+    const rank = (p) => (p.isFeatured && p.status === 'PUBLISHED') ? 0 : p.status === 'PUBLISHED' ? 1 : 2;
+    return rank(a) - rank(b);
+  });
 
   const loadPages = () => {
     setLoading(true);
@@ -139,21 +146,19 @@ export default function LandingPages() {
   };
 
   const handlePublish = async (id, action) => {
-    // Single-page-live workflow (post-merge): publishing also features
-    // the page so /trips resolves to it. If another page in the same
-    // (tenant, subBrand) scope is currently featured, confirm with the
-    // operator first — that page will be silently demoted by the
-    // backend's transactional swap. Skip the confirm on unpublish.
+    // Hard-block: only one page can be live at a time.
+    // If another page is already PUBLISHED, block publish entirely —
+    // the admin must unpublish the live page first.
     if (action === 'publish') {
       const target = pages.find((p) => p.id === id);
       const currentLive = pages.find(
-        (p) => p.isFeatured && p.id !== id && (p.subBrand ?? null) === (target?.subBrand ?? null),
+        (p) => p.status === 'PUBLISHED' && p.id !== id,
       );
       if (currentLive) {
-        const ok = await notify.confirm(
-          `"${currentLive.title}" is currently live at /trips. Publishing "${target?.title || 'this page'}" will replace it.\n\nProceed?`,
+        notify.error(
+          `"${currentLive.title}" is currently live. Unpublish it before publishing "${target?.title || 'this page'}". You can save this as a draft in the meantime.`,
         );
-        if (!ok) return;
+        return;
       }
     }
     try {
@@ -183,11 +188,30 @@ export default function LandingPages() {
     loadPages();
   };
 
-  // handleFeature / handleUnfeature removed. The /publish endpoint now
-  // also features the page (and the /unpublish endpoint already
-  // un-features), so the Feature/Unfeature buttons collapsed into the
-  // single Publish/Unpublish button. See handlePublish above for the
-  // sibling-swap confirm.
+  const handleCopyUrl = (page) => {
+    const url = `${window.location.origin}/trips`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedId(page.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    });
+  };
+
+  const handleSetFeatured = async (page) => {
+    if (featuringId) return;
+    setFeaturingId(page.id);
+    try {
+      if (page.isFeatured) {
+        await fetchApi(`/api/landing-pages/${page.id}/unfeature`, { method: 'POST' });
+      } else {
+        await fetchApi(`/api/landing-pages/${page.id}/feature`, { method: 'POST' });
+      }
+      loadPages();
+    } catch (err) {
+      notify.error(err?.message || 'Failed to update featured status.');
+    } finally {
+      setFeaturingId(null);
+    }
+  };
 
   // PR-B — AI Generate flow. Posts to /generate-from-destination with
   // autoCreate=true so the backend creates the DRAFT row + returns its
@@ -337,7 +361,14 @@ export default function LandingPages() {
             // an integer 0 fallback that rendered as bare "0%".
             const convRate = page.visits > 0 ? (page.submissions / page.visits) * 100 : 0;
             return (
-              <div key={page.id} className="card" style={{ padding: '1.5rem' }}>
+              <div key={page.id} className="card" style={{ padding: '1.5rem', ...(page.isFeatured && page.status === 'PUBLISHED' ? { border: '1.5px solid rgba(200,154,78,0.45)', boxShadow: '0 0 0 3px rgba(200,154,78,0.08)' } : {}) }}>
+                {/* Pinned banner */}
+                {page.isFeatured && page.status === 'PUBLISHED' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.7rem', fontWeight: 700, color: '#b8893b', marginBottom: '0.6rem', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M16 3a1 1 0 0 1 .7 1.7l-1.4 1.4 1 5-4.3 2.5V20l-1 1-1-1v-6.4L5.7 11.1l1-5L5.3 4.7A1 1 0 0 1 7 3.3L8.4 4.7A3 3 0 0 1 12 4a3 3 0 0 1 3.6.7L17 3.3A1 1 0 0 1 16 3z"/></svg>
+                    Pinned · Active Trip
+                  </div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', gap: '0.5rem' }}>
                   <h3 style={{ fontWeight: '600', fontSize: '1.1rem', flex: 1 }}>{page.title}</h3>
                   <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -395,20 +426,67 @@ export default function LandingPages() {
                       covers both make-it-live and put-it-on-/trips in
                       lockstep — matching the operator's actual
                       single-page-live workflow. */}
-                  <button
-                    onClick={() => handlePublish(page.id, page.status === 'PUBLISHED' ? 'unpublish' : 'publish')}
-                    title={page.status === 'PUBLISHED' ? 'Take this page down — /trips will no longer serve it' : 'Publish this page and make it live at /trips'}
-                    style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: page.status === 'PUBLISHED' ? '#f59e0b' : '#10b981', cursor: 'pointer' }}
-                  >
-                    <Globe size={13} /> {page.status === 'PUBLISHED' ? 'Unpublish' : 'Publish'}
-                  </button>
-                  <button onClick={() => handleDuplicate(page.id)} style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                  {(() => {
+                    const anotherLive = page.status !== 'PUBLISHED' && pages.some(p => p.status === 'PUBLISHED' && p.id !== page.id);
+                    const liveTitle = anotherLive ? (pages.find(p => p.status === 'PUBLISHED' && p.id !== page.id)?.title || 'Another page') : null;
+                    return (
+                      <button
+                        onClick={() => handlePublish(page.id, page.status === 'PUBLISHED' ? 'unpublish' : 'publish')}
+                        disabled={anotherLive}
+                        title={
+                          page.status === 'PUBLISHED'
+                            ? 'Take this page down — /trips will no longer serve it'
+                            : anotherLive
+                              ? `"${liveTitle}" is currently live. Unpublish it first.`
+                              : 'Publish this page and make it live at /trips'
+                        }
+                        style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: page.status === 'PUBLISHED' ? '#f59e0b' : anotherLive ? 'var(--text-secondary)' : '#10b981', cursor: anotherLive ? 'not-allowed' : 'pointer', opacity: anotherLive ? 0.5 : 1 }}
+                      >
+                        <Globe size={13} /> {page.status === 'PUBLISHED' ? 'Unpublish' : 'Publish'}
+                      </button>
+                    );
+                  })()}
+                  <button onClick={() => handleDuplicate(page.id)} title="Duplicate" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
                     <Copy size={13} />
                   </button>
-                  <button onClick={() => handleDelete(page.id)} style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: '#ef4444', cursor: 'pointer' }}>
+                  <button onClick={() => handleDelete(page.id)} title="Delete" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: '#ef4444', cursor: 'pointer' }}>
                     <Trash2 size={13} />
                   </button>
                 </div>
+
+                {/* Public link share panel — only for published pages */}
+                {page.status === 'PUBLISHED' && (
+                  <div style={{ marginTop: '1rem', paddingTop: '0.9rem', borderTop: '1px solid var(--border-color)' }}>
+                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.45rem' }}>
+                      Public Link
+                    </div>
+                    {/* URL + copy + open */}
+                    <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.6rem' }}>
+                      <input
+                        readOnly
+                        value={`${window.location.origin}/trips`}
+                        onClick={e => e.target.select()}
+                        style={{ flex: 1, fontSize: '0.72rem', padding: '5px 8px', borderRadius: '5px', border: '1px solid var(--border-color)', background: 'var(--subtle-bg)', color: 'var(--text-primary)', minWidth: 0, cursor: 'text' }}
+                      />
+                      <button
+                        onClick={() => handleCopyUrl(page)}
+                        title="Copy public URL"
+                        style={{ padding: '5px 10px', borderRadius: '5px', border: '1px solid var(--border-color)', background: copiedId === page.id ? '#10b981' : 'none', color: copiedId === page.id ? '#fff' : 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px', fontSize: '0.72rem', fontWeight: 600, flexShrink: 0, transition: 'background 0.2s, color 0.2s' }}
+                      >
+                        <Copy size={11} /> {copiedId === page.id ? 'Copied!' : 'Copy'}
+                      </button>
+                      <a
+                        href={`${window.location.origin}/trips`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Open public page in new tab"
+                        style={{ padding: '5px 8px', borderRadius: '5px', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', textDecoration: 'none', flexShrink: 0 }}
+                      >
+                        <ExternalLink size={12} />
+                      </a>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}

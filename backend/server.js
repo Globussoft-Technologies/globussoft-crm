@@ -1455,11 +1455,11 @@ app.get("/trips", async (req, res, next) => {
       return next();
     }
 
-    await prismaClient.landingPage.update({
+    prismaClient.landingPage.update({
       where: { id: page.id },
       data: { visits: { increment: 1 } },
-    });
-    await prismaClient.landingPageAnalytics.create({
+    }).catch((e) => console.warn("[trips] visit increment skipped:", e.message));
+    prismaClient.landingPageAnalytics.create({
       data: {
         landingPageId: page.id,
         eventType: "VISIT",
@@ -1468,30 +1468,24 @@ app.get("/trips", async (req, res, next) => {
         referrer: req.headers["referer"],
         tenantId: page.tenantId || 1,
       },
-    });
-
+    }).catch((e) => console.warn("[trips] analytics write skipped:", e.message));
+    const { renderPage } = require("./services/landingPageRenderer");
     const html = renderPage(page);
-    res.set("Content-Type", "text/html");
-    if (page && page.templateType === "wanderlux-v1") {
-      res.set(
-        "Content-Security-Policy",
-        [
-          "default-src 'self'",
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net",
-          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
-          "font-src 'self' data: https://fonts.gstatic.com",
-          "img-src 'self' data: blob: https:",
-          "media-src 'self' https: blob:",
-          "connect-src 'self' https://image.pollinations.ai https://unpkg.com",
-          "frame-src 'self' https://*.wistia.net https://*.wistia.com https://fast.wistia.net https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.loom.com",
-          "frame-ancestors 'none'",
-          "base-uri 'self'",
-          "object-src 'none'",
-        ].join("; "),
-      );
-      res.removeHeader("Content-Security-Policy-Report-Only");
+    if (page.templateType === "wanderlux-v1") {
+      res.set("Content-Security-Policy", [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
+        "font-src 'self' data: https://fonts.gstatic.com",
+        "img-src 'self' data: blob: https:",
+        "media-src 'self' https: blob:",
+        "connect-src 'self' https://image.pollinations.ai",
+        "frame-src 'self' https://www.youtube.com https://player.vimeo.com https://fast.wistia.net https://*.wistia.com",
+        "object-src 'none'",
+      ].join("; "));
     }
-    res.send(html);
+    res.set("Content-Type", "text/html");
+    return res.send(html);
   } catch (err) {
     console.error("[Trips] Render error:", err);
     res.status(500).send("<h1>Server error</h1>");

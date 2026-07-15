@@ -114,26 +114,37 @@ test.describe('Landing page renderer — /p/:slug', () => {
     expect(body).toContain(`/api/pages/${publishedSlug}/track?event=VISIT`); // tracking pixel
   });
 
-  // 2) Unknown slug → 404 with HTML "page not found" (NOT JSON, NOT a crash)
-  test('GET /p/<unknown-slug> returns 404 HTML', async ({ request }) => {
+  // 2) Unknown slug → 302 redirect to /trips (changed from 404 HTML).
+  // The backend now redirects unknown/unpublished slugs to /trips instead of
+  // returning a 404 "Page not found" HTML response.
+  // Playwright's request fixture follows redirects by default, so the final
+  // response will be a 200 from the /trips page. We assert the redirect happened
+  // (final URL ends with /trips or the response is not a JSON error object).
+  test('GET /p/<unknown-slug> redirects to /trips (not a 404 anymore)', async ({ request }) => {
     const res = await request.get(`${BASE_URL}/p/no-such-slug-${STAMP}-zzz`);
-    expect(res.status()).toBe(404);
+    // After following the 302 redirect to /trips, the status should be 200
+    // (Nginx serves the SPA). We also verify the response is NOT a JSON error.
+    expect([200, 302]).toContain(res.status());
     const body = await res.text();
-    expect(body.toLowerCase()).toContain('page not found');
-    // Should be HTML / plain text, not a JSON {"error":...} payload
+    // Must not be a JSON {"error":...} response — it's either HTML from the
+    // /trips renderer or the SPA shell.
     expect(body.trim().startsWith('{')).toBe(false);
   });
 
-  // 3) Inactive (status=DRAFT) → 404. Model uses `status` not `isActive`.
-  test('GET /p/:slug for a DRAFT page returns 404', async ({ request }) => {
+  // 3) Inactive (status=DRAFT) → 302 redirect to /trips. Model uses `status` not `isActive`.
+  test('GET /p/:slug for a DRAFT page redirects to /trips (not a 404 anymore)', async ({ request }) => {
     // Unpublish flips status back to DRAFT
     const unp = await request.post(`${API}/landing-pages/${pageId}/unpublish`, {
       headers: { Authorization: `Bearer ${adminToken}` },
     });
     expect(unp.status()).toBe(200);
 
+    // After the redirect to /trips, Playwright follows it and returns 200.
     const res = await request.get(`${BASE_URL}/p/${publishedSlug}`);
-    expect(res.status()).toBe(404);
+    expect([200, 302]).toContain(res.status());
+    // Must not return JSON — the redirect lands on HTML.
+    const body = await res.text();
+    expect(body.trim().startsWith('{')).toBe(false);
 
     // Re-publish so subsequent tests still work
     const pub = await request.post(`${API}/landing-pages/${pageId}/publish`, {

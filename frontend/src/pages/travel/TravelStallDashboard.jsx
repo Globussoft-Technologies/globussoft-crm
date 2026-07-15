@@ -43,20 +43,6 @@ export default function TravelStallDashboard() {
             {user?.name || user?.email ? ` · ${user.name || user.email}` : ""}
           </p>
         </div>
-        <div
-          style={{
-            display: "inline-block",
-            padding: "0.25rem 0.75rem",
-            borderRadius: 999,
-            background: "rgba(255, 200, 100, 0.12)",
-            border: "1px solid rgba(255, 200, 100, 0.25)",
-            color: "var(--text-secondary)",
-            fontSize: 12,
-            letterSpacing: 0.3,
-          }}
-        >
-          Phase 2 — TS21 scaffold
-        </div>
       </div>
 
       <p style={{ color: "var(--text-secondary)", marginTop: 16, marginBottom: 0, fontSize: 14, lineHeight: 1.5 }}>

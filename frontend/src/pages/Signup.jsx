@@ -2,13 +2,14 @@ import React, { useState, useContext } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { AuthContext } from '../App';
 import PasswordInput from '../components/PasswordInput';
-import EmailOtpField from '../components/EmailOtpField';
+import ContactVerificationField from '../components/ContactVerificationField';
 
 const Signup = () => {
   const [name, setName] = useState('');
   const [organizationName, setOrganizationName] = useState('');
-  const [email, setEmail] = useState('');
-  const [emailVerificationToken, setEmailVerificationToken] = useState(null);
+  const [verifiedContact, setVerifiedContact] = useState(null); // { type: 'email'|'phone', value }
+  const [verificationToken, setVerificationToken] = useState(null);
+  const [accountEmail, setAccountEmail] = useState(''); // only shown when phone verification is used
   const [password, setPassword] = useState('');
   const [vertical, setVertical] = useState('generic');
   const [error, setError] = useState('');
@@ -16,17 +17,45 @@ const Signup = () => {
   const { setUser, setToken, setTenant } = useContext(AuthContext);
   const navigate = useNavigate();
 
+  const isPhoneVerified = verifiedContact?.type === 'phone';
+
   const handleSignup = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
     try {
-      // Create tenant + user via register endpoint
+      // Determine the email for the account. When email verification was used
+      // the verified contact IS the email. When phone verification was used the
+      // user supplies a separate account email via the extra input below.
+      const email = verifiedContact?.type === 'email'
+        ? verifiedContact.value
+        : accountEmail.trim();
+
+      if (!email || !email.includes('@')) {
+        setError('A valid email address is required for your account.');
+        setLoading(false);
+        return;
+      }
+
+      const payload = {
+        name,
+        email,
+        password,
+        organizationName,
+        vertical,
+        verificationToken,
+      };
+      // Include phone when that was the verified contact so the backend can
+      // validate the phone-verified token against it.
+      if (verifiedContact?.type === 'phone') {
+        payload.phone = verifiedContact.value;
+      }
+
       const response = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password, organizationName, vertical, verificationToken: emailVerificationToken })
+        body: JSON.stringify(payload)
       });
 
       const data = await response.json();
@@ -131,16 +160,30 @@ const Signup = () => {
             />
           </div>
           <div style={{ marginBottom: '1rem' }}>
-            <EmailOtpField
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+            <ContactVerificationField
               purpose="signup"
-              onVerifiedChange={setEmailVerificationToken}
-              label="Email Address"
-              placeholder="name@company.com"
+              onVerifiedChange={setVerificationToken}
+              onContactChange={setVerifiedContact}
               inputClassName="input-field"
             />
           </div>
+          {isPhoneVerified && (
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Account Email</label>
+              <input
+                type="email"
+                className="input-field"
+                placeholder="name@company.com"
+                value={accountEmail}
+                onChange={(e) => setAccountEmail(e.target.value)}
+                required
+                autoComplete="email"
+              />
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+                Your email is used for account login and notifications.
+              </p>
+            </div>
+          )}
           <div style={{ marginBottom: '1.5rem' }}>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Secure Password</label>
             <PasswordInput
@@ -152,8 +195,8 @@ const Signup = () => {
               autoComplete="new-password"
             />
           </div>
-          <button type="submit" className="btn-primary" style={{ width: '100%', opacity: !emailVerificationToken ? 0.6 : 1 }} disabled={loading || !emailVerificationToken}>
-            {loading ? 'Creating organization...' : !emailVerificationToken ? 'Verify your email to continue' : 'Create Organization'}
+          <button type="submit" className="btn-primary" style={{ width: '100%', opacity: !verificationToken ? 0.6 : 1 }} disabled={loading || !verificationToken}>
+            {loading ? 'Creating organization...' : !verificationToken ? 'Verify your email or phone to continue' : 'Create Organization'}
           </button>
         </form>
 

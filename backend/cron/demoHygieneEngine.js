@@ -89,7 +89,7 @@
  *                            for one-shot cleanup without waiting for
  *                            the next tick.
  */
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 
 // Canonical QA / pen-test markers. Anchor at start-of-string only — these
@@ -446,12 +446,12 @@ function initDemoHygieneCron() {
   }
   // Hourly at :17. Off-the-hour timing keeps it out of the default
   // top-of-hour cron storm (backup, retention, etc. all schedule on :00).
-  cron.schedule("17 * * * *", () => {
-    runDemoHygiene().catch((err) => {
-      console.error("[demoHygiene] cron tick crashed:", err && err.message ? err.message : err);
-    });
-  });
-  console.log("[demoHygiene] Cron scheduled: hourly at :17");
+  cronRegistry.register({
+    name: "demoHygieneEngine",
+    description: "Hourly purge of QA/pen-test data pollution from the demo box",
+    defaultSchedule: "17 * * * *",
+    tickFn: runDemoHygiene,
+  }).catch((e) => console.error("[demoHygiene] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

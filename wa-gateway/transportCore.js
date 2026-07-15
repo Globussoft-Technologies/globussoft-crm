@@ -176,6 +176,8 @@ async function connect(tenantId, { reset = false } = {}) {
   sessions.set(tenantId, s);
   await emitStateChange(tenantId, getState(tenantId));
 
+  // Declared outside the try so the catch can reap a half-initialized client.
+  let client = null;
   try {
     const { Client, LocalAuth } = require("whatsapp-web.js");
     const chromium = require("puppeteer");
@@ -183,10 +185,10 @@ async function connect(tenantId, { reset = false } = {}) {
 
     const browser = await chromium.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", process.env.WHATSAPP_WEB_CHROME_PATH ? "--executable-path=" + process.env.WHATSAPP_WEB_CHROME_PATH : ""].filter(Boolean),
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", process.env.WHATSAPP_WEB_CHROME_PATH ? "--executable-path=" + process.env.WHATSAPP_WEB_CHROME_PATH : ""].filter(Boolean),
     });
 
-    const client = new Client({
+    client = new Client({
       authStrategy: new LocalAuth({ clientId: `travel-${tenantId}`, dataPath: AUTH_DIR }),
       puppeteer: { browser },
       webVersionCache: { type: "remote", remotePath: "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html" },
@@ -208,6 +210,14 @@ async function connect(tenantId, { reset = false } = {}) {
     client.on("auth_failure", async (msg) => {
       s.state = STATE.AUTH_FAILURE;
       s.lastError = msg || "auth failed";
+      // The browser behind a failed auth can never recover — reap it or it
+      // sits as a ~1 GB orphan (whatsapp-web.js does not close it for us).
+      const dead = s.client || client;
+      s.client = null;
+      if (dead && !dead.__tcDestroyed) {
+        dead.__tcDestroyed = true;
+        try { await dead.destroy(); } catch (e) { console.error(`[transportCore] tenant ${tenantId} auth_failure destroy warn: ${e.message}`); }
+      }
       await emitStateChange(tenantId, getState(tenantId));
     });
 
@@ -221,6 +231,10 @@ async function connect(tenantId, { reset = false } = {}) {
     });
 
     client.on("disconnected", async (reason) => {
+      // Destroy the browser on EVERY disconnect — logout, transient drop, or
+      // force-unlink. whatsapp-web.js leaves the Chromium process alive after
+      // the session dies; without this each drop orphans ~1 GB of RAM.
+      const dead = s.client || client;
       s.state = STATE.DISCONNECTED;
       s.phone = null;
       s.wid = null;
@@ -228,6 +242,10 @@ async function connect(tenantId, { reset = false } = {}) {
       s.qr = null;
       s.qrDataUrl = null;
       s.lastError = reason || "disconnected";
+      if (dead && !dead.__tcDestroyed) {
+        dead.__tcDestroyed = true;
+        try { await dead.destroy(); } catch (e) { console.error(`[transportCore] tenant ${tenantId} disconnect destroy warn: ${e.message}`); }
+      }
       await emitStateChange(tenantId, getState(tenantId));
     });
 
@@ -247,6 +265,11 @@ async function connect(tenantId, { reset = false } = {}) {
   } catch (e) {
     s.state = STATE.AUTH_FAILURE;
     s.lastError = e.message || "initialization failed";
+    // Reap a half-initialized client so its browser doesn't linger.
+    if (client && !client.__tcDestroyed) {
+      client.__tcDestroyed = true;
+      try { await client.destroy(); } catch { /* best-effort */ }
+    }
     await emitStateChange(tenantId, getState(tenantId));
     return getState(tenantId);
   }
@@ -255,10 +278,14 @@ async function connect(tenantId, { reset = false } = {}) {
 async function disconnect(tenantId, { logout = false } = {}) {
   tenantId = Number(tenantId);
   const s = getSession(tenantId);
-  if (s && s.client) {
+  if (!s) return getState(tenantId); // unknown / already-gone tenant — no-op (was a TypeError)
+  const live = s.client;
+  s.client = null;
+  if (live && !live.__tcDestroyed) {
+    live.__tcDestroyed = true;
     try {
-      if (logout) await s.client.logout();
-      await s.client.destroy();
+      if (logout) await live.logout();
+      await live.destroy();
     } catch (e) {
       console.error(`[transportCore] disconnect error (non-fatal): ${e.message}`);
     }

@@ -52,6 +52,15 @@ const LeadCapture = lazy(() => import("./pages/settings/LeadCapture"));
 const UserSettings = lazy(() => import("./pages/UserSettings"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
+// Super Admin Portal — fully separate auth system (env-based credentials,
+// no User/tenant table). See middleware/superAdminAuth.js on the backend
+// for the full contract. SuperAdminLayout manages its own auth redirect
+// (checks localStorage superAdminToken) rather than the app's AuthContext.
+const SuperAdminLogin = lazy(() => import("./pages/superadmin/SuperAdminLogin"));
+const SuperAdminLayout = lazy(() => import("./pages/superadmin/SuperAdminLayout"));
+const SuperAdminCronMaintenance = lazy(() => import("./pages/superadmin/SuperAdminCronMaintenance"));
+const SuperAdminCronAnalytics = lazy(() => import("./pages/superadmin/SuperAdminCronAnalytics"));
+const SuperAdminApiAnalytics = lazy(() => import("./pages/superadmin/SuperAdminApiAnalytics"));
 const TravelCustomerPortal = lazy(() => import("./pages/travel/TravelCustomerPortal"));
 const PublicTripMicrosite = lazy(() => import("./pages/travel/PublicTripMicrosite"));
 // Public itinerary share page (no auth) — the advisor's "Share link" opens
@@ -990,6 +999,16 @@ export default function App() {
                   <Route path="/privacy-policy" element={<LegalPage page="privacy-policy" />} />
                   <Route path="/deleted-account-policy" element={<LegalPage page="deleted-account-policy" />} />
                   <Route path="/portal" element={<Portal />} />
+                  {/* Super Admin Portal — deliberately outside the regular
+                      token/user/tenant auth gating above; it manages its own
+                      session via localStorage superAdminToken. */}
+                  <Route path="/super-admin/login" element={<SuperAdminLogin />} />
+                  <Route path="/super-admin" element={<SuperAdminLayout />}>
+                    <Route index element={<Navigate to="/super-admin/cron" replace />} />
+                    <Route path="cron" element={<SuperAdminCronMaintenance />} />
+                    <Route path="cron-analytics" element={<SuperAdminCronAnalytics />} />
+                    <Route path="api-analytics" element={<SuperAdminApiAnalytics />} />
+                  </Route>
                   {/* Travel customer portal — end-user (Contact) login + dashboard
                       + DigiLocker / Aadhaar verification (PRD §4.5 extended).
                       Distinct from /portal (Knowledge Base) + /wellness/portal

@@ -225,21 +225,6 @@ export default function Landing() {
               Login
             </Link>
             <Link
-              to="/trips"
-              style={{
-                padding: "8px 20px",
-                fontSize: "0.85rem",
-                borderRadius: 10,
-                textDecoration: "none",
-                background: "linear-gradient(135deg, #b91c1c, #991b1b)",
-                color: "#fff",
-                fontWeight: 600,
-                letterSpacing: "0.01em",
-              }}
-            >
-              Discover Trips
-            </Link>
-            <Link
               to="/get-started"
               style={{
                 padding: "8px 20px",

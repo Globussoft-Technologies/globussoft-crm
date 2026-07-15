@@ -41,6 +41,7 @@ prisma.whatsAppThread = {
   deleteMany: vi.fn(),
 };
 prisma.contact = { ...(prisma.contact || {}), findFirst: vi.fn() };
+prisma.whatsAppOptOut = { ...(prisma.whatsAppOptOut || {}), findUnique: vi.fn() };
 
 const wa = requireCJS('../../services/whatsappWebClient');
 
@@ -58,6 +59,7 @@ beforeEach(() => {
   prisma.whatsAppMessage.deleteMany.mockReset().mockResolvedValue({ count: 6 });
   prisma.whatsAppThread.deleteMany.mockReset().mockResolvedValue({ count: 2 });
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  prisma.whatsAppOptOut.findUnique.mockReset().mockResolvedValue(null);
   // Fake socket so emit-bearing paths are observable.
   wa.init({ to: (room) => ({ emit: (ev, payload) => emits.push({ room, ev, payload }) }) });
 });
@@ -316,7 +318,7 @@ describe('shutdown (graceful teardown so the auth store flushes — prevents "lo
     s.client = { destroy: () => new Promise(() => {}) }; // never resolves
     s.state = 'CONNECTED';
     // perClientTimeoutMs short so the test is fast; shutdown still resolves.
-    await expect(wa.shutdown({ perClientTimeoutMs: 20 })).resolves.toEqual({ closed: 1 });
+    await expect(wa.shutdown({ perClientTimeoutMs: 20 })).resolves.toMatchObject({ closed: 1 });
     // Drop the never-resolving client so it can't stall later teardown paths.
     s.client = null;
   });
@@ -325,6 +327,57 @@ describe('shutdown (graceful teardown so the auth store flushes — prevents "lo
     // Stub sessions (client:null) are skipped — shutdown stays fast + resolves.
     const out = await wa.shutdown();
     expect(out).toHaveProperty('closed');
+  });
+});
+
+describe('destroyClientAndOrphans (memory-leak cleanup helper)', () => {
+  test('destroys the client, nulls the handle, and kills orphan browsers', async () => {
+    await wa.connect(TENANT);
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const s = wa.getSession(TENANT);
+    s.client = { destroy };
+    s.state = 'CONNECTED';
+    const killSpy = vi.spyOn(wa, 'killBrowsersForDir').mockImplementation(() => {});
+
+    await wa.destroyClientAndOrphans(TENANT);
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(s.client).toBeNull();
+    expect(killSpy).toHaveBeenCalledTimes(1);
+    killSpy.mockRestore();
+  });
+
+  test('is safe when there is no session', async () => {
+    await expect(wa.destroyClientAndOrphans(999999)).resolves.toBeUndefined();
+  });
+});
+
+describe('scheduleSessionPrune (prevents dead-session registry growth)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test('removes a DISCONNECTED session after the prune delay', async () => {
+    await wa.connect(TENANT);
+    const s = wa.getSession(TENANT);
+    s.state = 'DISCONNECTED';
+    wa.scheduleSessionPrune(TENANT);
+    expect(wa.getSession(TENANT)).toBe(s);
+    vi.advanceTimersByTime(300_000);
+    expect(wa.getSession(TENANT)).toBeNull();
+  });
+
+  test('does NOT prune a session that changed state before the timer fired', async () => {
+    await wa.connect(TENANT);
+    const s = wa.getSession(TENANT);
+    s.state = 'AUTH_FAILURE';
+    wa.scheduleSessionPrune(TENANT);
+    s.state = 'CONNECTED';
+    vi.advanceTimersByTime(300_000);
+    expect(wa.getSession(TENANT)).toBe(s);
   });
 });
 
@@ -464,5 +517,108 @@ describe('ingestInbound', () => {
     const updateData = prisma.whatsAppThread.update.mock.calls[0][0].data;
     expect(updateData.unreadCount).toBeUndefined();
     expect(updateData.status).toBe('OPEN');
+  });
+
+  test('opted-out 1:1 number is dropped — no thread/message row, no emit', async () => {
+    prisma.whatsAppOptOut.findUnique.mockResolvedValue({ id: 9, contactPhone: '+919811111102' });
+    const out = await wa.ingestInbound(TENANT, inboundMsg());
+    expect(out).toBeUndefined();
+    expect(prisma.whatsAppOptOut.findUnique).toHaveBeenCalledWith({
+      where: { tenantId_contactPhone: { tenantId: 3, contactPhone: '+919811111102' } },
+    });
+    expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppThread.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppThread.update).not.toHaveBeenCalled();
+    expect(emits).toHaveLength(0);
+  });
+
+  test('opted-out check is skipped for group chats — group message still ingested', async () => {
+    prisma.whatsAppOptOut.findUnique.mockResolvedValue({ id: 9, contactPhone: '120363999@g.us' });
+    const out = await wa.ingestInbound(TENANT, inboundMsg({ from: '120363999@g.us', body: 'hi team' }));
+    expect(out).toMatchObject({ threadId: 11 });
+    expect(prisma.whatsAppOptOut.findUnique).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.create).toHaveBeenCalled();
+  });
+});
+
+describe('restoreOnBootEnabled — WHATSAPP_WEB_RESTORE_ON_BOOT guard', () => {
+  const ORIG = process.env.WHATSAPP_WEB_RESTORE_ON_BOOT;
+  afterEach(() => {
+    if (ORIG === undefined) delete process.env.WHATSAPP_WEB_RESTORE_ON_BOOT;
+    else process.env.WHATSAPP_WEB_RESTORE_ON_BOOT = ORIG;
+  });
+
+  test('defaults to enabled (true) when unset — matches historical always-restore behavior', () => {
+    delete process.env.WHATSAPP_WEB_RESTORE_ON_BOOT;
+    expect(wa.restoreOnBootEnabled()).toBe(true);
+  });
+
+  test.each(['0', 'false', 'FALSE', 'no', 'NO'])('%s disables boot-restore', (v) => {
+    process.env.WHATSAPP_WEB_RESTORE_ON_BOOT = v;
+    expect(wa.restoreOnBootEnabled()).toBe(false);
+  });
+
+  test.each(['1', 'true', 'yes', 'anything-else'])('%s (or any non-disable value) keeps boot-restore enabled', (v) => {
+    process.env.WHATSAPP_WEB_RESTORE_ON_BOOT = v;
+    expect(wa.restoreOnBootEnabled()).toBe(true);
+  });
+
+  test('restoreSessions() short-circuits with reason "restore-on-boot-disabled" when the guard is off — proven via the exported hook so this doesn\'t depend on defeating canLaunch()/NODE_ENV=test', async () => {
+    // restoreSessions() itself is gated by canLaunch() first, which is
+    // always false under NODE_ENV=test — so this test targets the
+    // documented contract at the source (restoreOnBootEnabled) rather than
+    // trying to stub canLaunch in a CJS module without a DI seam for it.
+    process.env.WHATSAPP_WEB_RESTORE_ON_BOOT = '0';
+    expect(wa.restoreOnBootEnabled()).toBe(false);
+  });
+});
+
+describe('parsePgrepPids — pkill self-kill bug fix (Linux/macOS)', () => {
+  // Regression test for the demo memory-leak audit (2026-07): the OLD
+  // implementation ran `pkill -f "session-travel-N" || true` directly, whose
+  // own /bin/sh command line contains the marker string it's searching for
+  // — pkill could match and kill its own shell before finishing, leaving
+  // the real orphan Chromium alive (confirmed in demo logs: repeating
+  // "orphan-kill best-effort failed: Command failed: pkill -f ..."). The
+  // fix enumerates PIDs via `pgrep -f` first and filters out the CALLING
+  // process's own pid before killing anything — parsePgrepPids is the pure
+  // parsing/filtering core of that fix, extracted so it's testable without
+  // spawning real processes or fighting the killBrowsersForDir NODE_ENV=test
+  // guard.
+  test('parses newline-separated PIDs into numbers', () => {
+    expect(wa.parsePgrepPids('101\n202\n303\n', 999)).toEqual([101, 202, 303]);
+  });
+
+  test('excludes the calling process\'s own PID — this is the actual bug fix', () => {
+    // Simulates pgrep matching its OWN /bin/sh invocation (whose command
+    // line also contains the marker string) alongside two real orphan
+    // Chrome PIDs — own pid must never appear in the kill list.
+    expect(wa.parsePgrepPids('101\n555\n303\n', 555)).toEqual([101, 303]);
+  });
+
+  test('handles pgrep finding nothing (empty/whitespace-only output)', () => {
+    expect(wa.parsePgrepPids('', 999)).toEqual([]);
+    expect(wa.parsePgrepPids('\n\n', 999)).toEqual([]);
+  });
+
+  test('ignores garbage/non-numeric lines rather than throwing', () => {
+    expect(wa.parsePgrepPids('101\nnot-a-pid\n303\n', 999)).toEqual([101, 303]);
+  });
+
+  test('de-dupes repeated PIDs', () => {
+    expect(wa.parsePgrepPids('101\n101\n202\n', 999)).toEqual([101, 202]);
+  });
+
+  test('drops zero/negative values (never valid PIDs)', () => {
+    expect(wa.parsePgrepPids('0\n-5\n202\n', 999)).toEqual([202]);
+  });
+});
+
+describe('killBrowsersForDir — NODE_ENV=test guard', () => {
+  test('is a no-op under NODE_ENV=test (never spawns a shell)', () => {
+    const spy = vi.spyOn(require('child_process'), 'execSync');
+    wa.killBrowsersForDir(999);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

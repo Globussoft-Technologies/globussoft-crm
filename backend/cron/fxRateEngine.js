@@ -23,7 +23,7 @@
  *   5. initCron() is idempotent — DISABLE_CRONS=1 path skips schedule.
  */
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const realPrisma = require("../lib/prisma");
 const fxRates = require("../lib/fxRates");
 
@@ -66,21 +66,22 @@ async function tick({
   return { fetched, errors };
 }
 
+async function loggedTick() {
+  const r = await tick();
+  if (r.fetched > 0 || r.errors.length > 0) {
+    console.log("[fxRateEngine]", r);
+  }
+  return r;
+}
+
 function initCron() {
   if (process.env.DISABLE_CRONS === "1") return;
-  cron.schedule(
-    "0 * * * *",
-    () => {
-      tick()
-        .then((r) => {
-          if (r.fetched > 0 || r.errors.length > 0) {
-            console.log("[fxRateEngine]", r);
-          }
-        })
-        .catch((e) => console.error("[fxRateEngine] fail:", e && e.message));
-    },
-  );
-  console.log("[fxRateEngine] cron initialized (hourly, top-of-the-hour UTC)");
+  cronRegistry.register({
+    name: "fxRateEngine",
+    description: "Hourly FxRate cache refresh from frankfurter.dev",
+    defaultSchedule: "0 * * * *",
+    tickFn: loggedTick,
+  }).catch((e) => console.error("[fxRateEngine] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

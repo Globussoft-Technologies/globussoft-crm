@@ -49,7 +49,6 @@ const express = require("express");
 const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
-const _cron = require("node-cron");
 const swaggerUi = require("swagger-ui-express");
 const YAML = require("yamljs");
 const rateLimit = require("express-rate-limit");
@@ -345,6 +344,27 @@ app.post(
   (req, res, next) => next(),
 );
 
+// Super Admin login — a single, extremely high-privilege account with no
+// account-lockout/2FA of its own, so brute-force protection matters even
+// more here than on the regular multi-user login. Tighter budget than the
+// app login (5/15min per IP is already tight; there's no legitimate-traffic
+// reason for a burst against this one specific account).
+const superAdminLoginIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  message: { error: "Too many Super Admin login attempts from this IP, please try again later." },
+  validate: { trustProxy: false, xForwardedForHeader: false },
+});
+app.post(
+  "/api/super-admin/auth/login",
+  superAdminLoginIpLimiter,
+  (req, res, next) => next(),
+);
+
 // #531 (HI-02 mitigation): per-IP and per-email rate limiting on
 // /api/auth/forgot-password. Mirrors the login limiter pattern. Without
 // these, an attacker can hammer the endpoint to enumerate valid emails
@@ -563,6 +583,13 @@ io.on("connection", (socket) => {
 
 // Import Enterprise Routes
 const authRoutes = require("./routes/auth");
+// Super Admin Portal — completely separate auth + module surface from the
+// rest of the app (see middleware/superAdminAuth.js for the contract).
+const superAdminAuthRoutes = require("./routes/super_admin_auth");
+const superAdminCronRoutes = require("./routes/super_admin_cron");
+const superAdminCronAnalyticsRoutes = require("./routes/super_admin_cron_analytics");
+const superAdminApiAnalyticsRoutes = require("./routes/super_admin_api_analytics");
+const { requireSuperAdmin } = require("./middleware/superAdminAuth");
 const rolesRoutes = require("./routes/roles");
 const widgetsRoutes = require("./routes/widgets");
 const pagesRoutes = require("./routes/pages");
@@ -819,7 +846,7 @@ const wellnessCsvRoutes = require("./routes/wellnessCsv");
 // Both routes are public on purpose — docs discoverability is the
 // whole point. The Nginx site config additionally proxies `/api-docs*`
 // to the backend (commit applied via scripts/apply-api-docs-nginx.py
-// closing #542).
+// closing #542). The button was removed from the Developer page UI.
 const swaggerDocument = YAML.load(path.join(__dirname, "swagger.yaml"));
 app.get("/api-docs/swagger.json", (req, res) => {
   res.json(swaggerDocument);
@@ -922,6 +949,13 @@ app.use("/api", (req, res, next) => {
     // Public landing-page submit + tracking pixels are referenced by
     // rendered pages as /api/pages/<slug>/submit and /api/pages/<slug>/track.
     "/pages/",
+    // Super Admin Portal — deliberately its OWN auth system (env-based
+    // credentials, no User/tenant table, dedicated JWT secret), so it must
+    // bypass the app's verifyToken guard entirely. Every actual route
+    // (except /super-admin/auth/login itself) is independently protected
+    // by requireSuperAdmin at the route level — same pattern as /portal/*
+    // above being globally open but individually gated by its own JWT.
+    "/super-admin",
   ];
   if (openPaths.some((p) => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
@@ -1038,6 +1072,13 @@ app.param("id", validateNumericId);
 
 // Map API Endpoints
 app.use("/api/auth", authRoutes);
+// Super Admin Portal — /login is open (checked inside the route itself);
+// every other /api/super-admin/* route is gated by requireSuperAdmin here
+// at the mount point, so no individual route file can forget the guard.
+app.use("/api/super-admin/auth", superAdminAuthRoutes);
+app.use("/api/super-admin/cron", requireSuperAdmin, superAdminCronRoutes);
+app.use("/api/super-admin/cron-analytics", requireSuperAdmin, superAdminCronAnalyticsRoutes);
+app.use("/api/super-admin/api-analytics", requireSuperAdmin, superAdminApiAnalyticsRoutes);
 app.use("/api/roles", rolesRoutes);
 // SPEC §C3 — unified /api/me + /api/permissions endpoints. Both come
 // from the same module so the SPEC-named endpoint surface is contiguous.
@@ -1414,11 +1455,11 @@ app.get("/trips", async (req, res, next) => {
       return next();
     }
 
-    await prismaClient.landingPage.update({
+    prismaClient.landingPage.update({
       where: { id: page.id },
       data: { visits: { increment: 1 } },
-    });
-    await prismaClient.landingPageAnalytics.create({
+    }).catch((e) => console.warn("[trips] visit increment skipped:", e.message));
+    prismaClient.landingPageAnalytics.create({
       data: {
         landingPageId: page.id,
         eventType: "VISIT",
@@ -1427,30 +1468,24 @@ app.get("/trips", async (req, res, next) => {
         referrer: req.headers["referer"],
         tenantId: page.tenantId || 1,
       },
-    });
-
+    }).catch((e) => console.warn("[trips] analytics write skipped:", e.message));
+    const { renderPage } = require("./services/landingPageRenderer");
     const html = renderPage(page);
-    res.set("Content-Type", "text/html");
-    if (page && page.templateType === "wanderlux-v1") {
-      res.set(
-        "Content-Security-Policy",
-        [
-          "default-src 'self'",
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net",
-          "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
-          "font-src 'self' data: https://fonts.gstatic.com",
-          "img-src 'self' data: blob: https:",
-          "media-src 'self' https: blob:",
-          "connect-src 'self' https://image.pollinations.ai https://unpkg.com",
-          "frame-src 'self' https://*.wistia.net https://*.wistia.com https://fast.wistia.net https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.loom.com",
-          "frame-ancestors 'none'",
-          "base-uri 'self'",
-          "object-src 'none'",
-        ].join("; "),
-      );
-      res.removeHeader("Content-Security-Policy-Report-Only");
+    if (page.templateType === "wanderlux-v1") {
+      res.set("Content-Security-Policy", [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
+        "font-src 'self' data: https://fonts.gstatic.com",
+        "img-src 'self' data: blob: https:",
+        "media-src 'self' https: blob:",
+        "connect-src 'self' https://image.pollinations.ai",
+        "frame-src 'self' https://www.youtube.com https://player.vimeo.com https://fast.wistia.net https://*.wistia.com",
+        "object-src 'none'",
+      ].join("; "));
     }
-    res.send(html);
+    res.set("Content-Type", "text/html");
+    return res.send(html);
   } catch (err) {
     console.error("[Trips] Render error:", err);
     res.status(500).send("<h1>Server error</h1>");
@@ -1934,6 +1969,16 @@ const _gracefulShutdown = (signal) => {
   // boot even though the phone still has the device linked. Best-effort + time-
   // boxed so a hung client can't block the rest of shutdown.
   Promise.resolve()
+    .then(() => {
+      // Kill in-flight brochure engine subprocesses FIRST — they're disposable
+      // (the operator can re-run), and their Chromes would otherwise survive
+      // the restart as orphans reparented to init.
+      try {
+        require("./services/brochureEngineBridge").shutdown();
+      } catch (e) {
+        console.warn("[shutdown] brochure bridge shutdown warn:", e && e.message);
+      }
+    })
     .then(() => require("./services/whatsappWebClient").shutdown())
     .catch((e) =>
       console.warn("[shutdown] whatsapp shutdown warn:", e && e.message),
@@ -2012,7 +2057,10 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initRecurringInvoiceCron } = require("./cron/recurringInvoiceEngine");
   initRecurringInvoiceCron(io);
 
-  // Initialize Marketplace Sync Engine (runs every 5 min)
+  // Marketplace Sync Engine — registers via cronRegistry with
+  // defaultEnabled:false (no tenant has an active MarketplaceConfig today,
+  // so it ships OFF by default). Now visible + one-click-enable from the
+  // Super Admin Cron Maintenance table instead of being invisible.
   const { initMarketplaceCron } = require("./cron/marketplaceEngine");
   initMarketplaceCron(io);
 
@@ -2215,21 +2263,11 @@ if (process.env.DISABLE_CRONS === "1") {
   // Iterates active tenants and emits a tiered reminder (T-7d / T-3d / T-1d / T-0)
   // for each one whose prior-month GSTR filing is approaching its deadline. Notify
   // half is a console-log stub today; real WhatsApp / email dispatch lands when
-  // Q9 creds drop. Respects DISABLE_CRONS=1 via the outer guard.
-  const {
-    runGstrFilingReminderEngine,
-  } = require("./cron/gstrFilingReminderEngine");
-  _cron.schedule("0 5 * * *", async () => {
-    try {
-      const result = await runGstrFilingReminderEngine();
-      console.log("[gstr-filing-reminder]", result);
-    } catch (e) {
-      console.error("[gstr-filing-reminder] cron failed:", e.message);
-    }
-  });
-  console.log(
-    "[gstr-filing-reminder] cron initialized (daily 05:00 UTC / 10:30 IST)",
-  );
+  // Q9 creds drop. Respects DISABLE_CRONS=1 via the outer guard. Now registers
+  // via cronRegistry (Super Admin Portal / Cron Maintenance) instead of a raw
+  // _cron.schedule() call, so it's manageable from the Super Admin UI too.
+  const { initCron: initGstrFilingReminderCron } = require("./cron/gstrFilingReminderEngine");
+  initGstrFilingReminderCron();
 
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
   const { initLowStockCron } = require("./cron/lowStockEngine");
@@ -2313,6 +2351,24 @@ if (process.env.DISABLE_CRONS === "1") {
   // Idempotent (status filter is the set-once gate).
   const { initWalletExpiryCron } = require("./cron/walletExpiryEngine");
   initWalletExpiryCron();
+
+  // Super Admin Portal / Cron Maintenance — purges CronExecutionLog rows
+  // past the configured retention window (daily 03:15, admin-configurable
+  // via PUT /api/super-admin/cron/settings/log-retention).
+  const { initCronLogRetentionCron } = require("./cron/cronLogRetentionEngine");
+  initCronLogRetentionCron();
+
+  // Super Admin Portal / API Analytics — purges LlmCallLog + ApiCallLog
+  // rows past the configured retention window (daily 03:20, admin-
+  // configurable via PUT /api/super-admin/api-analytics/settings/log-retention).
+  const { initApiCallLogRetentionCron } = require("./cron/apiCallLogRetentionEngine");
+  initApiCallLogRetentionCron();
+
+  // Super Admin Portal / Cron Maintenance — re-register any admin-created
+  // dynamic crons (isSystem:false) from CronConfig so they survive server
+  // restarts without requiring an admin to re-save each one.
+  const { loadDynamicCrons } = require("./lib/cronRegistry");
+  loadDynamicCrons().catch((e) => console.error("[server] loadDynamicCrons failed:", e.message));
 
   // Initialize Notification Rules Engine — event-driven notifications for
   // business events (SLA breaches, approvals, expenses, leave requests).

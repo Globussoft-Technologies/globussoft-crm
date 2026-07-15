@@ -621,6 +621,26 @@ router.get("/public/featured", async (req, res) => {
   }
 });
 
+// Returns rendered HTML of the featured published page. Used by TripsResolver
+// to write into document at /trips — no redirect, no proxy dependency needed.
+// Auth-exempt via the existing /landing-pages/public openPaths entry.
+router.get("/public/featured-html", async (req, res) => {
+  try {
+    const page = await prisma.landingPage.findFirst({
+      where: { isFeatured: true, status: "PUBLISHED" },
+      orderBy: { featuredAt: "desc" },
+    });
+    if (!page) return res.status(404).json({ error: "No featured page.", code: "NO_FEATURED_PAGE" });
+    const { renderPage } = require("../services/landingPageRenderer");
+    const html = renderPage(page);
+    res.set("Content-Type", "text/html");
+    return res.send(html);
+  } catch (err) {
+    console.error("[LandingPages] public/featured-html error:", err);
+    res.status(500).json({ error: "Failed to render featured page" });
+  }
+});
+
 // ── AI-powered destination landing page generator (PR-B) ─────────
 //
 // POST /api/landing-pages/generate-from-destination
@@ -2493,12 +2513,13 @@ publicRouter.all(
 publicRouter.get("/:slug", async (req, res) => {
   try {
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
-    if (!page || page.status !== "PUBLISHED") return res.status(404).send("<h1>Page not found</h1>");
+    if (!page) return res.status(404).send("<h1>Page not found</h1>");
+    if (page.status !== "PUBLISHED") return res.redirect(302, "/trips");
 
     await prisma.landingPage.update({ where: { id: page.id }, data: { visits: { increment: 1 } } });
-    await prisma.landingPageAnalytics.create({
+    prisma.landingPageAnalytics.create({
       data: { landingPageId: page.id, eventType: "VISIT", visitorIp: req.ip, userAgent: req.headers["user-agent"], referrer: req.headers["referer"], tenantId: page.tenantId || 1 },
-    });
+    }).catch((e) => console.warn("[LandingPage] analytics write skipped:", e.message));
 
     const html = renderPage(page);
     res.set("Content-Type", "text/html");

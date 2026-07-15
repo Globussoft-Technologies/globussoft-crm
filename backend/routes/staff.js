@@ -33,6 +33,17 @@ const {
 const VALID_ROLES = ["ADMIN", "MANAGER", "USER"];
 // Legacy whitelist — used only when the caller's tenant is non-wellness.
 // Wellness tenants consult the WellnessRoleType catalog instead.
+
+// Returns true when the tenant already has an ADMIN user (other than
+// the user identified by `excludeUserId`, so we don't block an admin
+// editing their own record). Used to enforce the one-admin-per-org rule
+// across create, role-update, and general-update endpoints.
+async function tenantHasAdmin(tenantId, excludeUserId = null) {
+  const where = { role: "ADMIN", tenantId };
+  if (excludeUserId) where.id = { not: excludeUserId };
+  const count = await prisma.user.count({ where });
+  return count > 0;
+}
 // PRD_WELLNESS_RBAC DD-5.1: "cashier" added as a valid POS sales role.
 const LEGACY_WELLNESS_ROLES = [
   "doctor",
@@ -383,6 +394,14 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
           error: `Invalid role. Must be one of: ${VALID_ROLES.join(", ")}`,
         });
     }
+    // One-admin-per-org rule: block creating a second ADMIN in this tenant.
+    if (role === "ADMIN" && await tenantHasAdmin(req.user.tenantId)) {
+      return res.status(409).json({
+        error:
+          "This organisation already has an Admin. Only one Admin is allowed per organisation. To make someone else the Admin, first change the current Admin's role to Manager or User.",
+        code: "SINGLE_ADMIN_LIMIT",
+      });
+    }
     const wrErr = await validateWellnessRole(req, wellnessRole);
     if (wrErr)
       return res
@@ -579,6 +598,16 @@ router.put("/:id/role", verifyRole(["ADMIN"]), async (req, res) => {
     });
     if (!target) return res.status(404).json({ error: "User not found." });
 
+    // One-admin-per-org rule: block promoting a second user to ADMIN.
+    // excludeUserId = target.id so an admin can "save" their own ADMIN role without tripping this.
+    if (role === "ADMIN" && target.role !== "ADMIN" && await tenantHasAdmin(req.user.tenantId, target.id)) {
+      return res.status(409).json({
+        error:
+          "This organisation already has an Admin. Only one Admin is allowed per organisation. To make someone else the Admin, first change the current Admin's role to Manager or User.",
+        code: "SINGLE_ADMIN_LIMIT",
+      });
+    }
+
     const user = await prisma.user.update({
       where: { id: target.id },
       data: { role },
@@ -697,6 +726,14 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
         target.role === "ADMIN"
       ) {
         return res.status(400).json({ error: "Cannot change your own role." });
+      }
+      // One-admin-per-org rule: block promoting a second user to ADMIN.
+      if (role === "ADMIN" && target.role !== "ADMIN" && await tenantHasAdmin(req.user.tenantId, target.id)) {
+        return res.status(409).json({
+          error:
+            "This organisation already has an Admin. Only one Admin is allowed per organisation. To make someone else the Admin, first change the current Admin's role to Manager or User.",
+          code: "SINGLE_ADMIN_LIMIT",
+        });
       }
       if (role !== target.role) {
         data.role = role;

@@ -12,7 +12,7 @@
 // Also exposed as an on-demand POST /api/whatsapp/templates/sync route in
 // routes/whatsapp.js — see the helper `syncTemplatesForTenant` below.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { decryptCredential } = require("../lib/credentialMasking");
 const provider = require("../services/whatsappProvider");
@@ -113,12 +113,12 @@ async function tick() {
 }
 
 function initWhatsappTemplateSyncCron() {
-  cron.schedule(TICK_CRON, () => {
-    tick().catch((err) => {
-      console.error("[whatsappTemplateSyncEngine] unhandled tick error:", err);
-    });
-  });
-  console.log(`[whatsappTemplateSyncEngine] initialized (cron: ${TICK_CRON})`);
+  cronRegistry.register({
+    name: "whatsappTemplateSyncEngine",
+    description: "Nightly sync of approved WhatsApp templates from Meta (daily 03:30)",
+    defaultSchedule: TICK_CRON,
+    tickFn: tick,
+  }).catch((e) => console.error("[whatsappTemplateSyncEngine] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

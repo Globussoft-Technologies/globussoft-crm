@@ -26,7 +26,7 @@
 // pending Wati BSP creds (Q9). The Notification + status transition
 // are the visible Phase 1 outputs.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 // WhatsApp transport swap (Q9): Wati REST is COMMENTED OUT (kept on disk, not removed);
@@ -247,14 +247,13 @@ async function runWebCheckinSchedulerForAllTravelTenants() {
 }
 
 function initWebCheckinSchedulerCron() {
-  // Every 15 minutes — off the :00/:15/:30/:45 cluster per the standing
-  // rule. PRD §6.3 row 1 specifies "every 15 min."
-  cron.schedule("13,28,43,58 * * * *", () => {
-    runWebCheckinSchedulerForAllTravelTenants().catch((e) =>
-      console.error("[WebCheckinScheduler] cron fail:", e.message),
-    );
-  });
-  console.log("[WebCheckinScheduler] cron initialized (every 15 min, off-minute jitter)");
+  // Every 15 minutes. PRD §6.3 row 1 specifies "every 15 min."
+  cronRegistry.register({
+    name: "webCheckinScheduler",
+    description: "Flips WebCheckin status pending→reminded→fallback-agent on window/stall triggers (every 15 min)",
+    defaultSchedule: "13,28,43,58 * * * *",
+    tickFn: runWebCheckinSchedulerForAllTravelTenants,
+  }).catch((e) => console.error("[WebCheckinScheduler] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

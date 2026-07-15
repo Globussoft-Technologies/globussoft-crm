@@ -54,7 +54,7 @@
  *   convention spreads the daily cron herd across the wall clock.
  */
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
 
@@ -395,23 +395,32 @@ async function processEscalations({ notify, now = new Date(), prisma: prismaOver
   };
 }
 
+// One tick runs BOTH the T-7/T-3/T-1 pre-due reminders AND the T+3/T+7/T+14
+// post-due escalation chain. allSettled (not a plain await sequence) so a
+// failure on one side can never stop the other from running — matches the
+// original two-independent-.catch()-chains isolation exactly.
+async function tick() {
+  const results = await Promise.allSettled([processReminders(), processEscalations()]);
+  const [reminders, escalations] = results;
+  if (reminders.status === "rejected") {
+    console.error("[payment-schedule-reminder] unhandled tick error:", reminders.reason);
+  }
+  if (escalations.status === "rejected") {
+    console.error("[payment-schedule-escalation] unhandled tick error:", escalations.reason);
+  }
+}
+
 /**
  * Register the cron schedule. Wired into backend/server.js cron init block.
  */
 function initCron() {
   // Daily 09:13 IST (off-minute per the standing-rule herd-spread).
-  // One tick runs BOTH the T-7/T-3/T-1 pre-due reminders AND the T+3/T+7/T+14
-  // post-due escalation chain. Each guarded by its own try/catch so a failure
-  // on one side doesn't stop the other.
-  cron.schedule("13 9 * * *", () => {
-    processReminders().catch((err) => {
-      console.error("[payment-schedule-reminder] unhandled tick error:", err);
-    });
-    processEscalations().catch((err) => {
-      console.error("[payment-schedule-escalation] unhandled tick error:", err);
-    });
-  });
-  console.log("[payment-schedule-reminder] cron initialized (daily 09:13 IST, reminders + escalation)");
+  cronRegistry.register({
+    name: "paymentScheduleReminderEngine",
+    description: "TravelPaymentSchedule T-7/T-3/T-1 reminders + T+3/T+7/T+14 escalation (daily 09:13 IST)",
+    defaultSchedule: "13 9 * * *",
+    tickFn: tick,
+  }).catch((e) => console.error("[payment-schedule-reminder] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

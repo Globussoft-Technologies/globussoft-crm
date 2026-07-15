@@ -1,4 +1,4 @@
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 
@@ -84,11 +84,15 @@ async function tickDealInsightsEngine(io) {
  * Wire this from server.js — orchestrator passes the socket.io instance.
  */
 function initDealInsightsCron(io) {
-  cron.schedule("0 */6 * * *", () => {
-    console.log("[DealInsightsEngine] Cron tick — scanning open deals...");
-    tickDealInsightsEngine(io).catch(err => console.error("[DealInsightsEngine] Cron error:", err));
-  });
-  console.log("[DealInsightsEngine] Cron initialized (every 6 hours).");
+  cronRegistry.register({
+    name: "dealInsightsEngine",
+    description: "Scans open deals every 6h and persists heuristic-rule DealInsight rows",
+    defaultSchedule: "0 */6 * * *",
+    tickFn: () => {
+      console.log("[DealInsightsEngine] Cron tick — scanning open deals...");
+      return tickDealInsightsEngine(io);
+    },
+  }).catch((e) => console.error("[DealInsightsEngine] cronRegistry registration failed:", e.message));
 }
 
 module.exports = { initDealInsightsCron, tickDealInsightsEngine };

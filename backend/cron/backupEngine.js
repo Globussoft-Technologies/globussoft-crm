@@ -60,7 +60,7 @@
  *   getBackupDir()    — returns the absolute backup dir path (for the
  *                       file-path sanitizer in the route).
  */
-const cron = require('node-cron');
+const cronRegistry = require('../lib/cronRegistry');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -556,16 +556,15 @@ function listBackups({ limit = 20 } = {}) {
 }
 
 function initBackupCron() {
-  // Run daily at 2 AM. runBackup() became async with #417 — we attach a
-  // .catch so an unexpected internal rejection (none should escape; the
-  // implementation always resolves) doesn't surface as an unhandled
-  // promise rejection on the process.
-  cron.schedule('0 2 * * *', () => {
-    runBackup().catch((err) => {
-      console.error('[Backup] cron tick crashed:', err && err.message ? err.message : err);
-    });
-  });
-  console.log('[Backup] Cron scheduled: daily at 02:00');
+  // Run daily at 2 AM. runBackup() always resolves internally; the registry's
+  // own runTick() wraps every tickFn call so an unexpected rejection is
+  // caught + logged as a failed CronExecutionLog row rather than escaping.
+  cronRegistry.register({
+    name: 'backupEngine',
+    description: 'Daily mysqldump + gzip backup with retention cleanup',
+    defaultSchedule: '0 2 * * *',
+    tickFn: runBackup,
+  }).catch((e) => console.error('[Backup] cronRegistry registration failed:', e.message));
 }
 
 module.exports = {

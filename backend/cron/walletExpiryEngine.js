@@ -58,7 +58,7 @@
  *   env var per PRD §4.
  */
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
 
@@ -283,16 +283,13 @@ async function run() {
  * server's local TZ.
  */
 function initWalletExpiryCron() {
-  cron.schedule(
-    DEFAULT_SCHEDULE,
-    () => {
-      module.exports.run().catch((e) =>
-        console.error(`[walletExpiry] cron tick failed: ${e.message}`),
-      );
-    },
-    { timezone: "Asia/Kolkata" },
-  );
-  console.log("[walletExpiry] cron initialized (daily 03:30 IST)");
+  cronRegistry.register({
+    name: "walletExpiryEngine",
+    description: "Expires ACTIVE WalletCreditBatch rows past expiresAt + debits balance (daily 03:30 IST)",
+    defaultSchedule: DEFAULT_SCHEDULE,
+    cronOptions: { timezone: "Asia/Kolkata" },
+    tickFn: () => module.exports.run(),
+  }).catch((e) => console.error("[walletExpiry] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

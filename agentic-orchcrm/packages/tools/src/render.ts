@@ -124,7 +124,9 @@ export async function renderHtmlToArtifact(
     const puppeteer = mod.default ?? mod;
     const browser = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      // --disable-dev-shm-usage: Linux/Docker /dev/shm defaults to 64 MB —
+      // Chromium crashes or wedges against it under render load.
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
     });
     try {
       const page = await browser.newPage();
@@ -209,7 +211,7 @@ export async function measureEditorialBlocks(
     const puppeteer = mod.default ?? mod;
     // Guard an unbounded launch (driver/cdp hang) — without this the whole run could stall.
     browser = await Promise.race([
-      puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] }),
+      puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] }),
       new Promise<never>((_, rej) => setTimeout(() => rej(new Error('launch timeout')), 8000)),
     ]);
     const page = await browser.newPage();

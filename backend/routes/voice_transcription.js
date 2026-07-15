@@ -5,6 +5,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override
 const FormData = require("form-data");
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
+const { llmLimiter } = require("../middleware/apiRateLimiters");
 
 const router = express.Router();
 
@@ -143,7 +144,7 @@ router.get("/providers", verifyToken, (req, res) => {
 });
 
 // POST /transcribe-url — ad-hoc transcription, no save
-router.post("/transcribe-url", verifyToken, async (req, res) => {
+router.post("/transcribe-url", verifyToken, llmLimiter, async (req, res) => {
   try {
     const { audioUrl } = req.body || {};
     if (!audioUrl) return res.status(400).json({ error: "audioUrl required" });
@@ -156,7 +157,7 @@ router.post("/transcribe-url", verifyToken, async (req, res) => {
 });
 
 // POST /call/:callLogId — transcribe a CallLog recording
-router.post("/call/:callLogId", verifyToken, async (req, res) => {
+router.post("/call/:callLogId", verifyToken, llmLimiter, async (req, res) => {
   try {
     const callLogId = parseInt(req.params.callLogId, 10);
     if (Number.isNaN(callLogId)) return res.status(400).json({ error: "Invalid callLogId" });
@@ -182,7 +183,7 @@ router.post("/call/:callLogId", verifyToken, async (req, res) => {
 });
 
 // POST /voice-session/:sessionId — transcribe a VoiceSession recording
-router.post("/voice-session/:sessionId", verifyToken, async (req, res) => {
+router.post("/voice-session/:sessionId", verifyToken, llmLimiter, async (req, res) => {
   try {
     const { sessionId } = req.params;
     const tenantId = req.user.tenantId;
@@ -206,7 +207,7 @@ router.post("/voice-session/:sessionId", verifyToken, async (req, res) => {
 });
 
 // POST /summarize/:callLogId — Gemini-based summary + action items, appended to notes
-router.post("/summarize/:callLogId", verifyToken, async (req, res) => {
+router.post("/summarize/:callLogId", verifyToken, llmLimiter, async (req, res) => {
   try {
     const callLogId = parseInt(req.params.callLogId, 10);
     if (Number.isNaN(callLogId)) return res.status(400).json({ error: "Invalid callLogId" });

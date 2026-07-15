@@ -20,7 +20,7 @@
 // Travel-only: scans the Itinerary model (travel-only) — no-ops for
 // wellness/generic.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const emailSender = require("../lib/emailSender");
@@ -112,10 +112,12 @@ async function runTravelReviewTick(now = new Date()) {
 // Daily tick at 09:07 — reviews aren't time-critical; the 4-day lookback covers
 // any missed day. Idempotency (one row per itinerary) makes re-runs safe.
 function initTravelReviewCron() {
-  cron.schedule("7 9 * * *", () => {
-    runTravelReviewTick().catch((e) => console.error("[TravelReview] tick error:", e.message));
-  });
-  console.log("[TravelReview] cron scheduled (daily 09:07)");
+  cronRegistry.register({
+    name: "travelReviewEngine",
+    description: "Post-trip customer review request emails (daily 09:07)",
+    defaultSchedule: "7 9 * * *",
+    tickFn: runTravelReviewTick,
+  }).catch((e) => console.error("[TravelReview] cronRegistry registration failed:", e.message));
 }
 
 module.exports = { runTravelReviewTick, initTravelReviewCron, REVIEW_STATUSES, reviewUrl };

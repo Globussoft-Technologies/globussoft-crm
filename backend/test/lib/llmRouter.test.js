@@ -15,7 +15,7 @@
 //
 // Surface area covered (24 + S45 extension = 30+ cases):
 //   - module shape (3): exports + TASK_ROUTING matches PRD §9.1 + VALID_TASKS
-//   - llmEnabled (4):   no-env false, reasoning-with-Anthropic-key true,
+//   - llmEnabled (4):   no-env false, reasoning-with-Gemini-key true,
 //                       call-summary-with-Gemini-key true, unknown-task false
 //   - getLlmKey (S45, 6): tenantId omitted → ENV-only,
 //                         tenantId present + SupplierCredential present → DB wins over ENV,
@@ -25,9 +25,9 @@
 //                         Prisma error → ENV fallback (never throws)
 //   - llmEnabled (S45 extension, 2): per-tenant SupplierCredential gate,
 //                                    tenantId omitted preserves ENV-only contract
-//   - pickModel (4):    talking-points → claude-opus-4-7,
+//   - pickModel (4):    talking-points → gemini-flash,
 //                       call-summary → gemini-flash,
-//                       unknown → claude-opus-4-7 with unknown-task-fallback reason,
+//                       unknown → gemini-flash with unknown-task-fallback reason,
 //                       every TASK_ROUTING key resolves to non-empty primary
 //   - routeRequest (6): throws on missing task,
 //                       returns full envelope for every valid task,
@@ -160,9 +160,9 @@ describe('llmRouter — module shape', () => {
     expect(r.TASK_ROUTING).toEqual({
       "search": { primary: "perplexity-sonar", fallback: null },
       "citation": { primary: "perplexity-sonar", fallback: null },
-      "reasoning": { primary: "claude-opus-4-7", fallback: "gpt-4" },
-      "talking-points": { primary: "claude-opus-4-7", fallback: "gpt-4" },
-      "form-vs-call": { primary: "claude-opus-4-7", fallback: "gpt-4" },
+      "reasoning": { primary: "gemini-flash", fallback: "gpt-4" },
+      "talking-points": { primary: "gemini-flash", fallback: "gpt-4" },
+      "form-vs-call": { primary: "gemini-flash", fallback: "gpt-4" },
       "bulk-text": { primary: "gemini-flash", fallback: "groq-llama" },
       "call-summary": { primary: "gemini-flash", fallback: null },
       "itinerary-suggest": { primary: "gemini-flash", fallback: "gpt-4" },
@@ -228,14 +228,14 @@ describe('llmEnabled', () => {
     }
   });
 
-  test('returns true for "reasoning" when ANTHROPIC_API_KEY is set', async () => {
+  test('returns true for "reasoning" when GEMINI_API_KEY is set', async () => {
     delete process.env.PERPLEXITY_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
     delete process.env.OPENAI_API_KEY;
-    delete process.env.GEMINI_API_KEY;
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-real';
+    process.env.GEMINI_API_KEY = 'AIzaSy-real';
     const r = loadRouter();
     expect(await r.llmEnabled('reasoning')).toBe(true);
-    // Talking-points + form-vs-call share Claude → also true.
+    // Talking-points + form-vs-call share Gemini Flash → also true.
     expect(await r.llmEnabled('talking-points')).toBe(true);
     expect(await r.llmEnabled('form-vs-call')).toBe(true);
   });
@@ -249,8 +249,8 @@ describe('llmEnabled', () => {
     expect(await r.llmEnabled('call-summary')).toBe(true);
     // Bulk-text also routed to Gemini → also true.
     expect(await r.llmEnabled('bulk-text')).toBe(true);
-    // But "reasoning" goes to Claude — Gemini key alone isn't enough.
-    expect(await r.llmEnabled('reasoning')).toBe(false);
+    // "reasoning" is also Gemini Flash now → also true.
+    expect(await r.llmEnabled('reasoning')).toBe(true);
   });
 
   test('"itinerary-suggest" follows the Gemini key (gemini-flash provider slot)', async () => {
@@ -377,11 +377,11 @@ describe('llmEnabled — S45 per-tenant gate', () => {
 });
 
 describe('pickModel', () => {
-  test('"talking-points" → claude-opus-4-7 with reason "primary"', () => {
+  test('"talking-points" → gemini-flash with reason "primary"', () => {
     const r = loadRouter();
     expect(r.pickModel('talking-points')).toEqual({
       task: 'talking-points',
-      model: 'claude-opus-4-7',
+      model: 'gemini-flash',
       reason: 'primary',
     });
   });
@@ -395,11 +395,11 @@ describe('pickModel', () => {
     });
   });
 
-  test('unknown task → claude-opus-4-7 with reason "unknown-task-fallback"', () => {
+  test('unknown task → gemini-flash with reason "unknown-task-fallback"', () => {
     const r = loadRouter();
     expect(r.pickModel('not-a-real-task')).toEqual({
       task: 'not-a-real-task',
-      model: 'claude-opus-4-7',
+      model: 'gemini-flash',
       reason: 'unknown-task-fallback',
     });
   });
@@ -499,7 +499,7 @@ describe('routeRequest', () => {
       payload: {},
       tenantId: 1,
     });
-    expect(out.model).toBe('claude-opus-4-7');
+    expect(out.model).toBe('gemini-flash');
     expect(out.stub).toBe(true);
     // Warning surfaced for config-drift visibility.
     expect(warnSpy).toHaveBeenCalled();
@@ -528,7 +528,7 @@ describe('routeRequest', () => {
     const match = lines.find((l) => l.startsWith('[llm-router] '));
     expect(match).toBeTruthy();
     expect(match).toContain('task=talking-points');
-    expect(match).toContain('model=claude-opus-4-7');
+    expect(match).toContain('model=gemini-flash');
     expect(match).toContain('tenant=99');
     expect(match).toMatch(/tokens_in=\d+/);
     expect(match).toMatch(/tokens_out=\d+/);
@@ -579,7 +579,7 @@ describe('routeRequest — LlmCallLog persistence (PRD §9.1, R7)', () => {
     expect(arg.data).toMatchObject({
       tenantId: 42,
       task: 'talking-points',
-      model: 'claude-opus-4-7',
+      model: 'gemini-flash',
       reason: 'primary',
       stub: true,
       costEstimate: 0,
@@ -665,7 +665,7 @@ describe('routeRequest — per-tenant budget cap (2026-05-24 product-call)', () 
     const r = loadRouter();
     const out = await r.routeRequest({ task: 'reasoning', payload: {}, tenantId: 42 });
     expect(out.stub).toBe(true);
-    expect(out.model).toBe('claude-opus-4-7');
+    expect(out.model).toBe('gemini-flash');
     // Cap query happened with the right tenant.
     expect(prismaMock.tenantSetting.findUnique).toHaveBeenCalledWith({
       where: { tenantId_key: { tenantId: 42, key: 'budgetCap_llm_monthly_usd_cents' } },
@@ -782,23 +782,23 @@ describe('routeRequest — real provider call (key present, not under test)', ()
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        content: [{ type: 'text', text: 'REAL talking points from Claude.' }],
-        usage: { input_tokens: 12, output_tokens: 34 },
+        candidates: [{ content: { parts: [{ text: 'REAL talking points from Gemini.' }] } }],
+        usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 34 },
       }),
     });
     vi.stubGlobal('fetch', fetchMock);
     process.env.NODE_ENV = 'production';
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-real';
+    process.env.GEMINI_API_KEY = 'AIzaSy-real';
     try {
       const r = loadRouter();
       const out = await r.routeRequest({ task: 'talking-points', payload: { leadId: 7 }, tenantId: 3 });
       expect(out.stub).toBe(false);
-      expect(out.text).toBe('REAL talking points from Claude.');
-      expect(out.model).toBe('claude-opus-4-7');
+      expect(out.text).toBe('REAL talking points from Gemini.');
+      expect(out.model).toBe('gemini-flash');
       expect(out.usage.promptTokens).toBe(12);
       expect(out.usage.completionTokens).toBe(34);
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(String(fetchMock.mock.calls[0][0])).toContain('api.anthropic.com');
+      expect(String(fetchMock.mock.calls[0][0])).toContain('generativelanguage.googleapis.com');
     } finally {
       process.env.NODE_ENV = prevNodeEnv;
       vi.unstubAllGlobals();
@@ -810,7 +810,7 @@ describe('routeRequest — real provider call (key present, not under test)', ()
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-real'; // NODE_ENV stays 'test' (vitest default)
+    process.env.GEMINI_API_KEY = 'AIzaSy-real'; // NODE_ENV stays 'test' (vitest default)
     try {
       const r = loadRouter();
       const out = await r.routeRequest({ task: 'talking-points', payload: {}, tenantId: 1 });

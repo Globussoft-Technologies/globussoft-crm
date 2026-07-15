@@ -10,6 +10,8 @@ const crypto = require("crypto");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const emailOtp = require("../lib/emailOtp");
+const phoneOtp = require("../lib/phoneOtp");
+const { registerLimiter, otpRequestLimiter, otpVerifyLimiter } = require("../middleware/apiRateLimiters");
 const { writeAudit } = require("../lib/audit");
 const { resolvePrimaryRole } = require("../lib/roleResolution");
 const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
@@ -332,7 +334,7 @@ function validatePasswordComplexity(password) {
 //   purpose ∈ { "signup" (create org), "customer-register" (create account) }
 
 // POST /api/auth/email-otp/request  { email, purpose }
-router.post("/email-otp/request", async (req, res) => {
+router.post("/email-otp/request", otpRequestLimiter, async (req, res) => {
   try {
     const email = String((req.body || {}).email || "").trim().toLowerCase();
     const purpose = String((req.body || {}).purpose || "");
@@ -355,10 +357,10 @@ router.post("/email-otp/request", async (req, res) => {
       data: { email, purpose, otpHash, expiresAt: new Date(Date.now() + emailOtp.OTP_TTL_MS) },
     });
     const result = await emailOtp.sendOtpEmail(email, code, purpose);
-    // When SendGrid isn't configured (dev/CI), surface the code so the flow is
-    // exercisable end-to-end without real email. NEVER in production.
+    // Only expose devCode when SendGrid is genuinely absent (no key configured
+    // at all). A real send failure must never leak the code to the HTTP response.
     const devCode =
-      !result.sent && process.env.NODE_ENV !== "production" ? code : undefined;
+      result.reason === "no_api_key" && process.env.NODE_ENV !== "production" ? code : undefined;
     return res.status(201).json({ sent: !!result.sent, ...(devCode ? { devCode } : {}) });
   } catch (error) {
     console.error("[auth] email-otp/request error:", error.message);
@@ -367,7 +369,7 @@ router.post("/email-otp/request", async (req, res) => {
 });
 
 // POST /api/auth/email-otp/verify  { email, purpose, code }
-router.post("/email-otp/verify", async (req, res) => {
+router.post("/email-otp/verify", otpVerifyLimiter, async (req, res) => {
   try {
     const email = String((req.body || {}).email || "").trim().toLowerCase();
     const purpose = String((req.body || {}).purpose || "");
@@ -399,21 +401,131 @@ router.post("/email-otp/verify", async (req, res) => {
   }
 });
 
-router.post("/register", async (req, res) => {
+// ─── Phone OTP for self-service registration ──────────────────────────────
+//
+// Mirrors the email-otp flow above but identifies by phone number instead.
+// Both routes are OPEN paths (no auth) — they run before any account exists.
+//   purpose ∈ { "signup" (create org), "customer-register" (create account) }
+
+// POST /api/auth/phone-otp/request  { phone, purpose }
+router.post("/phone-otp/request", otpRequestLimiter, async (req, res) => {
   try {
-    const { email, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
+    const phone = String((req.body || {}).phone || "").trim();
+    const purpose = String((req.body || {}).purpose || "");
+    if (!phoneOtp.isValidPhone(phone)) {
+      return res.status(400).json({ error: "A valid phone number is required (10 digits or E.164 format)", code: "INVALID_PHONE" });
+    }
+    if (!phoneOtp.VALID_PURPOSES.includes(purpose)) {
+      return res.status(400).json({ error: "Invalid verification purpose", code: "INVALID_PURPOSE" });
+    }
+    // Light rate-limit: at most one code per (phone, purpose) per 60s.
+    const normalizedPhone = phoneOtp.normalizePhone(phone);
+    const recent = await prisma.phoneVerificationOtp.findFirst({
+      where: { phone: normalizedPhone, purpose, createdAt: { gt: new Date(Date.now() - 60_000) } },
+    });
+    if (recent) {
+      return res.status(429).json({ error: "Please wait a moment before requesting another code", code: "OTP_RATE_LIMIT" });
+    }
+    const code = phoneOtp.generateOtpCode();
+    const otpHash = await bcrypt.hash(code, 10);
+    await prisma.phoneVerificationOtp.create({
+      data: { phone: normalizedPhone, purpose, otpHash, expiresAt: new Date(Date.now() + phoneOtp.OTP_TTL_MS) },
+    });
+    const result = await phoneOtp.sendOtpSms(normalizedPhone, code, purpose);
+    // NEVER return the code to the HTTP response — not even in dev/CI.
+    // The code is logged server-side only (same as emailOtp with no SendGrid key).
+    return res.status(201).json({ sent: !!result.sent });
+  } catch (error) {
+    console.error("[auth] phone-otp/request error:", error.message);
+    return res.status(500).json({ error: "Failed to send verification code" });
+  }
+});
+
+// POST /api/auth/phone-otp/verify  { phone, purpose, code }
+router.post("/phone-otp/verify", otpVerifyLimiter, async (req, res) => {
+  try {
+    const phone = String((req.body || {}).phone || "").trim();
+    const purpose = String((req.body || {}).purpose || "");
+    const code = String((req.body || {}).code || "").trim();
+    if (!phone || !purpose || !code) {
+      return res.status(400).json({ error: "phone, purpose and code are required", code: "MISSING_FIELDS" });
+    }
+    const normalizedPhone = phoneOtp.normalizePhone(phone);
+    const otp = await prisma.phoneVerificationOtp.findFirst({
+      where: { phone: normalizedPhone, purpose, usedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!otp) {
+      return res.status(400).json({ error: "Code expired or not found — request a new one", code: "OTP_INVALID" });
+    }
+    if (otp.attempts >= 5) {
+      return res.status(429).json({ error: "Too many attempts — request a new code", code: "OTP_LOCKED" });
+    }
+    const match = await bcrypt.compare(code, otp.otpHash);
+    if (!match) {
+      await prisma.phoneVerificationOtp.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
+      return res.status(400).json({ error: "Incorrect code", code: "OTP_INVALID" });
+    }
+    await prisma.phoneVerificationOtp.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
+    const verificationToken = phoneOtp.issueVerifiedPhoneToken(normalizedPhone, purpose);
+    return res.json({ verified: true, verificationToken });
+  } catch (error) {
+    console.error("[auth] phone-otp/verify error:", error.message);
+    return res.status(500).json({ error: "Failed to verify code" });
+  }
+});
+
+router.post("/register", registerLimiter, async (req, res) => {
+  try {
+    const { email, phone, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
-    // Email OTP gate (opt-in via REQUIRE_EMAIL_OTP). Anonymous public self-signup
-    // is gated; an authenticated admin (Settings → invite team member) is exempt
-    // — they manage their own team. See lib/emailOtp.enforceRegistrationOtp.
+    if (!email || typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({ error: "A valid email address is required", code: "EMAIL_REQUIRED" });
+    }
+
+    // Verification gate for anonymous (public) self-signup.
+    // The verificationToken may be issued by EITHER the email-OTP flow
+    // (kind:"email-verified") or the phone-OTP flow (kind:"phone-verified").
+    // Decode the token to determine which path was used and validate it against
+    // the correct contact field. An authenticated admin caller (team invite) is
+    // exempt from the gate entirely.
     let emailVerifiedAt = null;
     if (!isAuthenticatedCaller(req)) {
-      const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "signup");
-      if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
-      emailVerifiedAt = otpGate.emailVerifiedAt;
+      const tokenProvided = verificationToken !== undefined && verificationToken !== null && verificationToken !== "";
+      if (tokenProvided) {
+        // Detect token kind without fully verifying first, then re-verify with
+        // the correct contact to prevent cross-contact token reuse.
+        let decodedKind;
+        try {
+          const decoded = jwt.decode(verificationToken);
+          decodedKind = decoded && decoded.kind;
+        } catch { decodedKind = null; }
+
+        if (decodedKind === "phone-verified") {
+          const phoneValue = phone && typeof phone === "string" ? phone.trim() : "";
+          if (!phoneOtp.isValidPhone(phoneValue)) {
+            return res.status(400).json({ error: "A valid phone number is required to match the phone verification token", code: "PHONE_REQUIRED" });
+          }
+          if (!phoneOtp.checkVerifiedPhoneToken(verificationToken, phoneValue, "signup")) {
+            return res.status(403).json({ error: "Phone verification failed — please verify your phone again", code: "PHONE_NOT_VERIFIED" });
+          }
+          // Phone verified; emailVerifiedAt stays null (no email OTP was done)
+        } else {
+          // Treat as email-verified token (the original path)
+          const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "signup");
+          if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+          emailVerifiedAt = otpGate.emailVerifiedAt;
+        }
+      } else {
+        // No token: fall through to the standard email-OTP enforcement check
+        // (enforceRegistrationOtp handles the REQUIRE_EMAIL_OTP env gate)
+        const otpGate = emailOtp.enforceRegistrationOtp(undefined, email, "signup");
+        if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+        emailVerifiedAt = otpGate.emailVerifiedAt;
+      }
     }
 
     // Org creation makes a brand-new tenant, so (email, newTenantId) can never
@@ -479,20 +591,48 @@ router.post("/register", async (req, res) => {
 });
 
 // Signup alias (matches signup page) — same behavior as register
-router.post("/signup", async (req, res) => {
+router.post("/signup", registerLimiter, async (req, res) => {
   try {
-    const { email, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
+    const { email, phone, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
+    if (!email || typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({ error: "A valid email address is required", code: "EMAIL_REQUIRED" });
+    }
+
     // Email OTP gate (same posture as /register — this is its alias). Auth'd
     // admin (team invite) exempt; anonymous public signup gated.
+    // Handles both email-verified and phone-verified tokens — same logic as /register.
     let emailVerifiedAt = null;
     if (!isAuthenticatedCaller(req)) {
-      const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "signup");
-      if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
-      emailVerifiedAt = otpGate.emailVerifiedAt;
+      const tokenProvided = verificationToken !== undefined && verificationToken !== null && verificationToken !== "";
+      if (tokenProvided) {
+        let decodedKind;
+        try {
+          const decoded = jwt.decode(verificationToken);
+          decodedKind = decoded && decoded.kind;
+        } catch { decodedKind = null; }
+
+        if (decodedKind === "phone-verified") {
+          const phoneValue = phone && typeof phone === "string" ? phone.trim() : "";
+          if (!phoneOtp.isValidPhone(phoneValue)) {
+            return res.status(400).json({ error: "A valid phone number is required to match the phone verification token", code: "PHONE_REQUIRED" });
+          }
+          if (!phoneOtp.checkVerifiedPhoneToken(verificationToken, phoneValue, "signup")) {
+            return res.status(403).json({ error: "Phone verification failed — please verify your phone again", code: "PHONE_NOT_VERIFIED" });
+          }
+        } else {
+          const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "signup");
+          if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+          emailVerifiedAt = otpGate.emailVerifiedAt;
+        }
+      } else {
+        const otpGate = emailOtp.enforceRegistrationOtp(undefined, email, "signup");
+        if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+        emailVerifiedAt = otpGate.emailVerifiedAt;
+      }
     }
 
     // Org creation makes a brand-new tenant, so (email, newTenantId) can never
@@ -578,7 +718,7 @@ router.get("/customer/tenants", async (req, res) => {
 
 // Customer Registration — open path for CUSTOMER userType self-registration
 // Creates a new User with userType: 'CUSTOMER' and assigns the tenant's CUSTOMER role
-router.post("/customer/register", async (req, res) => {
+router.post("/customer/register", registerLimiter, async (req, res) => {
   try {
     // The target tenant is supplied in the body and MUST be named
     // `registrationTenantId`, NOT `tenantId`: the global stripDangerous
@@ -586,18 +726,43 @@ router.post("/customer/register", async (req, res) => {
     // standing rules), so a `tenantId` field would always arrive undefined
     // and registration would 400. `registrationTenantId` is not on the strip
     // list, so it passes through intact.
-    const { email, password, name, registrationTenantId, verificationToken } = req.body || {};
+    const { email, phone, password, name, registrationTenantId, verificationToken } = req.body || {};
 
-    // Input validation
-    if (!email || typeof email !== "string" || !password || typeof password !== "string") {
+    // Input validation — email is always required (it's the login credential and a required DB field)
+    if (!email || typeof email !== "string" || !email.includes("@") || !password || typeof password !== "string") {
       return res.status(400).json({ error: "email, password, and registrationTenantId are required" });
     }
 
-    // Email OTP gate (purpose "customer-register"). Enforced at the route layer
-    // (production by default, overridable via REQUIRE_EMAIL_OTP).
-    const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "customer-register");
-    if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
-    const emailVerifiedAt = otpGate.emailVerifiedAt;
+    // Verification gate — token may be email-verified or phone-verified.
+    // Detect kind and validate against the correct contact field.
+    let emailVerifiedAt = null;
+    const tokenProvided = verificationToken !== undefined && verificationToken !== null && verificationToken !== "";
+    if (tokenProvided) {
+      let decodedKind;
+      try {
+        const decoded = jwt.decode(verificationToken);
+        decodedKind = decoded && decoded.kind;
+      } catch { decodedKind = null; }
+
+      if (decodedKind === "phone-verified") {
+        const phoneValue = phone && typeof phone === "string" ? phone.trim() : "";
+        if (!phoneOtp.isValidPhone(phoneValue)) {
+          return res.status(400).json({ error: "A valid phone number is required to match the phone verification token", code: "PHONE_REQUIRED" });
+        }
+        if (!phoneOtp.checkVerifiedPhoneToken(verificationToken, phoneValue, "customer-register")) {
+          return res.status(403).json({ error: "Phone verification failed — please verify your phone again", code: "PHONE_NOT_VERIFIED" });
+        }
+        // Phone verified; emailVerifiedAt stays null
+      } else {
+        const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "customer-register");
+        if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+        emailVerifiedAt = otpGate.emailVerifiedAt;
+      }
+    } else {
+      const otpGate = emailOtp.enforceRegistrationOtp(undefined, email, "customer-register");
+      if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+      emailVerifiedAt = otpGate.emailVerifiedAt;
+    }
 
     // Coerce to a number — JSON sends it numeric, but accept a numeric string
     // defensively. Reject anything that isn't a positive integer.

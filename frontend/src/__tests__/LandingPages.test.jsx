@@ -43,7 +43,7 @@
  * the test is marked `it.skip()` with a TODO referencing a GH issue
  * filed via `gh issue create` (no source-file edits in this scope).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -120,6 +120,8 @@ function renderPage() {
 }
 
 describe('<LandingPages /> — index page surface', () => {
+  let clipboardWriteText;
+
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);
@@ -129,6 +131,23 @@ describe('<LandingPages /> — index page surface', () => {
     notifyInfo.mockReset();
     confirmMock.mockReset();
     confirmMock.mockResolvedValue(true);
+    // jsdom doesn't implement navigator.clipboard — stub it so handleCopyUrl
+    // doesn't throw an unhandled TypeError in tests that trigger a copy.
+    clipboardWriteText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: clipboardWriteText },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    // Restore clipboard so other test files start clean.
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
   });
 
   it('renders the header + subtitle + a top-right "Create Page" CTA', async () => {
@@ -225,16 +244,18 @@ describe('<LandingPages /> — index page surface', () => {
     expect(editLinks.some((a) => a.getAttribute('href') === '/landing-pages/builder/12')).toBe(true);
   });
 
-  it('publish-toggle reads "Publish" for DRAFT + "Unpublish" for PUBLISHED; clicking fires the matching POST', async () => {
+  it('publish-toggle reads "Publish" for DRAFT + "Unpublish" for PUBLISHED', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
     // Both buttons render on first paint — one for each row.
     expect(screen.getByRole('button', { name: /^Publish$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Unpublish$/i })).toBeInTheDocument();
+  });
 
-    // Click Unpublish (row 11, PUBLISHED → unpublish). loadPages() then
-    // re-fires GET /api/landing-pages which under the default mock returns
-    // the SAME samplePages array, so the buttons render again afterwards.
+  it('clicking Unpublish fires POST /api/landing-pages/:id/unpublish', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
     fetchApiMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /^Unpublish$/i }));
     await waitFor(() => {
@@ -243,20 +264,60 @@ describe('<LandingPages /> — index page surface', () => {
       );
       expect(call).toBeTruthy();
     });
+  });
 
-    // Re-query the Publish button (post-rerender — the original reference
-    // detaches after loadPages() refetches).
-    fetchApiMock.mockClear();
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Publish$/i })).toBeInTheDocument();
+  it('clicking Publish fires POST /api/landing-pages/:id/publish when no other page is PUBLISHED', async () => {
+    // The hard-block rule: if any other page is already PUBLISHED, the Publish
+    // button is disabled and clicking it calls notify.error instead of the API.
+    // This test uses a dataset where BOTH pages are DRAFT so the Publish call
+    // can go through.
+    const allDraftPages = [
+      { id: 11, title: 'Spring Launch', slug: 'spring-launch', status: 'DRAFT', visits: 0, submissions: 0 },
+      { id: 12, title: 'Winter Promo Draft', slug: 'winter-promo', status: 'DRAFT', visits: 0, submissions: 0 },
+    ];
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/landing-pages' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(allDraftPages);
+      }
+      if (url === '/api/landing-pages/templates/list') return Promise.resolve(sampleTemplates);
+      if (opts?.method === 'POST') return Promise.resolve({ ok: true });
+      return Promise.resolve(null);
     });
-    fireEvent.click(screen.getByRole('button', { name: /^Publish$/i }));
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    // With two DRAFT pages both Publish buttons are enabled. Click the first.
+    fetchApiMock.mockClear();
+    const publishBtns = screen.getAllByRole('button', { name: /^Publish$/i });
+    expect(publishBtns.length).toBe(2); // one per DRAFT card
+    fireEvent.click(publishBtns[0]);
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/landing-pages/12/publish' && o?.method === 'POST',
+        ([u, o]) => typeof u === 'string' && u.endsWith('/publish') && o?.method === 'POST',
       );
       expect(call).toBeTruthy();
     });
+  });
+
+  it('when another page is PUBLISHED the Publish button is disabled (hard-block UX)', async () => {
+    // samplePages has id=11 as PUBLISHED and id=12 as DRAFT.
+    // The SUT disables the Publish button — this IS the hard-block. The operator
+    // cannot click it; no API call can ever fire. That is the full contract.
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
+
+    const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
+    expect(publishBtn).toBeDisabled();
+
+    // The tooltip names the currently-live page so the operator knows why.
+    expect(publishBtn.title).toMatch(/Spring Launch/);
+
+    // Confirm no publish API call fires (button is disabled — nothing can fire it).
+    fetchApiMock.mockClear();
+    const publishCall = fetchApiMock.mock.calls.find(
+      ([u, o]) => typeof u === 'string' && u.endsWith('/publish') && o?.method === 'POST',
+    );
+    expect(publishCall).toBeUndefined();
   });
 
   it('clicking the header Create Page button opens the template picker with templates + Blank Page tile', async () => {
@@ -327,12 +388,11 @@ describe('<LandingPages /> — index page surface', () => {
     const cardTitle = screen.getByText('Spring Launch');
     const card = cardTitle.closest('.card');
     expect(card).toBeTruthy();
-    const buttons = card.querySelectorAll('button');
-    // The 3 buttons inside a published card: Unpublish (with text),
-    // duplicate (icon-only), delete (icon-only). DRAFT card is the
-    // same shape (Publish in place of Unpublish). Delete is the LAST
-    // button in the action row.
-    const deleteBtn = buttons[buttons.length - 1];
+    // The published card has a "Public Link" panel with a Copy button
+    // below the action row, so `buttons[last]` is unreliable. Pin by
+    // the explicit title="Delete" attribute instead.
+    const deleteBtn = card.querySelector('button[title="Delete"]');
+    expect(deleteBtn).toBeTruthy();
 
     fetchApiMock.mockClear();
     fireEvent.click(deleteBtn);

@@ -59,6 +59,36 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// ── API Analytics logging ───────────────────────────────────────────
+// Fire-and-forget ApiCallLog row per SerpApi search — mirrors llmRouter.js's
+// LlmCallLog pattern but for a flat-rate (non-token) provider. Must NEVER
+// throw or await-block the caller; this module's whole contract is
+// "never throws" (callers fall through to the next tier on any hiccup).
+function logApiCall({ endpoint, status, durationMs, errorMessage }) {
+  if (process.env.NODE_ENV === "test") return; // keep existing test suites deterministic
+  try {
+    const prisma = require("../lib/prisma");
+    const { estimateFlatCost } = require("../lib/apiPricing");
+    const cost = estimateFlatCost("serpapi");
+    prisma.apiCallLog
+      .create({
+        data: {
+          tenantId: 1,
+          provider: "serpapi",
+          endpoint,
+          status,
+          costEstimate: cost || 0,
+          durationMs,
+          surface: "serpApiClient",
+          errorMessage: errorMessage || null,
+        },
+      })
+      .catch((e) => console.error(`[serpApiClient] ApiCallLog persist failed (non-fatal): ${e.message}`));
+  } catch (e) {
+    console.error(`[serpApiClient] ApiCallLog require failed (non-fatal): ${e.message}`);
+  }
+}
+
 // ── Google Flights ───────────────────────────────────────────────────
 // SerpApi groups results into `best_flights` + `other_flights`; each group has
 // a `flights` array of legs (one per hop), `total_duration` (minutes), `price`,
@@ -127,14 +157,25 @@ async function searchFlights(q = {}, ax = axios) {
   const cacheKey = `F|${q.from}|${q.to}|${q.departDate}|${q.returnDate || ""}|${q.adults}|${q.children}|${q.currency}`;
   const hit = _cacheGet(cacheKey);
   if (hit) return hit;
-  const resp = await ax.get(SERP_URL, { params, timeout: TIMEOUT_MS });
+  const startedAt = Date.now();
+  let resp;
+  try {
+    resp = await ax.get(SERP_URL, { params, timeout: TIMEOUT_MS });
+  } catch (e) {
+    logApiCall({ endpoint: "google_flights", status: "failed", durationMs: Date.now() - startedAt, errorMessage: e.message });
+    console.error(`[serpApiClient] flights request failed: ${e.message}`);
+    return null;
+  }
   const data = resp && resp.data;
   if (!data || data.error) {
+    const errMsg = (data && data.error) || "empty response";
+    logApiCall({ endpoint: "google_flights", status: "failed", durationMs: Date.now() - startedAt, errorMessage: errMsg });
     if (data && data.error) console.error(`[serpApiClient] flights error: ${data.error}`);
     return null;
   }
   const mapped = mapFlights(data, q);
   _cacheSet(cacheKey, mapped);
+  logApiCall({ endpoint: "google_flights", status: "success", durationMs: Date.now() - startedAt });
   return mapped;
 }
 
@@ -194,14 +235,25 @@ async function searchHotels(q = {}, ax = axios) {
   const cacheKey = `H|${q.city}|${q.checkIn}|${q.checkOut}|${q.adults}|${q.currency}`;
   const hit = _cacheGet(cacheKey);
   if (hit) return hit;
-  const resp = await ax.get(SERP_URL, { params, timeout: TIMEOUT_MS });
+  const startedAt = Date.now();
+  let resp;
+  try {
+    resp = await ax.get(SERP_URL, { params, timeout: TIMEOUT_MS });
+  } catch (e) {
+    logApiCall({ endpoint: "google_hotels", status: "failed", durationMs: Date.now() - startedAt, errorMessage: e.message });
+    console.error(`[serpApiClient] hotels request failed: ${e.message}`);
+    return null;
+  }
   const data = resp && resp.data;
   if (!data || data.error) {
+    const errMsg = (data && data.error) || "empty response";
+    logApiCall({ endpoint: "google_hotels", status: "failed", durationMs: Date.now() - startedAt, errorMessage: errMsg });
     if (data && data.error) console.error(`[serpApiClient] hotels error: ${data.error}`);
     return null;
   }
   const mapped = mapHotels(data, q);
   _cacheSet(cacheKey, mapped);
+  logApiCall({ endpoint: "google_hotels", status: "success", durationMs: Date.now() - startedAt });
   return mapped;
 }
 

@@ -221,3 +221,6 @@ prompt_ref/
 agentic-orchcrm/packages/db/drizzle/
 agentic-orchcrm/**/.model-routing.json
 agentic-orchcrm/brochure-run_*.pdf
+
+# PEM Keys
+*.pem

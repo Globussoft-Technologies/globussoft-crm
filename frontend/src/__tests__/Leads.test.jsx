@@ -488,6 +488,15 @@ function leadsFetchMock(url, opts) {
   return Promise.resolve([]);
 }
 
+// ADMIN auth context for tests that exercise admin-only surfaces (checkboxes,
+// bulk-assign bar, per-row assign dropdowns). The SUT gates these on
+// auth?.user?.role === 'ADMIN' — calling renderLeads() without an auth value
+// (null) means isAdmin=false and those surfaces are hidden.
+const ADMIN_AUTH = {
+  tenant: { id: 1, vertical: 'generic', name: 'Globussoft CRM' },
+  user: { id: 1, role: 'ADMIN', name: 'Admin User', email: 'admin@crm.test' },
+};
+
 describe('Leads — table, search, bulk operations, row actions, drawer dismiss', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
@@ -498,7 +507,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
   });
 
   it('renders seeded leads with name + email + company + lead-score badge', async () => {
-    renderLeads();
+    renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     // All three names rendered
@@ -519,7 +528,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
   });
 
   it('filters the row list by search term against name / email / company', async () => {
-    renderLeads();
+    renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     const searchInput = screen.getByPlaceholderText('Search leads...');
@@ -554,7 +563,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
     // still read "3 leads in pipeline" while the table was narrowed to 1
     // result. Post-fix it switches to "X of Y leads match \"<term>\"" while
     // a search is active and reverts to the original phrasing when cleared.
-    renderLeads();
+    renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     // No search → original phrasing.
     expect(screen.getByText(/3 leads in pipeline/)).toBeInTheDocument();
@@ -573,7 +582,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
   });
 
   it('Convert button PUTs /api/contacts/:id with status="Prospect" (#283)', async () => {
-    renderLeads();
+    renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
@@ -594,7 +603,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
   });
 
   it('per-row assign dropdown PUTs /api/contacts/:id/assign with the selected staff id', async () => {
-    renderLeads();
+    renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
@@ -620,7 +629,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
   });
 
   it('row checkbox selection reveals the bulk-assign bar; Clear hides it (#334)', async () => {
-    renderLeads();
+    renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     // Bulk bar is not yet rendered (nothing selected).
@@ -644,7 +653,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
   });
 
   it('bulk-assign Assign button PUTs /api/contacts/bulk-assign with selected contactIds', async () => {
-    renderLeads();
+    renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
@@ -688,7 +697,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
   });
 
   it('header select-all toggles every visible row; clicking again deselects', async () => {
-    renderLeads();
+    renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     const checkboxes = screen.getAllByRole('checkbox');

@@ -23,7 +23,7 @@
 // dispatch line. WhatsApp/email send slots in once Wati BSP creds (Q9)
 // land — the WhatsAppMessage row creation goes in the same loop.
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 // WhatsApp transport swap (Q9): Wati REST is COMMENTED OUT (kept on disk, not removed);
@@ -223,15 +223,14 @@ async function runPaymentRemindersForAllTravelTenants() {
 }
 
 function initTripPaymentRemindersCron() {
-  // Daily 07:13 IST (off-minute per the standing rule). PRD §6.3 says
-  // "daily 09:00 IST" — running earlier so the reminders are queued by
-  // the time school finance teams open the system.
-  cron.schedule("13 7 * * *", () => {
-    runPaymentRemindersForAllTravelTenants().catch((e) =>
-      console.error("[TripPaymentReminders] cron fail:", e.message),
-    );
-  });
-  console.log("[TripPaymentReminders] cron initialized (daily 07:13 IST)");
+  // Daily 07:13 IST. PRD §6.3 says "daily 09:00 IST" — running earlier so
+  // the reminders are queued by the time school finance teams open the system.
+  cronRegistry.register({
+    name: "tripPaymentReminders",
+    description: "TripInstalmentPayment pre-due/overdue reminder notifications (daily 07:13 IST)",
+    defaultSchedule: "13 7 * * *",
+    tickFn: runPaymentRemindersForAllTravelTenants,
+  }).catch((e) => console.error("[TripPaymentReminders] cronRegistry registration failed:", e.message));
 }
 
 module.exports = {

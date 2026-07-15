@@ -17,7 +17,7 @@
  * cron will never re-fire for that ticket — so we don't spam the bus.
  */
 
-const cron = require("node-cron");
+const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
 const { emitEvent } = require("../lib/eventBus");
@@ -177,12 +177,12 @@ async function tickSlaBreaches() {
 }
 
 function initSlaBreachCron() {
-  cron.schedule("*/5 * * * *", () => {
-    tickSlaBreaches().catch((e) =>
-      console.error("[SLABreach] tick crashed:", e.message),
-    );
-  });
-  console.log("SLA Breach Engine initialized (cron: */5 * * * *)");
+  cronRegistry.register({
+    name: "slaBreachEngine",
+    description: "Flips Ticket.breached + emits sla.breached (every 5 min)",
+    defaultSchedule: "*/5 * * * *",
+    tickFn: tickSlaBreaches,
+  }).catch((e) => console.error("[SLABreach] cronRegistry registration failed:", e.message));
 }
 
 // Convenience runner for the manual-trigger endpoint: scopes to a single

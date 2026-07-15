@@ -75,6 +75,23 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
+const { estimateLlmCost } = require('../lib/apiPricing');
+
+// Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
+// persistLlmCallLog helper so this direct Gemini call is visible to the
+// Super Admin "API Analytics" dashboard. A DB hiccup here must NEVER break
+// flyer-copy generation, hence the nested try/catch and the un-awaited
+// .catch() on the create.
+function persistLlmCallLog(data) {
+  try {
+    const prisma = require('../lib/prisma');
+    prisma.llmCallLog.create({ data }).catch((e) =>
+      console.error(`[marketingFlyerCopyLLM] LlmCallLog persist failed (non-fatal): ${e.message}`),
+    );
+  } catch (e) {
+    console.error(`[marketingFlyerCopyLLM] LlmCallLog require failed (non-fatal): ${e.message}`);
+  }
+}
 
 const INTEGRATION = 'llm'; // share the LLM monthly cap envelope
 const TASK_NAME = 'marketing-flyer-copy'; // PRD §9.1 + FR-3.6.1
@@ -217,7 +234,7 @@ async function realModeEnabled(tenantId) {
  * shape (so consumers don't branch). Throws on any error — caller
  * falls through to the stub via try/catch.
  */
-async function callGemini({ destination, subBrand, themeJson, targetAudience }) {
+async function callGemini({ destination, subBrand, themeJson, targetAudience, tenantId }) {
   const apiKey = process.env[GEMINI_KEY_ENV];
   if (!apiKey) {
     throw new Error(`marketingFlyerCopyLLM: ${GEMINI_KEY_ENV} not set`);
@@ -250,7 +267,12 @@ async function callGemini({ destination, subBrand, themeJson, targetAudience }) 
       },
     });
     const res = await model.generateContent(prompt);
-    return res.response.text();
+    const usage = res.response.usageMetadata || {};
+    return {
+      text: res.response.text(),
+      promptTokens: usage.promptTokenCount || 0,
+      completionTokens: usage.candidatesTokenCount || 0,
+    };
   };
 
   // Multi-model cascade on 429 (each Gemini model on the free tier has
@@ -270,10 +292,15 @@ async function callGemini({ destination, subBrand, themeJson, targetAudience }) 
     'gemini-2.5-flash-lite',
   ]));
   let raw;
+  let modelUsed;
+  let usageResult;
   let lastError;
   for (const m of cascade) {
     try {
-      raw = await tryGemini(m);
+      const attempt = await tryGemini(m);
+      raw = attempt.text;
+      usageResult = attempt;
+      modelUsed = m;
       lastError = null;
       break;
     } catch (e) {
@@ -285,13 +312,65 @@ async function callGemini({ destination, subBrand, themeJson, targetAudience }) 
       // entry, not hard-abort. Without this, a single removed model in
       // the chain (like gemini-1.5-flash Sept 2025) blows the whole call.
       const isModelGone = /404.*Not Found|is not found for API version|is not supported for generateContent/i.test(msg);
-      if (!isQuota && !isModelGone) throw e;
+      if (!isQuota && !isModelGone) {
+        persistLlmCallLog({
+          tenantId: tenantId || 1,
+          task: 'flyer-copy',
+          model: m,
+          provider: 'gemini',
+          reason: null,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          costEstimate: 0,
+          stub: false,
+          userId: null,
+          surface: 'marketingFlyerCopyLLM',
+          status: 'failed',
+          errorMessage: e.message,
+        });
+        throw e;
+      }
       console.warn(
         `[marketingFlyerCopyLLM] '${m}' ${isQuota ? 'hit quota' : 'model unavailable'} — falling through cascade`,
       );
     }
   }
-  if (raw === undefined) throw lastError;
+  if (raw === undefined) {
+    persistLlmCallLog({
+      tenantId: tenantId || 1,
+      task: 'flyer-copy',
+      model: cascade[cascade.length - 1],
+      provider: 'gemini',
+      reason: null,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      costEstimate: 0,
+      stub: false,
+      userId: null,
+      surface: 'marketingFlyerCopyLLM',
+      status: 'failed',
+      errorMessage: (lastError && lastError.message) || 'gemini cascade exhausted',
+    });
+    throw lastError;
+  }
+
+  persistLlmCallLog({
+    tenantId: tenantId || 1,
+    task: 'flyer-copy',
+    model: modelUsed,
+    provider: 'gemini',
+    reason: null,
+    promptTokens: usageResult.promptTokens,
+    completionTokens: usageResult.completionTokens,
+    totalTokens: usageResult.promptTokens + usageResult.completionTokens,
+    costEstimate: estimateLlmCost(modelUsed, usageResult.promptTokens, usageResult.completionTokens),
+    stub: false,
+    userId: null,
+    surface: 'marketingFlyerCopyLLM',
+    status: 'success',
+  });
 
   const parsed = parseGeminiJson(raw);
   return { ...parsed, _source: 'gemini' };
@@ -377,6 +456,7 @@ async function generateFlyerCopy(args = {}, _ctx = {}) {
         subBrand,
         themeJson,
         targetAudience,
+        tenantId,
       });
       return {
         copyJson: { ...realJson, _source: 'gemini' },

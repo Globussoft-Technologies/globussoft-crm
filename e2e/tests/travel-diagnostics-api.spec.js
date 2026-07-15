@@ -547,8 +547,8 @@ test.describe('Travel diagnostics API — talking-points regen (PRD §4.2)', () 
     const body = await res.json();
     expect(body.diagnostic?.id).toBe(id);
     expect(body.talkingPoints).toBeTruthy();
-    // PRD §9.1 — talking-points task routes to Claude Opus primary.
-    expect(body.talkingPoints.model).toBe('claude-opus-4-7');
+    // PRD §9.1 — talking-points task routes to Gemini Flash primary (2026-07-14 swap off Claude Opus).
+    expect(body.talkingPoints.model).toBe('gemini-flash');
     // CI runs without LLM API keys → stub mode.
     expect(body.talkingPoints.stub).toBe(true);
     expect(body.talkingPoints.text).toMatch(/STUB-TALKING-POINTS/);
@@ -572,7 +572,7 @@ test.describe('Travel diagnostics API — talking-points regen (PRD §4.2)', () 
     expect(typeof body.talkingPointsJson).toBe('string');
     const envelope = JSON.parse(body.talkingPointsJson);
     expect(envelope.text).toMatch(/STUB-TALKING-POINTS/);
-    expect(envelope.model).toBe('claude-opus-4-7');
+    expect(envelope.model).toBe('gemini-flash');
     expect(envelope.stub).toBe(true);
     expect(Number.isFinite(Date.parse(envelope.generatedAt))).toBe(true);
   });
@@ -854,12 +854,12 @@ test.describe('Travel diagnostics — Travel Stall Family Travel Quiz seed (PRD 
 // PRD §4.1 — form-vs-call comparison endpoint.
 //
 // Second consumer of lib/llmRouter.js (commit 583c06b) — task
-// "form-vs-call" routes to Claude Opus primary per PRD §9.1, GPT-4
-// fallback. CI runs without LLM API keys so the router returns the
-// deterministic [STUB-FORM-VS-CALL] envelope. The stub text contains
-// "85% match" which → scorePercent=85 → classification="match" per
-// the 80% threshold. Real Claude output replaces this when Q11 keys
-// land; the envelope shape stays identical.
+// "form-vs-call" routes to Gemini Flash primary per PRD §9.1 (2026-07-14
+// swap off Claude Opus), GPT-4 fallback. CI runs without LLM API keys so
+// the router returns the deterministic [STUB-FORM-VS-CALL] envelope. The
+// stub text contains "85% match" which → scorePercent=85 →
+// classification="match" per the 80% threshold. Real Gemini Flash output
+// replaces this when Q11 keys land; the envelope shape stays identical.
 //
 // Tests pin:
 //   - auth gate (401/403 without token)
@@ -927,8 +927,8 @@ test.describe('Travel diagnostics API — form-vs-call comparison (PRD §4.1)', 
     expect(res.status(), `compare: ${await res.text()}`).toBe(200);
     const body = await res.json();
     expect(body.diagnosticId).toBe(id);
-    // PRD §9.1 — form-vs-call task routes to Claude Opus primary.
-    expect(body.model).toBe('claude-opus-4-7');
+    // PRD §9.1 — form-vs-call task routes to Gemini Flash primary (2026-07-14 swap off Claude Opus).
+    expect(body.model).toBe('gemini-flash');
     // CI runs without LLM API keys → stub mode.
     expect(body.stub).toBe(true);
     expect(body.summary).toMatch(/STUB-FORM-VS-CALL/);
@@ -1025,7 +1025,7 @@ test.describe('Travel diagnostics API — form-vs-call comparison (PRD §4.1)', 
   // PRD §4.1 Phase 1.5 — persist + cache. Eliminates duplicate-call noise
   // from LlmSpend telemetry (paired with the 76996c8 dashboard) by letting
   // DiagnosticDetail.jsx Section 3 read a cached envelope on reload
-  // instead of re-firing Claude Opus on every mount.
+  // instead of re-firing the LLM on every mount.
   test('POST /diagnostics/:id/form-vs-call/compare persists the result on TravelDiagnostic.formVsCallJson', async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || created.diagnosticIds.length === 0) test.skip(true, 'no diagnostic available');

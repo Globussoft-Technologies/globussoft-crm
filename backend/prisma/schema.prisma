@@ -1682,17 +1682,23 @@ model LlmCallLog {
   // class is a code-only change — no schema migration.
   task             String // search | citation | reasoning | talking-points | form-vs-call | bulk-text | call-summary | <unknown>
   model            String // claude-opus-4-7 | gemini-flash | perplexity-sonar | gpt-4 | claude-haiku
+  // Provider family, independent of the specific model string above — lets
+  // the API Analytics dashboard group/filter by "Gemini" vs "OpenAI" vs
+  // "Anthropic" without re-deriving it from `model` on every query. Backfilled
+  // via providerForModel()/inferProvider() at write time (lib/apiPricing.js).
+  provider         String   @default("unknown") // gemini | openai | anthropic | perplexity | groq | unknown
   reason           String? // primary | unknown-task-fallback | <future: fallback-after-primary-failure>
   promptTokens     Int      @default(0)
   completionTokens Int      @default(0)
   totalTokens      Int      @default(0)
-  costEstimate     Decimal  @default(0) @db.Decimal(12, 6) // up to 6dp; USD by convention
+  costEstimate     Decimal  @default(0) @db.Decimal(12, 6) // up to 6dp; USD by convention; from lib/apiPricing.js static table
   stub             Boolean  @default(true)
   // Optional caller context — useful for "which user / which surface burned
   // the most tokens". Both nullable so public-endpoint callers (no req.user)
   // just leave them null.
   userId           Int?
   surface          String? // free-form caller tag, e.g. "talking-points-regen", "form-vs-call-comparison"
+  status           String   @default("success") // success | failed — mirrors CronExecutionLog's status column
   errorMessage     String?  @db.Text // populated only when the call failed
   createdAt        DateTime @default(now())
 
@@ -1701,6 +1707,30 @@ model LlmCallLog {
   @@index([tenantId, createdAt])
   @@index([tenantId, task, createdAt])
   @@index([tenantId, model, createdAt])
+  @@index([provider, createdAt])
+  @@index([status, createdAt])
+}
+
+// Generic non-LLM external API call log — first consumer is SerpApi
+// (Google Flights/Hotels search, no token concept). Deliberately separate
+// from LlmCallLog rather than shoehorning token-shaped columns onto a
+// non-token API; the Super Admin API Analytics dashboard reads BOTH tables
+// and merges them into one combined view by provider.
+model ApiCallLog {
+  id           Int      @id @default(autoincrement())
+  tenantId     Int      @default(1)
+  provider     String // serpapi | <future providers>
+  endpoint     String? // e.g. "google_flights", "google_hotels"
+  status       String   @default("success") // success | failed
+  costEstimate Decimal  @default(0) @db.Decimal(12, 6) // flat $/request from lib/apiPricing.js, when known
+  durationMs   Int?
+  surface      String? // free-form caller tag, e.g. "tboClient-flight-search"
+  errorMessage String?  @db.Text
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([provider, createdAt])
+  @@index([status, createdAt])
 }
 
 model PipelineStage {
@@ -2557,11 +2587,11 @@ model CalendarIntegration {
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // @@index([tenantId]) removed — the FK relation already creates an implicit index on tenantId
 
   /// One calendar connection per (tenant, user, provider). Multi-tenancy isolation: a user's calendar
   /// connection in Wellness tenant is independent from their connection in Travel tenant.
   @@unique([tenantId, userId, provider])
-  // @@index([tenantId]) removed — the FK relation already creates an implicit index on tenantId
 }
 
 /// Per-user Gmail connection (OAuth2 via the Gmail API). Mirrors
@@ -2588,11 +2618,11 @@ model GmailIntegration {
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // @@index([tenantId]) removed — the FK relation already creates an implicit index on tenantId
 
   /// One Gmail connection per (tenant, user, provider). Multi-tenancy isolation: each tenant's
   /// users have independent Gmail connections.
   @@unique([tenantId, userId, provider])
-  // @@index([tenantId]) removed — the FK relation already creates an implicit index on tenantId
 }
 
 model CalendarEvent {
@@ -6788,6 +6818,22 @@ model EmailVerificationOtp {
   @@index([email, purpose])
 }
 
+/// Phone OTP verification — mirrors EmailVerificationOtp but for phone numbers.
+/// Pre-registration, identity-by-phone. Codes are bcrypt-hashed, expire in ~10 min.
+/// NOT tenant-scoped (at signup time no tenant exists yet).
+model PhoneVerificationOtp {
+  id        Int       @id @default(autoincrement())
+  phone     String
+  purpose   String // signup | customer-register
+  otpHash   String
+  expiresAt DateTime
+  usedAt    DateTime?
+  attempts  Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@index([phone, purpose])
+}
+
 /// Password-reset tokens, persisted to the DB so they survive backend
 /// restarts / redeploys / multiple instances (the old in-memory Map lost every
 /// outstanding link on any restart → "Invalid or expired" immediately).
@@ -8659,4 +8705,72 @@ model FxRate {
 
   @@unique([baseCurrency, quoteCurrency, fetchedAt])
   @@index([baseCurrency, quoteCurrency])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Super Admin Portal — Cron Maintenance (system-wide, NOT tenant-scoped;
+// crons run once per process across all tenants, so config/logs live at
+// the platform level, unlike TenantSetting).
+// ─────────────────────────────────────────────────────────────────────────
+
+// One row per registered cron engine. `name` is the stable machine key each
+// engine passes to lib/cronRegistry.register({name, ...}) — e.g.
+// "leadScoringEngine", "quoteExpirySweep". A row is upserted lazily the
+// first time an engine registers (self-healing: a fresh DB or a newly
+// added engine needs zero manual setup — see cronRegistry.js). `schedule`
+// and `enabled` are the live, admin-editable override; when null/unset the
+// registry falls back to the engine's own hardcoded defaultSchedule so
+// nothing breaks before an admin ever visits the portal.
+model CronConfig {
+  id           Int      @id @default(autoincrement())
+  name         String   @unique // engine's stable key, e.g. "leadScoringEngine"
+  description  String?  @db.Text
+  schedule     String // live cron expression (node-cron syntax)
+  enabled      Boolean  @default(true)
+  isSystem     Boolean  @default(true) // true = one of the 46 built-in engines (cannot be deleted, only disabled); false = admin-created dynamic cron
+  handlerKey   String? // for isSystem=false rows: which registered generic handler to invoke
+  metadataJson String?  @db.Text // free-form JSON for dynamic-cron config (isSystem=false)
+  createdBy    String? // super-admin username, or "system" for auto-registered engine rows
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  logs CronExecutionLog[]
+
+  @@index([enabled])
+}
+
+// One row per cron TICK (not per schedule) — a full execution history.
+model CronExecutionLog {
+  id           Int        @id @default(autoincrement())
+  cronConfigId Int
+  cronConfig   CronConfig @relation(fields: [cronConfigId], references: [id], onDelete: Cascade)
+  cronName     String // denormalized copy of CronConfig.name so logs survive a cron being renamed/deleted-then-recreated
+  startedAt    DateTime   @default(now())
+  finishedAt   DateTime?
+  durationMs   Int?
+  status       String     @default("running") // running, success, failed
+  errorMessage String?    @db.Text
+  triggerType  String     @default("scheduled") // scheduled, manual, startup
+  instance     String? // hostname/PID — useful once this runs on >1 server
+  metadataJson String?    @db.Text
+
+  @@index([cronConfigId, startedAt])
+  @@index([cronName, startedAt])
+  @@index([status])
+  @@index([startedAt])
+}
+
+// Global (non-tenant) key/value settings for the Super Admin portal.
+// First consumer: cron log retention window. Mirrors TenantSetting's
+// freeform-value + category shape but at the platform level.
+model SystemSetting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique // e.g. "cron_log_retention_days"
+  value     String   @db.Text // freeform; caller parses
+  category  String?  @db.VarChar(50)
+  updatedBy String? // super-admin username
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
 }

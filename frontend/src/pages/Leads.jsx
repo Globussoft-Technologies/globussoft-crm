@@ -76,6 +76,9 @@ const Leads = () => {
   const auth = useContext(AuthContext);
   const isWellness = auth?.tenant?.vertical === 'wellness';
   const isTravel = auth?.tenant?.vertical === 'travel';
+  // Only ADMINs may assign / reassign leads. All other roles see the
+  // assignee name as plain text and have no checkbox / bulk-assign surface.
+  const isAdmin = auth?.user?.role === 'ADMIN';
   const [leads, setLeads] = useState([]);
   const [staff, setStaff] = useState([]);
   const [services, setServices] = useState([]);
@@ -383,8 +386,8 @@ const Leads = () => {
         </button>
       </header>
 
-      {/* Bulk Assign Bar */}
-      {selectedLeads.length > 0 && (
+      {/* Bulk Assign Bar — admin only */}
+      {isAdmin && selectedLeads.length > 0 && (
         <div className="card" style={{ padding: '0.75rem 1.25rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', flexWrap: 'wrap' }}>
           <Users size={18} color="var(--primary-color, var(--accent-color))" />
           <span style={{ fontWeight: '500', fontSize: '0.875rem' }}>{selectedLeads.length} lead{selectedLeads.length !== 1 ? 's' : ''} selected</span>
@@ -435,9 +438,11 @@ const Leads = () => {
           <table className="leads-table" style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
-                <th style={{ padding: '1rem', width: '40px' }}>
-                  <input type="checkbox" checked={selectedLeads.length === filteredLeads.length && filteredLeads.length > 0} onChange={toggleSelectAll} style={{ cursor: 'pointer' }} />
-                </th>
+                {isAdmin && (
+                  <th style={{ padding: '1rem', width: '40px' }}>
+                    <input type="checkbox" checked={selectedLeads.length === filteredLeads.length && filteredLeads.length > 0} onChange={toggleSelectAll} style={{ cursor: 'pointer' }} />
+                  </th>
+                )}
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Company</th>
@@ -451,9 +456,9 @@ const Leads = () => {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="9" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
+                <tr><td colSpan={isAdmin ? 9 : 8} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
               ) : filteredLeads.length === 0 ? (
-                <tr><td colSpan="9" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
+                <tr><td colSpan={isAdmin ? 9 : 8} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
               ) : filteredLeads.map(lead => (
                 <tr
                   key={lead.id}
@@ -462,9 +467,11 @@ const Leads = () => {
                   onClick={() => navigate(`/contacts/${lead.id}`)}
                   title="Open lead detail"
                 >
-                  <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
-                    <input type="checkbox" checked={selectedLeads.includes(lead.id)} onChange={() => toggleSelect(lead.id)} style={{ cursor: 'pointer' }} />
-                  </td>
+                  {isAdmin && (
+                    <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
+                      <input type="checkbox" checked={selectedLeads.includes(lead.id)} onChange={() => toggleSelect(lead.id)} style={{ cursor: 'pointer' }} />
+                    </td>
+                  )}
                   <td style={{ padding: '1rem', fontWeight: '500' }}>{lead.name}</td>
                   <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.email}</td>
                   <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.company}</td>
@@ -494,17 +501,23 @@ const Leads = () => {
                     </span>
                   </td>
                   <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
-                    <select
-                      className="input-field"
-                      value={lead.assignedToId || ''}
-                      onChange={e => handleAssign(lead.id, e.target.value)}
-                      style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
-                    >
-                      <option value="">Unassigned</option>
-                      {staff.map(s => (
-                        <option key={s.id} value={s.id}>{s.name || s.email}</option>
-                      ))}
-                    </select>
+                    {isAdmin ? (
+                      <select
+                        className="input-field"
+                        value={lead.assignedToId || ''}
+                        onChange={e => handleAssign(lead.id, e.target.value)}
+                        style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
+                      >
+                        <option value="">Unassigned</option>
+                        {staff.map(s => (
+                          <option key={s.id} value={s.id}>{s.name || s.email}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span style={{ fontSize: '0.875rem', color: lead.assignedToId ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                        {lead.assignedTo?.name || lead.assignedTo?.email || 'Unassigned'}
+                      </span>
+                    )}
                   </td>
                   <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
                     {formatDate(lead.createdAt)}

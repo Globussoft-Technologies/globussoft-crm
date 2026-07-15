@@ -1,4 +1,4 @@
-const cron = require('node-cron');
+const cronRegistry = require('../lib/cronRegistry');
 const prisma = require("../lib/prisma");
 
 // Map RetentionPolicy.entity → prisma model property name. Resolved
@@ -178,12 +178,18 @@ async function runRetentionSweep() {
  * Initialize the retention cron job (daily at 03:00 server time).
  * Wire this in server.js: `require('./cron/retentionEngine').initRetentionCron()`.
  */
+async function tick() {
+  console.log('[Retention] Cron tick — running daily retention sweep...');
+  return runRetentionSweep();
+}
+
 function initRetentionCron() {
-  cron.schedule('0 3 * * *', () => {
-    console.log('[Retention] Cron tick — running daily retention sweep...');
-    runRetentionSweep().catch(err => console.error('[Retention] Cron failure:', err));
-  });
-  console.log('[Retention] Cron scheduled: daily at 03:00.');
+  cronRegistry.register({
+    name: 'retentionEngine',
+    description: 'Daily GDPR/DPDP retention sweep — purges rows past their RetentionPolicy window',
+    defaultSchedule: '0 3 * * *',
+    tickFn: tick,
+  }).catch((e) => console.error('[Retention] cronRegistry registration failed:', e.message));
 }
 
 // #576 — default retention windows for new wellness tenants. Matches

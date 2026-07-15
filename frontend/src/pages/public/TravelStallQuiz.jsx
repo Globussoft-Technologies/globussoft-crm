@@ -65,7 +65,7 @@ export default function TravelStallQuiz() {
     return bank.questions.every((q) => answers[q.id]);
   }, [bank, answers]);
 
-  const phoneOk = /^\+?\d[\d\s-]{7,}$/.test(lead.phone);
+  const phoneOk = /^\+?[\d\s\-().]{7,15}$/.test(lead.phone);
   const nameOk = lead.name.trim().length >= 2;
   const canSubmit = allAnswered && nameOk && phoneOk && !submitting;
 
@@ -180,7 +180,7 @@ export default function TravelStallQuiz() {
           <input
             placeholder="Phone (+91 …) *"
             value={lead.phone}
-            onChange={(e) => setLead({ ...lead, phone: e.target.value })}
+            onChange={(e) => setLead({ ...lead, phone: e.target.value.replace(/[^\d+\s\-().]/g, '') })}
             style={input}
             aria-required="true"
             inputMode="tel"

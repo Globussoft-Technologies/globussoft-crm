@@ -31,6 +31,8 @@ function formatPhone(raw) {
  * Top: current month leaderboard, referral pipeline.
  * Below: search a patient -> see balance + history + manual credit.
  */
+const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
+
 export default function Loyalty() {
   const [tab, setTab] = useState('overview'); // overview | search | referrals
   const [leaderboard, setLeaderboard] = useState([]);
@@ -366,6 +368,10 @@ function ReferralsTab({ referrals, onChanged }) {
   const submit = async (e) => {
     e.preventDefault();
     if (!form.referrerPatientId || !form.referredName || !form.referredPhone) return;
+    if (!PHONE_RE.test(form.referredPhone.trim())) {
+      notify.error('Enter a valid phone number (digits, +, spaces, hyphens only)');
+      return;
+    }
     try {
       await fetchApi('/api/wellness/referrals', {
         method: 'POST',
@@ -412,7 +418,14 @@ function ReferralsTab({ referrals, onChanged }) {
         <form onSubmit={submit} className="glass" style={{ padding: '1rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem' }}>
           <input placeholder="Referrer patient ID" required value={form.referrerPatientId} onChange={(e) => setForm({ ...form, referrerPatientId: e.target.value })} style={inputStyle} />
           <input placeholder="New person's name" required value={form.referredName} onChange={(e) => setForm({ ...form, referredName: e.target.value })} style={inputStyle} />
-          <input placeholder="Phone (10-digit)" required value={form.referredPhone} onChange={(e) => setForm({ ...form, referredPhone: e.target.value })} style={inputStyle} />
+          <input
+            placeholder="Phone (e.g. +91 98765 43210)"
+            type="tel"
+            required
+            value={form.referredPhone}
+            onChange={(e) => setForm({ ...form, referredPhone: e.target.value.replace(/[^\d+\s\-().]/g, '') })}
+            style={inputStyle}
+          />
           <input placeholder="Email (optional)" value={form.referredEmail} onChange={(e) => setForm({ ...form, referredEmail: e.target.value })} style={inputStyle} />
           <button type="submit" style={{ padding: '0.45rem 0.9rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Save</button>
         </form>

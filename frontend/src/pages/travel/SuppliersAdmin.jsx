@@ -73,6 +73,7 @@ const SUPPLIER_CATEGORIES = [
 // client-side hint + soft-validation (the backend re-validates regardless).
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z][Z][0-9A-Z]$/;
 const GSTIN_HINT = "Format: 22ABCDE1234F1Z5";
+const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
 
 // Credit-currency dropdown choices — per slice prompt + Tenant.defaultCurrency
 // canon (INR/USD/EUR/GBP/AED/SAR). Default INR matches backend slice 1 default.
@@ -469,6 +470,11 @@ export default function SuppliersAdmin() {
     const gstinTrimmed = form.gstin ? form.gstin.toUpperCase().trim() : "";
     if (gstinTrimmed && !GSTIN_REGEX.test(gstinTrimmed)) {
       notify.error(`Invalid GSTIN. ${GSTIN_HINT}`);
+      return;
+    }
+    const phoneTrimmed = (form.phone || "").trim();
+    if (phoneTrimmed && !PHONE_RE.test(phoneTrimmed)) {
+      notify.error("Enter a valid phone number (digits, +, spaces, hyphens only)");
       return;
     }
     setSaving(true);
@@ -1284,10 +1290,10 @@ export default function SuppliersAdmin() {
             aria-label="Contact person"
           />
           <input
-            placeholder="Phone"
+            placeholder="Phone (e.g. +91 98765 43210)"
             type="tel"
             value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/[^\d+\s\-().]/g, '') })}
             style={inputStyle}
             aria-label="Phone"
           />

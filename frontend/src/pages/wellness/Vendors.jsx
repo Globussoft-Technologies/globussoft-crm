@@ -7,6 +7,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import PageHeader from '../../components/PageHeader';
 
+const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
 const EMPTY = { name: '', contactPerson: '', phone: '', email: '', gstin: '', addressLine: '', isActive: true };
 
 const FILTERS = [
@@ -52,6 +53,11 @@ export default function Vendors() {
 
   const submit = async (e) => {
     e.preventDefault();
+    const phone = (form.phone || '').trim();
+    if (phone && !PHONE_RE.test(phone)) {
+      notify.error('Enter a valid phone number (digits, +, spaces, hyphens only)');
+      return;
+    }
     setSaving(true);
     try {
       if (editingId) {
@@ -134,7 +140,13 @@ export default function Vendors() {
         <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.5rem' }}>
           <input placeholder="Name — e.g. Sterile Supplies Pvt Ltd" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
           <input placeholder="Contact person" value={form.contactPerson} onChange={(e) => setForm({ ...form, contactPerson: e.target.value })} style={inputStyle} />
-          <input placeholder="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={inputStyle} />
+          <input
+            placeholder="Phone (e.g. +91 98765 43210)"
+            type="tel"
+            value={form.phone}
+            onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/[^\d+\s\-().]/g, '') })}
+            style={inputStyle}
+          />
           <input placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={inputStyle} />
           <input placeholder="GSTIN (15 chars)" maxLength={15} value={form.gstin} onChange={(e) => setForm({ ...form, gstin: e.target.value.toUpperCase() })} style={inputStyle} />
           <input placeholder="Address" value={form.addressLine} onChange={(e) => setForm({ ...form, addressLine: e.target.value })} style={{ ...inputStyle, gridColumn: 'span 2' }} />

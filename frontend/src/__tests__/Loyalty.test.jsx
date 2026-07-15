@@ -544,7 +544,7 @@ describe('Loyalty — Referrals tab', () => {
 
     expect(screen.getByPlaceholderText(/Referrer patient ID/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/New person's name/i)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/Phone \(10-digit\)/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/^Phone/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Email \(optional\)/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Save$/i })).toBeInTheDocument();
   });
@@ -562,7 +562,7 @@ describe('Loyalty — Referrals tab', () => {
     fireEvent.change(screen.getByPlaceholderText(/New person's name/i), {
       target: { value: 'Meera Joshi' },
     });
-    fireEvent.change(screen.getByPlaceholderText(/Phone \(10-digit\)/i), {
+    fireEvent.change(screen.getByPlaceholderText(/^Phone/i), {
       target: { value: '9876500000' },
     });
     // Leave email blank — should serialize as `undefined` and be stripped by JSON.stringify.

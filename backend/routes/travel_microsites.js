@@ -222,6 +222,7 @@ function uploadDocsOrReject(req, res, next) {
   docUpload.fields([
     { name: "passport", maxCount: 1 },
     { name: "aadhaar", maxCount: 1 },
+    { name: "consentLetter", maxCount: 1 },
   ])(req, res, (err) => {
     if (!err) return next();
     if (err.code === "LIMIT_FILE_SIZE") {
@@ -1336,6 +1337,7 @@ router.get("/microsites/public/:publicUuid/draft-summary", async (req, res) => {
       // Document-upload status (booleans + consent timestamp only)
       hasPassportDoc: !!docs.passport,
       hasAadhaarDoc: !!docs.aadhaar,
+      hasConsentLetterDoc: !!docs.consentLetter,
       consentGiven: !!docs.consentCapturedAt,
       consentCapturedAt: docs.consentCapturedAt || null,
     });
@@ -2089,10 +2091,11 @@ router.post("/microsites/public/:publicUuid/verify/aadhaar/callback", async (req
 // flow which only ever returns last-4).
 //
 // multipart/form-data fields:
-//   draftToken (text, required)
-//   consent    (text "true", required)
-//   passport   (file, required unless already uploaded on the draft)
-//   aadhaar    (file, required unless already uploaded on the draft)
+//   draftToken     (text, required)
+//   consent        (text "true", required)
+//   passport       (file, required unless already uploaded on the draft)
+//   aadhaar        (file, required unless already uploaded on the draft)
+//   consentLetter  (file, required unless already uploaded on the draft — Word/PDF)
 router.post(
   "/microsites/public/:publicUuid/documents",
   uploadDocsOrReject,
@@ -2139,17 +2142,25 @@ router.post(
 
       const passportFile = req.files?.passport?.[0] || null;
       const aadhaarFile = req.files?.aadhaar?.[0] || null;
+      const consentLetterFile = req.files?.consentLetter?.[0] || null;
 
-      // Both documents must be present AFTER this operation. A doc already
+      // All three documents must be present AFTER this operation. A doc already
       // stored on the draft satisfies the requirement even without a fresh
       // file this time (so a parent can re-upload just one). Neither present
       // and none stored → reject.
       const willHavePassport = !!passportFile || !!existingDocs.passport;
       const willHaveAadhaar = !!aadhaarFile || !!existingDocs.aadhaar;
+      const willHaveConsentLetter = !!consentLetterFile || !!existingDocs.consentLetter;
       if (!willHavePassport || !willHaveAadhaar) {
         return res.status(400).json({
           error: "Both Passport and Aadhaar documents are required",
           code: "MISSING_FILES",
+        });
+      }
+      if (!willHaveConsentLetter) {
+        return res.status(400).json({
+          error: "Parent consent letter is required",
+          code: "MISSING_CONSENT_LETTER",
         });
       }
 
@@ -2163,6 +2174,11 @@ router.post(
         if (existingDocs.aadhaar) await visaDocStore.removeDoc(existingDocs.aadhaar);
         const d = await visaDocStore.storeDoc(aadhaarFile.buffer, aadhaarFile.mimetype);
         nextDocs.aadhaar = { ...d, uploadedAt: new Date().toISOString() };
+      }
+      if (consentLetterFile) {
+        if (existingDocs.consentLetter) await visaDocStore.removeDoc(existingDocs.consentLetter);
+        const d = await visaDocStore.storeDoc(consentLetterFile.buffer, consentLetterFile.mimetype);
+        nextDocs.consentLetter = { ...d, uploadedAt: new Date().toISOString() };
       }
       nextDocs.consentCapturedAt = new Date().toISOString();
 
@@ -2178,6 +2194,7 @@ router.post(
         documents: {
           passport: !!nextDocs.passport,
           aadhaar: !!nextDocs.aadhaar,
+          consentLetter: !!nextDocs.consentLetter,
           consentCapturedAt: nextDocs.consentCapturedAt,
         },
       });

@@ -251,6 +251,7 @@ const TravelQuoteTemplates = lazy(() => import("./pages/travel/QuoteTemplates"))
 // CRUD surfaces that mirror the QuotesAdmin / InvoicesAdmin pattern.
 const TravelCancellationPolicies = lazy(() => import("./pages/travel/CancellationPolicies"));
 const TravelLeads = lazy(() => import("./pages/travel/Leads"));
+const TravelPipeline = lazy(() => import("./pages/travel/TravelPipeline"));
 const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
 const TravelReviews = lazy(() => import("./pages/travel/Reviews"));
@@ -577,6 +578,9 @@ function GenericOnly({ children }) {
   const { tenant, user } = useContext(AuthContext);
   if (tenant?.vertical === 'wellness') {
     return <Navigate to={landingFor(user, tenant)} replace />;
+  }
+  if (tenant?.vertical === 'travel') {
+    return <Navigate to="/travel/pipeline" replace />;
   }
   return children;
 }
@@ -1496,6 +1500,7 @@ export default function App() {
               <Route path="travel/diagnostics/banks/new" element={<TravelOnly><TravelDiagnosticBuilder /></TravelOnly>} />
               <Route path="travel/diagnostics/:id" element={<TravelOnly><TravelDiagnosticDetail /></TravelOnly>} />
               <Route path="travel/itineraries" element={<TravelOnly><TravelItineraries /></TravelOnly>} />
+              <Route path="travel/pipeline" element={<TravelOnly><TravelPipeline /></TravelOnly>} />
               <Route path="travel/trips" element={<TravelOnly><TravelTrips /></TravelOnly>} />
               <Route path="travel/trips/:id" element={<TravelOnly><TravelTripDetail /></TravelOnly>} />
               {/* #912 — canonical kebab-case path matches sibling travel routes

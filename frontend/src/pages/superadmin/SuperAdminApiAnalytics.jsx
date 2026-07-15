@@ -297,12 +297,20 @@ export default function SuperAdminApiAnalytics() {
                 ) : (
                   <ResponsiveContainer width="100%" height={260}>
                     <PieChart>
-                      <Pie data={providerPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={(e) => `${e.name}: ${e.value}`}>
+                      <Pie data={providerPie} dataKey="value" nameKey="name" cx="40%" cy="50%" outerRadius={90} label={false}>
                         {providerPie.map((d) => (
                           <Cell key={d.name} fill={d.color} />
                         ))}
                       </Pie>
                       <Tooltip contentStyle={{ background: "#1a1d24", border: "1px solid rgba(255,255,255,0.1)", fontSize: 12 }} />
+                      <Legend
+                        layout="vertical"
+                        align="right"
+                        verticalAlign="middle"
+                        formatter={(value, entry) => (
+                          <span style={{ color: entry.color, fontSize: 12 }}>{`${value}: ${entry.payload.value}`}</span>
+                        )}
+                      />
                     </PieChart>
                   </ResponsiveContainer>
                 )}

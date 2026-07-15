@@ -1778,20 +1778,22 @@ describe('<TripDetail /> — pending registration document view buttons', () => 
       documents: {
         passport: { storage: 'disk', key: 'passport-99.jpg', url: '/api/uploads/visa-docs/passport-99.jpg' },
         // aadhaar intentionally absent
+        // consentLetter intentionally absent
       },
     }),
   };
 
-  it('renders "View" passport button when passport uploaded, "not uploaded" for aadhaar', async () => {
+  it('renders "View" passport button when passport uploaded, "not uploaded" for aadhaar and consent letter', async () => {
     installFetchMock({ pendingRegs: [regWithPassport] });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     expect(await screen.findByTestId('view-passport-99')).toBeInTheDocument();
     expect(screen.getByTestId('aadhaar-missing-99')).toBeInTheDocument();
+    expect(screen.getByTestId('consent-letter-missing-99')).toBeInTheDocument();
   });
 
-  it('renders both "not uploaded" placeholders when extrasJson is null', async () => {
+  it('renders all three "not uploaded" placeholders when extrasJson is null', async () => {
     const regNoDocs = { ...regWithPassport, id: 100, extrasJson: null };
     installFetchMock({ pendingRegs: [regNoDocs] });
     renderPage();
@@ -1799,6 +1801,28 @@ describe('<TripDetail /> — pending registration document view buttons', () => 
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     expect(await screen.findByTestId('passport-missing-100')).toBeInTheDocument();
     expect(screen.getByTestId('aadhaar-missing-100')).toBeInTheDocument();
+    expect(screen.getByTestId('consent-letter-missing-100')).toBeInTheDocument();
+  });
+
+  it('renders "View" consent letter button when consent letter uploaded', async () => {
+    const regWithAll = {
+      ...regWithPassport,
+      id: 101,
+      extrasJson: JSON.stringify({
+        documents: {
+          passport: { storage: 'disk', key: 'passport-101.jpg', url: '/api/uploads/visa-docs/passport-101.jpg' },
+          aadhaar: { storage: 'disk', key: 'aadhaar-101.jpg', url: '/api/uploads/visa-docs/aadhaar-101.jpg' },
+          consentLetter: { storage: 'disk', key: 'consent-101.pdf', url: '/api/uploads/visa-docs/consent-101.pdf' },
+        },
+      }),
+    };
+    installFetchMock({ pendingRegs: [regWithAll] });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    expect(await screen.findByTestId('view-passport-101')).toBeInTheDocument();
+    expect(screen.getByTestId('view-aadhaar-101')).toBeInTheDocument();
+    expect(screen.getByTestId('view-consent-letter-101')).toBeInTheDocument();
   });
 
   it('clicking passport View calls the view-url API and opens the signed URL', async () => {

@@ -56,6 +56,50 @@ The code already prefers S3 when `AWS_S3_BUCKET_NAME` is set, with a local-disk 
 ### 3.6 (Larger, later) Co-locate the brochure engine off the API box
 The vendored brochure engine (~470 MB + its Chromium) is another Chromium workload. Running it on the same isolated render host as the WhatsApp gateway removes it (and its transient Chromium RAM) from the API box entirely. Bigger lift; do after 3.1–3.5.
 
+### 3.7 DragonflyDB / Redis for hot-data caching
+DragonflyDB is a modern, multi-threaded, Redis-compatible in-memory store. It can be introduced as an **opt-in caching layer** once the bigger Chromium/S3 wins above are in place and the CRM is hitting read-heavy hot paths that MySQL struggles with.
+
+**Good fits for a cache:**
+
+| Use case | Why it helps | Current fallback |
+|---|---|---|
+| Tenant settings / feature flags | Read on almost every request; rarely changes | MySQL + in-process memoization |
+| RBAC roles & permissions | Stable per tenant; expensive to re-resolve | `rbac.js` DB lookups |
+| Audit-log list (`GET /api/audit`) | Same 100-row query repeatedly; bounded dataset | `prisma.auditLog.findMany` |
+| FX rates (`/api/fx/latest`) | Updated hourly; very read-heavy | `FxRate` table |
+| Rate-limit counters (login, WhatsApp outbound) | Needs fast atomic increments across workers | In-memory or DB counters |
+| Socket.IO adapter / pub-sub | Shares real-time state across multiple backend instances | In-memory (single-node only) |
+
+**What it will NOT fix:**
+
+- It would **not** have prevented the audit backfill OOM (`backend/lib/audit.js` loading whole tables into JS heap). That is a code-level pagination/row-limit issue, not a cache problem.
+- It is not a substitute for fixing unbounded queries, missing `take` clauses, or un-paginated admin endpoints.
+
+**Integration sketch:**
+
+1. Run DragonflyDB on the demo box (or use a managed Redis) on a non-conflicting port, e.g. `6379`.
+2. Add a singleton `backend/lib/cache.js` using `ioredis` (or `redis`) with connection params from env:
+   - `CACHE_URL` (e.g. `redis://localhost:6379`)
+   - `CACHE_ENABLED=1`
+   - `CACHE_DEFAULT_TTL_SECONDS=300`
+3. Wrap hot reads with a `getOrSet(key, factory, ttl)` helper that:
+   - Checks cache first.
+   - Falls back to the DB factory on miss.
+   - Writes the result back to cache.
+4. Add cache invalidation hooks in the corresponding write paths (e.g., clear `tenant:<id>:settings` when `TenantSettings` is updated).
+5. Keep cache usage **explicit and localized** — do not silently cache every Prisma query. Start with the table above.
+
+**Trade-offs:**
+
+| Pros | Cons |
+|---|---|
+| Sub-ms reads for hot data | Another service to install, secure, upgrade, and monitor |
+| Reduces MySQL CPU / query time | Cache invalidation complexity; stale data bugs if not careful |
+| Shares state if backend is scaled horizontally | Adds a network hop on cache miss |
+| Higher memory ceiling than single-threaded Redis | Not justified until actual read load is the bottleneck |
+
+**When to do it:** after 3.1–3.5 are done and you have measured MySQL slow-query pressure or request latency from the hot paths above. For the current demo footprint, this is premature.
+
 ---
 
 ## 4. Sequencing (independent of, but complementary to, the gateway)
@@ -67,9 +111,11 @@ The vendored brochure engine (~470 MB + its Chromium) is another Chromium worklo
 | 4.3 | 3.1 (WhatsApp Chromium off host) | Gateway live | Yes (flag OFF) |
 | 4.4 | Remove backend `puppeteer` dep | 4.2 (flyer moved/uses core) + 4.3 | Yes (re-add dep) |
 | 4.5 | 3.6 (brochure engine off API box) | render host provisioned | Yes |
+| 4.6 | 3.7 (DragonflyDB/Redis cache for hot reads) | cache host provisioned + measured hot-path need | Yes (disable `CACHE_ENABLED`) |
 
 ---
 
 ## 5. Non-goals here
 - No changes to WhatsApp behavior, APIs, schema, Socket.IO, or lead capture (that is the gateway track's concern, and it too preserves behavior).
 - No git actions as part of documenting/implementing these items.
+- No mandatory cache adoption; DragonflyDB/Redis is documented as an opt-in optimization only.

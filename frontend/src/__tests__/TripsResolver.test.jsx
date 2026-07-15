@@ -15,7 +15,7 @@
  * jsdom doesn't actually blow away the test document.
  */
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
@@ -40,19 +40,32 @@ describe('<TripsResolver />', () => {
   let documentOpen;
   let documentWrite;
   let documentClose;
+  let origOpen;
+  let origWrite;
+  let origClose;
 
   beforeEach(() => {
     global.fetch = vi.fn();
     // Stub document.open/write/close so the test document isn't replaced.
+    // Use direct property assignment on the real document object rather than
+    // vi.stubGlobal('document', {...}) — the latter replaces the entire
+    // document reference, which breaks RTL's render() because it needs the
+    // real document.body.appendChild to mount the React tree.
+    origOpen = document.open.bind(document);
+    origWrite = document.write.bind(document);
+    origClose = document.close.bind(document);
     documentOpen = vi.fn();
     documentWrite = vi.fn();
     documentClose = vi.fn();
-    vi.stubGlobal('document', {
-      ...document,
-      open: documentOpen,
-      write: documentWrite,
-      close: documentClose,
-    });
+    document.open = documentOpen;
+    document.write = documentWrite;
+    document.close = documentClose;
+  });
+
+  afterEach(() => {
+    document.open = origOpen;
+    document.write = origWrite;
+    document.close = origClose;
   });
 
   it('writes the server-rendered HTML into the document when featured-html returns 200', async () => {

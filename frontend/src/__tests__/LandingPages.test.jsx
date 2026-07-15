@@ -43,7 +43,7 @@
  * the test is marked `it.skip()` with a TODO referencing a GH issue
  * filed via `gh issue create` (no source-file edits in this scope).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -120,6 +120,8 @@ function renderPage() {
 }
 
 describe('<LandingPages /> — index page surface', () => {
+  let clipboardWriteText;
+
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);
@@ -129,6 +131,23 @@ describe('<LandingPages /> — index page surface', () => {
     notifyInfo.mockReset();
     confirmMock.mockReset();
     confirmMock.mockResolvedValue(true);
+    // jsdom doesn't implement navigator.clipboard — stub it so handleCopyUrl
+    // doesn't throw an unhandled TypeError in tests that trigger a copy.
+    clipboardWriteText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: clipboardWriteText },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    // Restore clipboard so other test files start clean.
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
   });
 
   it('renders the header + subtitle + a top-right "Create Page" CTA', async () => {
@@ -280,22 +299,26 @@ describe('<LandingPages /> — index page surface', () => {
     });
   });
 
-  it('clicking Publish when another page is already PUBLISHED calls notify.error (hard-block)', async () => {
+  it('clicking Publish when another page is already PUBLISHED is hard-blocked (button disabled)', async () => {
     // samplePages has id=11 as PUBLISHED and id=12 as DRAFT.
-    // The hard-block must prevent publishing id=12 and call notify.error instead.
+    // The SUT disables the Publish button for id=12 because a live page
+    // already exists — clicking a disabled button fires no handler and
+    // no API call. The tooltip carries the error message; notify.error
+    // is only called if the user somehow bypasses the disabled state.
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
 
-    fetchApiMock.mockClear();
-    // The Publish button for the DRAFT page (id=12) should be disabled by the SUT.
-    // Clicking it should fire notify.error, not the API.
+    // The DRAFT page's Publish button should be disabled.
     const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
+    expect(publishBtn).toBeDisabled();
+
+    fetchApiMock.mockClear();
+    // Fire click anyway — disabled buttons don't invoke onClick in browsers
+    // but RTL's fireEvent does propagate. The SUT handler exits early because
+    // anotherLive is truthy and calls notify.error; assert no API call.
     fireEvent.click(publishBtn);
 
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalled();
-    });
-    // No publish API call should have fired.
+    // No publish API call should have fired regardless of handler path.
     const publishCall = fetchApiMock.mock.calls.find(
       ([u, o]) => typeof u === 'string' && u.endsWith('/publish') && o?.method === 'POST',
     );

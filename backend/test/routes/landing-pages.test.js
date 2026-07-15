@@ -878,12 +878,13 @@ describe('GET /p/:slug (public render, no auth)', () => {
     );
   });
 
-  test('DRAFT (non-PUBLISHED) page → 404 HTML, NO visit recorded', async () => {
+  test('DRAFT (non-PUBLISHED) page → 302 redirect to /trips, NO visit recorded', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'draft-page', status: 'DRAFT', content: '[]', tenantId: 1,
     });
     const res = await request(makeApp()).get('/p/draft-page');
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe('/trips');
     expect(prisma.landingPage.update).not.toHaveBeenCalled();
     expect(prisma.landingPageAnalytics.create).not.toHaveBeenCalled();
   });
@@ -1810,7 +1811,7 @@ describe('GET /api/landing-pages/:id/preview (render through production renderer
     expect(res.text).toContain('Where Exposure Becomes Perspective');
   });
 
-  test('preview renders DRAFT pages (the /p/:slug route would 404)', async () => {
+  test('preview renders DRAFT pages (the /p/:slug route would redirect to /trips)', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 77, slug: 's', title: 'T', status: 'DRAFT', tenantId: 1, content: '[]',
     });

@@ -299,26 +299,26 @@ describe('<LandingPages /> — index page surface', () => {
     });
   });
 
-  it('clicking Publish when another page is already PUBLISHED is hard-blocked (button disabled)', async () => {
+  it('clicking Publish when another page is already PUBLISHED calls notify.error (hard-block)', async () => {
     // samplePages has id=11 as PUBLISHED and id=12 as DRAFT.
-    // The SUT disables the Publish button for id=12 because a live page
-    // already exists — clicking a disabled button fires no handler and
-    // no API call. The tooltip carries the error message; notify.error
-    // is only called if the user somehow bypasses the disabled state.
+    // The SUT hard-blocks via notify.error and the Publish button is disabled.
+    // RTL's fireEvent.click still invokes the onClick handler on a disabled
+    // button (unlike a real browser), so we can verify the error path.
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
 
-    // The DRAFT page's Publish button should be disabled.
+    // Publish button for the DRAFT page should be disabled (hard-block UX).
     const publishBtn = screen.getByRole('button', { name: /^Publish$/i });
     expect(publishBtn).toBeDisabled();
 
     fetchApiMock.mockClear();
-    // Fire click anyway — disabled buttons don't invoke onClick in browsers
-    // but RTL's fireEvent does propagate. The SUT handler exits early because
-    // anotherLive is truthy and calls notify.error; assert no API call.
     fireEvent.click(publishBtn);
 
-    // No publish API call should have fired regardless of handler path.
+    // The handler calls notify.error naming the currently-live page.
+    await waitFor(() => expect(notifyError).toHaveBeenCalled());
+    expect(notifyError.mock.calls[0][0]).toMatch(/Spring Launch/);
+
+    // No publish API call should have fired.
     const publishCall = fetchApiMock.mock.calls.find(
       ([u, o]) => typeof u === 'string' && u.endsWith('/publish') && o?.method === 'POST',
     );
@@ -393,12 +393,11 @@ describe('<LandingPages /> — index page surface', () => {
     const cardTitle = screen.getByText('Spring Launch');
     const card = cardTitle.closest('.card');
     expect(card).toBeTruthy();
-    const buttons = card.querySelectorAll('button');
-    // The 3 buttons inside a published card: Unpublish (with text),
-    // duplicate (icon-only), delete (icon-only). DRAFT card is the
-    // same shape (Publish in place of Unpublish). Delete is the LAST
-    // button in the action row.
-    const deleteBtn = buttons[buttons.length - 1];
+    // The published card has a "Public Link" panel with a Copy button
+    // below the action row, so `buttons[last]` is unreliable. Pin by
+    // the explicit title="Delete" attribute instead.
+    const deleteBtn = card.querySelector('button[title="Delete"]');
+    expect(deleteBtn).toBeTruthy();
 
     fetchApiMock.mockClear();
     fireEvent.click(deleteBtn);

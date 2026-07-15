@@ -133,12 +133,14 @@ describe("TravelPipeline", () => {
   it("shows sub-line with stage names and deal count", async () => {
     renderPage();
     await screen.findByText("Travel Pipeline");
-    expect(screen.getByText(/Draft/)).toBeInTheDocument();
-    expect(screen.getByText(/Negotiation/)).toBeInTheDocument();
-    expect(screen.getByText(/Won/)).toBeInTheDocument();
-    expect(screen.getByText(/Lost/)).toBeInTheDocument();
-    expect(screen.getByText(/Achieved/)).toBeInTheDocument();
-    // deal count
+    // These words appear in the sub-line and also in KPI tiles / status dropdowns —
+    // use getAllByText to allow multiple matches.
+    expect(screen.getAllByText(/Draft/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/Negotiation/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/Won/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/Lost/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/Achieved/).length).toBeGreaterThanOrEqual(1);
+    // deal count appears in the sub-line
     expect(screen.getByText(String(DEFAULT_ITINS.length))).toBeInTheDocument();
   });
 
@@ -156,9 +158,10 @@ describe("TravelPipeline", () => {
   it("renders four KPI tiles", async () => {
     renderPage();
     await screen.findByText("Total pipeline value");
-    expect(screen.getByText("Won")).toBeInTheDocument();
+    // "Won" and "Lost" also appear as status options in dropdowns — allow multiple matches
+    expect(screen.getAllByText("Won").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("In negotiation")).toBeInTheDocument();
-    expect(screen.getByText("Lost")).toBeInTheDocument();
+    expect(screen.getAllByText("Lost").length).toBeGreaterThanOrEqual(1);
   });
 
   // 5. Loading state
@@ -255,7 +258,10 @@ describe("TravelPipeline", () => {
     await screen.findByText("Total pipeline value");
     // accepted = 124300 → won bucket; sent = 467000 → negotiation bucket; rejected = 210500 → lost bucket
     // total = 124300 + 467000 + 210500 = 801800 → ₹8,01,800
-    expect(screen.getByText(/₹8,01,800/)).toBeInTheDocument();
+    // Text may be split across DOM nodes, so use a custom matcher against the element's textContent.
+    expect(
+      screen.getByText((_, el) => Boolean(el && el.textContent?.replace(/\s/g, "").includes("8,01,800"))),
+    ).toBeInTheDocument();
   });
 
   // 13. Export CSV

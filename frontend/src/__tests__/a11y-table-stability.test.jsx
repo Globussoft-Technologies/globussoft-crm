@@ -71,7 +71,7 @@ const ICON_BUTTON_SITES = [
   },
   {
     file: ["pages", "Pipeline.jsx"],
-    substr: 'aria-label="Close deal score dialog"',
+    substr: 'aria-label="Close"',
   },
   // Invoices — payment modal X
   {

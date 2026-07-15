@@ -153,8 +153,10 @@ describe('Pipeline inline stage update (replaces drag-and-drop after table revam
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalledWith('Server error');
     });
-    // After error, the select reverts to original value
-    expect(stageSelect).toHaveValue('lead');
+    // After error, the select reverts to original value — wait for re-render
+    await waitFor(() => {
+      expect(screen.getAllByRole('combobox', { name: /change stage/i })[0]).toHaveValue('lead');
+    });
   });
 
   it('shows probability badge for each deal row', async () => {

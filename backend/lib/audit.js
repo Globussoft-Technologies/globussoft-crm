@@ -57,6 +57,33 @@
 const crypto = require('crypto');
 const prisma = require('./prisma');
 
+// Memory-safe audit-chain backfill. Without pagination, a tenant with a
+// large legacy AuditLog table (e.g. hundreds of thousands of null-hash rows
+// from E2E test pollution) would be loaded entirely into the JS heap by
+// `prisma.auditLog.findMany`, producing 7+ GB retained objects and an OOM.
+//
+// BACKFILL_BATCH_SIZE bounds the in-memory working set. Cursor pagination
+// keeps ordering deterministic (createdAt asc, id asc) while never re-reading
+// a row. The `maxIdAtStart` ceiling is still snapshotted so concurrent writes
+// cannot be forked by this pass.
+const BACKFILL_BATCH_SIZE = (() => {
+  const v = parseInt(process.env.AUDIT_BACKFILL_BATCH_SIZE, 10);
+  return Number.isFinite(v) && v > 0 ? v : 2000;
+})();
+
+// Inline backfill inside writeAudit is a fail-soft repair for legacy rows.
+// For very large tenants it is too expensive to run on the request path.
+// When the row count exceeds this limit we skip the inline repair and fall
+// back to GENESIS (same fail-soft behaviour as before); the operator can
+// run scripts/backfill-audit-chain.js or POST /api/audit/backfill later.
+// Set AUDIT_INLINE_BACKFILL_ROW_LIMIT=0 to disable inline backfill entirely.
+const INLINE_BACKFILL_ROW_LIMIT = (() => {
+  const v = parseInt(process.env.AUDIT_INLINE_BACKFILL_ROW_LIMIT, 10);
+  return Number.isFinite(v) && v >= 0 ? v : 5000;
+})();
+
+const DISABLE_AUDIT_INLINE_BACKFILL = process.env.DISABLE_AUDIT_INLINE_BACKFILL === '1';
+
 // canonicalize(obj) — sort object keys recursively before JSON.stringify so
 // the resulting string is byte-identical across Node versions. The hash
 // formula depends on this being deterministic; key-order changes would
@@ -156,17 +183,39 @@ async function writeAudit(entity, action, entityId, userId, tenantId, details, o
       if (prev && prev.hash == null) {
         // Latest row exists but its hash is null — legacy unbackfilled state.
         // Inline-repair the chain so this new write can anchor correctly.
-        try {
-          await backfillTenantChain(tenantIdNum);
-          prev = await prisma.auditLog.findFirst({
-            where: { tenantId: tenantIdNum },
-            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-            select: { hash: true },
-          });
-        } catch (backfillErr) {
-          // Backfill failed (likely tamper-conflict). Fall back to GENESIS;
-          // the integrity cron will surface the resulting fork.
-          console.warn(`[audit] inline backfill failed for tenant ${tenantIdNum}: ${backfillErr.message}`);
+        // For very large tenants this repair is too expensive on the request
+        // path, so we skip it when the table exceeds the configured limit.
+        let runInlineBackfill = !DISABLE_AUDIT_INLINE_BACKFILL;
+        if (runInlineBackfill && INLINE_BACKFILL_ROW_LIMIT >= 0) {
+          try {
+            const rowCount = await prisma.auditLog.count({
+              where: { tenantId: tenantIdNum },
+            });
+            if (rowCount > INLINE_BACKFILL_ROW_LIMIT) {
+              runInlineBackfill = false;
+              console.warn(
+                `[audit] tenant ${tenantIdNum} has ${rowCount} audit rows (limit ${INLINE_BACKFILL_ROW_LIMIT}); skipping inline backfill on write. Run scripts/backfill-audit-chain.js or POST /api/audit/backfill.`,
+              );
+            }
+          } catch (countErr) {
+            // If even counting fails, fail-soft: don't block the request.
+            runInlineBackfill = false;
+            console.warn(`[audit] auditLog.count failed for tenant ${tenantIdNum}: ${countErr.message}`);
+          }
+        }
+        if (runInlineBackfill) {
+          try {
+            await backfillTenantChain(tenantIdNum);
+            prev = await prisma.auditLog.findFirst({
+              where: { tenantId: tenantIdNum },
+              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+              select: { hash: true },
+            });
+          } catch (backfillErr) {
+            // Backfill failed (likely tamper-conflict). Fall back to GENESIS;
+            // the integrity cron will surface the resulting fork.
+            console.warn(`[audit] inline backfill failed for tenant ${tenantIdNum}: ${backfillErr.message}`);
+          }
         }
       }
       prevHash = prev && prev.hash ? prev.hash : genesisFor(tenantIdNum);
@@ -280,101 +329,120 @@ async function backfillTenantChain(tenantId) {
   });
   const maxIdAtStart = tailRow ? tailRow.id : 0;
 
-  const rows = await prisma.auditLog.findMany({
-    where: {
-      tenantId: tenantIdNum,
-      id: { lte: maxIdAtStart },
-    },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    select: {
-      id: true,
-      action: true,
-      entity: true,
-      entityId: true,
-      userId: true,
-      details: true,
-      createdAt: true,
-      prevHash: true,
-      hash: true,
-    },
-  });
-
   let walked = 0;
   let updated = 0;
   let skipped = 0;
   let lastHash = null;
+  let cursorId = null;
 
-  for (const row of rows) {
-    walked += 1;
-    const expectedPrev = lastHash == null ? genesisFor(tenantIdNum) : lastHash;
-    const payload = {
-      tenantId: tenantIdNum,
-      entity: row.entity,
-      action: row.action,
-      entityId: row.entityId,
-      userId: row.userId,
-      details: row.details,
-      createdAt: row.createdAt.toISOString(),
+  while (true) {
+    const query = {
+      where: {
+        tenantId: tenantIdNum,
+        id: { lte: maxIdAtStart },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: BACKFILL_BATCH_SIZE,
+      select: {
+        id: true,
+        action: true,
+        entity: true,
+        entityId: true,
+        userId: true,
+        details: true,
+        createdAt: true,
+        prevHash: true,
+        hash: true,
+      },
     };
-    const recomputed = computeHash(expectedPrev, payload);
-
-    if (row.hash != null) {
-      // The row already carries a hash. Distinguish two cases that can both
-      // surface here against a real-world DB (#558 hardening, PR #709 fallout):
-      //
-      //   (1) Content tampering — someone edited `details` / `entity` /
-      //       `userId` / `createdAt` after the row was written without also
-      //       updating `hash`. Recomputing with the row's OWN stored prevHash
-      //       will therefore disagree with the stored hash. This is a real
-      //       integrity failure and we MUST 409 — never silently re-stamp.
-      //
-      //   (2) Forked chain — writeAudit ran while a legacy null-hash row was
-      //       still the chain tail for this tenant. The fail-soft fallback
-      //       (`genesisFor(tenantId)` when the latest row's hash is null)
-      //       silently anchored the new row on GENESIS instead of the real
-      //       prior row. The row's CONTENT is untouched (recompute-with-
-      //       stored-prevHash matches stored-hash) but its `prevHash` doesn't
-      //       point at the row that actually precedes it in [createdAt asc,
-      //       id asc] order. We can safely re-stamp these — no information
-      //       loss because the content hash is intact.
-      //
-      // The distinguishing probe is `recomputeWithStoredPrev`: if that
-      // equals the stored hash, the row content has not been tampered with.
-      const recomputedWithStoredPrev = computeHash(row.prevHash, payload);
-      if (recomputedWithStoredPrev !== row.hash) {
-        // Case 1: content tampering — refuse to silently overwrite.
-        const err = new Error(
-          `existing chain disagrees with recomputation (row ${row.id}): ` +
-          `stored prevHash=${row.prevHash}, expected=${expectedPrev}; ` +
-          `stored hash=${row.hash}, recomputed=${recomputed}`
-        );
-        err.conflictRowId = row.id;
-        throw err;
-      }
-      if (row.prevHash !== expectedPrev) {
-        // Case 2: chain fork — re-stamp prevHash + hash to integrate the
-        // row into the real chain. Tamper-evidence is preserved because we
-        // only got here after proving the content is intact.
-        await prisma.auditLog.update({
-          where: { id: row.id },
-          data: { prevHash: expectedPrev, hash: recomputed },
-        });
-        updated += 1;
-        lastHash = recomputed;
-        continue;
-      }
-      // Already correctly chained — no-op.
-      skipped += 1;
-      lastHash = row.hash;
-      continue;
+    if (cursorId != null) {
+      query.cursor = { id: cursorId };
+      query.skip = 1;
     }
 
-    await prisma.auditLog.update({
-      where: { id: row.id },
-      data: { prevHash: expectedPrev, hash: recomputed },
-    });
-    updated += 1;
-    lastHash = recomputed;
+    const rows = await prisma.auditLog.findMany(query);
+    if (rows.length === 0) break;
+
+    for (const row of rows) {
+      walked += 1;
+      const expectedPrev = lastHash == null ? genesisFor(tenantIdNum) : lastHash;
+      const payload = {
+        tenantId: tenantIdNum,
+        entity: row.entity,
+        action: row.action,
+        entityId: row.entityId,
+        userId: row.userId,
+        details: row.details,
+        createdAt: row.createdAt.toISOString(),
+      };
+      const recomputed = computeHash(expectedPrev, payload);
+  
+      if (row.hash != null) {
+        // The row already carries a hash. Distinguish two cases that can both
+        // surface here against a real-world DB (#558 hardening, PR #709 fallout):
+        //
+        //   (1) Content tampering — someone edited `details` / `entity` /
+        //       `userId` / `createdAt` after the row was written without also
+        //       updating `hash`. Recomputing with the row's OWN stored prevHash
+        //       will therefore disagree with the stored hash. This is a real
+        //       integrity failure and we MUST 409 — never silently re-stamp.
+        //
+        //   (2) Forked chain — writeAudit ran while a legacy null-hash row was
+        //       still the chain tail for this tenant. The fail-soft fallback
+        //       (`genesisFor(tenantId)` when the latest row's hash is null)
+        //       silently anchored the new row on GENESIS instead of the real
+        //       prior row. The row's CONTENT is untouched (recompute-with-
+        //       stored-prevHash matches stored-hash) but its `prevHash` doesn't
+        //       point at the row that actually precedes it in [createdAt asc,
+        //       id asc] order. We can safely re-stamp these — no information
+        //       loss because the content hash is intact.
+        //
+        // The distinguishing probe is `recomputeWithStoredPrev`: if that
+        // equals the stored hash, the row content has not been tampered with.
+        const recomputedWithStoredPrev = computeHash(row.prevHash, payload);
+        if (recomputedWithStoredPrev !== row.hash) {
+          // Case 1: content tampering — refuse to silently overwrite.
+          const err = new Error(
+            `existing chain disagrees with recomputation (row ${row.id}): ` +
+            `stored prevHash=${row.prevHash}, expected=${expectedPrev}; ` +
+            `stored hash=${row.hash}, recomputed=${recomputed}`
+          );
+          err.conflictRowId = row.id;
+          throw err;
+        }
+        if (row.prevHash !== expectedPrev) {
+          // Case 2: chain fork — re-stamp prevHash + hash to integrate the
+          // row into the real chain. Tamper-evidence is preserved because we
+          // only got here after proving the content is intact.
+          await prisma.auditLog.update({
+            where: { id: row.id },
+            data: { prevHash: expectedPrev, hash: recomputed },
+          });
+          updated += 1;
+          lastHash = recomputed;
+          continue;
+        }
+        // Already correctly chained — no-op.
+        skipped += 1;
+        lastHash = row.hash;
+        continue;
+      }
+
+      await prisma.auditLog.update({
+        where: { id: row.id },
+        data: { prevHash: expectedPrev, hash: recomputed },
+      });
+      updated += 1;
+      lastHash = recomputed;
+    }
+
+    cursorId = rows[rows.length - 1].id;
+
+    // Yield to the event loop between batches so large backfills don't
+    // monopolize the worker and so intermediate garbage can be collected.
+    if (rows.length === BACKFILL_BATCH_SIZE) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
   }
 
   return {

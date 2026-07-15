@@ -221,7 +221,7 @@ async function restoreSessions() {
   }
   console.log(`[whatsappWeb] boot-restore: re-initializing ${tenantIds.length} saved session(s): ${tenantIds.join(", ")}`);
   let i = 0;
-  for (const tenantId of capped) {
+  for (const tenantId of tenantIds) {
     if (i > 0) await new Promise((r) => setTimeout(r, 1500)); // stagger Chrome launches
     i += 1;
     module.exports
@@ -229,7 +229,7 @@ async function restoreSessions() {
       .then(() => console.log(`[whatsappWeb] boot-restore: tenant ${tenantId} resuming from saved session`))
       .catch((err) => console.warn(`[whatsappWeb] boot-restore tenant ${tenantId} failed: ${err.message}`));
   }
-  return { restored: capped.length };
+  return { restored: tenantIds.length };
 }
 
 function getSession(tenantId) {

@@ -744,7 +744,7 @@ test.describe("Travel microsites API — Aadhaar verification (public)", () => {
   });
 });
 
-// ─── Public document upload (Passport + Aadhaar + parent consent) ────
+// ─── Public document upload (Passport + Aadhaar + Parent consent letter) ────
 //
 // Draft-scoped: the uploader is identified ONLY by the draftToken they
 // arrive with from the landing-page registration — there is no public

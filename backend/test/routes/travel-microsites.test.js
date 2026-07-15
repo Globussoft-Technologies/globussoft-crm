@@ -1069,7 +1069,7 @@ describe('GET /api/travel/microsites/public/:publicUuid/full (token-gated PII)',
 // ─── Document upload (PUBLIC, draftToken-scoped) ─────────────────────
 //
 // POST /microsites/public/:publicUuid/documents
-// Parent-facing document capture (Passport + Aadhaar + parent consent).
+// Parent-facing document capture (Passport + Aadhaar + Parent consent letter + consent checkbox).
 // The uploader is identified ONLY by draftToken; no participant list shown.
 // Files stored via visaDocStore (S3 when configured, gated disk fallback).
 describe('Travel microsites API — document upload (public)', () => {
@@ -1178,6 +1178,28 @@ describe('Travel microsites API — document upload (public)', () => {
     expect(res.body.code).toBe('MISSING_FILES');
   });
 
+  test('passport + aadhaar present but no consent letter → 400 MISSING_CONSENT_LETTER', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 10, tripId: 100,
+      draftTokenExpiresAt: new Date(Date.now() + 3600_000),
+      extrasJson: null, // No prior docs
+    });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
+      .field('draftToken', 'ok-token')
+      .field('consent', 'true')
+      .attach('passport', Buffer.from('PDF%PDF-1.4...'), 'passport.pdf')
+      .attach('aadhaar', Buffer.from('PNG\x89PNG\r\n...'), 'aadhaar.png')
+      // No consentLetter attached
+      .expect(400);
+
+    expect(res.body.code).toBe('MISSING_CONSENT_LETTER');
+  });
+
   test('invalid file type → 400 INVALID_FILE (multer rejection)', async () => {
     const res = await request(makeApp())
       .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
@@ -1225,7 +1247,7 @@ describe('Travel microsites API — document upload (public)', () => {
     expect(res.body.code).toBe('NOT_FOUND');
   });
 
-  test('happy path: both files + consent → 200 with doc status booleans', async () => {
+  test('happy path: all three files + consent → 200 with doc status booleans', async () => {
     prisma.tripMicrosite.findUnique.mockResolvedValue({
       id: 7, publicUuid: TEST_UUID, tripId: 100, expiresAt: null,
     });
@@ -1235,11 +1257,12 @@ describe('Travel microsites API — document upload (public)', () => {
       extrasJson: null, // No prior docs
     });
     prisma.pendingTripRegistration.update.mockResolvedValue({
-      id: 10, extrasJson: '{"documents":{"passport":{"storage":"s3","url":"..."},"aadhaar":{"storage":"s3","url":"..."},"consentCapturedAt":"2026-07-01T..."}}',
+      id: 10, extrasJson: '{"documents":{"passport":{"storage":"s3","url":"..."},"aadhaar":{"storage":"s3","url":"..."},"consentLetter":{"storage":"s3","url":"..."},"consentCapturedAt":"2026-07-01T..."}}',
     });
 
     const passportBuffer = Buffer.from('PDF%PDF-1.4...');
     const aadhaarBuffer = Buffer.from('PNG\x89PNG\r\n...');
+    const consentLetterBuffer = Buffer.from('PDF%PDF-1.4 consent...');
 
     const res = await request(makeApp())
       .post(`/api/travel/microsites/public/${TEST_UUID}/documents`)
@@ -1247,12 +1270,14 @@ describe('Travel microsites API — document upload (public)', () => {
       .field('consent', 'true')
       .attach('passport', passportBuffer, 'passport.pdf')
       .attach('aadhaar', aadhaarBuffer, 'aadhaar.png')
+      .attach('consentLetter', consentLetterBuffer, 'consent.pdf')
       .expect(200);
 
     expect(res.body.ok).toBe(true);
     expect(res.body.documents).toMatchObject({
       passport: true,
       aadhaar: true,
+      consentLetter: true,
       consentCapturedAt: expect.any(String),
     });
     // Verify the draft was updated with the new docs
@@ -1266,11 +1291,12 @@ describe('Travel microsites API — document upload (public)', () => {
     );
   });
 
-  test('re-upload one file while one exists → happy path, both present', async () => {
-    // Simulate a draft that already has passport but not aadhaar
+  test('re-upload one file while others exist → happy path, all three present', async () => {
+    // Simulate a draft that already has passport + consentLetter but not aadhaar
     const existingExtras = JSON.stringify({
       documents: {
-        passport: { storage: 's3', url: 'https://...', key: 'visa-docs/...' },
+        passport: { storage: 's3', url: 'https://...', key: 'visa-docs/passport.pdf' },
+        consentLetter: { storage: 's3', url: 'https://...', key: 'visa-docs/consent.pdf' },
         consentCapturedAt: '2026-07-01T00:00:00.000Z',
       },
     });
@@ -1288,6 +1314,7 @@ describe('Travel microsites API — document upload (public)', () => {
         documents: {
           passport: { storage: 's3', url: 'https://...' },
           aadhaar: { storage: 's3', url: 'https://...', uploadedAt: '2026-07-01T...' },
+          consentLetter: { storage: 's3', url: 'https://...' },
           consentCapturedAt: '2026-07-01T...',
         },
       }),
@@ -1300,13 +1327,14 @@ describe('Travel microsites API — document upload (public)', () => {
       .field('draftToken', 'ok-token')
       .field('consent', 'true')
       .attach('aadhaar', aadhaarBuffer, 'aadhaar.png')
-      // No passport file — it's already on record
+      // No passport or consentLetter file — both already on record
       .expect(200);
 
     expect(res.body.ok).toBe(true);
     expect(res.body.documents).toMatchObject({
-      passport: true, // Carried over from prior upload
-      aadhaar: true,  // Newly uploaded
+      passport: true,       // Carried over from prior upload
+      aadhaar: true,        // Newly uploaded
+      consentLetter: true,  // Carried over from prior upload
       consentCapturedAt: expect.any(String),
     });
   });

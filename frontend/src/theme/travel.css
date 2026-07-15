@@ -19,6 +19,7 @@
 [data-vertical="travel"] {
   --bg-color:        #FAF6EE;
   --surface-color:   #FFFFFF;
+  --modal-bg:        #FFFFFF;
   --subtle-bg:       rgba(18, 38, 71, 0.04);
   --subtle-bg-3:     rgba(18, 38, 71, 0.08);
 
@@ -75,6 +76,7 @@ html[data-theme="dark"][data-vertical="travel"],
 [data-theme="dark"] [data-vertical="travel"] {
   --bg-color:        #0F1729;
   --surface-color:   #19243A;
+  --modal-bg:        #19243A;
   --subtle-bg:       rgba(200, 154, 78, 0.08);
   --subtle-bg-3:     rgba(200, 154, 78, 0.14);
 

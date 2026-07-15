@@ -774,6 +774,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
             }
             const hasPassport = !!regDocs.passport;
             const hasAadhaar = !!regDocs.aadhaar;
+            const hasConsentLetter = !!regDocs.consentLetter;
             const docBtnBase = {
               display: "inline-flex", alignItems: "center", gap: 3,
               fontSize: 11, fontWeight: 500, border: "none",
@@ -835,6 +836,21 @@ function ParticipantsTab({ trip, onChange, notify }) {
                     ) : (
                       <span style={docMissing} data-testid={`aadhaar-missing-${r.id}`}>
                         <FileText size={11} aria-hidden /> Aadhaar not uploaded
+                      </span>
+                    )}
+                    {hasConsentLetter ? (
+                      <button
+                        type="button"
+                        style={docUploaded}
+                        onClick={() => viewRegistrationDoc(r.id, "consentLetter")}
+                        title="View uploaded parent consent letter"
+                        data-testid={`view-consent-letter-${r.id}`}
+                      >
+                        <FileText size={11} aria-hidden /> Consent letter ✓ View
+                      </button>
+                    ) : (
+                      <span style={docMissing} data-testid={`consent-letter-missing-${r.id}`}>
+                        <FileText size={11} aria-hidden /> Consent letter not uploaded
                       </span>
                     )}
                   </div>
@@ -1440,17 +1456,16 @@ function RoomingTab({ trip, notify }) {
           {unassignedCount} of {participants.length} participant{participants.length === 1 ? "" : "s"} unassigned
         </span>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {unassignedCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowAutoAllocateDialog(true)}
-              disabled={autoAllocating || showAutoAllocateDialog}
-              style={{ ...secondaryBtn, opacity: (autoAllocating || showAutoAllocateDialog) ? 0.5 : 1, cursor: (autoAllocating || showAutoAllocateDialog) ? "not-allowed" : "pointer" }}
-              aria-label="Auto-allocate unassigned participants"
-            >
-              <Sparkles size={14} aria-hidden /> {autoAllocating ? "Allocating…" : "Auto allocate"}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => unassignedCount > 0 && setShowAutoAllocateDialog(true)}
+            disabled={autoAllocating || showAutoAllocateDialog || unassignedCount === 0}
+            title={unassignedCount === 0 ? "No unassigned participants" : "Auto-allocate unassigned participants"}
+            style={{ ...secondaryBtn, opacity: (autoAllocating || showAutoAllocateDialog || unassignedCount === 0) ? 0.5 : 1, cursor: (autoAllocating || showAutoAllocateDialog || unassignedCount === 0) ? "not-allowed" : "pointer" }}
+            aria-label="Auto-allocate unassigned participants"
+          >
+            <Sparkles size={14} aria-hidden /> {autoAllocating ? "Allocating…" : "Auto allocate"}
+          </button>
           <a
             href={pdfHref}
             target="_blank"

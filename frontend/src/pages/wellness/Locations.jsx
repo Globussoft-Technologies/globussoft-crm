@@ -4,6 +4,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import PageHeader from '../../components/PageHeader';
 
+const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
 const EMPTY_FORM = { name: '', addressLine: '', city: '', state: '', pincode: '', phone: '', email: '' };
 
 export default function Locations() {
@@ -43,6 +44,11 @@ export default function Locations() {
 
   const submit = async (e) => {
     e.preventDefault();
+    const phone = (form.phone || '').trim();
+    if (phone && !PHONE_RE.test(phone)) {
+      notify.error('Enter a valid phone number (digits, +, spaces, hyphens only)');
+      return;
+    }
     setSaving(true);
     try {
       if (editingId) {
@@ -120,7 +126,13 @@ export default function Locations() {
               this field numeric and bounded; backend re-validates with /^\d{6}$/
               so paste-bypasses still 400 with INVALID_PINCODE. */}
           <input placeholder="Pincode — 6 digits" inputMode="numeric" pattern="\d{6}" maxLength={6} title="Indian pincode is exactly 6 digits" value={form.pincode} onChange={(e) => setForm({ ...form, pincode: e.target.value.replace(/\D/g, '').slice(0, 6) })} style={inputStyle} />
-          <input placeholder="Phone — e.g. +91 98765 43210" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={inputStyle} />
+          <input
+            placeholder="Phone — e.g. +91 98765 43210"
+            type="tel"
+            value={form.phone}
+            onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/[^\d+\s\-().]/g, '') })}
+            style={inputStyle}
+          />
           <input placeholder="Email — e.g. clinic@brand.in" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={inputStyle} />
           {/* #386: scaffolding — geocoding + Google Maps autofill not wired yet.
               Tip surfaces the expected affordance without promising behaviour. */}

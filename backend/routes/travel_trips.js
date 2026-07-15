@@ -1859,8 +1859,9 @@ router.get(
 );
 
 // GET /trips/:id/registrations/:rid/documents/:docType/view-url
-// Mints a short-lived (5-min) signed URL for a passport or Aadhaar scan
-// uploaded via the public microsite and stored in PendingTripRegistration.
+// Mints a short-lived (5-min) signed URL for a passport, Aadhaar scan or
+// parent consent letter uploaded via the public microsite and stored in
+// PendingTripRegistration.
 // All authenticated travel users (including USER/agent role) can view documents —
 // document access is controlled by trip tenancy, not by role.
 // Returns { url } — the signed URL is valid for DEFAULT_VIEW_TTL_SEC seconds.
@@ -1874,8 +1875,8 @@ router.get(
     try {
       const { draft } = await loadPendingRegistration(req);
       const { docType } = req.params;
-      if (!["passport", "aadhaar"].includes(docType)) {
-        return res.status(400).json({ error: "docType must be passport or aadhaar", code: "INVALID_DOC_TYPE" });
+      if (!["passport", "aadhaar", "consentLetter"].includes(docType)) {
+        return res.status(400).json({ error: "docType must be passport, aadhaar or consentLetter", code: "INVALID_DOC_TYPE" });
       }
       let extras = {};
       if (draft.extrasJson) {

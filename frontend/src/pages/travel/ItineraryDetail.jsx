@@ -28,6 +28,7 @@
 //      PRD §3.6(d) pricing transparency.
 
 import { useEffect, useState, useContext } from "react";
+import { createPortal } from "react-dom";
 import { useParams, Link } from "react-router-dom";
 import {
   Map as MapIcon, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
@@ -222,6 +223,16 @@ export default function ItineraryDetail() {
   };
 
   useEffect(load, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Lock body scroll while the edit modal is open so the page behind
+  // doesn't scroll and displace the viewport-centred overlay.
+  useEffect(() => {
+    if (editing) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => { document.body.style.overflow = prev; };
+    }
+  }, [editing]);
 
   useEffect(() => {
     fetchApi("/api/travel/suppliers?limit=500")
@@ -947,7 +958,7 @@ export default function ItineraryDetail() {
         </div>
 
         {adding && (
-          <div style={{ background: "var(--surface-color)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 16 }}>
+          <div style={{ background: "var(--modal-bg, #1a1c22)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 16 }}>
             <PricingPreviewHint preview={pricingPreview} />
             <ItemFields values={newItem} suppliers={suppliers} onChange={(patch) => setNewItem({ ...newItem, ...patch })} />
             <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
@@ -1242,37 +1253,52 @@ export default function ItineraryDetail() {
         )}
       </section>
 
-      {editing && (
+      {editing && createPortal(
         <div
           role="dialog"
           aria-label="Edit item"
           onClick={() => setEditing(null)}
           style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
-            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: 16,
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 1200, padding: 16,
           }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              background: "var(--surface-color)", padding: 24, borderRadius: 12,
-              maxWidth: 720, width: "100%", border: "1px solid var(--border-color)",
+              background: "var(--modal-bg, #1a1c22)",
+              padding: 24, borderRadius: 12,
+              maxWidth: 720, width: "100%",
+              border: "1px solid var(--border-color)",
               maxHeight: "90vh", overflowY: "auto",
+              boxShadow: "0 8px 40px rgba(0,0,0,0.6)",
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <strong>Edit item</strong>
+            {/* Modal header */}
+            <div style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              marginBottom: 20, paddingBottom: 14,
+              borderBottom: "1px solid var(--border-color)",
+            }}>
+              <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>Edit item</span>
               <button type="button" onClick={() => setEditing(null)} style={iconBtn} aria-label="Close">
                 <X size={18} />
               </button>
             </div>
             <ItemFields values={editing} suppliers={suppliers} onChange={(patch) => setEditing({ ...editing, ...patch })} />
-            <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            {/* Modal footer */}
+            <div style={{
+              marginTop: 20, paddingTop: 14,
+              borderTop: "1px solid var(--border-color)",
+              display: "flex", gap: 8, justifyContent: "flex-end",
+            }}>
               <button type="button" onClick={() => setEditing(null)} style={secondaryBtn}>Cancel</button>
-              <button type="button" onClick={saveItem} style={primaryBtn}>Save</button>
+              <button type="button" onClick={saveItem} style={primaryBtn}>Save changes</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -1351,100 +1377,124 @@ function PricingPreviewHint({ preview }) {
   );
 }
 
-function ItemFields({ values, suppliers = [], onChange }) {
+function FieldGroup({ cols, children }) {
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))" }}>
-        <label style={fieldLabel}>
-          Type
+    <div style={{
+      display: "grid",
+      gridTemplateColumns: cols,
+      gap: "4px 12px",
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, hint, children, style }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0, cursor: "default", ...style }}>
+      <span style={{
+        fontSize: 11, fontWeight: 600, textTransform: "uppercase",
+        letterSpacing: 0.6, color: "var(--text-secondary)",
+      }}>{label}</span>
+      {children}
+      {hint && (
+        <span style={{ fontSize: 11, color: "var(--text-secondary)", opacity: 0.75 }}>{hint}</span>
+      )}
+    </label>
+  );
+}
+
+function ItemFields({ values, suppliers = [], onChange }) {
+  const isTransport = TRANSPORT_TYPES.includes(values.itemType);
+  const cols1 = isTransport ? "1fr 1fr 72px 1.2fr" : "1fr 72px 1.2fr";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+      {/* Row 1: Type · [Direction] · Order · Supplier */}
+      <FieldGroup cols={cols1}>
+        <Field label="Type">
           <select value={values.itemType} onChange={(e) => onChange({ itemType: e.target.value })} style={input}>
             {ITEM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
-        </label>
-        {TRANSPORT_TYPES.includes(values.itemType) && (
-          <label style={fieldLabel}>
-            Direction
+        </Field>
+        {isTransport && (
+          <Field label="Direction" hint="One-way or round-trip.">
             <select value={values.direction ?? ""} onChange={(e) => onChange({ direction: e.target.value })} style={input}>
               {DIRECTIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
             </select>
-            <span style={hintLabel}>One-way or round-trip.</span>
-          </label>
+          </Field>
         )}
-        <label style={fieldLabel}>
-          Order
+        <Field label="Order" hint="Blank = end.">
           <input
-            type="number"
-            min={0}
+            type="number" min={0}
             value={values.position ?? ""}
             onChange={(e) => onChange({ position: e.target.value })}
-            style={input}
-            placeholder="auto"
+            style={input} placeholder="auto"
           />
-          <span style={hintLabel}>Sequence in the trip. Leave blank to add at the end.</span>
-        </label>
-        <label style={fieldLabel}>
-          Supplier
-          <select
-            value={values.supplierId ?? ""}
-            onChange={(e) => onChange({ supplierId: e.target.value })}
-            style={input}
-          >
+        </Field>
+        <Field label="Supplier" hint="Optional booking supplier.">
+          <select value={values.supplierId ?? ""} onChange={(e) => onChange({ supplierId: e.target.value })} style={input}>
             <option value="">— None —</option>
             {suppliers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}{s.subBrand ? ` (${s.subBrand})` : ""}
-              </option>
+              <option key={s.id} value={s.id}>{s.name}{s.subBrand ? ` (${s.subBrand})` : ""}</option>
             ))}
           </select>
-          <span style={hintLabel}>Who you&rsquo;re booking this through (optional).</span>
-        </label>
-      </div>
-      <label style={fieldLabel}>
-        Description
-        <input value={values.description ?? ""} onChange={(e) => onChange({ description: e.target.value })} style={input} placeholder="e.g. IndiGo 6E-237 BLR → MAA" />
-      </label>
-      <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 130px), 1fr))" }}>
-        <label style={fieldLabel}>
-          Basis
+        </Field>
+      </FieldGroup>
+
+      {/* Row 2: Description */}
+      <Field label="Description">
+        <input
+          value={values.description ?? ""}
+          onChange={(e) => onChange({ description: e.target.value })}
+          style={input}
+          placeholder="e.g. IndiGo 6E-237 BLR → MAA"
+        />
+      </Field>
+
+      {/* Row 3: Basis · Qty · Rate · Markup */}
+      <FieldGroup cols="1fr 72px 1fr 1fr">
+        <Field label="Basis" hint="What the rate is for.">
           <select value={values.unit ?? "per_person"} onChange={(e) => onChange({ unit: e.target.value })} style={input}>
             {ITEM_UNITS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
           </select>
-          <span style={hintLabel}>What the rate is for.</span>
-        </label>
-        <label style={fieldLabel}>
-          Quantity
+        </Field>
+        <Field label="Quantity" hint="Travelers, nights, units…">
           <input type="number" step="0.01" min={0} value={values.quantity ?? ""} onChange={(e) => onChange({ quantity: e.target.value })} style={input} placeholder="1" />
-          <span style={hintLabel}>How many units (travelers, nights…).</span>
-        </label>
-        <label style={fieldLabel}>
-          Rate
+        </Field>
+        <Field label="Rate" hint="Supplier cost per unit.">
           <input type="number" step="0.01" min={0} value={values.unitCost ?? ""} onChange={(e) => onChange({ unitCost: e.target.value })} style={input} />
-          <span style={hintLabel}>Cost of one unit (supplier price).</span>
-        </label>
-        <label style={fieldLabel}>
-          Markup
+        </Field>
+        <Field label="Markup" hint="Your margin on top of cost.">
           <input type="number" step="0.01" min={0} value={values.markup ?? ""} onChange={(e) => onChange({ markup: e.target.value })} style={input} />
-          <span style={hintLabel}>Your margin on top of cost.</span>
-        </label>
-        <label style={fieldLabel}>
-          GST amount
-          <input type="number" step="0.01" min={0} value={values.gstAmount ?? ""} onChange={(e) => onChange({ gstAmount: e.target.value })} style={input} />
-        </label>
-        <label style={fieldLabel}>
-          Line total
-          <input type="text" readOnly value={lineTotalOf(values).toLocaleString("en-IN")} style={{ ...input, opacity: 0.75, cursor: "not-allowed" }} />
-          <span style={hintLabel}>Rate × Qty + Markup + GST (auto).</span>
-        </label>
-      </div>
-      <label style={fieldLabel}>
-        Details JSON (optional, type-specific payload)
+        </Field>
+      </FieldGroup>
+
+      {/* Row 4: GST Amount · Line Total */}
+      <FieldGroup cols="1fr 1fr">
+        <Field label="GST Amount" hint="Tax added on top (optional).">
+          <input type="number" step="0.01" min={0} value={values.gstAmount ?? ""} onChange={(e) => onChange({ gstAmount: e.target.value })} style={input} placeholder="0" />
+        </Field>
+        <Field label="Line Total" hint="Rate × Qty + Markup + GST (auto).">
+          <input
+            type="text" readOnly
+            value={lineTotalOf(values).toLocaleString("en-IN")}
+            style={{ ...input, background: "var(--subtle-bg, rgba(0,0,0,0.08))", opacity: 0.75, cursor: "not-allowed" }}
+          />
+        </Field>
+      </FieldGroup>
+
+      {/* Row 5: Details JSON */}
+      <Field label="Details JSON" hint="Optional type-specific payload (e.g. PNR, cabin class).">
         <textarea
           value={values.detailsJson ?? ""}
           onChange={(e) => onChange({ detailsJson: e.target.value })}
           placeholder='e.g. {"pnr":"ABC123","cabin":"economy"}'
-          style={{ ...input, minHeight: 80, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12 }}
+          style={{ ...input, minHeight: 68, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, resize: "vertical" }}
         />
-      </label>
+      </Field>
+
     </div>
   );
 }

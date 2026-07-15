@@ -87,7 +87,7 @@ describe('Contacts.jsx — Add Contact email validation (#607)', () => {
 
     fireEvent.change(screen.getByPlaceholderText('Name'), { target: { value: 'Aarav Sharma' } });
     fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'not-an-email' } });
-    fireEvent.change(screen.getByPlaceholderText('Company'), { target: { value: 'Acme' } });
+    fireEvent.change(screen.getByPlaceholderText('Category'), { target: { value: 'Acme' } });
 
     submitAddContactForm();
 
@@ -102,7 +102,7 @@ describe('Contacts.jsx — Add Contact email validation (#607)', () => {
 
     fireEvent.change(screen.getByPlaceholderText('Name'), { target: { value: 'Aarav Sharma' } });
     fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'not-an-email' } });
-    fireEvent.change(screen.getByPlaceholderText('Company'), { target: { value: 'Acme' } });
+    fireEvent.change(screen.getByPlaceholderText('Category'), { target: { value: 'Acme' } });
 
     submitAddContactForm();
 
@@ -136,7 +136,7 @@ describe('Contacts.jsx — Add Contact email validation (#607)', () => {
 
     // Correct the value.
     fireEvent.change(emailInput, { target: { value: 'aarav@example.com' } });
-    fireEvent.change(screen.getByPlaceholderText('Company'), { target: { value: 'Acme' } });
+    fireEvent.change(screen.getByPlaceholderText('Category'), { target: { value: 'Acme' } });
 
     submitAddContactForm();
 

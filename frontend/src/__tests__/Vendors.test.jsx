@@ -228,7 +228,7 @@ describe('<Vendors /> — create POST', () => {
     fireEvent.change(screen.getByPlaceholderText(/^Contact person$/), {
       target: { value: 'Vikram Rao' },
     });
-    fireEvent.change(screen.getByPlaceholderText(/^Phone$/), {
+    fireEvent.change(screen.getByPlaceholderText(/^Phone/i), {
       target: { value: '+919999912345' },
     });
     fireEvent.change(screen.getByPlaceholderText(/^Email$/), {

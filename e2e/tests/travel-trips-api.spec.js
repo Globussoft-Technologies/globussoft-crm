@@ -880,8 +880,8 @@ test.describe("Travel trips API — slim-shape opt-in (#920 S3)", () => {
 // ─── Registration document view-url endpoint ──────────────────────────
 //
 // Covers the new GET /trips/:id/registrations/:rid/documents/:docType/view-url
-// endpoint that mints a short-lived signed URL for passport / Aadhaar scans
-// uploaded by parents via the public microsite.
+// endpoint that mints a short-lived signed URL for passport, Aadhaar scans
+// and parent consent letters uploaded by parents via the public microsite.
 //
 // Because real document uploads require multipart POSTs from the public
 // microsite surface (which this gate spec doesn't drive), we pin the

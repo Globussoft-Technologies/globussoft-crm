@@ -1866,8 +1866,8 @@ function renderTravelNav({
       <Section label="Sales pipeline">
         <Link to="/leads" icon={UserPlus} label="Travel Leads" requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/travel/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
+        <Link to="/travel/pipeline" icon={Plane} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
         <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
-        <Link to="/pipeline" icon={Briefcase} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
       </Section>
 
       <Section label="Customer comms">

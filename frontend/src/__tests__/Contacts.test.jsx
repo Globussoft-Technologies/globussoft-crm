@@ -196,7 +196,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
     fireEvent.change(screen.getByPlaceholderText('Name'), { target: { value: 'Diya Kapoor' } });
     fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'diya@example.com' } });
-    fireEvent.change(screen.getByPlaceholderText('Company'), { target: { value: 'Kapoor Foods' } });
+    fireEvent.change(screen.getByPlaceholderText('Category'), { target: { value: 'Kapoor Foods' } });
 
     // Stub the POST response.
     fetchApiMock.mockImplementationOnce(() => Promise.resolve({ id: 99 })); // POST /api/contacts
@@ -348,7 +348,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
     fireEvent.change(screen.getByPlaceholderText('Name'), { target: { value: 'Karan Verma' } });
     fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'karan@example.com' } });
-    fireEvent.change(screen.getByPlaceholderText('Company'), { target: { value: 'Verma Group' } });
+    fireEvent.change(screen.getByPlaceholderText('Category'), { target: { value: 'Verma Group' } });
 
     // Stub the POST to reject with a 409 DUPLICATE_CONTACT body shape.
     const dupErr = Object.assign(new Error('dup'), {
@@ -438,7 +438,7 @@ describe('Contacts.jsx — top-level page contract', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
     fireEvent.change(screen.getByPlaceholderText('Name'), { target: { value: 'Tara Kapoor' } });
-    fireEvent.change(screen.getByPlaceholderText('Company'), { target: { value: 'Kapoor Co' } });
+    fireEvent.change(screen.getByPlaceholderText('Category'), { target: { value: 'Kapoor Co' } });
 
     // Use an email that's syntactically passable to <input type="email"> but
     // fails the SUT's EMAIL_RE check (no TLD). Submit via the form directly so
@@ -463,7 +463,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
     fireEvent.change(screen.getByPlaceholderText('Name'), { target: { value: 'Nikhil Rao' } });
     fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'nikhil@example.com' } });
-    fireEvent.change(screen.getByPlaceholderText('Company'), { target: { value: 'Rao & Co' } });
+    fireEvent.change(screen.getByPlaceholderText('Category'), { target: { value: 'Rao & Co' } });
 
     // Stub the POST to reject with a generic 400 (no DUPLICATE_CONTACT code).
     const genericErr = Object.assign(new Error('bad'), {
@@ -487,7 +487,7 @@ describe('Contacts.jsx — top-level page contract', () => {
     fireEvent.click(screen.getByRole('button', { name: /Add Contact/i }));
     fireEvent.change(screen.getByPlaceholderText('Name'), { target: { value: 'Anjali Sen' } });
     fireEvent.change(screen.getByPlaceholderText('Email'), { target: { value: 'anjali@example.com' } });
-    fireEvent.change(screen.getByPlaceholderText('Company'), { target: { value: 'Sen Holdings' } });
+    fireEvent.change(screen.getByPlaceholderText('Category'), { target: { value: 'Sen Holdings' } });
 
     // First POST → 409 dup; second POST (force=true) → success.
     const dupErr = Object.assign(new Error('dup'), {

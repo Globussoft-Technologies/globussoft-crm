@@ -29,6 +29,10 @@
   --glass-border: rgba(255, 255, 255, 0.1);
   --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
 
+  /* Opaque modal panel background — dialogs must not be see-through even
+     when --surface-color carries glassmorphism alpha. */
+  --modal-bg: #1a1c22;
+
   /* #877 — Kanban column surface, deliberately darker than --surface-color
      so deal cards (which use .card → --surface-color) stand out against
      their column wrapper. Default mirrors dark-theme since :root is the
@@ -87,6 +91,7 @@
 
   --glass-bg: rgba(255, 255, 255, 0.5);
   --glass-border: rgba(0, 0, 0, 0.08);
+  --modal-bg: #ffffff;
   --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.08);
 
   /* #877 — Light theme: column wrapper sits BEHIND cream-white cards.

@@ -3,6 +3,8 @@ import { useParams } from 'react-router-dom';
 import { Sparkles, Clock, MapPin, IndianRupee, CheckCircle2, Home, Video, Phone, Building2 } from 'lucide-react';
 import { useFormAutosave } from '../../utils/useFormAutosave';
 
+const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
+
 const INITIAL_FORM = {
   name: '', phone: '', email: '', notes: '', preferredSlot: '',
   // Wave 2 Agent LL — booking-widget completion (2026-05-08 Google Doc audit).
@@ -85,6 +87,11 @@ export default function PublicBooking() {
 
   const submit = async (e) => {
     e.preventDefault();
+    const phone = (form.phone || '').trim();
+    if (!PHONE_RE.test(phone)) {
+      setError('Enter a valid phone number (e.g. +91 98765 43210)');
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {
@@ -276,7 +283,15 @@ export default function PublicBooking() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
             <input placeholder="Your name *" aria-label="Your name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={input} />
-            <input placeholder="Phone (10 digits) *" aria-label="Phone number" required value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={input} />
+            <input
+              placeholder="Phone (e.g. +91 98765 43210) *"
+              aria-label="Phone number"
+              type="tel"
+              required
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/[^\d+\s\-().]/g, '') })}
+              style={input}
+            />
           </div>
           <input placeholder="Email (optional)" aria-label="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={{ ...input, marginBottom: '0.5rem' }} />
 

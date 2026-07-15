@@ -35,6 +35,7 @@ const parseCSV = (text) => {
 // errors in the preview before clicking Import.
 const ALLOWED_STATUSES = new Set(['Lead', 'Prospect', 'Customer', 'Churned', 'Junk']);
 const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
+const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
 const FORMULA_INJECTION_RE = /^[=+\-@\t\r]/;
 
 function validateCsvRow(row) {
@@ -89,6 +90,7 @@ const Contacts = () => {
   // point at the email field. We reuse the same EMAIL_RE the CSV importer
   // uses so the two surfaces stay consistent.
   const [emailError, setEmailError] = useState('');
+  const [phoneError, setPhoneError] = useState('');
 
   // PRD §4.5 — duplicate-contact pop-up driven by the backend's
   // 409 DUPLICATE_CONTACT response. Backend payload populates the modal;
@@ -201,6 +203,12 @@ const Contacts = () => {
       return;
     }
     setEmailError('');
+    const phone = (newContact.phone || '').trim();
+    if (phone && !PHONE_RE.test(phone)) {
+      setPhoneError('Enter a valid phone number (digits, +, spaces, hyphens only)');
+      return;
+    }
+    setPhoneError('');
     await submitNewContact(false);
   };
 
@@ -389,7 +397,7 @@ const Contacts = () => {
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Phone</th>
-              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Company</th>
+              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Category</th>
               {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Status</th>
@@ -623,15 +631,38 @@ const Contacts = () => {
                   </p>
                 )}
               </div>
-              <input type="tel" placeholder="Phone (e.g. +91 98765 43210)" className="input-field" value={newContact.phone} onChange={e => setNewContact({...newContact, phone: e.target.value})} />
-              <input type="text" placeholder="Company" required className="input-field" value={newContact.company} onChange={e => setNewContact({...newContact, company: e.target.value})} />
-              <input type="text" placeholder="Title" className="input-field" value={newContact.title} onChange={e => setNewContact({...newContact, title: e.target.value})} />
+              <div>
+                <input
+                  type="tel"
+                  placeholder="Phone (e.g. +91 98765 43210)"
+                  className="input-field"
+                  value={newContact.phone}
+                  onChange={e => {
+                    const v = e.target.value.replace(/[^\d+\s\-().]/g, '');
+                    setNewContact({ ...newContact, phone: v });
+                    if (phoneError) setPhoneError('');
+                  }}
+                  onBlur={e => {
+                    const v = e.target.value.trim();
+                    if (v && !PHONE_RE.test(v)) setPhoneError('Enter a valid phone number (digits, +, spaces, hyphens only)');
+                    else setPhoneError('');
+                  }}
+                  style={phoneError ? { borderColor: '#ef4444' } : undefined}
+                  aria-describedby={phoneError ? 'contact-phone-error' : undefined}
+                />
+                {phoneError && (
+                  <p id="contact-phone-error" role="alert" style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                    {phoneError}
+                  </p>
+                )}
+              </div>
+              <input type="text" placeholder="Category" required className="input-field" value={newContact.company} onChange={e => setNewContact({...newContact, company: e.target.value})} />
               <select className="input-field" value={newContact.status} onChange={e => setNewContact({...newContact, status: e.target.value})}>
                 <option value="Lead">Lead</option>
                 <option value="Customer">Customer</option>
               </select>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1rem' }}>
-                <button type="button" onClick={() => { setShowModal(false); setEmailError(''); }} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer' }}>Cancel</button>
+                <button type="button" onClick={() => { setShowModal(false); setEmailError(''); setPhoneError(''); }} style={{ background: 'transparent', color: 'var(--text-secondary)', border: 'none', cursor: 'pointer' }}>Cancel</button>
                 <button type="submit" className="btn-primary">Save Contact</button>
               </div>
             </form>

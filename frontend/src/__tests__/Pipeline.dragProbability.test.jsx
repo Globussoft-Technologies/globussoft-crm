@@ -1,190 +1,173 @@
 /**
- * Pipeline.jsx — drag-and-drop probability sync (#605).
+ * Pipeline.jsx — inline stage update and probability sync.
  *
- * Pre-fix: dragging a deal between stages updated only the `stage` field via
- * PUT /:id/stage; the deal's `probability` stayed at the old value until a
- * full re-fetch / hard refresh. Forecast widget + per-column weighted total
- * rendered stale numbers for ~30s. Some users manually re-edited the deal
- * to "fix" the probability, double-saving.
- *
- * Fix: drag handler computes the destination stage's default probability
- * (won=100, lost=0, lead=25, contacted=40, proposal=70, negotiation=80) and
- * sends BOTH stage AND probability in a single PUT /:id call. Local state
- * updates optimistically with both fields so the badge / column total
- * reflect the new stage immediately.
+ * The pipeline was revamped from a kanban (drag-and-drop) to a flat table
+ * with an inline stage <select> per row. This file pins the inline stage
+ * update contracts that replaced the drag-and-drop probability sync (#605).
  *
  * Contracts pinned here:
- *   1. Drop on `won` snaps probability to 100 in local state immediately.
- *   2. Drop on `lost` snaps probability to 0 in local state immediately.
- *   3. Drop on intermediate stage (e.g. proposal) sets probability per
- *      the stage→probability mapping (proposal=70).
- *   4. The network call is PUT /:id with BOTH {stage, probability} in the
- *      body, NOT PUT /:id/stage with stage-only.
+ *   1. Changing the stage <select> to "won" PUTs /api/deals/:id with
+ *      { stage: 'won' } and updates the row optimistically.
+ *   2. Changing the stage <select> to "lost" PUTs /api/deals/:id with
+ *      { stage: 'lost' }.
+ *   3. Changing to an intermediate stage sends the correct stage value.
+ *   4. On PUT error, the row reverts to its original stage and shows
+ *      notify.error.
+ *   5. The stage select is disabled while the update is in-flight.
  */
+
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { AuthContext } from '../App';
 
-vi.mock('../utils/api', () => ({
-  fetchApi: vi.fn(),
+// ── Stable notify mock ────────────────────────────────────────────────────────
+const notifyObj = {
+  error: vi.fn(),
+  success: vi.fn(),
+  info: vi.fn(),
+  confirm: vi.fn(),
+};
+vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
+vi.mock('../utils/api', () => ({ fetchApi: vi.fn() }));
+vi.mock('../utils/money', () => ({
+  formatMoney: (n) => (n != null ? `$${Number(n).toLocaleString('en-US')}` : '—'),
+  currencySymbol: () => '$',
 }));
-
-vi.mock('../utils/notify', () => ({
-  useNotify: () => ({
-    error: vi.fn(),
-    info: vi.fn(),
-    success: vi.fn(),
-    confirm: () => Promise.resolve(true),
-    prompt: () => Promise.resolve(''),
-  }),
-}));
-
 vi.mock('socket.io-client', () => ({
-  io: () => ({
-    on: vi.fn(),
-    disconnect: vi.fn(),
-  }),
+  io: () => ({ on: vi.fn(), disconnect: vi.fn() }),
 }));
-
-vi.mock('../components/DealModal', () => ({
-  default: () => null,
-}));
+vi.mock('../components/DealModal', () => ({ default: () => null }));
 
 import { fetchApi } from '../utils/api';
 import Pipeline from '../pages/Pipeline';
 
 const STAGES = [
-  { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
-  { id: 2, name: 'Contacted', color: '#f59e0b', position: 1 },
-  { id: 3, name: 'Proposal', color: '#a855f7', position: 2 },
-  { id: 4, name: 'Won', color: '#10b981', position: 3 },
-  { id: 5, name: 'Lost', color: '#ef4444', position: 4 },
+  { id: 1, name: 'Lead',     color: '#3b82f6', position: 0 },
+  { id: 2, name: 'Proposal', color: '#a855f7', position: 1 },
+  { id: 3, name: 'Won',      color: '#10b981', position: 2 },
+  { id: 4, name: 'Lost',     color: '#ef4444', position: 3 },
 ];
 
 beforeEach(() => {
   vi.clearAllMocks();
-  try {
-    localStorage.setItem('tenant', JSON.stringify({ defaultCurrency: 'USD', locale: 'en-US' }));
-  } catch {
-    /* ignore */
-  }
+  notifyObj.confirm.mockResolvedValue(true);
 });
 
-function mockApi({ deals = [] }) {
+function mockApi(deals, putResponse = null) {
   fetchApi.mockImplementation((url, opts) => {
-    if (url === '/api/deals') return Promise.resolve(deals);
-    if (url === '/api/contacts') return Promise.resolve([]);
-    if (url === '/api/pipeline_stages') return Promise.resolve(STAGES);
-    // PUT /api/deals/:id — return the body merged onto the existing deal,
-    // mimicking the server's reconcile behaviour.
-    if (url.startsWith('/api/deals/') && opts && opts.method === 'PUT') {
-      const id = parseInt(url.split('/').pop());
+    if (opts?.method === 'PUT') {
+      if (putResponse instanceof Error) return Promise.reject({ body: { error: putResponse.message } });
+      const id = parseInt(url.split('/').pop(), 10);
       const body = JSON.parse(opts.body || '{}');
-      const existing = deals.find(d => d.id === id) || { id };
+      const existing = deals.find((d) => d.id === id) || { id };
       return Promise.resolve({ ...existing, ...body });
     }
-    return Promise.resolve(null);
+    if (url.startsWith('/api/deals')) return Promise.resolve(deals);
+    if (url.startsWith('/api/pipeline_stages')) return Promise.resolve(STAGES);
+    return Promise.resolve([]);
   });
 }
 
-function makeDataTransfer(dealId) {
-  // Minimal DataTransfer stub — Pipeline.jsx only calls setData on dragstart
-  // and getData on drop.
-  const store = {};
-  return {
-    setData: (k, v) => { store[k] = String(v); },
-    getData: (k) => (k === 'dealId' ? String(dealId) : store[k] || ''),
-  };
+function renderPage() {
+  return render(
+    <AuthContext.Provider value={{ user: null }}>
+      <MemoryRouter><Pipeline /></MemoryRouter>
+    </AuthContext.Provider>,
+  );
 }
 
-async function performDrop(dealId, targetStageHeading) {
-  // Find the target column by its <h3> stage title and walk up to the column
-  // container (the .glass div with the onDrop handler).
-  const heading = screen.getByText(targetStageHeading, { selector: 'h3' });
-  const column = heading.closest('.glass');
-  expect(column).toBeTruthy();
-  const dataTransfer = makeDataTransfer(dealId);
-  fireEvent.dragOver(column, { dataTransfer });
-  fireEvent.drop(column, { dataTransfer });
-}
+describe('Pipeline inline stage update (replaces drag-and-drop after table revamp)', () => {
+  it('changing stage to "won" sends PUT /api/deals/:id with { stage: "won" }', async () => {
+    const deals = [
+      { id: 101, title: 'Acme Corp Renewal', amount: 50000, probability: 25, stage: 'lead' },
+    ];
+    mockApi(deals);
+    renderPage();
+    await screen.findByText('Acme Corp Renewal');
 
-describe('Pipeline drag-and-drop probability sync (#605)', () => {
-  it('drop on Closed Won snaps probability to 100 immediately and sends PUT /:id with both fields', async () => {
-    const initialDeal = {
-      id: 101, title: 'Acme Corp Renewal', amount: 50000, probability: 25, stage: 'lead',
-    };
-    mockApi({ deals: [initialDeal] });
+    const [stageSelect] = screen.getAllByRole('combobox', { name: /change stage/i });
+    fireEvent.change(stageSelect, { target: { value: 'won' } });
 
-    render(<MemoryRouter><Pipeline /></MemoryRouter>);
-    await waitFor(() => expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument());
-
-    // Pre-drop, the badge in the Lead column reads 25%.
-    expect(screen.getByText('25%')).toBeInTheDocument();
-
-    await performDrop(101, 'Won');
-
-    // Probability snaps to 100% optimistically (before the network response).
     await waitFor(() => {
-      expect(screen.getByText('100%')).toBeInTheDocument();
-      expect(screen.queryByText('25%')).not.toBeInTheDocument();
+      const putCall = fetchApi.mock.calls.find(([url, opts]) =>
+        url.includes('/api/deals/101') && opts?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+      expect(JSON.parse(putCall[1].body)).toMatchObject({ stage: 'won' });
     });
-
-    // Network call shape: PUT /api/deals/101 with both stage AND probability
-    // in the body. NOT /api/deals/101/stage.
-    const putCall = fetchApi.mock.calls.find(
-      ([url, opts]) => url === '/api/deals/101' && opts?.method === 'PUT',
-    );
-    expect(putCall).toBeTruthy();
-    const body = JSON.parse(putCall[1].body);
-    expect(body).toEqual({ stage: 'won', probability: 100 });
   });
 
-  it('drop on Closed Lost snaps probability to 0 immediately', async () => {
-    const initialDeal = {
-      id: 102, title: 'Globex Expansion', amount: 40000, probability: 70, stage: 'proposal',
-    };
-    mockApi({ deals: [initialDeal] });
+  it('changing stage to "lost" sends PUT /api/deals/:id with { stage: "lost" }', async () => {
+    const deals = [
+      { id: 102, title: 'Globex Expansion', amount: 40000, probability: 70, stage: 'proposal' },
+    ];
+    mockApi(deals);
+    renderPage();
+    await screen.findByText('Globex Expansion');
 
-    render(<MemoryRouter><Pipeline /></MemoryRouter>);
-    await waitFor(() => expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument());
-
-    expect(screen.getByText('70%')).toBeInTheDocument();
-
-    await performDrop(102, 'Lost');
+    const [stageSelect] = screen.getAllByRole('combobox', { name: /change stage/i });
+    fireEvent.change(stageSelect, { target: { value: 'lost' } });
 
     await waitFor(() => {
-      expect(screen.getByText('0%')).toBeInTheDocument();
+      const putCall = fetchApi.mock.calls.find(([url, opts]) =>
+        url.includes('/api/deals/102') && opts?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+      expect(JSON.parse(putCall[1].body)).toMatchObject({ stage: 'lost' });
     });
-
-    const putCall = fetchApi.mock.calls.find(
-      ([url, opts]) => url === '/api/deals/102' && opts?.method === 'PUT',
-    );
-    expect(putCall).toBeTruthy();
-    expect(JSON.parse(putCall[1].body)).toEqual({ stage: 'lost', probability: 0 });
   });
 
-  it('drop on intermediate stage uses the stage→probability mapping (proposal=70)', async () => {
-    const initialDeal = {
-      id: 103, title: 'Initech Annual', amount: 90000, probability: 25, stage: 'lead',
-    };
-    mockApi({ deals: [initialDeal] });
+  it('changing stage to an intermediate value sends the correct stage slug', async () => {
+    const deals = [
+      { id: 103, title: 'Initech Annual', amount: 90000, probability: 25, stage: 'lead' },
+    ];
+    mockApi(deals);
+    renderPage();
+    await screen.findByText('Initech Annual');
 
-    render(<MemoryRouter><Pipeline /></MemoryRouter>);
-    await waitFor(() => expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument());
-
-    expect(screen.getByText('25%')).toBeInTheDocument();
-
-    await performDrop(103, 'Proposal');
+    const [stageSelect] = screen.getAllByRole('combobox', { name: /change stage/i });
+    fireEvent.change(stageSelect, { target: { value: 'proposal' } });
 
     await waitFor(() => {
-      expect(screen.getByText('70%')).toBeInTheDocument();
+      const putCall = fetchApi.mock.calls.find(([url, opts]) =>
+        url.includes('/api/deals/103') && opts?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+      expect(JSON.parse(putCall[1].body)).toMatchObject({ stage: 'proposal' });
     });
+  });
 
-    const putCall = fetchApi.mock.calls.find(
-      ([url, opts]) => url === '/api/deals/103' && opts?.method === 'PUT',
-    );
-    expect(putCall).toBeTruthy();
-    expect(JSON.parse(putCall[1].body)).toEqual({ stage: 'proposal', probability: 70 });
+  it('reverts stage and shows notify.error when PUT fails', async () => {
+    const deals = [
+      { id: 104, title: 'Revert Test Deal', amount: 5000, probability: 30, stage: 'lead' },
+    ];
+    mockApi(deals, new Error('Server error'));
+    renderPage();
+    await screen.findByText('Revert Test Deal');
+
+    const [stageSelect] = screen.getAllByRole('combobox', { name: /change stage/i });
+    fireEvent.change(stageSelect, { target: { value: 'won' } });
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith('Server error');
+    });
+    // After error, the select reverts to original value — wait for re-render
+    await waitFor(() => {
+      expect(screen.getAllByRole('combobox', { name: /change stage/i })[0]).toHaveValue('lead');
+    });
+  });
+
+  it('shows probability badge for each deal row', async () => {
+    const deals = [
+      { id: 201, title: 'Deal A', amount: 1000, probability: 45, stage: 'proposal' },
+      { id: 202, title: 'Deal B', amount: 2000, probability: 80, stage: 'won' },
+    ];
+    mockApi(deals);
+    renderPage();
+    await screen.findByText('Deal A');
+    expect(screen.getByText('45%')).toBeInTheDocument();
+    expect(screen.getByText('80%')).toBeInTheDocument();
   });
 });

@@ -4,8 +4,8 @@
  *
  * The page loads public trip info and, when the visitor arrives from the
  * landing-page registration with a ?draftToken, lets them (a) confirm their
- * registration via phone OTP and (b) upload their own Passport + Aadhaar
- * documents with a parent-consent checkbox.
+ * registration via phone OTP and (b) upload their own Passport, Aadhaar and
+ * Parent consent letter documents with a parent-consent checkbox.
  *
  * IMPORTANT privacy invariant: this is a PUBLIC page, so it must NOT show any
  * other traveller's data. The old per-participant Aadhaar-verification section
@@ -19,7 +19,8 @@
  *   3. no draftToken → no upload button; a hint tells the visitor to open
  *      their registration link.
  *   4. with draftToken → an "Upload documents" button opens a modal that
- *      requires both files + consent and POSTs multipart to /documents.
+ *      requires Passport + Aadhaar + Parent consent letter + consent checkbox
+ *      and POSTs multipart to /documents.
  *   5. Phase 7 RegistrationConfirmPanel behaviour is unchanged.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -231,6 +232,7 @@ describe("<PublicTripMicrosite /> — document upload", () => {
       hasPassport: true,
       hasPassportDoc: false,
       hasAadhaarDoc: false,
+      hasConsentLetterDoc: false,
       consentGiven: false,
     },
     uploadResponse = jsonResponse(200, {
@@ -287,7 +289,7 @@ describe("<PublicTripMicrosite /> — document upload", () => {
     });
   });
 
-  it("blocks submit until consent is ticked and both files are chosen", async () => {
+  it("blocks submit until consent is ticked, both ID files are chosen, and consent letter is uploaded", async () => {
     installDocMock();
     await withDraftToken("abc123", async () => {
       renderPage();
@@ -303,12 +305,27 @@ describe("<PublicTripMicrosite /> — document upload", () => {
         global.fetch.mock.calls.some(([u]) => u === `${BASE}/documents`),
       ).toBe(false);
 
-      // Consent but still no files → missing-files error.
+      // Consent but still no ID files → missing Passport/Aadhaar error.
       fireEvent.click(screen.getByRole("checkbox"));
       fireEvent.click(screen.getByTestId("microsite-doc-submit"));
       expect(
         await screen.findByTestId("microsite-doc-error"),
       ).toHaveTextContent(/Passport and Aadhaar/i);
+      expect(
+        global.fetch.mock.calls.some(([u]) => u === `${BASE}/documents`),
+      ).toBe(false);
+
+      // ID files present but no consent letter → consent letter error.
+      fireEvent.change(screen.getByTestId("microsite-doc-passport"), {
+        target: { files: [makeFile("passport.pdf", "application/pdf")] },
+      });
+      fireEvent.change(screen.getByTestId("microsite-doc-aadhaar"), {
+        target: { files: [makeFile("aadhaar.png", "image/png")] },
+      });
+      fireEvent.click(screen.getByTestId("microsite-doc-submit"));
+      expect(
+        await screen.findByTestId("microsite-doc-error"),
+      ).toHaveTextContent(/consent letter/i);
       expect(
         global.fetch.mock.calls.some(([u]) => u === `${BASE}/documents`),
       ).toBe(false);
@@ -328,6 +345,9 @@ describe("<PublicTripMicrosite /> — document upload", () => {
       fireEvent.change(screen.getByTestId("microsite-doc-aadhaar"), {
         target: { files: [makeFile("aadhaar.png", "image/png")] },
       });
+      fireEvent.change(screen.getByTestId("microsite-doc-consent-letter"), {
+        target: { files: [makeFile("consent.pdf", "application/pdf")] },
+      });
       fireEvent.click(screen.getByRole("checkbox"));
       fireEvent.click(screen.getByTestId("microsite-doc-submit"));
 
@@ -339,13 +359,14 @@ describe("<PublicTripMicrosite /> — document upload", () => {
         ([u, o]) => u === `${BASE}/documents` && o?.method === "POST",
       );
       expect(post).toBeTruthy();
-      // Body is a FormData carrying the token, consent flag and both files.
+      // Body is a FormData carrying the token, consent flag, both ID files and the consent letter.
       const fd = post[1].body;
       expect(fd).toBeInstanceOf(FormData);
       expect(fd.get("draftToken")).toBe("abc123");
       expect(fd.get("consent")).toBe("true");
       expect(fd.get("passport")).toBeInstanceOf(File);
       expect(fd.get("aadhaar")).toBeInstanceOf(File);
+      expect(fd.get("consentLetter")).toBeInstanceOf(File);
     });
   });
 
@@ -366,6 +387,9 @@ describe("<PublicTripMicrosite /> — document upload", () => {
       fireEvent.change(screen.getByTestId("microsite-doc-aadhaar"), {
         target: { files: [makeFile("a.pdf", "application/pdf")] },
       });
+      fireEvent.change(screen.getByTestId("microsite-doc-consent-letter"), {
+        target: { files: [makeFile("consent.pdf", "application/pdf")] },
+      });
       fireEvent.click(screen.getByRole("checkbox"));
       fireEvent.click(screen.getByTestId("microsite-doc-submit"));
 
@@ -379,7 +403,7 @@ describe("<PublicTripMicrosite /> — document upload", () => {
     });
   });
 
-  it('when a doc is already on record, the button reads "Update documents" and a single re-upload is allowed', async () => {
+  it('when all docs are already on record, the button reads "Update documents" and a single re-upload is allowed', async () => {
     installDocMock({
       draftSummary: {
         id: 7001,
@@ -393,6 +417,7 @@ describe("<PublicTripMicrosite /> — document upload", () => {
         hasPassport: true,
         hasPassportDoc: true,
         hasAadhaarDoc: true,
+        hasConsentLetterDoc: true,
         consentGiven: true,
       },
     });
@@ -402,7 +427,7 @@ describe("<PublicTripMicrosite /> — document upload", () => {
       expect(btn).toHaveTextContent(/Update documents/i);
       fireEvent.click(btn);
       await screen.findByTestId("microsite-doc-modal");
-      // Both already uploaded → replacing just the passport + re-consenting works.
+      // All already uploaded → replacing just the passport + re-consenting works.
       fireEvent.change(screen.getByTestId("microsite-doc-passport"), {
         target: { files: [makeFile("newpass.pdf", "application/pdf")] },
       });
@@ -416,6 +441,7 @@ describe("<PublicTripMicrosite /> — document upload", () => {
       );
       expect(post[1].body.get("passport")).toBeInstanceOf(File);
       expect(post[1].body.get("aadhaar")).toBeNull(); // not re-sent
+      expect(post[1].body.get("consentLetter")).toBeNull(); // not re-sent
     });
   });
 });
@@ -463,6 +489,7 @@ describe("<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel", () => {
       hasPassport: true,
       hasPassportDoc: false,
       hasAadhaarDoc: false,
+      hasConsentLetterDoc: false,
       consentGiven: false,
     }),
   } = {}) {
@@ -631,6 +658,7 @@ describe("<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel", () => {
         hasPassport: true,
         hasPassportDoc: false,
         hasAadhaarDoc: false,
+        hasConsentLetterDoc: false,
         consentGiven: false,
       }),
     });
@@ -660,6 +688,7 @@ describe("<PublicTripMicrosite /> — Phase 7 RegistrationConfirmPanel", () => {
         hasPassport: true,
         hasPassportDoc: false,
         hasAadhaarDoc: false,
+        hasConsentLetterDoc: false,
         consentGiven: false,
       }),
     });

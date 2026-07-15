@@ -272,7 +272,7 @@ export default function PublicTripMicrosite() {
                 data-testid="microsite-upload-docs-btn"
               >
                 <Upload size={15} aria-hidden />
-                {docStatus?.hasPassportDoc && docStatus?.hasAadhaarDoc ? "Update documents" : "Upload documents"}
+                {docStatus?.hasPassportDoc && docStatus?.hasAadhaarDoc && docStatus?.hasConsentLetterDoc ? "Update documents" : "Upload documents"}
               </button>
             )}
           </div>
@@ -286,9 +286,9 @@ export default function PublicTripMicrosite() {
           </div>
           {draftToken ? (
             <p style={{ ...S.help, marginTop: 12, marginBottom: 0 }}>
-              {docStatus?.hasPassportDoc && docStatus?.hasAadhaarDoc
+              {docStatus?.hasPassportDoc && docStatus?.hasAadhaarDoc && docStatus?.hasConsentLetterDoc
                 ? "Your documents have been received. You can re-upload above if anything needs to change."
-                : "Upload your Passport and Aadhaar and confirm parent consent using the button above."}
+                : "Upload your Passport, Aadhaar and Parent consent letter using the button above."}
             </p>
           ) : (
             <p style={{ ...S.help, marginTop: 12, marginBottom: 0 }}>
@@ -447,7 +447,7 @@ function parseItineraryDays(raw) {
 const DEFAULT_DOCUMENTS = [
   { docType: "passport", required: true },
   { docType: "aadhaar", required: true },
-  { docType: "consent-form", required: true },
+  { docType: "consent-letter", required: true },
 ];
 
 function docLabel(docType) {
@@ -455,7 +455,8 @@ function docLabel(docType) {
     passport: "Passport",
     aadhaar: "Aadhaar",
     "medical-form": "Medical form",
-    "consent-form": "Parent consent form",
+    "consent-form": "Parent consent letter",
+    "consent-letter": "Parent consent letter",
     "school-id": "School ID",
   };
   return labels[docType] || String(docType || "Document").replace(/-/g, " ");
@@ -832,6 +833,7 @@ export function RegistrationConfirmPanel({ publicUuid, draftToken, accentBg }) {
 function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose, onUploaded }) {
   const [passport, setPassport] = useState(null);
   const [aadhaar, setAadhaar] = useState(null);
+  const [consentLetter, setConsentLetter] = useState(null);
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -839,8 +841,10 @@ function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose
 
   const hasPassportDoc = !!status?.hasPassportDoc;
   const hasAadhaarDoc = !!status?.hasAadhaarDoc;
+  const hasConsentLetterDoc = !!status?.hasConsentLetterDoc;
 
   const ACCEPT = "image/jpeg,image/png,application/pdf";
+  const ACCEPT_DOC = "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   const MAX_BYTES = 8 * 1024 * 1024;
 
   // Close on Escape for keyboard users.
@@ -869,10 +873,14 @@ function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose
       setError("Please confirm parent consent to continue.");
       return;
     }
-    // Both docs must exist after this submit — a freshly-chosen file OR one
+    // All docs must exist after this submit — a freshly-chosen file OR one
     // already stored on the draft satisfies each requirement.
     if ((!passport && !hasPassportDoc) || (!aadhaar && !hasAadhaarDoc)) {
       setError("Both Passport and Aadhaar documents are required.");
+      return;
+    }
+    if (!consentLetter && !hasConsentLetterDoc) {
+      setError("Please upload your Parent consent letter (Word or PDF).");
       return;
     }
     setBusy(true);
@@ -882,6 +890,7 @@ function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose
       fd.append("consent", "true");
       if (passport) fd.append("passport", passport);
       if (aadhaar) fd.append("aadhaar", aadhaar);
+      if (consentLetter) fd.append("consentLetter", consentLetter);
       const res = await fetch(`/api/travel/microsites/public/${publicUuid}/documents`, {
         method: "POST",
         body: fd,
@@ -949,6 +958,15 @@ function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose
               accept={ACCEPT}
               onChange={pickFile(setAadhaar)}
             />
+            <FileField
+              label="Parent consent letter"
+              hint="Upload your signed parent consent letter (Word or PDF)"
+              testid="microsite-doc-consent-letter"
+              file={consentLetter}
+              alreadyUploaded={hasConsentLetterDoc}
+              accept={ACCEPT_DOC}
+              onChange={pickFile(setConsentLetter)}
+            />
 
             <label style={S.consentRow} data-testid="microsite-doc-consent">
               <input
@@ -984,7 +1002,7 @@ function DocumentUploadModal({ publicUuid, draftToken, status, accentBg, onClose
   );
 }
 
-function FileField({ label, testid, file, alreadyUploaded, accept, onChange }) {
+function FileField({ label, hint, testid, file, alreadyUploaded, accept, onChange }) {
   return (
     <div style={S.fileField}>
       <div style={S.fileFieldHead}>
@@ -995,6 +1013,7 @@ function FileField({ label, testid, file, alreadyUploaded, accept, onChange }) {
           </span>
         )}
       </div>
+      {hint && <div style={{ fontSize: 12, color: "#64748b", marginBottom: 6 }}>{hint}</div>}
       <input
         type="file"
         accept={accept}

@@ -5,6 +5,8 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Phone, Mail, Calendar, Paperclip, Upload, Trash2, FileText, Download, Target, Pencil, MessageSquareText, Sparkles } from 'lucide-react';
 
+const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
+
 const ContactDetail = () => {
   const { id } = useParams();
   const [contact, setContact] = useState(null);
@@ -30,6 +32,11 @@ const ContactDetail = () => {
 
   const handleSaveEdit = async (e) => {
     e.preventDefault();
+    const phone = (editForm.phone || '').trim();
+    if (phone && !PHONE_RE.test(phone)) {
+      setEditError('Enter a valid phone number (digits, +, spaces, hyphens only)');
+      return;
+    }
     setSaving(true);
     setEditError('');
     try {
@@ -139,7 +146,17 @@ const ContactDetail = () => {
                   <input className="input-field" type="email" value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
                 </label>
                 <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Phone
-                  <input className="input-field" value={editForm.phone} onChange={e => setEditForm({ ...editForm, phone: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
+                  <input
+                    className="input-field"
+                    type="tel"
+                    value={editForm.phone}
+                    onChange={e => setEditForm({ ...editForm, phone: e.target.value.replace(/[^\d+\s\-().]/g, '') })}
+                    onBlur={e => {
+                      const v = e.target.value.trim();
+                      if (v && !PHONE_RE.test(v)) setEditError('Enter a valid phone number (digits, +, spaces, hyphens only)');
+                    }}
+                    style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }}
+                  />
                 </label>
                 <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Company
                   <input className="input-field" value={editForm.company} onChange={e => setEditForm({ ...editForm, company: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />

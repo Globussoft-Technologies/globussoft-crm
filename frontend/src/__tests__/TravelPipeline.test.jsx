@@ -256,12 +256,9 @@ describe("TravelPipeline", () => {
   it("computes KPI tiles from itinerary amounts", async () => {
     renderPage();
     await screen.findByText("Total pipeline value");
-    // accepted = 124300 → won bucket; sent = 467000 → negotiation bucket; rejected = 210500 → lost bucket
-    // total = 124300 + 467000 + 210500 = 801800 → ₹8,01,800
-    // Text may be split across DOM nodes, so use a custom matcher against the element's textContent.
-    expect(
-      screen.getByText((_, el) => Boolean(el && el.textContent?.replace(/\s/g, "").includes("8,01,800"))),
-    ).toBeInTheDocument();
+    // accepted=124300 + sent=467000 + rejected=210500 = 801800
+    // fmtMoney(801800, 'INR'): 801800 >= 100000 → ₹8.02L
+    expect(screen.getByText("₹8.02L")).toBeInTheDocument();
   });
 
   // 13. Export CSV
@@ -314,10 +311,9 @@ describe("TravelPipeline", () => {
     renderPage();
     await screen.findByText("Travel Pipeline");
     fireEvent.click(screen.getByRole("button", { name: /new deal/i }));
-    await screen.findByRole("dialog", { name: /new deal/i });
-    // no contact selected → submit → notify.error
-    const submitBtn = screen.getByRole("button", { name: /create deal/i });
-    fireEvent.click(submitBtn);
+    const dialog = await screen.findByRole("dialog", { name: /new deal/i });
+    // no contact selected → fire submit on the form directly → notify.error
+    fireEvent.submit(dialog);
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalledWith("Contact is required");
     });

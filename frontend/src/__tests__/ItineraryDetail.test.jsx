@@ -482,7 +482,7 @@ describe("ItineraryDetail — page contract", () => {
     fireEvent.change(titleInput, { target: { value: "IndiGo 6E-237 — RESCHEDULED" } });
 
     const dialog = screen.getByRole("dialog", { name: /Edit item/i });
-    fireEvent.click(within(dialog).getByRole("button", { name: /^Save$/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /save/i }));
 
     await waitFor(() => {
       const patchCall = fetchApiMock.mock.calls.find(

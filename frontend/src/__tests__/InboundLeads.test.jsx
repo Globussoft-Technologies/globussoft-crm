@@ -301,8 +301,8 @@ describe('<InboundLeads /> — Convert to Lead', () => {
       expect(body.contactId).toBe(4242);
       expect(body.subBrand).toBe('tmc');
     });
-    // Then routes the operator to the pipeline (not the legacy /leads/:id).
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/travel/leads'));
+    // Then routes the operator to the Travel Leads page.
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/leads'));
   });
 });
 

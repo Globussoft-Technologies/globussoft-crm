@@ -254,7 +254,6 @@ const TravelQuoteTemplates = lazy(() => import("./pages/travel/QuoteTemplates"))
 // commit 4823b160). Sibling to QuoteTemplates above; both are travel admin
 // CRUD surfaces that mirror the QuotesAdmin / InvoicesAdmin pattern.
 const TravelCancellationPolicies = lazy(() => import("./pages/travel/CancellationPolicies"));
-const TravelLeads = lazy(() => import("./pages/travel/Leads"));
 const TravelPipeline = lazy(() => import("./pages/travel/TravelPipeline"));
 const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
@@ -613,6 +612,18 @@ function WellnessOwnerOnly({ children }) {
 function WellnessOnly({ children }) {
   const { user, tenant } = useContext(AuthContext);
   if (tenant && tenant.vertical !== "wellness") {
+    return <Navigate to={landingFor(user, tenant)} replace />;
+  }
+  return children;
+}
+
+// Guard for pages that belong to generic + travel but NOT wellness (e.g.
+// Landing Pages, which has travel-specific AI generation + sub-brand
+// concepts that have no meaning in a clinic context). A wellness user who
+// lands here via a bookmark or direct URL is redirected to their home.
+function NotWellness({ children }) {
+  const { user, tenant } = useContext(AuthContext);
+  if (tenant?.vertical === "wellness") {
     return <Navigate to={landingFor(user, tenant)} replace />;
   }
   return children;
@@ -1196,20 +1207,20 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
-                    <Route path="landing-pages" element={<LandingPages />} />
+                    <Route path="landing-pages" element={<NotWellness><LandingPages /></NotWellness>} />
                     <Route
                       path="landing-pages/builder/:id"
-                      element={<LandingPageBuilder />}
+                      element={<NotWellness><LandingPageBuilder /></NotWellness>}
                     />
                     <Route path="objects" element={<CustomObjects />} />
                     <Route
                       path="objects/:entityName"
                       element={<CustomObjectView />}
                     />
-                    <Route path="sequences" element={<Sequences />} />
+                    <Route path="sequences" element={<GenericOnly><Sequences /></GenericOnly>} />
                     <Route
                       path="sequences/:id/builder"
-                      element={<SequenceBuilder />}
+                      element={<GenericOnly><SequenceBuilder /></GenericOnly>}
                     />
                     <Route path="support" element={<Support />} />
                     <Route
@@ -1234,7 +1245,7 @@ export default function App() {
                       }
                     />
                     <Route path="expenses" element={<Expenses />} />
-                    <Route path="contracts" element={<Contracts />} />
+                    <Route path="contracts" element={<GenericOnly><Contracts /></GenericOnly>} />
                     <Route path="estimates" element={<Estimates />} />
                     <Route path="invoices" element={<Invoices />} />
                     <Route path="tickets" element={<Tickets />} />
@@ -1325,8 +1336,8 @@ export default function App() {
                         </GenericOnly>
                       }
                     />
-                    <Route path="dashboards" element={<Dashboards />} />
-                    <Route path="custom-reports" element={<CustomReports />} />
+                    <Route path="dashboards" element={<GenericOnly><Dashboards /></GenericOnly>} />
+                    <Route path="custom-reports" element={<GenericOnly><CustomReports /></GenericOnly>} />
                     <Route path="booking-pages" element={<BookingPages />} />
                     <Route path="signatures" element={<Signatures />} />
                     <Route path="knowledge-base" element={<KnowledgeBase />} />
@@ -1418,9 +1429,11 @@ export default function App() {
                     <Route
                       path="commission-data"
                       element={
-                        <RoleGuard allow={["ADMIN"]} message="Commission Data requires admin access.">
-                          <CommissionData />
-                        </RoleGuard>
+                        <GenericOnly>
+                          <RoleGuard allow={["ADMIN"]} message="Commission Data requires admin access.">
+                            <CommissionData />
+                          </RoleGuard>
+                        </GenericOnly>
                       }
                     />
                     <Route
@@ -1450,7 +1463,7 @@ export default function App() {
                       }
                     />
                     <Route path="ab-tests" element={<AbTests />} />
-                    <Route path="web-visitors" element={<WebVisitors />} />
+                    <Route path="web-visitors" element={<GenericOnly><WebVisitors /></GenericOnly>} />
                     <Route path="chatbots" element={<Chatbots />} />
                     <Route path="approvals" element={<Approvals />} />
                     <Route
@@ -1473,11 +1486,11 @@ export default function App() {
                     <Route path="playbooks" element={<Playbooks />} />
                     <Route
                       path="document-tracking"
-                      element={<DocumentTracking />}
+                      element={<GenericOnly><DocumentTracking /></GenericOnly>}
                     />
                     <Route
                       path="industry-templates"
-                      element={<IndustryTemplates />}
+                      element={<GenericOnly><IndustryTemplates /></GenericOnly>}
                     />
                     <Route path="social" element={<Social />} />
                     <Route path="sandbox" element={<Sandbox />} />
@@ -1578,7 +1591,6 @@ export default function App() {
                   POST/PATCH; Delete for ADMIN-only) live inside the page,
                   mirroring the QuotesAdmin / InvoicesAdmin convention. */}
               <Route path="travel/cancellation-policies" element={<TravelOnly><TravelCancellationPolicies /></TravelOnly>} />
-              <Route path="travel/leads" element={<TravelOnly><TravelLeads /></TravelOnly>} />
               <Route path="travel/rfu/customers/:contactId" element={<TravelOnly><TravelRfuCustomerProfile /></TravelOnly>} />
               <Route path="travel/pricing-rules" element={<TravelOnly><TravelPricingRules /></TravelOnly>} />
               <Route path="travel/reports" element={<TravelOnly><TravelReports /></TravelOnly>} />

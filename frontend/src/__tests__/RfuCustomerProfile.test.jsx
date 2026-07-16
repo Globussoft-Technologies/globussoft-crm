@@ -579,7 +579,7 @@ describe('RfuCustomerProfile — read view placeholders + chrome', () => {
     renderPage();
     const link = await screen.findByRole('link', { name: /Back to leads/i });
     expect(link).toBeTruthy();
-    expect(link.getAttribute('href')).toBe('/travel/leads');
+    expect(link.getAttribute('href')).toBe('/leads');
   });
 
   it('degrades gracefully when contact has no email/phone (renders just the name)', async () => {

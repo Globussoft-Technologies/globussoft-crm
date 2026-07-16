@@ -59,7 +59,7 @@
  *     run — but no assertion depends on it.
  *   - Prompt mentioned "KPI tiles … each renders the expected metric
  *     label" — the SUT has no KPI tiles. The 4 surfaces are NAV cards
- *     (Quick lead capture → /travel/leads), not numeric KPIs. Tests pin
+ *     (Quick lead capture → /leads), not numeric KPIs. Tests pin
  *     labels + hrefs, not metric values.
  *   - Prompt mentioned "filter chrome — if present, clicking changes
  *     query-string" — the SUT has no filter chrome. The `?subBrand=travelstall`
@@ -271,7 +271,7 @@ describe('<TravelStallDashboard /> — nav cards: labels, descriptions, CTAs, hr
     // 4 cards → 4 links. Locate each by its CTA text inside the link's
     // accessible name and assert href.
     const leadsLink = screen.getByText(/^Open Leads$/).closest('a');
-    expect(leadsLink).toHaveAttribute('href', '/travel/leads?subBrand=travelstall');
+    expect(leadsLink).toHaveAttribute('href', '/leads');
 
     const diagLink = screen.getByText(/^Open Diagnostics$/).closest('a');
     expect(diagLink).toHaveAttribute('href', '/travel/diagnostics?subBrand=travelstall');

@@ -57,7 +57,7 @@ export default function TravelStallDashboard() {
           label="Quick lead capture"
           description="Log a new family-holiday inquiry from a walk-in, call, or social DM."
           cta="Open Leads"
-          link="/travel/leads?subBrand=travelstall"
+          link="/leads"
         />
         <Card
           icon={MessageSquareHeart}

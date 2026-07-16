@@ -480,6 +480,7 @@ const PAGE_CATALOG = [
     label: 'Drip Sequences',
     description: 'Multi-step automated outreach',
     category: 'Marketing',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
   {
@@ -487,6 +488,7 @@ const PAGE_CATALOG = [
     label: 'Landing Pages',
     description: 'Lead-capture landing pages',
     category: 'Marketing',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
 
@@ -534,6 +536,7 @@ const PAGE_CATALOG = [
     label: 'Custom Dashboards',
     description: 'Drag-and-drop dashboard builder',
     category: 'Reports',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'dashboards', action: 'read' }],
   },
 
@@ -1052,6 +1055,7 @@ const PAGE_CATALOG = [
     label: 'Contracts',
     description: 'Contract lifecycle management',
     category: 'Finance',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'contracts', action: 'read' }],
   },
 
@@ -1114,6 +1118,7 @@ const PAGE_CATALOG = [
     label: 'Commission Analytics',
     description: 'Staff + supplier commission tracking',
     category: 'Finance',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'payments', action: 'read' }],
   },
   {
@@ -1130,6 +1135,7 @@ const PAGE_CATALOG = [
     label: 'Industry Templates',
     description: 'Pre-built workflow templates',
     category: 'Marketing',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'settings', action: 'read' }],
   },
   {
@@ -1144,6 +1150,7 @@ const PAGE_CATALOG = [
     label: 'Web Analytics',
     description: 'Website visitor tracking',
     category: 'Marketing',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'analytics', action: 'read' }],
   },
 
@@ -1190,6 +1197,7 @@ const PAGE_CATALOG = [
     label: 'Custom Reports',
     description: 'Build custom data reports',
     category: 'Reports',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'reports', action: 'write' }],
   },
   {
@@ -1204,6 +1212,7 @@ const PAGE_CATALOG = [
     label: 'Document Tracking',
     description: 'Track + sign documents',
     category: 'Finance',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'documents', action: 'read' }],
   },
   {
@@ -1352,6 +1361,7 @@ const PAGE_CATALOG = [
     label: 'Agent Reports',
     description: 'Staff performance analytics',
     category: 'Reports',
+    vertical: 'generic',
     requiredPermissions: [{ module: 'reports', action: 'read' }],
   },
   {

@@ -92,7 +92,7 @@ const DISABLE_AUDIT_INLINE_BACKFILL = process.env.DISABLE_AUDIT_INLINE_BACKFILL 
 function canonicalize(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return '[' + value.map(canonicalize).join(',') + ']';
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value).sort((a, b) => a.localeCompare(b));
   return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalize(value[k])).join(',') + '}';
 }
 

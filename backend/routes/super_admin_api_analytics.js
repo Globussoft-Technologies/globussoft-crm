@@ -288,8 +288,8 @@ router.get("/filters", async (req, res) => {
       prisma.apiCallLog.findMany({ distinct: ["provider"], select: { provider: true } }),
       prisma.llmCallLog.findMany({ where: modelWhere, distinct: ["model"], select: { model: true } }),
     ]);
-    const providers = [...new Set([...llmProviders, ...apiProviders].map((r) => r.provider))].sort();
-    const modelList = [...new Set(models.map((r) => r.model))].sort();
+    const providers = [...new Set([...llmProviders, ...apiProviders].map((r) => r.provider))].sort((a, b) => a.localeCompare(b));
+    const modelList = [...new Set(models.map((r) => r.model))].sort((a, b) => a.localeCompare(b));
     res.json({ providers, models: modelList });
   } catch (e) {
     console.error("[super-admin-api-analytics] GET /filters failed:", e.message);

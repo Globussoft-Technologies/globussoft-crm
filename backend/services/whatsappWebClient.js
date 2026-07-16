@@ -386,7 +386,7 @@ async function resolveChromePath() {
     const pp = require("puppeteer");
     let p = pp.executablePath();
     if (p && typeof p.then === "function") p = await p;
-    return p || null;
+    return p ?? null;
   } catch {
     return null;
   }

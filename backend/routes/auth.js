@@ -1256,7 +1256,7 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
 
     // Load merged permissions for non-OWNER users
     const permissions = await getUserPermissions(req.user.tenantId, req.user.userId);
-    const permissionArray = Array.from(permissions).sort();
+    const permissionArray = Array.from(permissions).sort((a, b) => a.localeCompare(b));
 
     // Extract role names from userRoles
     const roleNames = user.userRoles.map(ur => ur.role.key);

@@ -2478,7 +2478,7 @@ router.post(
           feeCurrency: data.feeCurrency ?? null,
           enrolmentCriteriaJson: data.enrolmentCriteriaJson ?? null,
           programSteps: data.programSteps ?? null,
-          isActive: data.isActive !== undefined ? data.isActive : true,
+          isActive: data.isActive ?? true,
           createdBy: req.user.userId ?? null,
         },
       });

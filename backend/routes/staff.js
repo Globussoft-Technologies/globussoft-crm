@@ -873,7 +873,7 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
             tenantId: req.user.tenantId,
             onlyIfEmpty: true,
           });
-          if (synced !== undefined && synced !== updated.wellnessRole) {
+          if (synced !== updated.wellnessRole) {
             updated.wellnessRole = synced;
             changed.wellnessRole = {
               from: target.wellnessRole,

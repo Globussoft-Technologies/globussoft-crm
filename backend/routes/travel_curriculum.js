@@ -1013,7 +1013,7 @@ router.get(
       const totals = {
         totalMappings: mappings.length,
         boardsCovered: boardsSeen.size,
-        fullCoverageBoards: [...fullCoverageBoardsSet].sort(),
+        fullCoverageBoards: [...fullCoverageBoardsSet].sort((a, b) => a.localeCompare(b)),
         gapCount,
       };
 

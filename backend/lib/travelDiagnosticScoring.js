@@ -54,7 +54,7 @@ function scoreDiagnostic(bank, answers) {
 
   for (const q of questions) {
     const ans = answers[q.id];
-    if (ans === undefined || ans === null || ans === "") {
+    if (ans == null || (typeof ans === "string" && ans.trim() === "")) {
       warnings.push(`unanswered:${q.id}`);
       continue;
     }

@@ -183,7 +183,7 @@ async function main() {
   return anyConflict ? 1 : 0;
 }
 
-if (require.main === module) {
+if (require.main && require.main === module) {
   main()
     .then((code) => process.exit(code))
     .catch((err) => {

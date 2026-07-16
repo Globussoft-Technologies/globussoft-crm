@@ -192,7 +192,7 @@ async function main() {
   }
 }
 
-if (require.main === module) {
+if (require.main && require.main === module) {
   main().catch((err) => {
     process.stderr.write(`Unexpected error: ${err.stack || err.message}\n`);
     process.exit(1);

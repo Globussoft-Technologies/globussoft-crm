@@ -6440,7 +6440,7 @@ router.get(
           phone: supplier ? supplier.phone : null,
           email: supplier ? supplier.email : null,
           itemCount: rows.length,
-          itemTypes: [...itemTypeSet].sort(),
+          itemTypes: [...itemTypeSet].sort((a, b) => a.localeCompare(b)),
           totalSupplierCost: supplierCost,
           totalGst: gstTotal,
           totalSalePrice: sale,

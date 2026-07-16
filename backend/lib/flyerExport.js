@@ -89,7 +89,7 @@ function canonicalize(value) {
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map(canonicalize);
   // Plain object — sort keys alphabetically.
-  const sortedKeys = Object.keys(value).sort();
+  const sortedKeys = Object.keys(value).sort((a, b) => a.localeCompare(b));
   const out = {};
   for (const key of sortedKeys) {
     out[key] = canonicalize(value[key]);

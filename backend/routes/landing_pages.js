@@ -1487,7 +1487,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     // Snapshot on MANUAL_SAVE only when content/title/slug changed —
     // avoids flooding the version list with no-op autosaves that only
     // touched metaTitle / metaDescription / templateType.
-    const contentChanged = data.content !== undefined && data.content !== existing.content;
+    const contentChanged = "content" in data && String(data.content) !== String(existing.content);
     const titleChanged = data.title !== undefined && data.title !== existing.title;
     const slugChanged = data.slug !== undefined && data.slug !== existing.slug;
     if (contentChanged || titleChanged || slugChanged) {
@@ -1648,7 +1648,7 @@ function validateTemplatePublishReadiness(page) {
     issues.push({ code: "CONTENT_INVALID_JSON", message: "Page content is not valid JSON. Re-open the builder to fix." });
     return { ok: false, issues };
   }
-  if (typeof content !== "object" || Array.isArray(content) || content === null) {
+  if (typeof content !== "object" || Array.isArray(content) || content == null) {
     issues.push({ code: "CONTENT_NOT_OBJECT", message: "Template pages store content as a JSON object, not a block array." });
     return { ok: false, issues };
   }

@@ -501,17 +501,17 @@ async function executeAction(rule, payload, tenantId, io, depth = 0) {
  *                               (e.g. "travel-visa/patch").
  */
 function safeEmitEvent(eventName, payload, tenantId, contextLabel) {
-  try {
-    // Invoke through `module.exports.emitEvent` so test-time spies that
-    // monkey-patch the exports surface (per wave-6a-event-emissions.test.js
-    // pattern) continue to intercept calls. Calling the local `emitEvent`
-    // closure-binding directly would bypass the spy.
-    module.exports.emitEvent(eventName, payload, tenantId).catch((err) =>
-      console.warn(`[${contextLabel}] ${eventName} emit failed:`, err.message)
-    );
-  } catch (emitErr) {
-    console.warn(`[${contextLabel}] ${eventName} setup failed:`, emitErr.message);
-  }
+  // Invoke through `module.exports.emitEvent` so test-time spies that
+  // monkey-patch the exports surface (per wave-6a-event-emissions.test.js
+  // pattern) continue to intercept calls. Calling the local `emitEvent`
+  // closure-binding directly would bypass the spy.
+  (async () => {
+    try {
+      await module.exports.emitEvent(eventName, payload, tenantId);
+    } catch (err) {
+      console.warn(`[${contextLabel}] ${eventName} emit failed:`, err.message);
+    }
+  })();
 }
 
 module.exports = {

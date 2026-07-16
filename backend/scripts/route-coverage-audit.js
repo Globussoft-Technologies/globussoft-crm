@@ -101,7 +101,7 @@ const gatedSpecs = readGatedSpecs();
 const routeFiles = fs
   .readdirSync(ROUTES_DIR)
   .filter((f) => f.endsWith('.js'))
-  .sort();
+  .sort((a, b) => a.localeCompare(b));
 
 const fileToMounts = readMountsFromServerJs();
 

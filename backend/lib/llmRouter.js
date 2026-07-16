@@ -745,6 +745,7 @@ async function callOpenAICompatible(
   user,
   apiKey,
   maxTokens,
+  extra = {},
 ) {
   const body = await httpJson(`${baseUrl}/chat/completions`, {
     method: "POST",
@@ -756,6 +757,7 @@ async function callOpenAICompatible(
       model: modelId,
       max_tokens: maxTokens,
       messages: [{ role: "system", content: system }, { role: "user", content: user }],
+      ...extra,
     }),
   });
   const text = (

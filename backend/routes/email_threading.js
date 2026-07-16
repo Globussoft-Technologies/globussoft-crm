@@ -64,7 +64,7 @@ function computeThreadId(subject, from, to) {
   const participants = [from, to]
     .filter(Boolean)
     .map((p) => p.toLowerCase().trim())
-    .sort()
+    .sort((a, b) => a.localeCompare(b))
     .join("|");
   const key = `${cleaned}::${participants}`;
   return crypto.createHash("md5").update(key).digest("hex").slice(0, 16);

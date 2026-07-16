@@ -85,7 +85,7 @@ router.get(
       // backs /auth/me/permissions. This guarantees the two endpoints stay
       // in lock-step — if the merge logic changes, both endpoints change.
       const permissions = await getUserPermissions(user.tenantId, user.id);
-      const permissionArray = Array.from(permissions).sort();
+      const permissionArray = Array.from(permissions).sort((a, b) => a.localeCompare(b));
 
       // Role names for the "Assigned roles" pill row in the UI.
       const userRoles = await prisma.userRole.findMany({

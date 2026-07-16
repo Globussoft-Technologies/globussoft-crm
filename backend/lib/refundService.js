@@ -160,7 +160,7 @@ async function refundCapturedPayment({ payment, amount, reason, userId }) {
 
   const fullAmount = Number(payment.amount || 0);
   let amt = fullAmount;
-  if (amount != null && amount !== "") {
+  if (amount != null && String(amount) !== "") {
     const a = Number(amount);
     if (!Number.isFinite(a) || a <= 0 || a > fullAmount + 1e-9) {
       return { ok: false, status: 400, code: "INVALID_AMOUNT", error: `Refund amount must be between 0 and ${fullAmount}.` };

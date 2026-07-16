@@ -186,7 +186,7 @@ function validateGstinFormat(gstin) {
   const stateCode = trimmed.slice(0, 2);
   if (!STATE_CODES.has(stateCode)) return { valid: false, reason: "INVALID_STATE_CODE" };
   const expected = computeChecksumChar(trimmed.slice(0, 14));
-  if (expected !== trimmed[14]) return { valid: false, reason: "INVALID_CHECKSUM" };
+  if (expected === null || expected !== trimmed[14]) return { valid: false, reason: "INVALID_CHECKSUM" };
   return { valid: true };
 }
 

@@ -258,12 +258,8 @@ async function sendCampaign(campaign, io) {
           const body = `<p>Campaign: ${campaign.name}</p>${trackingPixel}`;
 
           // Send via Mailgun
-          const result = await sendMailgun(contact.email, campaign.name, body, { from: fromAddress, domain: mailgunDomain });
-          if (result.sent) {
-            sentCount++;
-          } else {
-            sentCount++; // still count as sent (logged in DB even if Mailgun not configured)
-          }
+          await sendMailgun(contact.email, campaign.name, body, { from: fromAddress, domain: mailgunDomain });
+          sentCount++; // count as sent (logged in DB even if Mailgun not configured)
         } else if (campaign.channel === "SMS") {
           // Create SmsMessage record
           await prisma.smsMessage.create({

@@ -83,7 +83,7 @@ router.get('/', verifyToken, async (req, res) => {
     // enforcement view exactly. ADMIN runtime shortcut fires inside
     // getUserPermissions when applicable.
     const permSet = await getUserPermissions(req.user.tenantId, req.user.userId);
-    const effectivePermissions = Array.from(permSet).sort();
+    const effectivePermissions = Array.from(permSet).sort((a, b) => a.localeCompare(b));
 
     // Nav = accessible pages intersected with effective permissions. The
     // sidebar already consumes /api/pages/me with the same logic; this

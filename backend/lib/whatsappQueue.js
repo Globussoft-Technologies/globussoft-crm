@@ -70,7 +70,7 @@ let driverCache = { driver: null, instance: null };
 
 function getQueue() {
   const driver = (process.env.WHATSAPP_QUEUE_DRIVER || "db").toLowerCase();
-  if (driverCache.driver === driver && driverCache.instance) {
+  if (driverCache.driver && driverCache.driver === driver && driverCache.instance) {
     return driverCache.instance;
   }
 

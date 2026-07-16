@@ -168,7 +168,7 @@ async function buildReport(args) {
       );
       const foreignModules = Array.from(
         new Set(foreignPerms.map((p) => p.module)),
-      ).sort();
+      ).sort((a, b) => a.localeCompare(b));
 
       if (foreignPerms.length === 0) continue;
 
@@ -501,7 +501,7 @@ async function main() {
   }
 }
 
-if (require.main === module) {
+if (require.main && require.main === module) {
   main().catch((err) => {
     process.stderr.write(`Unexpected error: ${err.stack || err.message}\n`);
     process.exit(1);

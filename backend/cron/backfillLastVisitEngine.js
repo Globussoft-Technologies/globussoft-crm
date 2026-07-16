@@ -142,7 +142,7 @@ async function tick(opts = {}) {
   let totalErrors = 0;
 
   const scopedTenantId =
-    opts && opts.tenantId !== null && opts.tenantId !== undefined
+    opts && opts.tenantId != null
       ? opts.tenantId
       : null;
 

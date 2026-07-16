@@ -10501,7 +10501,7 @@ router.get("/portal/me", verifyPatientToken, async (req, res) => {
 router.get("/portal/me/permissions", verifyPatientToken, async (req, res) => {
   try {
     const perms = await getCustomerRolePermissions(req.patient.tenantId);
-    res.json({ permissions: Array.from(perms).sort() });
+    res.json({ permissions: Array.from(perms).sort((a, b) => a.localeCompare(b)) });
   } catch (e) {
     console.error("[wellness] portal/me/permissions error:", e.message);
     res.status(500).json({ error: "Failed to load permissions" });

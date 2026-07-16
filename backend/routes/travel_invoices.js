@@ -870,7 +870,7 @@ router.get(
       // diffs across filing-months stay stable.
       parts.push("# DOCUMENT_TOTALS");
       parts.push(["Type", "Count", "Total_Taxable", "Total_GST"].map(csvEscape).join(","));
-      const sortedDocTypes = [...docTotals.keys()].sort();
+      const sortedDocTypes = [...docTotals.keys()].sort((a, b) => a.localeCompare(b));
       for (const t of sortedDocTypes) {
         const v = docTotals.get(t);
         parts.push(

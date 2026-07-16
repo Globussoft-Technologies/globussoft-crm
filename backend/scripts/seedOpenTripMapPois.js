@@ -311,7 +311,7 @@ async function main() {
   }
 }
 
-if (require.main === module) {
+if (require.main && require.main === module) {
   main();
 }
 

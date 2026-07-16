@@ -52,7 +52,7 @@ async function run() {
   return { updated: dryRun ? 0 : updated, total: rows.length };
 }
 
-if (require.main === module) {
+if (require.main && require.main === module) {
   run()
     .then(() => process.exit(0))
     .catch((e) => {

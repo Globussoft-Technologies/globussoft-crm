@@ -583,6 +583,8 @@ io.on("connection", (socket) => {
 
 // Import Enterprise Routes
 const authRoutes = require("./routes/auth");
+// Public status page API — unauthenticated health/status endpoints (PRD_STATUS_PAGE.md).
+const statusRoutes = require("./routes/status");
 // Super Admin Portal — completely separate auth + module surface from the
 // rest of the app (see middleware/superAdminAuth.js for the contract).
 const superAdminAuthRoutes = require("./routes/super_admin_auth");
@@ -881,6 +883,7 @@ app.use("/api", (req, res, next) => {
     "/auth/reset-password",
     "/auth/2fa/verify",
     "/health",
+    "/status",
     "/marketplace-leads/webhook",
     "/sms/webhook",
     "/whatsapp/webhook",
@@ -1754,6 +1757,10 @@ const prisma = require("./lib/prisma");
 // token is used to probe /api/health, the worst outcome is fingerprint
 // disclosure to a caller who already has a tenant credential — not a
 // new escalation.
+// Public status page API (PRD_STATUS_PAGE.md). Mounted before the global
+// auth guard's route-level checks because /api/status/* is in openPaths.
+app.use("/api/status", statusRoutes);
+
 app.get("/api/health", async (req, res) => {
   let dbStatus = "disconnected";
   try {
@@ -2075,6 +2082,10 @@ if (process.env.DISABLE_CRONS === "1") {
   // Initialize Sentiment Analysis Engine (runs every 15 min)
   const { initSentimentCron } = require("./cron/sentimentEngine");
   initSentimentCron();
+
+  // Public status page — health probes every 5 min + daily snapshot at 00:05 UTC.
+  const { initStatusSnapshotCron } = require("./cron/statusSnapshot");
+  initStatusSnapshotCron();
 
   // Initialize AI Deal Insights Engine (runs every 6 hours)
   const { initDealInsightsCron } = require("./cron/dealInsightsEngine");

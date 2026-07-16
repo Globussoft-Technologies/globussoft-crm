@@ -2144,6 +2144,13 @@ function renderGenericNav({
             label="Embed Allowlist"
             adminOnly
           />
+          {/* PRD_STATUS_PAGE — Platform status admin (declare incidents, post updates). */}
+          <Link
+            to="/admin/status"
+            icon={Activity}
+            label="Status"
+            adminOnly
+          />
           {/* PRD Gap §1.5 / §1.6 — Commission profiles + revenue goals admin pages. */}
           <Link
             to="/commission-profiles"

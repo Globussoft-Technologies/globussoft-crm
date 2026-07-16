@@ -221,6 +221,14 @@ const NON_TENANT_MODELS = new Set([
   // most recent row for the requested pair. Adding tenantId would
   // multiply the table size by tenant count for zero behavioural benefit.
   'FxRate',
+  // PRD_STATUS_PAGE.md — public status page. Status is instance-level:
+  // the page describes the health of the whole CRM deployment, not a
+  // single tenant. Component list, incidents, incident updates, and daily
+  // uptime snapshots are global by design.
+  'StatusComponent',
+  'StatusIncident',
+  'StatusIncidentUpdate',
+  'StatusDailySnapshot',
 ]);
 
 // ── Expected AuditLog shape ──────────────────────────────────────────

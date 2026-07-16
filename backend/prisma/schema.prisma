@@ -8774,3 +8774,62 @@ model SystemSetting {
 
   @@index([category])
 }
+
+// Public status-page models (PRD_STATUS_PAGE.md). These are intentionally
+// GLOBAL / instance-level: the status page describes the health of the whole
+// CRM deployment, not a single tenant. Tenant isolation is irrelevant here.
+
+model StatusComponent {
+  id                  Int                   @id @default(autoincrement())
+  name                String                @unique // e.g. "CRM API", "Travel API"
+  group               String                @default("Core") // Core, Travel, Integrations
+  description         String?               @db.Text
+  sortOrder           Int                   @default(0)
+  status              String                @default("operational") // operational | degraded | partial_outage | major_outage | maintenance | no_data
+  isPublic            Boolean               @default(true)
+  probeUrl            String?               // relative URL or probe key
+  consecutiveFailures Int                   @default(0)
+  lastProbedAt        DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  snapshots           StatusDailySnapshot[]
+  incidents           StatusIncident[]
+}
+
+model StatusIncident {
+  id          Int                    @id @default(autoincrement())
+  title       String
+  impact      String                 @default("minor") // none | minor | major | critical | maintenance
+  status      String                 @default("investigating") // investigating | identified | monitoring | resolved
+  components  StatusComponent[]
+  createdAt   DateTime               @default(now())
+  resolvedAt  DateTime?
+  updatedAt   DateTime               @updatedAt
+  updates     StatusIncidentUpdate[]
+}
+
+model StatusIncidentUpdate {
+  id          Int            @id @default(autoincrement())
+  incidentId  Int
+  incident    StatusIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  status      String         // investigating | identified | monitoring | resolved
+  message     String         @db.Text
+  createdAt   DateTime       @default(now())
+
+  @@index([incidentId, createdAt])
+}
+
+model StatusDailySnapshot {
+  id          Int             @id @default(autoincrement())
+  componentId Int
+  component   StatusComponent @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  date        DateTime        @db.Date
+  uptimePct   Float           @default(100)
+  worstStatus String          @default("operational") // operational | degraded | partial_outage | major_outage | maintenance | no_data
+  probeCount  Int             @default(0)
+  failCount   Int             @default(0)
+  createdAt   DateTime        @default(now())
+
+  @@unique([componentId, date])
+  @@index([componentId, date])
+}

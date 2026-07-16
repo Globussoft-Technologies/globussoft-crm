@@ -151,6 +151,10 @@ const CSPViolations = lazy(() => import("./pages/admin/CSPViolations"));
 // Voyagr (OJR) per-site API key admin — slice C1 of TRAVEL_CODEABLE_BACKLOG.
 // ADMIN-only; provisions per-sub-brand API keys consumed by /api/v1/voyagr.
 const VoyagrApiKeys = lazy(() => import("./pages/admin/VoyagrApiKeys"));
+// Public status page — /status (PRD_STATUS_PAGE.md).
+const StatusPage = lazy(() => import("./pages/StatusPage"));
+// Admin incident-management surface for the status page.
+const StatusAdmin = lazy(() => import("./pages/admin/StatusAdmin"));
 // Embed allowlist admin — S128 of TRAVEL_BIG_SCOPE_BACKLOG. ADMIN-only;
 // sets Tenant.embedAllowlistJson which controls per-tenant iframe
 // frame-ancestors enforcement (S38/S39/S66/S129 chain).
@@ -992,6 +996,8 @@ export default function App() {
                   <Route path="/sso/return" element={<SsoReturn />} />
                   <Route path="/reset-password" element={<ResetPassword />} />
                   <Route path="/pricing" element={<Pricing />} />
+                  {/* Public status page — no auth (PRD_STATUS_PAGE.md). */}
+                  <Route path="/status" element={<StatusPage />} />
                   <Route path="/payment-success" element={<PaymentSuccess />} />
                   <Route path="/payment-failed" element={<PaymentFailed />} />
                   <Route
@@ -1398,6 +1404,8 @@ export default function App() {
                     <Route path="admin/voyagr-api-keys" element={<RoleGuard requiredPermission={{ module: "integrations", action: "manage" }} feature="Voyagr API Keys" message="Voyagr API Keys requires the 'integrations.manage' permission."><VoyagrApiKeys /></RoleGuard>} />
                     {/* S128 — Embed allowlist admin (sets Tenant.embedAllowlistJson). ADMIN-only. */}
                     <Route path="admin/embed-allowlist" element={<RoleGuard allow={["ADMIN"]} message="Embed Allowlist requires admin access."><EmbedAllowlist /></RoleGuard>} />
+                    {/* PRD_STATUS_PAGE.md — incident management for the public status page. */}
+                    <Route path="admin/status" element={<RoleGuard allow={["ADMIN"]} message="Status management requires admin access."><StatusAdmin /></RoleGuard>} />
                     {/* PRD Gap §1.5 / §1.6 */}
                     <Route
                       path="commission-profiles"

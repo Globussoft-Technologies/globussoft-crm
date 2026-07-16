@@ -1,0 +1,209 @@
+/* Admin incident-management surface for the public status page */
+
+.status-admin {
+  padding: 24px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.status-admin__title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 24px;
+  color: var(--text-primary);
+}
+
+.status-admin__section {
+  margin-bottom: 32px;
+}
+
+.status-admin__section-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 16px;
+  color: var(--text-primary);
+}
+
+.status-admin__form,
+.status-admin__card {
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.status-admin__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.status-admin__field input,
+.status-admin__field select,
+.status-admin__field textarea {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.status-admin__field input:focus,
+.status-admin__field select:focus,
+.status-admin__field textarea:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.status-admin__row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.status-admin__row > * {
+  flex: 1;
+}
+
+.status-admin__fieldset {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+}
+
+.status-admin__checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.status-admin__checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.status-admin__button {
+  padding: 10px 18px;
+  border-radius: 8px;
+  border: none;
+  background-color: var(--primary-color);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.status-admin__button:hover {
+  background-color: var(--primary-hover);
+}
+
+.status-admin__button--secondary {
+  background-color: var(--subtle-bg-3);
+  color: var(--text-primary);
+}
+
+.status-admin__button--secondary:hover {
+  background-color: var(--subtle-bg);
+}
+
+.status-admin__card {
+  margin-bottom: 16px;
+}
+
+.status-admin__card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.status-admin__card-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.status-admin__card-meta {
+  margin: 0 0 12px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.status-admin__badge {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  text-transform: capitalize;
+}
+
+.status-admin__badge--investigating,
+.status-admin__badge--identified {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.status-admin__badge--monitoring {
+  background-color: #fef9c3;
+  color: #854d0e;
+}
+
+.status-admin__badge--resolved {
+  background-color: #dcfce7;
+  color: #166534;
+}
+
+.status-admin__updates {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.status-admin__update {
+  background-color: var(--subtle-bg-2);
+  border-left: 3px solid var(--accent-color);
+  padding: 10px 12px;
+  border-radius: 0 8px 8px 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.status-admin__update p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+}
+
+.status-admin__update-form {
+  border-top: 1px solid var(--border-color);
+  padding-top: 16px;
+}
+
+.status-admin__loading,
+.status-admin__empty,
+.status-admin__error {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.status-admin__error {
+  background-color: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #991b1b;
+  margin-bottom: 16px;
+}

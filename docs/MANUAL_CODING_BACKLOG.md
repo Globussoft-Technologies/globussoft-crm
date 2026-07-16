@@ -483,6 +483,26 @@ gh issue list --label "wellness" --state open --limit 20
 
 ---
 
+### D21. Public Status Page — `/status` + health probes + incident feed + RSS/Atom (#<next>) — PRD drafted, design call pending
+**Labels:** `multi-day-feature`, `backend`, `frontend`, `observability`, `public-surface`, `schema-migration`, `cron`, `needs-design-call`
+
+**Why manual:** the CRM has no customer-facing status page. `GET /api/health` at `backend/server.js:1757` is a point-in-time liveness probe only; the Developer page (`/developer`) and Super Admin API Analytics (`/super-admin/api-analytics`) are auth-gated internal surfaces. Building a `status.claude.ai` / `status.moonshot.cn` equivalent requires new Prisma models (`StatusComponent`, `StatusIncident`, `StatusIncidentUpdate`, `StatusDailySnapshot`), a scheduled health-probe service that checks `/api/health`, `/api/travel/health`, and other critical subsystems every 5 minutes, a daily snapshot cron for uptime-history bars, public API routes, RSS/Atom feeds, a public React page at `/status`, and a small admin incident-management surface. The schema shape and routing depend on unresolved DD-5.1 (subdomain vs path), DD-5.2 (hardcoded component list vs DB-driven admin CRUD), and DD-5.5 (SUPER_ADMIN-only incident auth vs ADMIN inclusive).
+
+**Slicing recommendation:**
+- Slice 1 — Prisma migration + seed components + probe service + daily snapshot cron.
+- Slice 2 — Public API routes (`/api/status`, `/api/status/history`, `/api/status/incidents`, RSS/Atom).
+- Slice 3 — Public React page `/status` (banner, component list, 30/60/90-day chart, incidents).
+- Slice 4 — Admin incident-management page (`/admin/status`) gated to SUPER_ADMIN.
+- Slice 5 — Tests, deploy wiring, Nginx/CDN cache rules, and docs.
+
+**Blocks before implementation can start:** **DD-5.1 (URL/hosting — `/status` path vs `status.globusdemos.com` subdomain) — affects DNS/Nginx + frontend routing** + DD-5.2 (component list source — hardcoded seed vs DB-driven admin CRUD) + DD-5.5 (incident auth boundary — SUPER_ADMIN only vs ADMIN too) + OQ-9.5 (uptime history window length) + OQ-9.7 (public page theme — clean light vs app dark glass).
+
+**Effort estimate:** 4–6 engineering days post-design call.
+
+**Cross-refs:** `PRD_STATUS_PAGE.md` (this PRD). No direct sibling dependency; can ship independently of wellness/travel feature work.
+
+---
+
 ## E. PRODUCT-CALL DEPENDENT (decision-first, then implementation)
 
 These don't need an engineer — they need a stakeholder decision. Once the decision arrives, the implementation is small.

@@ -34,27 +34,18 @@ const DEFAULT_COMPONENTS = [
     probeUrl: "/api/health",
   },
   {
-    name: "Travel API",
-    group: "Travel",
-    description: "Travel-vertical API endpoints",
-    sortOrder: 3,
-    probeUrl: "/api/travel/health",
-  },
-  {
     name: "WebSocket / Real-time",
     group: "Core",
     description: "Socket.IO real-time events",
-    sortOrder: 4,
+    sortOrder: 3,
     probeUrl: "/api/health",
   },
-  {
-    name: "WhatsApp Gateway",
-    group: "Integrations",
-    description: "WhatsApp Business API integration",
-    sortOrder: 5,
-    probeUrl: "/api/whatsapp/onboard/status",
-  },
 ];
+
+// Legacy default components that were seeded with auth-gated probe URLs.
+// They cannot be checked by the unauthenticated cron, so they must be hidden
+// from the public status page until public subsystem health endpoints exist.
+const LEGACY_PUBLIC_COMPONENTS = ["Travel API", "WhatsApp Gateway"];
 
 const STATUS_ORDER = {
   operational: 0,
@@ -127,6 +118,13 @@ async function seedStatusComponents() {
       create: def,
     });
   }
+}
+
+async function hideLegacyPublicComponents() {
+  await prisma.statusComponent.updateMany({
+    where: { name: { in: LEGACY_PUBLIC_COMPONENTS } },
+    data: { isPublic: false },
+  });
 }
 
 async function probeComponent(component) {
@@ -252,6 +250,7 @@ async function writeDailySnapshots() {
 
 module.exports = {
   seedStatusComponents,
+  hideLegacyPublicComponents,
   runStatusProbes,
   writeDailySnapshots,
   getBaseUrl,

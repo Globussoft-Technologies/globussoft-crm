@@ -13,6 +13,7 @@ const {
   runStatusProbes,
   writeDailySnapshots,
   seedStatusComponents,
+  hideLegacyPublicComponents,
 } = require("../lib/statusProbe");
 
 async function tickStatusProbe() {
@@ -50,9 +51,11 @@ async function tickDailySnapshot() {
 function initStatusSnapshotCron() {
   // Ensure the default component catalog exists once per boot. After this,
   // operators own the rows (isPublic, sortOrder, probeUrl, etc.).
-  seedStatusComponents().catch((e) =>
-    console.error("[statusProbe] seed default components failed (non-fatal):", e.message),
-  );
+  seedStatusComponents()
+    .then(() => hideLegacyPublicComponents())
+    .catch((e) =>
+      console.error("[statusProbe] seed/hide legacy components failed (non-fatal):", e.message),
+    );
 
   // Live component probe every 5 minutes.
   cronRegistry

@@ -267,7 +267,26 @@ export const fetchApi = async (url, options = {}) => {
       // developer needs to correlate this toast with the matching backend
       // log line — so it rides along in small print / the console, not the
       // headline message.
-      userMsg = 'Something went wrong on our end. Please try again — if it keeps happening, contact support.';
+      //
+      // Two different 5xx shapes reach here, and they mean different things:
+      //   - errData.code present ("REFUND_FAILED", "GATEWAY_UNAVAILABLE", …) —
+      //     our OWN route handler ran, modeled the failure, and returned a
+      //     structured { error, code } body. serverMsg is safe, specific,
+      //     app-authored copy (never raw driver/SDK text) — show it.
+      //   - errData.code absent (response.json() returned {} because the
+      //     body wasn't JSON, or had no .code) — the request likely never
+      //     reached our route handler at all: an infra-level 502/503/504
+      //     from Nginx/PM2 (mid-deploy, backend restarting, briefly
+      //     unreachable). The generic "something went wrong" text is
+      //     genuinely correct there, but framed as a retry-shortly blip
+      //     rather than an app error, since that's what it usually is.
+      if (errData.code && serverMsg) {
+        userMsg = serverMsg;
+      } else if (response.status === 502 || response.status === 503 || response.status === 504) {
+        userMsg = 'The server was temporarily unreachable (probably mid-deploy or restarting). Please wait a few seconds and try again.';
+      } else {
+        userMsg = 'Something went wrong on our end. Please try again — if it keeps happening, contact support.';
+      }
       console.error(`[api] ${response.status} ${errorCode} on ${url}:`, serverMsg || '(no server message)');
     } else {
       userMsg = serverMsg || `Request failed (${response.status}).`;

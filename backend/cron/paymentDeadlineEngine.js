@@ -80,6 +80,13 @@ async function runPaymentDeadlineTick(now = new Date()) {
       status: "accepted", // committed but unpaid (advance_paid/fully_paid excluded)
       subBrand: { not: "visasure" }, // everything except Visa Sure
       startDate: { gte: floor, lte: horizon },
+      // Exclude bookings already in (or past) the customer-cancellation flow —
+      // `status` never flips away from "accepted" on cancellation (separate
+      // lifecycle field, see schema comment on Itinerary.cancellationStatus),
+      // so without this guard the cron keeps re-stamping paymentOverdueAt on
+      // an already-cancelled/refunded booking, reviving a stale "Deposit
+      // overdue" badge on the itinerary list indefinitely.
+      cancellationStatus: null,
     },
     select: {
       id: true, tenantId: true, subBrand: true, contactId: true, destination: true,

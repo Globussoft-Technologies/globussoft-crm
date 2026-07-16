@@ -195,6 +195,49 @@ describe('utils/api — fetchApi', () => {
     });
   });
 
+  it('shows the specific app-authored message when the backend returns a modeled { error, code } 5xx body', async () => {
+    // A route handler that ran its logic and returned a structured failure
+    // (e.g. refundService's REFUND_FAILED / GATEWAY_NOT_CONFIGURED) has
+    // already produced safe, specific, user-facing copy server-side — the
+    // client should show it verbatim instead of overwriting it with the
+    // generic fallback.
+    mockFetch({ status: 502, body: { error: 'Razorpay is temporarily unavailable. Please try again in a moment.', code: 'GATEWAY_UNAVAILABLE' } });
+    await expect(fetchApi('/api/payments/1/refund')).rejects.toMatchObject({
+      message: 'Razorpay is temporarily unavailable. Please try again in a moment.',
+      code: 'GATEWAY_UNAVAILABLE',
+      status: 502,
+    });
+  });
+
+  it('shows a retry-shortly message (not the generic fallback) for a bodiless 502/503/504 — an infra-level failure, not a modeled app error', async () => {
+    // No errData.code means response.json() returned {} — the request most
+    // likely never reached our route handler at all (Nginx/PM2 briefly
+    // unreachable mid-deploy or mid-restart). That's a different situation
+    // from a route that ran and modeled a failure, so it gets its own copy.
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: () => Promise.resolve({}),
+    });
+    await expect(fetchApi('/api/payments/1/refund')).rejects.toMatchObject({
+      message: 'The server was temporarily unreachable (probably mid-deploy or restarting). Please wait a few seconds and try again.',
+      code: null,
+      status: 502,
+    });
+  });
+
+  it('still uses the generic fallback for a bodiless plain 500 (not 502/503/504)', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: () => Promise.resolve({}),
+    });
+    await expect(fetchApi('/api/crash')).rejects.toMatchObject({
+      message: 'Something went wrong on our end. Please try again — if it keeps happening, contact support.',
+      status: 500,
+    });
+  });
+
   it('on 401: clears in-memory + sessionStorage token and redirects to /login', async () => {
     setAuthToken('expired');
     expect(sessionStorage.getItem('token')).toBe('expired');

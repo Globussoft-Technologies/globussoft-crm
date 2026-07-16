@@ -173,6 +173,14 @@ async function runOcr(imageBuffer, opts = {}) {
       throw e2;
     }
   }
+  // Expose the live worker to the caller (opts.workerRef, an out-param) so
+  // withTimeout() can terminate it immediately on timeout instead of merely
+  // abandoning this in-flight call — Promise.race does not cancel the loser,
+  // so without this hand-off a slow scan leaks a full Tesseract worker (WASM
+  // + loaded traineddata) per timeout, uncounted by the concurrency gate in
+  // withOcrSlot() since that gate releases as soon as the RACE settles, not
+  // when this worker actually terminates.
+  if (opts.workerRef) opts.workerRef.current = worker;
   async function useLanguage(lang) {
     try {
       await worker.reinitialize(lang);
@@ -268,6 +276,10 @@ async function runOcr(imageBuffer, opts = {}) {
     console.error("[passportOcrClient] runOcr failed:", runErr?.message || runErr, runErr?.stack || "");
     return { mrzText: "", vizText: "", confidence: null };
   } finally {
+    // terminate() is safe to call twice (tesseract.js no-ops on an already-
+    // terminated worker) — this covers the normal-completion path even when
+    // withTimeout() already terminated the worker on the timeout path below.
+    if (opts.workerRef) opts.workerRef.current = null;
     await worker.terminate().catch(() => {});
   }
 }
@@ -337,10 +349,25 @@ function resolvePassportNumber(mrz, viz) {
 }
 
 // Race a promise against a timeout; clears the timer on settle.
-function withTimeout(promise, ms) {
+//
+// workerRef is an out-param ({ current: worker|null }) that runOcr() fills in
+// once its tesseract worker is created. Promise.race does NOT cancel the
+// losing side — if runOcr() itself is still running when the timer fires, it
+// would otherwise keep the worker (and every in-flight recognize() pass)
+// alive in the background until it eventually settles on its own, uncounted
+// by the withOcrSlot() concurrency gate (which releases as soon as THIS race
+// settles). Terminating the worker directly on timeout makes the abandoned
+// runOcr() call fail fast (its pending worker.recognize()/reinitialize()
+// calls reject once the worker is gone) so its own `finally` cleanup runs
+// immediately instead of whenever the hung call happens to unwind.
+function withTimeout(promise, ms, workerRef) {
   let timer;
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(() => {
+      if (workerRef?.current) {
+        workerRef.current.terminate().catch(() => {});
+        workerRef.current = null;
+      }
       const err = new Error("OCR timed out");
       err.code = "OCR_TIMEOUT";
       reject(err);
@@ -476,7 +503,8 @@ async function extractPassport({ tenantId, filePath, fileBuffer, fileName, mimeT
   let vizText = "";
   let ocrConfidence = null;
   try {
-    const result = await withOcrSlot(() => withTimeout(runOcr(buffer, { ocr }), OCR_TIMEOUT_MS));
+    const workerRef = { current: null };
+    const result = await withOcrSlot(() => withTimeout(runOcr(buffer, { ocr, workerRef }), OCR_TIMEOUT_MS, workerRef));
     mrzText = result?.mrzText || "";
     vizText = result?.vizText || "";
     ocrConfidence = result?.confidence ?? null;
@@ -597,4 +625,4 @@ function mergeExtraction(mrz, viz, ocrConfidence) {
   };
 }
 
-module.exports = { extractPassport, isEnabledForTenant, runOcr, INTEGRATION };
+module.exports = { extractPassport, isEnabledForTenant, runOcr, withTimeout, INTEGRATION };

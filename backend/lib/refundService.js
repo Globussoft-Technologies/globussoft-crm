@@ -13,7 +13,7 @@
 
 const prisma = require("./prisma");
 const { writeAudit } = require("./audit");
-const { getTenantRazorpayClient, NOT_CONFIGURED_MESSAGE } = require("./tenantPaymentGateway");
+const { getTenantRazorpayClient, NOT_CONFIGURED_MESSAGE, parseRazorpayError } = require("./tenantPaymentGateway");
 
 function safeJsonParse(value, fallback = {}) {
   if (value == null) return fallback;
@@ -183,7 +183,8 @@ async function refundCapturedPayment({ payment, amount, reason, userId }) {
     });
   } catch (err) {
     console.error("[refundService] razorpay refund failed:", err && err.message);
-    return { ok: false, status: 502, code: "REFUND_FAILED", error: "The refund could not be processed by Razorpay. Please try again." };
+    const parsed = parseRazorpayError(err);
+    return { ok: false, status: parsed.status, code: parsed.code, error: parsed.message };
   }
 
   const updated = await finalizeRefund(payment, {

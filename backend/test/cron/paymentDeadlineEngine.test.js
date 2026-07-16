@@ -56,6 +56,20 @@ describe("paymentDeadlineEngine.runPaymentDeadlineTick — scope", () => {
     expect(where.startDate).toHaveProperty("gte");
     expect(where.startDate).toHaveProperty("lte");
   });
+
+  // Regression guard: `status` never flips away from "accepted" when a
+  // booking is cancelled (cancellationStatus is a separate lifecycle
+  // field — see schema comment on Itinerary.cancellationStatus). Without
+  // this scan-query guard, the cron keeps re-considering (and, before
+  // paymentOverdueAt was already set, re-stamping) a cancelled/refunded
+  // booking, reviving a stale "Deposit overdue" badge on the itinerary
+  // list indefinitely.
+  it("excludes itineraries with any cancellationStatus set (requested/cancelled/refunded) from the scan", async () => {
+    prisma.itinerary.findMany.mockResolvedValue([]);
+    await runPaymentDeadlineTick(NOW);
+    const where = prisma.itinerary.findMany.mock.calls[0][0].where;
+    expect(where.cancellationStatus).toBeNull();
+  });
 });
 
 describe("paymentDeadlineEngine.runPaymentDeadlineTick — reminders", () => {

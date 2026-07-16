@@ -72,6 +72,24 @@ const STATUS_VARIANT = {
   expired: "rejected",
 };
 
+// cancellationStatus is a separate, later-added lifecycle field (independent
+// of `status` — see backend/prisma/schema.prisma) that the customer-initiated
+// cancellation flow advances through requested → cancelled → refunded. It
+// takes display PRECEDENCE over the stale `status` value once set, mirroring
+// ItineraryDetail.jsx's cancellation banner. Without this, a cancelled/
+// refunded booking keeps showing whatever `status` it had before cancellation
+// (e.g. "accepted") since the cancellation PATCH never touches `status`.
+const CANCELLATION_LABEL = {
+  requested: "Cancellation requested",
+  cancelled: "Cancelled",
+  refunded: "Cancelled & refunded",
+};
+const CANCELLATION_VARIANT = {
+  requested: "sent",
+  cancelled: "rejected",
+  refunded: "rejected",
+};
+
 // PRD §6.4 — tier badge palette. productTier on each Itinerary is captured
 // at creation from the contact's latest diagnostic (recommendedTier).
 // Neutral / travel-navy / warm-gold for entry / primary / premium.
@@ -801,7 +819,14 @@ export default function Itineraries() {
             </thead>
             <tbody>
               {filteredItems.map((it) => {
-                const statusVariant = STATUS_VARIANT[it.status] || "other";
+                // cancellationStatus (once set) overrides the stale `status`
+                // pill — see CANCELLATION_LABEL comment above.
+                const statusLabel = it.cancellationStatus
+                  ? CANCELLATION_LABEL[it.cancellationStatus] || it.cancellationStatus
+                  : it.status;
+                const statusVariant = it.cancellationStatus
+                  ? CANCELLATION_VARIANT[it.cancellationStatus] || "other"
+                  : STATUS_VARIANT[it.status] || "other";
                 return (
                   <tr
                     key={it.id}
@@ -841,13 +866,16 @@ export default function Itineraries() {
                     <td style={td}>{fmtMoney(it.totalAmount, it.currency)}</td>
                     <td style={td}>
                       <span className={`travel-itin-status-pill travel-itin-status-pill--${statusVariant}`}>
-                        {it.status}
+                        {statusLabel}
                       </span>
                       {/* Pay-or-cancel at-risk flag: an accepted booking whose
                           50% deposit deadline passed unpaid (paymentOverdueAt
                           set by cron/paymentDeadlineEngine). Prompts the advisor
-                          to follow up or set status → expired. */}
-                      {it.status === "accepted" && it.paymentOverdueAt && (
+                          to follow up or set status → expired. Suppressed once
+                          a cancellation is in play (requested/cancelled/
+                          refunded) — the booking is no longer an active unpaid
+                          deposit risk, it's a cancellation being processed. */}
+                      {!it.cancellationStatus && it.status === "accepted" && it.paymentOverdueAt && (
                         <span
                           title={`Deposit overdue since ${fmt(it.paymentOverdueAt)} — review for cancellation`}
                           style={{

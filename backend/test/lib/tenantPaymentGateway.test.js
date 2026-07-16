@@ -37,6 +37,7 @@ const {
   NOT_CONFIGURED_MESSAGE,
   getTenantRazorpayCreds,
   getTenantRazorpayClient,
+  parseRazorpayError,
 } = gw;
 
 beforeEach(() => {
@@ -52,6 +53,69 @@ describe('module shape', () => {
     expect(NOT_CONFIGURED_MESSAGE.length).toBeGreaterThan(0);
     expect(typeof getTenantRazorpayCreds).toBe('function');
     expect(typeof getTenantRazorpayClient).toBe('function');
+    expect(typeof parseRazorpayError).toBe('function');
+  });
+});
+
+describe('parseRazorpayError', () => {
+  // Regression: the Payments-page refund flow used to collapse EVERY
+  // Razorpay SDK throw into the same blanket "please try again" 502,
+  // regardless of whether Razorpay actually rejected the request (a real,
+  // actionable 4xx) or was genuinely unreachable. This mirrors the
+  // parseGatewayError pattern already used for the customer-payment create
+  // path in routes/payments.js, so both flows give specific reasons.
+  test('no error object → generic gateway-unavailable 502', () => {
+    const out = parseRazorpayError(null);
+    expect(out.status).toBe(502);
+    expect(out.code).toBe('GATEWAY_ERROR');
+  });
+
+  test('401 / auth-shaped message → GATEWAY_NOT_CONFIGURED (503), never echoes the key', () => {
+    const err = new Error('Invalid API Key provided: rzp_test_ABCD1234');
+    err.statusCode = 401;
+    const out = parseRazorpayError(err);
+    expect(out.status).toBe(503);
+    expect(out.code).toBe('GATEWAY_NOT_CONFIGURED');
+    expect(out.message).not.toMatch(/rzp_test/);
+  });
+
+  test('"already refunded" upstream message → ALREADY_REFUNDED_UPSTREAM (409), tells the operator to refresh', () => {
+    const err = new Error('rejected');
+    err.statusCode = 400;
+    err.error = { code: 'BAD_REQUEST_ERROR', description: 'The payment has already been fully refunded' };
+    const out = parseRazorpayError(err);
+    expect(out.status).toBe(409);
+    expect(out.code).toBe('ALREADY_REFUNDED_UPSTREAM');
+    expect(out.message).toMatch(/refresh/i);
+  });
+
+  test('"payment status should be captured" message → PAYMENT_NOT_CAPTURED (409), tells the operator to check status', () => {
+    const err = new Error('rejected');
+    err.statusCode = 400;
+    err.error = { code: 'BAD_REQUEST_ERROR', description: 'The payment status should be captured for action to be taken' };
+    const out = parseRazorpayError(err);
+    expect(out.status).toBe(409);
+    expect(out.code).toBe('PAYMENT_NOT_CAPTURED');
+    expect(out.message).toMatch(/isn't eligible for a refund/i);
+    expect(out.message).not.toMatch(/captured for action to be taken/i);
+  });
+
+  test('generic 4xx with a structured description → surfaces the specific reason, scrubbed', () => {
+    const err = new Error('rejected');
+    err.statusCode = 400;
+    err.error = { code: 'BAD_REQUEST_ERROR', description: 'The refund amount exceeds rzp_live_ABCDEFGH the captured amount' };
+    const out = parseRazorpayError(err);
+    expect(out.status).toBe(400);
+    expect(out.code).toBe('BAD_REQUEST_ERROR');
+    expect(out.message).toMatch(/exceeds/i);
+    expect(out.message).not.toMatch(/rzp_live/);
+  });
+
+  test('5xx / unstructured throw → generic gateway-unavailable 502 (not a fabricated 4xx reason)', () => {
+    const out = parseRazorpayError(new Error('ECONNRESET'));
+    expect(out.status).toBe(502);
+    expect(out.code).toBe('GATEWAY_UNAVAILABLE');
+    expect(out.message).toMatch(/temporarily unavailable/i);
   });
 });
 

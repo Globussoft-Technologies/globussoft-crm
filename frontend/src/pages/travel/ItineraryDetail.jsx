@@ -27,7 +27,7 @@
 //      each day-row gains a margin sub-row beneath the totalCost.
 //      PRD §3.6(d) pricing transparency.
 
-import { useEffect, useState, useContext } from "react";
+import { useEffect, useState, useContext, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useParams, Link } from "react-router-dom";
 import {
@@ -99,6 +99,14 @@ const EMPTY_ITEM = {
   unit: "per_person",
   quantity: "1",
   direction: "",
+  // Flight-specific fields (stored in detailsJson)
+  flightPnr: "",
+  flightNumber: "",
+  airlineCode: "",
+  departureAt: "",
+  passengerName: "",
+  seatPref: "",
+  mealPref: "",
 };
 
 // Pricing-basis options + labels (mirror VALID_ITEM_UNITS in the backend).
@@ -125,6 +133,174 @@ function lineTotalOf(v) {
   const mk = v.markup !== "" && v.markup != null ? Number(v.markup) : 0;
   const gst = v.gstAmount !== "" && v.gstAmount != null ? Number(v.gstAmount) : 0;
   return Math.round((rate * qty + mk + gst) * 100) / 100;
+}
+
+// ── Flight details JSON helpers ─────────────────────────────────────
+// Parse detailsJson string → flight form fields (for editing).
+function parseFlightDetails(jsonStr) {
+  if (!jsonStr) return null;
+  try {
+    const obj = JSON.parse(jsonStr);
+    if (!obj || typeof obj !== "object") return null;
+    return {
+      flightPnr: obj.pnr || "",
+      flightNumber: obj.flightNumber || "",
+      airlineCode: obj.airlineCode || "",
+      departureAt: obj.departureAt || "",
+      passengerName: obj.passengerName || "",
+      seatPref: obj.seatPref || "",
+      mealPref: obj.mealPref || "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Build detailsJson string from flight form fields.
+function buildFlightDetails(fields) {
+  const obj = {};
+  if (fields.flightPnr?.trim()) obj.pnr = fields.flightPnr.trim().toUpperCase();
+  if (fields.flightNumber?.trim()) obj.flightNumber = fields.flightNumber.trim().toUpperCase();
+  if (fields.airlineCode?.trim()) obj.airlineCode = fields.airlineCode.trim().toUpperCase();
+  if (fields.departureAt) obj.departureAt = fields.departureAt;
+  if (fields.passengerName?.trim()) obj.passengerName = fields.passengerName.trim();
+  if (fields.seatPref?.trim()) obj.seatPref = fields.seatPref.trim();
+  if (fields.mealPref?.trim()) obj.mealPref = fields.mealPref.trim();
+  return Object.keys(obj).length > 0 ? JSON.stringify(obj) : "";
+}
+
+// Merge flight fields into a values object (for initializing edit mode).
+function mergeFlightFields(values) {
+  const parsed = parseFlightDetails(values.detailsJson);
+  if (!parsed) return values;
+  return { ...values, ...parsed };
+}
+
+// Airlines for the dropdown.
+const AIRLINE_OPTIONS = [
+  { code: "", name: "— Select Airline —" },
+  { code: "6E", name: "IndiGo" },
+  { code: "AI", name: "Air India" },
+  { code: "IX", name: "Air India Express" },
+  { code: "UK", name: "Vistara" },
+  { code: "EK", name: "Emirates" },
+  { code: "SG", name: "SpiceJet" },
+  { code: "QP", name: "Akasa Air" },
+  { code: "EY", name: "Etihad" },
+  { code: "SV", name: "Saudia" },
+  { code: "QR", name: "Qatar Airways" },
+  { code: "G9", name: "Air Arabia" },
+  { code: "GF", name: "Gulf Air" },
+];
+
+const SEAT_PREFS = [
+  { value: "", label: "—" },
+  { value: "aisle", label: "Aisle" },
+  { value: "window", label: "Window" },
+  { value: "middle", label: "Middle" },
+  { value: "not-bothered", label: "Not bothered" },
+];
+
+// Lightweight searchable single-select dropdown.
+// User can type the airline code or name (any case) to filter options.
+function SearchableSelect({ options, value, onChange, placeholder = "Select…" }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+
+  const selectedOption = options.find((o) => o.code === value);
+  const displayValue = selectedOption
+    ? (selectedOption.code ? `${selectedOption.code} — ${selectedOption.name}` : selectedOption.name)
+    : placeholder;
+
+  const filtered = search.trim()
+    ? options.filter((o) => {
+        const q = search.trim().toLowerCase();
+        return o.code.toLowerCase().includes(q) || o.name.toLowerCase().includes(q);
+      })
+    : options;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open && inputRef.current) inputRef.current.focus();
+  }, [open]);
+
+  const select = (code) => {
+    onChange(code);
+    setSearch("");
+    setOpen(false);
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          ...input,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          cursor: "pointer", textAlign: "left",
+        }}
+      >
+        <span>{displayValue}</span>
+        <span style={{ fontSize: 10, color: "var(--text-secondary)" }}>▼</span>
+      </button>
+      {open && (
+        <div
+          style={{
+            position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4,
+            background: "var(--bg-color)", border: "1px solid var(--border-color)",
+            borderRadius: 6, zIndex: 100, maxHeight: 260, display: "flex", flexDirection: "column",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
+          }}
+        >
+          <div style={{ padding: 8, borderBottom: "1px solid var(--border-color)" }}>
+            <input
+              ref={inputRef}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Type code or airline name…"
+              style={{ ...input, fontSize: 12 }}
+            />
+          </div>
+          <div style={{ overflowY: "auto", flex: 1 }}>
+            {filtered.length === 0 && (
+              <div style={{ padding: "8px 12px", fontSize: 12, color: "var(--text-secondary)" }}>No matches.</div>
+            )}
+            {filtered.map((o) => (
+              <button
+                key={o.code}
+                type="button"
+                onClick={() => select(o.code)}
+                style={{
+                  width: "100%", textAlign: "left", padding: "8px 12px",
+                  background: o.code === value ? "var(--subtle-bg)" : "transparent",
+                  border: "none", color: "var(--text-primary)", fontSize: 13,
+                  cursor: "pointer",
+                }}
+              >
+                {o.code ? `${o.code} — ${o.name}` : o.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function fmtDate(d) {
@@ -1030,7 +1206,7 @@ export default function ItineraryDetail() {
                       {canEdit && (
                         <>
                           <td style={{ ...td, width: 0 }}>
-                            <button type="button" onClick={() => setEditing({ ...item })} style={iconBtn} aria-label={`Edit item ${item.description}`}>
+                            <button type="button" onClick={() => setEditing(mergeFlightFields({ ...item }))} style={iconBtn} aria-label={`Edit item ${item.description}`}>
                               <Pencil size={16} />
                             </button>
                           </td>
@@ -1266,6 +1442,7 @@ export default function ItineraryDetail() {
         >
           <div
             onClick={(e) => e.stopPropagation()}
+            className="travel-itin-edit-modal"
             style={{
               background: "var(--modal-bg, #1a1c22)",
               padding: 24, borderRadius: 12,
@@ -1485,16 +1662,128 @@ function ItemFields({ values, suppliers = [], onChange }) {
         </Field>
       </FieldGroup>
 
-      {/* Row 5: Details JSON */}
-      <Field label="Details JSON" hint="Optional type-specific payload (e.g. PNR, cabin class).">
-        <textarea
-          value={values.detailsJson ?? ""}
-          onChange={(e) => onChange({ detailsJson: e.target.value })}
-          placeholder='e.g. {"pnr":"ABC123","cabin":"economy"}'
-          style={{ ...input, minHeight: 68, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, resize: "vertical" }}
-        />
-      </Field>
-
+      {/* Flight-specific form — replaces the raw JSON textarea for flight items */}
+      {values.itemType === "flight" && (
+        <div className="travel-flight-details-box" style={{ display: "grid", gap: 12, padding: 12, borderRadius: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Flight Details (for Web Check-in)
+          </div>
+          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))" }}>
+            <label style={fieldLabel}>
+              PNR *
+              <input
+                value={values.flightPnr ?? ""}
+                onChange={(e) => {
+                  const pnr = e.target.value.toUpperCase();
+                  onChange({ flightPnr: pnr, detailsJson: buildFlightDetails({ ...values, flightPnr: pnr }) });
+                }}
+                style={input}
+                placeholder="e.g. XK7Q2M"
+              />
+              <span style={hintLabel}>Airline booking reference.</span>
+            </label>
+            <label style={fieldLabel}>
+              Flight Number *
+              <input
+                value={values.flightNumber ?? ""}
+                onChange={(e) => {
+                  const fn = e.target.value.toUpperCase();
+                  onChange({ flightNumber: fn, detailsJson: buildFlightDetails({ ...values, flightNumber: fn }) });
+                }}
+                style={input}
+                placeholder="e.g. 6E-237"
+              />
+              <span style={hintLabel}>Include airline prefix.</span>
+            </label>
+            <label style={fieldLabel}>
+              Airline
+              <SearchableSelect
+                options={AIRLINE_OPTIONS}
+                value={values.airlineCode ?? ""}
+                onChange={(code) => {
+                  onChange({ airlineCode: code, detailsJson: buildFlightDetails({ ...values, airlineCode: code }) });
+                }}
+                placeholder="Select airline"
+              />
+              <span style={hintLabel}>Auto-derived from flight number if blank.</span>
+            </label>
+            <label style={fieldLabel}>
+              Departure Date & Time *
+              <input
+                type="datetime-local"
+                value={values.departureAt ?? ""}
+                onChange={(e) => {
+                  const dt = e.target.value;
+                  onChange({ departureAt: dt, detailsJson: buildFlightDetails({ ...values, departureAt: dt }) });
+                }}
+                style={input}
+              />
+              <span style={hintLabel}>When the flight departs.</span>
+            </label>
+          </div>
+          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))" }}>
+            <label style={fieldLabel}>
+              Passenger Name
+              <input
+                value={values.passengerName ?? ""}
+                onChange={(e) => {
+                  const name = e.target.value;
+                  onChange({ passengerName: name, detailsJson: buildFlightDetails({ ...values, passengerName: name }) });
+                }}
+                style={input}
+                placeholder="e.g. Aarav Sharma"
+              />
+              <span style={hintLabel}>Defaults to contact name if blank.</span>
+            </label>
+            <label style={fieldLabel}>
+              Seat Preference
+              <select
+                value={values.seatPref ?? ""}
+                onChange={(e) => {
+                  const pref = e.target.value;
+                  onChange({ seatPref: pref, detailsJson: buildFlightDetails({ ...values, seatPref: pref }) });
+                }}
+                style={input}
+              >
+                {SEAT_PREFS.map((s) => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
+              <span style={hintLabel}>Aisle / window / etc.</span>
+            </label>
+            <label style={fieldLabel}>
+              Meal Preference
+              <input
+                value={values.mealPref ?? ""}
+                onChange={(e) => {
+                  const pref = e.target.value;
+                  onChange({ mealPref: pref, detailsJson: buildFlightDetails({ ...values, mealPref: pref }) });
+                }}
+                style={input}
+                placeholder="e.g. VGML, AVML"
+              />
+              <span style={hintLabel}>Special meal code if any.</span>
+            </label>
+          </div>
+          {/* Hidden: the generated JSON is still stored in detailsJson for the backend */}
+          {values.detailsJson && (
+            <div style={{ fontSize: 10, color: "var(--text-secondary)", opacity: 0.6, fontFamily: "monospace" }}>
+              JSON: {values.detailsJson}
+            </div>
+          )}
+        </div>
+      )}
+      {/* Non-flight items keep the generic JSON textarea */}
+      {values.itemType !== "flight" && (
+        <Field label="Details JSON" hint="Optional type-specific payload (e.g. PNR, cabin class).">
+          <textarea
+            value={values.detailsJson ?? ""}
+            onChange={(e) => onChange({ detailsJson: e.target.value })}
+            placeholder='e.g. {"startTime":"09:00","endTime":"17:00"}'
+            style={{ ...input, minHeight: 68, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, resize: "vertical" }}
+          />
+        </Field>
+      )}
     </div>
   );
 }

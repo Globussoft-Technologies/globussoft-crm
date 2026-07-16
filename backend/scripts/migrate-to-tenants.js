@@ -60,6 +60,41 @@ async function main() {
   let totalUpdated = 0;
   for (const model of targets) {
     try {
+      if (model === "auditLog") {
+        // AuditLog rows carry a #558 tamper-evidence hash chain whose hash
+        // embeds tenantId. Reassigning tenantId here without clearing
+        // hash/prevHash strands the row with a fingerprint computed for its
+        // OLD tenant — the next /verify or backfill call flags it as
+        // "tampered" even though only its tenant changed, not its content.
+        // Capture the affected row ids first, then null their hash/prevHash
+        // in the same pass so the existing repair tooling (Audit Log page's
+        // "Repair chain" button / scripts/backfill-audit-chain.js) can
+        // cleanly recompute correct hashes under the new tenant on the next
+        // run — same tamper-evidence guarantee, just re-anchored.
+        const affected = await prisma.auditLog.findMany({
+          where: { tenantId: { not: tenantId } },
+          select: { id: true },
+        });
+        const affectedIds = affected.map((r) => r.id);
+
+        const result = await prisma.auditLog.updateMany({
+          where: { tenantId: { not: tenantId } },
+          data: { tenantId },
+        });
+
+        if (affectedIds.length > 0) {
+          await prisma.auditLog.updateMany({
+            where: { id: { in: affectedIds } },
+            data: { hash: null, prevHash: null },
+          });
+        }
+        if (result.count > 0) {
+          console.log(`  - auditLog: backfilled ${result.count} rows -> tenantId=${tenantId} (cleared hash/prevHash for hash-chain recompute)`);
+          totalUpdated += result.count;
+        }
+        continue;
+      }
+
       const result = await prisma[model].updateMany({
         where: { tenantId: { not: tenantId } },
         data: { tenantId },

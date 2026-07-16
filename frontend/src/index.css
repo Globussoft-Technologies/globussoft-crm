@@ -1020,3 +1020,15 @@ html[data-theme="dark"][data-vertical="wellness"] .travel-itin-suggest-modal {
 html[data-theme="dark"] .travel-subbrand-popup {
   background-color: #1a1d24 !important;
 }
+
+/* Flight details box inside the itinerary edit modal — subtle opaque panel
+ * to visually separate the web-check-in fields from the rest of the form.
+ * The modal's own background is left to main's styling (var(--modal-bg)). */
+.travel-flight-details-box {
+  background-color: #f5f5f5 !important;
+  border: 1px solid var(--border-color) !important;
+}
+[data-theme="dark"] .travel-flight-details-box,
+html[data-theme="dark"] .travel-flight-details-box {
+  background-color: #14161b !important;
+}

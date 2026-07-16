@@ -3,7 +3,7 @@ import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Search, ArrowRightCircle, UserCheck, Users, Plus, X } from 'lucide-react';
+import { UserPlus, Search, ArrowRightCircle, UserCheck, Users, Plus, X, Pencil, Trash2, RefreshCw } from 'lucide-react';
 import { AuthContext } from '../App';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
@@ -90,6 +90,15 @@ const Leads = () => {
   // #892 — Create Lead surface is a header CTA + drawer (not the inline
   // always-visible form). `creating` drives whether the drawer is rendered.
   const [creating, setCreating] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState('');
+  const [subBrandFilter, setSubBrandFilter] = useState('');
+  const [stageFilter, setStageFilter] = useState('');
+  const [pipelineStages, setPipelineStages] = useState([]);
+  const [dealsByContact, setDealsByContact] = useState({});
+  const [bookingValueByContact, setBookingValueByContact] = useState({});
+  const [editing, setEditing] = useState(null);
+  const [editForm, setEditForm] = useState({ name: '', email: '', company: '', title: '', source: '' });
+  const [editSaving, setEditSaving] = useState(false);
   // #600 — Initial source defaults differ per vertical: wellness leads
   // typically arrive walk-in/WhatsApp; generic CRM leads default to Organic.
   const [newLead, setNewLead] = useState({
@@ -125,7 +134,42 @@ const Leads = () => {
   useEffect(() => {
     fetchLeads();
     fetchStaff();
-  }, []);
+    if (isTravel) {
+      fetchApi('/api/pipeline_stages')
+        .then(data => setPipelineStages(Array.isArray(data) ? data : []))
+        .catch(() => setPipelineStages([]));
+      fetchApi('/api/deals?limit=500')
+        .then(data => {
+          const map = {};
+          const rows = Array.isArray(data) ? data : [];
+          for (const d of rows) {
+            if (d.contactId) {
+              if (!map[d.contactId]) map[d.contactId] = [];
+              map[d.contactId].push(d);
+            }
+          }
+          setDealsByContact(map);
+        })
+        .catch(() => setDealsByContact({}));
+      // Booking value from committed itineraries (more accurate than Deal.amount)
+      fetchApi('/api/travel/itineraries?limit=200')
+        .then(res => {
+          const rows = Array.isArray(res?.itineraries) ? res.itineraries : Array.isArray(res) ? res : [];
+          const COMMITTED = new Set(['accepted', 'advance_paid', 'fully_paid']);
+          const map = {};
+          for (const it of rows) {
+            if (it?.contactId == null || !COMMITTED.has(it.status)) continue;
+            const amt = Number(it.totalAmount);
+            if (!Number.isFinite(amt)) continue;
+            const cur = it.currency || 'INR';
+            if (!map[it.contactId]) map[it.contactId] = { value: 0, currency: cur };
+            map[it.contactId].value += amt;
+          }
+          setBookingValueByContact(map);
+        })
+        .catch(() => setBookingValueByContact({}));
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // #600 — load wellness service catalogue + clinic locations only when the
   // current tenant is the wellness vertical. Avoids 401 / empty-response
@@ -242,9 +286,10 @@ const Leads = () => {
       return;
     }
 
-    // #600 — phone is REQUIRED on wellness leads (mirrors Patients.jsx
-    // intake), shape-checked against the Indian-mobile pattern. Generic
-    // tenants pass through whatever the user typed (free-form, optional).
+    // Phone handling per vertical:
+    //   wellness — required, validated against Indian-mobile pattern
+    //   travel   — optional, free-form (prepend country code if provided)
+    //   generic  — optional, free-form (prepend country code if provided)
     let phone = String(newLead.phone || '').trim();
     if (isWellness) {
       const phoneClean = phone.replace(/[\s\-()]/g, '');
@@ -299,6 +344,61 @@ const Leads = () => {
     fetchLeads();
   };
 
+  const openEdit = (lead) => {
+    setEditForm({
+      name: lead.name || '',
+      email: lead.email || '',
+      company: lead.company || '',
+      title: lead.title || '',
+      source: lead.source || '',
+    });
+    setEditing(lead);
+  };
+
+  const submitEdit = async (e) => {
+    e.preventDefault();
+    if (!editForm.name.trim()) { notify.error('Name is required'); return; }
+    setEditSaving(true);
+    try {
+      await fetchApi(`/api/contacts/${editing.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editForm.name.trim(),
+          email: editForm.email.trim(),
+          company: editForm.company.trim(),
+          title: editForm.title.trim(),
+          source: editForm.source,
+        }),
+      });
+      notify.success('Lead updated');
+      setEditing(null);
+      fetchLeads();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to update lead');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const handleDelete = async (lead) => {
+    const ok = await notify.confirm({
+      title: 'Delete lead?',
+      message: `Delete "${lead.name}"? This permanently removes the contact. This can't be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await fetchApi(`/api/contacts/${lead.id}`, { method: 'DELETE' });
+      notify.success('Lead deleted');
+      fetchLeads();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to delete lead');
+    }
+  };
+
   const handleAssign = async (contactId, assignedToId) => {
     await fetchApi(`/api/contacts/${contactId}/assign`, {
       method: 'PUT',
@@ -340,12 +440,27 @@ const Leads = () => {
 
   const filteredLeads = leads.filter(lead => {
     const term = searchTerm.toLowerCase();
-    return (
+    const matchesSearch = (
       lead.name.toLowerCase().includes(term) ||
       (lead.email && lead.email.toLowerCase().includes(term)) ||
       (lead.company && lead.company.toLowerCase().includes(term))
     );
+    const matchesSource = !sourceFilter || (lead.source || '').toLowerCase() === sourceFilter.toLowerCase();
+    const matchesSubBrand = !subBrandFilter || (lead.subBrand || '') === subBrandFilter;
+    // Stage filter: match against the contact's linked deal stage slugs
+    const matchesStage = !stageFilter || (dealsByContact[lead.id] || []).some(
+      d => (d.stage || '') === stageFilter
+    );
+    return matchesSearch && matchesSource && matchesSubBrand && matchesStage;
   });
+
+  // Source chip options and counts derived from the full unfiltered leads list
+  const sourceOptions = isTravel ? TRAVEL_SOURCE_OPTIONS : isWellness ? WELLNESS_SOURCE_OPTIONS : SOURCE_OPTIONS.map(s => ({ value: s, label: s }));
+  const sourceCounts = leads.reduce((acc, lead) => {
+    const src = (lead.source || '').toLowerCase();
+    acc[src] = (acc[src] || 0) + 1;
+    return acc;
+  }, {});
 
 
   return (
@@ -362,7 +477,7 @@ const Leads = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <UserPlus size={24} style={{ color: 'var(--primary-color, var(--accent-color))' }} />
           <div>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{isTravel ? 'Travel Leads' : 'Leads'}</h2>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Leads</h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
               {searchTerm
                 ? `${filteredLeads.length} of ${leads.length} lead${leads.length !== 1 ? 's' : ''} match "${searchTerm}"`
@@ -374,16 +489,26 @@ const Leads = () => {
             always-visible form to the left of the table). Right-aligned so
             it sits alongside future header controls; primary styling per
             the c031ba0 travel/Leads pattern. */}
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={openCreate}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', fontSize: '0.875rem' }}
-          aria-label="Create a new lead"
-        >
-          <Plus size={16} />
-          Create Lead
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={fetchLeads}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0.5rem 0.875rem', borderRadius: 6, fontWeight: 500, fontSize: '0.875rem', background: 'var(--surface-color)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', cursor: 'pointer' }}
+            aria-label="Refresh leads"
+          >
+            <RefreshCw size={14} /> Refresh
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={openCreate}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', fontSize: '0.875rem' }}
+            aria-label="Create a new lead"
+          >
+            <Plus size={16} />
+            Create Lead
+          </button>
+        </div>
       </header>
 
       {/* Bulk Assign Bar — admin only */}
@@ -417,6 +542,73 @@ const Leads = () => {
         </div>
       )}
 
+      {/* Source filter chips — travel vertical shows travel-specific sources */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12, padding: 8, borderRadius: 8, background: 'var(--subtle-bg, rgba(255,255,255,0.04))', border: '1px solid var(--border-color)' }} role="toolbar" aria-label="Filter by source">
+        <button
+          type="button"
+          onClick={() => setSourceFilter('')}
+          style={!sourceFilter ? chipActiveStyle : chipStyle}
+          aria-pressed={!sourceFilter}
+        >
+          All <span style={chipCountStyle}>{leads.length}</span>
+        </button>
+        {sourceOptions.map(opt => {
+          const val = opt.value || opt;
+          const label = opt.label || opt;
+          const count = sourceCounts[(val || '').toLowerCase()] || 0;
+          return (
+            <button
+              key={val}
+              type="button"
+              onClick={() => setSourceFilter(sourceFilter === val ? '' : val)}
+              style={sourceFilter === val ? chipActiveStyle : chipStyle}
+              aria-pressed={sourceFilter === val}
+            >
+              {label} <span style={chipCountStyle}>{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Sub-brand + Stage filter bar — travel vertical only, synced with pipeline stages */}
+      {isTravel && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, marginBottom: 12, background: 'var(--subtle-bg, rgba(255,255,255,0.04))', borderRadius: 8, border: '1px solid var(--border-color)' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-secondary)', flexShrink: 0 }}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          <select
+            value={subBrandFilter}
+            onChange={e => setSubBrandFilter(e.target.value)}
+            style={filterSelectStyle}
+            aria-label="Filter by sub-brand"
+          >
+            <option value="">All sub-brands</option>
+            <option value="tmc">TMC</option>
+            <option value="rfu">RFU</option>
+            <option value="travelstall">Travel Stall</option>
+            <option value="visasure">Visa Sure</option>
+          </select>
+          <select
+            value={stageFilter}
+            onChange={e => setStageFilter(e.target.value)}
+            style={filterSelectStyle}
+            aria-label="Filter by stage"
+          >
+            <option value="">All stages</option>
+            {pipelineStages.length > 0
+              ? pipelineStages.map(s => {
+                  const slug = String(s.name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+                  return <option key={s.id} value={slug}>{s.name}</option>;
+                })
+              : ['Lead', 'Contacted', 'Proposal', 'Won', 'Lost'].map(s => (
+                  <option key={s} value={s.toLowerCase()}>{s}</option>
+                ))
+            }
+          </select>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 12, marginLeft: 'auto' }}>
+            {filteredLeads.length} {filteredLeads.length === 1 ? 'lead' : 'leads'}
+          </span>
+        </div>
+      )}
+
       {/* #892 — Leads Table (full-width; Create Lead form now lives in the
           drawer below, triggered by the header CTA). */}
       <div className="card leads-table-wrapper" style={{ overflow: 'visible' }}>
@@ -445,20 +637,23 @@ const Leads = () => {
                 )}
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Company</th>
+                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{isTravel ? 'Category' : 'Company'}</th>
+                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Phone</th>
                 {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>
+                {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Sub-brand</th>}
+                {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Amount</th>}
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', textAlign: 'right' }}>Actions</th>
+                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={isAdmin ? 9 : 8} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
+                <tr><td colSpan={isAdmin ? 10 + (isTravel ? 2 : 0) : 9 + (isTravel ? 2 : 0)} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
               ) : filteredLeads.length === 0 ? (
-                <tr><td colSpan={isAdmin ? 9 : 8} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
+                <tr><td colSpan={isAdmin ? 10 + (isTravel ? 2 : 0) : 9 + (isTravel ? 2 : 0)} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
               ) : filteredLeads.map(lead => (
                 <tr
                   key={lead.id}
@@ -474,7 +669,10 @@ const Leads = () => {
                   )}
                   <td style={{ padding: '1rem', fontWeight: '500' }}>{lead.name}</td>
                   <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.email}</td>
-                  <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.company}</td>
+                  <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.company || <span style={{ color: 'var(--border-color)' }}>—</span>}</td>
+                  <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
+                    {lead.phone || <span style={{ color: 'var(--border-color)' }}>—</span>}
+                  </td>
                   <td style={{ padding: '1rem' }}>
                     <span style={{
                       padding: '0.25rem 0.75rem',
@@ -500,6 +698,35 @@ const Leads = () => {
                       {lead.source || 'Organic'}
                     </span>
                   </td>
+                  {isTravel && (
+                    <td style={{ padding: '1rem' }}>
+                      {lead.subBrand ? (
+                        <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, background: 'var(--subtle-bg-3, rgba(99,102,241,0.1))', color: 'var(--primary-color, var(--accent-color))', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                          {lead.subBrand}
+                        </span>
+                      ) : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
+                    </td>
+                  )}
+                  {isTravel && (() => {
+                    // Prefer committed itinerary booking value over Deal.amount
+                    // (same logic as /travel/leads — deal amount is almost always 0)
+                    const bv = bookingValueByContact[lead.id];
+                    if (bv && bv.value > 0) {
+                      return (
+                        <td style={{ padding: '1rem', fontWeight: 500, fontSize: '0.875rem' }} title="Customer booking value — sum of committed itineraries">
+                          {bv.currency || 'INR'} {Number(bv.value).toLocaleString()}
+                        </td>
+                      );
+                    }
+                    const deals = dealsByContact[lead.id] || [];
+                    const total = deals.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+                    const currency = deals[0]?.currency || 'INR';
+                    return (
+                      <td style={{ padding: '1rem', fontWeight: 500, fontSize: '0.875rem' }}>
+                        {total > 0 ? `${currency} ${total.toLocaleString()}` : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
+                      </td>
+                    );
+                  })()}
                   <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
                     {isAdmin ? (
                       <select
@@ -522,24 +749,27 @@ const Leads = () => {
                   <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
                     {formatDate(lead.createdAt)}
                   </td>
-                  <td style={{ padding: '1rem', textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+                  <td style={{ padding: '1rem', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                    <button
+                      onClick={() => openEdit(lead)}
+                      title="Edit lead"
+                      style={actionIconBtn}
+                    >
+                      <Pencil size={15} />
+                    </button>
                     <button
                       onClick={() => handleConvert(lead.id)}
-                      title="Convert to Customer"
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--success-color)',
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.375rem',
-                        fontSize: '0.8rem',
-                        fontWeight: '500',
-                      }}
+                      title="Convert to Prospect"
+                      style={{ ...actionIconBtn, color: 'var(--success-color)', marginLeft: 6 }}
                     >
-                      <ArrowRightCircle size={16} />
-                      Convert
+                      <ArrowRightCircle size={15} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(lead)}
+                      title="Delete lead"
+                      style={{ ...actionIconBtn, color: 'var(--danger-color, #f43f5e)', marginLeft: 6 }}
+                    >
+                      <Trash2 size={15} />
                     </button>
                   </td>
                 </tr>
@@ -603,12 +833,13 @@ const Leads = () => {
               <form onSubmit={handleCreateLead} noValidate style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
                 <input type="text" placeholder="Full Name" required maxLength={191} className="input-field" value={newLead.name} onChange={e => handleChange('name', e.target.value)} />
                 <input type="email" placeholder="Email Address" required={!isWellness} maxLength={191} className="input-field" value={newLead.email} onChange={e => handleChange('email', e.target.value)} />
-                <input type="text" placeholder="Company" maxLength={191} className="input-field" value={newLead.company} onChange={e => handleChange('company', e.target.value)} />
-                <input type="text" placeholder="Job Title" maxLength={200} className="input-field" value={newLead.title} onChange={e => handleChange('title', e.target.value)} />
-                {/* #600 — phone field is wellness-specific (Patient-intake mirror).
-                    Generic CRM keeps phone optional and out of the Lead form to
-                    avoid noise. */}
-                {isWellness && (
+                <input type="text" placeholder={isTravel ? 'Category (e.g. School Trip, Umrah, Family Holiday)' : 'Company'} maxLength={191} className="input-field" value={newLead.company} onChange={e => handleChange('company', e.target.value)} />
+                {!isTravel && (
+                  <input type="text" placeholder="Job Title" maxLength={200} className="input-field" value={newLead.title} onChange={e => handleChange('title', e.target.value)} />
+                )}
+                {/* Phone field — required for wellness (Indian mobile validation),
+                    optional for travel (any format accepted). */}
+                {(isWellness || isTravel) && (
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <select className="input-field" value={newLead.countryCode} onChange={e => handleChange('countryCode', e.target.value)} style={{ width: '100px' }}>
                       {COUNTRY_CODES.map(cc => (
@@ -617,8 +848,8 @@ const Leads = () => {
                     </select>
                     <input
                       type="tel"
-                      placeholder="Phone (10-digit mobile, e.g. 9876543210)"
-                      required
+                      placeholder={isWellness ? 'Phone (10-digit mobile, e.g. 9876543210)' : 'Phone (optional)'}
+                      required={isWellness}
                       className="input-field"
                       value={newLead.phone}
                       onChange={e => handleChange('phone', e.target.value)}
@@ -724,8 +955,69 @@ const Leads = () => {
             </div>
           </div>
         )}
+
+        {editing && (
+          <div
+            onClick={(e) => { if (e.target === e.currentTarget) setEditing(null); }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Edit Lead"
+          >
+            <div className="card" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)', width: '100%', maxWidth: 480, maxHeight: '90vh', overflowY: 'auto', padding: '1.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Edit Lead</h3>
+                <button type="button" onClick={() => setEditing(null)} aria-label="Close" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 4 }}>
+                  <X size={18} />
+                </button>
+              </div>
+              <form onSubmit={submitEdit} style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                <input type="text" placeholder="Full Name" required className="input-field" value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
+                <input type="email" placeholder="Email Address" className="input-field" value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} />
+                <input type="text" placeholder="Company" className="input-field" value={editForm.company} onChange={e => setEditForm({ ...editForm, company: e.target.value })} />
+                <input type="text" placeholder="Job Title" className="input-field" value={editForm.title} onChange={e => setEditForm({ ...editForm, title: e.target.value })} />
+                <select className="input-field" value={editForm.source} onChange={e => setEditForm({ ...editForm, source: e.target.value })}>
+                  {isWellness
+                    ? WELLNESS_SOURCE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)
+                    : isTravel
+                    ? TRAVEL_SOURCE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)
+                    : SOURCE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)
+                  }
+                </select>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
+                  <button type="button" onClick={() => setEditing(null)} style={{ padding: '0.5rem 1rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.875rem' }}>Cancel</button>
+                  <button type="submit" className="btn-primary" disabled={editSaving} style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>{editSaving ? 'Saving…' : 'Save Changes'}</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
     </div>
   );
 };
+
+const actionIconBtn = {
+  background: 'transparent', border: 'none', cursor: 'pointer', padding: 4,
+  color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center',
+};
+const filterSelectStyle = {
+  padding: '6px 10px', borderRadius: 6, fontSize: 13,
+  border: '1px solid var(--border-color)',
+  background: 'var(--surface-color)', color: 'var(--text-primary)',
+  minWidth: 140,
+};
+const chipStyle = {
+  display: 'inline-flex', alignItems: 'center', gap: 4,
+  padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 500,
+  background: 'var(--surface-color)', color: 'var(--text-secondary)',
+  border: '1px solid var(--border-color)', cursor: 'pointer',
+};
+const chipActiveStyle = {
+  ...chipStyle,
+  background: 'var(--primary-color, var(--accent-color))',
+  color: 'var(--accent-text, #fff)',
+  border: '1px solid var(--primary-color, var(--accent-color))',
+};
+const chipCountStyle = { fontSize: 11, fontWeight: 600, opacity: 0.8, marginLeft: 2 };
 
 export default Leads;

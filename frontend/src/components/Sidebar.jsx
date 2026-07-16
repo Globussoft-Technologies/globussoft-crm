@@ -546,9 +546,14 @@ const Sidebar = ({
   // at once. Non-travel tenants (effectiveBrand always resolved with
   // subBrand=null) get exactly the old tenant.logoUrl behaviour.
   const logoUrl = effectiveBrand?.logoUrl || tenant?.logoUrl || null;
-  const brandColor = tenant?.brandColor || null;
-  // Inline style applied to wellness section labels — overrides the gold
-  // accent (#E0A68B) defined in wellness.css when a tenant brand color is set.
+  const brandColor =
+    tenant?.vertical === "travel"
+      ? effectiveBrand?.primaryColor || null
+      : tenant?.brandColor || null;
+  // Inline style applied to section labels — for travel, uses the
+  // effective sub-brand color so changing brand color in Settings
+  // colors the sidebar section headings (FINANCIAL, ADMIN, etc.).
+  // For wellness, uses tenant.brandColor as before.
   const sectionLabelStyle = brandColor
     ? { ...sectionLabel, color: brandColor }
     : sectionLabel;
@@ -988,12 +993,6 @@ const Sidebar = ({
             subBrandAccess,
             activeSubBrand,
             onSubBrandChange: handleSubBrandChange,
-            // Branding refactor (2026-07-08): the pinned second logo strip
-            // was removed — the single top-of-sidebar logo (driven by
-            // effectiveBrand) already reflects the active sub-brand, so a
-            // second logo here would just duplicate it. The accent color
-            // underline is preserved via accentColor below.
-            accentColor: effectiveBrand?.primaryColor || null,
           })}
 
         <nav
@@ -1610,7 +1609,6 @@ function renderTravelSubBrandHeader({
   subBrandAccess = null,
   activeSubBrand = null,
   onSubBrandChange = () => {},
-  accentColor = null,
 }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
   const ALL_SUB_BRANDS = [
@@ -1635,17 +1633,6 @@ function renderTravelSubBrandHeader({
       : null;
   return (
     <div style={{ flexShrink: 0 }}>
-      {/* Branding refactor (2026-07-08): the pinned sub-brand LOGO strip was
-          removed — the single top-of-sidebar logo already reflects the
-          active sub-brand (see Sidebar's `logoUrl` const). This thin accent
-          strip is the only remaining visual cue for "this is the brand
-          you're operating under" when that brand has its own color. */}
-      {accentColor && (
-        <div
-          data-testid="travel-sidebar-accent-strip"
-          style={{ height: 2, background: accentColor, marginBottom: 4 }}
-        />
-      )}
       <div style={labelStyle}>Travel</div>
       {soleBrand && (
         <div
@@ -1864,8 +1851,7 @@ function renderTravelNav({
       )}
 
       <Section label="Sales pipeline">
-        <Link to="/leads" icon={UserPlus} label="Travel Leads" requiredPermission={{ module: "leads", action: "read" }} />
-        <Link to="/travel/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
+        <Link to="/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/travel/pipeline" icon={Plane} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
         <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
       </Section>
@@ -1873,7 +1859,6 @@ function renderTravelNav({
       <Section label="Customer comms">
         <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
         <Link to="/travel/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
-        <Link to="/sequences" icon={Send} label="Sequences" requiredPermission={{ module: "sequences", action: "read" }} />
         <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
         <Link to="/calendar-sync" icon={Calendar} label="Calendar" requiredPermission={{ module: "integrations", action: "read" }} />
       </Section>

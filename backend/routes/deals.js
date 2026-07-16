@@ -435,7 +435,7 @@ router.put("/:id", async (req, res) => {
 
     // #464: strip write-restricted fields per the caller's role.
     req.body = await filterWriteFields(req.body, req.user.role, "Deal", req.user.tenantId);
-    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, lostReason, winLossReasonId } = req.body;
+    const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, lostReason, winLossReasonId, subBrand } = req.body;
     // #168 #173: same validation as POST — PUT can no longer accept negative
     // amount / out-of-range probability / unknown stage.
     const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: true });
@@ -469,6 +469,7 @@ router.put("/:id", async (req, res) => {
     if (currency !== undefined) data.currency = currency;
     if (lostReason !== undefined) data.lostReason = lostReason;
     if (winLossReasonId !== undefined) data.winLossReasonId = parseInt(winLossReasonId);
+    if (subBrand !== undefined) data.subBrand = subBrand ? String(subBrand) : null;
 
     // Track stage transition
     const stageChanged = stage !== undefined && stage !== existing.stage;

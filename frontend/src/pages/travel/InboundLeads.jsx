@@ -137,7 +137,7 @@ export default function InboundLeads() {
       // if the user comes back to this page.
       setConvertedIds((prev) => new Set(prev).add(c.id));
       notify.success(`${c.name || "Lead"} added to the pipeline`);
-      navigate("/travel/leads");
+      navigate("/leads");
     } catch (e) {
       notify.error(e?.data?.error || e?.body?.error || e?.message || "Failed to convert to lead");
     } finally {

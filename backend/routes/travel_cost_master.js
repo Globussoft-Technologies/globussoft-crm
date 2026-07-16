@@ -556,6 +556,86 @@ router.get("/cost-master/by-month", verifyToken, requireTravelTenant, async (req
   }
 });
 
+// GET /api/travel/cost-master/suggest-from-itineraries
+// Returns distinct (subBrand, itemType→category, description→routeOrSku, avg unitCost)
+// from ItineraryItem rows so the operator can promote real itinerary line-items
+// into the rate book without manual re-entry. Excludes items whose
+// (subBrand, category, description) triple already exists in TravelCostMaster.
+// Must be declared BEFORE /cost-master/:id or "suggest-from-itineraries"
+// would be treated as the :id param.
+router.get("/cost-master/suggest-from-itineraries", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const tenantId = req.travelTenant.id;
+    const ITEM_TYPE_TO_CATEGORY = {
+      flight: "flight", hotel: "hotel", transfer: "transport",
+      transport: "transport", visa: "visa", insurance: "insurance",
+      activity: "transport", // closest bucket for non-flight/hotel activity costs
+    };
+
+    // Fetch distinct itinerary items with a unitCost across this tenant's itineraries.
+    const items = await prisma.itineraryItem.findMany({
+      where: {
+        unitCost: { not: null },
+        itinerary: { tenantId },
+      },
+      select: {
+        itemType: true,
+        description: true,
+        unitCost: true,
+        itinerary: { select: { subBrand: true, currency: true } },
+      },
+    });
+
+    // Fetch existing cost-master routeOrSku keys to exclude duplicates.
+    const existing = await prisma.travelCostMaster.findMany({
+      where: { tenantId },
+      select: { subBrand: true, category: true, routeOrSku: true },
+    });
+    const existingSet = new Set(
+      existing.map((r) => `${r.subBrand}|${r.category}|${r.routeOrSku}`),
+    );
+
+    // Aggregate: group by (subBrand, category, description), average the unitCost.
+    const map = new Map();
+    for (const item of items) {
+      const subBrand = item.itinerary?.subBrand;
+      if (!subBrand) continue;
+      const category = ITEM_TYPE_TO_CATEGORY[item.itemType] || "transport";
+      const routeOrSku = (item.description || "").trim();
+      if (!routeOrSku) continue;
+      const key = `${subBrand}|${category}|${routeOrSku}`;
+      if (existingSet.has(key)) continue; // already in rate book
+      if (!map.has(key)) {
+        map.set(key, {
+          subBrand,
+          category,
+          routeOrSku,
+          currency: item.itinerary?.currency || "INR",
+          costs: [],
+        });
+      }
+      map.get(key).costs.push(Number(item.unitCost));
+    }
+
+    const suggestions = Array.from(map.values()).map((s) => ({
+      subBrand: s.subBrand,
+      category: s.category,
+      routeOrSku: s.routeOrSku,
+      currency: s.currency,
+      avgUnitCost: Math.round(s.costs.reduce((a, b) => a + b, 0) / s.costs.length),
+      occurrences: s.costs.length,
+    }));
+
+    // Sort: most-used first, then alphabetical.
+    suggestions.sort((a, b) => b.occurrences - a.occurrences || a.routeOrSku.localeCompare(b.routeOrSku));
+
+    res.json({ suggestions, total: suggestions.length });
+  } catch (e) {
+    console.error("[travel-cost] suggest error:", e.message);
+    res.status(500).json({ error: "Failed to load suggestions" });
+  }
+});
+
 // GET /api/travel/cost-master/:id
 router.get("/cost-master/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {

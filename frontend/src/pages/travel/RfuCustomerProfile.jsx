@@ -175,7 +175,7 @@ export default function RfuCustomerProfile() {
   if (!Number.isFinite(cid)) {
     return (
       <div style={{ padding: 24 }}>
-        <Link to="/travel/leads" style={backLink}><ChevronLeft size={16} /> Back to leads</Link>
+        <Link to="/leads" style={backLink}><ChevronLeft size={16} /> Back to leads</Link>
         <p style={{ color: "var(--text-secondary)" }}>Invalid contact id in URL.</p>
       </div>
     );
@@ -183,7 +183,7 @@ export default function RfuCustomerProfile() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-      <Link to="/travel/leads" style={backLink}>
+      <Link to="/leads" style={backLink}>
         <ChevronLeft size={16} aria-hidden /> Back to leads
       </Link>
 

@@ -273,7 +273,7 @@ describe("LeadDetail — page contract", () => {
     renderPage();
     expect(await screen.findByText(/Contact not found/i)).toBeTruthy();
     const back = screen.getByText(/Back to leads/i).closest("a");
-    expect(back?.getAttribute("href")).toBe("/travel/leads");
+    expect(back?.getAttribute("href")).toBe("/leads");
     // Section headers should NOT render in the error path.
     expect(screen.queryByText(/Latest diagnostic/i)).toBeNull();
     expect(screen.queryByText(/Itineraries/)).toBeNull();

@@ -198,7 +198,7 @@ export default function LeadDetail() {
         <p style={{ color: "var(--danger-color, #A8323F)" }}>
           {contactError || "Contact not found."}
         </p>
-        <Link to="/travel/leads" style={dealLink}>← Back to leads</Link>
+        <Link to="/leads" style={dealLink}>← Back to leads</Link>
       </div>
     );
   }

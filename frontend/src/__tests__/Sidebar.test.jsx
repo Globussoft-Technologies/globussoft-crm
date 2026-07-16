@@ -306,6 +306,35 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Win/Loss')).toBeNull();
       expect(screen.queryByText('CPQ')).toBeNull();
     });
+
+    it('does NOT render non-wellness catalog pages (Landing Pages / Custom Dashboards / Custom Reports / Agent Reports / Web Analytics / Industry Templates / Contracts / Commission Analytics / Document Tracking / Drip Sequences) under wellness vertical', async () => {
+      // These pages were appearing in the wellness sidebar due to being
+      // cross-vertical in the page catalog. They are now tagged
+      // vertical: 'generic' in pageCatalog.js so getCatalogForVertical
+      // excludes them from wellness. Pin the absence so a future
+      // catalog edit that removes the tag is caught immediately.
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        accessiblePages: [
+          // Seed ONLY items that should appear; none of the removed pages
+          // are in this fixture, confirming the catalog tag (not the
+          // fixture) is the gate being tested.
+          { category: 'Finance', path: '/wellness/pos', label: 'Point of Sale' },
+        ],
+      });
+      await screen.findByText('Point of Sale');
+      expect(screen.queryByText('Landing Pages')).toBeNull();
+      expect(screen.queryByText('Custom Dashboards')).toBeNull();
+      expect(screen.queryByText('Custom Reports')).toBeNull();
+      expect(screen.queryByText('Agent Reports')).toBeNull();
+      expect(screen.queryByText('Web Analytics')).toBeNull();
+      expect(screen.queryByText('Industry Templates')).toBeNull();
+      expect(screen.queryByText('Contracts')).toBeNull();
+      expect(screen.queryByText('Commission Analytics')).toBeNull();
+      expect(screen.queryByText('Document Tracking')).toBeNull();
+      expect(screen.queryByText('Drip Sequences')).toBeNull();
+    });
   });
 
   describe('Travel vertical', () => {
@@ -319,13 +348,14 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getAllByText('Visa Sure').length).toBeGreaterThanOrEqual(1);
     });
 
-    it('renders both leads links under Sales pipeline with distinct labels', () => {
+    it('renders the Leads link under Sales pipeline', () => {
       renderSidebar({ vertical: 'travel', role: 'ADMIN' });
-      const leadsLinks = Array.from(document.querySelectorAll('a[href="/leads"], a[href="/travel/leads"]'));
-      expect(leadsLinks.map((a) => a.getAttribute('href'))).toContain('/leads');
-      expect(leadsLinks.map((a) => a.getAttribute('href'))).toContain('/travel/leads');
-      expect(screen.getByText('Travel Leads')).toBeTruthy();
+      const leadsLink = document.querySelector('a[href="/leads"]');
+      expect(leadsLink).toBeTruthy();
+      expect(leadsLink.getAttribute('href')).toBe('/leads');
       expect(screen.getByText('Leads')).toBeTruthy();
+      // /travel/leads (All Leads) has been removed — only the revamped /leads page remains
+      expect(document.querySelector('a[href="/travel/leads"]')).toBeNull();
     });
 
     it('renders the sub-brand switcher when user has ≥2 sub-brand access', () => {
@@ -376,6 +406,13 @@ describe('Sidebar — load-bearing render surface', () => {
       renderSidebar({ vertical: 'travel', role: 'ADMIN' });
       expect(screen.queryByTestId('travel-sub-brand-sole')).toBeNull();
       expect(screen.getByLabelText('Switch active sub-brand')).toBeTruthy();
+    });
+
+    it('does NOT render Drip Sequences under travel vertical', () => {
+      // /sequences is tagged vertical: 'generic' in pageCatalog.js so it
+      // must not leak into the travel sidebar or Omnibar search.
+      renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      expect(screen.queryByText('Drip Sequences')).toBeNull();
     });
 
     it('access-aware nav: a TMC-only manager sees TMC Trips but NOT the Travel Stall section', () => {

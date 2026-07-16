@@ -1629,3 +1629,96 @@ describe('<Itineraries /> — S81 MapPreview wire-in (list page)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression: "Deposit overdue" badge must not survive cancellation.
+//
+// cancellationStatus (requested/cancelled/refunded) is a separate lifecycle
+// field from `status` — cancelling a booking never flips `status` away
+// from "accepted" (see backend/prisma/schema.prisma comment + the
+// cancellation PATCH route). Before the fix, the list badge condition was
+// bare `status === "accepted" && paymentOverdueAt`, so a booking that had
+// been flagged overdue pre-cancellation kept showing "Deposit overdue"
+// forever, even after ItineraryDetail correctly showed "Booking cancelled
+// & refunded". SUT lines 878-895 guard on `!it.cancellationStatus`; the
+// status pill itself (lines 822-829) also swaps to the CANCELLATION_LABEL/
+// CANCELLATION_VARIANT text once cancellationStatus is set.
+// ---------------------------------------------------------------------------
+describe('<Itineraries /> — cancellation suppresses the stale "Deposit overdue" badge', () => {
+  function makeOverdueItin(overrides = {}) {
+    return makeItin({
+      id: 501,
+      subBrand: 'travelstall',
+      status: 'accepted',
+      productTier: 'primary',
+      destination: 'Goa',
+      totalAmount: 225000,
+      currency: 'INR',
+      contactId: 5001,
+      paymentOverdueAt: '2026-06-29T10:00:00.000Z',
+      cancellationStatus: null,
+      items: [],
+      ...overrides,
+    });
+  }
+
+  it('accepted + paymentOverdueAt + no cancellationStatus → shows the "Deposit overdue" badge (baseline)', async () => {
+    installFetchMock({
+      list: { itineraries: [makeOverdueItin()], total: 1, limit: 100, offset: 0 },
+    });
+    renderPage();
+    const row = (await screen.findByText('Goa')).closest('tr');
+    expect(within(row).getByText(/Deposit overdue/i)).toBeInTheDocument();
+  });
+
+  it('accepted + paymentOverdueAt + cancellationStatus="cancelled" → badge is suppressed', async () => {
+    installFetchMock({
+      list: {
+        itineraries: [makeOverdueItin({ cancellationStatus: 'cancelled' })],
+        total: 1, limit: 100, offset: 0,
+      },
+    });
+    renderPage();
+    const row = (await screen.findByText('Goa')).closest('tr');
+    expect(within(row).queryByText(/Deposit overdue/i)).toBeNull();
+  });
+
+  it('accepted + paymentOverdueAt + cancellationStatus="refunded" → badge suppressed + status pill reads "Cancelled & refunded"', async () => {
+    installFetchMock({
+      list: {
+        itineraries: [makeOverdueItin({ cancellationStatus: 'refunded' })],
+        total: 1, limit: 100, offset: 0,
+      },
+    });
+    renderPage();
+    const row = (await screen.findByText('Goa')).closest('tr');
+    expect(within(row).queryByText(/Deposit overdue/i)).toBeNull();
+    const pill = within(row).getByText('Cancelled & refunded');
+    expect(pill.className).toContain('travel-itin-status-pill--rejected');
+  });
+
+  it('accepted + paymentOverdueAt + cancellationStatus="requested" → badge suppressed while resolution is pending', async () => {
+    installFetchMock({
+      list: {
+        itineraries: [makeOverdueItin({ cancellationStatus: 'requested' })],
+        total: 1, limit: 100, offset: 0,
+      },
+    });
+    renderPage();
+    const row = (await screen.findByText('Goa')).closest('tr');
+    expect(within(row).queryByText(/Deposit overdue/i)).toBeNull();
+    expect(within(row).getByText('Cancellation requested')).toBeInTheDocument();
+  });
+
+  it('cancelled but never flagged overdue (paymentOverdueAt null) → no badge regardless of guard', async () => {
+    installFetchMock({
+      list: {
+        itineraries: [makeOverdueItin({ cancellationStatus: 'cancelled', paymentOverdueAt: null })],
+        total: 1, limit: 100, offset: 0,
+      },
+    });
+    renderPage();
+    const row = (await screen.findByText('Goa')).closest('tr');
+    expect(within(row).queryByText(/Deposit overdue/i)).toBeNull();
+  });
+});

@@ -9,7 +9,7 @@
  * boundary (no place-of-birth/issue from MRZ), and the graceful-failure paths.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { extractPassport, isEnabledForTenant } from '../../services/passportOcrClient.js';
+import { extractPassport, isEnabledForTenant, withTimeout } from '../../services/passportOcrClient.js';
 
 // Canonical ICAO specimen MRZ (valid check digits).
 const MRZ_TEXT = [
@@ -155,6 +155,50 @@ describe('extractPassport — VIZ cross-check catches MRZ digit/letter slips', (
     expect(res.extraction.dateOfBirth).toBe('2023-03-19');
     expect(res.extraction.dateOfExpiry).toBe('2026-04-20');
     expect(res.note).toMatch(/disagreed/i);
+  });
+});
+
+describe('withTimeout — worker leak fix (2026-07-15)', () => {
+  // Regression test for a memory leak: withTimeout() used to be a bare
+  // Promise.race, which does NOT cancel the losing side. When a slow OCR
+  // call outran the timeout, the abandoned runOcr() call kept its Tesseract
+  // worker (WASM + loaded traineddata) alive in the background indefinitely
+  // — and withOcrSlot()'s concurrency gate released immediately on timeout,
+  // so leaked workers were never even counted against the concurrency cap.
+  // The fix threads a workerRef out-param through so the timeout path can
+  // terminate the worker directly instead of merely losing the race.
+  test('terminates the in-flight worker via workerRef when the timeout fires', async () => {
+    const worker = { terminate: vi.fn().mockResolvedValue(undefined) };
+    const workerRef = { current: worker };
+    const slowPromise = new Promise(() => {}); // never resolves — simulates a stuck OCR call
+
+    await expect(withTimeout(slowPromise, 10, workerRef)).rejects.toMatchObject({ code: 'OCR_TIMEOUT' });
+
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
+    expect(workerRef.current).toBeNull();
+  });
+
+  test('does not touch the worker when the promise settles before the timeout', async () => {
+    const worker = { terminate: vi.fn().mockResolvedValue(undefined) };
+    const workerRef = { current: worker };
+
+    const result = await withTimeout(Promise.resolve('done'), 5000, workerRef);
+
+    expect(result).toBe('done');
+    expect(worker.terminate).not.toHaveBeenCalled();
+  });
+
+  test('is a no-op when no worker has been assigned yet (workerRef.current is null)', async () => {
+    const workerRef = { current: null };
+    const slowPromise = new Promise(() => {});
+
+    await expect(withTimeout(slowPromise, 10, workerRef)).rejects.toMatchObject({ code: 'OCR_TIMEOUT' });
+    // Nothing to assert on termination — just confirms no throw on a null worker.
+  });
+
+  test('still rejects with OCR_TIMEOUT when no workerRef is passed (back-compat)', async () => {
+    const slowPromise = new Promise(() => {});
+    await expect(withTimeout(slowPromise, 10)).rejects.toMatchObject({ code: 'OCR_TIMEOUT' });
   });
 });
 

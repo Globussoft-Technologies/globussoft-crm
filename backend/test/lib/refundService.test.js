@@ -86,11 +86,53 @@ describe('refundCapturedPayment', () => {
     expect(r.code).toBe('NO_GATEWAY');
   });
 
-  test('gateway throw → REFUND_FAILED (502), payment not mutated', async () => {
+  test('gateway throw with no structured error → generic GATEWAY_UNAVAILABLE (502), payment not mutated', async () => {
     refundMock.mockRejectedValue(new Error('razorpay down'));
     const r = await svc.refundCapturedPayment({ payment: pay() });
     expect(r.ok).toBe(false);
-    expect(r.code).toBe('REFUND_FAILED');
+    expect(r.status).toBe(502);
+    expect(r.code).toBe('GATEWAY_UNAVAILABLE');
+    expect(r.error).toMatch(/temporarily unavailable/i);
     expect(prisma.payment.update).not.toHaveBeenCalled();
+  });
+
+  // Regression: previously every Razorpay rejection collapsed into the same
+  // blanket "please try again" message regardless of WHY Razorpay rejected
+  // it (auth misconfig / already-refunded upstream / a genuine 4xx like an
+  // amount limit) — parseRazorpayError (lib/tenantPaymentGateway.js) maps
+  // known Razorpay error shapes to a specific, safe, user-facing reason.
+  test('gateway throw with a structured 4xx error → specific rejection reason, not the generic message', async () => {
+    const err = new Error('The amount exceeds the maximum refund amount');
+    err.statusCode = 400;
+    err.error = { code: 'BAD_REQUEST_ERROR', description: 'The amount exceeds the maximum refund amount' };
+    refundMock.mockRejectedValue(err);
+    const r = await svc.refundCapturedPayment({ payment: pay() });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(400);
+    expect(r.code).toBe('BAD_REQUEST_ERROR');
+    expect(r.error).toMatch(/exceeds the maximum refund amount/i);
+  });
+
+  test('gateway throw indicating Razorpay already processed the refund → ALREADY_REFUNDED_UPSTREAM, tells the operator to refresh', async () => {
+    const err = new Error('The payment has already been fully refunded');
+    err.statusCode = 400;
+    err.error = { code: 'BAD_REQUEST_ERROR', description: 'The payment has already been fully refunded' };
+    refundMock.mockRejectedValue(err);
+    const r = await svc.refundCapturedPayment({ payment: pay() });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(409);
+    expect(r.code).toBe('ALREADY_REFUNDED_UPSTREAM');
+    expect(r.error).toMatch(/refresh/i);
+  });
+
+  test('gateway throw indicating an auth/config issue → GATEWAY_NOT_CONFIGURED, never echoes the key', async () => {
+    const err = new Error('Invalid API Key provided: rzp_test_ABC123XYZ');
+    err.statusCode = 401;
+    refundMock.mockRejectedValue(err);
+    const r = await svc.refundCapturedPayment({ payment: pay() });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(503);
+    expect(r.code).toBe('GATEWAY_NOT_CONFIGURED');
+    expect(r.error).not.toMatch(/rzp_test/);
   });
 });

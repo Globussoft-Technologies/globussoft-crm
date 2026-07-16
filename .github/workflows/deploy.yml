@@ -966,6 +966,102 @@ jobs:
         run: |
           echo "::notice title=Deploy complete::commit ${{ github.sha }} live on https://crm.globusdemos.com (build + api_tests passed)"
 
+      # ── Telegram deploy alert ────────────────────────────────────────
+      # Runs regardless of outcome (always()) so a failed/rolled-back deploy
+      # notifies the channel too, not just a healthy one. Captures a live PM2
+      # memory + recent-error snapshot over SSH so a leak (e.g. the WhatsApp/
+      # Puppeteer RSS blowout — PR #1217) would show up here immediately after
+      # every deploy, not just when someone thinks to SSH in and check.
+      # Never fails the workflow itself (all curl/ssh calls best-effort) —
+      # a broken Telegram notify must not block/red a real deploy.
+      - name: Capture PM2 snapshot
+        id: pm2_snapshot
+        if: always()
+        uses: appleboy/ssh-action@v1.2.0
+        continue-on-error: true
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 1m
+          # Required for steps.pm2_snapshot.outputs.stdout to populate below —
+          # ssh-action only captures/exposes stdout as an action output when
+          # this is explicitly set (verified against appleboy/ssh-action's
+          # action.yml; default is false and the output silently stays empty).
+          capture_stdout: true
+          script: |
+            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
+            echo "--- memory (rss MB / cpu %) ---"
+            pm2 jlist 2>/dev/null | node -e '
+              let d="";
+              process.stdin.on("data", c => d += c);
+              process.stdin.on("end", () => {
+                try {
+                  const procs = JSON.parse(d);
+                  for (const p of procs) {
+                    const rssMb = Math.round((p.monit?.memory || 0) / 1024 / 1024);
+                    console.log(`${p.name}: rss=${rssMb}MB cpu=${p.monit?.cpu ?? "?"}% restarts=${p.pm2_env?.restart_time ?? "?"} uptime_s=${Math.round((Date.now() - (p.pm2_env?.pm_uptime || Date.now())) / 1000)}`);
+                  }
+                } catch (e) { console.log("(pm2 jlist parse failed: " + e.message + ")"); }
+              });
+            ' || echo "(pm2 jlist unavailable)"
+            echo "--- last 15 error lines (pm2 logs) ---"
+            pm2 logs globussoft-crm-backend --err --lines 15 --nostream 2>/dev/null | tail -15 || echo "(no pm2 error log available)"
+
+      - name: Post Telegram deploy alert
+        if: always()
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          SNAPSHOT: ${{ steps.pm2_snapshot.outputs.stdout }}
+        run: |
+          set +e
+          if [ "${{ steps.backend.outcome }}" = "success" ]; then
+            ICON="✅"
+            STATUS="Healthy"
+          elif [ "${{ steps.backend.outcome }}" = "failure" ]; then
+            ICON="🔴"
+            STATUS="FAILED — rolled back to HEAD~1"
+          else
+            ICON="⚠️"
+            STATUS="Unknown (backend step: ${{ steps.backend.outcome }})"
+          fi
+
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          FIRST_MSG_LINE=$(printf '%s' "$COMMIT_MSG" | head -1)
+          SNAPSHOT_TEXT="${SNAPSHOT:-(snapshot unavailable)}"
+
+          # Plain text, no parse_mode: Telegram's Markdown parser 400s the
+          # whole request on a single stray _ / * / ` / [ character, and both
+          # the commit message and PM2 error-log lines are untrusted free text
+          # we don't want to escape defensively. Plain text always sends.
+          # Built via printf (not a heredoc) — a heredoc's closing marker
+          # can't tolerate the leading indentation this block scalar forces
+          # on every line, so string-concatenation is the robust choice here.
+          GATES_LINE="Gates: build=${{ needs.build.result }} api_tests=${{ needs.api_tests.result }} unit_tests=${{ needs.unit_tests.result }} lint=${{ needs.lint.result }} frontend_tests=${{ needs.frontend_unit_tests.result }} migration=${{ needs.migration_check.result }}"
+          TEXT=$(printf '%s\n' \
+            "${ICON} Deploy — crm.globusdemos.com" \
+            "Commit: ${SHORT_SHA} ${FIRST_MSG_LINE}" \
+            "Pushed by: ${GITHUB_ACTOR}" \
+            "${GATES_LINE}" \
+            "Status: ${STATUS}" \
+            "" \
+            "${SNAPSHOT_TEXT}")
+
+          # Telegram messages cap at 4096 chars; truncate defensively so a
+          # runaway PM2 error dump can't make the API silently reject the post.
+          TEXT="${TEXT:0:4000}"
+
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${TEXT}" \
+            -o /tmp/telegram_response.json
+          cat /tmp/telegram_response.json
+          echo
+
   # ── 8. DEPLOY_STAGING: mirrors deploy job but targets crm-staging ──────
   # Runs in parallel with the production deploy. Uses the same SSH secrets
   # (same server, different user home + vhost). No rollback on staging —

@@ -1994,7 +1994,10 @@ router.patch(
         // Apply the cancellation policy: compute the refund due for what's been
         // paid, given days-to-departure, and tell the customer the exact figure.
         refund = await resolveCancellationRefund(itin);
-        data = { cancellationStatus: "cancelled" };
+        // Clear any pay-or-cancel deposit-overdue flag the cron stamped before
+        // this cancellation — otherwise the itinerary list keeps showing a
+        // "Deposit overdue" badge on a booking that's no longer awaiting payment.
+        data = { cancellationStatus: "cancelled", paymentOverdueAt: null };
         custTitle = "Booking cancelled";
         const refundLine = refund.computable && refund.refundAmount != null
           ? ` Per our cancellation policy${refund.policyName ? ` (${refund.policyName})` : ""}, a refund of ${cur}${Number(refund.refundAmount).toLocaleString("en-IN")} (${refund.refundPercent}% of ${cur}${Number(refund.paidAmount).toLocaleString("en-IN")} paid) will be processed.`
@@ -2034,7 +2037,9 @@ router.patch(
             gatewayRefund = r.ok ? r.refund : null;
           }
         }
-        data = { cancellationStatus: "refunded" };
+        // Belt-and-suspenders: also clear here in case the flag got re-stamped
+        // by the cron between the "cancelled" and "refunded" transitions.
+        data = { cancellationStatus: "refunded", paymentOverdueAt: null };
         custTitle = "Refund processed";
         const amtLine = refundAmount ? ` of ${cur}${refundAmount.toLocaleString("en-IN")}` : "";
         custMessage = `The refund${amtLine} for your cancelled ${trip} booking has been processed.${note ? ` ${note}` : ""}`;
@@ -2045,7 +2050,7 @@ router.patch(
       const updated = await prisma.itinerary.update({
         where: { id: itin.id },
         data,
-        select: { id: true, status: true, cancellationStatus: true, cancellationReason: true, cancellationRequestedAt: true },
+        select: { id: true, status: true, cancellationStatus: true, cancellationReason: true, cancellationRequestedAt: true, paymentOverdueAt: true },
       });
 
       writeAudit(

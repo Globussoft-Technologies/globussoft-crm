@@ -27,6 +27,18 @@ import { Filter, Ticket, Calendar as CalendarIcon, Upload, Send, UserCheck, Refr
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
+// Rewrite /uploads/... → /api/uploads/... so production deployments (where the
+// frontend SPA catches /uploads/* before it reaches the backend static mount)
+// still serve boarding-pass files. Backward-compatible: absolute URLs and
+// already-/api uploads pass through unchanged.
+function normalizeUploadUrl(url) {
+  if (!url || typeof url !== "string") return url;
+  if (url.startsWith("/uploads/")) {
+    return `/api/uploads/${url.slice("/uploads/".length)}`;
+  }
+  return url;
+}
+
 const STATUSES = [
   { value: "", label: "All statuses" },
   { value: "pending", label: "Pending" },
@@ -320,7 +332,7 @@ export default function WebCheckinQueue() {
                     <td style={td}>
                       {r.boardingPassUrl ? (
                         <a
-                          href={r.boardingPassUrl}
+                          href={normalizeUploadUrl(r.boardingPassUrl)}
                           target="_blank"
                           rel="noopener noreferrer"
                           style={{ color: "var(--primary-color)", textDecoration: "none", fontWeight: 600 }}

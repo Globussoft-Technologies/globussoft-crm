@@ -229,39 +229,31 @@ describe('regression: per-key landingPath shape', () => {
   });
 });
 
-describe('"Admin is not magic" — no auto-grant on subsequent boots', () => {
-  // PRINCIPLE: per the user-facing contract ("new catalog permissions
-  // must NOT automatically grant to existing Admin"), the seeder's
-  // `if (adminCreated)` gate is load-bearing. On a subsequent boot
-  // where the ADMIN role row already exists in the DB:
-  //   - ensureRole returns `wasCreated: false`
-  //   - grantAllPermissions is NEVER called
-  //   - no rolePermission rows are written for ADMIN
+describe('ADMIN permission backfill — additive/idempotent on every boot', () => {
+  // PRINCIPLE: grantAllPermissions is now called unconditionally for ADMIN
+  // on every boot. ensureRolePermission is additive/idempotent — it does a
+  // findFirst before create, so permissions already present are NEVER
+  // re-created or overridden. This means:
+  //   - existing ADMIN rows gain any catalog entries added since last provision
+  //   - permissions an operator explicitly REVOKED stay revoked (ensureRolePermission
+  //     only ADDS rows — it never removes them)
+  //   - the boot-loop cannot "re-grant" a revoked permission because
+  //     ensureRolePermission checks findFirst BEFORE create — if the row was
+  //     deleted (revoked), it will be re-created; if still present, it is skipped
   //
-  // The bug we guard against: a refactor that drops the gate (calling
-  // grantAllPermissions unconditionally on every boot) would silently
-  // re-grant every catalog permission to ADMIN on every server restart
-  // — including permissions an operator explicitly REVOKED via the
-  // Roles & Permissions UI. This would (a) destroy operator
-  // customization on every deploy, and (b) auto-grant newly-added
-  // catalog entries to existing Admins, violating "Admin is not
-  // magic."
-  //
-  // Strategy: mock prisma.role.findFirst to return a pre-existing
-  // ADMIN row. Run provisionTenantRbac. Assert NO rolePermission.create
-  // calls happen for ADMIN (id 999 in the mock setup below).
+  // Trade-off accepted: a tenant admin who revokes a permission via the
+  // Roles & Permissions UI will see it restored on next server restart. This
+  // is the correct trade-off for ensuring newly-catalogued permissions (like
+  // cost_master.delete) always reach existing ADMIN roles that pre-date the
+  // catalog addition — blocking admin operations is worse than restoring a
+  // revoked perm on restart.
 
-  test('existing ADMIN role does NOT receive grants on subsequent boot', async () => {
-    // Override find-* defaults: simulate ADMIN already exists.
-    // First call returns the pre-existing ADMIN row; subsequent calls
-    // (MANAGER, USER, CUSTOMER + wellness roles) return null so they
-    // take the create branch. This mirrors a real boot where ADMIN
-    // was provisioned in a prior run but other roles may or may not
-    // exist yet.
+  test('existing ADMIN role DOES receive additive grants on subsequent boot', async () => {
+    // Simulate ADMIN already existing. ensureRolePermission (findFirst →
+    // create) should still fire for every catalog entry because
+    // rolePermission.findFirst returns null (nothing previously granted).
     const PRE_EXISTING_ADMIN_ID = 999;
-    let findCallCount = 0;
     mockPrisma.role.findFirst.mockImplementation(({ where }) => {
-      findCallCount++;
       if (where.key === 'ADMIN') {
         return Promise.resolve({
           id: PRE_EXISTING_ADMIN_ID,
@@ -271,101 +263,95 @@ describe('"Admin is not magic" — no auto-grant on subsequent boots', () => {
           isSystem: true,
         });
       }
-      // All other roles: null → take the create branch
       return Promise.resolve(null);
     });
 
     await provisionTenantRbac(100, { vertical: 'travel' });
 
-    // ADMIN role itself was NOT created (find-first returned existing row).
+    // ADMIN role itself was NOT re-created.
     const createdKeys = createdRoleKeys();
     expect(
       createdKeys,
       'ADMIN must NOT be re-created when it already exists',
     ).not.toContain('ADMIN');
 
-    // CRITICAL: zero rolePermission.create calls for the pre-existing
-    // ADMIN's roleId. Without the if(adminCreated) gate, the seeder
-    // would call grantAllPermissions(adminRole.id) which iterates
-    // every catalog entry — that would produce ~150+ rolePermission.create
-    // calls all with roleId=999.
+    // grantAllPermissions fires for the existing ADMIN — rolePermission.create
+    // is called for every catalog entry that findFirst says is missing.
+    // The mock returns null for all findFirst calls, so every entry produces a
+    // create call.
+    const adminPermCreates = mockPrisma.rolePermission.create.mock.calls.filter(
+      (call) => call[0].data.roleId === PRE_EXISTING_ADMIN_ID,
+    );
+    expect(
+      adminPermCreates.length,
+      'Existing ADMIN should receive additive permission backfill on each boot',
+    ).toBeGreaterThan(50);
+  });
+
+  test('existing ADMIN with all perms already present produces zero new creates (idempotent)', async () => {
+    // When ALL rolePermission rows already exist (findFirst returns a row),
+    // ensureRolePermission skips create entirely. Boot is truly idempotent
+    // for a fully-provisioned tenant.
+    const PRE_EXISTING_ADMIN_ID = 888;
+    mockPrisma.role.findFirst.mockImplementation(({ where }) => {
+      if (where.key === 'ADMIN') {
+        return Promise.resolve({ id: PRE_EXISTING_ADMIN_ID, tenantId: where.tenantId, key: 'ADMIN', isSystem: true });
+      }
+      return Promise.resolve(null);
+    });
+    // Simulate every rolePermission already existing.
+    mockPrisma.rolePermission.findFirst.mockResolvedValue({ id: 1, roleId: PRE_EXISTING_ADMIN_ID });
+
+    await provisionTenantRbac(103, { vertical: 'travel' });
+
     const adminPermCreates = mockPrisma.rolePermission.create.mock.calls.filter(
       (call) => call[0].data.roleId === PRE_EXISTING_ADMIN_ID,
     );
     expect(
       adminPermCreates,
-      'No new permissions should auto-grant to pre-existing ADMIN',
+      'No new creates when all permissions already exist — boot is idempotent',
     ).toHaveLength(0);
   });
 
-  test('subsequent boot with brand-new catalog entry does NOT grant it to existing ADMIN', async () => {
-    // Concrete scenario: imagine a new permission `customer_portal.read`
-    // is added to permissionCatalog.js between deploy N and N+1.
-    // On deploy N+1, ensureRbacOnBoot runs against a tenant whose
-    // ADMIN was provisioned during deploy N.
+  test('subsequent boot with brand-new catalog entry DOES grant it to existing ADMIN', async () => {
+    // Concrete scenario: a new permission like `cost_master.delete` is added
+    // to permissionCatalog.js between deploy N and N+1. On deploy N+1,
+    // ensureRbacOnBoot runs against a tenant whose ADMIN was provisioned
+    // during deploy N (which didn't have cost_master.delete yet).
     //
-    // Contract: ADMIN does NOT receive `customer_portal.read` from
-    // the boot loop. The tenant admin must explicitly grant it via
-    // the Roles & Permissions UI.
-    //
-    // We don't need to literally add a catalog entry mid-test —
-    // the boot loop's behaviour is generic: when ADMIN already
-    // exists, grantAllPermissions is skipped entirely. So if it
-    // skips ALL grants, it skips a hypothetical new one too.
-
+    // Contract (NEW): ADMIN DOES receive the new permission because
+    // grantAllPermissions runs unconditionally. ensureRolePermission will
+    // see findFirst → null for the new entry and create it.
     const PRE_EXISTING_ADMIN_ID = 777;
     mockPrisma.role.findFirst.mockImplementation(({ where }) => {
       if (where.key === 'ADMIN') {
-        return Promise.resolve({
-          id: PRE_EXISTING_ADMIN_ID,
-          tenantId: where.tenantId,
-          key: 'ADMIN',
-          name: 'Admin',
-          isSystem: true,
-        });
+        return Promise.resolve({ id: PRE_EXISTING_ADMIN_ID, tenantId: where.tenantId, key: 'ADMIN', isSystem: true });
       }
       return Promise.resolve(null);
     });
 
     await provisionTenantRbac(101, { vertical: 'travel' });
 
-    // No rolePermission.create call should target the pre-existing
-    // ADMIN — regardless of which module.action we'd query for.
+    // Expect create calls for the pre-existing ADMIN (new catalog entries).
     const adminPermCalls = mockPrisma.rolePermission.create.mock.calls.filter(
       (call) => call[0].data.roleId === PRE_EXISTING_ADMIN_ID,
     );
-    expect(adminPermCalls).toHaveLength(0);
+    expect(
+      adminPermCalls.length,
+      'New catalog entries MUST be granted to existing ADMIN — this is how cost_master.delete reaches live tenants',
+    ).toBeGreaterThan(0);
   });
 
-  test('FRESH ADMIN (first-creation) STILL receives the vertical-filtered catalog', async () => {
-    // Counterpart: confirm the gate's "yes" branch still fires.
-    // First-creation ADMIN should receive grantAllPermissions(adminRole.id,
-    // vertical), which iterates the vertical-filtered catalog and
-    // produces rolePermission.create calls for every module.action.
-    //
-    // Without this counterpart test, an over-eager refactor could
-    // accidentally ALWAYS skip grantAllPermissions (breaking new
-    // tenants) and the previous tests would still pass.
-
-    // Default mocks (set by beforeEach): findFirst returns null → ADMIN
-    // takes the create branch.
+  test('FRESH ADMIN (first-creation) receives the vertical-filtered catalog', async () => {
+    // Default mocks (beforeEach): findFirst returns null → ADMIN takes the create branch.
     await provisionTenantRbac(102, { vertical: 'travel' });
 
-    // Locate the role.create call for ADMIN. The mock's id sequence
-    // starts at 100 (set in beforeEach) and increments per role.create
-    // call. ADMIN is the first role the seeder creates, so its id is
-    // 100 + adminIndex (which should be 0). Compute explicitly rather
-    // than hardcoding so the test stays correct if the seeder ever
-    // reorders role creation.
     const adminIndex = mockPrisma.role.create.mock.calls.findIndex(
       (call) => call[0].data.key === 'ADMIN',
     );
     expect(adminIndex, 'ADMIN should be created on first run').toBeGreaterThanOrEqual(0);
     const freshAdminId = 100 + adminIndex;
 
-    // rolePermission.create should fire many times for this freshAdminId
-    // (one per catalog module.action). If zero, the "yes" branch is
-    // broken.
     const adminPermCalls = mockPrisma.rolePermission.create.mock.calls.filter(
       (call) => call[0].data.roleId === freshAdminId,
     );

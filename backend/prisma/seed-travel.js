@@ -562,6 +562,11 @@ async function main() {
   // Placeholder rates so the /pricing/quote endpoint has something to
   // compute against. Yasin's actual rate book lands as part of Section
   // 13 (Q1 deliverable).
+  //
+  // Dedup step: earlier seed versions used upsert({ where: { id: -1 } })
+  // which never matched and created fresh duplicates on every re-run.
+  // Only the exact 9 seed tuples below are eligible for dedup — rows the
+  // user created via the UI are never touched.
   const costRows = [
     { subBrand: "rfu", category: "hotel", routeOrSku: "Makkah:Hilton:Deluxe-HaramFacing", baseRate: 18500 },
     { subBrand: "rfu", category: "hotel", routeOrSku: "Makkah:Hilton:Standard", baseRate: 9500 },
@@ -573,6 +578,28 @@ async function main() {
     { subBrand: "tmc", category: "flight", routeOrSku: "BLR-DPS-Economy", baseRate: 22000 },
     { subBrand: "tmc", category: "transport", routeOrSku: "DPS-Bali-AC-Coach", baseRate: 4500 },
   ];
+
+  // Dedup: for each seed tuple, if the DB has more than one matching row
+  // (same tenantId + subBrand + category + routeOrSku), keep the lowest-id
+  // one and delete the extras. Only these 9 known seed rows are touched —
+  // rows the operator added via the UI are never examined or deleted.
+  let dupCount = 0;
+  for (const r of costRows) {
+    const matches = await prisma.travelCostMaster.findMany({
+      where: { tenantId: tenant.id, subBrand: r.subBrand, category: r.category, routeOrSku: r.routeOrSku },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    if (matches.length > 1) {
+      const extraIds = matches.slice(1).map((m) => m.id);
+      await prisma.travelCostMaster.deleteMany({ where: { id: { in: extraIds } } });
+      dupCount += extraIds.length;
+    }
+  }
+  if (dupCount > 0) {
+    console.log(`[seed-travel] cost-master dedup: removed ${dupCount} duplicate seed rows`);
+  }
+
   // Idempotent guard: TravelCostMaster has no @unique constraint, so key
   // on the natural business tuple (tenantId, subBrand, category, routeOrSku).
   // Earlier versions used `upsert({ where: { id: -1 } })` which never matched

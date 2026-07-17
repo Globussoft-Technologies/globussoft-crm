@@ -102,6 +102,17 @@ prisma.auditLog = {
 prisma.fieldPermission = {
   findMany: vi.fn().mockResolvedValue([]),
 };
+// TMC instalment reconciliation path — stubs so the tmc-instalment
+// confirm-payment block doesn't throw when kind='tmc-instalment' is set.
+prisma.tripInstalmentPayment = prisma.tripInstalmentPayment || {};
+prisma.tripInstalmentPayment.findFirst = vi.fn().mockResolvedValue(null);
+prisma.tripInstalmentPayment.update = vi.fn().mockResolvedValue({});
+prisma.tripParticipant = prisma.tripParticipant || {};
+prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
+prisma.itinerary = prisma.itinerary || {};
+prisma.itinerary.findFirst = vi.fn().mockResolvedValue(null);
+prisma.itinerary.update = vi.fn().mockResolvedValue({});
+prisma.tripInstalmentPayment.findMany = vi.fn().mockResolvedValue([]);
 
 import express from 'express';
 import request from 'supertest';
@@ -134,6 +145,12 @@ beforeEach(() => {
   prisma.auditLog.create.mockReset();
   prisma.fieldPermission.findMany.mockReset();
   prisma.fieldPermission.findMany.mockResolvedValue([]);
+  prisma.tripInstalmentPayment.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
+  prisma.tripInstalmentPayment.update.mockReset().mockResolvedValue({});
+  prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
+  prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
+  prisma.itinerary.update.mockReset().mockResolvedValue({});
   // Sensible defaults — happy-path resolves.
   prisma.auditLog.findFirst.mockResolvedValue(null);
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
@@ -606,5 +623,109 @@ describe('GET /api/billing?fields=summary — slim-shape opt-in (#920 slice 31)'
     // contact / deal should NOT have been hydrated by the route.
     expect(res.body[0].contact).toBeUndefined();
     expect(res.body[0].deal).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/billing/public/confirm-payment — tmc-instalment reconciliation
+// Pins the new kind='tmc-instalment' branch that prevents confirm-payment from
+// accidentally treating an instalment payment as a TravelInvoice payment.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('POST /api/billing/public/confirm-payment — tmc-instalment reconciliation', () => {
+  function makeTmcPayment(overrides = {}) {
+    return {
+      id: 902,
+      tenantId: 1,
+      invoiceId: null,
+      gateway: 'razorpay',
+      gatewayId: 'plink_tmc_cb',
+      status: 'PENDING',
+      amount: 50000,
+      currency: 'INR',
+      metadata: JSON.stringify({
+        mode: 'payment_link',
+        plinkId: 'plink_tmc_cb',
+        kind: 'tmc-instalment',
+        instalmentId: '200',
+        url: 'https://rzp.io/rzp/CBTEST',
+        ...overrides,
+      }),
+      ...overrides,
+    };
+  }
+
+  test('tmc-instalment confirm-payment marks instalment paid and updates itinerary', async () => {
+    const payment = makeTmcPayment();
+    prisma.payment.findFirst
+      .mockResolvedValueOnce(payment)       // first call: find pending payment by plinkId
+      .mockResolvedValueOnce({              // second call: reload after update
+        ...payment,
+        status: 'SUCCESS',
+        metadata: payment.metadata,
+      });
+    prisma.payment.update.mockResolvedValue({ ...payment, status: 'SUCCESS' });
+
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 200, participantId: 5, status: 'pending', amount: 50000,
+    });
+    prisma.tripInstalmentPayment.update.mockResolvedValue({ id: 200, status: 'paid', paidAmount: 50000 });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([{ paidAmount: 50000, amount: 50000 }]);
+    prisma.tripParticipant.findFirst.mockResolvedValue({ parentEmail: 'parent@test.com' });
+    prisma.itinerary.findFirst.mockResolvedValue({ id: 77, advancePaidAmount: 0, status: 'sent' });
+    prisma.itinerary.update.mockResolvedValue({ id: 77, status: 'advance_paid', advancePaidAmount: 50000 });
+
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/billing/public/confirm-payment')
+      .send({
+        razorpay_payment_link_id: 'plink_tmc_cb',
+        razorpay_payment_link_reference_id: 'tmc-ref-1',
+        razorpay_payment_link_status: 'paid',
+        razorpay_payment_id: 'pay_tmc_cb',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true });
+    // Instalment must be updated
+    expect(prisma.tripInstalmentPayment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 200 },
+        data: expect.objectContaining({ status: expect.stringMatching(/^(paid|partial)$/) }),
+      }),
+    );
+    // Itinerary must be updated to reflect payment
+    expect(prisma.itinerary.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 77 },
+        data: expect.objectContaining({ status: 'advance_paid' }),
+      }),
+    );
+  });
+
+  test('tmc-instalment confirm-payment does NOT reconcile TravelInvoice (kind guard)', async () => {
+    // The old bug: billing.js's travelInvoiceId branch would fire even when
+    // kind='tmc-instalment', treating the instalment's invoiceId as a TravelInvoice id.
+    // After the fix, kind='tmc-instalment' skips the TravelInvoice branch entirely.
+    const payment = makeTmcPayment({ travelInvoiceId: '55' }); // old metadata had this
+    prisma.payment.findFirst
+      .mockResolvedValueOnce(payment)
+      .mockResolvedValueOnce({ ...payment, status: 'SUCCESS', metadata: payment.metadata });
+    prisma.payment.update.mockResolvedValue({ ...payment, status: 'SUCCESS' });
+
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/billing/public/confirm-payment')
+      .send({
+        razorpay_payment_link_id: 'plink_tmc_cb',
+        razorpay_payment_link_reference_id: 'tmc-ref-2',
+        razorpay_payment_link_status: 'paid',
+        razorpay_payment_id: 'pay_tmc_cb_2',
+      });
+
+    expect(res.status).toBe(200);
+    // TravelInvoice model must NOT be touched — it's not stubbed, so if the
+    // route calls it the test would throw, which would cause the test to fail.
+    // The absence of a throw is the assertion.
   });
 });

@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Outlet, useNavigate, NavLink } from "react-router-dom";
-import { ShieldCheck, Clock, LogOut, BarChart3, Activity } from "lucide-react";
+import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor } from "lucide-react";
 import {
   getSuperAdminToken,
   getSuperAdminUsername,
@@ -16,8 +16,46 @@ const MODULES = [
   { path: "/super-admin/api-analytics", label: "API Analytics", icon: Activity },
 ];
 
+function getThemeIcon(theme) {
+  if (theme === "light") return Sun;
+  if (theme === "dark") return Moon;
+  return Monitor;
+}
+
 export default function SuperAdminLayout() {
   const navigate = useNavigate();
+  const [theme, setTheme] = useState(() => {
+    const stored = localStorage.getItem("theme");
+    if (stored) return stored;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    let effectiveTheme = theme;
+    if (theme === "system") {
+      effectiveTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    document.documentElement.setAttribute("data-theme", effectiveTheme);
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (theme !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e) => document.documentElement.setAttribute("data-theme", e.matches ? "dark" : "light");
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    const advance = () => setTheme((t) => t === "light" ? "dark" : t === "dark" ? "system" : "light");
+    if (typeof document.startViewTransition === "function") {
+      // flushSync not available here without importing from react-dom; use direct setState inside transition
+      document.startViewTransition(advance);
+    } else {
+      advance();
+    }
+  };
 
   useEffect(() => {
     if (!getSuperAdminToken()) {
@@ -80,13 +118,30 @@ export default function SuperAdminLayout() {
           <div style={{ fontSize: "0.75rem", color: "var(--text-secondary, #9aa0ab)", padding: "0 0.5rem", marginBottom: "0.5rem", wordBreak: "break-all" }}>
             {getSuperAdminUsername()}
           </div>
-          <button
-            onClick={handleLogout}
-            className="btn-secondary"
-            style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: "0.8rem" }}
-          >
-            <LogOut size={14} /> Log out
-          </button>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              onClick={handleLogout}
+              className="btn-secondary"
+              style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: "0.8rem" }}
+            >
+              <LogOut size={14} /> Log out
+            </button>
+            {(() => {
+              const ThemeIcon = getThemeIcon(theme);
+              const label = theme === "light" ? "Switch to dark mode" : theme === "dark" ? "Switch to system mode" : "Switch to light mode";
+              return (
+                <button
+                  onClick={toggleTheme}
+                  className="btn-secondary"
+                  title={label}
+                  aria-label={label}
+                  style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 0.5rem" }}
+                >
+                  <ThemeIcon size={14} />
+                </button>
+              );
+            })()}
+          </div>
         </div>
       </aside>
 

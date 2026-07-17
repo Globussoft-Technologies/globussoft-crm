@@ -96,6 +96,9 @@ const Leads = () => {
   const [pipelineStages, setPipelineStages] = useState([]);
   const [dealsByContact, setDealsByContact] = useState({});
   const [bookingValueByContact, setBookingValueByContact] = useState({});
+  // TMC instalment paid totals keyed by parent contact email — supplements
+  // itinerary advancePaidAmount for leads that have no itinerary row yet.
+  const [tmcPaidByEmail, setTmcPaidByEmail] = useState({});
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({ name: '', email: '', company: '', title: '', source: '' });
   const [editSaving, setEditSaving] = useState(false);
@@ -151,23 +154,37 @@ const Leads = () => {
           setDealsByContact(map);
         })
         .catch(() => setDealsByContact({}));
-      // Booking value from committed itineraries (more accurate than Deal.amount)
+      // Booking value from itineraries — show what the customer has actually paid.
+      // Priority: advancePaidAmount (actual cash received) when it's recorded and > 0.
+      // Fallback: totalAmount for committed statuses (accepted/advance_paid/fully_paid)
+      // so that legacy itineraries without advancePaidAmount still show their value.
       fetchApi('/api/travel/itineraries?limit=200')
         .then(res => {
           const rows = Array.isArray(res?.itineraries) ? res.itineraries : Array.isArray(res) ? res : [];
           const COMMITTED = new Set(['accepted', 'advance_paid', 'fully_paid']);
           const map = {};
           for (const it of rows) {
-            if (it?.contactId == null || !COMMITTED.has(it.status)) continue;
-            const amt = Number(it.totalAmount);
-            if (!Number.isFinite(amt)) continue;
+            if (it?.contactId == null) continue;
             const cur = it.currency || 'INR';
+            const advancePaid = Number(it.advancePaidAmount || 0);
+            // If advance payment is recorded, always show it (covers partial-paid leads
+            // whose itinerary status hasn't been flipped yet).
+            // Otherwise fall back to totalAmount for committed itineraries.
+            const amt = advancePaid > 0
+              ? advancePaid
+              : (COMMITTED.has(it.status) ? Number(it.totalAmount) : 0);
+            if (!Number.isFinite(amt) || amt <= 0) continue;
             if (!map[it.contactId]) map[it.contactId] = { value: 0, currency: cur };
             map[it.contactId].value += amt;
           }
           setBookingValueByContact(map);
         })
         .catch(() => setBookingValueByContact({}));
+      // Fetch TMC paid instalment totals keyed by parent email — covers leads
+      // whose parent contact has no Itinerary row (common for TMC school trips).
+      fetchApi('/api/travel/trip-billing/paid-by-contact')
+        .then(res => setTmcPaidByEmail(res?.byEmail || {}))
+        .catch(() => setTmcPaidByEmail({}));
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -708,13 +725,22 @@ const Leads = () => {
                     </td>
                   )}
                   {isTravel && (() => {
-                    // Prefer committed itinerary booking value over Deal.amount
-                    // (same logic as /travel/leads — deal amount is almost always 0)
+                    // 1. Itinerary advancePaidAmount (highest fidelity — set by sync/webhook)
                     const bv = bookingValueByContact[lead.id];
                     if (bv && bv.value > 0) {
                       return (
-                        <td style={{ padding: '1rem', fontWeight: 500, fontSize: '0.875rem' }} title="Customer booking value — sum of committed itineraries">
+                        <td style={{ padding: '1rem', fontWeight: 500, fontSize: '0.875rem' }} title="Amount paid — from instalment payments">
                           {bv.currency || 'INR'} {Number(bv.value).toLocaleString()}
+                        </td>
+                      );
+                    }
+                    // 2. TMC instalment paid totals keyed by parent email — covers leads
+                    // whose parent contact has no itinerary row (common for school trips).
+                    const tmcEntry = tmcPaidByEmail[lead.email];
+                    if (tmcEntry && tmcEntry.paidTotal > 0) {
+                      return (
+                        <td style={{ padding: '1rem', fontWeight: 500, fontSize: '0.875rem' }} title="Amount paid via TMC instalments">
+                          {tmcEntry.currency || 'INR'} {Number(tmcEntry.paidTotal).toLocaleString()}
                         </td>
                       );
                     }

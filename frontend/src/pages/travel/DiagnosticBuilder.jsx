@@ -666,6 +666,16 @@ function QuestionCard({ question, index, total, onChange, onRemove, onMoveUp, on
 
 function ScoringVisualEditor({ json, onChange, onSwitchToJson }) {
   const parsed = tryParse(json);
+
+  // Normalize missing `method` upfront so validation never fails on an
+  // unedited-but-otherwise-valid scoring JSON loaded from an existing bank.
+  useEffect(() => {
+    if (parsed && Array.isArray(parsed.bands) && !parsed.method) {
+      onChange(JSON.stringify({ method: 'weighted-sum', ...parsed }, null, 2));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (!parsed || !Array.isArray(parsed.bands)) {
     return (
       <ParseErrorPanel

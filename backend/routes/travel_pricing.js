@@ -119,6 +119,22 @@ router.post(
   },
 );
 
+// GET /api/travel/seasons/:id — fetch single season
+router.get("/seasons/:id", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    const row = await prisma.travelSeasonCalendar.findFirst({
+      where: { id, tenantId: req.travelTenant.id },
+    });
+    if (!row) return res.status(404).json({ error: "Season not found", code: "NOT_FOUND" });
+    res.json(row);
+  } catch (err) {
+    console.error("[travel-pricing] season get error:", err.message);
+    res.status(500).json({ error: "Failed to get season" });
+  }
+});
+
 router.patch(
   "/seasons/:id",
   verifyToken,
@@ -231,7 +247,7 @@ router.post(
   requireTravelTenant,
   async (req, res) => {
     try {
-      const { subBrand, scope, matchKeyJson, markupPct, markupFlat, ownerUserId, priority } = req.body || {};
+      const { subBrand, scope, matchKeyJson, markupPct, markupFlat, ownerUserId, priority, minPax } = req.body || {};
       if (!subBrand || !scope || !matchKeyJson) {
         return res.status(400).json({
           error: "subBrand, scope, matchKeyJson required",
@@ -265,6 +281,12 @@ router.post(
           return res.status(400).json({ error: "markupFlat must be a non-negative number", code: "INVALID_MARKUP" });
         }
       }
+      if (minPax != null) {
+        const mp = parseInt(minPax, 10);
+        if (!Number.isFinite(mp) || mp < 1) {
+          return res.status(400).json({ error: "minPax must be a positive integer", code: "INVALID_MIN_PAX" });
+        }
+      }
 
       const created = await prisma.travelMarkupRule.create({
         data: {
@@ -274,6 +296,7 @@ router.post(
           matchKeyJson: String(matchKeyJson),
           markupPct: markupPct != null ? Number(markupPct) : null,
           markupFlat: markupFlat != null ? Number(markupFlat) : null,
+          minPax: minPax != null ? parseInt(minPax, 10) : null,
           ownerUserId: ownerUserId ? parseInt(ownerUserId, 10) : null,
           priority: priority != null ? parseInt(priority, 10) : 100,
         },
@@ -286,6 +309,22 @@ router.post(
     }
   },
 );
+
+// GET /api/travel/markup-rules/:id — fetch single markup rule
+router.get("/markup-rules/:id", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    const row = await prisma.travelMarkupRule.findFirst({
+      where: { id, tenantId: req.travelTenant.id },
+    });
+    if (!row) return res.status(404).json({ error: "Rule not found", code: "NOT_FOUND" });
+    res.json(row);
+  } catch (err) {
+    console.error("[travel-pricing] rule get error:", err.message);
+    res.status(500).json({ error: "Failed to get markup rule" });
+  }
+});
 
 router.patch(
   "/markup-rules/:id",
@@ -302,7 +341,7 @@ router.patch(
       if (!existing) return res.status(404).json({ error: "Rule not found", code: "NOT_FOUND" });
 
       const data = {};
-      const { scope, matchKeyJson, markupPct, markupFlat, priority, isActive } = req.body || {};
+      const { scope, matchKeyJson, markupPct, markupFlat, priority, isActive, minPax } = req.body || {};
       if (scope !== undefined) { assertValidScope(scope); data.scope = scope; }
       if (matchKeyJson !== undefined) data.matchKeyJson = String(matchKeyJson);
       if (markupPct !== undefined) {
@@ -319,6 +358,15 @@ router.patch(
           const f = Number(markupFlat);
           if (!Number.isFinite(f) || f < 0) return res.status(400).json({ error: "markupFlat must be a non-negative number", code: "INVALID_MARKUP" });
           data.markupFlat = f;
+        }
+      }
+      if (minPax !== undefined) {
+        if (minPax == null) {
+          data.minPax = null;
+        } else {
+          const mp = parseInt(minPax, 10);
+          if (!Number.isFinite(mp) || mp < 1) return res.status(400).json({ error: "minPax must be a positive integer", code: "INVALID_MIN_PAX" });
+          data.minPax = mp;
         }
       }
       if (priority !== undefined) data.priority = parseInt(priority, 10);
@@ -1168,12 +1216,18 @@ router.get(
 // multiplier, markup amount, subtotal, grandTotal, warnings).
 router.post("/pricing/quote", verifyToken, requireTravelTenant, async (req, res) => {
   try {
-    const { subBrand, category, routeOrSku, tripDate, supplierId, ownerUserId } = req.body || {};
+    const { subBrand, category, routeOrSku, tripDate, supplierId, ownerUserId, paxCount } = req.body || {};
     if (!subBrand || !category || !routeOrSku || !tripDate) {
       return res.status(400).json({
         error: "subBrand, category, routeOrSku, tripDate required",
         code: "MISSING_FIELDS",
       });
+    }
+    if (paxCount != null) {
+      const pc = parseInt(paxCount, 10);
+      if (!Number.isFinite(pc) || pc < 1) {
+        return res.status(400).json({ error: "paxCount must be a positive integer", code: "INVALID_PAX_COUNT" });
+      }
     }
     assertValidSubBrand(subBrand);
 
@@ -1240,6 +1294,7 @@ router.post("/pricing/quote", verifyToken, requireTravelTenant, async (req, res)
       subBrand,
       tripDate: tripDateParsed,
       ownerUserId: ownerUserId ? parseInt(ownerUserId, 10) : null,
+      paxCount: paxCount != null ? parseInt(paxCount, 10) : null,
     });
 
     res.json({

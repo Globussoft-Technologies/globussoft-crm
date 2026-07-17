@@ -5,7 +5,7 @@
  * Pins backend/routes/travel_dashboard.js:
  *   GET /api/travel/dashboard — single endpoint, runs 14 prisma aggregates
  *   in parallel and shapes a response with seven sections (trips,
- *   diagnostics, itineraries, microsites, costMaster, pricingRules,
+ *   diagnostics, itineraries, landingPages, costMaster, pricingRules,
  *   recentTrips).
  *
  * What's pinned
@@ -21,10 +21,9 @@
  *     subBrandAccess=["tmc"] → where.subBrand = { in: ["tmc"] }.
  *   - Recent-trip select shape: id / tripCode / destination / departDate /
  *     returnDate / status — no PII (no participant names / amounts).
- *   - Microsite counts use tenantId only (NOT sub-brand narrowed) per
- *     the route comment: "the sub-brand scope on the parent trip is the
- *     source of truth; the microsite row has tenantId but inherits scope
- *     through the trip."
+ *   - Landing page counts are sub-brand scoped the same way as itineraries
+ *     (via the scoped() helper), so non-admin users see only their brand's
+ *     pages.
  *   - DB error path returns 500 with `{ error: "Failed to compute dashboard" }`.
  *
  * Test pattern mirrors backend/test/routes/travel_quotes.test.js — patch
@@ -52,7 +51,7 @@ prisma.itinerary = {
   count: vi.fn(),
   groupBy: vi.fn(),
 };
-prisma.tripMicrosite = {
+prisma.landingPage = {
   count: vi.fn(),
 };
 prisma.travelCostMaster = {
@@ -115,7 +114,7 @@ function installDefaultAggregates() {
   prisma.travelDiagnostic.groupBy.mockResolvedValue([]);
   prisma.itinerary.count.mockResolvedValue(0);
   prisma.itinerary.groupBy.mockResolvedValue([]);
-  prisma.tripMicrosite.count.mockResolvedValue(0);
+  prisma.landingPage.count.mockResolvedValue(0);
   prisma.travelCostMaster.count.mockResolvedValue(0);
   prisma.travelCostMaster.groupBy.mockResolvedValue([]);
   prisma.travelSeasonCalendar.count.mockResolvedValue(0);
@@ -134,7 +133,7 @@ beforeEach(() => {
   prisma.travelDiagnostic.groupBy.mockReset();
   prisma.itinerary.count.mockReset();
   prisma.itinerary.groupBy.mockReset();
-  prisma.tripMicrosite.count.mockReset();
+  prisma.landingPage.count.mockReset();
   prisma.travelCostMaster.count.mockReset();
   prisma.travelCostMaster.groupBy.mockReset();
   prisma.travelSeasonCalendar.count.mockReset();
@@ -212,11 +211,13 @@ describe('GET /api/travel/dashboard — happy path envelope', () => {
       trips: { total: 0, byStatus: {}, upcoming30d: 0 },
       diagnostics: { totalLast30d: 0, byClassification: {} },
       itineraries: { total: 0, byStatus: {} },
-      microsites: { published: 0, expired: 0 },
+      landingPages: { total: 0, published: 0 },
       costMaster: { activeRows: 0, bySubBrand: {} },
       pricingRules: { seasons: 0, markupRules: 0 },
       recentTrips: [],
     });
+    // microsites section must NOT appear in the response.
+    expect(res.body).not.toHaveProperty('microsites');
     // Every aggregate should fire — Promise.all dispatches all 14.
     expect(prisma.tmcTrip.count).toHaveBeenCalledTimes(2); // total + upcoming30d
     expect(prisma.tmcTrip.groupBy).toHaveBeenCalledTimes(1);
@@ -225,7 +226,7 @@ describe('GET /api/travel/dashboard — happy path envelope', () => {
     expect(prisma.travelDiagnostic.groupBy).toHaveBeenCalledTimes(1);
     expect(prisma.itinerary.count).toHaveBeenCalledTimes(1);
     expect(prisma.itinerary.groupBy).toHaveBeenCalledTimes(1);
-    expect(prisma.tripMicrosite.count).toHaveBeenCalledTimes(2); // published + expired
+    expect(prisma.landingPage.count).toHaveBeenCalledTimes(2); // total + published
     expect(prisma.travelCostMaster.count).toHaveBeenCalledTimes(1);
     expect(prisma.travelCostMaster.groupBy).toHaveBeenCalledTimes(1);
     expect(prisma.travelSeasonCalendar.count).toHaveBeenCalledTimes(1);
@@ -400,7 +401,7 @@ describe('GET /api/travel/dashboard — tenant + sub-brand scoping', () => {
     expect(tmcWhere).toMatchObject({ tenantId: 1, id: -1 });
   });
 
-  test('microsite counts use tenantId ONLY (NOT sub-brand narrowed — sourced from parent trip)', async () => {
+  test('landing page counts are sub-brand scoped for non-admin users', async () => {
     prisma.user.findUnique.mockResolvedValue({
       role: 'MANAGER',
       subBrandAccess: JSON.stringify(['tmc']),
@@ -408,16 +409,16 @@ describe('GET /api/travel/dashboard — tenant + sub-brand scoping', () => {
     await request(makeApp())
       .get('/api/travel/dashboard')
       .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
-    // Microsites are NOT narrowed by sub-brand even for a non-admin —
-    // the route comment explains: scope inherits through the parent trip.
-    const publishedWhere = prisma.tripMicrosite.count.mock.calls[0][0].where;
-    expect(publishedWhere).toEqual({ tenantId: 1 });
-    expect(publishedWhere).not.toHaveProperty('subBrand');
-    // The "expired" microsite call also stays tenant-only + the expiresAt narrow.
-    const expiredWhere = prisma.tripMicrosite.count.mock.calls[1][0].where;
-    expect(expiredWhere).toMatchObject({ tenantId: 1 });
-    expect(expiredWhere).toHaveProperty('expiresAt');
-    expect(expiredWhere).not.toHaveProperty('subBrand');
+    // landingPage.count(total) — first call — narrowed to the caller's brands.
+    const totalWhere = prisma.landingPage.count.mock.calls[0][0].where;
+    expect(totalWhere).toMatchObject({ tenantId: 1, subBrand: { in: ['tmc'] } });
+    // landingPage.count(published) — second call — same scope + status filter.
+    const publishedWhere = prisma.landingPage.count.mock.calls[1][0].where;
+    expect(publishedWhere).toMatchObject({
+      tenantId: 1,
+      subBrand: { in: ['tmc'] },
+      status: 'PUBLISHED',
+    });
   });
 
   test('diagnostics and trips upcoming30d carry the time-window narrow', async () => {

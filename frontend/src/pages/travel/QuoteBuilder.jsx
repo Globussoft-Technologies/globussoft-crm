@@ -2129,7 +2129,78 @@ export default function QuoteBuilder() {
                         ))}
                       </select>
                     </td>
-                    <td style={{ ...td, fontWeight: 600 }}>{fmt(lineAmount(it))}</td>
+                    <td style={{ ...td, fontWeight: 600, position: "relative" }}>
+                      {(() => {
+                        const lineBreakdown = pricingPreview?.lines?.find?.((l) => l.lineId === it.id);
+                        if (!lineBreakdown) return fmt(lineAmount(it));
+                        const tipId = `markup-tip-${it.id ?? it.key}`;
+                        return (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            {fmt(lineAmount(it))}
+                            <span
+                              role="img"
+                              aria-label="Markup breakdown available"
+                              aria-describedby={tipId}
+                              style={{
+                                cursor: "help",
+                                fontSize: 11,
+                                background: "var(--primary-color, var(--accent-color))",
+                                color: "#fff",
+                                borderRadius: 3,
+                                padding: "1px 5px",
+                                fontWeight: 500,
+                                userSelect: "none",
+                              }}
+                              tabIndex={0}
+                              onFocus={(e) => e.currentTarget.nextSibling?.removeAttribute("hidden")}
+                              onBlur={(e) => e.currentTarget.nextSibling?.setAttribute("hidden", "")}
+                              onMouseEnter={(e) => e.currentTarget.nextSibling?.removeAttribute("hidden")}
+                              onMouseLeave={(e) => e.currentTarget.nextSibling?.setAttribute("hidden", "")}
+                            >
+                              markup ▸
+                            </span>
+                            <span
+                              id={tipId}
+                              role="tooltip"
+                              hidden
+                              style={{
+                                position: "absolute",
+                                zIndex: 999,
+                                bottom: "calc(100% + 6px)",
+                                right: 0,
+                                background: "var(--glass-bg, rgba(255,255,255,0.97))",
+                                border: "1px solid var(--border-color, #ddd)",
+                                borderRadius: 6,
+                                padding: "8px 12px",
+                                minWidth: 200,
+                                boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
+                                fontSize: 12,
+                                lineHeight: 1.6,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              <div style={{ fontWeight: 600, marginBottom: 4 }}>Pricing breakdown</div>
+                              <div>Base rate: {lineBreakdown.currency} {fmt(lineBreakdown.baseRate)}</div>
+                              {lineBreakdown.seasonMultiplier != null && lineBreakdown.seasonMultiplier !== 1 && (
+                                <div>
+                                  Season ×{lineBreakdown.seasonMultiplier}
+                                  {lineBreakdown.matchedSeasonName ? ` (${lineBreakdown.matchedSeasonName})` : ""}
+                                </div>
+                              )}
+                              <div>Subtotal: {lineBreakdown.currency} {fmt(lineBreakdown.subtotal)}</div>
+                              {lineBreakdown.markupAmount != null && lineBreakdown.markupAmount !== 0 && (
+                                <div style={{ color: "var(--primary-color, var(--accent-color))" }}>
+                                  Markup: +{lineBreakdown.currency} {fmt(lineBreakdown.markupAmount)}
+                                </div>
+                              )}
+                              <div style={{ fontWeight: 600, borderTop: "1px solid var(--border-color, #ddd)", marginTop: 4, paddingTop: 4 }}>
+                                Total: {lineBreakdown.currency} {fmt(lineBreakdown.grandTotal)}
+                              </div>
+                            </span>
+                          </span>
+                        );
+                      })()}
+                    </td>
                     {canWrite && (
                       <td style={{ ...td, textAlign: "center" }}>
                         {isDraft ? (

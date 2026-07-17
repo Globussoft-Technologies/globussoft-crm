@@ -12,7 +12,7 @@
 //     trips:        { total, byStatus: { confirmed, "in-trip", completed, cancelled }, upcoming30d },
 //     diagnostics:  { totalLast30d, byClassification: { ... } },
 //     itineraries:  { total, byStatus: { draft, sent, revised, accepted, rejected } },
-//     microsites:   { published, expired },
+//     landingPages: { total, published },
 //     costMaster:   { activeRows, bySubBrand: { tmc, rfu, ... } },
 //     pricingRules: { seasons, markupRules },
 //     recentTrips:  [{ id, tripCode, destination, departDate, status }, ...]  // newest 5
@@ -113,8 +113,8 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
       diagByClass,
       itinTotal,
       itinByStatus,
-      micrositePublished,
-      micrositeExpired,
+      landingPageTotal,
+      landingPagePublished,
       costMasterActive,
       costMasterBySubBrand,
       seasonCount,
@@ -144,14 +144,10 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
         where: scoped(req, allowed),
         _count: { _all: true },
       }),
-      // Microsites live on TmcTrip — only the TMC sub-brand has them. The
-      // sub-brand scope on the parent trip is the source of truth; the
-      // microsite row has tenantId but inherits scope through the trip. Gate
-      // on canTmc so a non-TMC scope (e.g. switcher set to RFU) shows 0 rather
-      // than leaking tenant-wide microsite counts into an RFU-only view.
-      prisma.tripMicrosite.count({ where: tmcWhere() }),
-      prisma.tripMicrosite.count({
-        where: tmcWhere({ expiresAt: { lt: now } }),
+      // Landing pages are tenant-scoped and support subBrand filtering.
+      prisma.landingPage.count({ where: scoped(req, allowed) }),
+      prisma.landingPage.count({
+        where: scoped(req, allowed, { status: "PUBLISHED" }),
       }),
       prisma.travelCostMaster.count({
         where: scoped(req, allowed, { isActive: true }),
@@ -194,9 +190,9 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
         total: itinTotal,
         byStatus: flattenGroupCount(itinByStatus, "status"),
       },
-      microsites: {
-        published: micrositePublished,
-        expired: micrositeExpired,
+      landingPages: {
+        total: landingPageTotal,
+        published: landingPagePublished,
       },
       costMaster: {
         activeRows: costMasterActive,

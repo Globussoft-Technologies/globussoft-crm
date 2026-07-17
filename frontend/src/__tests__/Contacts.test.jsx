@@ -28,6 +28,15 @@ vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
 }));
 
+// AuthContext mock — default value is ADMIN so the assign dropdown renders as
+// a <select>. Tests that need non-admin behaviour wrap the component in
+// <AuthContext.Provider value={{ user: { role: 'USER' }, tenant: {...} }}>
+// using the same AuthContext exported from this mock.
+vi.mock('../App', async () => {
+  const { createContext } = await import('react');
+  return { AuthContext: createContext({ user: { role: 'ADMIN' }, tenant: { vertical: 'generic' } }) };
+});
+
 // Stable mock-object reference — see CLAUDE.md cron-learning on infinite-
 // re-render flakes when useNotify returns a fresh object per render.
 const notifyObj = {
@@ -276,6 +285,44 @@ describe('Contacts.jsx — top-level page contract', () => {
       expect(putCall).toBeTruthy();
       expect(JSON.parse(putCall[1].body)).toEqual({ assignedToId: '8' });
     });
+  });
+
+  it('non-ADMIN user sees read-only assigned-to text, not a dropdown', async () => {
+    const { AuthContext } = await import('../App');
+
+    // Seed contacts with assignedTo populated so the span can show the name.
+    const contactsWithAssignee = SEEDED_CONTACTS.map(c =>
+      c.id === 2 ? { ...c, assignedTo: { name: 'Sneha Manager', email: 'sneha@globussoft.com' } } : c,
+    );
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/contacts') return Promise.resolve(contactsWithAssignee);
+      if (url === '/api/staff') return Promise.resolve(SEEDED_STAFF);
+      return Promise.resolve(null);
+    });
+
+    const { unmount } = render(
+      <AuthContext.Provider value={{ user: { role: 'USER' }, tenant: { vertical: 'generic' } }}>
+        <MemoryRouter>
+          <Contacts />
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByText('Aarav Sharma')).toBeInTheDocument());
+
+    // No combobox inside a table cell — assign dropdowns are gone for non-admins.
+    const tableCombos = screen.queryAllByRole('combobox').filter(el => el.closest('td'));
+    expect(tableCombos).toHaveLength(0);
+
+    // Aarav is unassigned — the read-only cell should show 'Unassigned'.
+    const row = screen.getByText('Aarav Sharma').closest('tr');
+    expect(within(row).getByText('Unassigned')).toBeInTheDocument();
+
+    // Priya has assignedTo populated — her cell shows the assignee name.
+    const priyaRow = screen.getByText('Priya Iyer').closest('tr');
+    expect(within(priyaRow).getByText('Sneha Manager')).toBeInTheDocument();
+
+    unmount();
   });
 
   it('Import CSV modal opens, parses a pasted file, and POSTs to /api/contacts/import-csv on Import', async () => {

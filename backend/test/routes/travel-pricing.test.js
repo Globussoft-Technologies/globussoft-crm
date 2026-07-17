@@ -16,17 +16,18 @@
  *                        the math to lib/travelPricing.js's `quote()`. Returns
  *                        the QuoteResult plus `cost: { id, currency }` echo.
  *
- * What's pinned (16 cases)
+ * What's pinned (31 cases)
  * ------------------------
- *   - Seasons: GET tenant-scoped + subBrand filter; POST happy path; POST
- *     MISSING_FIELDS, INVALID_SUB_BRAND, INVERTED_DATES, INVALID_MULTIPLIER;
- *     DELETE 404 cross-tenant + DELETE 200 same-tenant.
- *   - Markup rules: GET 200 with scope filter; POST EXACTLY_ONE_MARKUP_TYPE;
- *     POST INVALID_SCOPE; POST SUB_BRAND_DENIED via non-admin caller whose
- *     subBrandAccess JSON excludes the target.
+ *   - Seasons: GET tenant-scoped + subBrand filter; GET /:id happy+400+404;
+ *     POST happy path; POST MISSING_FIELDS, INVALID_SUB_BRAND, INVERTED_DATES,
+ *     INVALID_MULTIPLIER; DELETE 404 cross-tenant + DELETE 200 same-tenant.
+ *   - Markup rules: GET 200 with scope filter; GET /:id happy+400+404;
+ *     POST EXACTLY_ONE_MARKUP_TYPE; POST INVALID_SCOPE; POST SUB_BRAND_DENIED;
+ *     POST happy path; POST INVALID_MIN_PAX (zero, negative, non-integer);
+ *     PATCH minPax: sets, clears (null), rejects invalid.
  *   - Quote: POST 400 MISSING_FIELDS; POST 404 COST_NOT_FOUND; POST 200 happy
- *     path with realistic cost+season+rule fixture returning QuoteResult +
- *     echo'd `cost: { id, currency }`.
+ *     path; POST paxCount INVALID_PAX_COUNT; POST paxCount minPax filtering;
+ *     POST matchedMarkupMinPax in QuoteResult.
  *   - Auth gate: USER role hits 403 on POST /seasons (requirePermission guard).
  *
  * Pattern mirrors backend/test/routes/travel_suppliers.test.js + travel_quotes.test.js
@@ -488,5 +489,326 @@ describe('POST /api/travel/pricing/quote', () => {
         }),
       }),
     );
+  });
+
+  test('rejects invalid paxCount with 400 INVALID_PAX_COUNT', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/pricing/quote')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        subBrand: 'tmc',
+        category: 'hotel',
+        routeOrSku: 'DEL-Hilton',
+        tripDate: tomorrowIso,
+        paxCount: -5,  // negative — invalid
+      });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_PAX_COUNT' });
+    expect(prisma.travelCostMaster.findMany).not.toHaveBeenCalled();
+  });
+
+  test('paxCount=0 is rejected with 400 INVALID_PAX_COUNT', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/pricing/quote')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        subBrand: 'tmc',
+        category: 'hotel',
+        routeOrSku: 'DEL-Hilton',
+        tripDate: tomorrowIso,
+        paxCount: 0,
+      });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_PAX_COUNT' });
+  });
+
+  test('minPax rule only applies when paxCount meets threshold', async () => {
+    // Cost row.
+    prisma.travelCostMaster.findMany.mockResolvedValue([
+      {
+        id: 202, tenantId: 1, subBrand: 'tmc', category: 'hotel',
+        routeOrSku: 'DEL-Hilton', baseRate: 1000, currency: 'INR',
+        validFrom: null, validTo: null, isActive: true, supplierId: null,
+      },
+    ]);
+    prisma.travelSeasonCalendar.findMany.mockResolvedValue([]);
+    // Rule requires minPax=50 — we send paxCount=10, should be excluded.
+    prisma.travelMarkupRule.findMany.mockResolvedValue([
+      {
+        id: 20, tenantId: 1, subBrand: 'tmc', scope: 'hotel',
+        matchKeyJson: '{}', markupPct: 15, markupFlat: null,
+        ownerUserId: null, priority: 100, isActive: true, minPax: 50,
+      },
+    ]);
+    const res = await request(makeApp())
+      .post('/api/travel/pricing/quote')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        subBrand: 'tmc',
+        category: 'hotel',
+        routeOrSku: 'DEL-Hilton',
+        tripDate: tomorrowIso,
+        paxCount: 10,  // below minPax=50 → rule excluded → no markup
+      });
+    expect(res.status).toBe(200);
+    // With no markup applied: subtotal=grandTotal=1000
+    expect(res.body).toMatchObject({
+      baseRate: 1000,
+      seasonMultiplier: 1,
+      subtotal: 1000,
+      markupAmount: 0,
+      grandTotal: 1000,
+      matchedMarkupRuleId: null,
+    });
+  });
+
+  test('minPax rule applies when paxCount meets threshold; matchedMarkupMinPax echoed', async () => {
+    prisma.travelCostMaster.findMany.mockResolvedValue([
+      {
+        id: 203, tenantId: 1, subBrand: 'tmc', category: 'hotel',
+        routeOrSku: 'DEL-Hilton', baseRate: 1000, currency: 'INR',
+        validFrom: null, validTo: null, isActive: true, supplierId: null,
+      },
+    ]);
+    prisma.travelSeasonCalendar.findMany.mockResolvedValue([]);
+    prisma.travelMarkupRule.findMany.mockResolvedValue([
+      {
+        id: 21, tenantId: 1, subBrand: 'tmc', scope: 'hotel',
+        matchKeyJson: '{}', markupPct: 10, markupFlat: null,
+        ownerUserId: null, priority: 100, isActive: true, minPax: 50,
+      },
+    ]);
+    const res = await request(makeApp())
+      .post('/api/travel/pricing/quote')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        subBrand: 'tmc',
+        category: 'hotel',
+        routeOrSku: 'DEL-Hilton',
+        tripDate: tomorrowIso,
+        paxCount: 60,  // meets minPax=50 → rule applies
+      });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      baseRate: 1000,
+      subtotal: 1000,
+      markupAmount: 100,
+      grandTotal: 1100,
+      matchedMarkupRuleId: 21,
+      matchedMarkupMinPax: 50,
+    });
+  });
+});
+
+// ─── GET /seasons/:id ────────────────────────────────────────────────
+
+describe('GET /api/travel/seasons/:id', () => {
+  test('happy path returns 200 with the season row', async () => {
+    prisma.travelSeasonCalendar.findFirst.mockResolvedValue({
+      id: 5, tenantId: 1, subBrand: 'tmc', seasonName: 'Eid',
+      startDate: tomorrow, endDate: inThreeDays, multiplier: 1.3, isActive: true,
+    });
+    const res = await request(makeApp())
+      .get('/api/travel/seasons/5')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 5, subBrand: 'tmc', seasonName: 'Eid' });
+    expect(prisma.travelSeasonCalendar.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 5, tenantId: 1 } }),
+    );
+  });
+
+  test('non-numeric id returns 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/seasons/abc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+    expect(prisma.travelSeasonCalendar.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('unknown id returns 404 NOT_FOUND', async () => {
+    prisma.travelSeasonCalendar.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get('/api/travel/seasons/9999')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+// ─── GET /markup-rules/:id ───────────────────────────────────────────
+
+describe('GET /api/travel/markup-rules/:id', () => {
+  test('happy path returns 200 with the markup rule row', async () => {
+    prisma.travelMarkupRule.findFirst.mockResolvedValue({
+      id: 9, tenantId: 1, subBrand: 'rfu', scope: 'flight',
+      matchKeyJson: '{}', markupPct: 8, markupFlat: null,
+      ownerUserId: null, priority: 50, isActive: true, minPax: null,
+    });
+    const res = await request(makeApp())
+      .get('/api/travel/markup-rules/9')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 9, scope: 'flight', markupPct: 8 });
+    expect(prisma.travelMarkupRule.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 9, tenantId: 1 } }),
+    );
+  });
+
+  test('non-numeric id returns 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/markup-rules/not-a-number')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+    expect(prisma.travelMarkupRule.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('unknown id returns 404 NOT_FOUND', async () => {
+    prisma.travelMarkupRule.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get('/api/travel/markup-rules/9999')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+// ─── minPax on markup rules (POST + PATCH) ───────────────────────────
+
+describe('POST /api/travel/markup-rules — minPax validation', () => {
+  test('minPax=0 returns 400 INVALID_MIN_PAX', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/markup-rules')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        subBrand: 'tmc', scope: 'hotel', matchKeyJson: '{}', markupPct: 10, minPax: 0,
+      });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_MIN_PAX' });
+    expect(prisma.travelMarkupRule.create).not.toHaveBeenCalled();
+  });
+
+  test('minPax=-1 returns 400 INVALID_MIN_PAX', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/markup-rules')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        subBrand: 'tmc', scope: 'hotel', matchKeyJson: '{}', markupPct: 10, minPax: -1,
+      });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_MIN_PAX' });
+    expect(prisma.travelMarkupRule.create).not.toHaveBeenCalled();
+  });
+
+  test('minPax="abc" returns 400 INVALID_MIN_PAX', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/markup-rules')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        subBrand: 'tmc', scope: 'hotel', matchKeyJson: '{}', markupPct: 10, minPax: 'abc',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_MIN_PAX' });
+    expect(prisma.travelMarkupRule.create).not.toHaveBeenCalled();
+  });
+
+  test('minPax=50 (valid positive integer) is accepted and stored', async () => {
+    prisma.travelMarkupRule.create.mockResolvedValue({
+      id: 30, tenantId: 1, subBrand: 'tmc', scope: 'hotel',
+      matchKeyJson: '{}', markupPct: 10, markupFlat: null,
+      ownerUserId: null, priority: 100, isActive: true, minPax: 50,
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/markup-rules')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        subBrand: 'tmc', scope: 'hotel', matchKeyJson: '{}', markupPct: 10, minPax: 50,
+      });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 30, minPax: 50 });
+    expect(prisma.travelMarkupRule.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ minPax: 50 }),
+      }),
+    );
+  });
+
+  test('minPax omitted → stored as null', async () => {
+    prisma.travelMarkupRule.create.mockResolvedValue({
+      id: 31, tenantId: 1, subBrand: 'tmc', scope: 'hotel',
+      matchKeyJson: '{}', markupPct: 10, markupFlat: null,
+      ownerUserId: null, priority: 100, isActive: true, minPax: null,
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/markup-rules')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        subBrand: 'tmc', scope: 'hotel', matchKeyJson: '{}', markupPct: 10,
+      });
+    expect(res.status).toBe(201);
+    expect(prisma.travelMarkupRule.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ minPax: null }),
+      }),
+    );
+  });
+});
+
+describe('PATCH /api/travel/markup-rules/:id — minPax', () => {
+  test('PATCH minPax=null clears the threshold', async () => {
+    prisma.travelMarkupRule.findFirst.mockResolvedValue({
+      id: 40, tenantId: 1, subBrand: 'tmc', scope: 'hotel',
+      matchKeyJson: '{}', markupPct: 10, markupFlat: null,
+      ownerUserId: null, priority: 100, isActive: true, minPax: 50,
+    });
+    prisma.travelMarkupRule.update.mockResolvedValue({
+      id: 40, minPax: null,
+    });
+    const res = await request(makeApp())
+      .patch('/api/travel/markup-rules/40')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ minPax: null });
+    expect(res.status).toBe(200);
+    expect(prisma.travelMarkupRule.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ minPax: null }),
+      }),
+    );
+  });
+
+  test('PATCH minPax=100 sets a new threshold', async () => {
+    prisma.travelMarkupRule.findFirst.mockResolvedValue({
+      id: 41, tenantId: 1, subBrand: 'tmc', scope: 'hotel',
+      matchKeyJson: '{}', markupPct: 10, markupFlat: null,
+      ownerUserId: null, priority: 100, isActive: true, minPax: null,
+    });
+    prisma.travelMarkupRule.update.mockResolvedValue({ id: 41, minPax: 100 });
+    const res = await request(makeApp())
+      .patch('/api/travel/markup-rules/41')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ minPax: 100 });
+    expect(res.status).toBe(200);
+    expect(prisma.travelMarkupRule.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ minPax: 100 }),
+      }),
+    );
+  });
+
+  test('PATCH minPax=0 returns 400 INVALID_MIN_PAX', async () => {
+    prisma.travelMarkupRule.findFirst.mockResolvedValue({
+      id: 42, tenantId: 1, subBrand: 'tmc', scope: 'hotel',
+      matchKeyJson: '{}', markupPct: 10, markupFlat: null,
+      ownerUserId: null, priority: 100, isActive: true, minPax: null,
+    });
+    const res = await request(makeApp())
+      .patch('/api/travel/markup-rules/42')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ minPax: 0 });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_MIN_PAX' });
+    expect(prisma.travelMarkupRule.update).not.toHaveBeenCalled();
   });
 });

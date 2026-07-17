@@ -949,6 +949,11 @@ app.use("/api", (req, res, next) => {
     "/landing-pages/public",
     "/landing-pages/wanderlux-static",
     "/brochure-assets",
+    // Diagnostic PDFs are public by design (PRD §4.2) — the unguessable
+    // 16-byte random suffix in the filename is the access-control mechanism.
+    // They are opened via plain <a href> (no fetch, no Authorization header)
+    // from the public report page, WhatsApp links, and email delivery.
+    "/uploads/diagnostics/",
     // Public landing-page submit + tracking pixels are referenced by
     // rendered pages as /api/pages/<slug>/submit and /api/pages/<slug>/track.
     "/pages/",

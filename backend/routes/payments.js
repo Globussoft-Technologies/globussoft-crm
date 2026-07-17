@@ -686,6 +686,77 @@ router.post(
           }
         }
 
+        // TMC instalment pay-link: notes.kind = 'tmc-instalment'.
+        // Marks the TripInstalmentPayment row paid/partial.
+        // Two lookup strategies:
+        //  A) notes.instalmentId — set on new links after the paymentLink.js fix.
+        //  B) paymentLinkUrl match — for old links where instalmentId was missing
+        //     from notes; the stored short_url matches TripInstalmentPayment.paymentLinkUrl.
+        if (notes && notes.kind === 'tmc-instalment') {
+          try {
+            const paidPaise = paymentEnt && paymentEnt.amount;
+            const paidMajor = paidPaise != null ? paidPaise / 100 : null;
+            const capturedAt = paymentEnt && paymentEnt.captured_at
+              ? new Date(paymentEnt.captured_at * 1000)
+              : new Date();
+            let instalment = null;
+            if (notes.instalmentId && Number.isFinite(Number(notes.instalmentId))) {
+              instalment = await prisma.tripInstalmentPayment.findFirst({
+                where: { id: Number(notes.instalmentId) },
+              });
+            } else if (plinkEnt && plinkEnt.short_url) {
+              instalment = await prisma.tripInstalmentPayment.findFirst({
+                where: { paymentLinkUrl: plinkEnt.short_url },
+              });
+            }
+            if (instalment && instalment.status !== 'paid') {
+              const paidAmount = paidMajor != null ? paidMajor : Number(instalment.amount);
+              const instalmentAmount = Number(instalment.amount);
+              const newStatus = paidAmount >= instalmentAmount ? 'paid' : 'partial';
+              await prisma.tripInstalmentPayment.update({
+                where: { id: instalment.id },
+                data: { status: newStatus, paidAmount, paidAt: capturedAt },
+              });
+              const webhookTenantId = notes.tenantId ? Number(notes.tenantId) : null;
+              try {
+                const participant = await prisma.tripParticipant.findFirst({
+                  where: { id: instalment.participantId },
+                  select: { parentEmail: true },
+                });
+                if (participant?.parentEmail && webhookTenantId) {
+                  const itinerary = await prisma.itinerary.findFirst({
+                    where: {
+                      tenantId: webhookTenantId,
+                      contact: { email: participant.parentEmail },
+                      status: { in: ['draft', 'sent', 'revised', 'advance_paid'] },
+                    },
+                    select: { id: true, advancePaidAmount: true },
+                  });
+                  if (itinerary) {
+                    // Recompute from all paid instalments under this participant for idempotency
+                    const paidRows = await prisma.tripInstalmentPayment.findMany({
+                      where: { participantId: instalment.participantId, status: 'paid' },
+                      select: { paidAmount: true, amount: true },
+                    });
+                    const trueTotal = paidRows.reduce(
+                      (s, r) => s + (Number(r.paidAmount) || Number(r.amount) || 0), 0,
+                    ) + paidAmount; // include this instalment (not yet marked paid)
+                    await prisma.itinerary.update({
+                      where: { id: itinerary.id },
+                      data: {
+                        status: 'advance_paid',
+                        advancePaidAmount: trueTotal,
+                      },
+                    });
+                  }
+                }
+              } catch (_ie) { /* non-fatal */ }
+            }
+          } catch (e) {
+            console.error('[Payments] tmc-instalment reconcile failed:', e.message);
+          }
+        }
+
         if (plinkId) {
           const payment = await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: plinkId },

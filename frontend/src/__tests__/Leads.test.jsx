@@ -804,3 +804,135 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
     expect(urls).not.toContain('/api/wellness/locations');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Amount column — travel vertical: shows advancePaidAmount for partially-paid
+// leads even when the itinerary status is not yet in the COMMITTED set.
+// ---------------------------------------------------------------------------
+describe('Leads — travel tenant Amount column reflects actual payments', () => {
+  const TRAVEL_AUTH = {
+    tenant: { id: 3, vertical: 'travel', name: 'Travel Co', defaultCurrency: 'INR' },
+    user: { id: 1, role: 'ADMIN', name: 'Admin', email: 'admin@travel.test' },
+  };
+
+  // Contact id=50 has made a partial payment (advancePaidAmount=50000) but the
+  // itinerary is still in 'sent' status (not in the old COMMITTED set).
+  // Contact id=51 has a fully_paid itinerary.
+  // Contact id=52 has no payment at all (advancePaidAmount=0).
+  const TRAVEL_LEADS = [
+    { id: 50, name: 'Lily', email: 'lily@parent.com', subBrand: 'TMC', createdAt: '2026-07-17T10:00:00Z' },
+    { id: 51, name: 'Ahmed Khan', email: 'ahmed@test.com', subBrand: 'RFU', createdAt: '2026-07-10T10:00:00Z' },
+    { id: 52, name: 'No Payment', email: 'nopay@test.com', subBrand: 'TMC', createdAt: '2026-07-01T10:00:00Z' },
+  ];
+
+  function travelFetchMock(url, opts) {
+    if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+      return Promise.resolve(TRAVEL_LEADS);
+    }
+    if (url === '/api/staff' && !opts) return Promise.resolve([]);
+    if (typeof url === 'string' && url.startsWith('/api/deals') && !opts) return Promise.resolve([]);
+    if (url === '/api/travel/trip-billing/paid-by-contact' && !opts) {
+      // Lily has paid via TMC instalments directly — keyed by her email
+      return Promise.resolve({
+        byEmail: { 'lily@parent.com': { paidTotal: 90000, currency: 'INR' } },
+      });
+    }
+    if (typeof url === 'string' && url.startsWith('/api/travel/itineraries') && !opts) {
+      return Promise.resolve({
+        itineraries: [
+          // Lily: 'sent' status, advancePaidAmount=0 (itinerary not updated yet)
+          // → falls through to TMC paid-by-contact path which shows 90000
+          { id: 1, contactId: 50, status: 'sent', totalAmount: 120000, advancePaidAmount: 0, currency: 'INR' },
+          // Ahmed: legacy itinerary — advance_paid status but advancePaidAmount not recorded (null)
+          // → fallback: totalAmount shown because status is in COMMITTED set
+          { id: 2, contactId: 51, status: 'advance_paid', totalAmount: 185000, advancePaidAmount: null, currency: 'INR' },
+          // No-payment lead: draft, nothing paid, advancePaidAmount=0 → shows dash
+          { id: 3, contactId: 52, status: 'draft', totalAmount: 80000, advancePaidAmount: 0, currency: 'INR' },
+        ],
+        total: 3,
+      });
+    }
+    if (opts?.method === 'PUT' || opts?.method === 'POST') return Promise.resolve({ ok: true });
+    return Promise.resolve([]);
+  }
+
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(travelFetchMock);
+    notifyError.mockReset();
+  });
+
+  it('shows TMC paid-by-contact amount for a lead with no itinerary advancePaidAmount', async () => {
+    // Lily's itinerary has advancePaidAmount=0 (not yet synced to itinerary),
+    // but the TMC paid-by-contact endpoint returns 90000 for lily@parent.com.
+    // The Amount column must show 90000 via the tmcPaidByEmail fallback.
+    const { container } = renderLeads(TRAVEL_AUTH);
+    await waitFor(() => expect(screen.getByText('Lily')).toBeInTheDocument());
+
+    await waitFor(() => {
+      expect(container.textContent).toMatch(/INR/);
+      expect(container.textContent).toMatch(/90/);
+    });
+    // Must NOT show totalAmount (120k) or the 0 advance
+    expect(container.textContent).not.toMatch(/1[,\s]?2[,\s]?0[,\s]?0[,\s]?0[,\s]?0/);
+    // Verify the paid-by-contact endpoint was called
+    const tmcCall = fetchApiMock.mock.calls.find(
+      ([url]) => url === '/api/travel/trip-billing/paid-by-contact',
+    );
+    expect(tmcCall).toBeDefined();
+  });
+
+  it('shows totalAmount for a fully_paid itinerary — bookingValueByContact is populated', async () => {
+    // This test verifies the mapping logic: fully_paid → totalAmount (185000) ends up
+    // in bookingValueByContact[51]. We confirm via the fetchApi call pattern rather
+    // than trying to match a locale-sensitive toLocaleString() string.
+    const { container } = renderLeads(TRAVEL_AUTH);
+    await waitFor(() => expect(screen.getByText('Ahmed Khan')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Lily')).toBeInTheDocument());
+
+    // Wait for the itinerary fetch to complete (Lily's amount appears as sentinel)
+    await waitFor(() => {
+      expect(container.textContent).toMatch(/INR/);
+    });
+
+    // The itinerary fetch should have been called with the right URL
+    const itinCall = fetchApiMock.mock.calls.find(
+      ([url]) => typeof url === 'string' && url.startsWith('/api/travel/itineraries'),
+    );
+    expect(itinCall).toBeDefined();
+
+    // Ahmed's Amount cell must not be the no-data dash.
+    // Since both rows share the same Amount column and we can't use getByText on split nodes,
+    // assert that the page has TWO non-dash amount entries (Lily + Ahmed) — i.e. at least
+    // two Amount-column td elements that contain "INR" somewhere in their text.
+    const tds = Array.from(container.querySelectorAll('td'));
+    const amountTds = tds.filter(td => td.textContent.includes('INR'));
+    expect(amountTds.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('shows — for a lead with no payment (advancePaidAmount=0 and not fully_paid)', async () => {
+    const { container } = renderLeads(TRAVEL_AUTH);
+    await waitFor(() => expect(screen.getByText('No Payment')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Lily')).toBeInTheDocument());
+
+    // Wait for itinerary data to populate (Amount column becomes non-empty for paid leads)
+    await waitFor(() => {
+      expect(container.textContent).toMatch(/INR/);
+    });
+
+    // 3 rows rendered; 2 have payments (Lily + Ahmed) → 2 Amount tds with INR.
+    // The no-payment lead (advancePaidAmount=0) falls through to the dash path.
+    const tds = Array.from(container.querySelectorAll('td'));
+    const amountTds = tds.filter(td => td.textContent.includes('INR'));
+    expect(amountTds.length).toBeGreaterThanOrEqual(2); // Lily + Ahmed have amounts
+
+    // The "No Payment" lead's td must contain the dash, not a currency amount.
+    // Find the row containing "No Payment" and check its Amount td doesn't have INR.
+    const rows = Array.from(container.querySelectorAll('tr'));
+    const noPayRow = rows.find(row => row.textContent.includes('No Payment'));
+    expect(noPayRow).toBeDefined();
+    const noPayTds = noPayRow ? Array.from(noPayRow.querySelectorAll('td')) : [];
+    const hasINRInRow = noPayTds.some(td => td.textContent.includes('INR'));
+    expect(hasINRInRow).toBe(false);
+  });
+});

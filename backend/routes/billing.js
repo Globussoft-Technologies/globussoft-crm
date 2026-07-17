@@ -1194,8 +1194,11 @@ router.post("/public/confirm-payment", async (req, res) => {
     // run it when the payment is already SUCCESS (e.g. webhook beat the callback)
     // so any missed TravelInvoice status update is corrected when the customer
     // loads the success page.
+    // Skip for tmc-instalment payments — those have a travelInvoiceId in metadata
+    // (the instalment's invoiceId FK) but must not reconcile as a TravelInvoice
+    // payment; the tmc-instalment block above handles them.
     const travelInvoiceId = Number(existingMeta.travelInvoiceId);
-    if (Number.isFinite(travelInvoiceId)) {
+    if (Number.isFinite(travelInvoiceId) && existingMeta.kind !== "tmc-instalment") {
       try {
         const travelInv = await prisma.travelInvoice.findFirst({
           where: { id: travelInvoiceId },
@@ -1470,6 +1473,86 @@ router.post("/public/confirm-payment", async (req, res) => {
       }
     }
 
+    // TMC instalment reconciliation — mirrors the webhook path but fires on the
+    // Razorpay callback (works on localhost where webhooks can't be delivered).
+    // Also runs when the payment is already SUCCESS (e.g. webhook beat the
+    // callback) so any missed TripInstalmentPayment update is corrected.
+    //
+    // Two lookup strategies:
+    //  A) existingMeta.instalmentId — set on new links after the paymentLink.js fix.
+    //  B) paymentLinkUrl match — for old links where instalmentId was not embedded
+    //     in notes; the short URL stored on TripInstalmentPayment.paymentLinkUrl
+    //     equals existingMeta.url (both come from Razorpay link.short_url).
+    if (existingMeta.kind === "tmc-instalment") {
+      try {
+        let instalment = null;
+        if (existingMeta.instalmentId) {
+          const instalmentId = Number(existingMeta.instalmentId);
+          if (Number.isFinite(instalmentId)) {
+            instalment = await prisma.tripInstalmentPayment.findFirst({
+              where: { id: instalmentId },
+            });
+          }
+        } else if (existingMeta.url) {
+          // Old link: find the instalment row whose stored paymentLinkUrl matches.
+          instalment = await prisma.tripInstalmentPayment.findFirst({
+            where: { paymentLinkUrl: existingMeta.url },
+          });
+        }
+
+        if (instalment && instalment.status !== "paid") {
+          const paidAmount = Number(payment.amount || instalment.amount);
+          const instalmentAmount = Number(instalment.amount);
+          const newStatus = paidAmount >= instalmentAmount ? "paid" : "partial";
+          await prisma.tripInstalmentPayment.update({
+            where: { id: instalment.id },
+            data: {
+              status: newStatus,
+              paidAmount,
+              paidAt: new Date(),
+            },
+          });
+          // Update linked itinerary status + advancePaidAmount so the Leads page
+          // Amount column reflects the payment immediately.
+          try {
+            const participant = await prisma.tripParticipant.findFirst({
+              where: { id: instalment.participantId },
+              select: { parentEmail: true },
+            });
+            if (participant?.parentEmail) {
+              const itinerary = await prisma.itinerary.findFirst({
+                where: {
+                  tenantId: payment.tenantId,
+                  contact: { email: participant.parentEmail },
+                  status: { in: ["draft", "sent", "revised", "advance_paid"] },
+                },
+                select: { id: true, advancePaidAmount: true },
+              });
+              if (itinerary) {
+                // Recompute from all paid instalments for idempotency
+                const paidRows = await prisma.tripInstalmentPayment.findMany({
+                  where: { participantId: instalment.participantId, status: "paid" },
+                  select: { paidAmount: true, amount: true },
+                });
+                const trueTotal = paidRows.reduce(
+                  (s, r) => s + (Number(r.paidAmount) || Number(r.amount) || 0), 0,
+                ) + paidAmount; // include this instalment (not yet committed)
+                await prisma.itinerary.update({
+                  where: { id: itinerary.id },
+                  data: {
+                    status: "advance_paid",
+                    advancePaidAmount: trueTotal,
+                  },
+                });
+              }
+            }
+          } catch (_ie) { /* non-fatal */ }
+        }
+      } catch (e) {
+        console.error("[PublicConfirmPayment] tmc-instalment reconcile failed (non-fatal):", e.message);
+      }
+    }
+
     // Build a summary for the success page (amount paid, balance due, invoice).
     const summary = {
       amountPaid: 0,
@@ -1564,6 +1647,67 @@ router.get("/public/receipt", async (req, res) => {
     try {
       meta = JSON.parse(payment.metadata || "{}");
     } catch (_) {}
+
+    // TMC instalment payment receipt — renders a simple payment confirmation PDF
+    // for the parent/guardian who paid via the instalment payment link.
+    if (meta.kind === "tmc-instalment" && meta.instalmentId) {
+      const instalmentId = Number(meta.instalmentId);
+      const instalment = Number.isFinite(instalmentId)
+        ? await prisma.tripInstalmentPayment.findFirst({ where: { id: instalmentId } })
+        : null;
+      const trip = instalment
+        ? await prisma.tmcTrip.findFirst({
+            where: { id: instalment.tripId },
+            select: { tripCode: true, destination: true, departDate: true },
+          })
+        : null;
+      const participant = instalment
+        ? await prisma.tripParticipant.findFirst({
+            where: { id: instalment.participantId },
+            select: { fullName: true, parentName: true },
+          })
+        : null;
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: payment.tenantId },
+        select: { name: true },
+      });
+
+      const doc = new PDFDocument({ size: "A4", margin: 50 });
+      applyRupeeCapableFonts(doc);
+      const filename = `instalment-receipt-${instalmentId}.pdf`;
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      doc.pipe(res);
+
+      const tenantName = tenant?.name || "Travel Stall";
+      doc.fontSize(22).font("Helvetica-Bold").text(tenantName, 50, 50);
+      doc.fontSize(11).font("Helvetica").fillColor("#666").text("Payment Receipt", 50, 78);
+      doc.moveTo(50, 95).lineTo(545, 95).strokeColor("#e0e0e0").stroke();
+
+      doc.fillColor("#000").fontSize(12).font("Helvetica-Bold").text("Instalment Payment", 50, 110);
+      doc.font("Helvetica").fontSize(11).fillColor("#333");
+      if (participant?.fullName) doc.text(`Student: ${participant.fullName}`, 50, 130);
+      if (participant?.parentName) doc.text(`Parent / Guardian: ${participant.parentName}`, 50, 148);
+      if (trip?.tripCode) doc.text(`Trip: ${trip.tripCode}${trip.destination ? " — " + trip.destination : ""}`, 50, 166);
+      if (instalment) {
+        const due = instalment.dueDate ? new Date(instalment.dueDate).toLocaleDateString("en-IN") : "—";
+        doc.text(`Instalment #${instalment.instalmentIndex + 1}  (Due: ${due})`, 50, 184);
+      }
+
+      doc.moveTo(50, 210).lineTo(545, 210).strokeColor("#e0e0e0").stroke();
+      doc.fontSize(13).font("Helvetica-Bold").fillColor("#000").text("Amount Paid", 50, 220);
+      const amtStr = `INR ${Number(payment.amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+      doc.fontSize(20).text(amtStr, 50, 240);
+
+      const paidOn = payment.paidAt ? new Date(payment.paidAt).toLocaleString("en-IN") : new Date().toLocaleString("en-IN");
+      doc.fontSize(10).font("Helvetica").fillColor("#666").text(`Paid on: ${paidOn}`, 50, 270);
+      doc.text(`Payment ID: ${plinkId}`, 50, 285);
+      doc.text("This is a computer-generated receipt and does not require a signature.", 50, 320);
+
+      doc.end();
+      return;
+    }
+
     const travelInvoiceId = Number(meta.travelInvoiceId);
 
     if (Number.isFinite(travelInvoiceId)) {

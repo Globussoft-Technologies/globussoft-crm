@@ -97,6 +97,13 @@ prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+prisma.payment = {
+  findFirst: vi.fn(),
+};
+prisma.itinerary = {
+  findFirst: vi.fn(),
+  update: vi.fn(),
+};
 
 import express from 'express';
 import request from 'supertest';
@@ -145,6 +152,9 @@ beforeEach(() => {
   });
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
+  prisma.payment.findFirst.mockReset().mockResolvedValue(null);
+  prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
+  prisma.itinerary.update.mockReset().mockResolvedValue({});
 });
 
 // -----------------------------------------------------------------------------
@@ -850,6 +860,123 @@ describe('DELETE /api/travel/trips/:tripId/instalments/:id', () => {
       .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
     expect(res.status).toBe(403);
     expect(prisma.tripInstalmentPayment.delete).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// POST /api/travel/trips/:tripId/instalments/:id/sync-payment
+// -----------------------------------------------------------------------------
+
+describe('POST /api/travel/trips/:tripId/instalments/:id/sync-payment', () => {
+  test('already_paid instalment returns synced:true and still triggers itinerary update', async () => {
+    // Previously returned synced:false without updating the itinerary — that caused
+    // the Leads Amount column to stay "—" when both instalments were already PAID
+    // before the fix was deployed. Now it always syncs the itinerary even if
+    // the instalment row is already marked paid.
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 200, tripId: 100, participantId: 5, status: 'paid', paidAmount: 5000, amount: 5000,
+    });
+    // _updateItineraryAfterInstalmentPaid will call findMany for paid instalments
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { paidAmount: 5000, amount: 5000 },
+    ]);
+    prisma.tripParticipant.findFirst.mockResolvedValue({ parentEmail: 'parent@test.com' });
+    prisma.itinerary.findFirst.mockResolvedValue({ id: 77, advancePaidAmount: 0, status: 'advance_paid' });
+    prisma.itinerary.update.mockResolvedValue({ id: 77 });
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/instalments/200/sync-payment')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    // Now returns synced:true so the UI knows the itinerary was refreshed
+    expect(res.body).toMatchObject({ synced: true, reason: 'already_paid', status: 'paid' });
+    // Itinerary update must fire
+    expect(prisma.itinerary.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 77 },
+        data: expect.objectContaining({ status: 'advance_paid', advancePaidAmount: 5000 }),
+      }),
+    );
+    // TripInstalmentPayment.update should NOT be called (instalment already paid)
+    expect(prisma.tripInstalmentPayment.update).not.toHaveBeenCalled();
+  });
+
+  test('webhook-paid instalment (paidAmount>0, status partial) syncs without Payment table', async () => {
+    // Simulates: webhook fired and set paidAmount=5000 + status=partial on the
+    // TripInstalmentPayment row, but no Payment table row exists (webhook path
+    // for tmc-instalment does NOT create a Payment row). The check button must
+    // read the instalment itself and return synced:true.
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 200, tripId: 100, participantId: 5, status: 'partial', paidAmount: 5000, amount: 5000,
+      paidAt: new Date('2026-07-01'),
+    });
+    prisma.tripInstalmentPayment.update.mockResolvedValue({
+      id: 200, status: 'partial', paidAmount: 5000,
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/instalments/200/sync-payment')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ synced: true, status: 'partial', paidAmount: 5000 });
+    // Payment table should NOT be consulted when the instalment already has paidAmount
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('no Payment row and no paidAmount returns synced:false reason:no_payment_found', async () => {
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 200, tripId: 100, participantId: 5, status: 'pending', paidAmount: 0, amount: 5000,
+    });
+    prisma.payment.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/instalments/200/sync-payment')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ synced: false, reason: 'no_payment_found' });
+  });
+
+  test('Payment table row found syncs instalment and updates itinerary status to advance_paid', async () => {
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 200, tripId: 100, participantId: 5, status: 'pending', paidAmount: 0, amount: 5000,
+    });
+    prisma.payment.findFirst.mockResolvedValue({
+      id: 99, amount: 5000, paidAt: new Date('2026-07-01'),
+    });
+    prisma.tripInstalmentPayment.update.mockResolvedValue({
+      id: 200, status: 'paid', paidAmount: 5000,
+    });
+    prisma.tripParticipant.findFirst.mockResolvedValue({ parentEmail: 'parent@test.com' });
+    prisma.itinerary.findFirst.mockResolvedValue({ id: 77, advancePaidAmount: 0, status: 'sent' });
+    prisma.itinerary.update.mockResolvedValue({ id: 77, status: 'advance_paid', advancePaidAmount: 5000 });
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/instalments/200/sync-payment')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ synced: true, status: 'paid', paidAmount: 5000 });
+    expect(prisma.itinerary.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 77 },
+        data: expect.objectContaining({ status: 'advance_paid' }),
+      }),
+    );
+  });
+
+  test('non-existent instalment returns 404 NOT_FOUND', async () => {
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/instalments/9999/sync-payment')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('USER role is rejected with 403 (requires update permission)', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/instalments/200/sync-payment')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(403);
+    expect(prisma.tripInstalmentPayment.findFirst).not.toHaveBeenCalled();
   });
 });
 

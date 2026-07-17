@@ -71,8 +71,9 @@ const Contacts = () => {
   // Travel vertical only — the Assigned-To dropdown is brand-scoped so a lead
   // can only be assigned to staff who have access to its sub-brand. Generic /
   // wellness tenants (isTravel false) keep the full unfiltered list.
-  const { tenant } = useContext(AuthContext) || {};
+  const { tenant, user } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === 'travel';
+  const isAdmin = user?.role === 'ADMIN';
   const assignableStaff = (contact) => {
     if (!isTravel || !contact?.subBrand) return staff;
     return staff.filter(
@@ -468,17 +469,23 @@ const Contacts = () => {
                   </span>
                 </td>
                 <td style={{ padding: '1rem' }}>
-                  <select
-                    className="input-field"
-                    value={contact.assignedToId || ''}
-                    onChange={e => handleAssign(contact.id, e.target.value)}
-                    style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
-                  >
-                    <option value="">Unassigned</option>
-                    {assignableStaff(contact).map(s => (
-                      <option key={s.id} value={s.id}>{s.name || s.email}</option>
-                    ))}
-                  </select>
+                  {isAdmin ? (
+                    <select
+                      className="input-field"
+                      value={contact.assignedToId || ''}
+                      onChange={e => handleAssign(contact.id, e.target.value)}
+                      style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
+                    >
+                      <option value="">Unassigned</option>
+                      {assignableStaff(contact).map(s => (
+                        <option key={s.id} value={s.id}>{s.name || s.email}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span style={{ fontSize: '0.875rem', color: contact.assignedToId ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                      {contact.assignedTo?.name || contact.assignedTo?.email || 'Unassigned'}
+                    </span>
+                  )}
                 </td>
                 <td style={{ padding: '1rem', textAlign: 'right' }}>
                   <button

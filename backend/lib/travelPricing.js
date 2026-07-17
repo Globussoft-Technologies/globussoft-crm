@@ -42,6 +42,7 @@
  * @property {string} matchKeyJson   // JSON for the scope-specific match keys
  * @property {number|null} markupPct
  * @property {number|null} markupFlat
+ * @property {number|null} minPax    // minimum pax count for the rule to apply (AC-6.2 group discount)
  * @property {number|null} ownerUserId
  * @property {number} priority
  * @property {boolean} isActive
@@ -56,6 +57,7 @@
  * @property {number} grandTotal        subtotal + markupAmount
  * @property {string|null} matchedSeasonName
  * @property {number|null} matchedMarkupRuleId
+ * @property {number|null} matchedMarkupMinPax  minPax threshold of the matched rule, null if no rule or no minPax
  * @property {string[]} warnings
  */
 
@@ -106,15 +108,20 @@ function pickSeason(seasons, tripDate, subBrand) {
  * because the route should pass ownerUserId only when the caller is
  * acting as that user.
  *
+ * minPax filtering (AC-6.2): a rule with minPax set only applies when
+ * the supplied paxCount meets or exceeds that threshold. Rules with no
+ * minPax (null / undefined) apply regardless of paxCount.
+ *
  * Returns { rule, markupAmount } where markupAmount is computed
  * against the supplied subtotal.
  */
-function pickMarkup(rules, subBrand, scope, subtotal, ownerUserId = null) {
+function pickMarkup(rules, subBrand, scope, subtotal, ownerUserId = null, paxCount = null) {
   const eligible = (rules || [])
     .filter((r) => r.isActive !== false)
     .filter((r) => r.subBrand === subBrand)
     .filter((r) => r.scope === scope)
-    .filter((r) => r.ownerUserId == null || r.ownerUserId === ownerUserId);
+    .filter((r) => r.ownerUserId == null || r.ownerUserId === ownerUserId)
+    .filter((r) => r.minPax == null || (paxCount != null && paxCount >= r.minPax));
   if (eligible.length === 0) return { rule: null, markupAmount: 0 };
 
   eligible.sort((a, b) => {
@@ -143,6 +150,7 @@ function pickMarkup(rules, subBrand, scope, subtotal, ownerUserId = null) {
  *   subBrand: string,
  *   tripDate: string|Date,
  *   ownerUserId?: number|null,
+ *   paxCount?: number|null,
  * }} input
  * @returns {QuoteResult}
  */
@@ -150,7 +158,7 @@ function quote(input) {
   if (!input || typeof input !== "object") {
     throw new TypeError("quote: input must be an object");
   }
-  const { cost, seasons = [], rules = [], subBrand, tripDate, ownerUserId = null } = input;
+  const { cost, seasons = [], rules = [], subBrand, tripDate, ownerUserId = null, paxCount = null } = input;
   if (!cost || typeof cost !== "object") {
     throw new TypeError("quote: cost row required");
   }
@@ -171,7 +179,7 @@ function quote(input) {
 
   // 2. Markup — scope inferred from cost row's category mapping
   const scope = mapCategoryToScope(cost.category);
-  const markupRes = pickMarkup(rules, subBrand, scope, subtotal, ownerUserId);
+  const markupRes = pickMarkup(rules, subBrand, scope, subtotal, ownerUserId, paxCount);
   if (rules.length > 0 && markupRes.rule === null) {
     warnings.push(`no-markup-rule-matched:${subBrand}:${scope}`);
   }
@@ -186,6 +194,7 @@ function quote(input) {
     grandTotal,
     matchedSeasonName: seasonRes.matchedSeasonName,
     matchedMarkupRuleId: markupRes.rule?.id ?? null,
+    matchedMarkupMinPax: markupRes.rule?.minPax ?? null,
     warnings,
   };
 }

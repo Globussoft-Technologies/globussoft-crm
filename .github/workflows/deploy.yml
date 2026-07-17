@@ -775,6 +775,9 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           command_timeout: 10m
+          # Capture the deploy log so the Telegram alert can include the tail
+          # of what happened on the server (npm install, prisma, health poll).
+          capture_stdout: true
           script: |
             set -euo pipefail
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
@@ -1036,6 +1039,12 @@ jobs:
             free -h 2>&1 | head -2 || echo "(free unavailable)"
             uptime 2>&1 || echo "(uptime unavailable)"
 
+            echo "--- disk usage ---"
+            df -h / 2>&1 | head -5 || echo "(df unavailable)"
+
+            echo "--- top processes by memory ---"
+            ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%mem | head -8 2>/dev/null || echo "(ps unavailable)"
+
             echo "--- last 15 error lines (pm2 logs) ---"
             LOGS=$(pm2 logs globussoft-crm-backend --err --lines 15 --nostream 2>&1)
             if [ -z "$LOGS" ]; then
@@ -1043,6 +1052,20 @@ jobs:
             else
               echo "$LOGS" | tail -15
             fi
+
+            echo "--- last 15 combined backend log lines (pm2 logs) ---"
+            COMBINED_LOGS=$(pm2 logs globussoft-crm-backend --lines 15 --nostream 2>&1)
+            if [ -z "$COMBINED_LOGS" ]; then
+              echo "(no pm2 combined log output)"
+            else
+              echo "$COMBINED_LOGS" | tail -15
+            fi
+
+            echo "--- recent nginx error log ---"
+            tail -n 15 /var/log/nginx/error.log 2>/dev/null || echo "(nginx error log unavailable)"
+
+            echo "--- db connectivity ---"
+            cd ~/globussoft-crm/backend 2>/dev/null && printf "SELECT 1 AS health;\n" | npx prisma db execute --stdin --schema=prisma/schema.prisma 2>&1 | tail -5 || echo "(db check unavailable)"
             exit 0
 
       # Looks up every PR associated with the deployed commit so the alert
@@ -1084,6 +1107,7 @@ jobs:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           SNAPSHOT: ${{ steps.pm2_snapshot.outputs.stdout }}
           PR_URLS: ${{ steps.pr_links.outputs.urls }}
+          DEPLOY_LOG: ${{ steps.backend.outputs.stdout }}
         run: |
           set +e
           if [ "${{ steps.backend.outcome }}" = "success" ]; then
@@ -1114,6 +1138,17 @@ jobs:
           else
             PR_LINE="PR: (none found — pr_links step outcome: ${{ steps.pr_links.outcome }}. Check the 'Find associated PR(s)' step log.)"
           fi
+          if [ -n "${DEPLOY_LOG}" ]; then
+            # On failure the full deploy log is the most useful artifact; on
+            # success keep it short so the alert stays readable.
+            if [ "${{ steps.backend.outcome }}" = "failure" ]; then
+              DEPLOY_LOG_TAIL=$(printf '%s' "$DEPLOY_LOG" | tail -n 80)
+            else
+              DEPLOY_LOG_TAIL=$(printf '%s' "$DEPLOY_LOG" | tail -n 25)
+            fi
+          else
+            DEPLOY_LOG_TAIL="(deploy log unavailable — backend step outcome: ${{ steps.backend.outcome }}, conclusion: ${{ steps.backend.conclusion }}. Check the 'Deploy backend' step log.)"
+          fi
 
           # Plain text, no parse_mode: Telegram's Markdown parser 400s the
           # whole request on a single stray _ / * / ` / [ character, and both
@@ -1130,6 +1165,9 @@ jobs:
             "${PR_LINE}" \
             "${GATES_LINE}" \
             "Status: ${STATUS}" \
+            "" \
+            "--- deploy log tail ---" \
+            "${DEPLOY_LOG_TAIL}" \
             "" \
             "${SNAPSHOT_TEXT}")
 

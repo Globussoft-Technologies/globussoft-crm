@@ -991,23 +991,89 @@ jobs:
           # action.yml; default is false and the output silently stays empty).
           capture_stdout: true
           script: |
+            set +e
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
+
+            # Every diagnostic below explicitly prints WHY it came up empty
+            # instead of silently falling through — the prior version's bare
+            # "(pm2 jlist unavailable)" gave no signal on whether pm2 itself
+            # was missing from PATH, jlist returned empty, or the JSON parse
+            # threw. Without that, a broken snapshot step is indistinguishable
+            # from "nothing to report."
+            echo "--- environment ---"
+            echo "whoami: $(whoami 2>&1)"
+            echo "node: $(command -v node 2>&1) ($(node -v 2>&1))"
+            echo "pm2: $(command -v pm2 2>&1) ($(pm2 -v 2>&1))"
+
             echo "--- memory (rss MB / cpu %) ---"
-            pm2 jlist 2>/dev/null | node -e '
-              let d="";
-              process.stdin.on("data", c => d += c);
-              process.stdin.on("end", () => {
-                try {
-                  const procs = JSON.parse(d);
-                  for (const p of procs) {
-                    const rssMb = Math.round((p.monit?.memory || 0) / 1024 / 1024);
-                    console.log(`${p.name}: rss=${rssMb}MB cpu=${p.monit?.cpu ?? "?"}% restarts=${p.pm2_env?.restart_time ?? "?"} uptime_s=${Math.round((Date.now() - (p.pm2_env?.pm_uptime || Date.now())) / 1000)}`);
-                  }
-                } catch (e) { console.log("(pm2 jlist parse failed: " + e.message + ")"); }
-              });
-            ' || echo "(pm2 jlist unavailable)"
+            RAW_JLIST=$(pm2 jlist 2>&1)
+            JLIST_EXIT=$?
+            if [ $JLIST_EXIT -ne 0 ]; then
+              echo "(pm2 jlist failed, exit=$JLIST_EXIT): $RAW_JLIST" | head -5
+            elif [ -z "$RAW_JLIST" ]; then
+              echo "(pm2 jlist returned empty output)"
+            else
+              echo "$RAW_JLIST" | node -e '
+                let d="";
+                process.stdin.on("data", c => d += c);
+                process.stdin.on("end", () => {
+                  try {
+                    const procs = JSON.parse(d);
+                    if (!Array.isArray(procs) || procs.length === 0) {
+                      console.log("(pm2 jlist parsed but listed 0 processes)");
+                      return;
+                    }
+                    for (const p of procs) {
+                      const rssMb = Math.round((p.monit?.memory || 0) / 1024 / 1024);
+                      console.log(`${p.name}: rss=${rssMb}MB cpu=${p.monit?.cpu ?? "?"}% restarts=${p.pm2_env?.restart_time ?? "?"} uptime_s=${Math.round((Date.now() - (p.pm2_env?.pm_uptime || Date.now())) / 1000)}`);
+                    }
+                  } catch (e) { console.log("(pm2 jlist JSON parse failed: " + e.message + ")"); }
+                });
+              '
+            fi
+
+            echo "--- host memory/CPU (free -h / uptime) ---"
+            free -h 2>&1 | head -2 || echo "(free unavailable)"
+            uptime 2>&1 || echo "(uptime unavailable)"
+
             echo "--- last 15 error lines (pm2 logs) ---"
-            pm2 logs globussoft-crm-backend --err --lines 15 --nostream 2>/dev/null | tail -15 || echo "(no pm2 error log available)"
+            LOGS=$(pm2 logs globussoft-crm-backend --err --lines 15 --nostream 2>&1)
+            if [ -z "$LOGS" ]; then
+              echo "(no pm2 error log output)"
+            else
+              echo "$LOGS" | tail -15
+            fi
+            exit 0
+
+      # Looks up every PR associated with the deployed commit so the alert
+      # links back to the actual change(s) that shipped, not just the SHA.
+      # Uses the GitHub REST "commit pulls" endpoint (returns ALL PRs the
+      # commit is part of — handles both a single squash-merge and a push
+      # that bundles multiple already-merged PRs) rather than parsing the
+      # commit message for "(#1234)", which only catches the one PR GitHub's
+      # own merge-commit template mentions and misses everything else.
+      - name: Find associated PR(s)
+        id: pr_links
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          RESPONSE=$(gh api \
+            "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+            2>&1)
+          API_EXIT=$?
+          if [ $API_EXIT -ne 0 ]; then
+            echo "[pr_links] gh api call failed (exit=$API_EXIT): $RESPONSE" >&2
+            echo "urls=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          PRS=$(printf '%s' "$RESPONSE" | jq -r '[.[] | "https://github.com/${{ github.repository }}/pull/" + (.number | tostring)] | join(", ")' 2>&1)
+          if [ -z "$PRS" ]; then
+            echo "[pr_links] no PRs associated with this commit (or jq parse issue): $RESPONSE" >&2
+          fi
+          echo "urls=${PRS}" >> "$GITHUB_OUTPUT"
 
       - name: Post Telegram deploy alert
         if: always()
@@ -1017,6 +1083,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           SNAPSHOT: ${{ steps.pm2_snapshot.outputs.stdout }}
+          PR_URLS: ${{ steps.pr_links.outputs.urls }}
         run: |
           set +e
           if [ "${{ steps.backend.outcome }}" = "success" ]; then
@@ -1032,7 +1099,21 @@ jobs:
 
           SHORT_SHA="${GITHUB_SHA:0:8}"
           FIRST_MSG_LINE=$(printf '%s' "$COMMIT_MSG" | head -1)
-          SNAPSHOT_TEXT="${SNAPSHOT:-(snapshot unavailable)}"
+          # The prior "(snapshot unavailable)" fallback gave no signal on WHY
+          # — was the SSH step skipped, did it time out, did it auth-fail?
+          # steps.<id>.outcome/conclusion distinguish those cases even when
+          # outputs.stdout came back empty, so surface that instead of a bare
+          # placeholder.
+          if [ -n "${SNAPSHOT}" ]; then
+            SNAPSHOT_TEXT="${SNAPSHOT}"
+          else
+            SNAPSHOT_TEXT="(snapshot unavailable — pm2_snapshot step outcome: ${{ steps.pm2_snapshot.outcome }}, conclusion: ${{ steps.pm2_snapshot.conclusion }}. Check the 'Capture PM2 snapshot' step log for the actual SSH/pm2 error.)"
+          fi
+          if [ -n "${PR_URLS}" ]; then
+            PR_LINE="PR: ${PR_URLS}"
+          else
+            PR_LINE="PR: (none found — pr_links step outcome: ${{ steps.pr_links.outcome }}. Check the 'Find associated PR(s)' step log.)"
+          fi
 
           # Plain text, no parse_mode: Telegram's Markdown parser 400s the
           # whole request on a single stray _ / * / ` / [ character, and both
@@ -1046,6 +1127,7 @@ jobs:
             "${ICON} Deploy — crm.globusdemos.com" \
             "Commit: ${SHORT_SHA} ${FIRST_MSG_LINE}" \
             "Pushed by: ${GITHUB_ACTOR}" \
+            "${PR_LINE}" \
             "${GATES_LINE}" \
             "Status: ${STATUS}" \
             "" \

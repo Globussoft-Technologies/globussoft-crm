@@ -33,9 +33,8 @@
  *      "3 expired" microsites footer when expired>0.
  *   8. KPI tiles — links: each linked tile wraps a <Link> with the expected
  *      href (/travel/trips, /travel/diagnostics, /travel/itineraries,
- *      /travel/cost-master, /travel/pricing-rules). Microsites tile is
- *      INTENTIONALLY unlinked (the SUT omits a `link` prop on it — there's
- *      no dedicated microsites surface).
+ *      /landing-pages, /travel/cost-master, /travel/pricing-rules).
+ *      All 6 KPI tiles are linked.
  *   9. Recent trips table — happy path: renders 1 row per `recentTrips`
  *      entry, with tripCode as a <Link> to /travel/trips/:id, destination,
  *      depart + return dates, and the status badge text.
@@ -155,9 +154,9 @@ const DASHBOARD_DEFAULT = {
     total: 23,
     byStatus: { draft: 5, published: 15, archived: 3 },
   },
-  microsites: {
-    published: 8,
-    expired: 0,
+  landingPages: {
+    total: 8,
+    published: 5,
   },
   costMaster: {
     activeRows: 134,
@@ -303,37 +302,40 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     expect(screen.getByText('Active trips')).toBeInTheDocument();
     expect(screen.getByText('Diagnostics (last 30 days)')).toBeInTheDocument();
     expect(screen.getByText('Itineraries')).toBeInTheDocument();
-    expect(screen.getByText('Microsites')).toBeInTheDocument();
+    expect(screen.getByText('Landing pages')).toBeInTheDocument();
     expect(screen.getByText('Cost master (active rates)')).toBeInTheDocument();
     expect(screen.getByText('Pricing rules')).toBeInTheDocument();
+    // Microsites tile must not appear.
+    expect(screen.queryByText('Microsites')).not.toBeInTheDocument();
     // Headline values.
     expect(screen.getByText('47')).toBeInTheDocument(); // trips
     expect(screen.getByText('89')).toBeInTheDocument(); // diagnostics
     expect(screen.getByText('23')).toBeInTheDocument(); // itineraries
-    expect(screen.getByText('8')).toBeInTheDocument();  // microsites published
+    expect(screen.getByText('8')).toBeInTheDocument();  // landingPages.total
     expect(screen.getByText('134')).toBeInTheDocument(); // costMaster activeRows
     expect(screen.getByText('11')).toBeInTheDocument();  // pricingRules: 4+7
   });
 
-  it('renders the upcoming-30d accent and the microsites "all current" footer when expired=0', async () => {
+  it('renders the upcoming-30d accent and the landing pages published footer', async () => {
     installFetchMock();
     renderPage();
     await screen.findByText(/12 departing in 30 days/);
-    expect(screen.getByText('all current')).toBeInTheDocument();
+    // DASHBOARD_DEFAULT has landingPages: { total: 8, published: 5 }
+    expect(screen.getByText('5 published')).toBeInTheDocument();
   });
 
-  it('renders microsites "expired" footer when expired > 0', async () => {
+  it('renders landing pages footer with correct published count', async () => {
     installFetchMock({
       data: {
         ...DASHBOARD_DEFAULT,
-        microsites: { published: 6, expired: 3 },
+        landingPages: { total: 10, published: 3 },
       },
     });
     renderPage();
-    await screen.findByText(/3 expired/);
+    await screen.findByText('3 published');
   });
 
-  it('linked tiles wrap their content in an anchor with the expected href; microsites tile is unlinked', async () => {
+  it('linked tiles wrap their content in an anchor with the expected href', async () => {
     installFetchMock();
     const { container } = renderPage();
     await screen.findByText('47');
@@ -350,6 +352,10 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     const itinAnchor = screen.getByText('Itineraries').closest('a');
     expect(itinAnchor).toHaveAttribute('href', '/travel/itineraries');
 
+    // Landing pages → /landing-pages
+    const landingAnchor = screen.getByText('Landing pages').closest('a');
+    expect(landingAnchor).toHaveAttribute('href', '/landing-pages');
+
     // Cost master → /travel/cost-master
     const costAnchor = screen.getByText('Cost master (active rates)').closest('a');
     expect(costAnchor).toHaveAttribute('href', '/travel/cost-master');
@@ -358,13 +364,9 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     const priceAnchor = screen.getByText('Pricing rules').closest('a');
     expect(priceAnchor).toHaveAttribute('href', '/travel/pricing-rules');
 
-    // Microsites tile has NO link prop — its label should NOT be wrapped in an anchor.
-    const micrositesLabel = screen.getByText('Microsites');
-    expect(micrositesLabel.closest('a')).toBeNull();
-
-    // Tile-link count = 5 KPI links + 2 recent-trip links = 7 anchors total.
+    // Tile-link count = 6 KPI links + 2 recent-trip links = 8 anchors total.
     const anchors = container.querySelectorAll('a');
-    expect(anchors.length).toBe(7);
+    expect(anchors.length).toBe(8);
   });
 });
 

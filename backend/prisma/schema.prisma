@@ -5934,7 +5934,7 @@ model TravelCostMaster {
   supplierId     Int?
   routeOrSku     String // "MAA-JED" or "Makkah:Hilton:Deluxe-HaramFacing"
   attributesJson String?   @db.Text // floor/view/room category for hotels
-  baseRate       Decimal   @db.Decimal(15, 2)
+  baseRate       Decimal   @db.Decimal(18, 4)
   currency       String    @default("INR")
   seasonId       Int?
   validFrom      DateTime?
@@ -6181,7 +6181,8 @@ model TravelMarkupRule {
   scope        String // flight | hotel | transport | package
   matchKeyJson String   @db.Text // airline+route+fareBucket / hotel+city / route
   markupPct    Decimal? @db.Decimal(6, 4)
-  markupFlat   Decimal? @db.Decimal(15, 2)
+  markupFlat   Decimal? @db.Decimal(18, 4)
+  minPax       Int? // minimum pax threshold for this rule to apply (AC-6.2 group discount)
   ownerUserId  Int? // agent-level markup (flight plugin)
   priority     Int      @default(100)
   isActive     Boolean  @default(true)
@@ -6492,18 +6493,20 @@ model TripPaymentPlan {
 }
 
 model TripInstalmentPayment {
-  id              Int       @id @default(autoincrement())
-  tripId          Int
-  participantId   Int
-  instalmentIndex Int
-  dueDate         DateTime
-  amount          Decimal   @db.Decimal(15, 2)
-  paidAmount      Decimal   @default(0) @db.Decimal(15, 2)
-  paidAt          DateTime?
-  invoiceId       Int? // FK Invoice (existing model)
-  status          String    @default("pending") // pending | partial | paid | overdue
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                     Int       @id @default(autoincrement())
+  tripId                 Int
+  participantId          Int
+  instalmentIndex        Int
+  dueDate                DateTime
+  amount                 Decimal   @db.Decimal(15, 2)
+  paidAmount             Decimal   @default(0) @db.Decimal(15, 2)
+  paidAt                 DateTime?
+  invoiceId              Int? // FK Invoice (existing model)
+  status                 String    @default("pending") // pending | partial | paid | overdue
+  paymentLinkUrl         String?   @db.Text // Razorpay short_url or Stripe session URL
+  paymentLinkGeneratedAt DateTime? // when the link was last generated
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   @@index([tripId, status])
   @@index([dueDate])

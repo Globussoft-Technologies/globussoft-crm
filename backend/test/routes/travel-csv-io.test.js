@@ -539,6 +539,84 @@ describe('POST /api/travel/markup-rules/import.csv', () => {
     // matchKeyJson is normalised — whitespace dropped via JSON.parse + JSON.stringify
     expect(data.matchKeyJson).toBe('{"brand":"x"}');
   });
+
+
+  test('minPax is stored when valid positive integer is supplied', async () => {
+    prisma.travelMarkupRule.findFirst.mockResolvedValue(null);
+    prisma.travelMarkupRule.create.mockResolvedValue({ id: 12 });
+    const csv = [
+      'subBrand,scope,matchKeyJson,markupPct,minPax,priority',
+      'tmc,hotel,"{}",10,50,5',
+    ].join('\r\n');
+
+    const res = await request(makeApp())
+      .post('/api/travel/markup-rules/import.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .set('Content-Type', 'text/csv')
+      .send(csv);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, skipped: 0 });
+    const data = prisma.travelMarkupRule.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({ minPax: 50 });
+  });
+
+  test('minPax omitted (column absent from CSV) → stored as null', async () => {
+    prisma.travelMarkupRule.findFirst.mockResolvedValue(null);
+    prisma.travelMarkupRule.create.mockResolvedValue({ id: 13 });
+    // No minPax column at all
+    const csv = [
+      'subBrand,scope,matchKeyJson,markupPct,priority',
+      'tmc,hotel,"{}",8,3',
+    ].join('\r\n');
+
+    const res = await request(makeApp())
+      .post('/api/travel/markup-rules/import.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .set('Content-Type', 'text/csv')
+      .send(csv);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, skipped: 0 });
+    const data = prisma.travelMarkupRule.create.mock.calls[0][0].data;
+    expect(data.minPax).toBeNull();
+  });
+
+  test('minPax=0 in CSV is rejected as invalid per-row (not a valid threshold)', async () => {
+    const csv = [
+      'subBrand,scope,matchKeyJson,markupPct,minPax,priority',
+      'tmc,hotel,"{}",10,0,1',
+    ].join('\r\n');
+
+    const res = await request(makeApp())
+      .post('/api/travel/markup-rules/import.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .set('Content-Type', 'text/csv')
+      .send(csv);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 0, skipped: 1 });
+    expect(res.body.errors[0].reason).toMatch(/invalid minPax/);
+    expect(prisma.travelMarkupRule.create).not.toHaveBeenCalled();
+  });
+
+  test('minPax=abc in CSV is rejected as non-integer', async () => {
+    const csv = [
+      'subBrand,scope,matchKeyJson,markupPct,minPax,priority',
+      'tmc,hotel,"{}",10,abc,1',
+    ].join('\r\n');
+
+    const res = await request(makeApp())
+      .post('/api/travel/markup-rules/import.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .set('Content-Type', 'text/csv')
+      .send(csv);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 0, skipped: 1 });
+    expect(res.body.errors[0].reason).toMatch(/invalid minPax/);
+    expect(prisma.travelMarkupRule.create).not.toHaveBeenCalled();
+  });
 });
 
 // --- Auth + vertical gates --------------------------------------------------

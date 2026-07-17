@@ -9,7 +9,7 @@
 //   - Active trips      total + by-status row + upcoming-30d highlight
 //   - Diagnostics 30d   total + classification breakdown
 //   - Itineraries       total + by-status row
-//   - Microsites        published + expired
+//   - Landing pages     total + published
 //   - Cost master       active rows + by-subBrand breakdown
 //   - Pricing rules     seasons + markup rules
 //
@@ -22,7 +22,7 @@ import { useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertCircle, BadgePercent, Calendar as CalendarIcon,
-  ClipboardCheck, Compass, IndianRupee, FileText, Globe, Luggage,
+  ClipboardCheck, Compass, IndianRupee, FileText, Luggage,
   Map as MapIcon, RefreshCw, Users,
 } from "lucide-react";
 import { AuthContext } from "../../App";
@@ -115,14 +115,11 @@ export default function TravelDashboard() {
               link="/travel/itineraries"
             />
             <Tile
-              icon={Globe}
-              label="Microsites"
-              value={data.microsites.published}
-              footer={
-                data.microsites.expired > 0
-                  ? `${data.microsites.expired} expired`
-                  : "all current"
-              }
+              icon={FileText}
+              label="Landing pages"
+              value={data.landingPages.total}
+              footer={`${data.landingPages.published} published`}
+              link="/landing-pages"
             />
             <Tile
               icon={IndianRupee}

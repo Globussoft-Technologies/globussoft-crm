@@ -597,6 +597,7 @@ const MARKUP_RULE_COLS = [
   { key: "matchKeyJson", header: "matchKeyJson" },
   { key: "markupPct", header: "markupPct" },
   { key: "markupFlat", header: "markupFlat" },
+  { key: "minPax", header: "minPax" },
   { key: "priority", header: "priority" },
   { key: "isActive", header: "isActive" },
 ];
@@ -724,7 +725,17 @@ router.post(
           }
           const isActive = row.isActive ? row.isActive !== "false" : true;
 
-          const data = { subBrand, scope, matchKeyJson, markupPct, markupFlat, priority, isActive };
+          let minPax = null;
+          if (row.minPax !== "" && row.minPax != null) {
+            const mp = parseInt(row.minPax, 10);
+            if (!Number.isFinite(mp) || mp < 1) {
+              errors.push({ rowNumber, reason: `invalid minPax: ${row.minPax} — must be a positive integer` });
+              continue;
+            }
+            minPax = mp;
+          }
+
+          const data = { subBrand, scope, matchKeyJson, markupPct, markupFlat, minPax, priority, isActive };
           // Natural key: (tenantId, subBrand, scope, matchKeyJson). Same rule
           // expressed twice in a CSV (e.g. re-imports) updates instead of
           // creating a second row. matchKeyJson is normalised via JSON.parse

@@ -89,7 +89,7 @@ const MANAGER_PERMISSIONS = [
   'quote_templates.write', 'quote_templates.update',
   'quotes.delete', 'quotes.export',
   'invoices.write', 'invoices.update', 'invoices.delete', 'invoices.export',
-  'cost_master.write', 'cost_master.update',
+  'cost_master.write', 'cost_master.update', 'cost_master.delete',
   'pricing.write', 'pricing.update',
   'sightseeing.write', 'sightseeing.update',
   'payables.write', 'payables.update', 'payables.export',
@@ -573,7 +573,11 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
       userType: 'STAFF',
       landingPath: adminLanding,
     });
-    if (adminCreated) await grantAllPermissions(stats, adminRole.id, vertical);
+    // Always run grantAllPermissions for ADMIN — ensureRolePermission is
+    // additive/idempotent (skips existing rows, never removes). Running on
+    // every boot ensures ADMIN always gains newly-catalogued permissions
+    // (e.g. cost_master.delete added after the role was first created).
+    await grantAllPermissions(stats, adminRole.id, vertical);
 
     const { role: managerRole, wasCreated: managerCreated } = await ensureRole(stats, {
       tenantId,
@@ -593,9 +597,8 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
     // hit 403 on every permission-gated route (e.g. GET /api/travel/visa/
     // applications, /travel dashboard, visa analytics). Manage/delete-tier
     // actions stay admin-only because they're absent from MANAGER_PERMISSIONS.
-    if (managerCreated) {
-      await grantPermissionList(stats, managerRole.id, filterPermsToVertical(MANAGER_PERMISSIONS, vertical));
-    }
+    // Always run (additive/idempotent) so new preset entries propagate.
+    await grantPermissionList(stats, managerRole.id, filterPermsToVertical(MANAGER_PERMISSIONS, vertical));
 
     const { role: customerRole, wasCreated: customerCreated } = await ensureRole(stats, {
       tenantId,

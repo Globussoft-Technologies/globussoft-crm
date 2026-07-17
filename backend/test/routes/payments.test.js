@@ -112,6 +112,16 @@ prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
 // fixtures, so the HMAC fixtures in these tests keep matching.
 prisma.paymentGatewayConfig = prisma.paymentGatewayConfig || {};
 prisma.paymentGatewayConfig.findFirst = vi.fn();
+// TMC instalment webhook path — stubs so new itinerary-status flip doesn't throw.
+prisma.tripInstalmentPayment = prisma.tripInstalmentPayment || {};
+prisma.tripInstalmentPayment.findFirst = vi.fn().mockResolvedValue(null);
+prisma.tripInstalmentPayment.findMany = vi.fn().mockResolvedValue([]);
+prisma.tripInstalmentPayment.update = vi.fn().mockResolvedValue({});
+prisma.tripParticipant = prisma.tripParticipant || {};
+prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
+prisma.itinerary = prisma.itinerary || {};
+prisma.itinerary.findFirst = vi.fn().mockResolvedValue(null);
+prisma.itinerary.update = vi.fn().mockResolvedValue({});
 
 import express from 'express';
 import request from 'supertest';
@@ -160,6 +170,12 @@ beforeEach(() => {
   prisma.paymentGatewayConfig.findFirst.mockReset();
   prisma.auditLog.create.mockClear();
   prisma.auditLog.findFirst.mockClear();
+  prisma.tripInstalmentPayment.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
+  prisma.tripInstalmentPayment.update.mockReset().mockResolvedValue({});
+  prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
+  prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
+  prisma.itinerary.update.mockReset().mockResolvedValue({});
 
   // Sensible defaults — each test overrides what it cares about.
   prisma.payment.findMany.mockResolvedValue([]);
@@ -700,5 +716,206 @@ describe('POST /webhook/razorpay — signature verification + event dispatch', (
     });
     // …but invoice MUST NOT be marked PAID on a failed payment.
     expect(prisma.invoice.update).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /webhook/razorpay — payment_link.paid with kind=tmc-instalment
+// Pins the new itinerary-status flip that makes the Leads Amount column
+// show a non-zero value after a TMC trip instalment is paid.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('POST /webhook/razorpay — payment_link.paid tmc-instalment reconciliation', () => {
+  function makePlinkPaidEvent(notes) {
+    return {
+      event: 'payment_link.paid',
+      payload: {
+        payment_link: {
+          entity: {
+            id: 'plink_tmc_test',
+            notes,
+          },
+        },
+        payment: {
+          entity: {
+            id: 'pay_tmc_test',
+            amount: 5000000, // paise → ₹50,000
+            captured_at: Math.floor(Date.now() / 1000),
+          },
+        },
+      },
+    };
+  }
+
+  test('marks instalment paid and flips linked itinerary to advance_paid when webhook fires', async () => {
+    const notes = {
+      tenantId: '1',
+      kind: 'tmc-instalment',
+      instalmentId: '200',
+      participantId: '5',
+      tripId: '100',
+    };
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 200, participantId: 5, status: 'pending', amount: 50000,
+    });
+    prisma.tripInstalmentPayment.update.mockResolvedValue({ id: 200, status: 'paid', paidAmount: 50000 });
+    // findMany is called after update to recompute the total for idempotency — return the
+    // single paid instalment so trueTotal=50000 and itinerary.update fires.
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([{ paidAmount: 50000, amount: 50000 }]);
+    prisma.tripParticipant.findFirst.mockResolvedValue({ parentEmail: 'parent@example.com' });
+    prisma.itinerary.findFirst.mockResolvedValue({ id: 77, advancePaidAmount: 0, status: 'sent' });
+    prisma.itinerary.update.mockResolvedValue({ id: 77, status: 'advance_paid', advancePaidAmount: 50000 });
+    // Payment row lookup for the standard plink path — return null so it skips that branch.
+    prisma.payment.findFirst.mockResolvedValue(null);
+
+    const eventObj = makePlinkPaidEvent(notes);
+    const bodyStr = JSON.stringify(eventObj);
+    const sig = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(bodyStr)
+      .digest('hex');
+
+    const res = await request(makeApp())
+      .post('/api/payments/webhook/razorpay')
+      .set('content-type', 'application/json')
+      .set('x-razorpay-signature', sig)
+      .send(bodyStr);
+
+    expect(res.status).toBe(200);
+    expect(prisma.tripInstalmentPayment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 200 },
+        data: expect.objectContaining({ status: 'paid', paidAmount: 50000 }),
+      }),
+    );
+    expect(prisma.itinerary.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 77 },
+        data: expect.objectContaining({ status: 'advance_paid' }),
+      }),
+    );
+  });
+
+  test('already-paid instalment is not updated again (idempotent)', async () => {
+    const notes = {
+      tenantId: '1',
+      kind: 'tmc-instalment',
+      instalmentId: '200',
+    };
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 200, participantId: 5, status: 'paid', paidAmount: 50000, amount: 50000,
+    });
+    prisma.payment.findFirst.mockResolvedValue(null);
+
+    const eventObj = makePlinkPaidEvent(notes);
+    const bodyStr = JSON.stringify(eventObj);
+    const sig = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(bodyStr)
+      .digest('hex');
+
+    const res = await request(makeApp())
+      .post('/api/payments/webhook/razorpay')
+      .set('content-type', 'application/json')
+      .set('x-razorpay-signature', sig)
+      .send(bodyStr);
+
+    expect(res.status).toBe(200);
+    expect(prisma.tripInstalmentPayment.update).not.toHaveBeenCalled();
+    expect(prisma.itinerary.update).not.toHaveBeenCalled();
+  });
+
+  test('old link (no instalmentId in notes) resolved via payment_link.short_url → paymentLinkUrl match', async () => {
+    // Old links were generated before paymentLink.js fix — notes has kind but no instalmentId.
+    // The webhook must still find the instalment via the short_url stored on the row.
+    const notes = {
+      tenantId: '1',
+      kind: 'tmc-instalment',
+      // NO instalmentId
+    };
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 200, participantId: 5, status: 'pending', amount: 50000,
+    });
+    prisma.tripInstalmentPayment.update.mockResolvedValue({ id: 200, status: 'paid', paidAmount: 50000 });
+    prisma.tripParticipant.findFirst.mockResolvedValue(null);
+    prisma.payment.findFirst.mockResolvedValue(null);
+
+    // The event includes a short_url on the payment_link entity
+    const eventObj = {
+      event: 'payment_link.paid',
+      payload: {
+        payment_link: {
+          entity: {
+            id: 'plink_old_test',
+            short_url: 'https://rzp.io/rzp/PKBWSW8H',
+            notes,
+          },
+        },
+        payment: {
+          entity: {
+            id: 'pay_old_test',
+            amount: 5000000,
+            captured_at: Math.floor(Date.now() / 1000),
+          },
+        },
+      },
+    };
+    const bodyStr = JSON.stringify(eventObj);
+    const sig = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(bodyStr)
+      .digest('hex');
+
+    const res = await request(makeApp())
+      .post('/api/payments/webhook/razorpay')
+      .set('content-type', 'application/json')
+      .set('x-razorpay-signature', sig)
+      .send(bodyStr);
+
+    expect(res.status).toBe(200);
+    // Must have called findFirst with paymentLinkUrl matching the short_url
+    expect(prisma.tripInstalmentPayment.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { paymentLinkUrl: 'https://rzp.io/rzp/PKBWSW8H' },
+      }),
+    );
+    expect(prisma.tripInstalmentPayment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 200 },
+        data: expect.objectContaining({ status: 'paid' }),
+      }),
+    );
+  });
+
+  test('itinerary flip is non-fatal — webhook still returns 200 if itinerary lookup fails', async () => {
+    const notes = {
+      tenantId: '1',
+      kind: 'tmc-instalment',
+      instalmentId: '200',
+      participantId: '5',
+    };
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 200, participantId: 5, status: 'pending', amount: 50000,
+    });
+    prisma.tripInstalmentPayment.update.mockResolvedValue({ id: 200, status: 'paid', paidAmount: 50000 });
+    prisma.tripParticipant.findFirst.mockRejectedValue(new Error('DB timeout'));
+    prisma.payment.findFirst.mockResolvedValue(null);
+
+    const eventObj = makePlinkPaidEvent(notes);
+    const bodyStr = JSON.stringify(eventObj);
+    const sig = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(bodyStr)
+      .digest('hex');
+
+    const res = await request(makeApp())
+      .post('/api/payments/webhook/razorpay')
+      .set('content-type', 'application/json')
+      .set('x-razorpay-signature', sig)
+      .send(bodyStr);
+
+    // Non-fatal: instalment was updated, webhook succeeds despite itinerary lookup error.
+    expect(res.status).toBe(200);
+    expect(prisma.tripInstalmentPayment.update).toHaveBeenCalled();
   });
 });

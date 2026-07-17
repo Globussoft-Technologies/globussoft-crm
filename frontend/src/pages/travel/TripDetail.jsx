@@ -1791,6 +1791,8 @@ function PaymentTab({ trip, notify }) {
   const [editingInstalment, setEditingInstalment] = useState(null);
   const [instalmentEdit, setInstalmentEdit] = useState({});
   const [expandedParticipant, setExpandedParticipant] = useState(null);
+  // Payment link state — keyed by instalment id: { url, generating }
+  const [paymentLinks, setPaymentLinks] = useState({});
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1804,6 +1806,12 @@ function PaymentTab({ trip, notify }) {
       .then(([p, ins]) => {
         setPlan(p);
         setInstalments(ins);
+        // Seed payment link state from any previously generated URLs stored on rows
+        const seeded = {};
+        for (const row of ins) {
+          if (row.paymentLinkUrl) seeded[row.id] = { url: row.paymentLinkUrl, generating: false };
+        }
+        setPaymentLinks(seeded);
         if (p) {
           setGraceDays(p.graceDays ?? 0);
           let parsed = [];
@@ -1938,6 +1946,42 @@ function PaymentTab({ trip, notify }) {
       load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to update instalment");
+    }
+  };
+
+  const onGeneratePaymentLink = async (ins) => {
+    setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], generating: true } }));
+    try {
+      const result = await fetchApi(`/api/travel/trips/${trip.id}/instalments/${ins.id}/payment-link`, {
+        method: "POST",
+      });
+      setPaymentLinks((prev) => ({ ...prev, [ins.id]: { url: result.url, generating: false } }));
+    } catch (e) {
+      setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], generating: false } }));
+      notify.error(e?.body?.error || "Failed to generate payment link");
+    }
+  };
+
+  const onCopyPaymentLink = (url) => {
+    navigator.clipboard?.writeText(url)
+      .then(() => notify.success("Payment link copied"))
+      .catch(() => notify.error("Copy failed — select the link manually"));
+  };
+
+  const onSyncPayment = async (ins) => {
+    setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], syncing: true } }));
+    try {
+      const result = await fetchApi(`/api/travel/trips/${trip.id}/instalments/${ins.id}/sync-payment`, { method: "POST" });
+      if (result.synced) {
+        notify.success("Payment synced — instalment marked " + result.status);
+        load();
+      } else {
+        notify.info(result.reason === "already_paid" ? "Already paid" : "No completed payment found for this link yet");
+      }
+    } catch (e) {
+      notify.error(e?.body?.error || "Sync failed");
+    } finally {
+      setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], syncing: false } }));
     }
   };
 
@@ -2269,41 +2313,89 @@ function PaymentTab({ trip, notify }) {
                           );
                         }
 
+                        const linkState = paymentLinks[i.id] || {};
+                        const hasLink = !!linkState.url;
+                        const isGenerating = !!linkState.generating;
+
                         return (
-                          <div
-                            key={i.id}
-                            style={{
-                              background: statusBg, padding: 10, borderRadius: 6, marginTop: 10,
-                              display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
-                            }}
-                          >
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                                Due {fmt(i.dueDate)}
+                          <div key={i.id} style={{ marginTop: 10 }}>
+                            <div
+                              style={{
+                                background: statusBg, padding: 10, borderRadius: hasLink ? "6px 6px 0 0" : 6,
+                                display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
+                              }}
+                            >
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                                  Due {fmt(i.dueDate)}
+                                </div>
+                                <div style={{ fontSize: 13, fontWeight: 600, fontVariantNumeric: "tabular-nums", marginTop: 2 }}>
+                                  ₹{Number(i.paidAmount).toLocaleString()} of ₹{Number(i.amount).toLocaleString()}
+                                </div>
                               </div>
-                              <div style={{ fontSize: 13, fontWeight: 600, fontVariantNumeric: "tabular-nums", marginTop: 2 }}>
-                                ₹{Number(i.paidAmount).toLocaleString()} of ₹{Number(i.amount).toLocaleString()}
+                              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                                <span
+                                  style={{
+                                    background: "transparent", color: statusColor, padding: "2px 6px", borderRadius: 4,
+                                    fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3,
+                                  }}
+                                >
+                                  {i.status}
+                                </span>
+                                {i.status !== "paid" && hasLink && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onSyncPayment(i)}
+                                    disabled={!!(paymentLinks[i.id] || {}).syncing}
+                                    style={{ ...iconBtn, padding: "4px", opacity: (paymentLinks[i.id] || {}).syncing ? 0.5 : 1 }}
+                                    title="Sync payment status from gateway"
+                                    aria-label="Sync payment status"
+                                  >
+                                    <RotateCcw size={12} aria-hidden />
+                                  </button>
+                                )}
+                                {i.status !== "paid" && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onGeneratePaymentLink(i)}
+                                    disabled={isGenerating}
+                                    style={{ ...iconBtn, padding: "4px", opacity: isGenerating ? 0.5 : 1 }}
+                                    title={hasLink ? "Regenerate payment link" : "Generate payment link"}
+                                    aria-label={hasLink ? "Regenerate payment link" : "Generate payment link"}
+                                  >
+                                    <Link2 size={12} aria-hidden />
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => onEditInstalment(i)}
+                                  style={{ ...iconBtn, padding: "4px" }}
+                                  title="Edit"
+                                  aria-label="Edit instalment"
+                                >
+                                  <Edit3 size={12} aria-hidden />
+                                </button>
                               </div>
                             </div>
-                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                              <span
-                                style={{
-                                  background: "transparent", color: statusColor, padding: "2px 6px", borderRadius: 4,
-                                  fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3,
-                                }}
-                              >
-                                {i.status}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => onEditInstalment(i)}
-                                style={{ ...iconBtn, padding: "4px" }}
-                                title="Edit"
-                                aria-label="Edit instalment"
-                              >
-                                <Edit3 size={12} aria-hidden />
-                              </button>
-                            </div>
+                            {hasLink && (
+                              <div style={{
+                                background: "var(--surface-color)", borderTop: "1px solid var(--border-color)",
+                                borderRadius: "0 0 6px 6px", padding: "8px 10px",
+                                display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+                              }}>
+                                <Link2 size={12} aria-hidden style={{ color: "var(--primary-color, var(--accent-color))", flexShrink: 0 }} />
+                                <code style={{ fontSize: 11, wordBreak: "break-all", flex: 1, minWidth: 0, color: "var(--text-secondary)" }}>
+                                  {linkState.url}
+                                </code>
+                                <button
+                                  type="button"
+                                  onClick={() => onCopyPaymentLink(linkState.url)}
+                                  style={{ ...secondaryBtn, padding: "4px 10px", fontSize: 11, flexShrink: 0 }}
+                                >
+                                  <Copy size={11} aria-hidden /> Copy
+                                </button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}

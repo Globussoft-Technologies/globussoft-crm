@@ -522,10 +522,24 @@ describe('DELETE /api/travel/cost-master/:id', () => {
     expect(prisma.travelCostMaster.delete).toHaveBeenCalledWith({ where: { id: 20 } });
   });
 
-  test('MANAGER role is rejected with 403 (ADMIN-only gate)', async () => {
+  test('MANAGER role IS allowed to delete (cost_master.delete in MANAGER_PERMISSIONS)', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'MANAGER', subBrandAccess: null });
+    prisma.travelCostMaster.findFirst.mockResolvedValue({
+      id: 20, tenantId: 1, subBrand: 'tmc', category: 'hotel',
+    });
+    prisma.travelCostMaster.delete.mockResolvedValue({ id: 20 });
     const res = await request(makeApp())
       .delete('/api/travel/cost-master/20')
       .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: true, id: 20 });
+    expect(prisma.travelCostMaster.delete).toHaveBeenCalledWith({ where: { id: 20 } });
+  });
+
+  test('USER role is rejected with 403 (no delete permission)', async () => {
+    const res = await request(makeApp())
+      .delete('/api/travel/cost-master/20')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
     expect(res.status).toBe(403);
     expect(prisma.travelCostMaster.delete).not.toHaveBeenCalled();
   });

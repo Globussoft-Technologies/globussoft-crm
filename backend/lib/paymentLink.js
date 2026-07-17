@@ -107,7 +107,18 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
               ...(travelContext.scheduleId != null
                 ? { scheduleId: String(travelContext.scheduleId) }
                 : {}),
-              travelInvoiceId: String(travelContext.travelInvoiceId),
+              ...(travelContext.travelInvoiceId != null
+                ? { travelInvoiceId: String(travelContext.travelInvoiceId) }
+                : {}),
+              ...(travelContext.instalmentId != null
+                ? { instalmentId: String(travelContext.instalmentId) }
+                : {}),
+              ...(travelContext.participantId != null
+                ? { participantId: String(travelContext.participantId) }
+                : {}),
+              ...(travelContext.tripId != null
+                ? { tripId: String(travelContext.tripId) }
+                : {}),
             }
           : { tenantId: String(tenantId), invoiceId: String(invoice.id) },
         callback_url: callbackUrl,
@@ -133,8 +144,11 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
                   url: link.short_url,
                   plinkId: link.id,
                   kind: travelContext.kind || "travel-milestone",
-                  scheduleId: travelContext.scheduleId,
-                  travelInvoiceId: travelContext.travelInvoiceId,
+                  ...(travelContext.scheduleId != null ? { scheduleId: travelContext.scheduleId } : {}),
+                  ...(travelContext.travelInvoiceId != null ? { travelInvoiceId: travelContext.travelInvoiceId } : {}),
+                  ...(travelContext.instalmentId != null ? { instalmentId: travelContext.instalmentId } : {}),
+                  ...(travelContext.participantId != null ? { participantId: travelContext.participantId } : {}),
+                  ...(travelContext.tripId != null ? { tripId: travelContext.tripId } : {}),
                 }
               : { mode: "payment_link", url: link.short_url, plinkId: link.id },
           ),

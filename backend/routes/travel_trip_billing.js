@@ -67,6 +67,111 @@ async function loadTrip(req) {
   return trip;
 }
 
+// Update the parent-contact's linked itinerary status to 'advance_paid' after
+// an instalment is successfully paid. This is what makes the Leads page Amount
+// column show a non-zero value (it reads committed itinerary totalAmount).
+// Non-fatal — logs on failure so it never blocks the payment reconciliation.
+async function _updateItineraryAfterInstalmentPaid(instalment, tenantId) {
+  try {
+    const participant = await prisma.tripParticipant.findFirst({
+      where: { id: instalment.participantId },
+      select: { parentEmail: true },
+    });
+    if (!participant?.parentEmail) return;
+    // Include advance_paid so subsequent instalment syncs can accumulate onto the
+    // same itinerary (first sync flips draft/sent → advance_paid; second sync
+    // must still find it to add to advancePaidAmount).
+    const itinerary = await prisma.itinerary.findFirst({
+      where: {
+        tenantId,
+        contact: { email: participant.parentEmail },
+        status: { in: ["draft", "sent", "revised", "advance_paid"] },
+      },
+      select: { id: true, advancePaidAmount: true, status: true },
+    });
+    if (!itinerary) return;
+
+    // Compute the true total from all paid instalments under this participant's
+    // trip — this is idempotent no matter how many times sync is called.
+    const paidInstalments = await prisma.tripInstalmentPayment.findMany({
+      where: { participantId: instalment.participantId, status: "paid" },
+      select: { paidAmount: true, amount: true },
+    });
+    const trueTotal = paidInstalments.reduce(
+      (sum, ins) => sum + (Number(ins.paidAmount) || Number(ins.amount) || 0),
+      0,
+    );
+    if (trueTotal <= 0) return;
+    await prisma.itinerary.update({
+      where: { id: itinerary.id },
+      data: {
+        status: "advance_paid",
+        advancePaidAmount: trueTotal,
+      },
+    });
+  } catch (e) {
+    console.error("[travel-trip-billing] itinerary status update failed (non-fatal):", e.message);
+  }
+}
+
+// ============================================================================
+// GET /api/travel/trip-billing/paid-by-contact
+//
+// Returns total paid instalment amounts keyed by the parent contact's email.
+// Used by the Leads page Amount column so TMC leads show their actual paid
+// amount even when no Itinerary row exists for the parent contact.
+//
+// Shape: { byEmail: { "lily@parent.com": { paidTotal: 90000, currency: "INR" } } }
+// ============================================================================
+router.get(
+  "/trip-billing/paid-by-contact",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      // Get all trip ids for this tenant
+      const trips = await prisma.tmcTrip.findMany({
+        where: { tenantId: req.travelTenant.id },
+        select: { id: true },
+      });
+      if (!trips.length) return res.json({ byEmail: {} });
+
+      const tripIds = trips.map((t) => t.id);
+
+      // Get all paid instalments across those trips
+      const instalments = await prisma.tripInstalmentPayment.findMany({
+        where: { tripId: { in: tripIds }, status: "paid" },
+        select: { paidAmount: true, amount: true, participantId: true },
+      });
+
+      // Collect unique participantIds and fetch their parentEmails in one query
+      const participantIds = [...new Set(instalments.map((i) => i.participantId).filter(Boolean))];
+      const participants = participantIds.length
+        ? await prisma.tripParticipant.findMany({
+            where: { id: { in: participantIds } },
+            select: { id: true, parentEmail: true },
+          })
+        : [];
+      const emailById = Object.fromEntries(participants.map((p) => [p.id, p.parentEmail]));
+
+      const byEmail = {};
+      for (const ins of instalments) {
+        const email = emailById[ins.participantId];
+        if (!email) continue;
+        const amt = Number(ins.paidAmount) || Number(ins.amount) || 0;
+        if (amt <= 0) continue;
+        if (!byEmail[email]) byEmail[email] = { paidTotal: 0, currency: "INR" };
+        byEmail[email].paidTotal += amt;
+      }
+
+      res.json({ byEmail });
+    } catch (e) {
+      console.error("[travel-trip-billing] paid-by-contact error:", e.message);
+      res.status(500).json({ error: "Failed to compute paid-by-contact" });
+    }
+  },
+);
+
 // ============================================================================
 // GET /api/travel/trip-billing/stats — tenant-wide TMC trip-billing rollup
 // (PRD_TRAVEL §TMC).
@@ -1394,6 +1499,240 @@ router.delete(
       if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
       console.error("[travel-trip-billing] instalment delete error:", err.message);
       res.status(500).json({ error: "Failed to delete instalment" });
+    }
+  },
+);
+
+// POST /api/travel/trips/:tripId/instalments/:id/payment-link
+//
+// Generate a hosted Razorpay (or Stripe) payment link for a single
+// per-participant instalment. The admin copies the returned URL and
+// shares it with the participant's parent/guardian via WhatsApp, email,
+// or any channel.
+//
+// Reuses the same createInvoicePaymentLink() factory used by billing.js
+// and travel_invoices.js — no new gateway coupling. Auth gate matches the
+// PATCH instalment endpoint (ADMIN/MANAGER via requirePermission "trips",
+// "update"). Guards: instalment must exist on this trip, status must not
+// already be "paid" (generating a link for a fully-paid instalment is
+// meaningless), amount must be > 0.
+//
+// The generated URL is persisted back to TripInstalmentPayment.paymentLinkUrl
+// + paymentLinkGeneratedAt so the frontend can show "Regenerate" vs
+// "Generate" and display the last-generated link without another API call.
+//
+// Contact info for the Razorpay customer block is sourced from the
+// TripParticipant's parentName/parentEmail/parentPhone fields — in the TMC
+// school-trip context the parent is always the payer.
+router.post(
+  "/trips/:tripId/instalments/:id/payment-link",
+  verifyToken,
+  requirePermission("trips", "update"),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    const { createInvoicePaymentLink } = require("../lib/paymentLink");
+    const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+    try {
+      const trip = await loadTrip(req);
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const instalment = await prisma.tripInstalmentPayment.findFirst({
+        where: { id, tripId: trip.id },
+      });
+      if (!instalment) {
+        return res.status(404).json({ error: "Instalment not found", code: "NOT_FOUND" });
+      }
+      if (instalment.status === "paid") {
+        return res.status(400).json({ error: "Instalment is already fully paid", code: "ALREADY_PAID" });
+      }
+      const amount = Number(instalment.amount);
+      if (!amount || amount <= 0) {
+        return res.status(400).json({ error: "Instalment amount must be > 0", code: "INVALID_AMOUNT" });
+      }
+
+      // Load participant for contact info (parent is the payer in TMC context)
+      const participant = await prisma.tripParticipant.findFirst({
+        where: { id: instalment.participantId, tripId: trip.id },
+        select: { id: true, fullName: true, parentName: true, parentEmail: true, parentPhone: true },
+      });
+
+      // Load tenant name for the Razorpay payment-page display label
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: req.travelTenant.id },
+        select: { name: true },
+      });
+
+      const contact = participant
+        ? {
+            name: participant.parentName || participant.fullName,
+            email: participant.parentEmail || undefined,
+            phone: participant.parentPhone || undefined,
+          }
+        : undefined;
+
+      const frontendBase = getFrontendUrlFromRequest(req);
+      const label = `Instalment ${instalment.instalmentIndex + 1}${participant ? ` — ${participant.fullName}` : ""}`;
+
+      const result = await createInvoicePaymentLink({
+        tenantId: req.travelTenant.id,
+        invoice: { id: instalment.id, invoiceNum: label, amount },
+        contact,
+        currency: "INR",
+        gatewayPref: "razorpay",
+        tenantName: tenant?.name || undefined,
+        baseUrl: frontendBase,
+        travelContext: {
+          kind: "tmc-instalment",
+          instalmentId: instalment.id,
+          tripId: trip.id,
+          participantId: instalment.participantId,
+        },
+      });
+
+      if (result.error) {
+        return res.status(502).json({ error: result.error, code: result.code || "GATEWAY_ERROR" });
+      }
+
+      // Persist link URL back to the instalment row so the frontend can
+      // show it without a second fetch and offer "Regenerate" on next open.
+      await prisma.tripInstalmentPayment.update({
+        where: { id },
+        data: {
+          paymentLinkUrl: result.url,
+          paymentLinkGeneratedAt: new Date(),
+        },
+      });
+
+      res.json({ url: result.url, gateway: result.gateway });
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+      console.error("[travel-trip-billing] payment-link error:", err.message);
+      res.status(500).json({ error: "Failed to generate payment link" });
+    }
+  },
+);
+
+// POST /api/travel/trips/:tripId/instalments/:id/sync-payment
+//
+// Admin-triggered reconciliation: checks the Payment table for a SUCCESS
+// record linked to this instalment and marks it paid. Idempotent.
+router.post(
+  "/trips/:tripId/instalments/:id/sync-payment",
+  verifyToken,
+  requirePermission("trips", "update"),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+
+      const instalment = await prisma.tripInstalmentPayment.findFirst({
+        where: { id, tripId: trip.id },
+      });
+      if (!instalment) return res.status(404).json({ error: "Instalment not found", code: "NOT_FOUND" });
+
+      // If already paid, still sync the itinerary in case advancePaidAmount was
+      // never updated (e.g. webhook fired before the fix, or sync was called first
+      // time on an already-reconciled instalment).
+      if (instalment.status === "paid") {
+        await _updateItineraryAfterInstalmentPaid(instalment, req.travelTenant.id);
+        return res.json({ synced: true, reason: "already_paid", status: "paid", paidAmount: instalment.paidAmount });
+      }
+
+      // The Razorpay webhook (payments.js) updates TripInstalmentPayment directly
+      // and does NOT always create a Payment table row for TMC instalments.
+      // So check the instalment itself first — if the webhook already fired and
+      // marked it paid/partial, surface that result without a Payment table lookup.
+      if (instalment.status === "partial" || Number(instalment.paidAmount) > 0) {
+        const updatedNow = await prisma.tripInstalmentPayment.update({
+          where: { id },
+          data: { status: instalment.status === "partial" ? "partial" : "paid", paidAt: instalment.paidAt || new Date() },
+        });
+        await _updateItineraryAfterInstalmentPaid(instalment, req.travelTenant.id);
+        return res.json({ synced: true, status: updatedNow.status, paidAmount: updatedNow.paidAmount });
+      }
+
+      // Fall back to searching the Payment table. Try two match strategies:
+      // 1. instalmentId in metadata (new links generated after the paymentLink.js fix)
+      // 2. plinkId matching the stored paymentLinkUrl (old links where instalmentId
+      //    was not embedded in notes — the plink_… id is the last path segment of rzp.io/rzp/<code>
+      //    which Razorpay stores as gatewayId on the Payment row).
+      let matchedPayment = await prisma.payment.findFirst({
+        where: {
+          tenantId: req.travelTenant.id,
+          status: "SUCCESS",
+          metadata: { contains: `"instalmentId":${id}` },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (!matchedPayment && instalment.paymentLinkUrl) {
+        // For payment links generated before the instalmentId-in-notes fix, the
+        // Payment row has `metadata.url = instalment.paymentLinkUrl` (the short_url
+        // Razorpay assigned). Match on that — it's unique per link.
+        matchedPayment = await prisma.payment.findFirst({
+          where: {
+            tenantId: req.travelTenant.id,
+            status: "SUCCESS",
+            gateway: "razorpay",
+            metadata: { contains: `"url":"${instalment.paymentLinkUrl}"` },
+          },
+          orderBy: { createdAt: "desc" },
+        });
+      }
+
+      if (!matchedPayment) {
+        return res.json({ synced: false, reason: "no_payment_found", status: instalment.status });
+      }
+
+      const paidAmount = Number(matchedPayment.amount || instalment.amount);
+      const instalmentAmount = Number(instalment.amount);
+      const newStatus = paidAmount >= instalmentAmount ? "paid" : "partial";
+
+      const updated = await prisma.tripInstalmentPayment.update({
+        where: { id },
+        data: { status: newStatus, paidAmount, paidAt: matchedPayment.paidAt || new Date() },
+      });
+
+      // Best-effort: update linked itinerary's advancePaidAmount so the Leads
+      // page shows a non-zero amount for the participant's parent contact.
+      try {
+        const participant = await prisma.tripParticipant.findFirst({
+          where: { id: instalment.participantId },
+          select: { parentEmail: true },
+        });
+        if (participant?.parentEmail) {
+          const itinerary = await prisma.itinerary.findFirst({
+            where: {
+              tenantId: req.travelTenant.id,
+              contact: { email: participant.parentEmail },
+            },
+            select: { id: true, advancePaidAmount: true },
+          });
+          if (itinerary) {
+            const currentPaid = Number(itinerary.advancePaidAmount || 0);
+            await prisma.itinerary.update({
+              where: { id: itinerary.id },
+              data: {
+                status: "advance_paid",
+                advancePaidAmount: currentPaid + paidAmount,
+              },
+            });
+          }
+        }
+      } catch (_e) { /* non-fatal */ }
+
+      res.json({ synced: true, status: updated.status, paidAmount: updated.paidAmount });
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+      console.error("[travel-trip-billing] sync-payment error:", err.message);
+      res.status(500).json({ error: "Failed to sync payment" });
     }
   },
 );

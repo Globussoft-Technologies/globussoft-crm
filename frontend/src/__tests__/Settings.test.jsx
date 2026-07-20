@@ -66,6 +66,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 
 // --- Stable mocks per 2026-05-23 standing rule -------------------------------
 const fetchApiMock = vi.fn();
@@ -101,6 +102,14 @@ vi.mock('../App', () => {
 });
 
 import Settings from '../pages/Settings';
+
+function renderSettings() {
+  return render(
+    <MemoryRouter>
+      <Settings />
+    </MemoryRouter>
+  );
+}
 
 const baseTenant = {
   id: 1,
@@ -162,14 +171,14 @@ describe('<Settings /> — page shell + representative card pin', () => {
 
   // 1 — Smoke render
   it('renders the page header "Organization Settings" + subtitle', async () => {
-    render(<Settings />);
+    renderSettings();
     expect(screen.getByRole('heading', { name: /Organization Settings/i, level: 1 })).toBeInTheDocument();
     expect(screen.getByText(/Manage team members, roles, and administrative security/i)).toBeInTheDocument();
   });
 
   // 2 — Initial fetches on mount
   it('fires the load-settings fetchApi calls on initial mount', async () => {
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => {
       const calledUrls = fetchApiMock.mock.calls.map(([url]) => url);
       expect(calledUrls).toContain('/api/tenants/current');
@@ -183,7 +192,7 @@ describe('<Settings /> — page shell + representative card pin', () => {
 
   // 3 — Organization card renders inputs
   it('renders Organization card inputs after tenant load (Name + Slug + Owner Email + Plan)', async () => {
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
     expect(screen.getByDisplayValue('acme')).toBeInTheDocument();
     expect(screen.getByDisplayValue('admin@acme.com')).toBeInTheDocument();
@@ -193,7 +202,7 @@ describe('<Settings /> — page shell + representative card pin', () => {
   // 4 — Organization save PUTs name + ownerEmail (not slug)
   it('submitting the Organization form PUTs /api/tenants/current with { name, ownerEmail }', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
 
     const nameInput = screen.getByDisplayValue('Acme Corp');
@@ -218,7 +227,7 @@ describe('<Settings /> — page shell + representative card pin', () => {
   // 5 — Appearance card theme radios
   it('renders the three theme options under the Appearance card and clicking one calls setTheme + notify.success', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText('Light mode')).toBeInTheDocument());
     expect(screen.getByText('Dark mode')).toBeInTheDocument();
     expect(screen.getByText('Based on system preference')).toBeInTheDocument();
@@ -232,7 +241,7 @@ describe('<Settings /> — page shell + representative card pin', () => {
 
   // 6 — Pipeline stages loaded list
   it('renders loaded pipeline stages with their names + position labels', async () => {
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
     expect(screen.getByText('Qualification')).toBeInTheDocument();
     expect(screen.getByText(/Position 1/i)).toBeInTheDocument();
@@ -242,7 +251,7 @@ describe('<Settings /> — page shell + representative card pin', () => {
   // 7 — Add pipeline stage POSTs
   it('submitting Add Stage form POSTs /api/pipeline_stages with { name, color, position }', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
 
     const stageNameInput = screen.getByPlaceholderText(/Stage name/i);
@@ -266,7 +275,7 @@ describe('<Settings /> — page shell + representative card pin', () => {
   // 8 — Invite user POSTs
   it('submitting the Invite Team Member form POSTs /api/auth/register with the form values', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByPlaceholderText(/Full Name/i)).toBeInTheDocument());
 
     await user.type(screen.getByPlaceholderText(/Full Name/i), 'Priya Kapoor');
@@ -292,7 +301,7 @@ describe('<Settings /> — page shell + representative card pin', () => {
   // 9 — Access Control Roster has been moved to RolesAdmin — Settings must NOT
   // render the roster card or the "Loading team..." copy.
   it('does NOT render the Access Control Roster card (moved to RolesAdmin)', async () => {
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
     expect(screen.queryByText(/Access Control Roster/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Loading team/i)).not.toBeInTheDocument();
@@ -302,13 +311,13 @@ describe('<Settings /> — page shell + representative card pin', () => {
   it('shows the "Loading organization details…" copy before tenant fetch resolves', async () => {
     // Make all fetches hang so the loading state stays visible.
     fetchApiMock.mockImplementation(() => new Promise(() => {}));
-    render(<Settings />);
+    renderSettings();
     expect(screen.getByText(/Loading organization details/i)).toBeInTheDocument();
   });
 
   // 11 — Slug field is read-only
   it('renders the Slug input as read-only with helper text', async () => {
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByDisplayValue('acme')).toBeInTheDocument());
     const slugInput = screen.getByDisplayValue('acme');
     expect(slugInput).toHaveAttribute('readonly');
@@ -318,7 +327,7 @@ describe('<Settings /> — page shell + representative card pin', () => {
 
   // 12a — Consent Templates does NOT render for generic vertical
   it('does NOT render the Consent Templates card for generic vertical', async () => {
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
     expect(screen.queryByText(/Consent Templates/i)).not.toBeInTheDocument();
   });
@@ -328,7 +337,7 @@ describe('<Settings /> — page shell + representative card pin', () => {
     fetchApiMock.mockImplementation(
       buildDefaultFetch({ tenant: { ...baseTenant, vertical: 'wellness' } })
     );
-    render(<Settings />);
+    renderSettings();
     await waitFor(() =>
       expect(screen.getByTestId('consent-templates-card')).toBeInTheDocument()
     );
@@ -358,7 +367,7 @@ describe('<Settings /> — extended card coverage', () => {
 
   // 13 — Branding: blank logo renders the placeholder icon (no <img>)
   it('Branding card shows the placeholder square when no logo is set', async () => {
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText(/^Branding$/)).toBeInTheDocument());
     // No <img alt="Current logo"> should be present when logoUrl is null.
     expect(screen.queryByAltText(/Current logo/i)).not.toBeInTheDocument();
@@ -373,7 +382,7 @@ describe('<Settings /> — extended card coverage', () => {
     fetchApiMock.mockImplementation(
       buildDefaultFetch({ branding: { logoUrl: 'https://cdn.example.com/logo.png', brandColor: '#265855' } })
     );
-    render(<Settings />);
+    renderSettings();
     const img = await screen.findByAltText(/Current logo/i);
     expect(img).toHaveAttribute('src', 'https://cdn.example.com/logo.png');
   });
@@ -389,7 +398,7 @@ describe('<Settings /> — extended card coverage', () => {
       }
       return buildDefaultFetch()(url, opts);
     });
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText(/^Branding$/)).toBeInTheDocument());
 
     // Find the hex text input by its placeholder
@@ -415,7 +424,7 @@ describe('<Settings /> — extended card coverage', () => {
   // 16 — Branding: invalid hex surfaces inline error WITHOUT calling PUT
   it('Save color rejects a non-6-hex value with an inline error and no PUT', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText(/^Branding$/)).toBeInTheDocument());
 
     const hexInput = screen.getByPlaceholderText('#3b82f6');
@@ -435,7 +444,7 @@ describe('<Settings /> — extended card coverage', () => {
   // 17 — Pipeline Stages: delete fires DELETE after notify.confirm resolves true
   it('Delete stage button DELETEs /api/pipeline_stages/:id after confirm', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
 
     // The pipeline-stages section: locate trash buttons. There are 2 stages so 2 trash
@@ -456,7 +465,7 @@ describe('<Settings /> — extended card coverage', () => {
   // 18 — Pipeline Stages: reorder fires PUT /api/pipeline_stages/reorder
   it('Move-down on first stage PUTs /api/pipeline_stages/reorder with swapped positions', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
 
     // First stage row's down-arrow button. Stage row layout: 3 buttons (Up, Down, Delete).
@@ -480,7 +489,7 @@ describe('<Settings /> — extended card coverage', () => {
 
   // 19 — Email Messages card: retention checkbox is checked when emailRetention !== false
   it('Email Messages retention checkbox reflects tenant.emailRetention state', async () => {
-    render(<Settings />);
+    renderSettings();
     const toggle = await screen.findByTestId('email-retention-toggle');
     expect(toggle).toBeChecked();
   });
@@ -488,7 +497,7 @@ describe('<Settings /> — extended card coverage', () => {
   // 20 — Email Messages card: toggling OFF surfaces the warning + PUTs the new value
   it('Toggling email retention OFF PUTs /api/tenants/current with { emailRetention: false } + warning text appears', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     const toggle = await screen.findByTestId('email-retention-toggle');
     await user.click(toggle);
 
@@ -507,7 +516,7 @@ describe('<Settings /> — extended card coverage', () => {
 
   // 21 — Notification Preferences: renders the 7 category labels + 4 channel labels
   it('Notification Preferences card renders all 7 categories + 4 channels', async () => {
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
 
     // Categories
@@ -529,7 +538,7 @@ describe('<Settings /> — extended card coverage', () => {
   // 22 — Notification Preferences: Save PUTs /api/notifications/preferences with state
   it('Save Preferences PUTs /api/notifications/preferences with the toggled state', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
 
     // Toggle the "Tasks" category off
@@ -556,7 +565,7 @@ describe('<Settings /> — extended card coverage', () => {
   // 23 — Notification Preferences: Reset POSTs /api/notifications/preferences/reset
   it('Reset to Defaults POSTs /api/notifications/preferences/reset after confirm', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
 
     const resetBtn = screen.getByRole('button', { name: /Reset to Defaults/i });
@@ -574,7 +583,7 @@ describe('<Settings /> — extended card coverage', () => {
   // 24 — Invite User: role-select changes POST role to MANAGER
   it('selecting Sales Manager in invite role and submitting POSTs with role=MANAGER', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByPlaceholderText(/Full Name/i)).toBeInTheDocument());
 
     await user.type(screen.getByPlaceholderText(/Full Name/i), 'Vikram Shah');
@@ -625,7 +634,7 @@ describe('<Settings /> — extended card coverage', () => {
       return buildDefaultFetch({ tenant: { ...baseTenant, vertical: 'wellness' } })(url, opts);
     });
 
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByTestId('consent-templates-card')).toBeInTheDocument());
 
     // Seeded labels render
@@ -665,7 +674,7 @@ describe('<Settings /> — extended card coverage', () => {
       configurable: true,
     });
 
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByDisplayValue('acme')).toBeInTheDocument());
 
     const copyBtn = screen.getByRole('button', { name: /Copy URL/i });
@@ -711,7 +720,7 @@ describe('<Settings /> — error paths + boundary states', () => {
       return buildDefaultFetch()(url, opts);
     });
 
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /Save Organization Details/i }));
@@ -736,7 +745,7 @@ describe('<Settings /> — error paths + boundary states', () => {
       return buildDefaultFetch()(url, opts);
     });
 
-    render(<Settings />);
+    renderSettings();
     const toggle = await screen.findByTestId('email-retention-toggle');
     expect(toggle).toBeChecked();
     await user.click(toggle);
@@ -762,7 +771,7 @@ describe('<Settings /> — error paths + boundary states', () => {
       return buildDefaultFetch()(url, opts);
     });
 
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalledWith(
         expect.stringMatching(/Failed to load notification preferences/i)
@@ -784,7 +793,7 @@ describe('<Settings /> — error paths + boundary states', () => {
       return buildDefaultFetch()(url, opts);
     });
 
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /Save Preferences/i }));
@@ -801,7 +810,7 @@ describe('<Settings /> — error paths + boundary states', () => {
     const user = userEvent.setup();
     notifyObj.confirm.mockImplementation(() => Promise.resolve(false));
 
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /Reset to Defaults/i }));
@@ -819,7 +828,7 @@ describe('<Settings /> — error paths + boundary states', () => {
   // the next Save PUT includes the new timezone value.
   it('Quiet-hours timezone selection is persisted via the next Save Preferences PUT', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
 
     // Find the timezone select (the one containing 'America/New_York' option)
@@ -845,7 +854,7 @@ describe('<Settings /> — error paths + boundary states', () => {
   // 35 — Stage Move-Up button is disabled on the FIRST stage (boundary)
   it('first pipeline stage Up-arrow is disabled and clicking it does not PUT reorder', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
 
     const stageRow = screen.getByText('Prospecting').closest('div').parentElement;
@@ -880,7 +889,7 @@ describe('<Settings /> — error paths + boundary states', () => {
       return buildDefaultFetch({ tenant: { ...baseTenant, vertical: 'wellness' } })(url, opts);
     });
 
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByTestId('consent-templates-card')).toBeInTheDocument());
 
     const disableBtn = await screen.findByRole('button', { name: /^Disable$/i });
@@ -900,7 +909,7 @@ describe('<Settings /> — error paths + boundary states', () => {
   // Pins the `if (!newStage.name.trim()) return;` guard in handleAddStage.
   it('Add Stage with whitespace-only name does NOT POST /api/pipeline_stages', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
 
     // HTML5 `required` would block the click, so bypass by setting value
@@ -933,7 +942,7 @@ describe('<Settings /> — error paths + boundary states', () => {
       return buildDefaultFetch()(url, opts);
     });
 
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByText(/^Branding$/)).toBeInTheDocument());
 
     // hex text input starts empty (branding.brandColor: '' default)

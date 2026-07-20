@@ -87,8 +87,8 @@ beforeEach(() => {
 describe('audienceController.getContactsByStatus — Marketing audience surface', () => {
   it('200 with rows when an explicit status returns contacts', async () => {
     const rows = [
-      { id: 1, name: 'Aarti Sharma', email: 'aarti@example.com', status: 'Lead', tenantId: 1, createdAt: new Date('2026-05-20') },
-      { id: 2, name: 'Vivek Iyer', email: 'vivek@example.com', status: 'Lead', tenantId: 1, createdAt: new Date('2026-05-19') },
+      { id: 1, name: 'Aarti Sharma', email: 'aarti@example.com', status: 'Lead', tenantId: 1, createdAt: new Date('2026-05-20'), customFields: {} },
+      { id: 2, name: 'Vivek Iyer', email: 'vivek@example.com', status: 'Lead', tenantId: 1, createdAt: new Date('2026-05-19'), customFields: {} },
     ];
     mockFindMany.mockResolvedValue(rows);
 
@@ -220,7 +220,7 @@ describe('audienceController.getContactsByStatus — Marketing audience surface'
   });
 
   it('count reflects contacts.length (no separate prisma.count() call)', async () => {
-    const rows = Array.from({ length: 7 }, (_, i) => ({ id: i + 1, name: `c${i}`, status: 'Customer', tenantId: 1 }));
+    const rows = Array.from({ length: 7 }, (_, i) => ({ id: i + 1, name: `c${i}`, status: 'Customer', tenantId: 1, customFields: {} }));
     mockFindMany.mockResolvedValue(rows);
 
     const req = makeReq({ status: 'Customer' });

@@ -229,6 +229,13 @@ const NON_TENANT_MODELS = new Set([
   'StatusIncident',
   'StatusIncidentUpdate',
   'StatusDailySnapshot',
+  // Location is a global catalog (shared by all tenants) for geo/address data.
+  // UserLocation is a user→location bookmark junction; tenant isolation flows
+  // through the parent User (User.tenantId) and the global Location. A
+  // redundant UserLocation.tenantId would create a consistency hazard (drift
+  // between user.tenantId and bookmark.tenantId) without strengthening
+  // isolation, because every query path joins through User.
+  'UserLocation',
 ]);
 
 // ── Expected AuditLog shape ──────────────────────────────────────────

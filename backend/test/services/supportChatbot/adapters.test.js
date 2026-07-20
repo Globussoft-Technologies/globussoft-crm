@@ -45,6 +45,7 @@ const {
   toGeminiContents,
   generateChatCompletion,
   resolveProviderConfig,
+  validateProviderBaseUrl,
 } = adapters;
 
 const RAW_KEY = 'sk-test-1234567890abcdef';
@@ -208,6 +209,25 @@ describe('toGeminiContents', () => {
 });
 
 describe('generateChatCompletion — gemini dispatch', () => {
+  test('allows the approved PowerAdSpy Gemini proxy and preserves its base path', async () => {
+    const fetchImpl = okFetch({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] });
+    await generateChatCompletion(
+      {
+        provider: 'gemini',
+        apiKey: RAW_KEY,
+        model: 'gemini-2.5-flash-lite',
+        baseUrl: 'https://gemini-central-beta-v1-pn-ds-01.poweradspy.ai/nx/direct',
+      },
+      { messages: [{ role: 'user', content: 'ping' }] },
+      fetchImpl,
+    );
+
+    expect(fetchImpl.mock.calls[0][0]).toBe(
+      'https://gemini-central-beta-v1-pn-ds-01.poweradspy.ai/nx/direct/v1beta/models/gemini-2.5-flash-lite:generateContent',
+    );
+    expect(fetchImpl.mock.calls[0][1].headers['x-goog-api-key']).toBe(RAW_KEY);
+  });
+
   test('POSTs to {base}/v1beta/models/{model}:generateContent with dual auth headers', async () => {
     const fetchImpl = okFetch({
       candidates: [{ content: { parts: [{ text: 'OK' }] } }],
@@ -218,7 +238,7 @@ describe('generateChatCompletion — gemini dispatch', () => {
         provider: 'gemini',
         apiKey: RAW_KEY,
         model: 'gemini-2.5-flash-lite',
-        baseUrl: 'https://gemini-proxy.example/nx/direct',
+        baseUrl: 'https://generativelanguage.googleapis.com',
       },
       { messages: [{ role: 'user', content: 'ping' }] },
       fetchImpl,
@@ -229,7 +249,7 @@ describe('generateChatCompletion — gemini dispatch', () => {
 
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe(
-      'https://gemini-proxy.example/nx/direct/v1beta/models/gemini-2.5-flash-lite:generateContent',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
     );
     expect(init.method).toBe('POST');
     expect(init.headers.Authorization).toBe(`Bearer ${RAW_KEY}`);
@@ -241,7 +261,7 @@ describe('generateChatCompletion — gemini dispatch', () => {
   test('translates tool definitions into Gemini functionDeclarations', async () => {
     const fetchImpl = okFetch({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] });
     await generateChatCompletion(
-      { provider: 'gemini', apiKey: RAW_KEY, model: 'm', baseUrl: 'https://x.test' },
+      { provider: 'gemini', apiKey: RAW_KEY, model: 'm', baseUrl: 'https://generativelanguage.googleapis.com' },
       {
         messages: [{ role: 'user', content: 'hi' }],
         tools: [
@@ -324,6 +344,43 @@ describe('generateChatCompletion — openai-compatible dispatch', () => {
 });
 
 describe('generateChatCompletion — error hygiene', () => {
+  test.each([
+    'http://api.openai.com/v1',
+    'https://127.0.0.1/v1',
+    'https://169.254.169.254/latest',
+    'https://localhost/v1',
+    'https://attacker.example/v1',
+    'https://user:password@api.openai.com/v1',
+    'https://api.openai.com:8443/v1',
+  ])('rejects unsafe provider base URL %s before fetch', async (baseUrl) => {
+    const fetchImpl = okFetch({ choices: [{ message: { content: 'should not run' } }] });
+    await expect(
+      generateChatCompletion(
+        { provider: 'openai-compatible', apiKey: RAW_KEY, model: 'm', baseUrl },
+        { messages: [{ role: 'user', content: 'hi' }] },
+        fetchImpl,
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID_PROVIDER_BASE_URL' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  test('accepts an exact deployment-allowlisted HTTPS hostname', () => {
+    vi.stubEnv('WELLNESS_AI_ALLOWED_HOSTS', 'llm.example.com');
+    expect(
+      validateProviderBaseUrl('openai-compatible', 'https://llm.example.com/v1'),
+    ).toBe('https://llm.example.com/v1');
+  });
+
+  test('does not allow an allowlisted hostname suffix attack', () => {
+    vi.stubEnv('WELLNESS_AI_ALLOWED_HOSTS', 'llm.example.com');
+    try {
+      validateProviderBaseUrl('openai-compatible', 'https://llm.example.com.attacker.test/v1');
+      expect.unreachable('should have rejected an unapproved hostname');
+    } catch (e) {
+      expect(e).toMatchObject({ code: 'INVALID_PROVIDER_BASE_URL' });
+    }
+  });
+
   test('non-OK upstream throws a status error that never contains the key', async () => {
     const fetchImpl = vi.fn(async () => ({
       ok: false,
@@ -333,14 +390,14 @@ describe('generateChatCompletion — error hygiene', () => {
     }));
     await expect(
       generateChatCompletion(
-        { provider: 'gemini', apiKey: RAW_KEY, model: 'm', baseUrl: 'https://x.test' },
+        { provider: 'gemini', apiKey: RAW_KEY, model: 'm', baseUrl: 'https://generativelanguage.googleapis.com' },
         { messages: [{ role: 'user', content: 'hi' }] },
         fetchImpl,
       ),
     ).rejects.toMatchObject({ status: 401, provider: 'gemini' });
     await expect(
       generateChatCompletion(
-        { provider: 'gemini', apiKey: RAW_KEY, model: 'm', baseUrl: 'https://x.test' },
+        { provider: 'gemini', apiKey: RAW_KEY, model: 'm', baseUrl: 'https://generativelanguage.googleapis.com' },
         { messages: [{ role: 'user', content: 'hi' }] },
         fetchImpl,
       ),
@@ -349,7 +406,7 @@ describe('generateChatCompletion — error hygiene', () => {
     // body echoed it.
     try {
       await generateChatCompletion(
-        { provider: 'gemini', apiKey: RAW_KEY, model: 'm', baseUrl: 'https://x.test' },
+        { provider: 'gemini', apiKey: RAW_KEY, model: 'm', baseUrl: 'https://generativelanguage.googleapis.com' },
         { messages: [{ role: 'user', content: 'hi' }] },
         fetchImpl,
       );

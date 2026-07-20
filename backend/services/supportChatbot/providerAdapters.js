@@ -44,6 +44,86 @@ const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_GEMINI_PUBLIC_BASE_URL = "https://generativelanguage.googleapis.com";
 
+const BUILTIN_PROVIDER_HOSTS = {
+  gemini: new Set([
+    "generativelanguage.googleapis.com",
+    "gemini-central-beta-v1-pn-ds-01.poweradspy.ai",
+  ]),
+  "openai-compatible": new Set([
+    "api.openai.com",
+    "openrouter.ai",
+    "api.together.xyz",
+    "api.groq.com",
+  ]),
+};
+
+function configuredProviderHosts() {
+  return new Set(
+    String(process.env.WELLNESS_AI_ALLOWED_HOSTS || "")
+      .split(",")
+      .map((host) => host.trim().toLowerCase().replace(/\.$/, ""))
+      .filter(Boolean),
+  );
+}
+
+/**
+ * Validate tenant-controlled provider endpoints before a credential is sent.
+ * Exact custom hosts can be enabled by the deployment through
+ * WELLNESS_AI_ALLOWED_HOSTS. Paths are supported, but credentials, ports,
+ * fragments, non-HTTPS schemes, IP literals and unapproved hosts are not.
+ */
+function validateProviderBaseUrl(provider, baseUrl, { source = "byok" } = {}) {
+  const defaultUrl =
+    provider === "gemini"
+      ? DEFAULT_GEMINI_PUBLIC_BASE_URL
+      : provider === "openai-compatible"
+        ? DEFAULT_OPENAI_BASE_URL
+        : null;
+  if (!defaultUrl) {
+    const err = new Error("Unsupported AI provider.");
+    err.code = "AI_PROVIDER_UNSUPPORTED";
+    throw err;
+  }
+
+  const raw = String(baseUrl || defaultUrl).trim();
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch (_e) {
+    const err = new Error("Provider base URL is invalid.");
+    err.code = "INVALID_PROVIDER_BASE_URL";
+    throw err;
+  }
+
+  // The internal proxy URL is deployment-controlled, not tenant-controlled.
+  // Keep supporting local development proxies while validating every BYOK
+  // and ad-hoc URL that can be supplied through the API.
+  if (source !== "internal") {
+    const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+    const builtins = BUILTIN_PROVIDER_HOSTS[provider] || new Set();
+    const isAzureOpenAI =
+      provider === "openai-compatible" && /^[a-z0-9-]+\.openai\.azure\.com$/.test(hostname);
+    const allowed = builtins.has(hostname) || isAzureOpenAI || configuredProviderHosts().has(hostname);
+
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.username ||
+      parsed.password ||
+      parsed.port ||
+      parsed.hash ||
+      !allowed
+    ) {
+      const err = new Error(
+        "Provider base URL must use HTTPS and an approved provider hostname.",
+      );
+      err.code = "INVALID_PROVIDER_BASE_URL";
+      throw err;
+    }
+  }
+
+  return parsed.toString().replace(/\/$/, "");
+}
+
 // Fetch injection point: tests stub the HTTP layer without module mocks.
 // Callers may pass an explicit fetchImpl; otherwise we use globalThis.fetch.
 function resolveFetch(fetchImpl) {
@@ -227,7 +307,7 @@ function toOpenAITools(tools) {
  */
 async function callGemini(config, { messages, tools, generationConfig }, fetchImpl) {
   const fetchFn = resolveFetch(fetchImpl);
-  const base = String(config.baseUrl || DEFAULT_GEMINI_PUBLIC_BASE_URL).replace(/\/+$/, "");
+  const base = validateProviderBaseUrl("gemini", config.baseUrl, { source: config.source });
   const model = config.model || DEFAULT_GEMINI_MODEL;
   const url = `${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
@@ -262,7 +342,9 @@ async function callGemini(config, { messages, tools, generationConfig }, fetchIm
 /** OpenAI-compatible Chat Completions call. */
 async function callOpenAICompatible(config, { messages, tools }, fetchImpl) {
   const fetchFn = resolveFetch(fetchImpl);
-  const base = String(config.baseUrl || DEFAULT_OPENAI_BASE_URL).replace(/\/+$/, "");
+  const base = validateProviderBaseUrl("openai-compatible", config.baseUrl, {
+    source: config.source,
+  });
   const model = config.model;
   const url = `${base}/chat/completions`;
 
@@ -378,6 +460,7 @@ function providerFamilyFor(config) {
 module.exports = {
   SUPPORTED_PROVIDERS,
   DEFAULT_GEMINI_MODEL,
+  validateProviderBaseUrl,
   maskApiKey,
   normalizeGeminiResponse,
   normalizeOpenAIResponse,

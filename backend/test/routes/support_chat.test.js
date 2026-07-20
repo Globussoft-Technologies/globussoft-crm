@@ -56,7 +56,7 @@ const BYOK_BLOB = JSON.stringify({
   provider: 'gemini',
   apiKey: BYOK_KEY,
   model: 'gemini-2.5-flash-lite',
-  baseUrl: 'https://gemini-proxy.test/nx/direct',
+  baseUrl: 'https://generativelanguage.googleapis.com',
 });
 
 function makeApp() {
@@ -184,7 +184,7 @@ describe('POST /api/support-chat/message', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(
-      'https://gemini-proxy.test/nx/direct/v1beta/models/gemini-2.5-flash-lite:generateContent',
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
     );
     expect(init.headers.Authorization).toBe(`Bearer ${BYOK_KEY}`);
     expect(init.headers['x-goog-api-key']).toBe(BYOK_KEY);

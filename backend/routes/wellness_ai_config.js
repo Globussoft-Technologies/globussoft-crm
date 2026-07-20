@@ -33,6 +33,7 @@ const {
   SUPPORTED_PROVIDERS,
   DEFAULT_GEMINI_MODEL,
   maskApiKey,
+  validateProviderBaseUrl,
   resolveProviderConfig,
   generateChatCompletion,
 } = require("../services/supportChatbot/providerAdapters");
@@ -155,6 +156,11 @@ router.post("/ai-provider-config", gate, async (req, res) => {
       });
     }
     const baseUrl = typeof body.baseUrl === "string" && body.baseUrl.trim() ? body.baseUrl.trim() : null;
+    try {
+      validateProviderBaseUrl(provider, baseUrl);
+    } catch (urlErr) {
+      return res.status(400).json({ error: urlErr.message, code: urlErr.code });
+    }
 
     const blob = JSON.stringify({ provider, apiKey: encrypt(apiKey), model, baseUrl });
     await setSetting(tenantId, KEYS.WELLNESS_AI_PROVIDER_CONFIG, blob, { category: "integrations" });
@@ -194,6 +200,11 @@ router.post("/ai-provider-config/test", gate, async (req, res) => {
         baseUrl: body.baseUrl || null,
         source: "ad-hoc",
       };
+      try {
+        validateProviderBaseUrl(config.provider, config.baseUrl, { source: "ad-hoc" });
+      } catch (urlErr) {
+        return res.status(400).json({ error: urlErr.message, code: urlErr.code });
+      }
     } else {
       config = await resolveProviderConfig(tenantId);
     }

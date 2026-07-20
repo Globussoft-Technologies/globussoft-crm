@@ -279,7 +279,7 @@ export default function ConsentTab({ patient, services, onSaved }) {
           ref={canvasRef}
           width={600}
           height={180}
-          style={{ width: '100%', maxWidth: 600, height: 180, background: 'var(--card-bg, rgba(0,0,0,0.04))', border: '2px dashed var(--accent-color, #265855)', borderRadius: 8, touchAction: 'none', cursor: 'crosshair' }}
+          style={{ width: '100%', maxWidth: 600, height: 180, background: 'var(--card-bg, rgba(0,0,0,0.04))', border: '2px dashed var(--accent-color, #C9A063)', borderRadius: 8, touchAction: 'none', cursor: 'crosshair' }}
           onMouseDown={startDraw}
           onMouseMove={draw}
           onMouseUp={endDraw}

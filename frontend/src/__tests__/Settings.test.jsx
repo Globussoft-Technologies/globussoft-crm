@@ -62,17 +62,17 @@
  *     which mounts the same shape against the UserSettings page)
  *   - Stage reorder / delete (POST contract is the load-bearing one)
  */
-import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import React from "react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 
 // --- Stable mocks per 2026-05-23 standing rule -------------------------------
 const fetchApiMock = vi.fn();
-vi.mock('../utils/api', () => ({
+vi.mock("../utils/api", () => ({
   fetchApi: (...args) => fetchApiMock(...args),
-  getAuthToken: () => 'test-token',
+  getAuthToken: () => "test-token",
 }));
 
 const notifyObj = {
@@ -81,7 +81,7 @@ const notifyObj = {
   info: vi.fn(),
   confirm: vi.fn(() => Promise.resolve(true)),
 };
-vi.mock('../utils/notify', () => ({
+vi.mock("../utils/notify", () => ({
   useNotify: () => notifyObj,
 }));
 
@@ -89,11 +89,11 @@ vi.mock('../utils/notify', () => ({
 // so the page renders standalone without booting the full app. vi.hoisted
 // keeps setThemeMock available inside the (hoisted) vi.mock factory.
 const { setThemeMock } = vi.hoisted(() => ({ setThemeMock: vi.fn() }));
-vi.mock('../App', () => {
-  const React = require('react');
+vi.mock("../App", () => {
+  const React = require("react");
   return {
     ThemeContext: React.createContext({
-      theme: 'light',
+      theme: "light",
       setTheme: setThemeMock,
       toggleTheme: () => {},
     }),
@@ -101,35 +101,43 @@ vi.mock('../App', () => {
   };
 });
 
-import Settings from '../pages/Settings';
+import Settings from "../pages/Settings";
 
 function renderSettings() {
   return render(
     <MemoryRouter>
       <Settings />
-    </MemoryRouter>
+    </MemoryRouter>,
   );
 }
 
 const baseTenant = {
   id: 1,
-  name: 'Acme Corp',
-  slug: 'acme',
-  plan: 'starter',
-  vertical: 'generic',
-  ownerEmail: 'admin@acme.com',
+  name: "Acme Corp",
+  slug: "acme",
+  plan: "starter",
+  vertical: "generic",
+  ownerEmail: "admin@acme.com",
   emailRetention: true,
 };
 
 const baseStages = [
-  { id: 's1', name: 'Prospecting', color: '#3b82f6', position: 0 },
-  { id: 's2', name: 'Qualification', color: '#10b981', position: 1 },
+  { id: "s1", name: "Prospecting", color: "#3b82f6", position: 0 },
+  { id: "s2", name: "Qualification", color: "#10b981", position: 1 },
 ];
 
 const basePrefs = {
-  categoryToggles: { deal: true, task: true, ticket: true, lead: true, approval: true, leave: true, expense: true },
+  categoryToggles: {
+    deal: true,
+    task: true,
+    ticket: true,
+    lead: true,
+    approval: true,
+    leave: true,
+    expense: true,
+  },
   channels: { db: true, socket: true, push: false, email: true },
-  timezone: 'Asia/Kolkata',
+  timezone: "Asia/Kolkata",
   quietHoursStart: null,
   quietHoursEnd: null,
 };
@@ -137,27 +145,41 @@ const basePrefs = {
 function buildDefaultFetch(overrides = {}) {
   const tenant = overrides.tenant ?? baseTenant;
   const stages = overrides.stages ?? baseStages;
-  const branding = overrides.branding ?? { logoUrl: null, brandColor: '' };
+  const branding = overrides.branding ?? {
+    logoUrl: null,
+    brandColor: "",
+    themeColor: null,
+  };
   const prefs = overrides.prefs ?? basePrefs;
 
   return function defaultFetch(url, opts) {
-    const method = opts?.method || 'GET';
-    if (url === '/api/tenants/current' && method === 'GET') return Promise.resolve(tenant);
-    if (url === '/api/tenants/current' && method === 'PUT') {
+    const method = opts?.method || "GET";
+    if (url === "/api/tenants/current" && method === "GET")
+      return Promise.resolve(tenant);
+    if (url === "/api/tenants/current" && method === "PUT") {
       const body = JSON.parse(opts.body);
       return Promise.resolve({ ...tenant, ...body });
     }
-    if (url === '/api/wellness/branding' && method === 'GET') return Promise.resolve(branding);
-    if (url === '/api/auth/register' && method === 'POST') return Promise.resolve({ ok: true });
-    if (url === '/api/pipeline_stages' && method === 'GET') return Promise.resolve(stages);
-    if (url === '/api/pipeline_stages' && method === 'POST') return Promise.resolve({ ok: true });
-    if (url === '/api/notifications/preferences' && method === 'GET') return Promise.resolve(prefs);
-    if (url === '/api/wellness/consent-templates') return Promise.resolve([]);
+    if (url === "/api/wellness/branding" && method === "GET")
+      return Promise.resolve(branding);
+    if (url === "/api/wellness/branding/theme-color" && method === "PUT") {
+      const body = JSON.parse(opts.body);
+      return Promise.resolve({ themeColor: body.themeColor });
+    }
+    if (url === "/api/auth/register" && method === "POST")
+      return Promise.resolve({ ok: true });
+    if (url === "/api/pipeline_stages" && method === "GET")
+      return Promise.resolve(stages);
+    if (url === "/api/pipeline_stages" && method === "POST")
+      return Promise.resolve({ ok: true });
+    if (url === "/api/notifications/preferences" && method === "GET")
+      return Promise.resolve(prefs);
+    if (url === "/api/wellness/consent-templates") return Promise.resolve([]);
     return Promise.resolve([]);
   };
 }
 
-describe('<Settings /> — page shell + representative card pin', () => {
+describe("<Settings /> — page shell + representative card pin", () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     notifyObj.success.mockReset();
@@ -172,138 +194,180 @@ describe('<Settings /> — page shell + representative card pin', () => {
   // 1 — Smoke render
   it('renders the page header "Organization Settings" + subtitle', async () => {
     renderSettings();
-    expect(screen.getByRole('heading', { name: /Organization Settings/i, level: 1 })).toBeInTheDocument();
-    expect(screen.getByText(/Manage team members, roles, and administrative security/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /Organization Settings/i, level: 1 }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Manage team members, roles, and administrative security/i,
+      ),
+    ).toBeInTheDocument();
   });
 
   // 2 — Initial fetches on mount
-  it('fires the load-settings fetchApi calls on initial mount', async () => {
+  it("fires the load-settings fetchApi calls on initial mount", async () => {
     renderSettings();
     await waitFor(() => {
       const calledUrls = fetchApiMock.mock.calls.map(([url]) => url);
-      expect(calledUrls).toContain('/api/tenants/current');
-      expect(calledUrls).toContain('/api/wellness/branding');
-      expect(calledUrls).toContain('/api/pipeline_stages');
-      expect(calledUrls).toContain('/api/notifications/preferences');
+      expect(calledUrls).toContain("/api/tenants/current");
+      expect(calledUrls).toContain("/api/wellness/branding");
+      expect(calledUrls).toContain("/api/pipeline_stages");
+      expect(calledUrls).toContain("/api/notifications/preferences");
     });
     // Access Control Roster now lives on /roles — Settings must NOT fetch users.
-    expect(fetchApiMock.mock.calls.map(([url]) => url)).not.toContain('/api/auth/users');
+    expect(fetchApiMock.mock.calls.map(([url]) => url)).not.toContain(
+      "/api/auth/users",
+    );
   });
 
   // 3 — Organization card renders inputs
-  it('renders Organization card inputs after tenant load (Name + Slug + Owner Email + Plan)', async () => {
+  it("renders Organization card inputs after tenant load (Name + Slug + Owner Email + Plan)", async () => {
     renderSettings();
-    await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
-    expect(screen.getByDisplayValue('acme')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('admin@acme.com')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('starter')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("Acme Corp")).toBeInTheDocument(),
+    );
+    expect(screen.getByDisplayValue("acme")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("admin@acme.com")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("starter")).toBeInTheDocument();
   });
 
   // 4 — Organization save PUTs name + ownerEmail (not slug)
-  it('submitting the Organization form PUTs /api/tenants/current with { name, ownerEmail }', async () => {
+  it("submitting the Organization form PUTs /api/tenants/current with { name, ownerEmail }", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("Acme Corp")).toBeInTheDocument(),
+    );
 
-    const nameInput = screen.getByDisplayValue('Acme Corp');
+    const nameInput = screen.getByDisplayValue("Acme Corp");
     await user.clear(nameInput);
-    await user.type(nameInput, 'Acme Wellness Ltd');
+    await user.type(nameInput, "Acme Wellness Ltd");
 
-    const saveBtn = screen.getByRole('button', { name: /Save Organization Details/i });
+    const saveBtn = screen.getByRole("button", {
+      name: /Save Organization Details/i,
+    });
     await user.click(saveBtn);
 
     await waitFor(() => {
       const puts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => url === '/api/tenants/current' && opts?.method === 'PUT'
+        ([url, opts]) =>
+          url === "/api/tenants/current" && opts?.method === "PUT",
       );
       expect(puts.length).toBeGreaterThan(0);
       const body = JSON.parse(puts[0][1].body);
       // Slug intentionally not in body — it's read-only.
-      expect(body).toEqual({ name: 'Acme Wellness Ltd', ownerEmail: 'admin@acme.com' });
-      expect('slug' in body).toBe(false);
+      expect(body).toEqual({
+        name: "Acme Wellness Ltd",
+        ownerEmail: "admin@acme.com",
+      });
+      expect("slug" in body).toBe(false);
     });
   });
 
   // 5 — Appearance card theme radios
-  it('renders the three theme options under the Appearance card and clicking one calls setTheme + notify.success', async () => {
+  it("renders the three theme options under the Appearance card and clicking one calls setTheme + notify.success", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByText('Light mode')).toBeInTheDocument());
-    expect(screen.getByText('Dark mode')).toBeInTheDocument();
-    expect(screen.getByText('Based on system preference')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("Light mode")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Dark mode")).toBeInTheDocument();
+    expect(screen.getByText("Based on system preference")).toBeInTheDocument();
 
-    const darkRadio = screen.getByRole('radio', { name: /Dark mode/i });
+    const darkRadio = screen.getByRole("radio", { name: /Dark mode/i });
     await user.click(darkRadio);
 
-    expect(setThemeMock).toHaveBeenCalledWith('dark');
-    expect(notifyObj.success).toHaveBeenCalledWith(expect.stringMatching(/Theme set to Dark mode/i));
+    expect(setThemeMock).toHaveBeenCalledWith("dark");
+    expect(notifyObj.success).toHaveBeenCalledWith(
+      expect.stringMatching(/Theme set to Dark mode/i),
+    );
   });
 
   // 6 — Pipeline stages loaded list
-  it('renders loaded pipeline stages with their names + position labels', async () => {
+  it("renders loaded pipeline stages with their names + position labels", async () => {
     renderSettings();
-    await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
-    expect(screen.getByText('Qualification')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Qualification")).toBeInTheDocument();
     expect(screen.getByText(/Position 1/i)).toBeInTheDocument();
     expect(screen.getByText(/Position 2/i)).toBeInTheDocument();
   });
 
   // 7 — Add pipeline stage POSTs
-  it('submitting Add Stage form POSTs /api/pipeline_stages with { name, color, position }', async () => {
+  it("submitting Add Stage form POSTs /api/pipeline_stages with { name, color, position }", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
+    );
 
     const stageNameInput = screen.getByPlaceholderText(/Stage name/i);
-    await user.type(stageNameInput, 'Negotiation');
-    const addBtn = screen.getByRole('button', { name: /Add Stage/i });
+    await user.type(stageNameInput, "Negotiation");
+    const addBtn = screen.getByRole("button", { name: /Add Stage/i });
     await user.click(addBtn);
 
     await waitFor(() => {
       const posts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => url === '/api/pipeline_stages' && opts?.method === 'POST'
+        ([url, opts]) =>
+          url === "/api/pipeline_stages" && opts?.method === "POST",
       );
       expect(posts.length).toBeGreaterThan(0);
       const body = JSON.parse(posts[0][1].body);
-      expect(body.name).toBe('Negotiation');
+      expect(body.name).toBe("Negotiation");
       // position should match the current stages length (2 in baseStages)
       expect(body.position).toBe(2);
-      expect(typeof body.color).toBe('string');
+      expect(typeof body.color).toBe("string");
     });
   });
 
   // 8 — Invite user POSTs
-  it('submitting the Invite Team Member form POSTs /api/auth/register with the form values', async () => {
+  it("submitting the Invite Team Member form POSTs /api/auth/register with the form values", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByPlaceholderText(/Full Name/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText(/Full Name/i)).toBeInTheDocument(),
+    );
 
-    await user.type(screen.getByPlaceholderText(/Full Name/i), 'Priya Kapoor');
-    await user.type(screen.getByPlaceholderText(/Email Address/i), 'priya@acme.com');
-    await user.type(screen.getByPlaceholderText(/Temporary Password/i), 'tempPass123!');
+    await user.type(screen.getByPlaceholderText(/Full Name/i), "Priya Kapoor");
+    await user.type(
+      screen.getByPlaceholderText(/Email Address/i),
+      "priya@acme.com",
+    );
+    await user.type(
+      screen.getByPlaceholderText(/Temporary Password/i),
+      "tempPass123!",
+    );
 
-    const submitBtn = screen.getByRole('button', { name: /Send Invitation & Create Account/i });
+    const submitBtn = screen.getByRole("button", {
+      name: /Send Invitation & Create Account/i,
+    });
     await user.click(submitBtn);
 
     await waitFor(() => {
       const posts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => url === '/api/auth/register' && opts?.method === 'POST'
+        ([url, opts]) =>
+          url === "/api/auth/register" && opts?.method === "POST",
       );
       expect(posts.length).toBeGreaterThan(0);
       const body = JSON.parse(posts[0][1].body);
-      expect(body.name).toBe('Priya Kapoor');
-      expect(body.email).toBe('priya@acme.com');
-      expect(body.password).toBe('tempPass123!');
-      expect(body.role).toBe('USER'); // default
+      expect(body.name).toBe("Priya Kapoor");
+      expect(body.email).toBe("priya@acme.com");
+      expect(body.password).toBe("tempPass123!");
+      expect(body.role).toBe("USER"); // default
     });
   });
 
   // 9 — Access Control Roster has been moved to RolesAdmin — Settings must NOT
   // render the roster card or the "Loading team..." copy.
-  it('does NOT render the Access Control Roster card (moved to RolesAdmin)', async () => {
+  it("does NOT render the Access Control Roster card (moved to RolesAdmin)", async () => {
     renderSettings();
-    await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
-    expect(screen.queryByText(/Access Control Roster/i)).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("Acme Corp")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByText(/Access Control Roster/i),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText(/Loading team/i)).not.toBeInTheDocument();
   });
 
@@ -312,34 +376,42 @@ describe('<Settings /> — page shell + representative card pin', () => {
     // Make all fetches hang so the loading state stays visible.
     fetchApiMock.mockImplementation(() => new Promise(() => {}));
     renderSettings();
-    expect(screen.getByText(/Loading organization details/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Loading organization details/i),
+    ).toBeInTheDocument();
   });
 
   // 11 — Slug field is read-only
-  it('renders the Slug input as read-only with helper text', async () => {
+  it("renders the Slug input as read-only with helper text", async () => {
     renderSettings();
-    await waitFor(() => expect(screen.getByDisplayValue('acme')).toBeInTheDocument());
-    const slugInput = screen.getByDisplayValue('acme');
-    expect(slugInput).toHaveAttribute('readonly');
-    expect(slugInput).toHaveAttribute('aria-readonly', 'true');
-    expect(screen.getByText(/Slug is read-only after organization creation/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("acme")).toBeInTheDocument(),
+    );
+    const slugInput = screen.getByDisplayValue("acme");
+    expect(slugInput).toHaveAttribute("readonly");
+    expect(slugInput).toHaveAttribute("aria-readonly", "true");
+    expect(
+      screen.getByText(/Slug is read-only after organization creation/i),
+    ).toBeInTheDocument();
   });
 
   // 12a — Consent Templates does NOT render for generic vertical
-  it('does NOT render the Consent Templates card for generic vertical', async () => {
+  it("does NOT render the Consent Templates card for generic vertical", async () => {
     renderSettings();
-    await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("Acme Corp")).toBeInTheDocument(),
+    );
     expect(screen.queryByText(/Consent Templates/i)).not.toBeInTheDocument();
   });
 
   // 12b — Consent Templates DOES render when wellness
   it('renders the Consent Templates card when tenant.vertical === "wellness"', async () => {
     fetchApiMock.mockImplementation(
-      buildDefaultFetch({ tenant: { ...baseTenant, vertical: 'wellness' } })
+      buildDefaultFetch({ tenant: { ...baseTenant, vertical: "wellness" } }),
     );
     renderSettings();
     await waitFor(() =>
-      expect(screen.getByTestId('consent-templates-card')).toBeInTheDocument()
+      expect(screen.getByTestId("consent-templates-card")).toBeInTheDocument(),
     );
   });
 });
@@ -353,7 +425,7 @@ describe('<Settings /> — page shell + representative card pin', () => {
 // preserves the existing describe block above. Pure pin — no SUT changes.
 // ============================================================================
 
-describe('<Settings /> — extended card coverage', () => {
+describe("<Settings /> — extended card coverage", () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     notifyObj.success.mockReset();
@@ -366,96 +438,121 @@ describe('<Settings /> — extended card coverage', () => {
   });
 
   // 13 — Branding: blank logo renders the placeholder icon (no <img>)
-  it('Branding card shows the placeholder square when no logo is set', async () => {
+  it("Branding card shows the placeholder square when no logo is set", async () => {
     renderSettings();
-    await waitFor(() => expect(screen.getByText(/^Branding$/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/^Branding$/)).toBeInTheDocument(),
+    );
     // No <img alt="Current logo"> should be present when logoUrl is null.
     expect(screen.queryByAltText(/Current logo/i)).not.toBeInTheDocument();
     // The file input accepts image/* mime types.
     const fileInput = document.querySelector('input[type="file"]');
     expect(fileInput).toBeTruthy();
-    expect(fileInput.getAttribute('accept')).toMatch(/image\/png/);
+    expect(fileInput.getAttribute("accept")).toMatch(/image\/png/);
   });
 
   // 14 — Branding: existing logo URL renders as an <img>
   it('Branding card renders <img alt="Current logo"> when logoUrl is set', async () => {
     fetchApiMock.mockImplementation(
-      buildDefaultFetch({ branding: { logoUrl: 'https://cdn.example.com/logo.png', brandColor: '#265855' } })
+      buildDefaultFetch({
+        branding: {
+          logoUrl: "https://cdn.example.com/logo.png",
+          brandColor: "#265855",
+        },
+      }),
     );
     renderSettings();
     const img = await screen.findByAltText(/Current logo/i);
-    expect(img).toHaveAttribute('src', 'https://cdn.example.com/logo.png');
+    expect(img).toHaveAttribute("src", "https://cdn.example.com/logo.png");
   });
 
   // 15 — Branding: Save color PUTs /api/wellness/branding/color with valid hex
-  it('Save color button PUTs /api/wellness/branding/color with the 6-digit hex', async () => {
+  it("Save color button PUTs /api/wellness/branding/color with the 6-digit hex", async () => {
     const user = userEvent.setup();
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/wellness/branding/color' && method === 'PUT') {
+      const method = opts?.method || "GET";
+      if (url === "/api/wellness/branding/color" && method === "PUT") {
         const body = JSON.parse(opts.body);
         return Promise.resolve({ brandColor: body.brandColor });
       }
       return buildDefaultFetch()(url, opts);
     });
     renderSettings();
-    await waitFor(() => expect(screen.getByText(/^Branding$/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/^Branding$/)).toBeInTheDocument(),
+    );
 
-    // Find the hex text input by its placeholder
-    const hexInput = screen.getByPlaceholderText('#3b82f6');
+    // Both brand color + theme color inputs share the same placeholder — pick first (brand color)
+    const hexInputs = screen.getAllByPlaceholderText("#3b82f6");
+    const hexInput = hexInputs[0];
     await user.clear(hexInput);
-    await user.type(hexInput, '#265855');
+    await user.type(hexInput, "#265855");
 
-    const saveBtn = screen.getByRole('button', { name: /Save color/i });
-    await user.click(saveBtn);
+    // Both "Save color" buttons exist — first is brand color
+    const saveBtns = screen.getAllByRole("button", { name: /Save color/i });
+    await user.click(saveBtns[0]);
 
     await waitFor(() => {
       const puts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => url === '/api/wellness/branding/color' && opts?.method === 'PUT'
+        ([url, opts]) =>
+          url === "/api/wellness/branding/color" && opts?.method === "PUT",
       );
       expect(puts.length).toBeGreaterThan(0);
       const body = JSON.parse(puts[0][1].body);
-      expect(body).toEqual({ brandColor: '#265855' });
+      expect(body).toEqual({ brandColor: "#265855" });
     });
     // Success message rendered
-    await waitFor(() => expect(screen.getByText(/Brand color saved/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Brand color saved/i)).toBeInTheDocument(),
+    );
   });
 
   // 16 — Branding: invalid hex surfaces inline error WITHOUT calling PUT
-  it('Save color rejects a non-6-hex value with an inline error and no PUT', async () => {
+  it("Save color rejects a non-6-hex value with an inline error and no PUT", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByText(/^Branding$/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/^Branding$/)).toBeInTheDocument(),
+    );
 
-    const hexInput = screen.getByPlaceholderText('#3b82f6');
-    await user.clear(hexInput);
-    await user.type(hexInput, 'not-a-hex');
+    // Pick the first hex input (brand color)
+    const hexInputs = screen.getAllByPlaceholderText("#3b82f6");
+    await user.clear(hexInputs[0]);
+    await user.type(hexInputs[0], "not-a-hex");
 
-    const saveBtn = screen.getByRole('button', { name: /Save color/i });
-    await user.click(saveBtn);
+    const saveBtns = screen.getAllByRole("button", { name: /Save color/i });
+    await user.click(saveBtns[0]);
 
-    await waitFor(() => expect(screen.getByText(/must be a 6-digit hex/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/must be a 6-digit hex/i)).toBeInTheDocument(),
+    );
     const puts = fetchApiMock.mock.calls.filter(
-      ([url, opts]) => url === '/api/wellness/branding/color' && opts?.method === 'PUT'
+      ([url, opts]) =>
+        url === "/api/wellness/branding/color" && opts?.method === "PUT",
     );
     expect(puts.length).toBe(0);
   });
 
   // 17 — Pipeline Stages: delete fires DELETE after notify.confirm resolves true
-  it('Delete stage button DELETEs /api/pipeline_stages/:id after confirm', async () => {
+  it("Delete stage button DELETEs /api/pipeline_stages/:id after confirm", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
+    );
 
     // The pipeline-stages section: locate trash buttons. There are 2 stages so 2 trash
     // buttons inside the stages section; pick the first.
-    const stageRow = screen.getByText('Prospecting').closest('div').parentElement;
-    const deleteBtn = stageRow.querySelectorAll('button')[2]; // up / down / delete
+    const stageRow = screen
+      .getByText("Prospecting")
+      .closest("div").parentElement;
+    const deleteBtn = stageRow.querySelectorAll("button")[2]; // up / down / delete
     await user.click(deleteBtn);
 
     await waitFor(() => {
       const deletes = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => /^\/api\/pipeline_stages\/s1$/.test(url) && opts?.method === 'DELETE'
+        ([url, opts]) =>
+          /^\/api\/pipeline_stages\/s1$/.test(url) && opts?.method === "DELETE",
       );
       expect(deletes.length).toBe(1);
     });
@@ -463,95 +560,107 @@ describe('<Settings /> — extended card coverage', () => {
   });
 
   // 18 — Pipeline Stages: reorder fires PUT /api/pipeline_stages/reorder
-  it('Move-down on first stage PUTs /api/pipeline_stages/reorder with swapped positions', async () => {
+  it("Move-down on first stage PUTs /api/pipeline_stages/reorder with swapped positions", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
+    );
 
     // First stage row's down-arrow button. Stage row layout: 3 buttons (Up, Down, Delete).
-    const stageRow = screen.getByText('Prospecting').closest('div').parentElement;
-    const downBtn = stageRow.querySelectorAll('button')[1];
+    const stageRow = screen
+      .getByText("Prospecting")
+      .closest("div").parentElement;
+    const downBtn = stageRow.querySelectorAll("button")[1];
     await user.click(downBtn);
 
     await waitFor(() => {
       const puts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => url === '/api/pipeline_stages/reorder' && opts?.method === 'PUT'
+        ([url, opts]) =>
+          url === "/api/pipeline_stages/reorder" && opts?.method === "PUT",
       );
       expect(puts.length).toBeGreaterThan(0);
       const body = JSON.parse(puts[0][1].body);
       // After swap, Qualification (s2) → pos 0, Prospecting (s1) → pos 1
       expect(body.stages).toEqual([
-        { id: 's2', position: 0 },
-        { id: 's1', position: 1 },
+        { id: "s2", position: 0 },
+        { id: "s1", position: 1 },
       ]);
     });
   });
 
   // 19 — Email Messages card: retention checkbox is checked when emailRetention !== false
-  it('Email Messages retention checkbox reflects tenant.emailRetention state', async () => {
+  it("Email Messages retention checkbox reflects tenant.emailRetention state", async () => {
     renderSettings();
-    const toggle = await screen.findByTestId('email-retention-toggle');
+    const toggle = await screen.findByTestId("email-retention-toggle");
     expect(toggle).toBeChecked();
   });
 
   // 20 — Email Messages card: toggling OFF surfaces the warning + PUTs the new value
-  it('Toggling email retention OFF PUTs /api/tenants/current with { emailRetention: false } + warning text appears', async () => {
+  it("Toggling email retention OFF PUTs /api/tenants/current with { emailRetention: false } + warning text appears", async () => {
     const user = userEvent.setup();
     renderSettings();
-    const toggle = await screen.findByTestId('email-retention-toggle');
+    const toggle = await screen.findByTestId("email-retention-toggle");
     await user.click(toggle);
 
     await waitFor(() => {
       const puts = fetchApiMock.mock.calls.filter(
         ([url, opts]) =>
-          url === '/api/tenants/current' &&
-          opts?.method === 'PUT' &&
-          JSON.parse(opts.body).emailRetention === false
+          url === "/api/tenants/current" &&
+          opts?.method === "PUT" &&
+          JSON.parse(opts.body).emailRetention === false,
       );
       expect(puts.length).toBeGreaterThan(0);
     });
     // Warning text only renders when emailRetention === false in local state
-    await waitFor(() => expect(screen.getByText(/Retention is OFF/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Retention is OFF/i)).toBeInTheDocument(),
+    );
   });
 
   // 21 — Notification Preferences: renders the 7 category labels + 4 channel labels
-  it('Notification Preferences card renders all 7 categories + 4 channels', async () => {
+  it("Notification Preferences card renders all 7 categories + 4 channels", async () => {
     renderSettings();
-    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument(),
+    );
 
     // Categories
-    expect(screen.getByText('Deals & Opportunities')).toBeInTheDocument();
-    expect(screen.getByText('Tasks')).toBeInTheDocument();
-    expect(screen.getByText('Support Tickets')).toBeInTheDocument();
-    expect(screen.getByText('Leads')).toBeInTheDocument();
-    expect(screen.getByText('Approvals')).toBeInTheDocument();
-    expect(screen.getByText('Leave Requests')).toBeInTheDocument();
-    expect(screen.getByText('Expense Reports')).toBeInTheDocument();
+    expect(screen.getByText("Deals & Opportunities")).toBeInTheDocument();
+    expect(screen.getByText("Tasks")).toBeInTheDocument();
+    expect(screen.getByText("Support Tickets")).toBeInTheDocument();
+    expect(screen.getByText("Leads")).toBeInTheDocument();
+    expect(screen.getByText("Approvals")).toBeInTheDocument();
+    expect(screen.getByText("Leave Requests")).toBeInTheDocument();
+    expect(screen.getByText("Expense Reports")).toBeInTheDocument();
 
     // Channels
-    expect(screen.getByText('In-App Bell')).toBeInTheDocument();
-    expect(screen.getByText('Real-Time Updates')).toBeInTheDocument();
-    expect(screen.getByText('Browser Push')).toBeInTheDocument();
-    expect(screen.getByText('Email')).toBeInTheDocument();
+    expect(screen.getByText("In-App Bell")).toBeInTheDocument();
+    expect(screen.getByText("Real-Time Updates")).toBeInTheDocument();
+    expect(screen.getByText("Browser Push")).toBeInTheDocument();
+    expect(screen.getByText("Email")).toBeInTheDocument();
   });
 
   // 22 — Notification Preferences: Save PUTs /api/notifications/preferences with state
-  it('Save Preferences PUTs /api/notifications/preferences with the toggled state', async () => {
+  it("Save Preferences PUTs /api/notifications/preferences with the toggled state", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument(),
+    );
 
     // Toggle the "Tasks" category off
-    const tasksLabel = screen.getByText('Tasks').closest('label');
+    const tasksLabel = screen.getByText("Tasks").closest("label");
     const tasksCheckbox = tasksLabel.querySelector('input[type="checkbox"]');
     await user.click(tasksCheckbox);
 
-    const saveBtn = screen.getByRole('button', { name: /Save Preferences/i });
+    const saveBtn = screen.getByRole("button", { name: /Save Preferences/i });
     await user.click(saveBtn);
 
     await waitFor(() => {
       const puts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => url === '/api/notifications/preferences' && opts?.method === 'PUT'
+        ([url, opts]) =>
+          url === "/api/notifications/preferences" && opts?.method === "PUT",
       );
       expect(puts.length).toBeGreaterThan(0);
       const body = JSON.parse(puts[0][1].body);
@@ -559,21 +668,27 @@ describe('<Settings /> — extended card coverage', () => {
       // Other categories remain on
       expect(body.categoryToggles.deal).toBe(true);
     });
-    expect(notifyObj.success).toHaveBeenCalledWith(expect.stringMatching(/saved/i));
+    expect(notifyObj.success).toHaveBeenCalledWith(
+      expect.stringMatching(/saved/i),
+    );
   });
 
   // 23 — Notification Preferences: Reset POSTs /api/notifications/preferences/reset
-  it('Reset to Defaults POSTs /api/notifications/preferences/reset after confirm', async () => {
+  it("Reset to Defaults POSTs /api/notifications/preferences/reset after confirm", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument(),
+    );
 
-    const resetBtn = screen.getByRole('button', { name: /Reset to Defaults/i });
+    const resetBtn = screen.getByRole("button", { name: /Reset to Defaults/i });
     await user.click(resetBtn);
 
     await waitFor(() => {
       const posts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => url === '/api/notifications/preferences/reset' && opts?.method === 'POST'
+        ([url, opts]) =>
+          url === "/api/notifications/preferences/reset" &&
+          opts?.method === "POST",
       );
       expect(posts.length).toBe(1);
     });
@@ -581,33 +696,46 @@ describe('<Settings /> — extended card coverage', () => {
   });
 
   // 24 — Invite User: role-select changes POST role to MANAGER
-  it('selecting Sales Manager in invite role and submitting POSTs with role=MANAGER', async () => {
+  it("selecting Sales Manager in invite role and submitting POSTs with role=MANAGER", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByPlaceholderText(/Full Name/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText(/Full Name/i)).toBeInTheDocument(),
+    );
 
-    await user.type(screen.getByPlaceholderText(/Full Name/i), 'Vikram Shah');
-    await user.type(screen.getByPlaceholderText(/Email Address/i), 'vikram@acme.com');
-    await user.type(screen.getByPlaceholderText(/Temporary Password/i), 'pass1234');
+    await user.type(screen.getByPlaceholderText(/Full Name/i), "Vikram Shah");
+    await user.type(
+      screen.getByPlaceholderText(/Email Address/i),
+      "vikram@acme.com",
+    );
+    await user.type(
+      screen.getByPlaceholderText(/Temporary Password/i),
+      "pass1234",
+    );
 
     // The invite-card role select is the one with "Sales Manager" option
-    const roleSelects = screen.getAllByRole('combobox');
+    const roleSelects = screen.getAllByRole("combobox");
     const inviteRoleSelect = roleSelects.find((sel) =>
-      Array.from(sel.options || []).some((opt) => opt.value === 'MANAGER' && /Sales Manager/i.test(opt.text))
+      Array.from(sel.options || []).some(
+        (opt) => opt.value === "MANAGER" && /Sales Manager/i.test(opt.text),
+      ),
     );
     expect(inviteRoleSelect).toBeTruthy();
-    await user.selectOptions(inviteRoleSelect, 'MANAGER');
+    await user.selectOptions(inviteRoleSelect, "MANAGER");
 
-    await user.click(screen.getByRole('button', { name: /Send Invitation & Create Account/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Send Invitation & Create Account/i }),
+    );
 
     await waitFor(() => {
       const posts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => url === '/api/auth/register' && opts?.method === 'POST'
+        ([url, opts]) =>
+          url === "/api/auth/register" && opts?.method === "POST",
       );
       expect(posts.length).toBeGreaterThan(0);
       const body = JSON.parse(posts[posts.length - 1][1].body);
-      expect(body.role).toBe('MANAGER');
-      expect(body.name).toBe('Vikram Shah');
+      expect(body.role).toBe("MANAGER");
+      expect(body.name).toBe("Vikram Shah");
     });
   });
 
@@ -617,73 +745,106 @@ describe('<Settings /> — extended card coverage', () => {
   // covered by test 9 above.
 
   // 27 — Consent Templates (wellness): seeded templates render + Add Template POSTs
-  it('wellness Consent Templates card lists seeded rows and Add Template POSTs new row', async () => {
+  it("wellness Consent Templates card lists seeded rows and Add Template POSTs new row", async () => {
     const user = userEvent.setup();
     const seededTemplates = [
-      { id: 'ct1', key: 'general', label: 'General Consent', isActive: true, isSeed: true },
-      { id: 'ct2', key: 'aesthetic', label: 'Aesthetic Procedure Consent', isActive: true, isSeed: true },
+      {
+        id: "ct1",
+        key: "general",
+        label: "General Consent",
+        isActive: true,
+        isSeed: true,
+      },
+      {
+        id: "ct2",
+        key: "aesthetic",
+        label: "Aesthetic Procedure Consent",
+        isActive: true,
+        isSeed: true,
+      },
     ];
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/wellness/consent-templates' && method === 'GET') {
+      const method = opts?.method || "GET";
+      if (url === "/api/wellness/consent-templates" && method === "GET") {
         return Promise.resolve(seededTemplates);
       }
-      if (url === '/api/wellness/consent-templates' && method === 'POST') {
+      if (url === "/api/wellness/consent-templates" && method === "POST") {
         return Promise.resolve({ ok: true });
       }
-      return buildDefaultFetch({ tenant: { ...baseTenant, vertical: 'wellness' } })(url, opts);
+      return buildDefaultFetch({
+        tenant: { ...baseTenant, vertical: "wellness" },
+      })(url, opts);
     });
 
     renderSettings();
-    await waitFor(() => expect(screen.getByTestId('consent-templates-card')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId("consent-templates-card")).toBeInTheDocument(),
+    );
 
     // Seeded labels render
-    expect(screen.getByText('General Consent')).toBeInTheDocument();
-    expect(screen.getByText('Aesthetic Procedure Consent')).toBeInTheDocument();
+    expect(screen.getByText("General Consent")).toBeInTheDocument();
+    expect(screen.getByText("Aesthetic Procedure Consent")).toBeInTheDocument();
     // (starter) marker appears for seed rows — there are 2
-    expect(screen.getAllByText(/\(starter\)/i).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText(/\(starter\)/i).length).toBeGreaterThanOrEqual(
+      2,
+    );
 
     // Create a new template
-    await user.type(screen.getByPlaceholderText(/Key \(e\.g\. paediatric\)/i), 'paediatric');
-    await user.type(screen.getByPlaceholderText(/Label \(e\.g\. Paediatric Consent\)/i), 'Paediatric Consent');
-    const addBtn = screen.getByRole('button', { name: /Add Template/i });
+    await user.type(
+      screen.getByPlaceholderText(/Key \(e\.g\. paediatric\)/i),
+      "paediatric",
+    );
+    await user.type(
+      screen.getByPlaceholderText(/Label \(e\.g\. Paediatric Consent\)/i),
+      "Paediatric Consent",
+    );
+    const addBtn = screen.getByRole("button", { name: /Add Template/i });
     await user.click(addBtn);
 
     await waitFor(() => {
       const posts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => url === '/api/wellness/consent-templates' && opts?.method === 'POST'
+        ([url, opts]) =>
+          url === "/api/wellness/consent-templates" && opts?.method === "POST",
       );
       expect(posts.length).toBeGreaterThan(0);
       const body = JSON.parse(posts[0][1].body);
-      expect(body.key).toBe('paediatric');
-      expect(body.label).toBe('Paediatric Consent');
+      expect(body.key).toBe("paediatric");
+      expect(body.label).toBe("Paediatric Consent");
     });
-    expect(notifyObj.success).toHaveBeenCalledWith(expect.stringMatching(/Consent template created/i));
+    expect(notifyObj.success).toHaveBeenCalledWith(
+      expect.stringMatching(/Consent template created/i),
+    );
   });
 
   // 28 — Public Booking URL: Copy URL button writes to clipboard
-  it('Copy URL button writes the booking URL to navigator.clipboard', async () => {
+  it("Copy URL button writes the booking URL to navigator.clipboard", async () => {
     const user = userEvent.setup();
     const writeTextMock = vi.fn(() => Promise.resolve());
     // jsdom marks navigator.clipboard as a getter-only prop; redefine the
     // property via Object.defineProperty so the test can inject a writeText
     // spy without TypeError.
-    Object.defineProperty(navigator, 'clipboard', {
+    Object.defineProperty(navigator, "clipboard", {
       value: { writeText: writeTextMock },
       writable: true,
       configurable: true,
     });
 
     renderSettings();
-    await waitFor(() => expect(screen.getByDisplayValue('acme')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("acme")).toBeInTheDocument(),
+    );
 
-    const copyBtn = screen.getByRole('button', { name: /Copy URL/i });
+    const copyBtn = screen.getByRole("button", { name: /Copy URL/i });
     await user.click(copyBtn);
 
     await waitFor(() => {
-      expect(writeTextMock).toHaveBeenCalledWith(expect.stringContaining('/book/acme'));
+      expect(writeTextMock).toHaveBeenCalledWith(
+        expect.stringContaining("/book/acme"),
+      );
     });
-    expect(notifyObj.success).toHaveBeenCalledWith(expect.stringMatching(/copied/i));
+    expect(notifyObj.success).toHaveBeenCalledWith(
+      expect.stringMatching(/copied/i),
+    );
   });
 });
 
@@ -697,7 +858,7 @@ describe('<Settings /> — extended card coverage', () => {
 // effect (notify.error / no fetchApi call / DOM state) — no SUT changes.
 // ============================================================================
 
-describe('<Settings /> — error paths + boundary states', () => {
+describe("<Settings /> — error paths + boundary states", () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     notifyObj.success.mockReset();
@@ -710,63 +871,69 @@ describe('<Settings /> — error paths + boundary states', () => {
   });
 
   // 29 — Tenant save failure → notify.error('Failed to update organization')
-  it('Organization save calls notify.error when PUT /api/tenants/current rejects', async () => {
+  it("Organization save calls notify.error when PUT /api/tenants/current rejects", async () => {
     const user = userEvent.setup();
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/tenants/current' && method === 'PUT') {
-        return Promise.reject(new Error('backend down'));
+      const method = opts?.method || "GET";
+      if (url === "/api/tenants/current" && method === "PUT") {
+        return Promise.reject(new Error("backend down"));
       }
       return buildDefaultFetch()(url, opts);
     });
 
     renderSettings();
-    await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("Acme Corp")).toBeInTheDocument(),
+    );
 
-    await user.click(screen.getByRole('button', { name: /Save Organization Details/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Save Organization Details/i }),
+    );
 
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalledWith(
-        expect.stringMatching(/Failed to update organization/i)
+        expect.stringMatching(/Failed to update organization/i),
       );
     });
   });
 
   // 30 — Email retention toggle FAILURE reverts the checkbox + calls notify.error
-  it('toggling email retention reverts the checkbox state when PUT fails', async () => {
+  it("toggling email retention reverts the checkbox state when PUT fails", async () => {
     const user = userEvent.setup();
     let putCount = 0;
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/tenants/current' && method === 'PUT') {
+      const method = opts?.method || "GET";
+      if (url === "/api/tenants/current" && method === "PUT") {
         putCount++;
-        return Promise.reject(new Error('boom'));
+        return Promise.reject(new Error("boom"));
       }
       return buildDefaultFetch()(url, opts);
     });
 
     renderSettings();
-    const toggle = await screen.findByTestId('email-retention-toggle');
+    const toggle = await screen.findByTestId("email-retention-toggle");
     expect(toggle).toBeChecked();
     await user.click(toggle);
 
     await waitFor(() => expect(putCount).toBeGreaterThan(0));
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalledWith(
-        expect.stringMatching(/Failed to update email retention/i)
+        expect.stringMatching(/Failed to update email retention/i),
       );
     });
     // The optimistic flip must be reverted — toggle is checked again.
-    await waitFor(() => expect(screen.getByTestId('email-retention-toggle')).toBeChecked());
+    await waitFor(() =>
+      expect(screen.getByTestId("email-retention-toggle")).toBeChecked(),
+    );
   });
 
   // 31 — Notification Preferences load FAILURE surfaces notify.error +
   // the card does NOT render (loading→null branch via the !prefs guard).
-  it('Notification Preferences card calls notify.error when initial GET rejects', async () => {
+  it("Notification Preferences card calls notify.error when initial GET rejects", async () => {
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/notifications/preferences' && method === 'GET') {
-        return Promise.reject(new Error('500'));
+      const method = opts?.method || "GET";
+      if (url === "/api/notifications/preferences" && method === "GET") {
+        return Promise.reject(new Error("500"));
       }
       return buildDefaultFetch()(url, opts);
     });
@@ -774,51 +941,61 @@ describe('<Settings /> — error paths + boundary states', () => {
     renderSettings();
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalledWith(
-        expect.stringMatching(/Failed to load notification preferences/i)
+        expect.stringMatching(/Failed to load notification preferences/i),
       );
     });
     // The card returns null when prefs is null, so the section heading is
     // never rendered.
-    expect(screen.queryByText(/Notification Preferences/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Notification Preferences/i),
+    ).not.toBeInTheDocument();
   });
 
   // 32 — Notification Preferences SAVE FAILURE surfaces notify.error
-  it('Save Preferences calls notify.error when PUT /api/notifications/preferences rejects', async () => {
+  it("Save Preferences calls notify.error when PUT /api/notifications/preferences rejects", async () => {
     const user = userEvent.setup();
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/notifications/preferences' && method === 'PUT') {
-        return Promise.reject(new Error('save failed'));
+      const method = opts?.method || "GET";
+      if (url === "/api/notifications/preferences" && method === "PUT") {
+        return Promise.reject(new Error("save failed"));
       }
       return buildDefaultFetch()(url, opts);
     });
 
     renderSettings();
-    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument(),
+    );
 
-    await user.click(screen.getByRole('button', { name: /Save Preferences/i }));
+    await user.click(screen.getByRole("button", { name: /Save Preferences/i }));
 
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalledWith(
-        expect.stringMatching(/Failed to save notification preferences/i)
+        expect.stringMatching(/Failed to save notification preferences/i),
       );
     });
   });
 
   // 33 — Notification Preferences RESET DECLINE → no POST fires
-  it('Reset to Defaults does NOT POST when confirm resolves false', async () => {
+  it("Reset to Defaults does NOT POST when confirm resolves false", async () => {
     const user = userEvent.setup();
     notifyObj.confirm.mockImplementation(() => Promise.resolve(false));
 
     renderSettings();
-    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument(),
+    );
 
-    await user.click(screen.getByRole('button', { name: /Reset to Defaults/i }));
+    await user.click(
+      screen.getByRole("button", { name: /Reset to Defaults/i }),
+    );
 
     // Allow any microtasks to settle then verify NO POST fired
     await new Promise((r) => setTimeout(r, 50));
     const posts = fetchApiMock.mock.calls.filter(
-      ([url, opts]) => url === '/api/notifications/preferences/reset' && opts?.method === 'POST'
+      ([url, opts]) =>
+        url === "/api/notifications/preferences/reset" &&
+        opts?.method === "POST",
     );
     expect(posts.length).toBe(0);
     expect(notifyObj.confirm).toHaveBeenCalled();
@@ -826,39 +1003,48 @@ describe('<Settings /> — error paths + boundary states', () => {
 
   // 34 — Quiet Hours: timezone select changes update the local state and
   // the next Save PUT includes the new timezone value.
-  it('Quiet-hours timezone selection is persisted via the next Save Preferences PUT', async () => {
+  it("Quiet-hours timezone selection is persisted via the next Save Preferences PUT", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument(),
+    );
 
     // Find the timezone select (the one containing 'America/New_York' option)
-    const allSelects = screen.getAllByRole('combobox');
+    const allSelects = screen.getAllByRole("combobox");
     const tzSelect = allSelects.find((sel) =>
-      Array.from(sel.options || []).some((opt) => opt.value === 'America/New_York')
+      Array.from(sel.options || []).some(
+        (opt) => opt.value === "America/New_York",
+      ),
     );
     expect(tzSelect).toBeTruthy();
-    await user.selectOptions(tzSelect, 'America/New_York');
+    await user.selectOptions(tzSelect, "America/New_York");
 
-    await user.click(screen.getByRole('button', { name: /Save Preferences/i }));
+    await user.click(screen.getByRole("button", { name: /Save Preferences/i }));
 
     await waitFor(() => {
       const puts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => url === '/api/notifications/preferences' && opts?.method === 'PUT'
+        ([url, opts]) =>
+          url === "/api/notifications/preferences" && opts?.method === "PUT",
       );
       expect(puts.length).toBeGreaterThan(0);
       const body = JSON.parse(puts[puts.length - 1][1].body);
-      expect(body.timezone).toBe('America/New_York');
+      expect(body.timezone).toBe("America/New_York");
     });
   });
 
   // 35 — Stage Move-Up button is disabled on the FIRST stage (boundary)
-  it('first pipeline stage Up-arrow is disabled and clicking it does not PUT reorder', async () => {
+  it("first pipeline stage Up-arrow is disabled and clicking it does not PUT reorder", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
+    );
 
-    const stageRow = screen.getByText('Prospecting').closest('div').parentElement;
-    const upBtn = stageRow.querySelectorAll('button')[0]; // up / down / delete
+    const stageRow = screen
+      .getByText("Prospecting")
+      .closest("div").parentElement;
+    const upBtn = stageRow.querySelectorAll("button")[0]; // up / down / delete
     expect(upBtn).toBeDisabled();
 
     // Force-click via fireEvent (userEvent skips disabled targets) to verify
@@ -866,38 +1052,56 @@ describe('<Settings /> — error paths + boundary states', () => {
     fireEvent.click(upBtn);
     await new Promise((r) => setTimeout(r, 30));
     const reorderPuts = fetchApiMock.mock.calls.filter(
-      ([url, opts]) => url === '/api/pipeline_stages/reorder' && opts?.method === 'PUT'
+      ([url, opts]) =>
+        url === "/api/pipeline_stages/reorder" && opts?.method === "PUT",
     );
     expect(reorderPuts.length).toBe(0);
   });
 
   // 36 — Consent Templates: clicking Disable on an active row PUTs
   // /api/wellness/consent-templates/:id with { isActive: false }.
-  it('wellness Consent Templates Disable button PUTs the row with { isActive: false }', async () => {
+  it("wellness Consent Templates Disable button PUTs the row with { isActive: false }", async () => {
     const user = userEvent.setup();
     const seededTemplates = [
-      { id: 'ct1', key: 'general', label: 'General Consent', isActive: true, isSeed: true },
+      {
+        id: "ct1",
+        key: "general",
+        label: "General Consent",
+        isActive: true,
+        isSeed: true,
+      },
     ];
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/wellness/consent-templates' && method === 'GET') {
+      const method = opts?.method || "GET";
+      if (url === "/api/wellness/consent-templates" && method === "GET") {
         return Promise.resolve(seededTemplates);
       }
-      if (/^\/api\/wellness\/consent-templates\/ct1$/.test(url) && method === 'PUT') {
+      if (
+        /^\/api\/wellness\/consent-templates\/ct1$/.test(url) &&
+        method === "PUT"
+      ) {
         return Promise.resolve({ ok: true });
       }
-      return buildDefaultFetch({ tenant: { ...baseTenant, vertical: 'wellness' } })(url, opts);
+      return buildDefaultFetch({
+        tenant: { ...baseTenant, vertical: "wellness" },
+      })(url, opts);
     });
 
     renderSettings();
-    await waitFor(() => expect(screen.getByTestId('consent-templates-card')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId("consent-templates-card")).toBeInTheDocument(),
+    );
 
-    const disableBtn = await screen.findByRole('button', { name: /^Disable$/i });
+    const disableBtn = await screen.findByRole("button", {
+      name: /^Disable$/i,
+    });
     await user.click(disableBtn);
 
     await waitFor(() => {
       const puts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => /^\/api\/wellness\/consent-templates\/ct1$/.test(url) && opts?.method === 'PUT'
+        ([url, opts]) =>
+          /^\/api\/wellness\/consent-templates\/ct1$/.test(url) &&
+          opts?.method === "PUT",
       );
       expect(puts.length).toBeGreaterThan(0);
       const body = JSON.parse(puts[0][1].body);
@@ -907,35 +1111,38 @@ describe('<Settings /> — error paths + boundary states', () => {
 
   // 37 — Add Stage form REJECTS whitespace-only stage name without POSTing.
   // Pins the `if (!newStage.name.trim()) return;` guard in handleAddStage.
-  it('Add Stage with whitespace-only name does NOT POST /api/pipeline_stages', async () => {
+  it("Add Stage with whitespace-only name does NOT POST /api/pipeline_stages", async () => {
     const user = userEvent.setup();
     renderSettings();
-    await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
+    );
 
     // HTML5 `required` would block the click, so bypass by setting value
     // directly and dispatching submit via fireEvent.
     const stageNameInput = screen.getByPlaceholderText(/Stage name/i);
     // Override the required attribute so the form can submit empty/whitespace
     // and we can pin the SUT's trim() guard rather than the browser's check.
-    stageNameInput.removeAttribute('required');
-    fireEvent.change(stageNameInput, { target: { value: '   ' } });
+    stageNameInput.removeAttribute("required");
+    fireEvent.change(stageNameInput, { target: { value: "   " } });
 
-    const form = stageNameInput.closest('form');
+    const form = stageNameInput.closest("form");
     fireEvent.submit(form);
 
     await new Promise((r) => setTimeout(r, 50));
     const posts = fetchApiMock.mock.calls.filter(
-      ([url, opts]) => url === '/api/pipeline_stages' && opts?.method === 'POST'
+      ([url, opts]) =>
+        url === "/api/pipeline_stages" && opts?.method === "POST",
     );
     expect(posts.length).toBe(0);
   });
 
   // 38 — Empty brand color save sends `brandColor: null` (not the empty string)
-  it('Save color with an empty hex sends { brandColor: null } and shows the saved message', async () => {
+  it("Save color with an empty hex sends { brandColor: null } and shows the saved message", async () => {
     const user = userEvent.setup();
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/wellness/branding/color' && method === 'PUT') {
+      const method = opts?.method || "GET";
+      if (url === "/api/wellness/branding/color" && method === "PUT") {
         const body = JSON.parse(opts.body);
         return Promise.resolve({ brandColor: body.brandColor || null });
       }
@@ -943,21 +1150,180 @@ describe('<Settings /> — error paths + boundary states', () => {
     });
 
     renderSettings();
-    await waitFor(() => expect(screen.getByText(/^Branding$/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/^Branding$/)).toBeInTheDocument(),
+    );
 
-    // hex text input starts empty (branding.brandColor: '' default)
-    const hexInput = screen.getByPlaceholderText('#3b82f6');
-    expect(hexInput.value).toBe('');
+    // hex text input starts empty (branding.brandColor: '' default) — pick brand color (index 0)
+    const hexInputs = screen.getAllByPlaceholderText("#3b82f6");
+    expect(hexInputs[0].value).toBe("");
 
-    await user.click(screen.getByRole('button', { name: /Save color/i }));
+    const saveBtns = screen.getAllByRole("button", { name: /Save color/i });
+    await user.click(saveBtns[0]);
 
     await waitFor(() => {
       const puts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => url === '/api/wellness/branding/color' && opts?.method === 'PUT'
+        ([url, opts]) =>
+          url === "/api/wellness/branding/color" && opts?.method === "PUT",
       );
       expect(puts.length).toBeGreaterThan(0);
       const body = JSON.parse(puts[0][1].body);
       expect(body).toEqual({ brandColor: null });
     });
+  });
+});
+
+// ============================================================================
+// EXTENSION WAVE 3 — Theme Color column (3rd branding column added in the
+// wellness UI revamp). Pins the new /api/wellness/branding/theme-color endpoint
+// contract, the "Reset to default" button surface, and the description copy.
+// No SUT changes — pure pin against the shipped implementation.
+// ============================================================================
+
+describe("<Settings /> — Theme Color branding column", () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyObj.success.mockReset();
+    notifyObj.error.mockReset();
+    notifyObj.info.mockReset();
+    notifyObj.confirm.mockReset();
+    notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
+    setThemeMock.mockReset();
+    fetchApiMock.mockImplementation(buildDefaultFetch());
+  });
+
+  // 39 — Theme color input renders in the Branding card with the correct
+  // description copy (distinguishes it from the brand color input).
+  it("renders the Theme color label + input in the Branding card", async () => {
+    renderSettings();
+    await waitFor(() =>
+      expect(screen.getByText(/^Branding$/)).toBeInTheDocument(),
+    );
+    // The label "Theme color" should appear as a separate column from "Brand color"
+    expect(screen.getByText(/Theme color/i)).toBeInTheDocument();
+    // Three hex inputs exist: brand-color picker, brand-color text, theme-color text
+    // At minimum two text inputs share the #3b82f6 placeholder
+    expect(
+      screen.getAllByPlaceholderText("#3b82f6").length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  // 40 — Save theme color PUTs /api/wellness/branding/theme-color with valid hex
+  it("Save color (theme) PUTs /api/wellness/branding/theme-color with the 6-digit hex", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await waitFor(() =>
+      expect(screen.getByText(/Theme color/i)).toBeInTheDocument(),
+    );
+
+    // The theme hex input is the second text input with placeholder #3b82f6
+    const hexInputs = screen.getAllByPlaceholderText("#3b82f6");
+    const themeHexInput = hexInputs[hexInputs.length - 1];
+
+    await user.clear(themeHexInput);
+    await user.type(themeHexInput, "#A07C4A");
+
+    // Multiple "Save color" buttons — theme one is the last
+    const saveBtns = screen.getAllByRole("button", { name: /Save color/i });
+    await user.click(saveBtns[saveBtns.length - 1]);
+
+    await waitFor(() => {
+      const puts = fetchApiMock.mock.calls.filter(
+        ([url, opts]) =>
+          url === "/api/wellness/branding/theme-color" &&
+          opts?.method === "PUT",
+      );
+      expect(puts.length).toBeGreaterThan(0);
+      const body = JSON.parse(puts[0][1].body);
+      expect(body).toHaveProperty("themeColor");
+      expect(body.themeColor).toMatch(/^#[0-9a-fA-F]{6}$/);
+    });
+  });
+
+  // 41 — "Reset to default" (exact text, lowercase d) is the theme-color reset button.
+  // It must be absent when themeColor is falsy (null or empty string).
+  // Note: "Reset to Defaults" (capital D, plural) is the Notification Prefs button —
+  // a different element. We use exact-text matching to tell them apart.
+  it('"Reset to default" button is absent when themeColor is null/empty', async () => {
+    fetchApiMock.mockImplementation(
+      buildDefaultFetch({
+        branding: { logoUrl: null, brandColor: "", themeColor: null },
+      }),
+    );
+    renderSettings();
+    await waitFor(() =>
+      expect(screen.getByText(/^Branding$/)).toBeInTheDocument(),
+    );
+    // queryAllByRole + exact text filter — avoids false-match with "Reset to Defaults"
+    const exactReset = screen
+      .queryAllByRole("button")
+      .filter((btn) => btn.textContent.trim() === "Reset to default");
+    expect(exactReset).toHaveLength(0);
+  });
+
+  it('"Reset to default" button IS rendered when branding.themeColor is a non-empty string', async () => {
+    fetchApiMock.mockImplementation(
+      buildDefaultFetch({
+        branding: { logoUrl: null, brandColor: "", themeColor: "#A07C4A" },
+      }),
+    );
+    renderSettings();
+    await waitFor(() => {
+      const btns = screen
+        .queryAllByRole("button")
+        .filter((btn) => btn.textContent.trim() === "Reset to default");
+      expect(btns).toHaveLength(1);
+    });
+  });
+
+  // 42 — Reset to default PUTs /api/wellness/branding/theme-color with { themeColor: null }
+  it('"Reset to default" PUTs theme-color endpoint with { themeColor: null }', async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || "GET";
+      if (url === "/api/wellness/branding/theme-color" && method === "PUT") {
+        return Promise.resolve({ themeColor: null });
+      }
+      return buildDefaultFetch({
+        branding: { logoUrl: null, brandColor: "", themeColor: "#A07C4A" },
+      })(url, opts);
+    });
+
+    renderSettings();
+    const resetBtn = await screen.findByText("Reset to default");
+    await user.click(resetBtn);
+
+    await waitFor(() => {
+      const puts = fetchApiMock.mock.calls.filter(
+        ([url, opts]) =>
+          url === "/api/wellness/branding/theme-color" &&
+          opts?.method === "PUT",
+      );
+      expect(puts.length).toBeGreaterThan(0);
+      const body = JSON.parse(puts[0][1].body);
+      expect(body).toEqual({ themeColor: null });
+    });
+  });
+
+  // 43 — Reset to default shows the "Reset to logo default." success message
+  it('"Reset to default" surfaces the reset success message after PUT resolves', async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || "GET";
+      if (url === "/api/wellness/branding/theme-color" && method === "PUT") {
+        return Promise.resolve({ themeColor: null });
+      }
+      return buildDefaultFetch({
+        branding: { logoUrl: null, brandColor: "", themeColor: "#A07C4A" },
+      })(url, opts);
+    });
+
+    renderSettings();
+    const resetBtn = await screen.findByText("Reset to default");
+    await user.click(resetBtn);
+
+    await waitFor(() =>
+      expect(screen.getByText(/Reset to logo default/i)).toBeInTheDocument(),
+    );
   });
 });

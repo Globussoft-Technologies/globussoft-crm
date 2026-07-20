@@ -327,7 +327,7 @@ export default function BookAppointment() {
         name: "Dr. Haror's Wellness",
         description: orderEnvelope.service?.name || "Appointment",
         order_id: orderEnvelope.orderId,
-        theme: { color: "#265855" },
+        theme: { color: "#a07c4a" },
         modal: { ondismiss: () => setSubmitting(false) },
         handler: async (resp) => {
           try {

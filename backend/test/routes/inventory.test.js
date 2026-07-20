@@ -536,6 +536,39 @@ describe('POST /auto-consumption-rules — create rule', () => {
   });
 });
 
+describe('GET /auto-consumption-rules — list', () => {
+  test('returns rules with product joined and orphan productId rendered as null product', async () => {
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, serviceId: 10, productId: 100, quantityPerVisit: 2, unit: 'ml', isActive: true, service: { id: 10, name: 'Facial' } },
+      { id: 2, tenantId: 1, serviceId: 11, productId: 999, quantityPerVisit: 1, unit: null, isActive: true, service: { id: 11, name: 'Peel' } },
+    ]);
+    prisma.product.findMany.mockResolvedValue([
+      { id: 100, name: 'Serum', sku: 'SER-01', currentStock: 12, unit: 'ml' },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/wellness/auto-consumption-rules');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body[0].product).toMatchObject({ id: 100, name: 'Serum' });
+    expect(res.body[1].product).toBeNull();
+    expect(prisma.product.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: { in: [100, 999] } },
+      }),
+    );
+  });
+
+  test('omits product include from the rule query (loads products separately)', async () => {
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([]);
+    await request(makeApp()).get('/api/wellness/auto-consumption-rules');
+    const callArg = prisma.autoConsumptionRule.findMany.mock.calls[0][0];
+    expect(callArg.include).toBeDefined();
+    expect(callArg.include.product).toBeUndefined();
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // Movements ledger
 // ─────────────────────────────────────────────────────────────────────────

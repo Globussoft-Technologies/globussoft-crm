@@ -156,7 +156,7 @@ export default function Sequences() {
       type: 'input',
       data: { label: `TRIGGER: ${trig.label || trig.value}` },
       position: { x: Math.random() * 200 + 100, y: Math.random() * 100 + 30 },
-      style: { background: trig.vertical === 'wellness' ? '#265855' : '#10b981', color: 'white', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 'bold', width: 240, textAlign: 'center' },
+      style: { background: trig.vertical === 'wellness' ? '#1F2220' : '#10b981', color: 'white', border: 'none', borderRadius: '8px', padding: '10px 20px', fontWeight: 'bold', width: 240, textAlign: 'center' },
     };
     setNodes((nds) => nds.concat(newNode));
   };

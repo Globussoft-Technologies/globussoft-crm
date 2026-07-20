@@ -581,7 +581,7 @@ router.post("/register", registerLimiter, async (req, res) => {
     res.status(201).json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null, themePreference: user.themePreference || 'system' },
-      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor }
+      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor, themeColor: tenant.themeColor }
     });
 
   } catch (error) {
@@ -686,7 +686,7 @@ router.post("/signup", registerLimiter, async (req, res) => {
     res.status(201).json({
       token,
       user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null, themePreference: user.themePreference || 'system' },
-      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor }
+      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor, themeColor: tenant.themeColor }
     });
 
   } catch (error) {
@@ -1017,7 +1017,7 @@ router.post("/login", async (req, res) => {
         primaryRole, // { id, key, name, landingPath } | null
         landingPath: primaryRole?.landingPath || null,
       },
-      tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic", country: user.tenant.country || "US", defaultCurrency: user.tenant.defaultCurrency || "USD", locale: user.tenant.locale || "en-US", logoUrl: user.tenant.logoUrl, brandColor: user.tenant.brandColor } : null
+      tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic", country: user.tenant.country || "US", defaultCurrency: user.tenant.defaultCurrency || "USD", locale: user.tenant.locale || "en-US", logoUrl: user.tenant.logoUrl, brandColor: user.tenant.brandColor, themeColor: user.tenant.themeColor } : null
     });
   } catch (error) {
     console.error("[auth] login error:", error);
@@ -1208,6 +1208,18 @@ router.get("/me", verifyToken, async (req, res) => {
       smsConfigured = false;
     }
 
+    // Fetch themeColor separately so a stale Prisma client (not yet
+    // regenerated after the schema migration that added the column) doesn't
+    // crash /me — it just returns null for themeColor until restart.
+    let themeColor = null;
+    try {
+      const tc = await prisma.tenant.findUnique({
+        where: { id: user.tenantId },
+        select: { themeColor: true },
+      });
+      themeColor = tc?.themeColor || null;
+    } catch (_ignored) {}
+
     // Carry primaryRole + landingPath on /me so a page-refresh restores the
     // same routing context the login response gave us.
     const primaryRole = await resolvePrimaryRole({ id: user.id, role: user.role, tenantId: user.tenantId });
@@ -1218,6 +1230,7 @@ router.get("/me", verifyToken, async (req, res) => {
       primaryRole,
       landingPath: primaryRole?.landingPath || null,
       features: { smsConfigured },
+      tenant: user.tenant ? { ...user.tenant, themeColor } : null,
     });
   } catch (_error) {
     res.status(500).json({ error: "Failed to fetch profile" });

@@ -1,124 +1,140 @@
 /*
- * Wellness vertical theme — modeled on Dr. Haror's Wellness brand palette.
- * Primary: deep teal #265855 (sampled from drharorswellness.com)
- * Accent : warm blush #CD9481
- * Background: warm off-white / cream — premium medical-aesthetic feel
+ * Wellness vertical theme — Dr. Enhance Wellness brand palette.
+ * Exact values from enhancewelness.globusdemos.com color analysis.
  *
- * Activated by adding <body data-vertical="wellness"> in App.jsx after login.
- * All overrides are scoped under the [data-vertical="wellness"] selector so
- * generic tenants render unchanged.
+ * Sidebar/chip : #1F2220  (dark hero bg — charcoal with slight green-gray tint)
+ * Gold accent  : #C9A063  (button gradient end, "EST. 2009" label text)
+ * Bronze       : #B98D5E  (awards section icons, star outlines)
+ * Peach        : #E8B9A0  (button gradient start, warm highlight)
+ * Content bg   : #F4EFE4  (Awards & Recognition section cream)
  */
 
 [data-vertical="wellness"] {
-  --bg-color:        #FAF7F2;
-  --surface-color:   #FFFFFF;
-  --subtle-bg:       rgba(38, 88, 85, 0.04);
-  --subtle-bg-3:     rgba(38, 88, 85, 0.08);
+  --bg-color:          #F4EFE4;        /* cream — Awards section bg */
+  --surface-color:     #FAF6ED;        /* lighter warm white for cards */
+  --subtle-bg:         rgba(201, 160, 99, 0.06);
+  --subtle-bg-3:       rgba(201, 160, 99, 0.12);
 
-  --primary-color:   #265855;        /* deep teal */
-  --primary-hover:   #1F4845;
-  --accent-color:    #CD9481;        /* warm blush */
-  --accent-hover:    #B87E6A;
-  --accent-glow:     rgba(205, 148, 129, 0.45);
-  /* #294: canonical accent-on-accent pair. The blush text on a 10%-blush
-   * cream tint failed AA contrast on cream backgrounds. Pair the deep teal
-   * surface with cream text for an always-legible CTA on wellness. */
-  --accent-bg:       var(--primary-color);   /* deep teal surface */
-  --accent-text:     #FFFFFF;                /* cream/white foreground */
+  --primary-color:     #1F2220;        /* dark charcoal — hero bg / sidebar */
+  --primary-hover:     #161917;
+  /* Accent = the customisable brand gold. Dynamic themeColor injection
+     overrides this on document.body so buttons/highlights follow the saved color. */
+  --accent-color:      #C9A063;        /* gold — "EST. 2009" label, button end */
+  --accent-hover:      #A87E45;        /* gold -20% for hover */
+  --accent-peach:      #E8B9A0;        /* peach — button gradient start */
+  --accent-peach-hover:#D9A888;        /* peach hover */
+  --accent-glow:       rgba(201, 160, 99, 0.40);
+  /* --accent-bg drives the tenant chip fill in Layout.jsx.
+     Use the charcoal so it matches the dark pill from the reference site. */
+  --accent-bg:         #1F2220;
+  --accent-text:       #F5F1E8;        /* cream — hero white heading text */
 
-  --success-color:   #4A7C59;        /* sage green */
-  --warning-color:   #D4923B;        /* warm amber */
-  --danger-color:    #A8323F;        /* burgundy red — softer than tech red */
+  --bronze-color:      #B98D5E;        /* awards bronze — sidebar section labels */
 
-  --text-primary:    #2C2825;        /* warm charcoal, not pure black — ~13.4:1 on #FAF7F2 */
-  --text-secondary:  #5C5046;        /* warm dark taupe — ~7.1:1 on #FAF7F2, clears WCAG AAA */
-  --text-tertiary:   #7A6E66;        /* original secondary, used for de-emphasis only (large text) */
+  --success-color:     #4A7C59;
+  --warning-color:     #D4923B;
+  --danger-color:      #A8323F;
 
-  --border-color:    rgba(38, 88, 85, 0.12);
-  --border-light:    rgba(38, 88, 85, 0.06);
+  --text-primary:      #2B2B2B;        /* dark heading text */
+  --text-secondary:    #6E6E6E;        /* muted gray subtext */
+  --text-tertiary:     #9A9A9A;
 
-  --font-family:     "Roboto", "Inter", system-ui, -apple-system, sans-serif;
-  --font-heading:    "Playfair Display", "Georgia", serif;
+  --border-color:      rgba(43, 43, 43, 0.10);
+  --border-light:      rgba(43, 43, 43, 0.06);
 
-  --shadow-sm:       0 1px 2px rgba(38, 88, 85, 0.06);
-  --shadow-md:       0 4px 12px rgba(38, 88, 85, 0.08);
-  --shadow-lg:       0 12px 40px rgba(38, 88, 85, 0.12);
+  --font-family:       "Manrope", "Inter", system-ui, -apple-system, sans-serif;
+  --font-heading:      "Cormorant Garamond", "Georgia", serif;
+
+  --shadow-sm:         0 1px 2px rgba(185, 141, 94, 0.08);
+  --shadow-md:         0 4px 12px rgba(185, 141, 94, 0.12);
+  --shadow-lg:         0 12px 40px rgba(185, 141, 94, 0.18);
+
+  /* Sidebar bg is its own variable so dynamic themeColor only updates
+     buttons/highlights — never the sidebar background. */
+  --sidebar-bg:        #1F2220;
+  --sidebar-bg-deep:   #161917;
 }
 
-/* Dark mode override for wellness vertical — preserves wellness brand
- * (teal primary, blush accent) but uses dark backgrounds + light text */
+/* ─── Dark mode ───────────────────────────────────────────────────────────── */
 html[data-theme="dark"][data-vertical="wellness"],
 [data-theme="dark"] [data-vertical="wellness"] {
-  --bg-color:        #14181A;        /* dark teal-tinted background */
-  --surface-color:   rgba(30, 38, 40, 0.6);
-  --subtle-bg:       rgba(205, 148, 129, 0.06);
-  --subtle-bg-3:     rgba(205, 148, 129, 0.12);
+  --bg-color:          #0D0F0E;
+  --surface-color:     rgba(31, 34, 32, 0.90);
+  --subtle-bg:         rgba(201, 160, 99, 0.06);
+  --subtle-bg-3:       rgba(201, 160, 99, 0.12);
 
-  --primary-color:   #3D9690;        /* lighter teal — readable on dark */
-  --primary-hover:   #4FB0A8;
-  --accent-color:    #E0A68B;        /* lighter blush for dark mode */
-  --accent-hover:    #ECBBA3;
-  --accent-glow:     rgba(224, 166, 139, 0.4);
-  --accent-bg:       var(--primary-color);
-  --accent-text:     #FFFFFF;
+  --primary-color:     #1F2220;
+  --primary-hover:     #161917;
+  --accent-color:      #D9A468;        /* brighter gold on dark */
+  --accent-hover:      #C9A063;
+  --accent-peach:      #D9A468;
+  --accent-peach-hover:#C9A063;
+  --accent-glow:       rgba(217, 164, 104, 0.40);
+  --accent-bg:         #1F2220;
+  --accent-text:       #F5F1E8;
 
-  --text-primary:    #F5EFE6;        /* warm cream */
-  --text-secondary:  #C4BAB0;        /* warm taupe */
-  --text-tertiary:   #948980;        /* dimmer warm taupe */
+  --bronze-color:      #C9A063;
 
-  --border-color:    rgba(245, 239, 230, 0.1);
-  --border-light:    rgba(245, 239, 230, 0.05);
+  --text-primary:      #F5F1E8;        /* hero white heading */
+  --text-secondary:    #CFCFC9;        /* hero body paragraph text */
+  --text-tertiary:     #8A8A8A;
 
-  --shadow-sm:       0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md:       0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg:       0 12px 40px rgba(0, 0, 0, 0.5);
+  --border-color:      rgba(201, 160, 99, 0.20);
+  --border-light:      rgba(201, 160, 99, 0.10);
+
+  --shadow-sm:         0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md:         0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg:         0 12px 40px rgba(0, 0, 0, 0.65);
+
+  --sidebar-bg:        #1F2220;
+  --sidebar-bg-deep:   #161917;
 }
 
-/* Dark wellness — glass cards on dark background */
+/* Dark — glass cards */
 [data-theme="dark"][data-vertical="wellness"] .glass,
 [data-theme="dark"] [data-vertical="wellness"] .glass {
-  background: rgba(30, 38, 40, 0.7);
+  background: rgba(31, 34, 32, 0.85);
   border: 1px solid var(--border-color);
 }
 
-/* Dark wellness — header bar */
+/* Dark — header bar */
 [data-theme="dark"][data-vertical="wellness"] header,
 [data-theme="dark"] [data-vertical="wellness"] header {
-  background: rgba(20, 24, 26, 0.95) !important;
+  background: rgba(13, 15, 14, 0.97) !important;
   border-bottom: 1px solid var(--border-color) !important;
 }
 
-/* Dark wellness — main content background */
+/* Dark — main content */
 [data-theme="dark"][data-vertical="wellness"] main,
 [data-theme="dark"] [data-vertical="wellness"] main {
-  background: linear-gradient(180deg, #14181A 0%, #1A2022 100%);
+  background: linear-gradient(180deg, #0D0F0E 0%, #141714 100%);
 }
 
-/* Dark wellness — inputs */
+/* Dark — inputs */
 [data-theme="dark"][data-vertical="wellness"] input,
 [data-theme="dark"][data-vertical="wellness"] select,
 [data-theme="dark"][data-vertical="wellness"] textarea,
 [data-theme="dark"] [data-vertical="wellness"] input,
 [data-theme="dark"] [data-vertical="wellness"] select,
 [data-theme="dark"] [data-vertical="wellness"] textarea {
-  background: rgba(30, 38, 40, 0.6) !important;
+  background: rgba(31, 34, 32, 0.70) !important;
   border: 1px solid var(--border-color) !important;
   color: var(--text-primary) !important;
 }
 
-/* Dark wellness — tables */
+/* Dark — tables */
 [data-theme="dark"][data-vertical="wellness"] table tbody tr:nth-child(even),
 [data-theme="dark"] [data-vertical="wellness"] table tbody tr:nth-child(even) {
-  background: rgba(245, 239, 230, 0.03);
+  background: rgba(201, 160, 99, 0.04);
 }
 [data-theme="dark"][data-vertical="wellness"] table th,
 [data-theme="dark"] [data-vertical="wellness"] table th {
-  background: rgba(245, 239, 230, 0.05);
+  background: rgba(201, 160, 99, 0.08);
 }
 
-/* Glass cards on the warm cream background — subtle, not stark */
+/* ─── Glass cards (light) ─────────────────────────────────────────────────── */
 [data-vertical="wellness"] .glass {
-  background: rgba(255, 255, 255, 0.85);
+  background: rgba(250, 246, 237, 0.90);
   backdrop-filter: blur(8px) saturate(1.05);
   -webkit-backdrop-filter: blur(8px) saturate(1.05);
   border: 1px solid var(--border-color);
@@ -126,93 +142,98 @@ html[data-theme="dark"][data-vertical="wellness"],
   box-shadow: var(--shadow-sm);
 }
 
-/* Sidebar — tinted teal background, cream text.
- * Overriding the CSS custom properties INSIDE the aside scope means any
- * `color: var(--text-primary)` inline style (e.g. on NavLink) resolves to
- * the cream value here, while the rest of the app keeps warm charcoal.
- * This is the correct fix for the inline-style-wins-over-class problem.
- */
+/* ─── Sidebar ─────────────────────────────────────────────────────────────── */
+/* #1F2220 = exact dark hero background from reference site.
+   The slight green-gray tint prevents the "dark brown" optical illusion
+   that pure near-blacks (#1A1A1A, #111) produce on warm-gamma displays. */
 [data-vertical="wellness"] aside.glass {
-  background: linear-gradient(180deg, #265855 0%, #1F4845 100%) !important;
-  border-right: 1px solid rgba(255, 255, 255, 0.10) !important;
-  /* Sidebar-scoped text vars — light on dark teal */
-  --text-primary:   #F5EFE6;
-  --text-secondary: rgba(245, 239, 230, 0.72);
-  --text-tertiary:  rgba(245, 239, 230, 0.50);
-  --border-color:   rgba(255, 255, 255, 0.10);
-  color: #F5EFE6;
+  background: linear-gradient(180deg, var(--sidebar-bg, #1F2220) 0%, var(--sidebar-bg-deep, #161917) 100%) !important;
+  border-right: 1px solid rgba(201, 160, 99, 0.18) !important;
+  --text-primary:   #F5F1E8;
+  --text-secondary: rgba(245, 241, 232, 0.68);
+  --text-tertiary:  rgba(245, 241, 232, 0.42);
+  --border-color:   rgba(201, 160, 99, 0.14);
+  color: #F5F1E8;
 }
 [data-vertical="wellness"] aside.glass h1 { color: #FFFFFF; }
 [data-vertical="wellness"] aside.glass a,
 [data-vertical="wellness"] aside.glass .nav-link {
-  color: #F5EFE6 !important;
+  color: rgba(245, 241, 232, 0.82) !important;
 }
 [data-vertical="wellness"] aside.glass .nav-link svg,
 [data-vertical="wellness"] aside.glass a svg {
-  color: rgba(245, 239, 230, 0.85);
+  color: rgba(245, 241, 232, 0.65);
   stroke: currentColor;
 }
 [data-vertical="wellness"] aside.glass .nav-link:hover,
 [data-vertical="wellness"] aside.glass a:hover {
-  background: rgba(255, 255, 255, 0.10);
+  background: rgba(201, 160, 99, 0.13);
   color: #FFFFFF !important;
+}
+[data-vertical="wellness"] aside.glass .nav-link:hover svg,
+[data-vertical="wellness"] aside.glass a:hover svg {
+  color: var(--accent-color, #C9A063);
 }
 [data-vertical="wellness"] aside.glass .nav-link.active {
-  background: rgba(205, 148, 129, 0.28);
+  background: rgba(201, 160, 99, 0.22);
   color: #FFFFFF !important;
-  border-left: 3px solid #CD9481;
+  border-left: 3px solid var(--accent-color, #C9A063);
+}
+[data-vertical="wellness"] aside.glass .nav-link.active svg {
+  color: var(--accent-color, #C9A063);
 }
 
-/* #635 Section headers in sidebar (CLINICAL / LEADS & REVENUE / etc.) —
-   lightened to meet WCAG 2.1 AA. Previous #E0A68B against the dark sidebar
-   background measured ≈2.4:1; #F4D3BD measures ≈4.7:1 (passes AA for both
-   normal and uppercase/large text). Hue preserved (warm peach), only
-   brightness/saturation tuned. */
+/* Sidebar section labels — bronze matches awards/recognition accent.
+   #B98D5E on #1F2220 ≈ 5.6:1 contrast — passes WCAG AA. */
 [data-vertical="wellness"] aside.glass [style*="textTransform"] {
-  color: #F4D3BD !important;
+  color: var(--bronze-color, #B98D5E) !important;
   font-weight: 700 !important;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
 }
 
-/* Header bar — warm white */
+/* ─── Header bar ──────────────────────────────────────────────────────────── */
 [data-vertical="wellness"] header {
-  background: rgba(255, 255, 255, 0.95) !important;
-  border-bottom: 1px solid var(--border-color) !important;
+  background: rgba(244, 239, 228, 0.97) !important;
+  border-bottom: 1px solid rgba(185, 141, 94, 0.15) !important;
 }
 
-/* Main content background */
+/* ─── Main content background ─────────────────────────────────────────────── */
 [data-vertical="wellness"] main {
-  background: linear-gradient(180deg, #FAF7F2 0%, #F5F0E8 100%);
+  background: linear-gradient(180deg, #F4EFE4 0%, #EAE3D2 100%);
 }
 
-/* Buttons — primary teal */
+/* ─── Buttons ─────────────────────────────────────────────────────────────── */
+/* Use CSS variables so dynamic themeColor injection (App.jsx → body.style)
+   reaches buttons in real time. --accent-peach is the warm start of the
+   gradient; --accent-color is the gold end. Both are overridable. */
 [data-vertical="wellness"] .btn-primary,
 [data-vertical="wellness"] button[type="submit"] {
-  background: var(--primary-color);
+  background: linear-gradient(135deg, var(--accent-peach, #E8B9A0) 0%, var(--accent-color, #C9A063) 100%);
   color: #FFFFFF;
+  border: none;
 }
-[data-vertical="wellness"] .btn-primary:hover {
-  background: var(--primary-hover);
+[data-vertical="wellness"] .btn-primary:hover,
+[data-vertical="wellness"] button[type="submit"]:hover {
+  background: linear-gradient(135deg, var(--accent-peach-hover, #D9A888) 0%, var(--accent-hover, #A87E45) 100%);
+  filter: brightness(1.04);
 }
 
-/* Inputs — soft warm borders */
+/* ─── Inputs ──────────────────────────────────────────────────────────────── */
 [data-vertical="wellness"] input,
 [data-vertical="wellness"] select,
 [data-vertical="wellness"] textarea {
   background: #FFFFFF !important;
-  border: 1px solid var(--border-color) !important;
+  border: 1px solid rgba(185, 141, 94, 0.25) !important;
   color: var(--text-primary) !important;
 }
 [data-vertical="wellness"] input:focus,
 [data-vertical="wellness"] select:focus,
 [data-vertical="wellness"] textarea:focus {
-  border-color: var(--primary-color) !important;
-  box-shadow: 0 0 0 3px rgba(38, 88, 85, 0.1) !important;
+  border-color: var(--accent-color, #C9A063) !important;
+  box-shadow: 0 0 0 3px rgba(201, 160, 99, 0.12) !important;
 }
 
-/* Opt-out: inputs nested in a styled wrapper (icon-prefixed search bars,
-   combo controls, etc.) where the WRAPPER provides the border + background.
-   Apply `className="naked-input"` to suppress the global input chrome. */
+/* Opt-out for icon-prefixed wrappers that provide their own chrome */
 [data-vertical="wellness"] input.naked-input,
 [data-vertical="wellness"] input.naked-input:focus,
 [data-theme="dark"][data-vertical="wellness"] input.naked-input,
@@ -225,30 +246,28 @@ html[data-theme="dark"][data-vertical="wellness"],
   outline: none !important;
 }
 
-/* Tables — warm zebra stripes */
+/* ─── Tables ──────────────────────────────────────────────────────────────── */
 [data-vertical="wellness"] table tbody tr:nth-child(even) {
-  background: rgba(38, 88, 85, 0.02);
+  background: rgba(201, 160, 99, 0.04);
 }
 [data-vertical="wellness"] table th {
   color: var(--text-secondary) !important;
-  background: rgba(38, 88, 85, 0.05);
-  border-bottom: 1px solid var(--border-color) !important;
+  background: rgba(201, 160, 99, 0.06);
+  border-bottom: 1px solid rgba(185, 141, 94, 0.15) !important;
 }
 
-/* Tier badges — warmer colors */
+/* ─── Tier badges ─────────────────────────────────────────────────────────── */
 [data-vertical="wellness"] [style*="background: rgb(239, 68, 68)"],
 [data-vertical="wellness"] [style*="background: #ef4444"] {
   background: var(--danger-color) !important;
 }
 
-/* Soft scrollbars */
-[data-vertical="wellness"] *::-webkit-scrollbar {
-  width: 8px; height: 8px;
-}
+/* ─── Scrollbars ──────────────────────────────────────────────────────────── */
+[data-vertical="wellness"] *::-webkit-scrollbar { width: 6px; height: 6px; }
 [data-vertical="wellness"] *::-webkit-scrollbar-thumb {
-  background: rgba(38, 88, 85, 0.15);
-  border-radius: 4px;
+  background: rgba(201, 160, 99, 0.22);
+  border-radius: 3px;
 }
 [data-vertical="wellness"] *::-webkit-scrollbar-thumb:hover {
-  background: rgba(38, 88, 85, 0.3);
+  background: rgba(201, 160, 99, 0.42);
 }

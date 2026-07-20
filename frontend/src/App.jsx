@@ -833,6 +833,83 @@ export default function App() {
     document.body.setAttribute("data-vertical", v);
   }, [tenant]);
 
+  // Inject dynamic theme color from tenant.themeColor.
+  // When set, overrides the static --primary-color / --accent-color defined in
+  // the vertical CSS files (wellness.css, travel.css, index.css).  The sidebar,
+  // buttons, focus rings, active-nav indicators, and every other element that
+  // reads var(--primary-color) or var(--accent-color) will pick up the tenant's
+  // chosen color automatically — in both light and dark modes.
+  // tenant.brandColor remains untouched — it drives sidebar section labels only.
+  // When cleared, removes the inline custom properties so the vertical CSS
+  // defaults take back over with no residual stale values.
+  useEffect(() => {
+    const raw = tenant?.themeColor || "";
+    const valid = /^#[0-9a-fA-F]{6}$/.test(raw);
+    // Inject onto document.body — body carries data-vertical="wellness", so
+    // inline styles here beat the [data-vertical="wellness"] CSS class rules
+    // (same element: inline > class in the cascade, no specificity fight).
+    const el = document.body;
+    if (valid) {
+      const r = parseInt(raw.slice(1, 3), 16);
+      const g = parseInt(raw.slice(3, 5), 16);
+      const b = parseInt(raw.slice(5, 7), 16);
+      const darken = (c) =>
+        Math.round(c * 0.88)
+          .toString(16)
+          .padStart(2, "0");
+      const hoverHex = `#${darken(r)}${darken(g)}${darken(b)}`;
+      const glowRgba = `rgba(${r},${g},${b},0.35)`;
+      const subtleBg = `rgba(${r},${g},${b},0.06)`;
+      const subtleBg3 = `rgba(${r},${g},${b},0.12)`;
+
+      // --accent-color drives buttons, active highlights, links, focus rings.
+      // --sidebar-bg / --sidebar-bg-deep / --accent-bg follow the theme color
+      // so the sidebar and tenant chip update together with buttons.
+      el.style.setProperty("--accent-color", raw);
+      el.style.setProperty("--accent-hover", hoverHex);
+      el.style.setProperty("--accent-glow", glowRgba);
+      el.style.setProperty("--subtle-bg", subtleBg);
+      el.style.setProperty("--subtle-bg-3", subtleBg3);
+
+      // Sidebar / chip background: use the theme color directly.
+      // --sidebar-bg-deep is a 15%-darkened variant for the gradient.
+      const deepR = Math.round(r * 0.85);
+      const deepG = Math.round(g * 0.85);
+      const deepB = Math.round(b * 0.85);
+      const toHex = (c) => c.toString(16).padStart(2, "0");
+      const sidebarDeep = `#${toHex(deepR)}${toHex(deepG)}${toHex(deepB)}`;
+      el.style.setProperty("--sidebar-bg", raw);
+      el.style.setProperty("--sidebar-bg-deep", sidebarDeep);
+      el.style.setProperty("--accent-bg", raw);
+
+      // Ensure text on the colored sidebar is always readable:
+      // use white for dark backgrounds, dark charcoal for light ones.
+      const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      const accentText = luminance < 160 ? "#F5F1E8" : "#1F2220";
+      el.style.setProperty("--accent-text", accentText);
+
+      // Derive a warm peach tint for the button gradient start: blend the
+      // chosen color 40% toward white so it reads as a lighter warm variant.
+      const peachR = Math.round(r + (255 - r) * 0.4);
+      const peachG = Math.round(g + (255 - g) * 0.4);
+      const peachB = Math.round(b + (255 - b) * 0.4);
+      el.style.setProperty("--accent-peach", `#${toHex(peachR)}${toHex(peachG)}${toHex(peachB)}`);
+      el.style.setProperty("--accent-peach-hover", `#${darken(peachR)}${darken(peachG)}${darken(peachB)}`);
+    } else {
+      el.style.removeProperty("--accent-color");
+      el.style.removeProperty("--accent-hover");
+      el.style.removeProperty("--accent-glow");
+      el.style.removeProperty("--subtle-bg");
+      el.style.removeProperty("--subtle-bg-3");
+      el.style.removeProperty("--sidebar-bg");
+      el.style.removeProperty("--sidebar-bg-deep");
+      el.style.removeProperty("--accent-bg");
+      el.style.removeProperty("--accent-text");
+      el.style.removeProperty("--accent-peach");
+      el.style.removeProperty("--accent-peach-hover");
+    }
+  }, [tenant?.themeColor]);
+
   // Theme toggle. Uses the View Transitions API in browsers that support it
   // (Chrome/Edge 111+, Safari 18+) so the swap is a GPU-composited crossfade
   // instead of a sharp snap. The browser captures the page as a screenshot,

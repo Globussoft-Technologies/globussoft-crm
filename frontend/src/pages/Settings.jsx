@@ -117,9 +117,10 @@ export default function Settings() {
   // that claims to track customer comms. Pre-fix the default was OFF, sent
   // emails vanished, Sent folder stayed empty, threading broke.
   const [emailRetentionSaving, setEmailRetentionSaving] = useState(false);
-  // Branding (logo + brand color) — backed by /api/wellness/branding
-  const [branding, setBranding] = useState({ logoUrl: null, brandColor: "" });
+  // Branding (logo + brand color + theme color) — backed by /api/wellness/branding
+  const [branding, setBranding] = useState({ logoUrl: null, brandColor: "", themeColor: "" });
   const [brandingSaving, setBrandingSaving] = useState(false);
+  const [themeColorSaving, setThemeColorSaving] = useState(false);
   // Logo upload UX: pick a file → preview it locally → click "Save logo"
   // to actually upload. Previously the upload fired on file-pick which
   // gave no way to review before commit + no preview of the picked file.
@@ -176,6 +177,7 @@ export default function Settings() {
         setBranding({
           logoUrl: res.logoUrl || null,
           brandColor: res.brandColor || "",
+          themeColor: res.themeColor || "",
         }),
       )
       .catch(() => {
@@ -239,6 +241,7 @@ export default function Settings() {
     setBranding({
       logoUrl: activeBrandKitRow?.logoUrl || null,
       brandColor: activeBrandKitRow?.primaryColor || "",
+      themeColor: "",
     });
     setLogoBroken(false);
     setBrandingMsg("");
@@ -397,6 +400,29 @@ export default function Settings() {
       setBrandingMsg(err?.body?.error || err?.message || "Failed to save brand color");
     } finally {
       setBrandingSaving(false);
+    }
+  };
+
+  const handleSaveThemeColor = async () => {
+    setThemeColorSaving(true);
+    setBrandingMsg("");
+    try {
+      const value = branding.themeColor || "";
+      if (value && !/^#[0-9a-fA-F]{6}$/.test(value)) {
+        throw new Error("Theme color must be a 6-digit hex (e.g. #C9A063).");
+      }
+      const res = await fetchApi("/api/wellness/branding/theme-color", {
+        method: "PUT",
+        body: JSON.stringify({ themeColor: value || null }),
+      });
+      setBranding((b) => ({ ...b, themeColor: res.themeColor || "" }));
+      if (setTenant && ctxTenant)
+        setTenant({ ...ctxTenant, themeColor: res.themeColor || null });
+      setBrandingMsg("Theme color saved.");
+    } catch (err) {
+      setBrandingMsg(err?.body?.error || err?.message || "Failed to save theme color");
+    } finally {
+      setThemeColorSaving(false);
     }
   };
 
@@ -2057,7 +2083,7 @@ export default function Settings() {
                 </p>
               </div>
 
-              {/* Brand color */}
+              {/* Brand color — original; sidebar section labels + PDFs */}
               <div style={{ minWidth: 0 }}>
                 <label
                   style={{
@@ -2135,6 +2161,120 @@ export default function Settings() {
                 >
                   6-digit hex. Leave blank to fall back to the default theme
                   accent.
+                </p>
+              </div>
+
+              {/* Theme color — controls the full UI: sidebar bg, buttons, tabs, focus rings */}
+              <div style={{ minWidth: 0 }}>
+                <label
+                  style={{
+                    display: "block",
+                    marginBottom: "0.5rem",
+                    fontSize: "0.875rem",
+                    color: "var(--text-secondary)",
+                    fontWeight: 500,
+                  }}
+                >
+                  <Palette
+                    size={14}
+                    style={{ verticalAlign: "middle", marginRight: "0.35rem" }}
+                  />{" "}
+                  Theme color
+                </label>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    marginBottom: "0.75rem",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <input
+                    type="color"
+                    value={
+                      /^#[0-9a-fA-F]{6}$/.test(branding.themeColor || "")
+                        ? branding.themeColor
+                        : DEFAULT_BRAND_COLOR
+                    }
+                    onChange={(e) =>
+                      setBranding({ ...branding, themeColor: e.target.value })
+                    }
+                    style={{
+                      width: 48,
+                      height: 40,
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      padding: 2,
+                      background: "var(--input-bg)",
+                    }}
+                  />
+                  <input
+                    type="text"
+                    className="input-field"
+                    placeholder={DEFAULT_BRAND_COLOR}
+                    value={branding.themeColor || ""}
+                    onChange={(e) =>
+                      setBranding({ ...branding, themeColor: e.target.value })
+                    }
+                    style={{ flex: "1 1 120px", minWidth: 0 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={themeColorSaving}
+                    onClick={handleSaveThemeColor}
+                    style={{ whiteSpace: "nowrap" }}
+                  >
+                    {themeColorSaving ? "Saving..." : "Save color"}
+                  </button>
+                  {branding.themeColor && (
+                    <button
+                      type="button"
+                      disabled={themeColorSaving}
+                      onClick={async () => {
+                        setBranding((b) => ({ ...b, themeColor: "" }));
+                        setThemeColorSaving(true);
+                        setBrandingMsg("");
+                        try {
+                          await fetchApi("/api/wellness/branding/theme-color", {
+                            method: "PUT",
+                            body: JSON.stringify({ themeColor: null }),
+                          });
+                          if (setTenant && ctxTenant)
+                            setTenant({ ...ctxTenant, themeColor: null });
+                          setBrandingMsg("Reset to logo default.");
+                        } catch (err) {
+                          setBrandingMsg(err?.body?.error || err?.message || "Reset failed");
+                        } finally {
+                          setThemeColorSaving(false);
+                        }
+                      }}
+                      style={{
+                        whiteSpace: "nowrap",
+                        background: "transparent",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 8,
+                        padding: "0.45rem 0.85rem",
+                        fontSize: "0.85rem",
+                        color: "var(--text-secondary)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Reset to default
+                    </button>
+                  )}
+                </div>
+                <p
+                  style={{
+                    color: "var(--text-secondary)",
+                    fontSize: "0.75rem",
+                  }}
+                >
+                  6-digit hex. Changes buttons, tabs, active highlights, and
+                  focus rings. Leave blank (or reset) to restore the Dr. Enhance
+                  gold palette.
                 </p>
               </div>
             </div>

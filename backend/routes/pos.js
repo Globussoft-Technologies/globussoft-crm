@@ -158,13 +158,28 @@ function parseInvoiceNumber(s) {
 
 async function generateInvoiceNumber(tx, tenantId, now = new Date()) {
   const year = now.getUTCFullYear();
-  // Atomic counter table (replaces the racy findFirst+1 pattern).
-  // nextSeq is the value AFTER increment; invoice = nextSeq - 1.
-  // For a fresh tenant+year, create sets nextSeq=2 → invoice 1.
+  // Atomic counter table. nextSeq is the value AFTER increment; invoice = nextSeq - 1.
+  // When the counter row is missing (first sale ever, or DB seeded without the
+  // counter), scan existing Sales for this tenant+year to find the true max seq
+  // so the create branch never collides with a pre-existing invoice number.
+  const prefix = `POS-${year}-`;
+  const existing = await tx.sale.findFirst({
+    where: {
+      tenantId,
+      invoiceNumber: { startsWith: prefix },
+    },
+    orderBy: { invoiceNumber: "desc" },
+    select: { invoiceNumber: true },
+  });
+  const maxExistingSeq = existing ? (parseInvoiceNumber(existing.invoiceNumber)?.seq ?? 0) : 0;
+  // nextSeq for a brand-new counter = maxExistingSeq + 2
+  // (maxExistingSeq + 1 is the invoice we're about to issue; counter stores the
+  //  value *after* increment so the next caller gets maxExistingSeq + 2).
+  const freshNextSeq = maxExistingSeq + 2;
   const counter = await tx.invoiceCounter.upsert({
     where: { tenantId_year: { tenantId, year } },
     update: { nextSeq: { increment: 1 } },
-    create: { tenantId, year, nextSeq: 2 },
+    create: { tenantId, year, nextSeq: freshNextSeq },
   });
   return formatInvoiceNumber(year, counter.nextSeq - 1);
 }
@@ -984,6 +999,8 @@ router.post("/sales", cashierGate, async (req, res) => {
       discountTotal,
       taxTotal,
       paymentBreakdownJson,
+      managerOverride,
+      notes,
     } = req.body;
 
     // Validate shift
@@ -1123,7 +1140,43 @@ router.post("/sales", cashierGate, async (req, res) => {
     const orderDiscount = Math.max(0, parseFloat(discountTotal || 0));
     const totalDiscount = lineDiscounts + orderDiscount;
     const tax = Math.max(0, parseFloat(taxTotal || 0));
-    const total = Math.max(0, subtotal - totalDiscount + tax);
+    const computedTotal = Math.max(0, subtotal - totalDiscount + tax);
+
+    // Manager override — admin/manager may supply a custom grand total.
+    // The override amount replaces the computed total for payment validation
+    // and the Sale record; the computed breakdown fields remain unchanged for
+    // audit transparency.
+    let total = computedTotal;
+    let managerOverrideNote = null;
+    if (managerOverride && typeof managerOverride === "object") {
+      const isPrivileged =
+        req.user.role === "ADMIN" || req.user.role === "MANAGER";
+      if (!isPrivileged) {
+        return res.status(403).json({
+          error: "Only ADMIN or MANAGER can apply a manager override",
+          code: "OVERRIDE_FORBIDDEN",
+        });
+      }
+      const overrideAmt = parseFloat(managerOverride.amount);
+      const overrideReason =
+        typeof managerOverride.reason === "string"
+          ? managerOverride.reason.trim()
+          : "";
+      if (!Number.isFinite(overrideAmt) || overrideAmt < 0) {
+        return res.status(400).json({
+          error: "managerOverride.amount must be a non-negative number",
+          code: "INVALID_OVERRIDE_AMOUNT",
+        });
+      }
+      if (!overrideReason) {
+        return res.status(400).json({
+          error: "managerOverride.reason is required",
+          code: "OVERRIDE_REASON_REQUIRED",
+        });
+      }
+      total = overrideAmt;
+      managerOverrideNote = `Manager override by ${req.user.userId}: ${overrideReason} (computed ${computedTotal.toFixed(2)} → override ${overrideAmt.toFixed(2)})`;
+    }
     const paid = paidAmount !== undefined ? parseFloat(paidAmount) : total;
     if (!Number.isFinite(paid) || paid < 0) {
       return res
@@ -1284,18 +1337,22 @@ router.post("/sales", cashierGate, async (req, res) => {
       }
     }
 
+    const auditMeta = {
+      invoiceNumber: sale.invoiceNumber,
+      total: sale.total,
+      paymentMethod: sale.paymentMethod,
+      lineCount: sale.lineItems.length,
+    };
+    if (managerOverrideNote) {
+      auditMeta.managerOverride = managerOverrideNote;
+    }
     await writeAudit(
       "Sale",
       "CREATE",
       sale.id,
       req.user.userId,
       req.user.tenantId,
-      {
-        invoiceNumber: sale.invoiceNumber,
-        total: sale.total,
-        paymentMethod: sale.paymentMethod,
-        lineCount: sale.lineItems.length,
-      },
+      auditMeta,
     );
 
     // PRD Gap §2 item 9 — auto-credit loyalty on Sale completion. Same
@@ -1331,7 +1388,7 @@ router.post("/sales", cashierGate, async (req, res) => {
 
     res.status(201).json(sale);
   } catch (e) {
-    console.error("[pos] create sale error:", e.message);
+    console.error("[pos] create sale error:", e.message, e.stack);
     res.status(500).json({ error: "Failed to create sale" });
   }
 });

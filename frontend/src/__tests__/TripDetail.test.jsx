@@ -116,11 +116,13 @@ const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
 const notifyConfirm = vi.fn(() => Promise.resolve(true));
+const notifyPrompt = vi.fn(() => Promise.resolve('Documents do not meet trip requirements'));
 const notifyObj = {
   error: notifyError,
   info: notifyInfo,
   success: notifySuccess,
   confirm: notifyConfirm,
+  prompt: notifyPrompt,
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
@@ -273,6 +275,8 @@ beforeEach(() => {
   notifyInfo.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockResolvedValue(true);
+  notifyPrompt.mockReset();
+  notifyPrompt.mockResolvedValue('Documents do not meet trip requirements');
   // Stub window.confirm for the remove-participant path (used only in the
   // remove case; harmless elsewhere).
   vi.stubGlobal('confirm', vi.fn(() => true));
@@ -1675,11 +1679,18 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
         destructive: true,
       }));
     });
+    expect(notifyPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Reason for rejection',
+      confirmText: 'Continue',
+    }));
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/travel/trips/101/registrations/9001/reject' && o?.method === 'POST',
       );
       expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({
+        reviewNotes: 'Documents do not meet trip requirements',
+      });
     });
   });
 
@@ -1698,6 +1709,19 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     expect(fetchApiMock.mock.calls.find(
       ([u]) => /\/registrations\/9001\/reject/.test(u),
     )).toBeFalsy();
+  });
+
+  it('rejecting without a reason shows a required toast and does not call the endpoint', async () => {
+    notifyPrompt.mockResolvedValueOnce('   ');
+    installFetchMock({ pendingRegs: [makePendingReg()] });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    fireEvent.click(await screen.findByTestId('reject-registration-9001'));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('A reason is required to reject a participant.');
+    });
+    expect(fetchApiMock.mock.calls.find(([u]) => /\/registrations\/9001\/reject/.test(u))).toBeFalsy();
   });
 
   it('no pending registrations → pending list is not rendered, participants list still shows', async () => {

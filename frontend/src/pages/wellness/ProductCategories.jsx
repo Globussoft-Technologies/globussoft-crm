@@ -486,7 +486,7 @@ export default function ProductCategories() {
               >
                 <input
                   type="color"
-                  value={formData.color || "#265855"}
+                  value={formData.color || "#C9A063"}
                   onChange={(e) =>
                     setFormData({ ...formData, color: e.target.value })
                   }
@@ -501,7 +501,7 @@ export default function ProductCategories() {
                 <span
                   style={{ fontSize: "0.9rem", color: "var(--text-secondary)" }}
                 >
-                  {formData.color || "#265855"}
+                  {formData.color || "#C9A063"}
                 </span>
               </div>
             </div>

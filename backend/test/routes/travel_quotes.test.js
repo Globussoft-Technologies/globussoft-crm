@@ -231,10 +231,11 @@ describe('POST /api/travel/quotes', () => {
 });
 
 describe('GET /api/travel/quotes', () => {
-  test('returns tenant-scoped list', async () => {
+  test('returns tenant-scoped list with contact names joined', async () => {
     prisma.travelQuote.findMany.mockResolvedValue([
       { id: 1, tenantId: 1, subBrand: 'tmc', contactId: 5, status: 'Draft',
-        totalAmount: '100.00', currency: 'INR', validUntil: null },
+        totalAmount: '100.00', currency: 'INR', validUntil: null,
+        contact: { id: 5, name: 'Alice Smith' } },
     ]);
     prisma.travelQuote.count.mockResolvedValue(1);
     const res = await request(makeApp())
@@ -243,10 +244,13 @@ describe('GET /api/travel/quotes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ total: 1 });
     expect(res.body.quotes).toHaveLength(1);
-    // The where clause MUST include tenantId from req.user.tenantId.
+    expect(res.body.quotes[0]).toMatchObject({ contactId: 5, contact: { id: 5, name: 'Alice Smith' } });
+    // The where clause MUST include tenantId from req.user.tenantId and the
+    // full-shape path MUST join the contact name.
     expect(prisma.travelQuote.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ tenantId: 1 }),
+        include: { contact: { select: { id: true, name: true } } },
       }),
     );
   });

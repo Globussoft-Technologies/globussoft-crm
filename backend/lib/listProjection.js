@@ -176,6 +176,10 @@ const PROJECTIONS = Object.freeze({
     currency: true,
     validUntil: true,    // expiry-sort UI needs this
     createdAt: true,
+    // Contact name is the operator-visible headline for a quote row. The bare
+    // contactId is kept for backwards-compat/detail navigation; name is joined
+    // here so list callers don't need a second fetch to render the customer.
+    contact: { select: { id: true, name: true } },
   }),
 
   TravelInvoice: Object.freeze({

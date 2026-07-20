@@ -48,7 +48,7 @@
 //                          + dates + totalAmount + currency + createdAt.
 //                          shareToken (auth-bearing) + pricingJson (heavy)
 //                          + pdfUrl + micrositeUrl are EXCLUDED.
-//   - TravelQuote        — id + subBrand + contactId + status + totals +
+//   - TravelQuote        — id + subBrand + contactId + contact.name + status + totals +
 //                          validUntil + createdAt.
 //   - TravelInvoice      — id + subBrand + contactId + invoiceNum + status
 //                          + docType + totals + dueDate + paidAt + createdAt.
@@ -213,18 +213,18 @@ describe('listProjection(modelName, fullShape)', () => {
       }
     });
 
-    test('every projection value is `true` (Prisma `select` shape contract)', () => {
-      // Prisma `select` keys map to `true` (include) or `false` (exclude) or
-      // a nested-select object. Our slim shape only uses `true` (the keys
-      // we WANT) — we never spell out `false` for excluded keys; absence
+    test('every projection value is `true` or a nested-select object (Prisma `select` shape contract)', () => {
+      // Prisma `select` keys map to `true` (include) or a nested-select
+      // object for relations. We never use `false` for excluded keys; absence
       // is the exclusion signal.
       for (const model of KNOWN_MODELS) {
         const projection = listProjection(model, false);
         for (const [, v] of Object.entries(projection)) {
-          // Allow `true` only (the helper never ships `false` exclusions —
-          // we let absence carry the exclusion signal so the SQL `SELECT`
-          // stays narrow rather than spelling out exclusions).
-          expect(v).toBe(true);
+          // Allow `true` or a nested relation select object. The helper never
+          // ships `false` exclusions — we let absence carry the exclusion
+          // signal so the SQL `SELECT` stays narrow rather than spelling out
+          // exclusions.
+          expect(v === true || (typeof v === 'object' && v !== null)).toBe(true);
         }
       }
     });
@@ -359,6 +359,7 @@ describe('listProjection(modelName, fullShape)', () => {
         currency: true,
         validUntil: true,
         createdAt: true,
+        contact: { select: { id: true, name: true } },
       });
     });
 

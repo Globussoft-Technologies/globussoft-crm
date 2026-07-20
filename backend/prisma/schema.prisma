@@ -74,7 +74,8 @@ model Tenant {
   gstStateCode       String?
   // Agent C: white-label branding
   logoUrl            String? // path to uploaded logo, e.g. /uploads/branding/tenant-2/logo.png
-  brandColor         String? // hex like #265855, overrides theme accent when set
+  brandColor         String? // hex like #265855, overrides sidebar section-label + PDF accent when set
+  themeColor         String? // hex like #C9A063, overrides the full UI primary color (buttons, sidebar bg, tabs)
   // #611: when true, OUTBOUND EmailMessage rows are persisted on send
   // (industry default — Sent folder, threading, audit trail). Admins
   // may opt out for storage / compliance reasons; existing tenants
@@ -866,6 +867,9 @@ model Contact {
   itineraries               Itinerary[]
   // Generic-vertical admin-configurable Lead custom fields.
   leadCustomFieldValues     LeadCustomFieldValue[]
+  // Customer-facing travel quotes. This relation lets quote lists load the
+  // customer's display name without a separate contact-list request.
+  travelQuotes              TravelQuote[]
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
@@ -7190,6 +7194,7 @@ model TravelQuote {
   tenantId             Int                   @default(1)
   subBrand             String
   contactId            Int
+  contact              Contact               @relation(fields: [contactId], references: [id], onDelete: Restrict)
   status               String                @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
   totalAmount          Decimal?              @db.Decimal(15, 2)
   currency             String                @default("INR")

@@ -120,7 +120,7 @@ export default function Memberships() {
             name: user?.name || '',
             email: user?.email || '',
           },
-          theme: { color: '#265855' },
+          theme: { color: '#a07c4a' },
           handler: async (response) => {
             try {
               const confirm = await fetchApi(

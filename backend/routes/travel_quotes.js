@@ -281,8 +281,9 @@ function visaComplexCaseError() {
 // Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction).
 // Default shape is the full TravelQuote row (back-compat). Pass
 // `?fields=summary` to opt into the slim projection (id + subBrand +
-// contactId + status + totalAmount + currency + validUntil + createdAt)
-// — picker / dashboard-tile callers don't need the model's full row.
+// contactId + contact.name + status + totalAmount + currency + validUntil +
+// createdAt) — picker / dashboard-tile callers don't need the model's
+// full row.
 router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
@@ -314,6 +315,10 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
     };
     if (isSummary) {
       findManyArgs.select = listProjection("TravelQuote", false);
+    } else {
+      // Full-shape path: join the contact name so the admin list can render
+      // the customer name instead of a bare contactId.
+      findManyArgs.include = { contact: { select: { id: true, name: true } } };
     }
     const [quotes, total] = await Promise.all([
       prisma.travelQuote.findMany(findManyArgs),

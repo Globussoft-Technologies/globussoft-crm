@@ -631,7 +631,18 @@ function ParticipantsTab({ trip, onChange, notify }) {
   // endpoints (not PATCH) so the audit trail captures the decision cleanly
   // and the workflow engine can hook off the verb later.
   const decide = async (pid, action) => {
+    let reviewNotes;
     if (action === "reject") {
+      reviewNotes = await notify.prompt({
+        title: "Reason for rejection",
+        message: "Please provide a reason for rejecting this participant.",
+        placeholder: "Enter rejection reason",
+        confirmText: "Continue",
+      });
+      if (!String(reviewNotes || "").trim()) {
+        notify.error("A reason is required to reject a participant.");
+        return;
+      }
       const ok = await notify.confirm({
         title: "Reject application",
         message: "Mark this participant as rejected? You can re-approve later if needed.",
@@ -644,6 +655,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
     try {
       await fetchApi(`/api/travel/trips/${trip.id}/participants/${pid}/${action}`, {
         method: "POST",
+        ...(action === "reject" ? { body: JSON.stringify({ reviewNotes: String(reviewNotes).trim() }) } : {}),
       });
       notify.success(action === "approve" ? "Application approved" : "Application rejected");
       onChange();
@@ -675,7 +687,18 @@ function ParticipantsTab({ trip, onChange, notify }) {
   // BOTH the parent trip (to get the new participant row) AND the
   // pending-registration list (to reflect status=CONVERTED).
   const decideRegistration = async (rid, action) => {
+    let reviewNotes;
     if (action === "reject") {
+      reviewNotes = await notify.prompt({
+        title: "Reason for rejection",
+        message: "Please provide a reason for rejecting this participant.",
+        placeholder: "Enter rejection reason",
+        confirmText: "Continue",
+      });
+      if (!String(reviewNotes || "").trim()) {
+        notify.error("A reason is required to reject a participant.");
+        return;
+      }
       const ok = await notify.confirm({
         title: "Reject registration",
         message: "Mark this registration as rejected? It will be removed from the review queue.",
@@ -688,6 +711,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
     try {
       await fetchApi(`/api/travel/trips/${trip.id}/registrations/${rid}/${action}`, {
         method: "POST",
+        ...(action === "reject" ? { body: JSON.stringify({ reviewNotes: String(reviewNotes).trim() }) } : {}),
       });
       notify.success(
         action === "approve"

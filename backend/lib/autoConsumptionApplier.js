@@ -54,11 +54,23 @@ async function applyAutoConsumptionForVisit(visit, _opts = {}) {
       serviceId: visit.serviceId,
       isActive: true,
     },
-    include: { product: { select: { id: true, name: true, currentStock: true, threshold: true, volume: true, unit: true, partialMlUsed: true } } },
   });
   out.rules = rules.length;
   console.log(`[autoConsumption] visit ${visit.id} serviceId=${visit.serviceId}: found ${rules.length} rules`);
   if (rules.length === 0) return out;
+
+  // Load products separately. If a rule references a product that was deleted
+  // after the rule was created, the product will be missing; those rules are
+  // skipped rather than crashing on a required-relation include.
+  const productIds = [...new Set(rules.map((r) => r.productId).filter(Boolean))];
+  const products = productIds.length
+    ? await prisma.product.findMany({
+        where: { id: { in: productIds } },
+        select: { id: true, name: true, currentStock: true, threshold: true, volume: true, unit: true, partialMlUsed: true },
+      })
+    : [];
+  const productMap = new Map(products.map((p) => [p.id, p]));
+  const rulesWithProduct = rules.map((r) => ({ ...r, product: productMap.get(r.productId) || null }));
 
   // Idempotency: if any ServiceConsumption rows already exist for this visit
   // (from an earlier `visit.completed` fire — duplicate event, re-entrant
@@ -84,8 +96,15 @@ async function applyAutoConsumptionForVisit(visit, _opts = {}) {
     // deduction — the existing audit trail surfaces any double-deduction.
   }
 
-  for (const rule of rules) {
+  for (const rule of rulesWithProduct) {
     try {
+      if (!rule.product) {
+        console.warn(
+          `[autoConsumption] rule ${rule.id} references missing product ${rule.productId}; skipping`
+        );
+        out.skipped.push({ ruleId: rule.id, reason: "PRODUCT_NOT_FOUND" });
+        continue;
+      }
       if (alreadyDeducted.has(rule.productId)) {
         out.skipped.push({ ruleId: rule.id, reason: "ALREADY_APPLIED" });
         continue;

@@ -1,14 +1,18 @@
 import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
 import { formatDate, formatDateTime } from '../utils/date';
-import React, { useEffect, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Phone, Mail, Calendar, Paperclip, Upload, Trash2, FileText, Download, Target, Pencil, MessageSquareText, Sparkles } from 'lucide-react';
+import { AuthContext } from '../App';
 
 const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
 
 const ContactDetail = () => {
   const { id } = useParams();
+  const auth = useContext(AuthContext);
+  const isWellness = auth?.tenant?.vertical === 'wellness';
+  const isTravel = auth?.tenant?.vertical === 'travel';
   const [contact, setContact] = useState(null);
   const [attachments, setAttachments] = useState([]);
   const [showUpload, setShowUpload] = useState(false);
@@ -16,7 +20,16 @@ const ContactDetail = () => {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState('');
-  const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', company: '', title: '' });
+  const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', company: '', title: '', customFields: {} });
+  // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
+  const [customFieldDefs, setCustomFieldDefs] = useState([]);
+
+  useEffect(() => {
+    if (isWellness || isTravel) return;
+    fetchApi('/api/lead-custom-fields')
+      .then(d => setCustomFieldDefs(Array.isArray(d) ? d : []))
+      .catch(() => setCustomFieldDefs([]));
+  }, [isWellness, isTravel]);
 
   const openEdit = () => {
     setEditForm({
@@ -25,6 +38,7 @@ const ContactDetail = () => {
       phone: contact.phone || '',
       company: contact.company || '',
       title: contact.title || '',
+      customFields: { ...(contact.customFields || {}) },
     });
     setEditError('');
     setEditing(true);
@@ -56,6 +70,99 @@ const ContactDetail = () => {
 
   const loadContact = () => {
     fetchApi(`/api/contacts/${id}`).then(data => setContact(data)).catch(() => {});
+  };
+
+  // Generic-vertical-only Lead custom fields — renders the right input
+  // widget per admin-defined field type (Settings > Lead Fields).
+  const handleCustomFieldChange = (key, value) => {
+    setEditForm(prev => ({ ...prev, customFields: { ...prev.customFields, [key]: value } }));
+  };
+
+  const renderCustomFieldInputs = () => {
+    if (isWellness || isTravel || customFieldDefs.length === 0) return null;
+    return customFieldDefs.map((f) => {
+      const value = editForm.customFields?.[f.fieldKey] ?? '';
+      const label = (
+        <span style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>{f.label}</span>
+      );
+      const titleAttr = f.tooltip ? { title: f.tooltip } : {};
+      const placeholder = f.placeholder || `${f.label}…`;
+
+      if (f.fieldType === 'checkbox') {
+        return (
+          <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }} {...titleAttr}>
+            <input type="checkbox" checked={Boolean(value)} onChange={e => handleCustomFieldChange(f.fieldKey, e.target.checked)} />
+            {f.label}
+          </label>
+        );
+      }
+      if (f.fieldType === 'dropdown' || f.fieldType === 'radio') {
+        return (
+          <label key={f.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }} {...titleAttr}>
+            {label}
+            <select className="input-field" required={f.isRequired} value={value} onChange={e => handleCustomFieldChange(f.fieldKey, e.target.value)} style={{ padding: '0.45rem', fontSize: '0.85rem' }}>
+              <option value="">Select…</option>
+              {(f.options || []).map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+            </select>
+          </label>
+        );
+      }
+      if (f.fieldType === 'multiselect') {
+        const selected = Array.isArray(value) ? value : (value ? [value] : []);
+        return (
+          <div key={f.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }} {...titleAttr}>
+            {label}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+              {(f.options || []).map((opt) => (
+                <label key={opt} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.8rem', padding: '0.2rem 0.5rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(opt)}
+                    onChange={(e) => {
+                      const next = e.target.checked ? [...selected, opt] : selected.filter((s) => s !== opt);
+                      handleCustomFieldChange(f.fieldKey, next);
+                    }}
+                  />
+                  {opt}
+                </label>
+              ))}
+            </div>
+          </div>
+        );
+      }
+      if (f.fieldType === 'textarea') {
+        return (
+          <label key={f.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }} {...titleAttr}>
+            {label}
+            <textarea
+              className="input-field"
+              required={f.isRequired}
+              value={value}
+              placeholder={placeholder}
+              maxLength={2000}
+              rows={3}
+              onChange={e => handleCustomFieldChange(f.fieldKey, e.target.value)}
+              style={{ padding: '0.45rem', fontSize: '0.85rem' }}
+            />
+          </label>
+        );
+      }
+      const inputType = f.fieldType === 'date' ? 'date' : f.fieldType === 'number' ? 'number' : f.fieldType === 'url' ? 'url' : 'text';
+      return (
+        <label key={f.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }} {...titleAttr}>
+          {label}
+          <input
+            className="input-field"
+            type={inputType}
+            required={f.isRequired}
+            placeholder={placeholder}
+            value={value}
+            onChange={e => handleCustomFieldChange(f.fieldKey, e.target.value)}
+            style={{ padding: '0.45rem', fontSize: '0.85rem' }}
+          />
+        </label>
+      );
+    });
   };
 
   const [summarizing, setSummarizing] = useState(false);
@@ -140,17 +247,17 @@ const ContactDetail = () => {
             {editing ? (
               <form onSubmit={handleSaveEdit} style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                 <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Name
-                  <input className="input-field" required value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
+                  <input className="input-field" required value={editForm.name} onChange={e => setEditForm(prev => ({ ...prev, name: e.target.value }))} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
                 </label>
                 <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Email
-                  <input className="input-field" type="email" value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
+                  <input className="input-field" type="email" value={editForm.email} onChange={e => setEditForm(prev => ({ ...prev, email: e.target.value }))} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
                 </label>
                 <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Phone
                   <input
                     className="input-field"
                     type="tel"
                     value={editForm.phone}
-                    onChange={e => setEditForm({ ...editForm, phone: e.target.value.replace(/[^\d+\s\-().]/g, '') })}
+                    onChange={e => setEditForm(prev => ({ ...prev, phone: e.target.value.replace(/[^\d+\s\-().]/g, '') }))}
                     onBlur={e => {
                       const v = e.target.value.trim();
                       if (v && !PHONE_RE.test(v)) setEditError('Enter a valid phone number (digits, +, spaces, hyphens only)');
@@ -159,11 +266,12 @@ const ContactDetail = () => {
                   />
                 </label>
                 <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Company
-                  <input className="input-field" value={editForm.company} onChange={e => setEditForm({ ...editForm, company: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
+                  <input className="input-field" value={editForm.company} onChange={e => setEditForm(prev => ({ ...prev, company: e.target.value }))} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
                 </label>
                 <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Title
-                  <input className="input-field" value={editForm.title} onChange={e => setEditForm({ ...editForm, title: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
+                  <input className="input-field" value={editForm.title} onChange={e => setEditForm(prev => ({ ...prev, title: e.target.value }))} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
                 </label>
+                {renderCustomFieldInputs()}
                 {editError && <p style={{ color: '#ef4444', fontSize: '0.75rem', margin: 0 }}>{editError}</p>}
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
                   <button type="submit" className="btn-primary" disabled={saving} style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}>{saving ? 'Saving…' : 'Save'}</button>
@@ -204,6 +312,23 @@ const ContactDetail = () => {
                   Source: {contact.source}
                 </div>
               )}
+              {/* Generic-vertical-only Lead custom fields (Settings > Lead
+                  Fields) — read-only display; edit via the Edit button above. */}
+              {!isWellness && !isTravel && customFieldDefs.map((f) => {
+                const raw = contact.customFields?.[f.fieldKey];
+                if (raw === null || raw === undefined || raw === '') return null;
+                let display;
+                if (f.fieldType === 'checkbox') display = raw ? 'Yes' : 'No';
+                else if (f.fieldType === 'date') display = formatDate(raw);
+                else if (f.fieldType === 'multiselect') display = Array.isArray(raw) ? raw.join(', ') : String(raw);
+                else if (f.fieldType === 'url') display = <a href={String(raw)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)' }}>{String(raw)}</a>;
+                else display = String(raw);
+                return (
+                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    {f.label}: {display}
+                  </div>
+                );
+              })}
             </div>
 
             {/* AI-generated chat summary — append-only via "Sync Lead" on the

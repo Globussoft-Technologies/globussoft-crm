@@ -5685,6 +5685,12 @@ router.post("/itineraries/public/:shareToken/create-payment-order", async (req, 
         currency,
         receipt: `itin_${itin.id}_${kind}_${Date.now()}`,
         notes: { itineraryId: String(itin.id), shareToken: token, kind },
+        // Explicit, not relying on the tenant's Razorpay account-level default —
+        // some accounts/payment methods leave a charge "authorized" (held, not
+        // settled) rather than auto-capturing it. verify-payment below also
+        // capture()s defensively if it ever sees "authorized" despite this, but
+        // asking for auto-capture at order-creation time is the primary fix.
+        payment_capture: 1,
       });
     } catch (gErr) {
       console.error("[travel-itin-public] razorpay order error:", gErr && gErr.message);
@@ -5810,12 +5816,15 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
       });
     }
 
-    // Authoritative amount: fetch the captured payment from Razorpay rather
-    // than trusting any client-supplied figure.
-    let paidMajor = 0;
+    // Authoritative amount + STATE: fetch the payment from Razorpay rather
+    // than trusting any client-supplied figure. `amount` is present on an
+    // "authorized" (held, not yet settled) payment too, so checking amount
+    // alone is not enough — a payment we never actually collected could pass
+    // that check and get recorded as SUCCESS. Require status === "captured"
+    // before advancing the itinerary / creating the Payment row.
+    let payment;
     try {
-      const payment = await rp.client.payments.fetch(razorpay_payment_id);
-      paidMajor = payment && payment.amount ? Number(payment.amount) / 100 : 0;
+      payment = await rp.client.payments.fetch(razorpay_payment_id);
     } catch (fErr) {
       console.error("[travel-itin-public] razorpay payments.fetch error:", fErr && fErr.message);
       if (isFormPost) {
@@ -5823,7 +5832,25 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
       }
       return res.status(502).json({ error: "Could not confirm payment. Please contact support.", code: "GATEWAY_ERROR" });
     }
-    if (!(paidMajor > 0)) {
+    let paidMajor = payment && payment.amount ? Number(payment.amount) / 100 : 0;
+
+    // "authorized" means Razorpay is holding the charge but hasn't settled it
+    // yet (payment_capture:1 on order-create should prevent this, but some
+    // payment methods/account configs can still land here) — attempt an
+    // explicit capture rather than immediately failing the customer's checkout.
+    if (payment && payment.status === "authorized" && paidMajor > 0) {
+      try {
+        const captured = await rp.client.payments.capture(razorpay_payment_id, payment.amount, payment.currency);
+        payment = captured;
+        paidMajor = captured && captured.amount ? Number(captured.amount) / 100 : paidMajor;
+      } catch (cErr) {
+        console.error("[travel-itin-public] razorpay payments.capture error:", cErr && cErr.message);
+        // Fall through — the status check below will reject it as not captured.
+      }
+    }
+
+    if (!(paidMajor > 0) || !payment || payment.status !== "captured") {
+      console.warn(`[travel-itin-public] verify-payment: payment ${razorpay_payment_id} not captured (status=${payment && payment.status})`);
       if (isFormPost) {
         return res.redirect(303, `/p/itinerary/${encodeURIComponent(token)}/payment-success?error=Payment%20not%20captured`);
       }

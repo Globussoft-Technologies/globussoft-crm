@@ -44,8 +44,45 @@ const { writeAudit } = require("../lib/audit");
 // the three history endpoints (/me /staff/:id /summary) silently returned empty
 // rows when the operator passed to < from.
 const { validateDateRange } = require("../lib/validateDateRange");
+// Geo-tagged attendance (wellness only) — see lib/attendanceGeofence.js for
+// the full design rationale (multi-location, unenforced-when-unassigned,
+// accuracy threshold, per-Location radius).
+const { evaluatePunchGeofence } = require("../lib/attendanceGeofence");
 
 const router = express.Router();
+
+// Resolve the punching user's tenant vertical + assigned clinics in one
+// round trip. Returns { vertical, assignedLocations } — assignedLocations
+// is [] for non-wellness tenants (never queried) or wellness users with no
+// UserLocation rows (evaluatePunchGeofence treats [] as "not enforced").
+async function resolveGeofenceContext(tenantId, userId) {
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+  const vertical = tenant ? tenant.vertical : null;
+  if (vertical !== "wellness") return { vertical, assignedLocations: [] };
+
+  // userId is always req.user.userId (the caller's own JWT-derived id, never
+  // attacker-supplied) so this can't leak another user's assignments — the
+  // location.tenantId filter is defense-in-depth against a UserLocation row
+  // ever pointing at a Location outside the caller's own tenant.
+  const rows = await prisma.userLocation.findMany({
+    where: { userId, location: { tenantId } },
+    select: { location: { select: { id: true, name: true, latitude: true, longitude: true, geofenceRadiusM: true } } },
+  });
+  return { vertical, assignedLocations: rows.map((r) => r.location) };
+}
+
+// Body coords are sent as strings/numbers by fetch/JSON — coerce once here
+// so lib/attendanceGeofence.js can assume real numbers or undefined.
+function parseCoords(body) {
+  const lat = Number(body && body.latitude);
+  const lng = Number(body && body.longitude);
+  const acc = Number(body && body.accuracy);
+  return {
+    latitude: Number.isFinite(lat) ? lat : undefined,
+    longitude: Number.isFinite(lng) ? lng : undefined,
+    accuracy: Number.isFinite(acc) ? acc : undefined,
+  };
+}
 
 // Standard tenant-where helper -- mirrors the pattern used by routes/wellness.js
 // and routes/inventory.js. Routes that need cross-tenant lookups (the biometric
@@ -184,12 +221,24 @@ router.post("/clock-in", verifyToken, async (req, res) => {
       });
     }
 
+    // Geo-tagged attendance (wellness only) — see lib/attendanceGeofence.js.
+    // Not enforced for non-wellness tenants or users with no assigned clinic.
+    const coords = parseCoords(req.body);
+    const { vertical, assignedLocations } = await resolveGeofenceContext(tenantId, userId);
+    const geofence = evaluatePunchGeofence({ vertical, assignedLocations, coords });
+    if (geofence.enforced && !geofence.ok) {
+      return res.status(403).json({ error: geofence.error, code: geofence.code });
+    }
+
     const data = {
       tenantId,
       userId,
       date: day,
       clockInAt: now,
       clockInLocationId: req.body.locationId ? parseInt(req.body.locationId) : null,
+      clockInLat: coords.latitude ?? null,
+      clockInLng: coords.longitude ?? null,
+      clockInAccuracyM: coords.accuracy != null ? Math.round(coords.accuracy) : null,
       source: "MANUAL",
     };
 
@@ -199,7 +248,14 @@ router.post("/clock-in", verifyToken, async (req, res) => {
       // through this flow, but the schema permits it). Update in place.
       row = await prisma.attendance.update({
         where: { id: existing.id },
-        data: { clockInAt: now, clockInLocationId: data.clockInLocationId, source: "MANUAL" },
+        data: {
+          clockInAt: now,
+          clockInLocationId: data.clockInLocationId,
+          clockInLat: data.clockInLat,
+          clockInLng: data.clockInLng,
+          clockInAccuracyM: data.clockInAccuracyM,
+          source: "MANUAL",
+        },
       });
     } else {
       row = await prisma.attendance.create({ data });
@@ -260,6 +316,14 @@ router.post("/clock-out", verifyToken, async (req, res) => {
       });
     }
 
+    // Geo-tagged attendance (wellness only) — see lib/attendanceGeofence.js.
+    const coords = parseCoords(req.body);
+    const { vertical, assignedLocations } = await resolveGeofenceContext(tenantId, userId);
+    const geofence = evaluatePunchGeofence({ vertical, assignedLocations, coords });
+    if (geofence.enforced && !geofence.ok) {
+      return res.status(403).json({ error: geofence.error, code: geofence.code });
+    }
+
     const totalMinutes = Math.max(0, Math.round((now.getTime() - existing.clockInAt.getTime()) / 60000));
 
     const row = await prisma.attendance.update({
@@ -267,6 +331,9 @@ router.post("/clock-out", verifyToken, async (req, res) => {
       data: {
         clockOutAt: now,
         clockOutLocationId: req.body.locationId ? parseInt(req.body.locationId) : null,
+        clockOutLat: coords.latitude ?? null,
+        clockOutLng: coords.longitude ?? null,
+        clockOutAccuracyM: coords.accuracy != null ? Math.round(coords.accuracy) : null,
         totalMinutes,
         // Status semantics:
         //   - HALF_DAY if shift was shorter than 4 hours (240 minutes)

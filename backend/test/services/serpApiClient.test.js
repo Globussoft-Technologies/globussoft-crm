@@ -62,7 +62,7 @@ describe('searchFlights', () => {
     const out = await serp.searchFlights({ from: 'DEL', to: 'JED', departDate: '2026-08-02', adults: 2, currency: 'INR' }, ax);
     // params
     const params = ax.get.mock.calls[0][1].params;
-    expect(params).toMatchObject({ engine: 'google_flights', departure_id: 'DEL', arrival_id: 'JED', outbound_date: '2026-08-02', type: 2, adults: 2 });
+    expect(params).toMatchObject({ engine: 'google_flights', departure_id: 'DEL', arrival_id: 'JED', outbound_date: '2026-08-02', type: 2, adults: 2, travel_class: 1 });
     expect(params.return_date).toBeUndefined();
     // mapping
     expect(out).toHaveLength(2);
@@ -76,6 +76,12 @@ describe('searchFlights', () => {
     const params = ax.get.mock.calls[0][1].params;
     expect(params.return_date).toBe('2026-08-09');
     expect(params.type).toBeUndefined();
+  });
+
+  test('maps the requested cabin class to SerpApi travel_class', async () => {
+    const ax = { get: vi.fn().mockResolvedValue({ data: { best_flights: [], other_flights: [] } }) };
+    await serp.searchFlights({ from: 'DEL', to: 'JED', departDate: '2026-08-02', cabinClass: 'Business' }, ax);
+    expect(ax.get.mock.calls[0][1].params.travel_class).toBe(3);
   });
 
   test('SerpApi error body → null', async () => {

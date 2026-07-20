@@ -73,6 +73,16 @@ prisma.leaveRequest = prisma.leaveRequest || {};
 prisma.leaveRequest.findMany = vi.fn().mockResolvedValue([]);
 prisma.user = prisma.user || {};
 prisma.user.findFirst = vi.fn();
+// Geo-tagged attendance (wellness only) — resolveGeofenceContext() queries
+// these on every clock-in/out. Default to a non-wellness tenant so all the
+// PRE-EXISTING tests above (none of which set up geofence state) keep their
+// original "unenforced" behaviour without modification; the dedicated
+// describe('Geo-tagged attendance (wellness only)') block below overrides
+// both per-test.
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
+prisma.userLocation = prisma.userLocation || {};
+prisma.userLocation.findMany = vi.fn();
 prisma.biometricDevice = prisma.biometricDevice || {};
 prisma.biometricDevice.findMany = vi.fn();
 prisma.biometricDevice.findFirst = vi.fn();
@@ -141,9 +151,16 @@ beforeEach(() => {
   prisma.biometricDevice.create.mockReset();
   prisma.biometricDevice.update.mockReset();
   prisma.biometricDevice.delete.mockReset();
+  prisma.tenant.findUnique.mockReset();
+  prisma.userLocation.findMany.mockReset();
   prisma.attendance.findMany.mockResolvedValue([]);
   prisma.attendance.findUnique.mockResolvedValue(null);
   prisma.biometricDevice.findMany.mockResolvedValue([]);
+  // Default: non-wellness tenant → resolveGeofenceContext short-circuits
+  // before ever querying userLocation, matching every pre-existing test's
+  // assumption of unconditional-accept clock-in/out.
+  prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+  prisma.userLocation.findMany.mockResolvedValue([]);
 });
 
 // ── /clock-in ──────────────────────────────────────────────────────────
@@ -281,6 +298,163 @@ describe('POST /clock-out', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('HALF_DAY');
+  });
+});
+
+// ── Geo-tagged attendance (wellness only) ───────────────────────────────
+//
+// Real distance math (not stubbed) — same reference coordinates as
+// backend/test/lib/attendanceGeofence.test.js: a Ranchi clinic + a point
+// ~11m away (NEARBY, inside any reasonable radius) + a point ~1.1km away
+// (FAR, outside the 150m default). resolveGeofenceContext() itself isn't
+// exported, so these tests exercise it indirectly through the route.
+const RANCHI_CLINIC = { id: 1, name: 'Ranchi Clinic', latitude: 23.3441, longitude: 85.3096, geofenceRadiusM: null };
+const NEARBY_COORDS = { latitude: 23.34420, longitude: 85.3096, accuracy: 20 };
+const FAR_COORDS = { latitude: 23.3541, longitude: 85.3096, accuracy: 20 };
+
+describe('Geo-tagged attendance (wellness only)', () => {
+  describe('POST /clock-in', () => {
+    test('non-wellness tenant (travel/generic) → geofence not enforced even with no coords sent', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+      prisma.userLocation.findMany.mockResolvedValue([{ location: RANCHI_CLINIC }]);
+      prisma.attendance.create.mockResolvedValue({ id: 900, tenantId: 1, userId: 7, source: 'MANUAL' });
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send({});
+
+      expect(res.status).toBe(201);
+      expect(prisma.attendance.create).toHaveBeenCalledTimes(1);
+      // travel tenant never even queries assigned locations (short-circuits
+      // on vertical !== 'wellness' before the userLocation lookup).
+      expect(prisma.userLocation.findMany).not.toHaveBeenCalled();
+    });
+
+    test('wellness tenant, user has no assigned Location → geofence not enforced (roll-out default)', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([]);
+      prisma.attendance.create.mockResolvedValue({ id: 901, tenantId: 1, userId: 7, source: 'MANUAL' });
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send({});
+
+      expect(res.status).toBe(201);
+      expect(prisma.attendance.create).toHaveBeenCalledTimes(1);
+    });
+
+    test('wellness tenant, assigned + no coords sent → 403 LOCATION_REQUIRED, no row created', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([{ location: RANCHI_CLINIC }]);
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send({});
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('LOCATION_REQUIRED');
+      expect(prisma.attendance.create).not.toHaveBeenCalled();
+    });
+
+    test('wellness tenant, assigned + fuzzy GPS (accuracy > 100m) → 403 ACCURACY_TOO_LOW', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([{ location: RANCHI_CLINIC }]);
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send({
+        latitude: NEARBY_COORDS.latitude, longitude: NEARBY_COORDS.longitude, accuracy: 500,
+      });
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('ACCURACY_TOO_LOW');
+      expect(prisma.attendance.create).not.toHaveBeenCalled();
+    });
+
+    test('wellness tenant, assigned + too far from clinic → 403 OUTSIDE_RADIUS', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([{ location: RANCHI_CLINIC }]);
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send(FAR_COORDS);
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('OUTSIDE_RADIUS');
+      expect(prisma.attendance.create).not.toHaveBeenCalled();
+    });
+
+    test('wellness tenant, assigned + within radius + good accuracy → 201, coords persisted on the row', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([{ location: RANCHI_CLINIC }]);
+      prisma.attendance.create.mockResolvedValue({ id: 902, tenantId: 1, userId: 7, source: 'MANUAL' });
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send(NEARBY_COORDS);
+
+      expect(res.status).toBe(201);
+      const createArgs = prisma.attendance.create.mock.calls[0][0];
+      expect(createArgs.data.clockInLat).toBe(NEARBY_COORDS.latitude);
+      expect(createArgs.data.clockInLng).toBe(NEARBY_COORDS.longitude);
+      expect(createArgs.data.clockInAccuracyM).toBe(20);
+    });
+
+    test('wellness tenant, assigned to MULTIPLE clinics → accepted if within radius of any one', async () => {
+      const farAwayClinic = { id: 2, name: 'Delhi Clinic', latitude: 28.6139, longitude: 77.2090, geofenceRadiusM: null };
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([{ location: farAwayClinic }, { location: RANCHI_CLINIC }]);
+      prisma.attendance.create.mockResolvedValue({ id: 903, tenantId: 1, userId: 7, source: 'MANUAL' });
+
+      const res = await authedReq('post', '/api/attendance/clock-in').send(NEARBY_COORDS);
+
+      expect(res.status).toBe(201);
+      expect(prisma.attendance.create).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('POST /clock-out', () => {
+    test('wellness tenant, assigned + too far from clinic → 403 OUTSIDE_RADIUS, no update written', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([{ location: RANCHI_CLINIC }]);
+      prisma.attendance.findUnique.mockResolvedValue({
+        id: 950, tenantId: 1, userId: 7,
+        date: new Date('2026-05-25T00:00:00.000Z'),
+        clockInAt: new Date(Date.now() - 60 * 60 * 1000),
+        clockOutAt: null,
+      });
+
+      const res = await authedReq('post', '/api/attendance/clock-out').send(FAR_COORDS);
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('OUTSIDE_RADIUS');
+      expect(prisma.attendance.update).not.toHaveBeenCalled();
+    });
+
+    test('wellness tenant, assigned + within radius → 200, coords persisted on the row', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+      prisma.userLocation.findMany.mockResolvedValue([{ location: RANCHI_CLINIC }]);
+      const clockInAt = new Date(Date.now() - 5 * 60 * 60 * 1000);
+      prisma.attendance.findUnique.mockResolvedValue({
+        id: 951, tenantId: 1, userId: 7,
+        date: new Date('2026-05-25T00:00:00.000Z'),
+        clockInAt, clockOutAt: null,
+      });
+      prisma.attendance.update.mockImplementation(({ where, data }) => ({ id: where.id, ...data }));
+
+      const res = await authedReq('post', '/api/attendance/clock-out').send(NEARBY_COORDS);
+
+      expect(res.status).toBe(200);
+      const updateArgs = prisma.attendance.update.mock.calls[0][0];
+      expect(updateArgs.data.clockOutLat).toBe(NEARBY_COORDS.latitude);
+      expect(updateArgs.data.clockOutLng).toBe(NEARBY_COORDS.longitude);
+      expect(updateArgs.data.clockOutAccuracyM).toBe(20);
+    });
+
+    test('travel tenant sharing the same route → geofence not enforced on clock-out either', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+      prisma.userLocation.findMany.mockResolvedValue([{ location: RANCHI_CLINIC }]);
+      prisma.attendance.findUnique.mockResolvedValue({
+        id: 952, tenantId: 1, userId: 7,
+        date: new Date('2026-05-25T00:00:00.000Z'),
+        clockInAt: new Date(Date.now() - 60 * 60 * 1000),
+        clockOutAt: null,
+      });
+      prisma.attendance.update.mockImplementation(({ where, data }) => ({ id: where.id, ...data }));
+
+      const res = await authedReq('post', '/api/attendance/clock-out').send(FAR_COORDS);
+
+      expect(res.status).toBe(200);
+      expect(prisma.attendance.update).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

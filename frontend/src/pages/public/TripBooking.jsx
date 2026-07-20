@@ -296,6 +296,7 @@ export default function TripBooking() {
   const optionsMode = !!itin.optionsMode;
   const flightOptions = optionsMode ? itin.items.filter((i) => i.itemType === "flight") : [];
   const selected = flightOptions.find((o) => String(o.id) === String(selectedId)) || null;
+  const selectedIsRoundTrip = isRoundTripFlight(selected);
   const displayTotal = optionsMode ? (selected ? Number(selected.totalPrice) : null) : itin.totalAmount;
   const displayAdvance = optionsMode
     ? (selected ? Math.round(Number(selected.totalPrice) * (itin.advanceRatio || 0) * 100) / 100 : null)
@@ -384,6 +385,7 @@ export default function TripBooking() {
             {flightOptions.map((item) => {
               const checked = String(selectedId) === String(item.id);
               const details = flightDetails(item);
+              const isRoundTrip = isRoundTripFlight(item);
               return (
                 <li key={item.id}>
                   <label
@@ -408,7 +410,7 @@ export default function TripBooking() {
                     </div>
                     {item.totalPrice != null && (
                       <div style={{ fontWeight: 700, color: "#122647", whiteSpace: "nowrap" }}>
-                        {fmtMoney(item.totalPrice, itin.currency)}
+                        <div>{fmtMoney(item.totalPrice, itin.currency)}</div>
                       </div>
                     )}
                   </label>
@@ -449,7 +451,7 @@ export default function TripBooking() {
       <section style={costBox} aria-labelledby="cost-heading">
         <h2 id="cost-heading" style={{ ...sectionHeading, marginTop: 0 }}>Trip cost</h2>
         <Line
-          label="Total"
+          label={selectedIsRoundTrip ? "Round-trip total (outbound + return)" : "Total"}
           value={displayTotal != null ? fmtMoney(displayTotal, itin.currency) : "Select an option above"}
           bold
         />
@@ -650,13 +652,25 @@ function fmtDateTime(d) {
 // item's detailsJson so the customer sees timing + baggage, not just a code.
 // detailsJson is set by the flight quick-quote (airline/flightNumber/fareClass/
 // route/departAt/arriveAt/baggage) and is already on the public projection.
-function flightDetails(item) {
+function flightQuoteData(item) {
   let d = {};
   try {
     d = item.detailsJson
       ? (typeof item.detailsJson === "string" ? JSON.parse(item.detailsJson) : item.detailsJson)
       : {};
   } catch { d = {}; }
+  return d;
+}
+
+function isRoundTripFlight(item) {
+  const d = flightQuoteData(item);
+  // This presentation is exclusively for paired Flight quick-quote options.
+  // Other itinerary flight items retain their existing customer-facing labels.
+  return d.source === "agent-quick-quote" && Boolean(d.returnLeg);
+}
+
+function flightDetails(item) {
+  const d = flightQuoteData(item);
   const parts = [];
   const dep = fmtDateTime(d.departAt);
   const arr = fmtDateTime(d.arriveAt);
@@ -664,6 +678,11 @@ function flightDetails(item) {
   if (arr) parts.push(`Arrives ${arr}`);
   if (d.fareClass) parts.push(String(d.fareClass));
   if (d.baggage) parts.push(`Baggage: ${d.baggage}`);
+  if (d.source === "agent-quick-quote" && d.returnLeg) {
+    const r = d.returnLeg;
+    const returnDep = fmtDateTime(r.departAt);
+    parts.push(`Return: ${r.airline || ""}${r.flightNumber ? ` ${r.flightNumber}` : ""} ${r.route?.from || ""}→${r.route?.to || ""}${returnDep ? `, ${returnDep}` : ""}`.trim());
+  }
   return parts;
 }
 

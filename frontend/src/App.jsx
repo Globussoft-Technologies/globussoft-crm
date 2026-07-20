@@ -49,6 +49,7 @@ const Settings = lazy(() => import("./pages/Settings"));
 // enable/disable toggles + cooldowns + Meta form-ID routing mappings.
 // ADMIN-only via RoleGuard at the route declaration below.
 const LeadCapture = lazy(() => import("./pages/settings/LeadCapture"));
+const LeadFields = lazy(() => import("./pages/settings/LeadFields"));
 const UserSettings = lazy(() => import("./pages/UserSettings"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
@@ -1295,6 +1296,16 @@ export default function App() {
                       element={
                         <RoleGuard allow={["ADMIN"]} message="Lead Capture settings require admin access.">
                           <LeadCapture />
+                        </RoleGuard>
+                      }
+                    />
+                    {/* Lead custom fields — generic vertical only; LeadFields.jsx
+                        itself redirects away for wellness/travel tenants. */}
+                    <Route
+                      path="settings/lead-fields"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Lead Fields settings require admin access.">
+                          <LeadFields />
                         </RoleGuard>
                       }
                     />

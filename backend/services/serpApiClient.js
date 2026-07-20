@@ -38,7 +38,7 @@ function isConfigured() {
 // keyed on the exact query collapses those duplicates so identical searches
 // within the TTL cost ZERO extra calls. Bypassed under test (tests inject a
 // mock axios and must stay deterministic across cases).
-const CACHE_TTL_MS = Number(process.env.SERP_API_CACHE_TTL_MS || 10 * 60 * 1000);
+const CACHE_TTL_MS = Number(process.env.SERP_API_CACHE_TTL_MS || 2 * 60 * 1000);
 const _cache = new Map(); // key → { at:number, data:Array }
 function _cacheGet(key) {
   if (process.env.NODE_ENV === "test") return undefined;
@@ -55,8 +55,18 @@ function _cacheSet(key, data) {
 }
 
 function num(v) {
+  if (v == null || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+function travelClass(value) {
+  return {
+    Economy: 1,
+    "Premium Economy": 2,
+    Business: 3,
+    First: 4,
+  }[value] || 1;
 }
 
 // ── API Analytics logging ───────────────────────────────────────────
@@ -144,6 +154,7 @@ async function searchFlights(q = {}, ax = axios) {
     outbound_date: q.departDate,
     currency: q.currency || "INR",
     adults: q.adults || 1,
+    travel_class: travelClass(q.cabinClass),
     gl: "in",
     hl: "en",
     api_key: SERP_KEY(),
@@ -154,7 +165,10 @@ async function searchFlights(q = {}, ax = axios) {
   } else {
     params.type = 2; // one-way (else SerpApi demands a return_date)
   }
-  const cacheKey = `F|${q.from}|${q.to}|${q.departDate}|${q.returnDate || ""}|${q.adults}|${q.children}|${q.currency}`;
+  // Every request parameter that can alter Google Flights results must be in
+  // the key. Otherwise, for example, a Business-class search could be shown
+  // to a later Economy search for the same route/date during the cache TTL.
+  const cacheKey = `F|${q.from}|${q.to}|${q.departDate}|${q.returnDate || ""}|${q.adults}|${q.children}|${q.infants || 0}|${q.cabinClass || "Economy"}|${q.currency}`;
   const hit = _cacheGet(cacheKey);
   if (hit) return hit;
   const startedAt = Date.now();

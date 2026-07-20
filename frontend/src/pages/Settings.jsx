@@ -26,6 +26,7 @@ import {
   CreditCard,
   ArrowRight,
   Stethoscope,
+  Sliders,
   Bot,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
@@ -772,6 +773,29 @@ export default function Settings() {
           >
             <CreditCard size={14} /> Manage Subscription Plans{" "}
             <ArrowRight size={13} />
+          </Link>
+        )}
+        {/* Lead custom fields — generic vertical only. LeadFields.jsx itself
+            also redirects a direct URL hit from wellness/travel tenants. */}
+        {ctxTenant?.vertical !== "wellness" && ctxTenant?.vertical !== "travel" && (
+          <Link
+            to="/settings/lead-fields"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              marginTop: "1rem",
+              marginLeft: "0.75rem",
+              padding: "8px 14px",
+              fontSize: "0.85rem",
+              fontWeight: 600,
+              background: "var(--primary-color, var(--accent-color))",
+              color: "#fff",
+              borderRadius: 8,
+              textDecoration: "none",
+            }}
+          >
+            <Sliders size={14} /> Lead Fields <ArrowRight size={13} />
           </Link>
         )}
       </header>

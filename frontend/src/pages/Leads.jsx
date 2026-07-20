@@ -100,8 +100,12 @@ const Leads = () => {
   // itinerary advancePaidAmount for leads that have no itinerary row yet.
   const [tmcPaidByEmail, setTmcPaidByEmail] = useState({});
   const [editing, setEditing] = useState(null);
-  const [editForm, setEditForm] = useState({ name: '', email: '', company: '', title: '', source: '' });
+  const [editForm, setEditForm] = useState({ name: '', email: '', company: '', title: '', source: '', customFields: {} });
   const [editSaving, setEditSaving] = useState(false);
+  // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
+  // Fetched once; empty array for wellness/travel (no fetch attempted) or
+  // for a generic tenant that hasn't defined any fields yet.
+  const [customFieldDefs, setCustomFieldDefs] = useState([]);
   // #600 — Initial source defaults differ per vertical: wellness leads
   // typically arrive walk-in/WhatsApp; generic CRM leads default to Organic.
   const [newLead, setNewLead] = useState({
@@ -116,6 +120,7 @@ const Leads = () => {
     treatmentOfInterest: '',
     preferredLocationId: '',
     preferredPractitionerId: '',
+    customFields: {},
   });
 
   const fetchLeads = () => {
@@ -200,6 +205,15 @@ const Leads = () => {
       .then(d => setLocations(Array.isArray(d) ? d : (d?.locations || [])))
       .catch(() => setLocations([]));
   }, [isWellness]);
+
+  // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
+  // Skipped entirely for wellness/travel tenants.
+  useEffect(() => {
+    if (isWellness || isTravel) return;
+    fetchApi('/api/lead-custom-fields')
+      .then(d => setCustomFieldDefs(Array.isArray(d) ? d : []))
+      .catch(() => setCustomFieldDefs([]));
+  }, [isWellness, isTravel]);
 
   // #892 — close the Create drawer on Escape. Attached only while the drawer
   // is open so we don't trap key events for users not actively creating.
@@ -339,7 +353,7 @@ const Leads = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...newLead, name: trimmedName, phone: phoneOut, countryCode: undefined }),
       });
-      setNewLead({ name: '', email: '', company: '', title: '', countryCode: '+1', phone: '', source: 'Organic', status: 'Lead' });
+      setNewLead({ name: '', email: '', company: '', title: '', countryCode: '+1', phone: '', source: 'Organic', status: 'Lead', customFields: {} });
       // #892 — close the drawer on successful create; the list refresh
       // below puts the new row at the top so the user sees the result.
       setCreating(false);
@@ -368,6 +382,7 @@ const Leads = () => {
       company: lead.company || '',
       title: lead.title || '',
       source: lead.source || '',
+      customFields: { ...(lead.customFields || {}) },
     });
     setEditing(lead);
   };
@@ -386,6 +401,7 @@ const Leads = () => {
           company: editForm.company.trim(),
           title: editForm.title.trim(),
           source: editForm.source,
+          customFields: editForm.customFields || {},
         }),
       });
       notify.success('Lead updated');
@@ -453,6 +469,99 @@ const Leads = () => {
 
   const handleChange = (field, value) => {
     setNewLead(prev => ({ ...prev, [field]: value }));
+  };
+
+  // Generic-vertical-only Lead custom fields — renders the right input
+  // widget per admin-defined field type (Settings > Lead Fields). Shared
+  // between the Create and Edit forms; each caller passes its own
+  // `values`/`onChange` so this stays a pure render helper with no state
+  // of its own.
+  const renderCustomFieldInputs = (values, onChange) => {
+    if (isWellness || isTravel || customFieldDefs.length === 0) return null;
+    return customFieldDefs.map((f) => {
+      const value = values?.[f.fieldKey] ?? '';
+      const handle = (v) => onChange(f.fieldKey, v);
+      const label = f.label;
+      const placeholder = f.placeholder || (f.isRequired ? label : `${label} (optional)`);
+      const titleAttr = f.tooltip ? { title: f.tooltip } : {};
+
+      if (f.fieldType === 'checkbox') {
+        return (
+          <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} {...titleAttr}>
+            <input type="checkbox" checked={Boolean(value)} onChange={e => handle(e.target.checked)} />
+            {label}
+          </label>
+        );
+      }
+      if (f.fieldType === 'dropdown' || f.fieldType === 'radio') {
+        return (
+          <select key={f.id} className="input-field" required={f.isRequired} value={value} onChange={e => handle(e.target.value)} {...titleAttr}>
+            <option value="">{placeholder}</option>
+            {(f.options || []).map((opt) => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        );
+      }
+      if (f.fieldType === 'multiselect') {
+        const selected = Array.isArray(value) ? value : (value ? [value] : []);
+        return (
+          <div key={f.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }} {...titleAttr}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+              {(f.options || []).map((opt) => {
+                const checked = selected.includes(opt);
+                return (
+                  <label key={opt} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.85rem', padding: '0.25rem 0.5rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        const next = e.target.checked ? [...selected, opt] : selected.filter((s) => s !== opt);
+                        handle(next);
+                      }}
+                    />
+                    {opt}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        );
+      }
+      if (f.fieldType === 'date') {
+        return (
+          <input key={f.id} type="date" placeholder={placeholder} required={f.isRequired} className="input-field" value={value} onChange={e => handle(e.target.value)} {...titleAttr} />
+        );
+      }
+      if (f.fieldType === 'number') {
+        return (
+          <input key={f.id} type="number" placeholder={placeholder} required={f.isRequired} className="input-field" value={value} onChange={e => handle(e.target.value)} {...titleAttr} />
+        );
+      }
+      if (f.fieldType === 'url') {
+        return (
+          <input key={f.id} type="url" placeholder={placeholder} required={f.isRequired} className="input-field" value={value} onChange={e => handle(e.target.value)} {...titleAttr} />
+        );
+      }
+      if (f.fieldType === 'textarea') {
+        return (
+          <textarea key={f.id} placeholder={placeholder} required={f.isRequired} maxLength={2000} className="input-field" rows={3} value={value} onChange={e => handle(e.target.value)} {...titleAttr} />
+        );
+      }
+      // text
+      return (
+        <input key={f.id} type="text" placeholder={placeholder} required={f.isRequired} maxLength={2000} className="input-field" value={value} onChange={e => handle(e.target.value)} {...titleAttr} />
+      );
+    });
+  };
+
+  const handleCustomFieldChangeNew = (key, value) => {
+    setNewLead(prev => ({ ...prev, customFields: { ...prev.customFields, [key]: value } }));
+  };
+
+  const handleCustomFieldChangeEdit = (key, value) => {
+    setEditForm(prev => ({ ...prev, customFields: { ...prev.customFields, [key]: value } }));
   };
 
   const filteredLeads = leads.filter(lead => {
@@ -661,6 +770,11 @@ const Leads = () => {
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>
                 {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Sub-brand</th>}
                 {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Amount</th>}
+                {/* Generic-vertical-only Lead custom fields (Settings > Lead Fields) —
+                    one column per admin-defined field, in displayOrder. */}
+                {customFieldDefs.map(f => (
+                  <th key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{f.label}</th>
+                ))}
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Actions</th>
@@ -668,9 +782,9 @@ const Leads = () => {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={isAdmin ? 10 + (isTravel ? 2 : 0) : 9 + (isTravel ? 2 : 0)} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
+                <tr><td colSpan={(isAdmin ? 10 : 9) + (isTravel ? 2 : 0) + customFieldDefs.length} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
               ) : filteredLeads.length === 0 ? (
-                <tr><td colSpan={isAdmin ? 10 + (isTravel ? 2 : 0) : 9 + (isTravel ? 2 : 0)} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
+                <tr><td colSpan={(isAdmin ? 10 : 9) + (isTravel ? 2 : 0) + customFieldDefs.length} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
               ) : filteredLeads.map(lead => (
                 <tr
                   key={lead.id}
@@ -753,6 +867,35 @@ const Leads = () => {
                       </td>
                     );
                   })()}
+                  {/* Generic-vertical-only Lead custom fields — shows every
+                      defined field's value, or a dash for leads that predate
+                      the field (backend fills the key with null). */}
+                  {customFieldDefs.map(f => {
+                    const raw = lead.customFields?.[f.fieldKey];
+                    let display;
+                    if (raw === null || raw === undefined || raw === '') {
+                      display = null;
+                    } else if (f.fieldType === 'checkbox') {
+                      display = raw ? 'Yes' : 'No';
+                    } else if (f.fieldType === 'date') {
+                      display = formatDate(raw);
+                    } else if (f.fieldType === 'multiselect') {
+                      display = Array.isArray(raw) ? raw.join(', ') : String(raw);
+                    } else if (f.fieldType === 'url') {
+                      display = (
+                        <a href={String(raw)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)' }}>
+                          {String(raw)}
+                        </a>
+                      );
+                    } else {
+                      display = String(raw);
+                    }
+                    return (
+                      <td key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                        {display ?? <span style={{ color: 'var(--border-color)' }}>—</span>}
+                      </td>
+                    );
+                  })}
                   <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
                     {isAdmin ? (
                       <select
@@ -965,6 +1108,8 @@ const Leads = () => {
                   </>
                 )}
 
+                {renderCustomFieldInputs(newLead.customFields, handleCustomFieldChangeNew)}
+
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
                   <button
                     type="button"
@@ -998,11 +1143,11 @@ const Leads = () => {
                 </button>
               </div>
               <form onSubmit={submitEdit} style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-                <input type="text" placeholder="Full Name" required className="input-field" value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
-                <input type="email" placeholder="Email Address" className="input-field" value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} />
-                <input type="text" placeholder="Company" className="input-field" value={editForm.company} onChange={e => setEditForm({ ...editForm, company: e.target.value })} />
-                <input type="text" placeholder="Job Title" className="input-field" value={editForm.title} onChange={e => setEditForm({ ...editForm, title: e.target.value })} />
-                <select className="input-field" value={editForm.source} onChange={e => setEditForm({ ...editForm, source: e.target.value })}>
+                <input type="text" placeholder="Full Name" required className="input-field" value={editForm.name} onChange={e => setEditForm(prev => ({ ...prev, name: e.target.value }))} />
+                <input type="email" placeholder="Email Address" className="input-field" value={editForm.email} onChange={e => setEditForm(prev => ({ ...prev, email: e.target.value }))} />
+                <input type="text" placeholder="Company" className="input-field" value={editForm.company} onChange={e => setEditForm(prev => ({ ...prev, company: e.target.value }))} />
+                <input type="text" placeholder="Job Title" className="input-field" value={editForm.title} onChange={e => setEditForm(prev => ({ ...prev, title: e.target.value }))} />
+                <select className="input-field" value={editForm.source} onChange={e => setEditForm(prev => ({ ...prev, source: e.target.value }))}>
                   {isWellness
                     ? WELLNESS_SOURCE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)
                     : isTravel
@@ -1010,6 +1155,7 @@ const Leads = () => {
                     : SOURCE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)
                   }
                 </select>
+                {renderCustomFieldInputs(editForm.customFields, handleCustomFieldChangeEdit)}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
                   <button type="button" onClick={() => setEditing(null)} style={{ padding: '0.5rem 1rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.875rem' }}>Cancel</button>
                   <button type="submit" className="btn-primary" disabled={editSaving} style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>{editSaving ? 'Saving…' : 'Save Changes'}</button>

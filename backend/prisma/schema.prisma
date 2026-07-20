@@ -338,30 +338,36 @@ model Tenant {
   // Closes out the remaining 18 drifters; data-leak gate already covered by
   // the tenantId column itself, this just makes Prisma aware of the FK so
   // joins/cascades work uniformly with the rest of the schema.
-  voiceSessions        VoiceSession[]
-  abTests              AbTest[]
-  touchpoints          Touchpoint[]
-  webVisitors          WebVisitor[]
-  chatbots             Chatbot[]
-  chatbotConversations ChatbotConversation[]
-  cannedResponses      CannedResponse[]
-  surveys              Survey[]
-  surveyResponses      SurveyResponse[]
+  voiceSessions              VoiceSession[]
+  abTests                    AbTest[]
+  touchpoints                Touchpoint[]
+  webVisitors                WebVisitor[]
+  chatbots                   Chatbot[]
+  chatbotConversations       ChatbotConversation[]
+  // Lead custom fields (generic vertical only) — admin-defined fields +
+  // their per-lead values. Deliberately separate from CustomEntity/
+  // CustomField/CustomValue (the existing generic EAV system) — see the
+  // model comment above LeadCustomFieldDefinition for why.
+  leadCustomFieldDefinitions LeadCustomFieldDefinition[]
+  leadCustomFieldValues      LeadCustomFieldValue[]
+  cannedResponses            CannedResponse[]
+  surveys                    Survey[]
+  surveyResponses            SurveyResponse[]
   // Parent-child review system — Survey owns ordered SurveyQuestion rows
   // and per-question SurveyAnswer rows. Survey itself already has its
   // back-relation above; the two child tables need their own so the
   // Prisma client validates.
-  surveyQuestions      SurveyQuestion[]
-  surveyAnswers        SurveyAnswer[]
-  documentTemplates    DocumentTemplate[]
-  dashboards           Dashboard[]
-  customReports        CustomReport[]
-  sharedInboxes        SharedInbox[]
-  liveChatSessions     LiveChatSession[]
-  liveChatMessages     LiveChatMessage[]
-  documentViews        DocumentView[]
-  socialPosts          SocialPost[]
-  socialMentions       SocialMention[]
+  surveyQuestions            SurveyQuestion[]
+  surveyAnswers              SurveyAnswer[]
+  documentTemplates          DocumentTemplate[]
+  dashboards                 Dashboard[]
+  customReports              CustomReport[]
+  sharedInboxes              SharedInbox[]
+  liveChatSessions           LiveChatSession[]
+  liveChatMessages           LiveChatMessage[]
+  documentViews              DocumentView[]
+  socialPosts                SocialPost[]
+  socialMentions             SocialMention[]
 
   // #592 — Find Duplicates dismiss persistence (DismissedDuplicateGroup model
   // at the bottom of this file). Per-tenant scoped.
@@ -609,6 +615,13 @@ model User {
   leaveApprovals LeaveRequest[] @relation("LeaveApprover")
   leaveBalances  LeaveBalance[]
 
+  // Geo-tagged attendance (wellness only) — clinics this staff member is
+  // assigned to. Many-to-many since a doctor/professional can split time
+  // across multiple clinics; the geofence check on clock-in/out passes if
+  // the punch is within radius of ANY one of them. Empty/no rows = geofence
+  // NOT enforced for this user (falls back to today's unenforced behaviour).
+  assignedLocations UserLocation[]
+
   // Wave 2 Agent II — POS cashier shifts.
   cashierShifts Shift[] @relation("CashierShifts")
 
@@ -851,6 +864,8 @@ model Contact {
   travelPortalNotifications TravelPortalNotification[]
   // Travel itineraries (PRD Phase 1).
   itineraries               Itinerary[]
+  // Generic-vertical admin-configurable Lead custom fields.
+  leadCustomFieldValues     LeadCustomFieldValue[]
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
@@ -872,6 +887,84 @@ model Contact {
   @@index([tenantId, status, slaBreached])
   @@index([tenantId, name])
   @@index([tenantId, phone])
+}
+
+// ── Lead Custom Fields (generic vertical only, admin-configurable) ──
+//
+// Purpose-built for Contact/Lead, deliberately NOT built on the existing
+// generic CustomEntity/CustomField/CustomValue EAV system (schema above
+// this comment references Activity, not those — see custom_objects.js for
+// that separate, unrelated system). Kept isolated so this feature has zero
+// shared blast radius with whatever else uses the generic EAV tables.
+//
+// An ADMIN defines fields in Settings > Lead Fields (fieldType chosen at
+// definition time, not per-value) — ADMIN never has to duplicate that
+// choice; the CRM renders the right input widget and validates/stores the
+// value in the matching typed column automatically. Scoped to tenants using
+// the generic vertical only; wellness/travel are untouched by this feature.
+
+model LeadCustomFieldDefinition {
+  id           Int      @id @default(autoincrement())
+  fieldKey     String // stable machine key, e.g. "referral_source" — derived from label at creation, never renamed after
+  label        String // human-readable label shown on the form, e.g. "Referral Source"
+  // "text" | "textarea" | "number" | "dropdown" | "checkbox" | "radio" |
+  // "date" | "url" | "multiselect". fieldType itself is still locked after
+  // creation (see routes/lead_custom_fields.js) — changing type would
+  // misinterpret already-stored typed-column values. `options` CAN be
+  // edited post-creation for dropdown/radio/multiselect (add/rename/remove
+  // choices) — see that route's comment for the rename/remove tradeoff.
+  fieldType    String
+  options      String?  @db.Text // JSON array of strings — dropdown/radio/multiselect only
+  tooltip      String? // optional helper text shown near the input (Freshworks-style "what is this field for")
+  placeholder  String? // optional input placeholder text
+  isRequired   Boolean  @default(false)
+  displayOrder Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  values LeadCustomFieldValue[]
+
+  /// One field key per tenant — "referral_source" can exist independently in tenant A and tenant B's field definitions without collision.
+  @@unique([tenantId, fieldKey])
+  @@index([tenantId, displayOrder])
+}
+
+model LeadCustomFieldValue {
+  id        Int                       @id @default(autoincrement())
+  contactId Int
+  contact   Contact                   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  fieldId   Int
+  field     LeadCustomFieldDefinition @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  // Typed value columns — only the column matching the field's declared
+  // fieldType is populated; the others stay null. This is what lets
+  // "sort/filter leads by a custom Number/Date field" work as a real
+  // numeric/date comparison instead of a string comparison, and is why
+  // this isn't a single free-text `value` column.
+  // valueText covers: text, textarea, url (raw string), dropdown/radio (the
+  // selected option string), AND multiselect (JSON array of selected
+  // option strings, e.g. ["Product A","Product B"] — deliberately not a
+  // new table; multiselect is the only type needing >1 value per lead per
+  // field, and a JSON-array string in the existing text column covers it
+  // without a schema shape change, at the cost of not being filterable by
+  // "contains option X" via a plain WHERE clause — acceptable for v1).
+  valueText   String?   @db.Text
+  valueNumber Float?
+  valueDate   DateTime?
+  valueBool   Boolean? // "checkbox"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// One value row per (contact, field) — updating a lead's custom field value upserts this row rather than accumulating history rows.
+  @@unique([contactId, fieldId])
+  @@index([tenantId, fieldId])
 }
 
 model Activity {
@@ -4146,17 +4239,25 @@ model Location {
   timezone    String  @default("Asia/Kolkata")
   isActive    Boolean @default(true)
 
+  // Geo-tagged attendance (wellness only) — radius in meters within which a
+  // clock-in/out is accepted for staff assigned to this Location. Null =
+  // caller applies its own default (150m — see routes/attendance.js) rather
+  // than every existing row needing a backfill.
+  geofenceRadiusM Int?
+
   // Operating hours JSON: { mon: ["09:00","20:00"], tue: ..., sun: null }
   hours String? @db.Text
 
   tenantId Int
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  patients  Patient[]
-  visits    Visit[]
+  patients      Patient[]
+  visits        Visit[]
   // Wave 11 Agent GG — resources + holidays scoped to this clinic.
-  resources Resource[]
-  holidays  Holiday[]
+  resources     Resource[]
+  holidays      Holiday[]
+  // Geo-tagged attendance (wellness only) — staff assigned to this clinic.
+  assignedUsers UserLocation[]
 
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
@@ -4165,6 +4266,27 @@ model Location {
 
   @@index([tenantId, isActive])
   @@index([tenantId, city])
+}
+
+// Geo-tagged attendance (wellness only) — many-to-many User↔Location
+// assignment. A staff member can be assigned to multiple clinics (e.g. a
+// doctor splitting time across two locations); the clock-in/out geofence
+// check passes if the punch is within radius of ANY one of their assigned
+// Locations. No rows for a user = geofencing not enforced for them (see
+// routes/attendance.js).
+model UserLocation {
+  id Int @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  locationId Int
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, locationId])
+  @@index([locationId])
 }
 
 // Per-tenant wellness role catalog. Replaces the hard-coded
@@ -4881,6 +5003,19 @@ model Attendance {
   clockOutAt         DateTime?
   clockInLocationId  Int?
   clockOutLocationId Int?
+
+  // Geo-tagged attendance (wellness only) — the actual GPS reading captured
+  // by the browser at punch time, kept for audit regardless of whether a
+  // geofence was enforced. Float lat/lng mirrors the existing precedent at
+  // ItineraryItem.latitude/longitude (travel vertical); accuracy is the
+  // browser's reported GPS accuracy radius in meters (used for the
+  // ACCURACY_TOO_LOW guard in routes/attendance.js).
+  clockInLat        Float?
+  clockInLng        Float?
+  clockInAccuracyM  Int?
+  clockOutLat       Float?
+  clockOutLng       Float?
+  clockOutAccuracyM Int?
 
   source            String @default("MANUAL")
   biometricDeviceId Int?
@@ -8790,7 +8925,7 @@ model StatusComponent {
   sortOrder           Int                   @default(0)
   status              String                @default("operational") // operational | degraded | partial_outage | major_outage | maintenance | no_data
   isPublic            Boolean               @default(true)
-  probeUrl            String?               // relative URL or probe key
+  probeUrl            String? // relative URL or probe key
   consecutiveFailures Int                   @default(0)
   lastProbedAt        DateTime?
   createdAt           DateTime              @default(now())
@@ -8800,24 +8935,24 @@ model StatusComponent {
 }
 
 model StatusIncident {
-  id          Int                    @id @default(autoincrement())
-  title       String
-  impact      String                 @default("minor") // none | minor | major | critical | maintenance
-  status      String                 @default("investigating") // investigating | identified | monitoring | resolved
-  components  StatusComponent[]
-  createdAt   DateTime               @default(now())
-  resolvedAt  DateTime?
-  updatedAt   DateTime               @updatedAt
-  updates     StatusIncidentUpdate[]
+  id         Int                    @id @default(autoincrement())
+  title      String
+  impact     String                 @default("minor") // none | minor | major | critical | maintenance
+  status     String                 @default("investigating") // investigating | identified | monitoring | resolved
+  components StatusComponent[]
+  createdAt  DateTime               @default(now())
+  resolvedAt DateTime?
+  updatedAt  DateTime               @updatedAt
+  updates    StatusIncidentUpdate[]
 }
 
 model StatusIncidentUpdate {
-  id          Int            @id @default(autoincrement())
-  incidentId  Int
-  incident    StatusIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
-  status      String         // investigating | identified | monitoring | resolved
-  message     String         @db.Text
-  createdAt   DateTime       @default(now())
+  id         Int            @id @default(autoincrement())
+  incidentId Int
+  incident   StatusIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  status     String // investigating | identified | monitoring | resolved
+  message    String         @db.Text
+  createdAt  DateTime       @default(now())
 
   @@index([incidentId, createdAt])
 }

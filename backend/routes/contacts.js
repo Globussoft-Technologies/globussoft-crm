@@ -225,6 +225,182 @@ async function attachTravelRelationshipTimeline(contact, tenantId) {
   }
 }
 
+// GENERIC-VERTICAL-ONLY Lead custom fields — see Settings > Lead Fields
+// (routes/lead_custom_fields.js). Admin-defined fields + their per-lead
+// values, kept deliberately separate from the CustomEntity/CustomField/
+// CustomValue EAV system (routes/custom_objects.js). Best-effort — a
+// failure here must never break the surrounding Contact request. No
+// vertical check is needed: for wellness/travel tenants no
+// LeadCustomFieldDefinition rows exist (the admin UI that creates them is
+// gated to the generic vertical), so this is naturally a no-op there.
+async function attachLeadCustomFields(contact, tenantId) {
+  if (!contact || typeof contact !== "object" || !contact.id) return contact;
+  try {
+    const [definitions, values] = await Promise.all([
+      prisma.leadCustomFieldDefinition.findMany({ where: { tenantId } }),
+      prisma.leadCustomFieldValue.findMany({ where: { tenantId, contactId: contact.id } }),
+    ]);
+    return { ...contact, customFields: buildCustomFieldsObject(definitions, values) };
+  } catch (_e) {
+    return { ...contact, customFields: {} };
+  }
+}
+
+// Batch sibling of attachLeadCustomFields — for LIST endpoints (GET /) so a
+// page of N contacts costs 2 extra queries total, not 2N. Every contact in
+// the list gets a `customFields` object keyed by EVERY field this tenant has
+// defined (not just the ones it has a value for) — so a lead created before
+// a field existed shows that field as null rather than the key being absent
+// entirely, matching how the create/edit forms always render every defined
+// field. Best-effort: a failure here returns the contacts unchanged rather
+// than breaking the list.
+async function attachLeadCustomFieldsBatch(contacts, tenantId) {
+  if (!Array.isArray(contacts) || !contacts.length) return contacts;
+  try {
+    const definitions = await prisma.leadCustomFieldDefinition.findMany({ where: { tenantId } });
+    if (!definitions.length) return contacts.map((c) => ({ ...c, customFields: {} }));
+    const contactIds = contacts.map((c) => c.id).filter((id) => id != null);
+    const values = await prisma.leadCustomFieldValue.findMany({
+      where: { tenantId, contactId: { in: contactIds } },
+    });
+    const valuesByContact = new Map();
+    for (const v of values) {
+      if (!valuesByContact.has(v.contactId)) valuesByContact.set(v.contactId, []);
+      valuesByContact.get(v.contactId).push(v);
+    }
+    return contacts.map((c) => ({
+      ...c,
+      customFields: buildCustomFieldsObject(definitions, valuesByContact.get(c.id) || []),
+    }));
+  } catch (_e) {
+    return contacts.map((c) => ({ ...c, customFields: {} }));
+  }
+}
+
+// Shared projection: every field DEFINITION becomes a key (null when this
+// contact has no stored value for it — covers leads created before the
+// field existed), overlaid with whatever VALUES actually exist.
+function buildCustomFieldsObject(definitions, values) {
+  const customFields = {};
+  for (const def of definitions) {
+    customFields[def.fieldKey] = null;
+  }
+  const byFieldId = new Map(definitions.map((d) => [d.id, d]));
+  for (const v of values) {
+    const def = byFieldId.get(v.fieldId);
+    if (!def) continue;
+    let raw;
+    if (def.fieldType === "number") raw = v.valueNumber;
+    else if (def.fieldType === "date") raw = v.valueDate;
+    else if (def.fieldType === "checkbox") raw = v.valueBool;
+    else if (def.fieldType === "multiselect") {
+      try {
+        raw = v.valueText ? JSON.parse(v.valueText) : null;
+      } catch (_e) {
+        raw = v.valueText;
+      }
+    } else {
+      // text, textarea, dropdown, radio, url
+      raw = v.valueText;
+    }
+    customFields[def.fieldKey] = raw;
+  }
+  return customFields;
+}
+
+// Simple URL validator — allows http(s):// and mailto: schemes. Returns
+// false for obvious non-URLs; intentionally permissive so users can store
+// internal links or domain-only strings if they choose.
+function isValidUrl(str) {
+  try {
+    const url = new URL(str);
+    return ["http:", "https:", "mailto:"].includes(url.protocol);
+  } catch (_e) {
+    return false;
+  }
+}
+
+// Coerce a raw incoming value into the correct typed column(s) for a
+// LeadCustomFieldDefinition. Returns null when the value should be cleared
+// (null/undefined/empty array/empty string). Does NOT throw — invalid input
+// is best-effort dropped so the surrounding Contact request stays intact.
+function coerceCustomFieldValue(def, raw) {
+  if (raw === null || raw === undefined || raw === "") return null;
+
+  if (def.fieldType === "number") {
+    const n = Number(raw);
+    return Number.isFinite(n) ? { valueNumber: n } : null;
+  }
+  if (def.fieldType === "date") {
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? null : { valueDate: d };
+  }
+  if (def.fieldType === "checkbox") {
+    return { valueBool: Boolean(raw) };
+  }
+  if (def.fieldType === "multiselect") {
+    const arr = Array.isArray(raw) ? raw : [raw];
+    const clean = arr.map((o) => String(o).trim()).filter(Boolean);
+    return clean.length ? { valueText: JSON.stringify(clean) } : null;
+  }
+  if (def.fieldType === "radio") {
+    const s = String(raw).trim();
+    return s ? { valueText: s } : null;
+  }
+  if (def.fieldType === "url") {
+    const s = String(raw).trim();
+    return s && isValidUrl(s) ? { valueText: s } : null;
+  }
+  // text, textarea, dropdown
+  const s = String(raw).trim();
+  return s ? { valueText: s.slice(0, 2000) } : null;
+}
+
+// Persists req.body.customFields (a { fieldKey: value } object) as
+// LeadCustomFieldValue rows for the given contact, validating each key
+// against this tenant's LeadCustomFieldDefinition rows first. Unknown keys
+// (no matching definition) are silently ignored rather than erroring — the
+// admin may have deleted a field after a stale form was left open in
+// another tab. Best-effort: a failure here must never block the Contact
+// create/update it's attached to (the primary contact write already
+// succeeded by the time this runs).
+async function writeLeadCustomFieldValues(contactId, tenantId, customFields) {
+  if (!customFields || typeof customFields !== "object") return;
+  const keys = Object.keys(customFields);
+  if (!keys.length) return;
+  try {
+    const definitions = await prisma.leadCustomFieldDefinition.findMany({
+      where: { tenantId, fieldKey: { in: keys } },
+    });
+    const byKey = new Map(definitions.map((d) => [d.fieldKey, d]));
+    for (const key of keys) {
+      const def = byKey.get(key);
+      if (!def) continue; // unknown/stale field key — ignore rather than error
+      const raw = customFields[key];
+      const clearData = { valueText: null, valueNumber: null, valueDate: null, valueBool: null };
+      const typed = raw === null || raw === undefined || raw === ""
+        ? null
+        : coerceCustomFieldValue(def, raw);
+      if (!typed) {
+        // Explicit clear — upsert with all-null value columns so a previously-
+        // set value can be cleared from the UI.
+        await prisma.leadCustomFieldValue.upsert({
+          where: { contactId_fieldId: { contactId, fieldId: def.id } },
+          create: { contactId, fieldId: def.id, tenantId, ...clearData },
+          update: clearData,
+        });
+      } else {
+        await prisma.leadCustomFieldValue.upsert({
+          where: { contactId_fieldId: { contactId, fieldId: def.id } },
+          create: { contactId, fieldId: def.id, tenantId, ...clearData, ...typed },
+          update: typed,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("[contacts] writeLeadCustomFieldValues failed (non-fatal):", e && e.message);
+  }
+}
 
 // Protect all contact routes
 router.use(verifyToken);
@@ -304,7 +480,12 @@ router.get('/', async (req, res) => {
     const contacts = await prisma.contact.findMany(findManyArgs);
     // #464: strip read-restricted fields per the caller's role.
     const filtered = await filterReadFields(contacts, req.user.role, "Contact", req.user.tenantId);
-    res.json(filtered);
+    // Generic-vertical-only: attach { fieldKey: value|null } to every row
+    // (no-op elsewhere — see attachLeadCustomFieldsBatch). Skipped for the
+    // ?fields=summary slim shape, which is an explicit "give me the minimal
+    // projection" opt-in.
+    const withCustomFields = isSummary ? filtered : await attachLeadCustomFieldsBatch(filtered, req.user.tenantId);
+    res.json(withCustomFields);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contacts' });
   }
@@ -330,7 +511,10 @@ router.get('/:id', async (req, res) => {
     // Travel-only: merge the contact's bookings (Itineraries) + invoices into
     // the activity timeline so booking-only customers aren't shown empty.
     const withTimeline = await attachTravelRelationshipTimeline(withWallet, req.user.tenantId);
-    res.json(withTimeline);
+    // Generic-vertical-only: attach { fieldKey: value } from this tenant's
+    // Lead custom field definitions/values (no-op elsewhere — see helper).
+    const withCustomFields = await attachLeadCustomFields(withTimeline, req.user.tenantId);
+    res.json(withCustomFields);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contact' });
   }
@@ -346,6 +530,12 @@ router.post('/', async (req, res) => {
     req.body = await filterWriteFields(req.body, req.user.role, "Contact", req.user.tenantId);
     // PRD Gap §1.1e — strip walletBalance from writes (read-only computed surface).
     req.body = stripWalletBalanceWrite(req.body);
+    // Generic-vertical-only Lead custom fields (Settings > Lead Fields) —
+    // customFields is NOT a real Contact column, so it must never reach
+    // prisma.contact.create's spread below. Captured here, written to
+    // LeadCustomFieldValue AFTER the contact create succeeds (see below).
+    const customFields = req.body.customFields;
+    delete req.body.customFields;
     // #160 #166: validate before hitting Prisma so bad inputs return 400 with a
     // clear code instead of a 500 from the DB layer.
     const inputErr = validateContactInput(req.body, { isUpdate: false });
@@ -419,6 +609,9 @@ router.post('/', async (req, res) => {
     }
 
     const contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
+    // Generic-vertical-only Lead custom fields — best-effort, after the
+    // primary create already succeeded (see writeLeadCustomFieldValues).
+    await writeLeadCustomFieldValues(contact.id, req.user.tenantId, customFields);
     try { const { emitEvent } = require('../lib/eventBus'); await emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
     // [GP-CRM integration] Fire lead.new to registered webhooks (e.g. GlobusPhone)
     // when a Lead contact is created. Carries the id/name/phone/email shape the
@@ -570,6 +763,10 @@ router.put('/:id', async (req, res) => {
     req.body = await filterWriteFields(req.body, req.user.role, "Contact", req.user.tenantId);
     // PRD Gap §1.1e — strip walletBalance from writes (read-only computed surface).
     req.body = stripWalletBalanceWrite(req.body);
+    // Generic-vertical-only Lead custom fields — see the POST handler above
+    // for why this must be stripped before the Prisma spread.
+    const customFields = req.body.customFields;
+    delete req.body.customFields;
     // #168: same input checks as create so PUT can't bypass POST validation.
     const inputErr = validateContactInput(req.body, { isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
@@ -582,6 +779,9 @@ router.put('/:id', async (req, res) => {
       updateData.birthDate = new Date(updateData.birthDate);
     }
     const contact = await prisma.contact.update({ where: { id: existing.id }, data: updateData });
+    // Generic-vertical-only Lead custom fields — best-effort, after the
+    // primary update already succeeded.
+    await writeLeadCustomFieldValues(contact.id, req.user.tenantId, customFields);
 
     // #179: audit only the keys that actually changed (skip unchanged + DB internals).
     const changes = diffFields(existing, contact, Object.keys(req.body || {}));

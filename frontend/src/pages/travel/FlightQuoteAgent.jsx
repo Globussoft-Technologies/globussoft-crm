@@ -136,7 +136,7 @@ const SORT_OPTIONS = [
 function blankOption() {
   return {
     airline: "", flightNumber: "", from: "", to: "",
-    departAt: "", arriveAt: "", fare: "", fareClass: "Economy", baggage: "",
+    departAt: "", arriveAt: "", fare: "", fareClass: "Economy", baggage: "", returnLeg: null,
   };
 }
 
@@ -182,15 +182,20 @@ export default function FlightQuoteAgent() {
   // Searches real-ish flights via /api/travel/search/flights and lets the
   // advisor drop a result straight into an option row. Data source + freshness
   // are surfaced via the provider badge (TBO / AI estimate / sample).
-  const [searchForm, setSearchForm] = useState({ from: "", to: "", departDate: "", cabinClass: "Economy" });
+  const [searchForm, setSearchForm] = useState({ from: "", to: "", departDate: "", returnDate: "", cabinClass: "Economy", tripType: "oneWay" });
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
+  const [returnSearchResults, setReturnSearchResults] = useState([]);
+  const [activeSearchLeg, setActiveSearchLeg] = useState("outbound");
   const [searchMeta, setSearchMeta] = useState(null); // { provider, note }
   // Results-board filters/sort (GDS-style left rail + sort dropdown).
   const [stopsFilter, setStopsFilter] = useState("any");
   const [airlineSel, setAirlineSel] = useState(null); // Set of enabled codes; null = all
   const [sortBy, setSortBy] = useState("recommended");
   const [expandedIdx, setExpandedIdx] = useState(null); // which row's "Flight details" is open
+
+  const isRoundTrip = searchForm.tripType === "roundTrip";
+  const activeResults = activeSearchLeg === "return" ? returnSearchResults : searchResults;
 
   // ── result state ────────────────────────────────────────────────
   const [result, setResult] = useState(null); // { itineraryId, items, totalWithMarkup, currency, pdfUrl }
@@ -295,22 +300,34 @@ export default function FlightQuoteAgent() {
     if (!searchForm.departDate) { notify.error("Pick a departure date"); return; }
     setSearching(true);
     setSearchResults([]);
+    setReturnSearchResults([]);
     setSearchMeta(null);
     // Reset the board's filters/sort for the new result set.
     setStopsFilter("any");
     setSortBy("recommended");
     setExpandedIdx(null);
+    setActiveSearchLeg("outbound");
     try {
-      const res = await fetchApi("/api/travel/search/flights", {
+      if (isRoundTrip && !searchForm.returnDate) { notify.error("Pick a return date"); return; }
+      if (isRoundTrip && searchForm.returnDate < searchForm.departDate) {
+        notify.error("Return date must be on or after the departure date"); return;
+      }
+      const searchLeg = (legFrom, legTo, date) => fetchApi("/api/travel/search/flights", {
         method: "POST",
         body: JSON.stringify({
-          from, to, departDate: searchForm.departDate,
+          from: legFrom, to: legTo, departDate: date,
           cabinClass: searchForm.cabinClass,
           currency: currency.trim().toUpperCase() || "INR",
         }),
       });
+      const [res, returnRes] = await Promise.all([
+        searchLeg(from, to, searchForm.departDate),
+        isRoundTrip ? searchLeg(to, from, searchForm.returnDate) : Promise.resolve(null),
+      ]);
       const opts = Array.isArray(res?.options) ? res.options : [];
+      const returnOpts = Array.isArray(returnRes?.options) ? returnRes.options : [];
       setSearchResults(opts);
+      setReturnSearchResults(returnOpts);
       // Start with every airline in the result set selected (matches the
       // reference UI's "all checked" default).
       setAirlineSel(new Set(opts.map((o) => o.airline).filter(Boolean)));
@@ -337,6 +354,19 @@ export default function FlightQuoteAgent() {
       fareClass: o.fareClass || "Economy",
       baggage: o.baggage || "",
     };
+    if (isRoundTrip && activeSearchLeg === "return") {
+      setOptions((prev) => {
+        const target = prev.findIndex((p) => p.airline && !p.returnLeg);
+        if (target < 0) { notify.info?.("Select an outbound flight first"); return prev; }
+        return prev.map((p, i) => i === target ? {
+          ...p,
+          returnLeg: opt,
+          fare: String((Number(p.fare) || 0) + (Number(opt.fare) || 0)),
+        } : p);
+      });
+      notify.success?.(`Added return ${o.airline || "flight"} ${o.from}→${o.to}`);
+      return;
+    }
     setOptions((prev) => {
       const emptyIdx = prev.findIndex((p) => !p.airline && !p.from && !p.to && p.fare === "");
       if (emptyIdx >= 0) return prev.map((p, i) => (i === emptyIdx ? opt : p));
@@ -344,21 +374,22 @@ export default function FlightQuoteAgent() {
       return [...prev, opt];
     });
     notify.success?.(`Added ${o.airline || "flight"} ${o.from}→${o.to}`);
+    if (isRoundTrip) showSearchLeg("return");
   };
 
   // Distinct airlines in the current result set (for the left-rail checkboxes).
   const availableAirlines = useMemo(() => {
     const seen = new Map();
-    for (const o of searchResults) {
+    for (const o of activeResults) {
       if (o.airline && !seen.has(o.airline)) seen.set(o.airline, o.airlineName || o.airline);
     }
     return Array.from(seen, ([code, name]) => ({ code, name }));
-  }, [searchResults]);
+  }, [activeResults]);
 
   // Apply the stops + airline filters, then sort. "recommended" keeps the
   // backend's order (which leads with the cheapest non-stop-ish picks).
   const visibleResults = useMemo(() => {
-    const out = searchResults.filter((o) => {
+    const out = activeResults.filter((o) => {
       if (airlineSel && o.airline && !airlineSel.has(o.airline)) return false;
       if (stopsFilter === "any") return true;
       const max = parseInt(stopsFilter, 10);
@@ -370,7 +401,7 @@ export default function FlightQuoteAgent() {
       earliest: (a, b) => new Date(a.departAt || 0) - new Date(b.departAt || 0),
     };
     return by[sortBy] ? [...out].sort(by[sortBy]) : out;
-  }, [searchResults, airlineSel, stopsFilter, sortBy]);
+  }, [activeResults, airlineSel, stopsFilter, sortBy]);
 
   const toggleAirline = (code) =>
     setAirlineSel((prev) => {
@@ -380,6 +411,14 @@ export default function FlightQuoteAgent() {
     });
   const allAirlines = () => setAirlineSel(new Set(availableAirlines.map((a) => a.code)));
   const clearAirlines = () => setAirlineSel(new Set());
+  const showSearchLeg = (leg) => {
+    const legResults = leg === "return" ? returnSearchResults : searchResults;
+    setActiveSearchLeg(leg);
+    setAirlineSel(new Set(legResults.map((o) => o.airline).filter(Boolean)));
+    setStopsFilter("any");
+    setSortBy("recommended");
+    setExpandedIdx(null);
+  };
 
   const setOpt = (i, patch) =>
     setOptions((prev) => prev.map((o, idx) => (idx === i ? { ...o, ...patch } : o)));
@@ -409,6 +448,7 @@ export default function FlightQuoteAgent() {
       const o = options[i];
       if (!o.airline.trim()) { notify.error(`Option ${i + 1}: airline is required`); return; }
       if (!o.from.trim() || !o.to.trim()) { notify.error(`Option ${i + 1}: origin and destination are required`); return; }
+      if (isRoundTrip && !o.returnLeg) { notify.error(`Option ${i + 1}: select a return flight`); return; }
       const fare = Number(o.fare);
       if (o.fare === "" || !Number.isFinite(fare) || fare < 0) {
         notify.error(`Option ${i + 1}: fare must be a non-negative number`);
@@ -428,6 +468,11 @@ export default function FlightQuoteAgent() {
         departAt: o.departAt || undefined,
         arriveAt: o.arriveAt || undefined,
         baggage: o.baggage.trim() || undefined,
+        returnLeg: o.returnLeg ? {
+          airline: o.returnLeg.airline.trim().toUpperCase(), flightNumber: o.returnLeg.flightNumber.trim() || undefined,
+          fareClass: o.returnLeg.fareClass || undefined, route: { from: o.returnLeg.from.trim().toUpperCase(), to: o.returnLeg.to.trim().toUpperCase() },
+          departAt: o.returnLeg.departAt || undefined, arriveAt: o.returnLeg.arriveAt || undefined, baggage: o.returnLeg.baggage.trim() || undefined,
+        } : undefined,
       })),
     };
     if (forcedRuleId) body.markupRuleId = forcedRuleId;
@@ -671,6 +716,10 @@ export default function FlightQuoteAgent() {
               Pull live options and drop one into a row below. Uses TBO when configured, else an AI web
               estimate, else sample data.
             </p>
+            <div role="group" aria-label="Trip type" style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button type="button" onClick={() => setSearchForm({ ...searchForm, tripType: "oneWay", returnDate: "" })} style={searchForm.tripType === "oneWay" ? primaryBtn : secondaryBtn}>One way</button>
+              <button type="button" onClick={() => setSearchForm({ ...searchForm, tripType: "roundTrip" })} style={isRoundTrip ? primaryBtn : secondaryBtn}>Round trip</button>
+            </div>
             <div style={{ marginTop: 10, display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 130px), 1fr))" }}>
               <input
                 placeholder="From — city or code (e.g. Delhi or DEL)" value={searchForm.from} maxLength={60}
@@ -687,6 +736,13 @@ export default function FlightQuoteAgent() {
                 onChange={(e) => setSearchForm({ ...searchForm, departDate: e.target.value })}
                 style={input} aria-label="Search departure date"
               />
+              {isRoundTrip && (
+                <input
+                  type="date" value={searchForm.returnDate} min={searchForm.departDate || undefined}
+                  onChange={(e) => setSearchForm({ ...searchForm, returnDate: e.target.value })}
+                  style={input} aria-label="Search return date"
+                />
+              )}
               <select
                 value={searchForm.cabinClass}
                 onChange={(e) => setSearchForm({ ...searchForm, cabinClass: e.target.value })}
@@ -712,12 +768,17 @@ export default function FlightQuoteAgent() {
               </p>
             )}
 
-            {searchResults.length > 0 && (
+            {(searchResults.length > 0 || (isRoundTrip && returnSearchResults.length > 0)) && (
               <div style={board}>
                 {/* Header bar: route + date + sort (mirrors "Select onward flight"). */}
                 <div style={boardHeader}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <strong style={{ fontSize: 14 }}>Select onward flight</strong>
+                    {isRoundTrip ? (
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button type="button" onClick={() => showSearchLeg("outbound")} style={activeSearchLeg === "outbound" ? primaryBtn : secondaryBtn}>Going flights</button>
+                        <button type="button" onClick={() => showSearchLeg("return")} style={activeSearchLeg === "return" ? primaryBtn : secondaryBtn}>Return flights</button>
+                      </div>
+                    ) : <strong style={{ fontSize: 14 }}>Select onward flight</strong>}
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, opacity: 0.92 }}>
                       {searchMeta?.resolved?.from?.iata || searchForm.from || "—"}
                       <Plane size={14} aria-hidden />
@@ -991,6 +1052,14 @@ export default function FlightQuoteAgent() {
                     aria-label={`Baggage (option ${i + 1})`}
                   />
                 </div>
+                {isRoundTrip && (
+                  <div style={{ marginTop: 12, padding: 10, border: "1px solid var(--border-color)", borderRadius: 8, fontSize: 13 }}>
+                    <strong>Return flight: </strong>
+                    {o.returnLeg
+                      ? `${o.returnLeg.airline} ${o.returnLeg.flightNumber || ""} · ${o.returnLeg.from} → ${o.returnLeg.to} · ${o.returnLeg.departAt || "time pending"}`
+                      : "Select a return flight from the Return flights tab."}
+                  </div>
+                )}
               </div>
             ))}
           </section>

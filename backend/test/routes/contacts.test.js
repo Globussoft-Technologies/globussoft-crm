@@ -185,6 +185,13 @@ prisma.itinerary.findMany = vi.fn().mockResolvedValue([]);
 prisma.travelInvoice = prisma.travelInvoice || {};
 prisma.travelInvoice.findMany = vi.fn().mockResolvedValue([]);
 
+// Generic-vertical Lead custom fields (attachLeadCustomFields / Batch / write)
+prisma.leadCustomFieldDefinition = prisma.leadCustomFieldDefinition || {};
+prisma.leadCustomFieldDefinition.findMany = vi.fn().mockResolvedValue([]);
+prisma.leadCustomFieldValue = prisma.leadCustomFieldValue || {};
+prisma.leadCustomFieldValue.findMany = vi.fn().mockResolvedValue([]);
+prisma.leadCustomFieldValue.upsert = vi.fn().mockResolvedValue({});
+
 import express from 'express';
 import request from 'supertest';
 const contactsRouter = requireCJS('../../routes/contacts');
@@ -238,6 +245,9 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
   prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoice.findMany.mockReset().mockResolvedValue([]);
+  prisma.leadCustomFieldDefinition.findMany.mockReset().mockResolvedValue([]);
+  prisma.leadCustomFieldValue.findMany.mockReset().mockResolvedValue([]);
+  prisma.leadCustomFieldValue.upsert.mockReset().mockResolvedValue({});
   writeAuditMock.mockReset().mockResolvedValue(undefined);
   diffFieldsMock.mockReset().mockReturnValue({});
   emitEventMock.mockReset();
@@ -660,6 +670,95 @@ describe('GET /api/contacts?fields=summary — opt-in slim shape (#920 slice 1)'
     // Slim select still in place under pagination.
     expect(args).toHaveProperty('select');
     expect(args).not.toHaveProperty('include');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Generic-vertical Lead custom fields (Settings > Lead Fields)
+// ─────────────────────────────────────────────────────────────────────
+describe('Lead custom fields — read/write integration', () => {
+  test('GET /api/contacts attaches customFields keyed by field definitions', async () => {
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+      { id: 10, tenantId: TENANT_ID, fieldKey: 'referral', label: 'Referral', fieldType: 'text' },
+      { id: 11, tenantId: TENANT_ID, fieldKey: 'priority', label: 'Priority', fieldType: 'dropdown', options: JSON.stringify(['High', 'Low']) },
+    ]);
+    prisma.leadCustomFieldValue.findMany.mockResolvedValue([
+      { contactId: SAMPLE_CONTACT.id, fieldId: 11, valueText: 'High', tenantId: TENANT_ID },
+    ]);
+
+    const res = await request(makeApp()).get('/api/contacts');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].customFields).toEqual({
+      referral: null,
+      priority: 'High',
+    });
+  });
+
+  test('GET /api/contacts/:id parses multiselect values from JSON', async () => {
+    prisma.contact.findFirst.mockResolvedValue(SAMPLE_CONTACT);
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+      { id: 12, tenantId: TENANT_ID, fieldKey: 'tags', label: 'Tags', fieldType: 'multiselect', options: JSON.stringify(['A', 'B', 'C']) },
+    ]);
+    prisma.leadCustomFieldValue.findMany.mockResolvedValue([
+      { contactId: SAMPLE_CONTACT.id, fieldId: 12, valueText: JSON.stringify(['A', 'C']), tenantId: TENANT_ID },
+    ]);
+
+    const res = await request(makeApp()).get(`/api/contacts/${SAMPLE_CONTACT.id}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.customFields.tags).toEqual(['A', 'C']);
+  });
+
+  test('POST /api/contacts persists customFields values after contact create', async () => {
+    findDuplicateMock.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue(SAMPLE_CONTACT);
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+      { id: 13, tenantId: TENANT_ID, fieldKey: 'website', label: 'Website', fieldType: 'url' },
+      { id: 14, tenantId: TENANT_ID, fieldKey: 'notes', label: 'Notes', fieldType: 'textarea' },
+      { id: 15, tenantId: TENANT_ID, fieldKey: 'active', label: 'Active', fieldType: 'checkbox' },
+    ]);
+
+    await request(makeApp())
+      .post('/api/contacts')
+      .send({
+        name: 'Amita Rao',
+        email: 'amita@example.com',
+        customFields: {
+          website: 'https://example.com',
+          notes: 'Important lead',
+          active: true,
+        },
+      });
+
+    const upserts = prisma.leadCustomFieldValue.upsert.mock.calls.map((c) => c[0]);
+    const websiteCall = upserts.find((c) => c.where.contactId_fieldId.fieldId === 13);
+    expect(websiteCall.create.valueText).toBe('https://example.com');
+    const notesCall = upserts.find((c) => c.where.contactId_fieldId.fieldId === 14);
+    expect(notesCall.create.valueText).toBe('Important lead');
+    const activeCall = upserts.find((c) => c.where.contactId_fieldId.fieldId === 15);
+    expect(activeCall.create.valueBool).toBe(true);
+  });
+
+  test('POST /api/contacts skips invalid URL values for url fields', async () => {
+    findDuplicateMock.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue(SAMPLE_CONTACT);
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+      { id: 13, tenantId: TENANT_ID, fieldKey: 'website', label: 'Website', fieldType: 'url' },
+    ]);
+
+    await request(makeApp())
+      .post('/api/contacts')
+      .send({
+        name: 'Amita Rao',
+        email: 'amita@example.com',
+        customFields: { website: 'not-a-url' },
+      });
+
+    const upserts = prisma.leadCustomFieldValue.upsert.mock.calls.map((c) => c[0]);
+    const websiteCall = upserts.find((c) => c.where.contactId_fieldId.fieldId === 13);
+    // Invalid URL is treated as a clear — all typed columns are null.
+    expect(websiteCall.update).toEqual({ valueText: null, valueNumber: null, valueDate: null, valueBool: null });
   });
 });
 

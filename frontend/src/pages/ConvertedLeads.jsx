@@ -1,8 +1,9 @@
 import { fetchApi } from '../utils/api';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { UserPlus, Search, Users, Filter, Undo2 } from 'lucide-react';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
+import { AuthContext } from '../App';
 
 // #366: include Junk so the chip can show its count if the tenant uses it.
 const STATUSES = ['Lead', 'Prospect', 'Customer', 'Churned', 'Junk'];
@@ -10,6 +11,9 @@ const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website
 
 const ConvertedLeads = () => {
   const notify = useNotify();
+  const auth = useContext(AuthContext);
+  const isWellness = auth?.tenant?.vertical === 'wellness';
+  const isTravel = auth?.tenant?.vertical === 'travel';
   const [leads, setLeads] = useState([]);
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17,6 +21,8 @@ const ConvertedLeads = () => {
   const [selectedStatus, setSelectedStatus] = useState('Prospect');
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [bulkAgent, setBulkAgent] = useState('');
+  // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
+  const [customFieldDefs, setCustomFieldDefs] = useState([]);
   // #366: per-status counts powering the chip labels, e.g. "Prospect (12)".
   const [statusCounts, setStatusCounts] = useState({});
 
@@ -72,6 +78,13 @@ const ConvertedLeads = () => {
     fetchStaff();
     fetchStatusCounts();
   }, [selectedStatus]);
+
+  useEffect(() => {
+    if (isWellness || isTravel) return;
+    fetchApi('/api/lead-custom-fields')
+      .then(d => setCustomFieldDefs(Array.isArray(d) ? d : []))
+      .catch(() => setCustomFieldDefs([]));
+  }, [isWellness, isTravel]);
 
   const handleStatusChange = (status) => {
     setSelectedStatus(status);
@@ -249,7 +262,10 @@ const ConvertedLeads = () => {
             </div>
           </div>
 
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+          {/* overflow-x wrapper — the dynamic Lead-custom-field columns
+              can push this table wider than the viewport. */}
+          <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: customFieldDefs.length ? `${900 + customFieldDefs.length * 140}px` : undefined }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                 <th style={{ padding: '1rem', width: '40px' }}>
@@ -261,6 +277,10 @@ const ConvertedLeads = () => {
                 {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>
+                {/* Generic-vertical-only Lead custom fields (Settings > Lead Fields). */}
+                {customFieldDefs.map(f => (
+                  <th key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{f.label}</th>
+                ))}
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>
                 {/* #367: per-row Revert to Lead control. */}
@@ -269,9 +289,9 @@ const ConvertedLeads = () => {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="9" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
+                <tr><td colSpan={9 + customFieldDefs.length} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
               ) : filteredLeads.length === 0 ? (
-                <tr><td colSpan="9" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
+                <tr><td colSpan={9 + customFieldDefs.length} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
               ) : filteredLeads.map(lead => (
                 <tr key={lead.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
                   <td style={{ padding: '1rem' }}>
@@ -303,6 +323,34 @@ const ConvertedLeads = () => {
                       {lead.source || 'Organic'}
                     </span>
                   </td>
+                  {/* Generic-vertical-only Lead custom fields — value or a
+                      dash for leads that predate the field. */}
+                  {customFieldDefs.map(f => {
+                    const raw = lead.customFields?.[f.fieldKey];
+                    let display;
+                    if (raw === null || raw === undefined || raw === '') {
+                      display = null;
+                    } else if (f.fieldType === 'checkbox') {
+                      display = raw ? 'Yes' : 'No';
+                    } else if (f.fieldType === 'date') {
+                      display = formatDate(raw);
+                    } else if (f.fieldType === 'multiselect') {
+                      display = Array.isArray(raw) ? raw.join(', ') : String(raw);
+                    } else if (f.fieldType === 'url') {
+                      display = (
+                        <a href={String(raw)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)' }}>
+                          {String(raw)}
+                        </a>
+                      );
+                    } else {
+                      display = String(raw);
+                    }
+                    return (
+                      <td key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                        {display ?? <span style={{ color: 'var(--border-color)' }}>—</span>}
+                      </td>
+                    );
+                  })}
                   <td style={{ padding: '1rem' }}>
                     <select
                       className="input-field"
@@ -345,6 +393,7 @@ const ConvertedLeads = () => {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>

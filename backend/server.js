@@ -600,6 +600,7 @@ const pagesRoutes = require("./routes/pages");
 // roles.read guards inside the handler.
 const usersRoutes = require("./routes/users");
 const contactsRoutes = require("./routes/contacts");
+const leadCustomFieldsRoutes = require("./routes/lead_custom_fields");
 const dealsRoutes = require("./routes/deals");
 const calendarRoutes = require("./routes/calendar");
 const aiScoringRoutes = require("./routes/ai_scoring");
@@ -1107,6 +1108,7 @@ app.use("/api/pages", pagesRoutes);
 app.use("/api/pages", landingPagesPublic);
 app.use("/api/users", usersRoutes);
 app.use("/api/contacts", contactsRoutes);
+app.use("/api/lead-custom-fields", leadCustomFieldsRoutes);
 app.use("/api/deals", dealsRoutes);
 app.use("/api/calendar", calendarRoutes);
 app.use("/api/ai_scoring", aiScoringRoutes);

@@ -218,6 +218,25 @@ router.post("/agent-quotes", verifyToken, requireTravelTenant, async (req, res) 
       if (!from || !to) {
         return res.status(400).json({ error: `options[${i}]: route.from and route.to are required`, code: "MISSING_ROUTE" });
       }
+      let returnLeg = null;
+      if (o.returnLeg != null) {
+        const r = o.returnLeg || {};
+        const returnAirline = typeof r.airline === "string" ? r.airline.trim() : "";
+        const returnFrom = r.route && r.route.from ? String(r.route.from).trim() : "";
+        const returnTo = r.route && r.route.to ? String(r.route.to).trim() : "";
+        if (!returnAirline || !returnFrom || !returnTo) {
+          return res.status(400).json({ error: `options[${i}]: return flight airline and route are required`, code: "INVALID_RETURN_LEG" });
+        }
+        returnLeg = {
+          airline: returnAirline,
+          flightNumber: typeof r.flightNumber === "string" && r.flightNumber.trim() ? r.flightNumber.trim() : null,
+          fareClass: typeof r.fareClass === "string" && r.fareClass.trim() ? r.fareClass.trim() : null,
+          route: { from: returnFrom, to: returnTo },
+          departAt: r.departAt || null,
+          arriveAt: r.arriveAt || null,
+          baggage: typeof r.baggage === "string" && r.baggage.trim() ? r.baggage.trim() : null,
+        };
+      }
       parsed.push({
         airline,
         pricePerPax,
@@ -228,6 +247,7 @@ router.post("/agent-quotes", verifyToken, requireTravelTenant, async (req, res) 
         departAt: o.departAt || null,
         arriveAt: o.arriveAt || null,
         baggage: typeof o.baggage === "string" && o.baggage.trim() ? o.baggage.trim() : null,
+        returnLeg,
       });
     }
 
@@ -326,7 +346,7 @@ router.post("/agent-quotes", verifyToken, requireTravelTenant, async (req, res) 
           itineraryId: itin.id,
           itemType: "flight",
           position: position++,
-          description: `${opt.airline}${opt.flightNumber ? ` ${opt.flightNumber}` : ""} ${opt.from}→${opt.to}${opt.fareClass ? ` (${opt.fareClass})` : ""}`,
+          description: `${opt.airline}${opt.flightNumber ? ` ${opt.flightNumber}` : ""} ${opt.from}→${opt.to}${opt.returnLeg ? ` · return ${opt.returnLeg.airline}${opt.returnLeg.flightNumber ? ` ${opt.returnLeg.flightNumber}` : ""} ${opt.returnLeg.route.from}→${opt.returnLeg.route.to}` : ""}${opt.fareClass ? ` (${opt.fareClass})` : ""}`,
           detailsJson: JSON.stringify({
             airline: opt.airline,
             flightNumber: opt.flightNumber,
@@ -335,6 +355,7 @@ router.post("/agent-quotes", verifyToken, requireTravelTenant, async (req, res) 
             departAt: opt.departAt,
             arriveAt: opt.arriveAt,
             baggage: opt.baggage,
+            returnLeg: opt.returnLeg,
             currency,
             source: "agent-quick-quote",
           }),

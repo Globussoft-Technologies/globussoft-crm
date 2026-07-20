@@ -1,5 +1,6 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { formatDateMedium as formatDate } from '../utils/date';
 import React, { useState, useEffect, useContext } from 'react';
 import { Search, Plus, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -73,7 +74,10 @@ const Contacts = () => {
   // wellness tenants (isTravel false) keep the full unfiltered list.
   const { tenant, user } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === 'travel';
+  const isWellness = tenant?.vertical === 'wellness';
   const isAdmin = user?.role === 'ADMIN';
+  // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
+  const [customFieldDefs, setCustomFieldDefs] = useState([]);
   const assignableStaff = (contact) => {
     if (!isTravel || !contact?.subBrand) return staff;
     return staff.filter(
@@ -183,6 +187,17 @@ const Contacts = () => {
     fetchContacts();
     fetchApi('/api/staff').then(data => setStaff(data)).catch(() => {});
   }, []);
+
+  // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
+  // Own effect keyed on [isWellness, isTravel] (not the mount-only effect
+  // above) so it re-fires once AuthContext's tenant finishes loading —
+  // tenant can still be undefined on the very first render.
+  useEffect(() => {
+    if (isWellness || isTravel) return;
+    fetchApi('/api/lead-custom-fields')
+      .then(d => setCustomFieldDefs(Array.isArray(d) ? d : []))
+      .catch(() => setCustomFieldDefs([]));
+  }, [isWellness, isTravel]);
 
   const handleAssign = async (contactId, assignedToId) => {
     await fetchApi(`/api/contacts/${contactId}/assign`, {
@@ -381,8 +396,16 @@ const Contacts = () => {
         </div>
         
         {/* #633: stable-table — pins tableLayout=fixed so row hover never
-            shifts column widths, plus column widths set explicitly below. */}
-        <table className="stable-table" style={{ borderCollapse: 'collapse', textAlign: 'left' }}>
+            shifts column widths, plus column widths set explicitly below.
+            Wrapped in an overflow-x:auto container (rather than relying on
+            .stable-table's mobile-only <768px scroll rule) because the
+            dynamic Lead-custom-field columns below can push total column
+            width past 100% on desktop too — without this wrapper the
+            overflow spills into the page's own horizontal scrollbar instead
+            of scrolling just the table. minWidth ensures the fixed-percent
+            columns don't get crushed once custom-field columns are added. */}
+        <div style={{ overflowX: 'auto' }}>
+        <table className="stable-table" style={{ borderCollapse: 'collapse', textAlign: 'left', minWidth: customFieldDefs.length ? `${900 + customFieldDefs.length * 140}px` : undefined }}>
           <colgroup>
             <col style={{ width: '18%' }} />
             <col style={{ width: '20%' }} />
@@ -390,6 +413,7 @@ const Contacts = () => {
             <col style={{ width: '14%' }} />
             <col style={{ width: '10%' }} />
             <col style={{ width: '10%' }} />
+            {customFieldDefs.map(f => <col key={f.id} style={{ width: '140px' }} />)}
             <col style={{ width: '10%' }} />
             <col style={{ width: '6%' }} />
           </colgroup>
@@ -402,15 +426,19 @@ const Contacts = () => {
               {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Status</th>
+              {/* Generic-vertical-only Lead custom fields (Settings > Lead Fields). */}
+              {customFieldDefs.map(f => (
+                <th key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{f.label}</th>
+              ))}
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>
               <th style={{ padding: '1rem', textAlign: 'right' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan="8" style={{ padding: '2rem', textAlign: 'center' }}>Loading contacts...</td></tr>
+              <tr><td colSpan={8 + customFieldDefs.length} style={{ padding: '2rem', textAlign: 'center' }}>Loading contacts...</td></tr>
             ) : visibleContacts.length === 0 ? (
-              <tr><td colSpan="8" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              <tr><td colSpan={8 + customFieldDefs.length} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
                 {contacts.length === 0
                   ? 'No contacts yet. Click "Add Contact" or import a CSV.'
                   : `No contacts match "${searchTerm}"${statusFilter !== 'All' ? ` with status ${statusFilter}` : ''}.`}
@@ -468,6 +496,34 @@ const Contacts = () => {
                     {contact.status}
                   </span>
                 </td>
+                {/* Generic-vertical-only Lead custom fields — value or a
+                    dash for contacts that predate the field. */}
+                {customFieldDefs.map(f => {
+                  const raw = contact.customFields?.[f.fieldKey];
+                  let display;
+                  if (raw === null || raw === undefined || raw === '') {
+                    display = null;
+                  } else if (f.fieldType === 'checkbox') {
+                    display = raw ? 'Yes' : 'No';
+                  } else if (f.fieldType === 'date') {
+                    display = formatDate(raw);
+                  } else if (f.fieldType === 'multiselect') {
+                    display = Array.isArray(raw) ? raw.join(', ') : String(raw);
+                  } else if (f.fieldType === 'url') {
+                    display = (
+                      <a href={String(raw)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)' }}>
+                        {String(raw)}
+                      </a>
+                    );
+                  } else {
+                    display = String(raw);
+                  }
+                  return (
+                    <td key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                      {display ?? <span style={{ color: 'var(--border-color)' }}>—</span>}
+                    </td>
+                  );
+                })}
                 <td style={{ padding: '1rem' }}>
                   {isAdmin ? (
                     <select
@@ -501,6 +557,7 @@ const Contacts = () => {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {showImportModal && (

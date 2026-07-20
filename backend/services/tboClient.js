@@ -39,6 +39,9 @@ const TBO_PASSWORD = () => process.env.TBO_PASSWORD || "";
 const TIMEOUT_MS = Number(process.env.TBO_TIMEOUT_MS || 12000);
 
 function num(v) {
+  // Number(null) is 0, which would make an unknown seat count look like a
+  // sold-out flight in the UI. Preserve omitted supplier fields as null.
+  if (v == null || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }

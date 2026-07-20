@@ -471,11 +471,17 @@ test.describe("Travel quotes list — slim-shape opt-in (#920 S3)", () => {
       // Body still bounded — pin via positive-shape (the projection registry
       // determines the shape; the assertion forbids drift via unexpected keys).
       const allowed = new Set([
-        "id", "subBrand", "contactId", "status",
+        "id", "subBrand", "contactId", "contact", "status",
         "totalAmount", "currency", "validUntil", "createdAt",
       ]);
       for (const k of Object.keys(q)) {
         expect(allowed.has(k), `unexpected key "${k}" on slim TravelQuote shape`).toBe(true);
+      }
+      // If contact is shipped in summary, it must be a minimal {id, name} projection.
+      if (q.contact) {
+        expect(typeof q.contact).toBe('object');
+        expect(q.contact).toHaveProperty('id');
+        expect(q.contact).toHaveProperty('name');
       }
     }
   });

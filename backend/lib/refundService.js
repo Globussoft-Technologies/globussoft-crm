@@ -14,6 +14,8 @@
 const prisma = require("./prisma");
 const { writeAudit } = require("./audit");
 const { getTenantRazorpayClient, NOT_CONFIGURED_MESSAGE, parseRazorpayError } = require("./tenantPaymentGateway");
+const { sendEmail } = require("./emailSender");
+const waWebClient = require("../services/whatsappWebClient");
 
 function safeJsonParse(value, fallback = {}) {
   if (value == null) return fallback;
@@ -102,6 +104,68 @@ async function reverseLinkedRecords(payment, meta) {
   }
 }
 
+// Tell the customer their refund has been initiated — email + WhatsApp
+// (when connected), mirroring the payment-confirmation pattern in
+// routes/travel_itineraries.js (notifyCustomerPaymentConfirmation). Generic
+// (not travel-specific): this runs for every gateway refund regardless of
+// caller (Payments-page admin override OR the itinerary cancellation flow),
+// so it only assumes a Contact — no "trip/destination" wording. subBrand is
+// read from the payment's own metadata (present on travel bookings; absent
+// elsewhere, in which case WhatsApp is skipped since sendBestEffort requires
+// a subBrand to route on). Best-effort; never throws — the refund itself
+// already succeeded with Razorpay by the time this runs.
+async function notifyRefundInitiated(payment, meta, amount) {
+  try {
+    if (!payment.contactId) return;
+    const [contact, tenant] = await Promise.all([
+      prisma.contact.findUnique({ where: { id: payment.contactId }, select: { name: true, email: true, phone: true } }).catch(() => null),
+      prisma.tenant.findUnique({ where: { id: payment.tenantId }, select: { name: true } }).catch(() => null),
+    ]);
+    if (!contact || (!contact.email && !contact.phone)) return;
+
+    const name = contact.name || "there";
+    const cur = payment.currency || "INR";
+    const amt = Number(amount || 0).toLocaleString("en-IN");
+    const org = (tenant && tenant.name) || "our team";
+    const what = payment.description || "your payment";
+
+    const text =
+      `Hi ${name},\n\n` +
+      `Your refund of ${cur} ${amt} for ${what} has been initiated. ` +
+      `You'll receive it in your original payment method within 5-7 working days.\n\n` +
+      `— ${org}`;
+
+    if (contact.email) {
+      const html =
+        `<p>Hi ${name},</p>` +
+        `<p>Your refund of ${cur} ${amt} for ${what} has been initiated. ` +
+        `You'll receive it in your original payment method within 5-7 working days.</p>` +
+        `<p>&mdash; ${org}</p>`;
+      await sendEmail({
+        to: contact.email,
+        subject: `Refund initiated — ${cur} ${amt}`,
+        text,
+        html,
+      }).catch(() => {});
+    }
+
+    if (contact.phone && meta && meta.subBrand) {
+      await waWebClient.sendBestEffort({
+        tenantId: payment.tenantId,
+        subBrand: meta.subBrand,
+        toPhone: contact.phone,
+        contactId: payment.contactId,
+        fallbackText:
+          `Hi ${name}! Your refund of ${cur} ${amt} for ${what} has been initiated. ` +
+          `You'll get it back in 5-7 working days.`,
+        broadcastName: "refund-initiated",
+      }).catch(() => {});
+    }
+  } catch (e) {
+    console.error("[refundService] refund-initiated notify failed (non-fatal):", e.message);
+  }
+}
+
 // Mark the Payment REFUNDED + stash refund details, audit, reverse, emit.
 async function finalizeRefund(payment, { refundId, amount, reason, refundStatus, userId }) {
   const meta = safeJsonParse(payment.metadata, {});
@@ -124,6 +188,7 @@ async function finalizeRefund(payment, { refundId, amount, reason, refundStatus,
       payment.tenantId,
     );
   } catch (_e) { /* best-effort */ }
+  module.exports.notifyRefundInitiated(payment, meta, amount).catch(() => {});
   return updated;
 }
 
@@ -201,6 +266,7 @@ module.exports = {
   refundCapturedPayment,
   finalizeRefund,
   reverseLinkedRecords,
+  notifyRefundInitiated,
   isRefundable,
   isTravelBookingPayment,
   safeJsonParse,

@@ -48,17 +48,6 @@ function makeGateway() {
   };
 }
 
-function makeGateway() {
-  return {
-    client: {
-      payments: {
-        fetch: fetchMock,
-        refund: refundMock,
-      },
-    },
-  };
-}
-
 beforeEach(() => {
   fetchMock.mockReset().mockResolvedValue({ status: 'captured' });
   refundMock.mockReset().mockResolvedValue({ id: 'rfnd_1', status: 'processed', amount: 49900 });

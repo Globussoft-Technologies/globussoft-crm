@@ -1195,7 +1195,7 @@ describe("<Settings /> — Theme Color branding column", () => {
   // 39 — Theme color input renders in the Branding card with the correct
   // description copy (distinguishes it from the brand color input).
   it("renders the Theme color label + input in the Branding card", async () => {
-    render(<Settings />);
+    renderSettings();
     await waitFor(() =>
       expect(screen.getByText(/^Branding$/)).toBeInTheDocument(),
     );
@@ -1211,7 +1211,7 @@ describe("<Settings /> — Theme Color branding column", () => {
   // 40 — Save theme color PUTs /api/wellness/branding/theme-color with valid hex
   it("Save color (theme) PUTs /api/wellness/branding/theme-color with the 6-digit hex", async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() =>
       expect(screen.getByText(/Theme color/i)).toBeInTheDocument(),
     );
@@ -1250,7 +1250,7 @@ describe("<Settings /> — Theme Color branding column", () => {
         branding: { logoUrl: null, brandColor: "", themeColor: null },
       }),
     );
-    render(<Settings />);
+    renderSettings();
     await waitFor(() =>
       expect(screen.getByText(/^Branding$/)).toBeInTheDocument(),
     );
@@ -1267,7 +1267,7 @@ describe("<Settings /> — Theme Color branding column", () => {
         branding: { logoUrl: null, brandColor: "", themeColor: "#A07C4A" },
       }),
     );
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => {
       const btns = screen
         .queryAllByRole("button")
@@ -1289,7 +1289,7 @@ describe("<Settings /> — Theme Color branding column", () => {
       })(url, opts);
     });
 
-    render(<Settings />);
+    renderSettings();
     const resetBtn = await screen.findByText("Reset to default");
     await user.click(resetBtn);
 
@@ -1318,7 +1318,7 @@ describe("<Settings /> — Theme Color branding column", () => {
       })(url, opts);
     });
 
-    render(<Settings />);
+    renderSettings();
     const resetBtn = await screen.findByText("Reset to default");
     await user.click(resetBtn);
 

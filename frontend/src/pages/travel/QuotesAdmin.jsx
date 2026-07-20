@@ -126,8 +126,6 @@ export default function QuotesAdmin() {
   // #829 — distinguish 403 from genuine empty so the empty-state copy
   // honestly says "Access restricted" instead of "No quotes match."
   const [permissionDenied, setPermissionDenied] = useState(false);
-  // Contact id → display name, so the list shows names instead of bare ids.
-  const [contactsById, setContactsById] = useState({});
 
   const [subBrand, setSubBrand] = useState("");
   const [status, setStatus] = useState("");
@@ -158,20 +156,15 @@ export default function QuotesAdmin() {
       .finally(() => setLoading(false));
   };
 
-  // Name filter is a derived client-side view over the raw fetched rows —
-  // NOT re-fetched on every keystroke. Case-insensitive against the
-  // contactId -> name map (loaded separately below). The backend doesn't
-  // expose a ?name query param, and TravelQuote has no destination field
-  // to search by. Kept separate from `load()` so contactsById finishing
-  // its own fetch (after the quotes list) re-applies the filter for free
-  // via a normal re-render, instead of needing another network round-trip.
+  // Name filter is a derived client-side view over the raw fetched rows.
+  // The backend now joins contact.name, so we filter directly on it.
   const visibleQuotes = useMemo(() => {
     const needle = nameFilter.trim().toLowerCase();
     if (!needle) return quotes;
     return quotes.filter((q) =>
-      (contactsById[q.contactId] || "").toLowerCase().includes(needle),
+      (q.contact?.name || "").toLowerCase().includes(needle),
     );
-  }, [quotes, nameFilter, contactsById]);
+  }, [quotes, nameFilter]);
 
   // Sync the global sub-brand selector (sidebar) into the local filter so this
   // list re-scopes when the user switches brand — consistent with InvoicesAdmin
@@ -182,20 +175,6 @@ export default function QuotesAdmin() {
   }, [activeSubBrand]);
 
   useEffect(load, [subBrand, status]);
-
-  // Load a contactId → name map once so the Contact column renders names.
-  useEffect(() => {
-    fetchApi("/api/contacts?fields=summary&limit=500")
-      .then((d) => {
-        const rows = Array.isArray(d) ? d : Array.isArray(d?.contacts) ? d.contacts : [];
-        const map = {};
-        for (const c of rows) {
-          if (c && c.id != null) map[c.id] = c.name || c.email || `#${c.id}`;
-        }
-        setContactsById(map);
-      })
-      .catch(() => {});
-  }, []);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -267,7 +246,8 @@ export default function QuotesAdmin() {
   };
 
   const handleDelete = async (q) => {
-    if (!confirm(`Delete quote #${q.id} for contact ${q.contactId}? (Hard delete — no undo.)`)) return;
+    const contactName = q.contact?.name || "this contact";
+    if (!confirm(`Delete quote #${q.id} for ${contactName}? (Hard delete — no undo.)`)) return;
     try {
       await fetchApi(`/api/travel/quotes/${q.id}`, { method: "DELETE" });
       notify.success(`Quote #${q.id} deleted`);
@@ -449,7 +429,7 @@ export default function QuotesAdmin() {
               {visibleQuotes.map((q) => (
                 <tr key={q.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                   <td style={td}>
-                    <strong>{contactsById[q.contactId] || `#${q.contactId}`}</strong>
+                    <strong>{q.contact?.name || "—"}</strong>
                   </td>
                   <td style={td}>
                     <span

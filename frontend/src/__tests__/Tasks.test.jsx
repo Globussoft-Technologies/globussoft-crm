@@ -5,7 +5,7 @@
  * Scope: pins the page-surface invariants for the productivity / follow-up
  * queue surface used daily by SDR-like roles. The page reads from
  * /api/tasks + /api/contacts, displays a priority-sorted Active queue + a
- * Completed log, and exposes a drawer-shaped "Create Task" form that
+ * Completed log, and exposes a drawer-shaped "Add Todo" form that
  * POSTs to /api/tasks then refreshes.
  *
  * Invariants pinned here:
@@ -33,6 +33,8 @@
  *  12. Priority normalization (#296): a non-canonical backend value like
  *      "CRITICAL_OMG" collapses to "Critical" in the rendered badge so
  *      the UI never shows a screaming all-caps string.
+ *  13. Form fields match reference: Status dropdown (Pending/Completed/In Progress),
+ *      Priority dropdown (with color), Due At, Completed At, Assignees, Description.
  *
  * Mock discipline: notifyObj is a SINGLE stable reference (the
  * useNotify-in-useCallback RTL standing rule) — fresh objects per call
@@ -58,6 +60,20 @@ const notifyObj = {
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
+}));
+
+// Mock wellness patient tag imports so TagPickerPopover doesn't blow up
+// in the non-wellness generic render path (the component is only rendered
+// when isWellness=true, but the module graph is still resolved).
+vi.mock('../pages/wellness/patients/TagPickerPopover', () => ({
+  default: () => null,
+}));
+vi.mock('../pages/wellness/patients/styles', () => ({
+  tagChipStyle: () => ({}),
+  chipRemoveStyle: {},
+}));
+vi.mock('../pages/wellness/patients/constants', () => ({
+  tagColour: () => '#888',
 }));
 
 import Tasks from '../pages/Tasks';
@@ -125,6 +141,10 @@ function defaultFetchMock(url, opts) {
   }
   if (url === '/api/staff' && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(sampleStaff);
+  }
+  // GET /wellness/patients/tags returns { tags: [...] }
+  if (url === '/api/wellness/patients/tags' && (!opts || !opts.method || opts.method === 'GET')) {
+    return Promise.resolve({ tags: [{ id: 1, name: 'Interested', color: '#f9a8d4' }] });
   }
   if (url === '/api/tasks' && opts?.method === 'POST') {
     return Promise.resolve({ id: 99 });
@@ -280,26 +300,26 @@ describe('<Tasks /> — page surface', () => {
       expect(screen.getByText('Q3 Renewal Call')).toBeInTheDocument();
     });
 
-    // Before click: drawer header not visible.
-    expect(screen.queryByText(/Enqueue Activity/i)).not.toBeInTheDocument();
+    // Before click: modal not visible.
+    expect(screen.queryByText(/Add Todo/i)).not.toBeInTheDocument();
 
-    // Click header CTA → drawer opens with title input present.
+    // Click header CTA → modal opens with title input present.
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
-    expect(screen.getByText(/Enqueue Activity/i)).toBeInTheDocument();
+    expect(screen.getByText(/Add Todo/i)).toBeInTheDocument();
     expect(document.getElementById('task-title-input')).toBeInTheDocument();
 
     // Close via the X button (aria-label="Close").
     fireEvent.click(screen.getByRole('button', { name: /^Close$/i }));
     await waitFor(() => {
-      expect(screen.queryByText(/Enqueue Activity/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Add Todo/i)).not.toBeInTheDocument();
     });
 
     // Re-open + close via ESC keydown on window.
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
-    expect(screen.getByText(/Enqueue Activity/i)).toBeInTheDocument();
+    expect(screen.getByText(/Add Todo/i)).toBeInTheDocument();
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => {
-      expect(screen.queryByText(/Enqueue Activity/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Add Todo/i)).not.toBeInTheDocument();
     });
   });
 
@@ -317,14 +337,15 @@ describe('<Tasks /> — page surface', () => {
     const priorityInput = document.getElementById('task-priority-select');
     fireEvent.change(priorityInput, { target: { value: 'High' } });
 
-    // datetime-local input — pick a future wall-clock time.
-    const dueDateInput = document.querySelector('input[type="datetime-local"]');
-    expect(dueDateInput).toBeInTheDocument();
-    fireEvent.change(dueDateInput, { target: { value: '2030-06-01T10:30' } });
+    // Due At datetime-local input — pick a future wall-clock time.
+    // The first datetime-local is the Due At field.
+    const dueDateInputs = document.querySelectorAll('input[type="datetime-local"]');
+    expect(dueDateInputs.length).toBeGreaterThanOrEqual(1);
+    fireEvent.change(dueDateInputs[0], { target: { value: '2030-06-01T10:30' } });
 
     fetchApiMock.mockClear();
-    // Submit via the Assign Task button.
-    fireEvent.click(screen.getByRole('button', { name: /Assign Task/i }));
+    // Submit via the Save button.
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
 
     await waitFor(() => {
       const postCall = fetchApiMock.mock.calls.find(
@@ -345,7 +366,7 @@ describe('<Tasks /> — page surface', () => {
 
     // Drawer closes on success.
     await waitFor(() => {
-      expect(screen.queryByText(/Enqueue Activity/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Add Todo/i)).not.toBeInTheDocument();
     });
   });
 
@@ -356,7 +377,8 @@ describe('<Tasks /> — page surface', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
-    const dueDateInput = document.querySelector('input[type="datetime-local"]');
+    const dueDateInputs = document.querySelectorAll('input[type="datetime-local"]');
+    const dueDateInput = dueDateInputs[0];
 
     // Pre-input: no warning.
     expect(screen.queryByTestId('task-past-date-warning')).not.toBeInTheDocument();
@@ -387,15 +409,15 @@ describe('<Tasks /> — page surface', () => {
     fireEvent.change(document.getElementById('task-title-input'), {
       target: { value: 'Will fail' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Assign Task/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
 
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/Failed to enqueue task/i),
+        expect.stringMatching(/Failed to create task/i),
       );
     });
     // Drawer stays open so the user can correct + retry.
-    expect(screen.getByText(/Enqueue Activity/i)).toBeInTheDocument();
+    expect(screen.getByText(/Add Todo/i)).toBeInTheDocument();
   });
 
   it('priority normalization: non-canonical "CRITICAL_OMG" collapses to "Critical" badge (#296)', async () => {
@@ -426,6 +448,60 @@ describe('<Tasks /> — page surface', () => {
     // chips/options carrying "Critical" so just assert at least one.
     expect(screen.getAllByText(/Critical/).length).toBeGreaterThanOrEqual(1);
   });
+
+  it('form has Status dropdown with Pending/Completed/In Progress options', async () => {
+    renderTasks();
+    await waitFor(() => screen.getByText('Q3 Renewal Call'));
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+
+    const statusSelect = document.getElementById('task-status-select');
+    expect(statusSelect).toBeInTheDocument();
+    expect(within(statusSelect).getByRole('option', { name: 'Pending' })).toBeInTheDocument();
+    expect(within(statusSelect).getByRole('option', { name: 'Completed' })).toBeInTheDocument();
+    expect(within(statusSelect).getByRole('option', { name: 'In Progress' })).toBeInTheDocument();
+  });
+
+  it('form has two datetime-local inputs for Due At and Completed At', async () => {
+    renderTasks();
+    await waitFor(() => screen.getByText('Q3 Renewal Call'));
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+
+    const dtInputs = document.querySelectorAll('input[type="datetime-local"]');
+    expect(dtInputs.length).toBe(2);
+  });
+
+  it('form has Description textarea with correct placeholder', async () => {
+    renderTasks();
+    await waitFor(() => screen.getByText('Q3 Renewal Call'));
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+
+    const textarea = screen.getByPlaceholderText(/Write description or notes here/i);
+    expect(textarea).toBeInTheDocument();
+  });
+
+  it('description is included in POST notes payload', async () => {
+    renderTasks();
+    await waitFor(() => screen.getByText('Q3 Renewal Call'));
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+
+    fireEvent.change(document.getElementById('task-title-input'), { target: { value: 'Test task' } });
+    const textarea = screen.getByPlaceholderText(/Write description or notes here/i);
+    fireEvent.change(textarea, { target: { value: 'Some briefing notes' } });
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/tasks' && o?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(postCall[1].body);
+      // Description is packed into notes (with or without tags sentinel).
+      expect(body.notes).toBeTruthy();
+      expect(body.notes).toContain('Some briefing notes');
+    });
+  });
 });
 
 describe('<Tasks /> — travel "Assign to (staff)" dropdown', () => {
@@ -437,7 +513,7 @@ describe('<Tasks /> — travel "Assign to (staff)" dropdown', () => {
     notifyInfo.mockReset();
   });
 
-  it('travel vertical: fetches /api/staff and renders a staff assignee dropdown (not contacts)', async () => {
+  it('travel vertical: fetches /api/staff and renders a staff assignee select', async () => {
     renderTravelTasks();
     await screen.findByRole('heading', { name: /Agent Task Queue/i });
     // The travel-gated staff fetch fires.
@@ -445,34 +521,32 @@ describe('<Tasks /> — travel "Assign to (staff)" dropdown', () => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/staff');
     });
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
-    // The new staff dropdown renders with staff names — NOT contacts.
-    expect(await screen.findByText(/Assign to \(staff\)/i)).toBeInTheDocument();
-    const staffSelect = screen.getByLabelText(/Assign to \(staff\)/i);
-    expect(within(staffSelect).getByRole('option', { name: /Asha Agent/ })).toBeInTheDocument();
+    // Staff names appear as options in the Assignees select.
+    const staffOption = await screen.findByRole('option', { name: /Asha Agent/ });
+    expect(staffOption).toBeInTheDocument();
+    const staffSelect = staffOption.closest('select');
     expect(within(staffSelect).getByRole('option', { name: /Vikram Agent/ })).toBeInTheDocument();
-    // Contacts must NOT appear as staff options (Anita is a contact).
+    // Contacts must NOT appear as staff options.
     expect(within(staffSelect).queryByRole('option', { name: /Anita Sharma/ })).not.toBeInTheDocument();
   });
 
-  it('generic vertical: no staff dropdown, no /api/staff call', async () => {
+  it('generic vertical: no /api/staff call', async () => {
     renderTasks(); // no AuthContext → tenant undefined → isTravel false
     await screen.findByRole('heading', { name: /Agent Task Queue/i });
-    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
-    expect(screen.queryByText(/Assign to \(staff\)/i)).not.toBeInTheDocument();
     expect(fetchApiMock).not.toHaveBeenCalledWith('/api/staff');
   });
 
-  it('travel: submitting with a chosen staff sends targetUserId (not contactId)', async () => {
+  it('travel: submitting with a chosen staff sends targetUserId', async () => {
     renderTravelTasks();
     await screen.findByRole('heading', { name: /Agent Task Queue/i });
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
     const titleInput = document.getElementById('task-title-input');
     fireEvent.change(titleInput, { target: { value: 'Call the school' } });
-    await screen.findByText(/Assign to \(staff\)/i);
-    // The staff <select> is the one whose options include the staff names.
-    const staffSelect = screen.getByRole('option', { name: /Asha Agent/ }).closest('select');
+    // Wait for staff options to load.
+    const staffOption = await screen.findByRole('option', { name: /Asha Agent/ });
+    const staffSelect = staffOption.closest('select');
     fireEvent.change(staffSelect, { target: { value: '201' } });
-    fireEvent.click(screen.getByRole('button', { name: /Assign Task/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/tasks' && o?.method === 'POST',

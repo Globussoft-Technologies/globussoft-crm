@@ -936,6 +936,36 @@ describe('Participants', () => {
     expect(res.body).toMatchObject({ code: 'PARTICIPANT_NOT_FOUND' });
     expect(prisma.tripParticipant.delete).not.toHaveBeenCalled();
   });
+
+  test('POST reject requires a non-empty reason', async () => {
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 50, applicationStatus: 'pending' });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/participants/50/reject')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ reviewNotes: '   ' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'REJECTION_REASON_REQUIRED' });
+    expect(prisma.tripParticipant.update).not.toHaveBeenCalled();
+  });
+
+  test('POST reject persists the required reason in reviewNotes', async () => {
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 50, applicationStatus: 'pending' });
+    prisma.tripParticipant.update.mockResolvedValue({
+      id: 50, applicationStatus: 'rejected', reviewNotes: 'Missing consent form',
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/participants/50/reject')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ reviewNotes: 'Missing consent form' });
+    expect(res.status).toBe(200);
+    expect(prisma.tripParticipant.update).toHaveBeenCalledWith({
+      where: { id: 50 },
+      data: expect.objectContaining({
+        applicationStatus: 'rejected',
+        reviewNotes: 'Missing consent form',
+      }),
+    });
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -1591,7 +1621,7 @@ describe('POST /api/travel/trips/:id/registrations/:rid/reject', () => {
     expect(prisma.tripParticipant.create).not.toHaveBeenCalled();
   });
 
-  test('reject from DRAFT state is allowed (operator can dismiss un-verified spam)', async () => {
+  test('reject from DRAFT state still requires a reason', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
     prisma.pendingTripRegistration.findFirst.mockResolvedValue({
       id: 9002, tripId: 100, tenantId: 1, status: 'DRAFT',
@@ -1601,8 +1631,9 @@ describe('POST /api/travel/trips/:id/registrations/:rid/reject', () => {
       .post('/api/travel/trips/100/registrations/9002/reject')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
       .send({});
-    expect(res.status).toBe(200);
-    expect(res.body.rejected).toBe(true);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'REJECTION_REASON_REQUIRED' });
+    expect(prisma.pendingTripRegistration.update).not.toHaveBeenCalled();
   });
 
   test('CONVERTED draft cannot be rejected → 409 INVALID_STATE', async () => {

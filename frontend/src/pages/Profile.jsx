@@ -547,7 +547,7 @@ const Profile = () => {
                   style={{
                     display: 'inline-block',
                     padding: '2px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: '600',
-                    background: 'rgba(38,88,85,0.15)', color: 'var(--primary-color, #265855)',
+                    background: 'rgba(160,124,74,0.15)', color: 'var(--accent-color, #a07c4a)',
                     textTransform: 'capitalize',
                   }}
                 >

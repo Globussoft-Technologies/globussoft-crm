@@ -1724,6 +1724,12 @@ async function decideApplication(req, res, nextStatus) {
     const reviewNotes = typeof req.body?.reviewNotes === "string"
       ? req.body.reviewNotes.slice(0, 2000)
       : null;
+    if (nextStatus === "rejected" && !reviewNotes?.trim()) {
+      return res.status(400).json({
+        error: "A rejection reason is required",
+        code: "REJECTION_REASON_REQUIRED",
+      });
+    }
     const reviewerId = req.user?.userId ?? null;
 
     const updated = await prisma.tripParticipant.update({
@@ -2088,6 +2094,12 @@ router.post(
       const reviewNotes = typeof req.body?.reviewNotes === "string"
         ? req.body.reviewNotes.slice(0, 2000)
         : null;
+      if (!reviewNotes?.trim()) {
+        return res.status(400).json({
+          error: "A rejection reason is required",
+          code: "REJECTION_REASON_REQUIRED",
+        });
+      }
       const reviewerId = req.user?.userId ?? null;
       const reviewerIdSafe = Number.isFinite(reviewerId) ? reviewerId : null;
       const updated = await prisma.pendingTripRegistration.update({

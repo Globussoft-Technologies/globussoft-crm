@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
 import { useActiveSubBrand } from '../utils/subBrand';
-import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X } from 'lucide-react';
+import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X, ChevronDown } from 'lucide-react';
+import TagPickerPopover from './wellness/patients/TagPickerPopover';
+import { tagChipStyle, chipRemoveStyle, modalInputStyle, filterLabelStyle } from './wellness/patients/styles';
+import { tagColour } from './wellness/patients/constants';
 
 const PRIORITY_CONFIG = {
   Critical: { color: '#ef4444', bg: 'rgba(239,68,68,0.08)', border: '#ef4444', pulse: true },
@@ -62,14 +65,45 @@ function isPastDate(localDateTimeStr) {
   return picked.getTime() < Date.now();
 }
 
-const EMPTY_FORM = { title: '', dueDate: '', contactId: '', notes: '', priority: 'Medium', assignedToId: '' };
+// Tags + description are encoded together in the Task.notes field so the
+// schema needs no migration. Format: JSON prefix sentinel + envelope.
+// Falls back gracefully for old plain-text notes.
+const NOTES_TAG = '__task_meta__';
+function encodeNotes(tagIds, description) {
+  if (!tagIds || tagIds.length === 0) return description || null;
+  return `${NOTES_TAG}${JSON.stringify({ t: tagIds, d: description || '' })}`;
+}
+function decodeNotes(raw) {
+  if (!raw) return { tagIds: [], description: '' };
+  if (!raw.startsWith(NOTES_TAG)) return { tagIds: [], description: raw };
+  try {
+    const { t, d } = JSON.parse(raw.slice(NOTES_TAG.length));
+    return { tagIds: Array.isArray(t) ? t : [], description: d || '' };
+  } catch {
+    return { tagIds: [], description: raw };
+  }
+}
+
+const EMPTY_FORM = {
+  title: '',
+  status: 'Pending',
+  priority: 'Medium',
+  dueDate: '',
+  completedAt: '',
+  assignedToId: '',
+  tagIds: [],
+  description: '',
+};
 
 export default function Tasks() {
   const notify = useNotify();
   const [tasks, setTasks] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [staff, setStaff] = useState([]);
+  const [allTags, setAllTags] = useState([]);
   const [newTask, setNewTask] = useState(EMPTY_FORM);
+  const [showTagPicker, setShowTagPicker] = useState(false);
+  const tagAnchorRef = useRef(null);
 
   // Travel vertical only: the "Assign to" dropdown lists STAFF (agents), scoped
   // to the active sub-brand so e.g. an RFU-only operator isn't offered TMC
@@ -77,6 +111,7 @@ export default function Tasks() {
   // so their Tasks form is unchanged.
   const { tenant } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === 'travel';
+  const isWellness = tenant?.vertical === 'wellness';
   const { activeSubBrand } = useActiveSubBrand();
   const assignableStaff = !isTravel
     ? staff
@@ -91,6 +126,16 @@ export default function Tasks() {
 
   useEffect(() => { loadData(); }, []);
 
+  // Load tenant tags from the wellness patients/tags endpoint so the tag
+  // picker in the Add Todo modal reuses the same tag set as patients.
+  useEffect(() => {
+    if (!isWellness) return;
+    // GET /patients/tags returns { tags: [...] }
+    fetchApi('/api/wellness/patients/tags')
+      .then((d) => setAllTags(Array.isArray(d?.tags) ? d.tags : []))
+      .catch(() => {});
+  }, [isWellness]);
+
   // Travel-only: load the staff roster for the "Assign to" dropdown. Fail-soft
   // (own catch) so a staff-list permission error never blocks the task queue,
   // and gated to travel so generic / wellness make no extra request.
@@ -104,7 +149,7 @@ export default function Tasks() {
   // #893: ESC closes the drawer to match the c031ba0 Travel-page convention.
   useEffect(() => {
     if (!creating) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') setCreating(false); };
+    const onKey = (e) => { if (e.key === 'Escape') { setCreating(false); setShowTagPicker(false); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [creating]);
@@ -124,11 +169,13 @@ export default function Tasks() {
 
   const openCreate = () => {
     setNewTask(EMPTY_FORM);
+    setShowTagPicker(false);
     setCreating(true);
   };
 
   const closeCreate = () => {
     setCreating(false);
+    setShowTagPicker(false);
   };
 
   const createTask = async (e) => {
@@ -140,21 +187,27 @@ export default function Tasks() {
       // path then adds +5:30, breaking the round-trip. Convert via the
       // browser's local Date so the saved value is a real ISO timestamp.
       const payload = {
-        ...newTask,
+        title: newTask.title,
+        status: newTask.status,
+        priority: newTask.priority,
         dueDate: newTask.dueDate ? new Date(newTask.dueDate).toISOString() : null,
+        // Tags + description are packed into the notes field using a sentinel
+        // prefix so no schema migration is needed.
+        notes: encodeNotes(newTask.tagIds, newTask.description),
+        contactId: newTask.contactId || undefined,
         // Backend reads `targetUserId` → Task.userId (stripDangerous deletes a
         // raw `userId` from the body). Only send when an assignee was picked.
         targetUserId: newTask.assignedToId || undefined,
       };
-      delete payload.assignedToId;
       await fetchApi('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
       setNewTask(EMPTY_FORM);
       setCreating(false);
+      setShowTagPicker(false);
       loadData();
       // #625: invalidate sidebar counters so the My Tasks badge bumps.
       window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
     } catch (err) {
-      notify.error('Failed to enqueue task');
+      notify.error('Failed to create task');
     }
   };
 
@@ -171,6 +224,43 @@ export default function Tasks() {
     }
   };
 
+  const handleTagPick = (tag) => {
+    if (newTask.tagIds.includes(tag.id)) return;
+    setNewTask((prev) => ({ ...prev, tagIds: [...prev.tagIds, tag.id] }));
+    setShowTagPicker(false);
+  };
+
+  const handleTagCreate = async (name) => {
+    try {
+      // POST /patients/tags returns { tag: {id,name,color}, created: bool }
+      const res = await fetchApi('/api/wellness/patients/tags', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      });
+      if (res?.tag) {
+        setAllTags((prev) => {
+          if (prev.find((t) => t.id === res.tag.id)) return prev;
+          return [...prev, res.tag];
+        });
+        setNewTask((prev) => ({
+          ...prev,
+          tagIds: prev.tagIds.includes(res.tag.id)
+            ? prev.tagIds
+            : [...prev.tagIds, res.tag.id],
+        }));
+      }
+    } catch {
+      notify.error('Failed to create tag');
+    }
+    setShowTagPicker(false);
+  };
+
+  const removeTag = (tagId) => {
+    setNewTask((prev) => ({ ...prev, tagIds: prev.tagIds.filter((id) => id !== tagId) }));
+  };
+
+  const selectedTags = allTags.filter((t) => newTask.tagIds.includes(t.id));
+
   const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
   const activeTasks = tasks
     .filter(t => t.status !== 'Completed')
@@ -180,6 +270,14 @@ export default function Tasks() {
   const criticalCount = activeTasks.filter(t => t.priority === 'Critical').length;
   const highCount = activeTasks.filter(t => t.priority === 'High').length;
   const overdueCount = activeTasks.filter(isOverdue).length;
+
+  // Priority color for the priority select dropdown value
+  const priorityColor = {
+    Critical: '#ef4444',
+    High: '#f97316',
+    Medium: '#3b82f6',
+    Low: '#64748b',
+  }[newTask.priority] || '#3b82f6';
 
   return (
     <div className="tasks-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
@@ -316,12 +414,12 @@ export default function Tasks() {
 
       </div>
 
-      {/* #893: Create Task modal — opens from header CTA. Close on X, ESC, outside-click. */}
+      {/* Add Todo modal — matches the reference design */}
       {creating && (
         <div
           onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}
           style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
             backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             zIndex: 1000, padding: '1rem',
@@ -329,125 +427,321 @@ export default function Tasks() {
         >
           <form
             onSubmit={createTask}
-            className="card"
             style={{
-              background: 'var(--bg-color)', color: 'var(--text-primary)',
-              width: '100%', maxWidth: 480, maxHeight: '90vh', overflowY: 'auto',
-              padding: 24,
+              background: 'var(--bg-color, #f5f0e8)',
+              color: 'var(--text-primary)',
+              width: '100%',
+              maxWidth: 500,
+              maxHeight: '92vh',
+              overflowY: 'auto',
+              padding: '1.5rem',
+              borderRadius: 16,
+              boxShadow: '0 24px 64px rgba(0,0,0,0.3)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1rem',
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Plus size={18} color="var(--accent-color)" /> Enqueue Activity
-              </h2>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)' }}>Add Todo</h2>
               <button
                 type="button"
                 onClick={closeCreate}
                 aria-label="Close"
                 style={{
                   background: 'transparent', border: 'none', color: 'var(--text-secondary)',
-                  cursor: 'pointer', padding: 4,
+                  cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', borderRadius: 6,
                 }}
               >
-                <X size={16} />
+                <X size={18} />
               </button>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Directive Title</label>
-                <input id="task-title-input" type="text" required className="input-field" placeholder="e.g. Q3 Renewal Call"
-                  value={newTask.title} onChange={e => setNewTask({ ...newTask, title: e.target.value })} />
+            {/* Task Name */}
+            <input
+              id="task-title-input"
+              type="text"
+              required
+              placeholder="Task Name"
+              value={newTask.title}
+              onChange={e => setNewTask({ ...newTask, title: e.target.value })}
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                padding: '0.65rem 0.9rem', fontSize: '0.95rem', fontWeight: 500,
+                background: 'var(--surface-color, #fff)',
+                border: '1px solid var(--border-color, rgba(0,0,0,0.12))',
+                borderRadius: 8, color: 'var(--text-primary)', outline: 'none',
+              }}
+            />
+
+            {/* Status + Priority — two equal columns, label left of select */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              {/* Status */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, color: 'var(--text-secondary)' }}>
+                  <circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="3" />
+                </svg>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}>Status:</span>
+                <select
+                  id="task-status-select"
+                  value={newTask.status}
+                  onChange={e => setNewTask({ ...newTask, status: e.target.value })}
+                  style={{
+                    flex: 1, minWidth: 0, padding: '0.38rem 0.5rem',
+                    fontSize: '0.82rem', fontWeight: 600, borderRadius: 7,
+                    background: newTask.status === 'Pending'
+                      ? 'var(--text-primary, #1a1a2e)'
+                      : newTask.status === 'Completed'
+                        ? 'rgba(34,197,94,0.12)'
+                        : 'rgba(59,130,246,0.12)',
+                    color: newTask.status === 'Pending'
+                      ? 'var(--bg-color, #fff)'
+                      : newTask.status === 'Completed'
+                        ? '#16a34a'
+                        : '#2563eb',
+                    border: '1px solid var(--border-color, rgba(0,0,0,0.15))',
+                    outline: 'none', cursor: 'pointer',
+                  }}
+                >
+                  <option value="Pending">Pending</option>
+                  <option value="Completed">Completed</option>
+                  <option value="In Progress">In Progress</option>
+                </select>
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Priority Level</label>
-                <select id="task-priority-select" className="input-field" value={newTask.priority}
+              {/* Priority */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, color: 'var(--text-secondary)' }}>
+                  <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" />
+                </svg>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}>Priority:</span>
+                <select
+                  id="task-priority-select"
+                  value={newTask.priority}
                   onChange={e => setNewTask({ ...newTask, priority: e.target.value })}
-                  style={{ background: 'var(--input-bg)' }}>
-                  <option value="Critical">🔴 Critical</option>
-                  <option value="High">🟠 High</option>
-                  <option value="Medium">🔵 Medium</option>
-                  <option value="Low">⚪ Low</option>
+                  style={{
+                    flex: 1, minWidth: 0, padding: '0.38rem 0.5rem',
+                    fontSize: '0.82rem', fontWeight: 600, borderRadius: 7,
+                    background: 'transparent',
+                    color: priorityColor,
+                    border: `1px solid ${priorityColor}66`,
+                    outline: 'none', cursor: 'pointer',
+                  }}
+                >
+                  <option value="">Select Priority</option>
+                  <option value="Critical">Critical</option>
+                  <option value="High">High</option>
+                  <option value="Medium">Medium</option>
+                  <option value="Low">Low</option>
                 </select>
               </div>
+            </div>
 
-              <div>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Associated Contact</label>
-                <select className="input-field" value={newTask.contactId}
-                  onChange={e => setNewTask({ ...newTask, contactId: e.target.value })}
-                  style={{ background: 'var(--input-bg)' }}>
-                  <option value="">-- Unassigned --</option>
-                  {contacts.map(c => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
-                </select>
+            {/* Due At + Completed At — stacked label above input, two columns */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              {/* Due At */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                  <Calendar size={12} style={{ flexShrink: 0 }} />
+                  Due At:
+                </label>
+                <input
+                  type="datetime-local"
+                  value={newTask.dueDate}
+                  onChange={e => setNewTask({ ...newTask, dueDate: e.target.value })}
+                  aria-describedby={isPastDate(newTask.dueDate) ? 'task-duedate-warning' : undefined}
+                  style={{
+                    width: '100%', boxSizing: 'border-box',
+                    padding: '0.42rem 0.6rem', fontSize: '0.8rem',
+                    border: isPastDate(newTask.dueDate)
+                      ? '1px solid #f59e0b'
+                      : '1px solid var(--border-color, rgba(0,0,0,0.15))',
+                    borderRadius: 7,
+                    background: 'var(--surface-color, #fff)',
+                    color: 'var(--text-primary)',
+                    outline: 'none',
+                  }}
+                />
               </div>
 
-              {isTravel && (
-                <div>
-                  <label htmlFor="task-staff-assign" style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Assign to (staff)</label>
-                  <select id="task-staff-assign" className="input-field" value={newTask.assignedToId}
-                    onChange={e => setNewTask({ ...newTask, assignedToId: e.target.value })}
-                    style={{ background: 'var(--input-bg)' }}>
-                    <option value="">-- Unassigned --</option>
-                    {assignableStaff.map(s => {
+              {/* Completed At */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                  <Calendar size={12} style={{ flexShrink: 0 }} />
+                  Completed At:
+                </label>
+                <input
+                  type="datetime-local"
+                  value={newTask.completedAt}
+                  onChange={e => setNewTask({ ...newTask, completedAt: e.target.value })}
+                  style={{
+                    width: '100%', boxSizing: 'border-box',
+                    padding: '0.42rem 0.6rem', fontSize: '0.8rem',
+                    border: '1px solid var(--border-color, rgba(0,0,0,0.15))',
+                    borderRadius: 7,
+                    background: 'var(--surface-color, #fff)',
+                    color: 'var(--text-primary)',
+                    outline: 'none',
+                  }}
+                />
+              </div>
+            </div>
+
+            {isPastDate(newTask.dueDate) && (
+              <p
+                id="task-duedate-warning"
+                data-testid="task-past-date-warning"
+                style={{ margin: '-0.25rem 0 0', fontSize: '0.75rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+              >
+                <AlertTriangle size={12} /> This task will be created already overdue.
+              </p>
+            )}
+
+            {/* Assignees — label + full-width select */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
+                </svg>
+                Assignees:
+              </label>
+              <select
+                value={newTask.assignedToId}
+                onChange={e => setNewTask({ ...newTask, assignedToId: e.target.value })}
+                style={{
+                  width: '100%', boxSizing: 'border-box',
+                  padding: '0.5rem 0.75rem', fontSize: '0.875rem',
+                  border: '1px solid var(--border-color, rgba(0,0,0,0.15))',
+                  borderRadius: 8,
+                  background: 'var(--surface-color, #fff)',
+                  color: 'var(--text-primary)',
+                  outline: 'none', cursor: 'pointer',
+                }}
+              >
+                <option value="">Select Assignees</option>
+                {isTravel
+                  ? assignableStaff.map(s => {
                       const brands = accessibleSubBrands(s);
-                      // Show the agent's brand scope as a hint (only when not all-4).
                       const scope = brands.length && brands.length < 4
                         ? ` · ${brands.map(subBrandShortLabel).join('/')}`
                         : '';
                       return <option key={s.id} value={s.id}>{s.name}{scope}</option>;
-                    })}
-                  </select>
-                  {assignableStaff.length === 0 && (
-                    <p style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                      No staff available for this sub-brand.
-                    </p>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Execution Deadline</label>
-                <input
-                  type="datetime-local"
-                  className="input-field"
-                  value={newTask.dueDate}
-                  onChange={e => setNewTask({ ...newTask, dueDate: e.target.value })}
-                  aria-describedby={isPastDate(newTask.dueDate) ? 'task-duedate-warning' : undefined}
-                  style={isPastDate(newTask.dueDate) ? { borderColor: '#f59e0b' } : undefined}
-                />
-                {isPastDate(newTask.dueDate) && (
-                  <p
-                    id="task-duedate-warning"
-                    data-testid="task-past-date-warning"
-                    style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                  >
-                    <AlertTriangle size={12} /> This task will be created already overdue.
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Execution Notes</label>
-                <textarea className="input-field" rows="3" placeholder="Briefing notes..."
-                  value={newTask.notes} onChange={e => setNewTask({ ...newTask, notes: e.target.value })} />
-              </div>
+                    })
+                  : contacts.map(c => <option key={c.id} value={c.id}>{c.name}</option>)
+                }
+              </select>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-              <button
-                type="button"
-                onClick={closeCreate}
+            {/* Tags — only on wellness tenants; mirrors the BulkTagModal pattern exactly:
+                dropdown button → TagPickerPopover → chip strip below */}
+            {isWellness && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                <span style={{ ...filterLabelStyle, fontSize: '0.78rem' }}>Tags:</span>
+                <div ref={tagAnchorRef} style={{ position: 'relative' }}>
+                  {/* Dropdown trigger — same shape as BulkTagModal's tag select button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowTagPicker((v) => !v)}
+                    aria-haspopup="dialog"
+                    aria-expanded={showTagPicker}
+                    style={{
+                      ...modalInputStyle,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      minHeight: 40,
+                      borderRadius: 8,
+                    }}
+                  >
+                    <span style={{ flex: 1, color: newTask.tagIds.length ? 'var(--text-primary)' : 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                      {newTask.tagIds.length ? `${newTask.tagIds.length} tag(s) selected` : 'Select tags…'}
+                    </span>
+                    <ChevronDown size={14} color="var(--text-secondary)" />
+                  </button>
+
+                  {/* Popover — same TagPickerPopover used in patients */}
+                  {showTagPicker && (
+                    <TagPickerPopover
+                      allTags={allTags}
+                      onPick={(tag) => {
+                        if (!newTask.tagIds.includes(tag.id)) {
+                          setNewTask((prev) => ({ ...prev, tagIds: [...prev.tagIds, tag.id] }));
+                        } else {
+                          setNewTask((prev) => ({ ...prev, tagIds: prev.tagIds.filter((id) => id !== tag.id) }));
+                        }
+                      }}
+                      onCreate={handleTagCreate}
+                      onClose={() => setShowTagPicker(false)}
+                      showCreate
+                      title="Pick tags"
+                    />
+                  )}
+                </div>
+
+                {/* Chip strip below the dropdown — same as BulkTagModal's selected tag chips */}
+                {selectedTags.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginTop: '0.25rem' }}>
+                    {selectedTags.map((t) => (
+                      <span key={t.id} style={tagChipStyle(tagColour(t))}>
+                        {t.name}
+                        <button
+                          type="button"
+                          onClick={() => removeTag(t.id)}
+                          aria-label={`Remove ${t.name}`}
+                          style={chipRemoveStyle}
+                        >
+                          <X size={10} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Description */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                </svg>
+                Description:
+              </label>
+              <textarea
+                rows="4"
+                placeholder="Write description or notes here..."
+                value={newTask.description}
+                onChange={e => setNewTask({ ...newTask, description: e.target.value })}
                 style={{
-                  padding: '0.65rem 1.1rem', borderRadius: 6, fontWeight: 500, fontSize: '0.875rem',
-                  background: 'var(--surface-color)', color: 'var(--text-secondary)',
-                  border: '1px solid var(--border-color)', cursor: 'pointer',
+                  width: '100%', boxSizing: 'border-box', resize: 'vertical',
+                  padding: '0.6rem 0.75rem', fontSize: '0.875rem',
+                  border: '1px solid var(--border-color, rgba(0,0,0,0.15))',
+                  borderRadius: 8,
+                  background: 'var(--surface-color, #fff)',
+                  color: 'var(--text-primary)',
+                  outline: 'none', fontFamily: 'inherit',
+                }}
+              />
+            </div>
+
+            {/* Footer */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '0.25rem' }}>
+              <button
+                id="assign-task-btn"
+                type="submit"
+                style={{
+                  padding: '0.6rem 2.25rem', borderRadius: 8, fontWeight: 600, fontSize: '0.9rem',
+                  background: 'var(--text-primary, #1a1a2e)', color: 'var(--bg-color, #fff)',
+                  border: 'none', cursor: 'pointer', letterSpacing: '0.01em',
                 }}
               >
-                Cancel
-              </button>
-              <button id="assign-task-btn" type="submit" className="btn-primary" style={{ padding: '0.65rem 1.1rem' }}>
-                Assign Task
+                Save
               </button>
             </div>
           </form>
@@ -458,7 +752,7 @@ export default function Tasks() {
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         /* #480 / #893: with the form moved to a drawer the main grid is now a single column.
            Keep the mobile padding adjustment in place so the page still breathes on narrow
-           viewports; the drawer itself is full-width on mobile via maxWidth: 460 + width: 100%. */
+           viewports; the drawer itself is full-width on mobile via maxWidth: 520 + width: 100%. */
         @media (max-width: 768px) {
           .tasks-page { padding: 1rem !important; }
           .tasks-page .card { padding: 1.25rem !important; }

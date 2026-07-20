@@ -7,7 +7,7 @@
  * management admin page (sibling to SuppliersAdmin / InvoicesAdmin):
  *
  *   1. Page chrome: heading "Travel Quotes" + sub-brand filter + status
- *      filter + contact-id filter + "New Quote" CTA (ADMIN/MANAGER only).
+ *      filter + customer-name filter + "New Quote" CTA (ADMIN/MANAGER only).
  *   2. Loading state: shows "Loading…" placeholder before first GET resolves
  *      (await findByText per CLAUDE.md tick #108 cron-learning).
  *   3. GET on mount: hits /api/travel/quotes (no query string when filters
@@ -119,13 +119,15 @@ const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' }
 const USER_USER = { userId: 2, name: 'Plain User', email: 'u@x.com', role: 'USER' };
 
 // Canonical quote rows — three sub-brands + statuses to exercise the badge
-// + status-pill render paths.
+// + status-pill render paths. Each row now carries the joined contact shape
+// so the Contact column renders names directly from the list response.
 function makeQuote(overrides = {}) {
   return {
     id: 101,
     tenantId: 1,
     subBrand: 'tmc',
     contactId: 5001,
+    contact: { id: 5001, name: 'Alice Smith' },
     status: 'Draft',
     totalAmount: 5000,
     currency: 'INR',
@@ -136,9 +138,9 @@ function makeQuote(overrides = {}) {
 }
 
 const QUOTES_DEFAULT = [
-  makeQuote({ id: 101, subBrand: 'tmc', status: 'Draft', totalAmount: 5000, contactId: 5001 }),
-  makeQuote({ id: 102, subBrand: 'rfu', status: 'Sent', totalAmount: 75000, contactId: 5002, currency: 'INR' }),
-  makeQuote({ id: 103, subBrand: 'visasure', status: 'Accepted', totalAmount: 12000, contactId: 5003, currency: 'USD' }),
+  makeQuote({ id: 101, subBrand: 'tmc', status: 'Draft', totalAmount: 5000, contactId: 5001, contact: { id: 5001, name: 'Alice Smith' } }),
+  makeQuote({ id: 102, subBrand: 'rfu', status: 'Sent', totalAmount: 75000, contactId: 5002, contact: { id: 5002, name: 'Bob Jones' }, currency: 'INR' }),
+  makeQuote({ id: 103, subBrand: 'visasure', status: 'Accepted', totalAmount: 12000, contactId: 5003, contact: { id: 5003, name: 'Carol White' }, currency: 'USD' }),
 ];
 
 // Install a fetchApi mock that routes by URL + method. Tests override
@@ -222,7 +224,7 @@ describe('<QuotesAdmin /> — page chrome + filter bar', () => {
     });
     expect(screen.queryByRole('button', { name: /New Quote/i })).toBeNull();
     // Wait for rows so we can check the column header set
-    await screen.findByText('#5001');
+    await screen.findByText('Alice Smith');
     // Actions column header should NOT be present for plain USER
     expect(screen.queryByRole('columnheader', { name: /Actions/i })).toBeNull();
   });
@@ -244,7 +246,7 @@ describe('<QuotesAdmin /> — load + render lifecycle', () => {
     expect(await screen.findByText('Loading…')).toBeInTheDocument();
     resolveList({ quotes: QUOTES_DEFAULT, total: QUOTES_DEFAULT.length });
     // Once resolved, Loading disappears + rows render.
-    await screen.findByText('#5001');
+    await screen.findByText('Alice Smith');
     expect(screen.queryByText('Loading…')).toBeNull();
   });
 
@@ -259,9 +261,15 @@ describe('<QuotesAdmin /> — load + render lifecycle', () => {
       expect(listCall[0]).toBe('/api/travel/quotes');
     });
     // Renders one row per quote.
-    expect(await screen.findByText('#5001')).toBeInTheDocument();
-    expect(screen.getByText('#5002')).toBeInTheDocument();
-    expect(screen.getByText('#5003')).toBeInTheDocument();
+    expect(await screen.findByText('Alice Smith')).toBeInTheDocument();
+    expect(screen.getByText('Bob Jones')).toBeInTheDocument();
+    expect(screen.getByText('Carol White')).toBeInTheDocument();
+    // The list uses the name joined onto each quote; raw contact IDs must not
+    // leak into the Contact column or trigger a second contacts-list request.
+    expect(screen.queryByText('#5001')).toBeNull();
+    expect(screen.queryByText('#5002')).toBeNull();
+    expect(screen.queryByText('#5003')).toBeNull();
+    expect(fetchApiMock.mock.calls.some(([url]) => String(url).startsWith('/api/contacts'))).toBe(false);
   });
 
   it('renders empty state "No quotes match." when API returns []', async () => {
@@ -286,7 +294,7 @@ describe('<QuotesAdmin /> — load + render lifecycle', () => {
 describe('<QuotesAdmin /> — filter behavior', () => {
   it('selecting sub-brand "rfu" re-fetches with ?subBrand=rfu in the URL', async () => {
     renderPage();
-    await screen.findByText('#5001');
+    await screen.findByText('Alice Smith');
     fetchApiMock.mockClear();
     installFetchMock({ list: { quotes: [QUOTES_DEFAULT[1]], total: 1 } });
     fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), { target: { value: 'rfu' } });
@@ -300,7 +308,7 @@ describe('<QuotesAdmin /> — filter behavior', () => {
 
   it('selecting status "Sent" re-fetches with ?status=Sent in the URL', async () => {
     renderPage();
-    await screen.findByText('#5001');
+    await screen.findByText('Alice Smith');
     fetchApiMock.mockClear();
     installFetchMock({ list: { quotes: [QUOTES_DEFAULT[1]], total: 1 } });
     fireEvent.change(screen.getByLabelText(/Filter by status/i), { target: { value: 'Sent' } });
@@ -311,13 +319,29 @@ describe('<QuotesAdmin /> — filter behavior', () => {
       expect(call).toBeTruthy();
     });
   });
+
+  it('customer-name filter narrows rows client-side by contact.name', async () => {
+    renderPage();
+    await screen.findByText('Alice Smith');
+    expect(screen.getByText('Bob Jones')).toBeInTheDocument();
+    expect(screen.getByText('Carol White')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/Filter by customer name/i), { target: { value: 'bob' } });
+
+    // Bob Jones remains; Alice and Carol are filtered out.
+    await waitFor(() => {
+      expect(screen.queryByText('Alice Smith')).toBeNull();
+      expect(screen.queryByText('Carol White')).toBeNull();
+    });
+    expect(screen.getByText('Bob Jones')).toBeInTheDocument();
+  });
 });
 
 describe('<QuotesAdmin /> — row rendering: money + sub-brand badge', () => {
   it('row total renders via real formatMoney — INR row contains "5,000" digit substring', async () => {
     renderPage();
     // Wait for the row corresponding to contactId 5001 (totalAmount=5000 INR).
-    const row = await screen.findByText('#5001');
+    const row = await screen.findByText('Alice Smith');
     // Walk up to the row; assert total contains "5,000" (locale-tolerant —
     // INR formatting via en-IN injects the standard "5,000" thousands separator).
     const tr = row.closest('tr');
@@ -327,7 +351,7 @@ describe('<QuotesAdmin /> — row rendering: money + sub-brand badge', () => {
 
   it('sub-brand badge per row uses real SUB_BRAND_BG (rgba palette from travelSubBrand.js)', async () => {
     renderPage();
-    const tmcRow = await screen.findByText('#5001');
+    const tmcRow = await screen.findByText('Alice Smith');
     const tr = tmcRow.closest('tr');
     // The badge cell contains the literal sub-brand id "tmc".
     const badge = within(tr).getByText('tmc');
@@ -346,7 +370,7 @@ describe('<QuotesAdmin /> — row rendering: money + sub-brand badge', () => {
 describe('<QuotesAdmin /> — edit + status-transition + delete', () => {
   it('clicking Edit on a row opens the form pre-filled + PUTs to /api/travel/quotes/:id', async () => {
     renderPage();
-    await screen.findByText('#5001');
+    await screen.findByText('Alice Smith');
     // Edit button has aria-label "Edit quote #101"
     fireEvent.click(screen.getByRole('button', { name: /Edit quote #101/i }));
     // Form prefilled with row 101 values.
@@ -370,7 +394,7 @@ describe('<QuotesAdmin /> — edit + status-transition + delete', () => {
 
   it('status-transition via edit: changing Draft → Sent sends `status: "Sent"` in PUT body', async () => {
     renderPage();
-    await screen.findByText('#5001');
+    await screen.findByText('Alice Smith');
     fireEvent.click(screen.getByRole('button', { name: /Edit quote #101/i }));
     // Status <select> in the edit form is labelled "Status" (the edit-form
     // dropdown — distinct from the filter-bar "Filter by status").
@@ -390,10 +414,12 @@ describe('<QuotesAdmin /> — edit + status-transition + delete', () => {
 
   it('delete flow: confirm-yes → DELETE /api/travel/quotes/:id; confirm-no → no DELETE', async () => {
     renderPage();
-    await screen.findByText('#5001');
+    await screen.findByText('Alice Smith');
     // Confirm-no path first.
     vi.spyOn(window, 'confirm').mockReturnValueOnce(false);
     fireEvent.click(screen.getByRole('button', { name: /Delete quote #101/i }));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('Alice Smith'));
+    expect(window.confirm).not.toHaveBeenCalledWith(expect.stringContaining('5001'));
     // No DELETE fired.
     await waitFor(() => {
       const deletes = fetchApiMock.mock.calls.filter(([u, o]) =>
@@ -419,7 +445,7 @@ describe('<QuotesAdmin /> — edit + status-transition + delete', () => {
     err.body = { error: 'Cannot delete — referenced by invoice' };
     installFetchMock({ del: err });
     renderPage();
-    await screen.findByText('#5001');
+    await screen.findByText('Alice Smith');
     vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
     fireEvent.click(screen.getByRole('button', { name: /Delete quote #101/i }));
     await waitFor(() => {

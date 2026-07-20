@@ -239,6 +239,36 @@ async function refundCapturedPayment({ payment, amount, reason, userId }) {
     return { ok: false, status: 503, code: "NO_GATEWAY", error: NOT_CONFIGURED_MESSAGE };
   }
 
+  // Pre-flight: verify the payment is actually `captured` on Razorpay's side
+  // before attempting the refund. Our DB status can lag (webhook not yet landed,
+  // or test-mode authorize-only flows that were never captured). A better error
+  // message is returned here than what `parseRazorpayError` extracts from the
+  // refund-attempt failure, and we avoid a wasted gateway round-trip.
+  try {
+    const rpPayment = await tenantGateway.client.payments.fetch(String(payment.gatewayId));
+    if (rpPayment && rpPayment.status && rpPayment.status !== "captured") {
+      const statusLabel = rpPayment.status; // authorized | failed | refunded | created
+      if (statusLabel === "refunded") {
+        return {
+          ok: false, status: 409, code: "ALREADY_REFUNDED_UPSTREAM",
+          error: "Razorpay shows this payment as already refunded. Please refresh the page — the status here may be out of date.",
+        };
+      }
+      return {
+        ok: false, status: 409, code: "PAYMENT_NOT_CAPTURED",
+        error: `This payment can't be refunded — Razorpay shows it as "${statusLabel}" (not captured). ${
+          statusLabel === "authorized"
+            ? "The payment was authorised but never settled. It will expire automatically; no refund is needed."
+            : "Please check the payment in your Razorpay dashboard."
+        }`,
+      };
+    }
+  } catch (fetchErr) {
+    // Non-fatal: if the pre-flight fetch itself fails (network blip, etc.) we
+    // fall through and let the refund attempt surface its own error.
+    console.warn("[refundService] razorpay payments.fetch pre-flight failed (non-fatal):", fetchErr && fetchErr.message);
+  }
+
   let refund;
   try {
     refund = await tenantGateway.client.payments.refund(String(payment.gatewayId), {

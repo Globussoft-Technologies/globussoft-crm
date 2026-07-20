@@ -9,6 +9,8 @@ import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
 
+const fetchMock = vi.fn();
+
 const refundMock = vi.fn();
 const getClientMock = vi.fn();
 requireCJS('../../lib/tenantPaymentGateway').getTenantRazorpayClient = getClientMock;
@@ -35,9 +37,32 @@ function pay(over = {}) {
   return { id: 5, tenantId: 1, invoiceId: 993, contactId: 501, description: 'Travel to Goa — advance payment', currency: 'INR', amount: 499, gateway: 'razorpay', gatewayId: 'pay_ABC', status: 'SUCCESS', metadata: null, ...over };
 }
 
+function makeGateway() {
+  return {
+    client: {
+      payments: {
+        fetch: fetchMock,
+        refund: refundMock,
+      },
+    },
+  };
+}
+
+function makeGateway() {
+  return {
+    client: {
+      payments: {
+        fetch: fetchMock,
+        refund: refundMock,
+      },
+    },
+  };
+}
+
 beforeEach(() => {
+  fetchMock.mockReset().mockResolvedValue({ status: 'captured' });
   refundMock.mockReset().mockResolvedValue({ id: 'rfnd_1', status: 'processed', amount: 49900 });
-  getClientMock.mockReset().mockResolvedValue({ client: { payments: { refund: refundMock } } });
+  getClientMock.mockReset().mockResolvedValue(makeGateway());
   prisma.payment.update.mockReset().mockImplementation(async ({ data }) => ({ ...pay(), ...data }));
   prisma.invoice.update.mockReset().mockResolvedValue({});
   sendEmailMock.mockReset().mockResolvedValue({ sent: true });
@@ -217,5 +242,41 @@ describe('notifyRefundInitiated', () => {
     expect(sendEmailMock).toHaveBeenCalledWith(expect.objectContaining({
       html: expect.stringContaining('Travel Stall'),
     }));
+  });
+
+  describe('pre-flight payments.fetch (#900 TMC instalment payments polish)', () => {
+    test('pre-flight status=authorized → PAYMENT_NOT_CAPTURED without calling refund', async () => {
+      fetchMock.mockResolvedValue({ status: 'authorized' });
+      const r = await svc.refundCapturedPayment({ payment: pay() });
+      expect(r.ok).toBe(false);
+      expect(r.status).toBe(409);
+      expect(r.code).toBe('PAYMENT_NOT_CAPTURED');
+      expect(refundMock).not.toHaveBeenCalled();
+      expect(prisma.payment.update).not.toHaveBeenCalled();
+    });
+
+    test('pre-flight status=refunded → ALREADY_REFUNDED_UPSTREAM without calling refund', async () => {
+      fetchMock.mockResolvedValue({ status: 'refunded' });
+      const r = await svc.refundCapturedPayment({ payment: pay() });
+      expect(r.ok).toBe(false);
+      expect(r.status).toBe(409);
+      expect(r.code).toBe('ALREADY_REFUNDED_UPSTREAM');
+      expect(refundMock).not.toHaveBeenCalled();
+      expect(prisma.payment.update).not.toHaveBeenCalled();
+    });
+
+    test('pre-flight status=captured → proceeds to refund', async () => {
+      fetchMock.mockResolvedValue({ status: 'captured' });
+      const r = await svc.refundCapturedPayment({ payment: pay(), amount: 200, reason: 'x', userId: 7 });
+      expect(r.ok).toBe(true);
+      expect(refundMock).toHaveBeenCalledWith('pay_ABC', expect.objectContaining({ amount: 20000 }));
+    });
+
+    test('pre-flight fetch failure is non-fatal and falls through to refund', async () => {
+      fetchMock.mockRejectedValue(new Error('network blip'));
+      const r = await svc.refundCapturedPayment({ payment: pay(), amount: 200, reason: 'x', userId: 7 });
+      expect(r.ok).toBe(true);
+      expect(refundMock).toHaveBeenCalledWith('pay_ABC', expect.objectContaining({ amount: 20000 }));
+    });
   });
 });

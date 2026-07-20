@@ -34,7 +34,7 @@ import { formatMoney } from '../../utils/money';
 // Per-category visual config — icon + accent colour for the timeline rows
 // and the filter chips. Keys match the `category` field the API emits.
 const CATEGORY_META = {
-  Purchase: { icon: ShoppingBag, color: '#265855', label: 'Purchases' },
+  Purchase: { icon: ShoppingBag, color: '#a07c4a', label: 'Purchases' },
   Wallet: { icon: WalletIcon, color: '#2563eb', label: 'Wallet' },
   'Gift Card': { icon: Gift, color: '#c026d3', label: 'Gift Cards' },
   Membership: { icon: Crown, color: '#b45309', label: 'Memberships' },

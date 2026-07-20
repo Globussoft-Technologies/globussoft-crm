@@ -198,3 +198,131 @@ describe('VALID_PAYMENT_METHODS — unknown methods rejected', () => {
     expect(res.body.error).toMatch(/ONLINE/);
   });
 });
+
+describe('POST /api/pos/sales — manager override (#900 TMC instalment payments polish)', () => {
+  test('ADMIN can override total and it persists on the Sale row + audit meta', async () => {
+    const res = await request(makeApp({ role: 'ADMIN' }))
+      .post('/api/pos/sales')
+      .send(basePayload({
+        managerOverride: { amount: 100, reason: 'Goodwill discount' },
+      }));
+    expect(res.status).toBe(201);
+    const createArg = prisma.sale.create.mock.calls[0][0];
+    expect(createArg.data.total).toBe(100);
+    expect(prisma.auditLog.create).toHaveBeenCalled();
+    const detailsStr = prisma.auditLog.create.mock.calls[0][0].data.details;
+    expect(detailsStr).toMatch(/Goodwill discount/);
+    expect(detailsStr).toMatch(/100\.00/);
+    // managerOverride key should be in the JSON audit payload
+    const parsed = JSON.parse(detailsStr);
+    expect(parsed.managerOverride).toMatch(/Goodwill discount/);
+  });
+
+  test('MANAGER can override total', async () => {
+    const res = await request(makeApp({ role: 'MANAGER' }))
+      .post('/api/pos/sales')
+      .send(basePayload({
+        managerOverride: { amount: 200, reason: 'Compensation' },
+      }));
+    expect(res.status).toBe(201);
+    expect(prisma.sale.create.mock.calls[0][0].data.total).toBe(200);
+  });
+
+  test('clinical staff cannot apply manager override (403 OVERRIDE_FORBIDDEN)', async () => {
+    const res = await request(makeApp({ role: 'doctor' }))
+      .post('/api/pos/sales')
+      .send(basePayload({
+        managerOverride: { amount: 50, reason: 'Test' },
+      }));
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('OVERRIDE_FORBIDDEN');
+    expect(prisma.sale.create).not.toHaveBeenCalled();
+  });
+
+  test('managerOverride missing reason returns 400 OVERRIDE_REASON_REQUIRED', async () => {
+    const res = await request(makeApp())
+      .post('/api/pos/sales')
+      .send(basePayload({
+        managerOverride: { amount: 100, reason: '   ' },
+      }));
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('OVERRIDE_REASON_REQUIRED');
+    expect(prisma.sale.create).not.toHaveBeenCalled();
+  });
+
+  test('managerOverride negative amount returns 400 INVALID_OVERRIDE_AMOUNT', async () => {
+    const res = await request(makeApp())
+      .post('/api/pos/sales')
+      .send(basePayload({
+        managerOverride: { amount: -10, reason: 'Bad' },
+      }));
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_OVERRIDE_AMOUNT');
+    expect(prisma.sale.create).not.toHaveBeenCalled();
+  });
+
+  test('managerOverride non-numeric amount returns 400 INVALID_OVERRIDE_AMOUNT', async () => {
+    const res = await request(makeApp())
+      .post('/api/pos/sales')
+      .send(basePayload({
+        managerOverride: { amount: 'free', reason: 'Bad' },
+      }));
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_OVERRIDE_AMOUNT');
+    expect(prisma.sale.create).not.toHaveBeenCalled();
+  });
+
+  test('paidAmount mismatch with override total returns 400 INVALID_PAYMENT_TOTAL', async () => {
+    const res = await request(makeApp())
+      .post('/api/pos/sales')
+      .send(basePayload({
+        managerOverride: { amount: 100, reason: 'Override' },
+        paidAmount: 500,
+      }));
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_PAYMENT_TOTAL');
+    expect(prisma.sale.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/pos/sales — notes field', () => {
+  test('notes are accepted in the request body (currently stored in audit meta only; Sale schema has no notes column)', async () => {
+    const res = await request(makeApp())
+      .post('/api/pos/sales')
+      .send(basePayload({ notes: 'Customer asked for invoice by email' }));
+    expect(res.status).toBe(201);
+    // The route destructures notes but does NOT persist it on Sale (no notes column).
+    // This test documents the current contract so a future schema change is caught.
+    const createArg = prisma.sale.create.mock.calls[0][0];
+    expect(createArg.data).not.toHaveProperty('notes');
+  });
+});
+
+
+describe('generateInvoiceNumber — counter seeding for existing invoices', () => {
+  test('fresh counter starts at 2 when no prior invoices exist', async () => {
+    prisma.sale.findFirst.mockResolvedValue(null);
+    await request(makeApp())
+      .post('/api/pos/sales')
+      .send(basePayload());
+    expect(prisma.invoiceCounter.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ tenantId: 1, year: 2026, nextSeq: 2 }),
+      }),
+    );
+  });
+
+  test('counter seeds after the highest existing invoice number', async () => {
+    prisma.sale.findFirst.mockResolvedValue({ invoiceNumber: 'POS-2026-0042' });
+    await request(makeApp())
+      .post('/api/pos/sales')
+      .send(basePayload());
+    // 42 + 2 = 44 (nextSeq stores value AFTER the invoice we are about to issue).
+    expect(prisma.invoiceCounter.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ tenantId: 1, year: 2026, nextSeq: 44 }),
+      }),
+    );
+  });
+});
+

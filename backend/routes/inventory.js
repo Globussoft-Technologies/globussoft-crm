@@ -892,8 +892,11 @@ router.get("/inventory/receipts", canReadInventory, async (req, res) => {
       if (req.query.from) where.receivedAt.gte = new Date(req.query.from);
       if (req.query.to) where.receivedAt.lte = new Date(req.query.to);
     }
+    // product: { id: { gt: 0 } } forces an INNER JOIN on Product, silently
+    // excluding orphaned rows whose product was deleted without cascading
+    // (FK enforcement gap in some MySQL configs). Data stays untouched.
     const items = await prisma.inventoryReceipt.findMany({
-      where,
+      where: { ...where, product: { id: { gt: 0 } } },
       orderBy: { receivedAt: "desc" },
       take: Math.min(parseInt(req.query.limit) || 100, 500),
       include: {
@@ -1232,8 +1235,9 @@ router.get("/inventory/adjustments", canReadInventory, async (req, res) => {
       if (req.query.from) where.createdAt.gte = new Date(req.query.from);
       if (req.query.to) where.createdAt.lte = new Date(req.query.to);
     }
+    // Same INNER JOIN guard as receipts — skips orphaned rows without deleting them.
     const items = await prisma.inventoryAdjustment.findMany({
-      where,
+      where: { ...where, product: { id: { gt: 0 } } },
       orderBy: { createdAt: "desc" },
       take: Math.min(parseInt(req.query.limit) || 100, 500),
       include: { product: { select: { id: true, name: true, sku: true } } },
@@ -1312,15 +1316,37 @@ router.get("/auto-consumption-rules", canReadProducts, async (req, res) => {
     if (req.query.serviceId) where.serviceId = parseInt(req.query.serviceId);
     if (req.query.isActive === "true") where.isActive = true;
     if (req.query.isActive === "false") where.isActive = false;
-    const items = await prisma.autoConsumptionRule.findMany({
+    const rules = await prisma.autoConsumptionRule.findMany({
       where,
       orderBy: [{ serviceId: "asc" }, { productId: "asc" }],
       take: 200,
       include: {
         service: { select: { id: true, name: true } },
-        product: { select: { id: true, name: true, sku: true, currentStock: true, unit: true } },
       },
     });
+
+    // Fetch products separately so orphan productId values (products that were
+    // deleted after the rule was created) do not make Prisma's required-relation
+    // include throw "Inconsistent query result" and crash the listing.
+    const productIds = [...new Set(rules.map((r) => r.productId).filter(Boolean))];
+    const products = productIds.length
+      ? await prisma.product.findMany({
+          where: { id: { in: productIds } },
+          select: { id: true, name: true, sku: true, currentStock: true, unit: true },
+        })
+      : [];
+    const productMap = new Map(products.map((p) => [p.id, p]));
+
+    const items = rules.map((r) => {
+      const product = productMap.get(r.productId) || null;
+      if (!product) {
+        console.warn(
+          `[inventory] auto-consumption rule ${r.id} references missing product ${r.productId}; returning null product`
+        );
+      }
+      return { ...r, product };
+    });
+
     res.json(items);
   } catch (e) {
     console.error("[inventory] list auto-consumption rules error:", e.message);

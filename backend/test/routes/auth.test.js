@@ -197,7 +197,7 @@ describe('POST /api/auth/login', () => {
       wellnessRole: null,
       twoFactorEnabled: false,
       tenantId: 1,
-      tenant: { id: 1, name: 'Globussoft', slug: 'globussoft', plan: 'PRO', vertical: 'generic', country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null },
+      tenant: { id: 1, name: 'Globussoft', slug: 'globussoft', plan: 'PRO', vertical: 'generic', country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null, themeColor: '#C9A063' },
     });
 
     const res = await request(makeApp())
@@ -208,6 +208,7 @@ describe('POST /api/auth/login', () => {
     expect(res.body.token).toMatch(/^eyJ/);
     expect(res.body.user).toMatchObject({ id: 7, email: 'admin@globussoft.com', role: 'ADMIN' });
     expect(res.body.tenant).toMatchObject({ id: 1, slug: 'globussoft', plan: 'PRO' });
+    expect(res.body.tenant.themeColor).toBe('#C9A063');
 
     // JWT carries the expected claims (userId, tenantId, role, vertical, jti).
     const decoded = jwt.verify(res.body.token, JWT_SECRET);
@@ -312,7 +313,7 @@ describe('POST /api/auth/signup', () => {
     prisma.user.findUnique.mockResolvedValue(null); // email is free
     prisma.tenant.create.mockResolvedValue({
       id: 42, name: 'Acme', slug: 'acme', plan: 'TRIAL', vertical: 'generic',
-      country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null,
+      country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null, themeColor: '#C9A063',
     });
     prisma.user.create.mockResolvedValue({
       id: 100, email: 'new@user.com', name: 'New User', role: 'ADMIN', wellnessRole: null,
@@ -326,6 +327,7 @@ describe('POST /api/auth/signup', () => {
     expect(res.body.token).toMatch(/^eyJ/);
     expect(res.body.user).toMatchObject({ id: 100, email: 'new@user.com', role: 'ADMIN' });
     expect(res.body.tenant).toMatchObject({ id: 42, slug: 'acme', plan: 'TRIAL' });
+    expect(res.body.tenant.themeColor).toBe('#C9A063');
 
     // bcrypt.hash was applied (password field on the create payload is NOT the plaintext).
     expect(prisma.user.create).toHaveBeenCalled();
@@ -370,7 +372,7 @@ describe('POST /api/auth/register', () => {
     prisma.user.findUnique.mockResolvedValue(null);
     prisma.tenant.create.mockResolvedValue({
       id: 43, name: 'Beta Inc', slug: 'beta-inc', plan: 'TRIAL', vertical: 'generic',
-      country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null,
+      country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null, themeColor: '#C9A063',
     });
     prisma.user.create.mockResolvedValue({
       id: 101, email: 'reg@user.com', name: 'Reg User', role: 'ADMIN', wellnessRole: null,
@@ -383,6 +385,7 @@ describe('POST /api/auth/register', () => {
     expect(res.status).toBe(201);
     expect(res.body.token).toMatch(/^eyJ/);
     expect(res.body.tenant.slug).toBe('beta-inc');
+    expect(res.body.tenant.themeColor).toBe('#C9A063');
   });
 
   // DRIFT: same as /signup — the register route no longer pre-checks
@@ -460,12 +463,13 @@ describe('GET /api/auth/me', () => {
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
   });
 
-  test('happy path → 200 with profile + features.smsConfigured', async () => {
+  test('happy path → 200 with profile + features.smsConfigured + tenant.themeColor', async () => {
     prisma.user.findUnique.mockResolvedValue({
       id: 7, name: 'Admin', email: 'admin@globussoft.com', role: 'ADMIN',
       wellnessRole: null, createdAt: new Date('2026-01-01T00:00:00Z'),
       tenant: { id: 1, name: 'Globussoft', slug: 'globussoft', plan: 'PRO', vertical: 'generic', country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null },
     });
+    prisma.tenant.findUnique.mockResolvedValue({ themeColor: '#C9A063' });
 
     const res = await request(makeApp())
       .get('/api/auth/me')
@@ -475,6 +479,7 @@ describe('GET /api/auth/me', () => {
     expect(res.body.id).toBe(7);
     expect(res.body.email).toBe('admin@globussoft.com');
     expect(res.body.tenant.slug).toBe('globussoft');
+    expect(res.body.tenant.themeColor).toBe('#C9A063');
     // T1.2 feature flag — features.smsConfigured surfaced for the FE to gate
     // the patient-portal OTP UI. The value depends on tenant SmsConfig +
     // MSG91/TWILIO/FAST2SMS env fallbacks (resolveProviderConfig), so we

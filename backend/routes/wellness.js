@@ -11437,8 +11437,47 @@ router.put("/branding/color", requireTenantAdmin, async (req, res) => {
   }
 });
 
+router.put("/branding/theme-color", requireTenantAdmin, async (req, res) => {
+  try {
+    const { themeColor } = req.body || {};
+    if (
+      themeColor !== null &&
+      themeColor !== "" &&
+      !/^#[0-9a-fA-F]{6}$/.test(themeColor || "")
+    ) {
+      return res
+        .status(400)
+        .json({ error: "themeColor must be a 6-digit hex like #C9A063" });
+    }
+    try {
+      const tenant = await prisma.tenant.update({
+        where: { id: req.user.tenantId },
+        data: { themeColor: themeColor || null },
+      });
+      res.json({ themeColor: tenant.themeColor });
+    } catch (prismaErr) {
+      if (prismaErr.message && prismaErr.message.includes("Unknown field")) {
+        // Prisma client not yet regenerated after schema migration.
+        // The DB column exists; run `prisma generate` + restart to activate.
+        return res.status(503).json({
+          error: "Theme color field not yet available — restart the backend after running `npx prisma generate`.",
+        });
+      }
+      throw prismaErr;
+    }
+  } catch (e) {
+    console.error("[wellness] branding theme-color error:", e.message);
+    res.status(500).json({ error: "Failed to save theme color" });
+  }
+});
+
 router.get("/branding", async (req, res) => {
   try {
+    // Select fields that exist in the currently-generated Prisma client.
+    // themeColor is fetched in a separate try block so a stale Prisma
+    // client (not yet regenerated after the schema migration) doesn't
+    // crash the entire branding endpoint — it will just return null for
+    // themeColor until the backend is restarted after `prisma generate`.
     const tenant = await prisma.tenant.findUnique({
       where: { id: req.user.tenantId },
       select: {
@@ -11449,7 +11488,19 @@ router.get("/branding", async (req, res) => {
       },
     });
     if (!tenant) return res.status(404).json({ error: "Tenant not found" });
-    res.json(tenant);
+
+    let themeColor = null;
+    try {
+      const t2 = await prisma.tenant.findUnique({
+        where: { id: req.user.tenantId },
+        select: { themeColor: true },
+      });
+      themeColor = t2?.themeColor || null;
+    } catch (_ignored) {
+      // Prisma client not yet regenerated — themeColor unavailable until restart
+    }
+
+    res.json({ ...tenant, themeColor });
   } catch (e) {
     console.error("[wellness] branding get error:", e.message);
     res.status(500).json({ error: "Failed to load branding" });

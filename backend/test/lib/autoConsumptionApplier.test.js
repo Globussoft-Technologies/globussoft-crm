@@ -52,6 +52,16 @@ beforeEach(() => {
     findMany: vi.fn().mockResolvedValue([]),
   };
   prisma.product = {
+    // The applier now loads products separately from the rules. Provide a
+    // dynamic lookup that mirrors the product embedded in the mocked rules so
+    // tests don't need to manually set both mocks.
+    findMany: vi.fn(async ({ where }) => {
+      const lastResult = prisma.autoConsumptionRule.findMany.mock.results.at(-1);
+      const rules = lastResult ? await lastResult.value : [];
+      const productMap = new Map(rules.map((r) => [r.productId, r.product]));
+      const ids = where?.id?.in || [];
+      return ids.map((id) => productMap.get(id)).filter(Boolean);
+    }),
     update: vi.fn().mockResolvedValue({ id: 200, currentStock: 49 }),
   };
   prisma.visit = {
@@ -317,6 +327,29 @@ describe('lib/autoConsumptionApplier — extended coverage', () => {
     expect(result.rules).toBe(1);
     expect(result.applied).toHaveLength(1);
     expect(prisma.serviceConsumption.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('skips rules whose referenced product no longer exists (orphan productId)', async () => {
+    // If a product was deleted after the rule was created, the applier must not
+    // crash on a required-relation include; it should skip the rule cleanly.
+    const orphanRule = {
+      id: 99,
+      serviceId: 100,
+      productId: 999,
+      quantityPerVisit: 1,
+      isActive: true,
+      product: null,
+    };
+    prisma.autoConsumptionRule.findMany.mockResolvedValue([orphanRule]);
+    const result = await applyAutoConsumptionForVisit({
+      id: 7, serviceId: 100, tenantId: 1, status: 'completed',
+    });
+    expect(result.rules).toBe(1);
+    expect(result.applied).toHaveLength(0);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0].reason).toBe('PRODUCT_NOT_FOUND');
+    expect(prisma.serviceConsumption.create).not.toHaveBeenCalled();
+    expect(prisma.product.update).not.toHaveBeenCalled();
   });
 });
 

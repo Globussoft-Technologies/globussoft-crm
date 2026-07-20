@@ -384,4 +384,5 @@ describe('Layout', () => {
     expect(subCalls.length).toBeGreaterThanOrEqual(1);
     expect(subCalls[0][1]).toMatchObject({ silent: true });
   });
+
 });

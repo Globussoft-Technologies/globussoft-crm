@@ -796,6 +796,11 @@ const wellnessRoutes = require("./routes/wellness");
 // stay uniform; routes/inventory.js declares only paths that wellness.js does
 // not own.
 const inventoryRoutes = require("./routes/inventory");
+// Wellness Admin Support Chatbot — staff-facing AI help widget. Chat turns
+// + ticket creation at /api/support-chat; BYOK provider config under
+// /api/wellness/ai-provider-config.
+const supportChatRoutes = require("./routes/support_chat");
+const wellnessAiConfigRoutes = require("./routes/wellness_ai_config");
 // Wave 2 Agent II — POS / cash register / shift / sale backbone.
 const posRoutes = require("./routes/pos");
 // D16 Wallet Top-up Arc 1 slice 2-partial — read-only wallet endpoints
@@ -1387,6 +1392,13 @@ app.use(
 app.use("/api/tenant/sub-brand-themes", subBrandThemesRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
+// Wellness Admin Support Chatbot — AI chat turns + ticket creation
+// (wellness-tenant gated inside the router).
+app.use("/api/support-chat", supportChatRoutes);
+// BYOK provider config for the chatbot. Mounted on /api/wellness so it
+// sits beside the other wellness admin surfaces; declares only
+// /ai-provider-config paths that wellness.js does NOT own.
+app.use("/api/wellness", wellnessAiConfigRoutes);
 // Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths
 // like /api/wellness/inventory/receipts work; declares only paths wellness.js
 // does NOT own (product-categories, vendors, inventory/receipts,

@@ -108,6 +108,11 @@ const KEYS = {
   WELLNESS_NPS_DELAY_HOURS:              "wellness.npsDelayHours",
   WELLNESS_JUNK_RETENTION_DAYS:          "wellness.junkRetentionDays",
   WELLNESS_MEMBERSHIP_EXPIRY_WINDOW_DAYS:"wellness.membershipExpiryWindowDays",
+  // Wellness Admin Support Chatbot BYOK config. Value is a JSON blob
+  // { provider, apiKey(encrypted via lib/fieldEncryption), model, baseUrl }
+  // written exclusively by routes/wellness_ai_config.js — never set this
+  // key with a plaintext apiKey through /api/tenant-settings.
+  WELLNESS_AI_PROVIDER_CONFIG:           "wellness.aiProviderConfig",
   SLA_TERMINAL_STATUSES:                 "sla.terminalStatuses",
   EMAIL_FROM_ADDRESS:                    "email.fromAddress",
   INVENTORY_ALERT_ROLES:                 "inventory.alertRoles",

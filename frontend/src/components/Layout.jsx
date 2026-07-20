@@ -10,6 +10,9 @@ import Sidebar from "./Sidebar";
 import Omnibar from "./Omnibar";
 import Presence from "./Presence";
 import Softphone from "./Softphone";
+// Wellness Admin Support Chatbot — wellness-vertical counterpart to the
+// Softphone FAB (wellness hides the softphone; it gets the help widget).
+import SupportChatWidget from "./SupportChatWidget";
 import NotificationBell from "./NotificationBell";
 import Avatar from "./Avatar";
 import TrialBanner from "./TrialBanner";
@@ -539,6 +542,10 @@ const Layout = () => {
         </footer>
       </div>
       {!isWellness && !isWhatsAppChat && <Softphone />}
+      {/* Wellness Admin Support Chatbot — the component itself also guards
+          on tenant.vertical === 'wellness' + authenticated user; the layout
+          check avoids mounting it at all for other verticals. */}
+      {isWellness && <SupportChatWidget />}
       <Presence />
     </div>
   );

@@ -26,6 +26,7 @@ import {
   CreditCard,
   ArrowRight,
   Stethoscope,
+  Bot,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
@@ -1772,6 +1773,18 @@ export default function Settings() {
             )}
           </div>
 
+          {/* AI Provider (Support Chatbot) — wellness-vertical BYOK card.
+              Mounted only for wellness tenants whose user holds
+              settings.manage (the catalog-backed gate for the wellness
+              settings surface; there is no separate wellness_settings
+              module in the permission catalog). The backend route
+              (/api/wellness/ai-provider-config) enforces the same gate
+              authoritatively. */}
+          {ctxTenant?.vertical === "wellness" &&
+            hasPermission("settings", "manage") && (
+              <AiProviderConfigCard notify={notify} />
+            )}
+
           {/* Webhook Signing Credential — per-tenant HMAC secret for outbound
               webhooks (GlobusPhone lead-sync). Self-contained admin component;
               ADMIN-only + subscription-gated server-side. */}
@@ -3086,6 +3099,308 @@ function WellnessRoleTypesCard({ notify }) {
           <Plus size={16} /> {creating ? "Adding…" : "Add Role"}
         </button>
       </form>
+    </div>
+  );
+}
+
+// ─── AI Provider (Support Chatbot) ──────────────────────────────────────────
+// BYOK management for the Wellness Admin Support Chatbot. Backs
+// /api/wellness/ai-provider-config (GET/POST/POST test/DELETE). The stored
+// apiKey is AES-256-GCM encrypted server-side; this card only ever sees the
+// masked form (sk-...XXXX). Saving with the masked placeholder still in the
+// key field keeps the stored key (server-side behaviour), so model/baseUrl
+// can be edited without re-entering the secret.
+function AiProviderConfigCard({ notify }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [configured, setConfigured] = useState(false);
+  const [fallback, setFallback] = useState(null); // 'internal' | 'none' when unconfigured
+  const [maskedKey, setMaskedKey] = useState(null);
+  const [provider, setProvider] = useState("gemini");
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [showKey, setShowKey] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = async () => {
+    try {
+      const res = await fetchApi("/api/wellness/ai-provider-config");
+      if (res.configured) {
+        setConfigured(true);
+        setProvider(res.provider || "gemini");
+        setModel(res.model || "");
+        setBaseUrl(res.baseUrl || "");
+        setMaskedKey(res.maskedApiKey || null);
+        setApiKey(res.maskedApiKey || "");
+      } else {
+        setConfigured(false);
+        setFallback(res.fallback || "none");
+      }
+    } catch (_err) {
+      setMsg("Could not load the current AI provider config.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setMsg("");
+    try {
+      const res = await fetchApi("/api/wellness/ai-provider-config", {
+        method: "POST",
+        body: JSON.stringify({
+          provider,
+          apiKey: apiKey.trim(),
+          model: model.trim(),
+          baseUrl: baseUrl.trim(),
+        }),
+      });
+      setConfigured(true);
+      setMaskedKey(res.maskedApiKey || null);
+      setApiKey(res.maskedApiKey || "");
+      setMsg("✓ AI provider saved — the support chatbot will use it for new chats.");
+    } catch (err) {
+      setMsg(err.message || "Failed to save AI provider config.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setMsg("");
+    try {
+      const res = await fetchApi("/api/wellness/ai-provider-config/test", {
+        method: "POST",
+        body: JSON.stringify(
+          apiKey.trim() && !apiKey.includes("...")
+            ? { provider, apiKey: apiKey.trim(), model: model.trim(), baseUrl: baseUrl.trim() }
+            : {},
+        ),
+      });
+      setMsg(`✓ Connection OK (${res.provider} / ${res.model}, ${res.latencyMs} ms).`);
+    } catch (err) {
+      setMsg(err.message || "Provider test failed.");
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleRemove = async () => {
+    setRemoving(true);
+    setMsg("");
+    try {
+      await fetchApi("/api/wellness/ai-provider-config", { method: "DELETE" });
+      setConfigured(false);
+      setMaskedKey(null);
+      setApiKey("");
+      setModel("");
+      setBaseUrl("");
+      setMsg("✓ AI provider removed.");
+      await load();
+    } catch (err) {
+      setMsg(err.message || "Failed to remove AI provider config.");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  return (
+    <div
+      className="card"
+      data-testid="ai-provider-config-card"
+      style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
+    >
+      <h3
+        style={{
+          fontSize: "1.25rem",
+          fontWeight: "600",
+          marginBottom: "1rem",
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+        }}
+      >
+        <Bot size={20} color="var(--accent-color)" /> AI Provider (Support
+        Chatbot)
+      </h3>
+
+      {!loading && (
+        <div
+          style={{
+            padding: "1rem",
+            marginBottom: "1.25rem",
+            borderRadius: "8px",
+            background: configured ? "rgba(16, 185, 129, 0.1)" : "rgba(245, 158, 11, 0.1)",
+            border: `1px solid ${configured ? "#10b981" : "#f59e0b"}`,
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+          }}
+        >
+          {configured ? (
+            <>
+              <Check size={20} color="#10b981" />
+              <div style={{ flex: 1 }}>
+                <p style={{ fontWeight: "500", color: "#10b981", margin: 0 }}>
+                  ✓ {provider === "gemini" ? "Gemini" : "OpenAI-compatible"} key configured
+                </p>
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.75rem", margin: "0.25rem 0 0 0" }}>
+                  {maskedKey ? `Key: ${maskedKey}` : ""}
+                  {model ? `${maskedKey ? " · " : ""}Model: ${model}` : ""}
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <X size={20} color="#f59e0b" />
+              <div style={{ flex: 1 }}>
+                <p style={{ fontWeight: "500", color: "#f59e0b", margin: 0 }}>
+                  {fallback === "internal"
+                    ? "Using the shared internal provider (non-production fallback)"
+                    : "No AI provider configured"}
+                </p>
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.75rem", margin: "0.25rem 0 0 0" }}>
+                  {fallback === "internal"
+                    ? "Add your own key below to take control of model and spend."
+                    : "The support chatbot is disabled until a provider key is added."}
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginBottom: "1.25rem" }}>
+        Powers the floating support assistant for clinic staff. The key is
+        stored encrypted and never shown again after saving.
+      </p>
+
+      <form onSubmit={handleSave} style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        <select
+          className="input-field"
+          data-testid="ai-provider-select"
+          value={provider}
+          onChange={(e) => setProvider(e.target.value)}
+          disabled={saving}
+          style={{ background: "var(--input-bg)" }}
+        >
+          <option value="gemini">Gemini (Google generateContent)</option>
+          <option value="openai-compatible">OpenAI-compatible (chat completions)</option>
+        </select>
+
+        <div style={{ position: "relative" }}>
+          <input
+            type={showKey ? "text" : "password"}
+            className="input-field"
+            data-testid="ai-provider-key-input"
+            placeholder={provider === "gemini" ? "AIza..." : "sk-..."}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            disabled={saving}
+            autoComplete="new-password"
+            style={{ width: "100%", minWidth: 0, paddingRight: "40px" }}
+          />
+          <button
+            type="button"
+            onClick={() => setShowKey(!showKey)}
+            disabled={saving}
+            aria-label={showKey ? "Hide API key" : "Show API key"}
+            style={{
+              position: "absolute",
+              right: "0.75rem",
+              top: "50%",
+              transform: "translateY(-50%)",
+              background: "transparent",
+              border: "none",
+              color: "var(--text-secondary)",
+              cursor: "pointer",
+              padding: "0.25rem",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
+          </button>
+        </div>
+
+        <input
+          type="text"
+          className="input-field"
+          data-testid="ai-provider-model-input"
+          placeholder={provider === "gemini" ? "Model (default: gemini-2.5-flash-lite)" : "Model (e.g. gpt-4o-mini)"}
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          disabled={saving}
+        />
+        <input
+          type="text"
+          className="input-field"
+          placeholder="Base URL (optional — custom/proxy endpoint)"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          disabled={saving}
+        />
+
+        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+          <button type="submit" className="btn-primary" disabled={saving || !apiKey.trim()} style={{ whiteSpace: "nowrap" }}>
+            {saving ? "Saving..." : configured ? "Update Provider" : "Save Provider"}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            data-testid="ai-provider-test-btn"
+            onClick={handleTest}
+            disabled={testing || (!configured && !apiKey.trim())}
+            style={{ whiteSpace: "nowrap" }}
+          >
+            {testing ? "Testing..." : "Test Connection"}
+          </button>
+          {configured && (
+            <button
+              type="button"
+              onClick={handleRemove}
+              disabled={removing}
+              style={{
+                padding: "0.75rem 1rem",
+                borderRadius: "6px",
+                background: "rgba(239, 68, 68, 0.1)",
+                color: "#ef4444",
+                border: "1px solid #ef4444",
+                cursor: "pointer",
+                fontSize: "0.875rem",
+                fontWeight: "500",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {removing ? "Removing..." : "Remove"}
+            </button>
+          )}
+        </div>
+      </form>
+
+      {msg && (
+        <p
+          data-testid="ai-provider-msg"
+          style={{
+            marginTop: "1rem",
+            fontSize: "0.85rem",
+            color: msg.startsWith("✓") ? "var(--accent-color)" : "var(--danger-color)",
+          }}
+        >
+          {msg}
+        </p>
+      )}
     </div>
   );
 }

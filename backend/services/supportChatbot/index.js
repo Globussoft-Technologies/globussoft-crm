@@ -71,12 +71,23 @@ async function executeTool(name, args, ctx) {
   }
 
   if (name === "get_page_info") {
-    const page = findPageInfo(args?.page);
+    const matches = findPageInfo(args?.page);
     return {
-      result: page
-        ? { title: page.title, path: page.path, description: page.description }
+      result: matches.length
+        ? {
+            matches: matches.map((p) => ({
+              title: p.title,
+              path: p.path,
+              description: p.description,
+              score: p.score,
+            })),
+          }
         : { found: false, note: "No matching page. Describe the task in other words." },
-      sideEffects: page ? { links: [{ label: page.title, path: page.path }] } : {},
+      sideEffects: matches.length
+        ? {
+            links: matches.map((p) => ({ label: p.title, path: p.path })),
+          }
+        : {},
     };
   }
 

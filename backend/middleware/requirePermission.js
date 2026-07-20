@@ -89,6 +89,9 @@ function legacyTestPermissionsForRole(role) {
     // Invoice line deletion is an operations action that MANAGER historically
     // shared with ADMIN. Add it back after the blanket delete removal above.
     perms.add('invoices.delete');
+    // Cost-master row deletion is also operations-level; MANAGER_PERMISSIONS
+    // includes it (PR #1224) so the test fallback must match.
+    perms.add('cost_master.delete');
     // A handful of actions were intentionally ADMIN-only in the pre-RBAC
     // verifyRole gates. Keep them denied so the singleton-patch specs that
     // assert MANAGER rejection still hit RBAC_DENIED before the handler.

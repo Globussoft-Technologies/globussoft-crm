@@ -159,6 +159,11 @@ const DEFAULTS = {
   [KEYS.REPORT_SMTP_SECURE]: process.env.SMTP_SECURE || "false",
   [KEYS.REPORT_SMTP_USER]: process.env.SMTP_USER || "",
   [KEYS.REPORT_SMTP_PASS]: process.env.SMTP_PASS || "",
+  // Wellness Admin Support Chatbot BYOK default — empty JSON object when no
+  // provider config has been saved yet. The actual value is a JSON blob written
+  // by routes/wellness_ai_config.js; this default only prevents `getSetting`
+  // from returning null for new tenants.
+  [KEYS.WELLNESS_AI_PROVIDER_CONFIG]: process.env.WELLNESS_AI_PROVIDER_CONFIG || "{}",
 };
 
 /**

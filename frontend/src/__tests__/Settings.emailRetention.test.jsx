@@ -22,6 +22,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -72,6 +73,14 @@ function defaultFetch(url, opts) {
   return Promise.resolve([]);
 }
 
+function renderSettings() {
+  return render(
+    <MemoryRouter>
+      <Settings />
+    </MemoryRouter>
+  );
+}
+
 describe('<Settings /> — #611 email retention toggle', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
@@ -81,7 +90,7 @@ describe('<Settings /> — #611 email retention toggle', () => {
   });
 
   it('renders the Email Messages card and reflects the current retention state', async () => {
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByTestId('email-retention-card')).toBeInTheDocument());
     const toggle = screen.getByTestId('email-retention-toggle');
     expect(toggle).toBeChecked();
@@ -96,14 +105,14 @@ describe('<Settings /> — #611 email retention toggle', () => {
       }
       return defaultFetch(url, opts);
     });
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByTestId('email-retention-toggle')).not.toBeChecked());
     expect(screen.getByText(/Retention is OFF/i)).toBeInTheDocument();
   });
 
   it('flipping the toggle PUTs emailRetention to /api/tenants/current', async () => {
     const user = userEvent.setup();
-    render(<Settings />);
+    renderSettings();
     await waitFor(() => expect(screen.getByTestId('email-retention-toggle')).toBeChecked());
     await user.click(screen.getByTestId('email-retention-toggle'));
 

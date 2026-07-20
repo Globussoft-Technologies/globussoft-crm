@@ -9,6 +9,7 @@
  *   - auth gate (401/403 without token)
  *   - vertical gate (403 WRONG_VERTICAL for non-travel tenants)
  *   - response shape (all 6 KPI sections + recentTrips array)
+ *   - landingPages tile replaced the legacy microsites tile (PR #1224)
  *   - shape stability under empty-state (no rows yet)
  *   - sub-brand scoping signal (subBrand keys appear in byStatus / bySubBrand)
  *
@@ -142,7 +143,7 @@ test.describe("Travel dashboard API — aggregate shape", () => {
     expect(body).toHaveProperty("trips");
     expect(body).toHaveProperty("diagnostics");
     expect(body).toHaveProperty("itineraries");
-    expect(body).toHaveProperty("microsites");
+    expect(body).toHaveProperty("landingPages");
     expect(body).toHaveProperty("costMaster");
     expect(body).toHaveProperty("pricingRules");
     expect(body).toHaveProperty("recentTrips");
@@ -161,9 +162,9 @@ test.describe("Travel dashboard API — aggregate shape", () => {
     expect(typeof body.itineraries.total).toBe("number");
     expect(body.itineraries.byStatus).toBeTruthy();
 
-    // Microsites shape
-    expect(typeof body.microsites.published).toBe("number");
-    expect(typeof body.microsites.expired).toBe("number");
+    // Landing pages shape (replaced microsites in PR #1224)
+    expect(typeof body.landingPages.total).toBe("number");
+    expect(typeof body.landingPages.published).toBe("number");
 
     // Cost master shape
     expect(typeof body.costMaster.activeRows).toBe("number");
@@ -205,8 +206,8 @@ test.describe("Travel dashboard API — aggregate shape", () => {
       body.trips.upcoming30d,
       body.diagnostics.totalLast30d,
       body.itineraries.total,
-      body.microsites.published,
-      body.microsites.expired,
+      body.landingPages.total,
+      body.landingPages.published,
       body.costMaster.activeRows,
       body.pricingRules.seasons,
       body.pricingRules.markupRules,
@@ -248,8 +249,8 @@ test.describe("Travel dashboard API — aggregate shape", () => {
 // The dashboard accepts an optional ?subBrand= query that narrows every
 // tile to a single sub-brand (intersected with the caller's access).
 // These assertions are STRUCTURAL, not seed-count-dependent:
-//   - An admin scoping to a non-TMC brand must see 0 trips + 0 microsites,
-//     because TmcTrip + TripMicrosite are TMC-only and gated on canTmc.
+//   - An admin scoping to a non-TMC brand must see 0 trips,
+//     because TmcTrip is TMC-only and gated on canTmc.
 //   - costMaster.bySubBrand must only contain the requested brand's key.
 //   - A garbage subBrand is a 400 INVALID_SUB_BRAND.
 test.describe("Travel dashboard API — ?subBrand= scoping", () => {
@@ -280,12 +281,14 @@ test.describe("Travel dashboard API — ?subBrand= scoping", () => {
     );
     expect(r.status()).toBe(200);
     const body = await r.json();
-    // TmcTrip + TripMicrosite are TMC-only — an RFU scope must show zero,
-    // regardless of seed state.
+    // TmcTrip is TMC-only — an RFU scope must show zero, regardless of seed state.
     expect(body.trips.total).toBe(0);
     expect(body.trips.upcoming30d).toBe(0);
-    expect(body.microsites.published).toBe(0);
     expect(body.recentTrips.length).toBe(0);
+    // landingPages are tenant-scoped and support sub-brand narrowing; assert shape.
+    expect(body.landingPages).toBeTruthy();
+    expect(typeof body.landingPages.total).toBe("number");
+    expect(typeof body.landingPages.published).toBe("number");
     // costMaster, when present, is scoped to rfu only.
     for (const key of Object.keys(body.costMaster.bySubBrand)) {
       expect(key).toBe("rfu");

@@ -88,6 +88,10 @@ html[data-theme="dark"][data-vertical="wellness"],
 
   --sidebar-bg:        #1F2220;
   --sidebar-bg-deep:   #161917;
+
+  --page-header-count-bg: rgba(217, 164, 104, 0.18);
+  --page-header-count-text: #F6D7A8;
+  --page-header-count-border: rgba(217, 164, 104, 0.32);
 }
 
 /* Dark — glass cards */
@@ -130,6 +134,28 @@ html[data-theme="dark"][data-vertical="wellness"],
 [data-theme="dark"][data-vertical="wellness"] table th,
 [data-theme="dark"] [data-vertical="wellness"] table th {
   background: rgba(201, 160, 99, 0.08);
+}
+
+[data-theme="dark"][data-vertical="wellness"] [data-wellness-patients-table],
+[data-theme="dark"] [data-vertical="wellness"] [data-wellness-patients-table] {
+  color: var(--text-primary);
+}
+[data-theme="dark"][data-vertical="wellness"] [data-wellness-patients-table] thead th,
+[data-theme="dark"] [data-vertical="wellness"] [data-wellness-patients-table] thead th {
+  background: rgba(217, 164, 104, 0.13) !important;
+  color: #E9D8BF !important;
+}
+[data-theme="dark"][data-vertical="wellness"] [data-wellness-patients-table] tbody tr,
+[data-theme="dark"] [data-vertical="wellness"] [data-wellness-patients-table] tbody tr {
+  background: rgba(31, 34, 32, 0.72);
+}
+[data-theme="dark"][data-vertical="wellness"] [data-wellness-patients-table] tbody tr:nth-child(even),
+[data-theme="dark"] [data-vertical="wellness"] [data-wellness-patients-table] tbody tr:nth-child(even) {
+  background: rgba(42, 45, 41, 0.88);
+}
+[data-theme="dark"][data-vertical="wellness"] [data-wellness-patients-table] tbody tr:hover,
+[data-theme="dark"] [data-vertical="wellness"] [data-wellness-patients-table] tbody tr:hover {
+  background: rgba(65, 55, 40, 0.88);
 }
 
 /* ─── Glass cards (light) ─────────────────────────────────────────────────── */

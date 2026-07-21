@@ -14,8 +14,11 @@
 //   const { effective, loading } = useEffectiveBrand(activeSubBrand);
 //   // effective?.logoUrl, effective?.primaryColor, effective?.source
 //
-// Caching: per-subBrand module-level cache + in-flight de-dupe, same shape
-// as useBrandKit's. Callers that just wrote a new logo/color/default should
+// Caching: per-tenant + per-subBrand module-level cache + in-flight de-dupe.
+// A sub-brand name such as "travelstall" is reused by multiple organizations,
+// so it is never a safe cache key by itself. The implementation otherwise
+// follows the same shape as useBrandKit's. Callers that just wrote a
+// logo/color/default should
 // call invalidateEffectiveBrandCache() before re-fetching so they don't see
 // stale data (there is no TTL — writes must actively bust the cache).
 
@@ -34,19 +37,21 @@ const _inflight = new Map();
 // component triggered the write.
 const BROADCAST_EVENT = 'globussoft:effective-brand-invalidated';
 
-function cacheKey(subBrand) {
-  return subBrand == null ? '__null__' : String(subBrand);
+function cacheKey(subBrand, tenantId) {
+  const tenant = tenantId == null ? '__unknown_tenant__' : String(tenantId);
+  const brand = subBrand == null ? '__null__' : String(subBrand);
+  return `${tenant}:${brand}`;
 }
 
 /** Clear the whole cache (or just one subBrand's entry) after a write, and
  * tell every mounted useEffectiveBrand() instance to re-fetch. */
-export function invalidateEffectiveBrandCache(subBrand) {
+export function invalidateEffectiveBrandCache(subBrand, tenantId) {
   if (subBrand === undefined) {
     _cache.clear();
     _inflight.clear();
   } else {
-    _cache.delete(cacheKey(subBrand));
-    _inflight.delete(cacheKey(subBrand));
+    _cache.delete(cacheKey(subBrand, tenantId));
+    _inflight.delete(cacheKey(subBrand, tenantId));
   }
   try {
     window.dispatchEvent(new CustomEvent(BROADCAST_EVENT));
@@ -71,10 +76,11 @@ async function fetchEffective(subBrand) {
 /**
  * Read the fully fallback-resolved brand for a sub-brand.
  * @param {string|null|undefined} subBrand
+ * @param {number|string|null|undefined} tenantId authenticated organization ID
  * @returns {{effective: {logoUrl:string|null, primaryColor:string|null, source:string}|null, loading: boolean, reload: Function}}
  */
-export function useEffectiveBrand(subBrand) {
-  const key = cacheKey(subBrand);
+export function useEffectiveBrand(subBrand, tenantId) {
+  const key = cacheKey(subBrand, tenantId);
   const cached = _cache.get(key);
   const [effective, setEffective] = useState(cached !== undefined ? cached : null);
   const [loading, setLoading] = useState(cached === undefined);
@@ -82,7 +88,7 @@ export function useEffectiveBrand(subBrand) {
 
   useEffect(() => {
     let active = true;
-    const k = cacheKey(subBrand);
+    const k = cacheKey(subBrand, tenantId);
     if (_cache.has(k) && reloadTick === 0) {
       setEffective(_cache.get(k));
       setLoading(false);
@@ -108,7 +114,7 @@ export function useEffectiveBrand(subBrand) {
     return () => {
       active = false;
     };
-  }, [subBrand, reloadTick]);
+  }, [subBrand, tenantId, reloadTick]);
 
   // Listen for invalidation broadcasts from OTHER components (e.g. Settings
   // saving a logo while Sidebar stays mounted) and re-fetch this instance's
@@ -121,7 +127,7 @@ export function useEffectiveBrand(subBrand) {
   }, []);
 
   const reload = () => {
-    invalidateEffectiveBrandCache(subBrand);
+    invalidateEffectiveBrandCache(subBrand, tenantId);
     setReloadTick((t) => t + 1);
   };
 

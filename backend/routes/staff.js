@@ -1439,8 +1439,13 @@ function validateGoalBody(body, { partial = false } = {}) {
   return errors;
 }
 
-// Compute SUM(Sale.total) for a userId in [periodStart, periodEnd]. Returns
-// a Number; 0 on empty/error so the UI can render "₹0 / ₹50,000".
+// Compute SUM(Sale.total) + SUM(visit-linked Payment.amount) for a userId in
+// [periodStart, periodEnd]. Returns a Number; 0 on empty/error so the UI
+// can render "₹0 / ₹50,000".
+//
+// Payment path: a successful online payment tied to an invoice whose visit
+// was diagnosed by this staff member counts as service revenue, so the goal
+// bar fills when patients pay for that doctor's appointments.
 async function computeAchievedAmount(
   tenantId,
   userId,
@@ -1450,6 +1455,7 @@ async function computeAchievedAmount(
   _scopeFilter,
 ) {
   try {
+    let achieved = 0;
     const where = {
       tenantId,
       cashierId: userId,
@@ -1468,17 +1474,157 @@ async function computeAchievedAmount(
         },
         select: { lineTotal: true },
       });
-      return rows.reduce((acc, r) => acc + Number(r.lineTotal || 0), 0);
+      achieved = rows.reduce((acc, r) => acc + Number(r.lineTotal || 0), 0);
+    } else {
+      const agg = await prisma.sale.aggregate({
+        where,
+        _sum: { total: true },
+      });
+      achieved = Number(agg._sum.total || 0);
     }
-    const agg = await prisma.sale.aggregate({
-      where,
-      _sum: { total: true },
-    });
-    return Number(agg._sum.total || 0);
+
+    // Add successful visit-linked payments for ALL and SERVICE goals.
+    // Wellness-visit payments are service revenue, so they count toward the
+    // diagnosing doctor's achievement.
+    if (!scope || scope === "ALL" || scope === "SERVICE") {
+      try {
+        const invoices = await prisma.invoice.findMany({
+          where: {
+            tenantId,
+            visit: { doctorId: userId },
+          },
+          select: { id: true },
+        });
+        const invoiceIds = invoices.map((i) => i.id).filter(Boolean);
+        if (invoiceIds.length > 0) {
+          const paymentAgg = await prisma.payment.aggregate({
+            where: {
+              tenantId,
+              invoiceId: { in: invoiceIds },
+              status: "SUCCESS",
+              paidAt: { gte: periodStart, lt: periodEnd },
+            },
+            _sum: { amount: true },
+          });
+          achieved += Number(paymentAgg._sum.amount || 0);
+        }
+      } catch (err) {
+        console.error("[staff][revenue-goals][computeAchievedPayments]", err);
+      }
+    }
+
+    return achieved;
   } catch (err) {
     console.error("[staff][revenue-goals][computeAchieved]", err);
     return 0;
   }
+}
+
+// Live aggregation for the Commission Profiles → Historical Data table.
+// Computes per-staff, per-period breakdowns from the same POS + payment sources
+// that feed revenue goals, so a goal that is achieved automatically surfaces
+// in the historical view without a separate cron or persisted table.
+async function computeCommissionDataForPeriod(
+  tenantId,
+  user,
+  periodStart,
+  periodEnd,
+) {
+  const userId = user.id;
+  const employeeName = user.name || user.email || "Unknown";
+
+  let serviceRevenue = 0;
+  let productRevenue = 0;
+  let packageRevenue = 0;
+  let membershipRevenue = 0;
+  let giftcardRevenue = 0;
+  let discount = 0;
+
+  try {
+    const sales = await prisma.sale.findMany({
+      where: {
+        tenantId,
+        cashierId: userId,
+        status: "COMPLETED",
+        createdAt: { gte: periodStart, lt: periodEnd },
+      },
+      include: { lineItems: true },
+    });
+
+    for (const sale of sales) {
+      discount += Number(sale.discountTotal || 0);
+      for (const item of sale.lineItems || []) {
+        const amount = Number(item.lineTotal || 0);
+        switch (item.lineType) {
+          case "SERVICE":
+            serviceRevenue += amount;
+            break;
+          case "PRODUCT":
+            productRevenue += amount;
+            break;
+          case "PACKAGE":
+            packageRevenue += amount;
+            break;
+          case "MEMBERSHIP":
+            membershipRevenue += amount;
+            break;
+          case "GIFTCARD":
+            giftcardRevenue += amount;
+            break;
+          default:
+            break;
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[staff][commission-data][saleAgg]", err);
+  }
+
+  // Successful visit-linked payments count as service revenue for the doctor
+  // who diagnosed the visit — same rule as revenue goals.
+  try {
+    const invoices = await prisma.invoice.findMany({
+      where: { tenantId, visit: { doctorId: userId } },
+      select: { id: true },
+    });
+    const invoiceIds = invoices.map((i) => i.id).filter(Boolean);
+    if (invoiceIds.length > 0) {
+      const paymentAgg = await prisma.payment.aggregate({
+        where: {
+          tenantId,
+          invoiceId: { in: invoiceIds },
+          status: "SUCCESS",
+          paidAt: { gte: periodStart, lt: periodEnd },
+        },
+        _sum: { amount: true },
+      });
+      serviceRevenue += Number(paymentAgg._sum.amount || 0);
+    }
+  } catch (err) {
+    console.error("[staff][commission-data][paymentAgg]", err);
+  }
+
+  const totalSales =
+    serviceRevenue +
+    productRevenue +
+    packageRevenue +
+    membershipRevenue +
+    giftcardRevenue;
+  const netSales = totalSales - discount;
+
+  return {
+    employeeName,
+    periodStart,
+    periodEnd,
+    serviceRevenue,
+    productRevenue,
+    packageRevenue,
+    membershipRevenue,
+    giftcardRevenue,
+    totalSales,
+    discount,
+    netSales,
+  };
 }
 
 // GET /revenue-goals — admin sees all, USER sees only their own goals.
@@ -1695,23 +1841,48 @@ router.delete("/revenue-goals/:id", verifyRole(["ADMIN"]), async (req, res) => {
 router.get("/commission-data", verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { startDate, endDate, employeeName } = req.query;
-    const where = { tenantId: req.user.tenantId };
+    const goalWhere = { tenantId: req.user.tenantId };
 
     if (startDate || endDate) {
-      where.periodStart = {};
-      if (startDate) where.periodStart.gte = new Date(startDate);
-      if (endDate) where.periodStart.lte = new Date(endDate);
+      goalWhere.periodStart = {};
+      if (startDate) goalWhere.periodStart.gte = new Date(startDate);
+      if (endDate) goalWhere.periodStart.lte = new Date(endDate);
     }
 
-    if (employeeName) where.employeeName = { contains: employeeName };
-
-    const records = await prisma.commissionData.findMany({
-      where,
-      include: { user: { select: { id: true, email: true, name: true } } },
-      orderBy: [{ periodStart: "desc" }, { employeeName: "asc" }],
+    // Historical data is derived from the staff revenue goal periods. A goal
+    // that has been achieved therefore automatically shows up here without
+    // requiring a separate cron or persisted CommissionData row.
+    const goals = await prisma.staffRevenueGoal.findMany({
+      where: goalWhere,
+      include: {
+        user: { select: { id: true, email: true, name: true } },
+      },
+      orderBy: [{ periodStart: "desc" }, { id: "desc" }],
     });
 
-    res.json(records);
+    const records = await Promise.all(
+      goals.map(async (g) => {
+        const computed = await computeCommissionDataForPeriod(
+          req.user.tenantId,
+          g.user,
+          g.periodStart,
+          g.periodEnd,
+        );
+        return {
+          id: g.id,
+          ...computed,
+          user: g.user,
+        };
+      }),
+    );
+
+    const filtered = employeeName
+      ? records.filter((r) =>
+          r.employeeName.toLowerCase().includes(employeeName.toLowerCase()),
+        )
+      : records;
+
+    res.json(filtered);
   } catch (err) {
     console.error("[staff][commission-data][list]", err);
     res.status(500).json({ error: "Failed to fetch commission data." });

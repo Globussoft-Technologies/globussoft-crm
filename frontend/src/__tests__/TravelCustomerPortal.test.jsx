@@ -767,7 +767,7 @@ describe('TravelCustomerPortal — G092 brand-kit consumer', () => {
       }
       if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
       if (url.includes('/portal/travel/profile')) {
-        return mockJsonResponse({ id: 3140, name: 'Ahmed Khan', email: 'ahmed.pilgrim@demo.test', subBrand: 'rfu' });
+        return mockJsonResponse({ id: 3140, tenantId: 42, name: 'Ahmed Khan', email: 'ahmed.pilgrim@demo.test', subBrand: 'rfu' });
       }
       if (url.includes('/api/brand-kits/by-subbrand/rfu')) {
         return mockJsonResponse({
@@ -789,6 +789,7 @@ describe('TravelCustomerPortal — G092 brand-kit consumer', () => {
     // Brand logo appears in the header via data-testid.
     const logo = await screen.findByTestId('portal-brand-logo');
     expect(logo.getAttribute('src')).toBe('https://cdn.example/rfu.png');
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/brand-kits/by-subbrand/rfu?tenantId=42');
     // Brand footer surfaces mission + support contacts.
     expect(await screen.findByTestId('portal-brand-footer')).toBeInTheDocument();
     expect(screen.getByText(/Trusted Umrah & Hajj operator since 2010/i)).toBeInTheDocument();
@@ -838,7 +839,7 @@ describe('TravelCustomerPortal — G092 brand-kit consumer', () => {
       }
       if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
       if (url.includes('/portal/travel/profile')) {
-        return mockJsonResponse({ id: 3140, name: 'Ahmed Khan', email: 'ahmed.pilgrim@demo.test', subBrand: 'visasure' });
+        return mockJsonResponse({ id: 3140, tenantId: 42, name: 'Ahmed Khan', email: 'ahmed.pilgrim@demo.test', subBrand: 'visasure' });
       }
       if (url.includes('/api/brand-kits/by-subbrand/visasure')) {
         return mockJsonResponse({ error: 'No active brand kit', code: 'BRAND_KIT_NOT_FOUND' }, { status: 404 });

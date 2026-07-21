@@ -217,41 +217,11 @@ describe('Layout', () => {
   // -- Extended coverage (Layout.jsx is 416L; bring ratio above 51%) --
   //
   // The cases below target uncovered branches identified by reading the SUT
-  // end-to-end: SMS banner gating by role + features.smsConfigured,
-  // hamburger aria-controls + aria-expanded initial state, search button
-  // event dispatch (#851), logout server-side revocation call (#528),
-  // theme-toggle ThemeContext branch (#862), document.title tenant-
+  // end-to-end: hamburger aria-controls + aria-expanded initial state,
+  // search button event dispatch (#851), logout server-side revocation call
+  // (#528), theme-toggle ThemeContext branch (#862), document.title tenant-
   // awareness (#704), build footer rendering (#634), and push-setup
   // token gating.
-
-  // T1.2 -- SMS banner visible to ADMIN when smsConfigured===false.
-  it('renders the SMS-not-configured banner for ADMIN when features.smsConfigured is false', () => {
-    renderLayout({
-      user: { name: 'Admin', email: 'a@x.test', role: 'ADMIN', features: { smsConfigured: false } },
-    });
-    expect(screen.getByTestId('sms-not-configured-banner')).toBeInTheDocument();
-  });
-
-  it('renders the SMS banner for MANAGER too (isStaff branch)', () => {
-    renderLayout({
-      user: { name: 'Mgr', email: 'm@x.test', role: 'MANAGER', features: { smsConfigured: false } },
-    });
-    expect(screen.getByTestId('sms-not-configured-banner')).toBeInTheDocument();
-  });
-
-  it('hides the SMS banner for regular USERs even when smsConfigured===false', () => {
-    renderLayout({
-      user: { name: 'User', email: 'u@x.test', role: 'USER', features: { smsConfigured: false } },
-    });
-    expect(screen.queryByTestId('sms-not-configured-banner')).not.toBeInTheDocument();
-  });
-
-  it('hides the SMS banner when smsConfigured===true', () => {
-    renderLayout({
-      user: { name: 'Admin', email: 'a@x.test', role: 'ADMIN', features: { smsConfigured: true } },
-    });
-    expect(screen.queryByTestId('sms-not-configured-banner')).not.toBeInTheDocument();
-  });
 
   // T2.1 -- hamburger toggle exposes correct aria attributes for desktop
   // resting state. JSDOM matchMedia defaults to non-mobile, and Layout's

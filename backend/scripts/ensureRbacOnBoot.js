@@ -559,11 +559,6 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
     // The seed (`prisma/seed.js`) handles the first-time provisioning
     // for the demo seed; this script handles tenants that pre-date the
     // RBAC migration by creating the role then backfilling perms once.
-    //
-    // "Admin is not magic" (2026-06-15): ADMIN now gets the vertical-
-    // filtered catalog snapshot, not the union. New permissions added
-    // to the catalog after this first-creation moment must be granted
-    // explicitly via the Roles & Permissions UI — no auto-elevation.
     const { role: adminRole, wasCreated: adminCreated } = await ensureRole(stats, {
       tenantId,
       key: 'ADMIN',
@@ -573,11 +568,9 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
       userType: 'STAFF',
       landingPath: adminLanding,
     });
-    // Always run grantAllPermissions for ADMIN — ensureRolePermission is
-    // additive/idempotent (skips existing rows, never removes). Running on
-    // every boot ensures ADMIN always gains newly-catalogued permissions
-    // (e.g. cost_master.delete added after the role was first created).
-    await grantAllPermissions(stats, adminRole.id, vertical);
+    if (adminCreated) {
+      await grantAllPermissions(stats, adminRole.id, vertical);
+    }
 
     const { role: managerRole, wasCreated: managerCreated } = await ensureRole(stats, {
       tenantId,
@@ -588,17 +581,12 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
       userType: 'STAFF',
       landingPath: managerLanding,
     });
-    // MANAGER gets the vertical-appropriate slice of its preset: common perms
-    // for every vertical, wellness perms only on wellness, travel perms only on
-    // travel (incl. visa / trips / dashboard reads). This restores the access
-    // contract MANAGER held under the old verifyRole(['ADMIN','MANAGER']) gates
-    // now that those routes enforce requirePermission() — previously this grant
-    // was wellness-only, so a travel/generic MANAGER got ZERO permissions and
-    // hit 403 on every permission-gated route (e.g. GET /api/travel/visa/
-    // applications, /travel dashboard, visa analytics). Manage/delete-tier
-    // actions stay admin-only because they're absent from MANAGER_PERMISSIONS.
-    // Always run (additive/idempotent) so new preset entries propagate.
-    await grantPermissionList(stats, managerRole.id, filterPermsToVertical(MANAGER_PERMISSIONS, vertical));
+    // MANAGER gets the vertical-appropriate slice of its preset only on first
+    // creation. Subsequent boots leave the grant matrix alone so tenant admins'
+    // revocations survive server restarts.
+    if (managerCreated) {
+      await grantPermissionList(stats, managerRole.id, filterPermsToVertical(MANAGER_PERMISSIONS, vertical));
+    }
 
     const { role: customerRole, wasCreated: customerCreated } = await ensureRole(stats, {
       tenantId,

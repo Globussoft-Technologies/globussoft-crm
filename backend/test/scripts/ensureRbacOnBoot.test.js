@@ -229,29 +229,23 @@ describe('regression: per-key landingPath shape', () => {
   });
 });
 
-describe('ADMIN permission backfill — additive/idempotent on every boot', () => {
-  // PRINCIPLE: grantAllPermissions is now called unconditionally for ADMIN
-  // on every boot. ensureRolePermission is additive/idempotent — it does a
-  // findFirst before create, so permissions already present are NEVER
-  // re-created or overridden. This means:
-  //   - existing ADMIN rows gain any catalog entries added since last provision
-  //   - permissions an operator explicitly REVOKED stay revoked (ensureRolePermission
-  //     only ADDS rows — it never removes them)
-  //   - the boot-loop cannot "re-grant" a revoked permission because
-  //     ensureRolePermission checks findFirst BEFORE create — if the row was
-  //     deleted (revoked), it will be re-created; if still present, it is skipped
+describe('ADMIN permission backfill — seed-on-creation only', () => {
+  // PRINCIPLE: grantAllPermissions is now called ONLY when ADMIN is first
+  // created. ensureRolePermission is still additive/idempotent, but it is only
+  // invoked on first provision. This means:
+  //   - an existing ADMIN role's grants are left untouched on every boot
+  //   - permissions an operator explicitly REVOKED stay revoked after restart
+  //   - newly-catalogued permissions must be granted manually via the Roles &
+  //     Permissions UI for existing tenants; fresh tenants get them at first boot
   //
-  // Trade-off accepted: a tenant admin who revokes a permission via the
-  // Roles & Permissions UI will see it restored on next server restart. This
-  // is the correct trade-off for ensuring newly-catalogued permissions (like
-  // cost_master.delete) always reach existing ADMIN roles that pre-date the
-  // catalog addition — blocking admin operations is worse than restoring a
-  // revoked perm on restart.
+  // Trade-off accepted: new catalog entries (e.g. cost_master.delete) do NOT
+  // auto-propagate to existing ADMIN roles. The tenant admin grants them once
+  // via the UI; after that grant persists across restarts.
 
-  test('existing ADMIN role DOES receive additive grants on subsequent boot', async () => {
-    // Simulate ADMIN already existing. ensureRolePermission (findFirst →
-    // create) should still fire for every catalog entry because
-    // rolePermission.findFirst returns null (nothing previously granted).
+  test('existing ADMIN role does NOT receive grants on subsequent boot', async () => {
+    // Simulate ADMIN already existing. Because grantAllPermissions is now gated
+    // on role creation, no rolePermission.create calls should be made for the
+    // pre-existing ADMIN.
     const PRE_EXISTING_ADMIN_ID = 999;
     mockPrisma.role.findFirst.mockImplementation(({ where }) => {
       if (where.key === 'ADMIN') {
@@ -275,17 +269,14 @@ describe('ADMIN permission backfill — additive/idempotent on every boot', () =
       'ADMIN must NOT be re-created when it already exists',
     ).not.toContain('ADMIN');
 
-    // grantAllPermissions fires for the existing ADMIN — rolePermission.create
-    // is called for every catalog entry that findFirst says is missing.
-    // The mock returns null for all findFirst calls, so every entry produces a
-    // create call.
+    // No permissions should be granted for an existing ADMIN on boot.
     const adminPermCreates = mockPrisma.rolePermission.create.mock.calls.filter(
       (call) => call[0].data.roleId === PRE_EXISTING_ADMIN_ID,
     );
     expect(
-      adminPermCreates.length,
-      'Existing ADMIN should receive additive permission backfill on each boot',
-    ).toBeGreaterThan(50);
+      adminPermCreates,
+      'Existing ADMIN should NOT receive permission grants on subsequent boot',
+    ).toHaveLength(0);
   });
 
   test('existing ADMIN with all perms already present produces zero new creates (idempotent)', async () => {
@@ -313,15 +304,11 @@ describe('ADMIN permission backfill — additive/idempotent on every boot', () =
     ).toHaveLength(0);
   });
 
-  test('subsequent boot with brand-new catalog entry DOES grant it to existing ADMIN', async () => {
-    // Concrete scenario: a new permission like `cost_master.delete` is added
-    // to permissionCatalog.js between deploy N and N+1. On deploy N+1,
-    // ensureRbacOnBoot runs against a tenant whose ADMIN was provisioned
-    // during deploy N (which didn't have cost_master.delete yet).
-    //
-    // Contract (NEW): ADMIN DOES receive the new permission because
-    // grantAllPermissions runs unconditionally. ensureRolePermission will
-    // see findFirst → null for the new entry and create it.
+  test('revoked permission on existing ADMIN stays revoked after subsequent boot', async () => {
+    // Concrete scenario: a tenant admin revokes `cost_master.delete` from
+    // ADMIN via the Roles & Permissions UI. That deletes the RolePermission row.
+    // On the next server boot, the existing ADMIN must NOT receive a backfill,
+    // so the revocation persists.
     const PRE_EXISTING_ADMIN_ID = 777;
     mockPrisma.role.findFirst.mockImplementation(({ where }) => {
       if (where.key === 'ADMIN') {
@@ -332,14 +319,14 @@ describe('ADMIN permission backfill — additive/idempotent on every boot', () =
 
     await provisionTenantRbac(101, { vertical: 'travel' });
 
-    // Expect create calls for the pre-existing ADMIN (new catalog entries).
+    // No permission grants should be issued for the existing ADMIN.
     const adminPermCalls = mockPrisma.rolePermission.create.mock.calls.filter(
       (call) => call[0].data.roleId === PRE_EXISTING_ADMIN_ID,
     );
     expect(
-      adminPermCalls.length,
-      'New catalog entries MUST be granted to existing ADMIN — this is how cost_master.delete reaches live tenants',
-    ).toBeGreaterThan(0);
+      adminPermCalls,
+      'Revoked permissions must NOT be re-granted to existing ADMIN on boot',
+    ).toHaveLength(0);
   });
 
   test('FRESH ADMIN (first-creation) receives the vertical-filtered catalog', async () => {
@@ -359,5 +346,60 @@ describe('ADMIN permission backfill — additive/idempotent on every boot', () =
       adminPermCalls.length,
       'Fresh ADMIN should receive vertical-catalog permissions',
     ).toBeGreaterThan(50);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// MANAGER permission persistence — same seed-on-creation-only contract
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('MANAGER permission backfill — seed-on-creation only', () => {
+  function managerIdFromCalls() {
+    const call = mockPrisma.role.create.mock.calls.find(
+      (c) => c[0].data.key === 'MANAGER',
+    );
+    return call ? 100 + mockPrisma.role.create.mock.calls.indexOf(call) : null;
+  }
+
+  test('fresh MANAGER receives vertical-filtered preset on first creation', async () => {
+    await provisionTenantRbac(200, { vertical: 'travel' });
+
+    const managerId = managerIdFromCalls();
+    expect(managerId, 'MANAGER should be created on first run').not.toBeNull();
+
+    const managerPermCreates = mockPrisma.rolePermission.create.mock.calls.filter(
+      (call) => call[0].data.roleId === managerId,
+    );
+    expect(managerPermCreates.length).toBeGreaterThan(0);
+  });
+
+  test('existing MANAGER does NOT receive grants on subsequent boot', async () => {
+    const PRE_EXISTING_MANAGER_ID = 555;
+    mockPrisma.role.findFirst.mockImplementation(({ where }) => {
+      if (where.key === 'MANAGER') {
+        return Promise.resolve({
+          id: PRE_EXISTING_MANAGER_ID,
+          tenantId: where.tenantId,
+          key: 'MANAGER',
+          name: 'Manager',
+          isSystem: false,
+          userType: 'STAFF',
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    await provisionTenantRbac(201, { vertical: 'travel' });
+
+    const createdKeys = createdRoleKeys();
+    expect(createdKeys).not.toContain('MANAGER');
+
+    const managerPermCreates = mockPrisma.rolePermission.create.mock.calls.filter(
+      (call) => call[0].data.roleId === PRE_EXISTING_MANAGER_ID,
+    );
+    expect(
+      managerPermCreates,
+      'Existing MANAGER should NOT receive permission grants on subsequent boot',
+    ).toHaveLength(0);
   });
 });

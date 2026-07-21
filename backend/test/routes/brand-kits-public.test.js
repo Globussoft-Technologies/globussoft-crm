@@ -59,7 +59,6 @@ beforeEach(() => {
 
 describe('GET /api/brand-kits/by-subbrand/:subBrand — public happy path', () => {
   test('returns 200 + active brand kit when one exists', async () => {
-    prisma.tenant.findFirst.mockResolvedValue({ id: 42 });
     prisma.brandKit.findFirst.mockResolvedValue({
       logoUrl: 'https://cdn.example/tmc-logo.png',
       primaryColor: '#1F4E79',
@@ -71,17 +70,14 @@ describe('GET /api/brand-kits/by-subbrand/:subBrand — public happy path', () =
       footerText: '© TMC Nexus 2026',
     });
 
-    const res = await request(makeApp()).get('/api/brand-kits/by-subbrand/tmc');
+    const res = await request(makeApp()).get('/api/brand-kits/by-subbrand/tmc?tenantId=42');
     expect(res.status).toBe(200);
     expect(res.body.subBrand).toBe('tmc');
     expect(res.body.brandKit).toBeTruthy();
     expect(res.body.brandKit.primaryColor).toBe('#1F4E79');
     expect(res.body.brandKit.logoUrl).toBe('https://cdn.example/tmc-logo.png');
     expect(res.body.brandKit.supportEmail).toBe('hello@tmcnexus.com');
-    // Tenant lookup falls back when ?tenantId is absent.
-    expect(prisma.tenant.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ vertical: 'travel' }),
-    }));
+    expect(prisma.tenant.findFirst).not.toHaveBeenCalled();
     expect(prisma.brandKit.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId: 42, subBrand: 'tmc', isActive: true },
     }));
@@ -104,7 +100,6 @@ describe('GET /api/brand-kits/by-subbrand/:subBrand — public happy path', () =
 
 describe('GET /api/brand-kits/by-subbrand/:subBrand — public field safety', () => {
   test('select payload omits audit + signatureTemplate fields (regression pin)', async () => {
-    prisma.tenant.findFirst.mockResolvedValue({ id: 1 });
     prisma.brandKit.findFirst.mockImplementation(async (args) => {
       // Validate the select shape — we must NOT include audit/internal
       // fields in the select so they cannot leak via the wire payload.
@@ -124,7 +119,7 @@ describe('GET /api/brand-kits/by-subbrand/:subBrand — public field safety', ()
       return { primaryColor: '#1F4E79' };
     });
 
-    const res = await request(makeApp()).get('/api/brand-kits/by-subbrand/tmc');
+    const res = await request(makeApp()).get('/api/brand-kits/by-subbrand/tmc?tenantId=1');
     expect(res.status).toBe(200);
   });
 });
@@ -155,16 +150,14 @@ describe('GET /api/brand-kits/by-subbrand/:subBrand — error envelopes', () => 
   });
 
   test('no travel tenant configured → 404 NO_TRAVEL_TENANT', async () => {
-    prisma.tenant.findFirst.mockResolvedValue(null);
     const res = await request(makeApp()).get('/api/brand-kits/by-subbrand/tmc');
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('NO_TRAVEL_TENANT');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('TENANT_ID_REQUIRED');
   });
 
   test('no active brand kit for sub-brand → 404 BRAND_KIT_NOT_FOUND', async () => {
-    prisma.tenant.findFirst.mockResolvedValue({ id: 1 });
     prisma.brandKit.findFirst.mockResolvedValue(null);
-    const res = await request(makeApp()).get('/api/brand-kits/by-subbrand/visasure');
+    const res = await request(makeApp()).get('/api/brand-kits/by-subbrand/visasure?tenantId=1');
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('BRAND_KIT_NOT_FOUND');
   });
@@ -172,10 +165,9 @@ describe('GET /api/brand-kits/by-subbrand/:subBrand — error envelopes', () => 
 
 describe('GET /api/brand-kits/by-subbrand/:subBrand — no auth required', () => {
   test('returns 200 without an Authorization header', async () => {
-    prisma.tenant.findFirst.mockResolvedValue({ id: 1 });
     prisma.brandKit.findFirst.mockResolvedValue({ primaryColor: '#1F4E79' });
 
-    const res = await request(makeApp()).get('/api/brand-kits/by-subbrand/tmc');
+    const res = await request(makeApp()).get('/api/brand-kits/by-subbrand/tmc?tenantId=1');
     expect(res.status).toBe(200);
     // The router exposes mutations (POST/PUT/DELETE) gated by verifyToken
     // + verifyRole — they all 401 here without a token. The public read
@@ -190,9 +182,8 @@ describe('GET /api/brand-kits/by-subbrand/:subBrand — all four sub-brands acce
     ['travelstall', '#922B21'],
     ['visasure', '#283747'],
   ])('sub-brand %s accepted', async (sb, color) => {
-    prisma.tenant.findFirst.mockResolvedValue({ id: 1 });
     prisma.brandKit.findFirst.mockResolvedValue({ primaryColor: color });
-    const res = await request(makeApp()).get(`/api/brand-kits/by-subbrand/${sb}`);
+    const res = await request(makeApp()).get(`/api/brand-kits/by-subbrand/${sb}?tenantId=1`);
     expect(res.status).toBe(200);
     expect(res.body.subBrand).toBe(sb);
     expect(res.body.brandKit.primaryColor).toBe(color);

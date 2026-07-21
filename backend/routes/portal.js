@@ -968,6 +968,10 @@ router.get("/travel/profile", verifyPortalToken, requireTravelPortalTenant, asyn
       select: {
         id: true, name: true, email: true, phone: true, company: true,
         title: true, subBrand: true, avatarUrl: true, createdAt: true,
+        // The portal JWT is tenant-bound. Return the same scoped ID so the
+        // public brand resolver can select this organization's kit rather
+        // than an ambiguous first travel tenant.
+        tenantId: true,
       },
     });
     if (!contact) return res.status(404).json({ error: "Contact not found" });

@@ -31,7 +31,7 @@
 //     reason; reason is logged into Sale.notes and AuditLog (server-side
 //     audit row written by routes/pos.js → writeAudit).
 
-import { useEffect, useMemo, useState, useContext } from 'react';
+import { useEffect, useMemo, useState, useContext, useCallback } from 'react';
 import {
   Calculator,
   Plus,
@@ -69,6 +69,7 @@ const LINE_TYPES = [
 ];
 
 const PAYMENT_METHODS = ['CASH', 'CARD', 'UPI', 'WALLET', 'GIFTCARD', 'COMBINED'];
+const PAYMENT_PAGE_SIZE = 5;
 
 export default function PointOfSale() {
   const { user } = useContext(AuthContext) || {};
@@ -132,6 +133,11 @@ export default function PointOfSale() {
   const [overrideEnabled, setOverrideEnabled] = useState(false);
   const [overrideAmount, setOverrideAmount] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
+  // Recent payment history fetched from /api/payments so the cashier sees
+  // online + POS payments alongside the current sale without leaving the page.
+  const [paymentHistory, setPaymentHistory] = useState([]);
+  const [paymentPage, setPaymentPage] = useState(1);
+  const [paymentLoading, setPaymentLoading] = useState(false);
 
   const loadRegisters = async () => {
     try {
@@ -160,6 +166,30 @@ export default function PointOfSale() {
       setCurrentShift(null);
     }
   };
+
+  const loadPaymentHistory = useCallback(async () => {
+    setPaymentLoading(true);
+    try {
+      const list = await fetchApi('/api/payments');
+      setPaymentHistory(Array.isArray(list) ? list : []);
+    } catch (e) {
+      // Fail silently — this is a convenience panel, not a blocking flow.
+      setPaymentHistory([]);
+    } finally {
+      setPaymentLoading(false);
+    }
+  }, []);
+
+  // Keep the payment-history panel in sync with the open shift. When a shift
+  // is opened we fetch the ledger; when it is closed we clear it.
+  useEffect(() => {
+    if (currentShift) {
+      loadPaymentHistory();
+    } else {
+      setPaymentHistory([]);
+      setPaymentPage(1);
+    }
+  }, [currentShift, loadPaymentHistory]);
 
   // Auto-open the inline register form for admin/manager when there are
   // no registers yet — turns the dead-end empty dropdown into a do-it-now
@@ -505,6 +535,7 @@ export default function PointOfSale() {
       setOverrideAmount('');
       setOverrideReason('');
       notify.success(`Sale complete: ${sale.invoiceNumber}`);
+      loadPaymentHistory();
     } catch (e) {
       notify.error(e.message || 'Failed to complete sale');
     } finally {
@@ -960,6 +991,120 @@ export default function PointOfSale() {
                   ))}
                 </tbody>
               </table>
+            )}
+          </div>
+
+          {/* Recent payment history — synced from /api/payments so the cashier
+              sees online + POS payments without leaving the sale surface. */}
+          <div style={cardStyle} data-testid="pos-payment-history">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+              <h2 style={{ marginTop: 0, marginBottom: 0, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Banknote size={18} /> Payment history
+              </h2>
+              <button
+                type="button"
+                onClick={loadPaymentHistory}
+                disabled={paymentLoading}
+                style={{
+                  ...primaryBtnStyle,
+                  padding: '0.35rem 0.7rem',
+                  fontSize: '0.8rem',
+                  opacity: paymentLoading ? 0.6 : 1,
+                }}
+                data-testid="pos-payment-history-refresh"
+              >
+                Refresh
+              </button>
+            </div>
+            {paymentLoading ? (
+              <p style={{ color: 'var(--text-secondary)', margin: 0 }}>Loading payments…</p>
+            ) : paymentHistory.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)', margin: 0 }}>No payments yet.</p>
+            ) : (
+              (() => {
+                const totalPaymentPages = Math.max(1, Math.ceil(paymentHistory.length / PAYMENT_PAGE_SIZE));
+                const pagePayments = paymentHistory.slice((paymentPage - 1) * PAYMENT_PAGE_SIZE, paymentPage * PAYMENT_PAGE_SIZE);
+                return (
+                  <div>
+                    <div style={{ maxHeight: 320, overflow: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr style={{ background: 'var(--surface-2, #f7f7f8)' }}>
+                            <th style={thStyle}>Customer</th>
+                            <th style={thStyle}>Service</th>
+                            <th style={thStyle}>Staff</th>
+                            <th style={thStyle}>Amount</th>
+                            <th style={thStyle}>Gateway</th>
+                            <th style={thStyle}>Status</th>
+                            <th style={thStyle}>Paid</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pagePayments.map((p) => (
+                            <tr key={p.id} style={{ borderTop: '1px solid var(--border-color)' }} data-testid={`pos-payment-row-${p.id}`}>
+                              <td style={tdStyle}>{p.contact?.name || '—'}</td>
+                              <td style={tdStyle}>{p.service?.name || '—'}</td>
+                              <td style={tdStyle}>{p.staff?.name || '—'}</td>
+                              <td style={tdStyle}>{formatMoney(p.amount, 'INR', 'en-IN')}</td>
+                              <td style={tdStyle}>{p.gateway ? p.gateway.toUpperCase() : '—'}</td>
+                              <td style={tdStyle}>
+                                <span
+                                  style={{
+                                    display: 'inline-block',
+                                    padding: '0.15rem 0.45rem',
+                                    borderRadius: 999,
+                                    fontSize: '0.75rem',
+                                    fontWeight: 600,
+                                    textTransform: 'lowercase',
+                                    background:
+                                      p.status === 'SUCCESS'
+                                        ? 'color-mix(in srgb, var(--success-color) 15%, transparent)'
+                                        : p.status === 'PENDING'
+                                        ? 'color-mix(in srgb, var(--warning-color) 15%, transparent)'
+                                        : 'color-mix(in srgb, var(--danger-color) 15%, transparent)',
+                                    color:
+                                      p.status === 'SUCCESS'
+                                        ? 'var(--success-color)'
+                                        : p.status === 'PENDING'
+                                        ? 'var(--warning-color)'
+                                        : 'var(--danger-color)',
+                                  }}
+                                >
+                                  {p.status || '—'}
+                                </span>
+                              </td>
+                              <td style={tdStyle}>
+                                {p.paidAt ? new Date(p.paidAt).toLocaleString() : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      <span>Page {paymentPage} of {totalPaymentPages}</span>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          onClick={() => setPaymentPage((pg) => Math.max(1, pg - 1))}
+                          disabled={paymentPage <= 1}
+                          style={{ ...primaryBtnStyle, padding: '0.35rem 0.7rem', fontSize: '0.8rem', opacity: paymentPage <= 1 ? 0.5 : 1 }}
+                        >
+                          Prev
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPaymentPage((pg) => Math.min(totalPaymentPages, pg + 1))}
+                          disabled={paymentPage >= totalPaymentPages}
+                          style={{ ...primaryBtnStyle, padding: '0.35rem 0.7rem', fontSize: '0.8rem', opacity: paymentPage >= totalPaymentPages ? 0.5 : 1 }}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()
             )}
           </div>
 

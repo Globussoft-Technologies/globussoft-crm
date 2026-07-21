@@ -437,6 +437,84 @@ describe('<PointOfSale /> — open-shift state', () => {
   });
 });
 
+// ── Payment history panel — synced from /api/payments ─────────────────────
+describe('<PointOfSale /> — payment history panel', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    notifyInfo.mockReset();
+    fetchApiMock.mockImplementation(defaultOpenShiftMock);
+  });
+
+  const samplePayments = [
+    { id: 801, amount: 300, currency: 'INR', gateway: 'razorpay', status: 'SUCCESS', paidAt: '2026-07-21T07:42:38Z', contact: { name: 'Demo User' }, service: { name: 'Acne Vulgaris Treatment' }, staff: { name: 'Dr. Anita Das' } },
+    { id: 802, amount: 6999, currency: 'INR', gateway: 'razorpay', status: 'SUCCESS', paidAt: '2026-07-21T08:00:00Z', contact: { name: 'Demo User' }, service: { name: 'Advanced Acne Facial' }, staff: { name: 'Dr. Harsh' } },
+    { id: 803, amount: 2999, currency: 'INR', gateway: 'razorpay', status: 'SUCCESS', paidAt: '2026-07-21T09:00:00Z', contact: { name: 'Rishu Agarwal' }, service: null, staff: null },
+    { id: 804, amount: 500, currency: 'INR', gateway: 'razorpay', status: 'PENDING', paidAt: null, contact: { name: 'Asha' }, service: { name: 'Hair Botox' }, staff: null },
+    { id: 805, amount: 100, currency: 'INR', gateway: 'stripe', status: 'FAILED', paidAt: null, contact: { name: 'Bob' }, service: null, staff: null },
+    { id: 806, amount: 1200, currency: 'INR', gateway: 'razorpay', status: 'SUCCESS', paidAt: '2026-07-21T10:00:00Z', contact: { name: 'Charlie' }, service: { name: 'Glow Boost Facial' }, staff: { name: 'Dr. Anita Das' } },
+  ];
+
+  it('fetches /api/payments and renders a compact paginated list', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/payments') return Promise.resolve(samplePayments);
+      return defaultOpenShiftMock(url, opts);
+    });
+    renderPos();
+    await waitFor(() => expect(screen.getByText(/Shift open/i)).toBeInTheDocument());
+
+    await waitFor(() => expect(screen.getByTestId('pos-payment-history')).toBeInTheDocument());
+
+    // Page 1 shows the first 5 rows.
+    await waitFor(() => expect(screen.getByTestId('pos-payment-row-801')).toBeInTheDocument());
+    expect(screen.getByTestId('pos-payment-row-802')).toBeInTheDocument();
+    expect(screen.getByTestId('pos-payment-row-803')).toBeInTheDocument();
+    expect(screen.getByTestId('pos-payment-row-804')).toBeInTheDocument();
+    expect(screen.getByTestId('pos-payment-row-805')).toBeInTheDocument();
+    expect(screen.queryByTestId('pos-payment-row-806')).not.toBeInTheDocument();
+
+    // Service + staff columns render the enriched data.
+    expect(screen.getByText('Acne Vulgaris Treatment')).toBeInTheDocument();
+    expect(screen.getAllByText('Dr. Anita Das').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Advanced Acne Facial')).toBeInTheDocument();
+
+    expect(screen.getByText(/Page 1 of 2/i)).toBeInTheDocument();
+
+    // Next page shows the 6th row.
+    fireEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await waitFor(() => expect(screen.getByTestId('pos-payment-row-806')).toBeInTheDocument());
+    expect(screen.queryByTestId('pos-payment-row-801')).not.toBeInTheDocument();
+    expect(screen.getByText(/Page 2 of 2/i)).toBeInTheDocument();
+
+    // Prev returns to page 1.
+    fireEvent.click(screen.getByRole('button', { name: /^Prev$/i }));
+    await waitFor(() => expect(screen.getByTestId('pos-payment-row-801')).toBeInTheDocument());
+    expect(screen.getByText(/Page 1 of 2/i)).toBeInTheDocument();
+  });
+
+  it('Refresh button re-fetches /api/payments', async () => {
+    let callCount = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/payments') {
+        callCount += 1;
+        return Promise.resolve(callCount === 1 ? [samplePayments[0]] : samplePayments.slice(0, 2));
+      }
+      return defaultOpenShiftMock(url, opts);
+    });
+    renderPos();
+    await waitFor(() => expect(screen.getByText(/Shift open/i)).toBeInTheDocument());
+
+    await waitFor(() => expect(screen.getByTestId('pos-payment-row-801')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('pos-payment-history-refresh'));
+
+    await waitFor(() => expect(screen.getByTestId('pos-payment-row-802')).toBeInTheDocument());
+    const paymentCalls = fetchApiMock.mock.calls.filter(([url]) => url === '/api/payments');
+    expect(paymentCalls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
 // ── #789 / WAL-002 — Wallet + Gift Card payment-method surface ────────────
 //
 // Skipped: the current SUT does NOT implement the wallet-balance fetch,

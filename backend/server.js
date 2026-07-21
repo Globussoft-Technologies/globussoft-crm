@@ -1982,6 +1982,34 @@ server.listen(PORT, () => {
       ),
     );
   }
+
+  // Live drift guard for Travel Cost Master. Older builds allowed duplicate
+  // logical rates, so toggling/deleting one row appeared to succeed while an
+  // identical stale row stayed visible. Keep the newest copy per natural key.
+  if (process.env.DISABLE_COST_MASTER_DEDUP_BOOT_SYNC !== "1") {
+    const {
+      collapseCostMasterDuplicatesOnBoot,
+    } = require("./lib/travelCostMasterDedupe");
+    collapseCostMasterDuplicatesOnBoot()
+      .then((stats) => {
+        if (!stats) return;
+        if (stats.removed > 0) {
+          console.log(
+            `[cost-master-boot] removed ${stats.removed} duplicate row(s) from ${stats.scanned} scanned.`,
+          );
+        } else {
+          console.log(
+            `[cost-master-boot] no duplicate rows found (${stats.scanned} scanned).`,
+          );
+        }
+      })
+      .catch((err) =>
+        console.error(
+          "[cost-master-boot] non-fatal error:",
+          err && err.message ? err.message : err,
+        ),
+      );
+  }
 });
 
 // Graceful shutdown — required for c8 / V8 line coverage to flush its temp

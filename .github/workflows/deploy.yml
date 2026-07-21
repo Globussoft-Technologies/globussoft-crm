@@ -916,6 +916,9 @@ jobs:
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
             cd ~/globussoft-crm/frontend
 
+            echo "=== npm install ==="
+            npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
+
             echo "=== vite build ==="
             npx vite build --logLevel=error 2>&1 | tail -8
             du -sh dist
@@ -1263,6 +1266,9 @@ jobs:
             set -euo pipefail
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
             cd /home/empcloud-development/globussoft-crm/frontend
+
+            echo "=== npm install ==="
+            npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
 
             echo "=== vite build ==="
             npx vite build --logLevel=error 2>&1 | tail -8

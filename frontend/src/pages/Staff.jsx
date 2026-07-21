@@ -73,6 +73,65 @@ function SubBrandAccessPicker({ value, onChange, accessTier }) {
   );
 }
 
+// Geo-tagged attendance (wellness only). Toggle-chip picker for assigning a
+// staff member to one or more clinic Locations — mirrors SubBrandAccessPicker
+// above. An empty selection means "no geofence" (the staff member can clock
+// in/out from anywhere; see backend/lib/attendanceGeofence.js's "[] = not
+// enforced" rule), unlike sub-brand access where empty means "all brands" —
+// worth calling out since the two pickers look identical but empty means
+// opposite things.
+function LocationAccessPicker({ value, onChange, locations }) {
+  const toggle = (id) =>
+    onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  return (
+    <div style={{ marginTop: '0.35rem' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+        {locations.map((loc) => {
+          const on = value.includes(loc.id);
+          return (
+            <button
+              key={loc.id}
+              type="button"
+              onClick={() => toggle(loc.id)}
+              aria-pressed={on}
+              data-testid={`location-${loc.id}`}
+              style={{
+                fontSize: '0.78rem',
+                padding: '0.3rem 0.7rem',
+                borderRadius: '999px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.3rem',
+                // Deliberately --accent-color, not --primary-color: on this
+                // tenant's wellness theme --primary-color resolves to a dark
+                // charcoal (#1F2220) that's nearly invisible against the
+                // modal's own dark background, making "selected" chips look
+                // identical to "unselected" ones. --accent-color (gold) reads
+                // clearly against that same dark backdrop.
+                border: `1px solid ${on ? 'var(--accent-color)' : 'var(--border-color)'}`,
+                background: on ? 'var(--accent-color)' : 'transparent',
+                color: on ? '#1a1a1a' : 'var(--text-secondary)',
+                fontWeight: on ? 700 : 500,
+                boxShadow: on ? '0 0 0 2px rgba(217,164,104,0.35)' : 'none',
+              }}
+            >
+              {on && <span aria-hidden="true">✓</span>}
+              {loc.name}{loc.city ? ` (${loc.city})` : ''}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+        {value.length === 0
+          ? 'No clinic selected → check-in allowed from anywhere.'
+          : `Must check in within range of: ${locations.filter((l) => value.includes(l.id)).map((l) => l.name).join(', ')}.`}
+      </div>
+    </div>
+  );
+}
+
 const ROLE_CONFIG = {
   ADMIN:   { color: '#a855f7', bg: 'rgba(168,85,247,0.1)' },
   MANAGER: { color: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
@@ -369,6 +428,15 @@ export default function Staff() {
   // tenant's catalog (the cause of the "Unknown wellness role for this
   // tenant" toast on freshly-signed-up wellness tenants).
   const [wellnessRoleTypes, setWellnessRoleTypes] = useState([]);
+  // Geo-tagged attendance (wellness only) — clinic locations for the
+  // multi-select assignment picker in the Edit Staff modal, plus a
+  // saving/loading flag for that picker's own Save button (kept separate
+  // from savingEdit since location assignment is a distinct PUT call, not
+  // part of the staff-fields payload — see PUT /api/wellness/location-assignments/:userId).
+  // (Namespaced under /location-assignments, not /staff — the wellness API
+  // reserves /wellness/staff/* for a 410 redirect to /api/staff per #348.)
+  const [clinicLocations, setClinicLocations] = useState([]);
+  const [savingLocations, setSavingLocations] = useState(false);
   // Staff availability tracking
   const [availDate, setAvailDate] = useState(new Date());
   const [availability, setAvailability] = useState([]);
@@ -379,7 +447,10 @@ export default function Staff() {
     loadStaff();
     loadCommissionProfiles();
     loadAvailableRoles();
-    if (isWellness) loadWellnessRoleTypes();
+    if (isWellness) {
+      loadWellnessRoleTypes();
+      loadClinicLocations();
+    }
   }, [isWellness]);
 
   // Load availability when date changes or showAvailability is toggled
@@ -411,6 +482,18 @@ export default function Staff() {
       // is preserved on save because we only send commissionProfileId when
       // it actually changed.
       setCommissionProfiles([]);
+    }
+  };
+
+  // Geo-tagged attendance (wellness only) — clinic locations for the
+  // assignment picker. Non-fatal on failure: the picker just shows nothing
+  // to select, same degrade-gracefully pattern as commission profiles.
+  const loadClinicLocations = async () => {
+    try {
+      const data = await fetchApi('/api/wellness/locations');
+      setClinicLocations(Array.isArray(data) ? data.filter((l) => l.isActive !== false) : []);
+    } catch {
+      setClinicLocations([]);
     }
   };
 
@@ -501,7 +584,37 @@ export default function Staff() {
       wellnessRoleTouched: false,
       // Travel-only: pre-fill the sub-brand picker from the member's current scope.
       subBrandAccess: parseSubBrandAccess(member.subBrandAccess),
+      // Geo-tagged attendance (wellness only) — filled in async below once
+      // GET /staff/:userId/locations returns; empty until then so the
+      // picker renders with nothing checked rather than stale data.
+      locationIds: [],
     });
+    if (isWellness) {
+      fetchApi(`/api/wellness/location-assignments/${member.id}`)
+        .then((res) => {
+          const ids = Array.isArray(res?.locations) ? res.locations.map((l) => l.id) : [];
+          setEditing((prev) => (prev && prev.id === member.id ? { ...prev, locationIds: ids } : prev));
+        })
+        .catch(() => { /* picker just stays empty — non-fatal */ });
+    }
+  };
+
+  // Geo-tagged attendance (wellness only) — saved independently of saveEdit
+  // since it's a separate join-table endpoint, not a field on the User row.
+  const saveLocations = async () => {
+    if (!editing) return;
+    setSavingLocations(true);
+    try {
+      await fetchApi(`/api/wellness/location-assignments/${editing.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ locationIds: editing.locationIds }),
+      });
+      notify.success('Clinic assignments updated.');
+    } catch (err) {
+      if (!err.status) notify.error(err.message || 'Failed to update clinic assignments.');
+    } finally {
+      setSavingLocations(false);
+    }
   };
 
   const saveEdit = async () => {
@@ -1491,6 +1604,29 @@ export default function Staff() {
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
                   </select>
+                </label>
+              )}
+              {isWellness && clinicLocations.length > 0 && (
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Clinic locations <span style={{ fontWeight: 400 }}>(geofenced check-in — leave empty for no location restriction)</span>
+                  <LocationAccessPicker
+                    value={editing.locationIds || []}
+                    onChange={(v) => setEditing({ ...editing, locationIds: v })}
+                    locations={clinicLocations}
+                  />
+                  <button
+                    type="button"
+                    onClick={saveLocations}
+                    disabled={savingLocations}
+                    style={{
+                      marginTop: '0.5rem', fontSize: '0.78rem', padding: '0.3rem 0.7rem',
+                      borderRadius: '6px', border: '1px solid var(--border-color)',
+                      background: 'transparent', color: 'var(--text-primary)',
+                      cursor: savingLocations ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {savingLocations ? 'Saving…' : 'Save clinic assignments'}
+                  </button>
                 </label>
               )}
             </div>

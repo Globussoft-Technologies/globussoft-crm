@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
+import TopScrollSync from "../components/TopScrollSync";
 import { AuthContext } from "../App";
 import { formatDate } from "../utils/date";
 
@@ -757,7 +758,7 @@ export default function KnowledgeBase() {
                   </p>
                 </div>
               ) : (
-                <div style={{ overflowX: "auto" }}>
+                <TopScrollSync>
                   <table
                     style={{
                       width: "100%",
@@ -1008,7 +1009,7 @@ export default function KnowledgeBase() {
                       })}
                     </tbody>
                   </table>
-                </div>
+                </TopScrollSync>
               )}
             </>
           )}

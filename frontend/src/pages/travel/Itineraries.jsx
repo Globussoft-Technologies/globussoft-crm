@@ -22,6 +22,7 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import PermissionGate from "../../components/PermissionGate";
+import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import {
   accessibleSubBrands,
@@ -801,7 +802,7 @@ export default function Itineraries() {
             No itineraries match &ldquo;{searchQuery}&rdquo;.
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <TopScrollSync scrollWidth="1000px">
           <table style={{ width: "100%", minWidth: "1000px", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -952,7 +953,7 @@ export default function Itineraries() {
               })}
             </tbody>
           </table>
-          </div>
+          </TopScrollSync>
         )}
       </div>
 

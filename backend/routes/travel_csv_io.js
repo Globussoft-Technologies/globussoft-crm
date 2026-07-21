@@ -51,6 +51,7 @@ const {
   buildErrorReport,
   setCsvDownloadHeaders,
 } = require("../lib/csvHelpers");
+const { parseXlsxBuffer } = require("../lib/csvIO");
 
 const router = express.Router();
 
@@ -70,10 +71,37 @@ const VALID_CATEGORIES = ["hotel", "flight", "transport", "visa", "insurance"];
 // one to the sub-routes here only.
 router.use(express.text({ type: ["text/csv", "text/plain"], limit: "5mb" }));
 
-function readUploadedCsv(req) {
-  if (req.file && req.file.buffer) return req.file.buffer.toString("utf8");
-  if (typeof req.body === "string") return req.body;
-  if (req.body && typeof req.body.csv === "string") return req.body.csv;
+// True when the uploaded file looks like an XLSX (extension OR mimetype) —
+// same detection rule routes/wellnessCsv.js uses for the same purpose.
+function isXlsxUpload(file) {
+  if (!file) return false;
+  const name = String(file.originalname || "").toLowerCase();
+  if (name.endsWith(".xlsx") || name.endsWith(".xls")) return true;
+  const mt = String(file.mimetype || "").toLowerCase();
+  return (
+    mt === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    mt === "application/vnd.ms-excel"
+  );
+}
+
+// Parses either a multer file upload (multipart/form-data, CSV or XLSX) or a
+// raw text/csv request body into the shared { headers, rows } shape both
+// parseCsv (csvHelpers.js) and parseXlsxBuffer (csvIO.js) already return —
+// downstream row-processing loops stay format-blind. Returns null when
+// nothing was actually uploaded (NO empty file, NO empty text body) so
+// callers can distinguish "nothing was sent" (400 NO_CSV) from "an empty
+// CSV/sheet was sent" (400 EMPTY_CSV once rows.length is checked) —
+// collapsing that distinction was a regression caught by the existing
+// e2e suite (travel-csv-io-api.spec.js's "400 NO_CSV when no body is
+// provided" test posts an empty string body and expects NO_CSV, not
+// EMPTY_CSV).
+function readUploadedRows(req) {
+  if (req.file && req.file.buffer && req.file.buffer.length > 0) {
+    if (isXlsxUpload(req.file)) return parseXlsxBuffer(req.file.buffer);
+    return parseCsv(req.file.buffer.toString("utf8"));
+  }
+  if (typeof req.body === "string" && req.body.length > 0) return parseCsv(req.body);
+  if (req.body && typeof req.body.csv === "string" && req.body.csv.length > 0) return parseCsv(req.body.csv);
   return null;
 }
 
@@ -152,11 +180,11 @@ router.post(
   upload.single("file"),
   async (req, res) => {
     try {
-      const csvText = readUploadedCsv(req);
-      if (!csvText) {
-        return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
+      const parsed = readUploadedRows(req);
+      if (!parsed) {
+        return res.status(400).json({ error: "No CSV/Excel body or file uploaded", code: "NO_CSV" });
       }
-      const { rows } = parseCsv(csvText);
+      const { rows } = parsed;
       if (rows.length === 0) {
         return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
       }
@@ -316,11 +344,11 @@ router.post(
   upload.single("file"),
   async (req, res) => {
     try {
-      const csvText = readUploadedCsv(req);
-      if (!csvText) {
-        return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
+      const parsed = readUploadedRows(req);
+      if (!parsed) {
+        return res.status(400).json({ error: "No CSV/Excel body or file uploaded", code: "NO_CSV" });
       }
-      const { rows } = parseCsv(csvText);
+      const { rows } = parsed;
       if (rows.length === 0) {
         return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
       }
@@ -484,11 +512,11 @@ router.post(
   upload.single("file"),
   async (req, res) => {
     try {
-      const csvText = readUploadedCsv(req);
-      if (!csvText) {
-        return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
+      const parsed = readUploadedRows(req);
+      if (!parsed) {
+        return res.status(400).json({ error: "No CSV/Excel body or file uploaded", code: "NO_CSV" });
       }
-      const { rows } = parseCsv(csvText);
+      const { rows } = parsed;
       if (rows.length === 0) {
         return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
       }
@@ -644,11 +672,11 @@ router.post(
   upload.single("file"),
   async (req, res) => {
     try {
-      const csvText = readUploadedCsv(req);
-      if (!csvText) {
-        return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
+      const parsed = readUploadedRows(req);
+      if (!parsed) {
+        return res.status(400).json({ error: "No CSV/Excel body or file uploaded", code: "NO_CSV" });
       }
-      const { rows } = parseCsv(csvText);
+      const { rows } = parsed;
       if (rows.length === 0) {
         return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
       }

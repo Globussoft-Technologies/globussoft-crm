@@ -59,6 +59,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Key, Plus, RefreshCw, Trash2, Copy, X, AlertCircle } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 
 // Voyagr sub-brands — mirrors VALID_API_KEY_SUB_BRANDS in
 // backend/routes/developer.js (#899 Part A whitelist). Order matches the
@@ -324,11 +325,11 @@ export default function VoyagrApiKeys() {
       ) : (
         <div
           style={{
-            overflowX: "auto",
             border: "1px solid var(--border-color)",
             borderRadius: 12,
           }}
         >
+        <TopScrollSync>
           <table
             style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}
             aria-label="Voyagr API keys"
@@ -424,6 +425,7 @@ export default function VoyagrApiKeys() {
               ))}
             </tbody>
           </table>
+        </TopScrollSync>
         </div>
       )}
 

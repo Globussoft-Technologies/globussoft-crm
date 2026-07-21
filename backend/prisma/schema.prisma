@@ -351,6 +351,10 @@ model Tenant {
   // model comment above LeadCustomFieldDefinition for why.
   leadCustomFieldDefinitions LeadCustomFieldDefinition[]
   leadCustomFieldValues      LeadCustomFieldValue[]
+  // Generic-vertical-only "Customize table" column-visibility picker.
+  tableColumnPreferences     TableColumnPreference[]
+  // Generic-vertical-only Contacts "Saved Views" (named fixed contact lists).
+  savedContactViews          SavedContactView[]
   cannedResponses            CannedResponse[]
   surveys                    Survey[]
   surveyResponses            SurveyResponse[]
@@ -654,6 +658,14 @@ model User {
   // (PRD_TMC_CURRICULUM_MAPPING PC-1 RESOLVED 2026-05-24).
   curriculumMappingsCreated TravelCurriculumMapping[] @relation("CurriculumMappingCreator")
 
+  // Generic-vertical-only "Customize table" column-visibility picker —
+  // personal per-user preference, not shared with teammates.
+  tableColumnPreferences TableColumnPreference[]
+  // Generic-vertical-only Contacts "Saved Views" this user created — the
+  // views themselves are tenant-shared/readable, but only the creator (or
+  // an ADMIN) may edit/delete them, enforced in routes/contact_views.js.
+  createdContactViews    SavedContactView[]
+
   // Email is unique within a tenant, not globally — see the comment on the
   // email field. Lets the same email register/log in across multiple orgs.
   @@unique([email, tenantId])
@@ -867,6 +879,9 @@ model Contact {
   itineraries               Itinerary[]
   // Generic-vertical admin-configurable Lead custom fields.
   leadCustomFieldValues     LeadCustomFieldValue[]
+  // Generic-vertical-only Contacts "Saved Views" membership rows this
+  // contact belongs to.
+  savedViewMemberships      SavedContactViewMember[]
   // Customer-facing travel quotes. This relation lets quote lists load the
   // customer's display name without a separate contact-list request.
   travelQuotes              TravelQuote[]
@@ -969,6 +984,78 @@ model LeadCustomFieldValue {
   /// One value row per (contact, field) — updating a lead's custom field value upserts this row rather than accumulating history rows.
   @@unique([contactId, fieldId])
   @@index([tenantId, fieldId])
+}
+
+// ── Table Column Visibility Preference (generic vertical only) ──────
+//
+// "Customize table" picker (Freshsales-style — see Leads/Contacts table
+// header) — lets a USER/MANAGER/ADMIN choose which columns show in a given
+// table, PERSONAL to them (not an admin-wide setting; two people on the same
+// tenant can have different layouts). One row per (user, tableKey). The
+// column list itself is NOT hardcoded server-side — the API returns every
+// available column (built-in fields + this tenant's LeadCustomFieldDefinition
+// rows) and the frontend/DB only track which of those the user has chosen to
+// SHOW + in what order; a column that no longer exists (e.g. its custom
+// field definition was deleted) is simply ignored on render rather than
+// erroring, so this table never needs to migrate when fields change.
+model TableColumnPreference {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tableKey     String // "leads" | "contacts" — which table this preference applies to
+  visibleJson  String   @db.Text // JSON array of column keys, in display order, e.g. ["name","email","cf_job_title","status"]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// One preference row per (user, table) — saving a new layout overwrites the existing row rather than accumulating history.
+  @@unique([userId, tableKey])
+  @@index([tenantId, userId])
+}
+
+// Generic-vertical-only "Saved Views" on the Contacts page — a named,
+// FIXED list of hand-picked contact IDs (e.g. select 10 via search/filter,
+// save as "Mohit Customers"). Deliberately NOT a saved filter/search
+// definition — membership is static until someone explicitly edits it via
+// PUT, it does not re-evaluate against new contacts over time.
+// Shared/tenant-wide read: any user in the tenant can select any view from
+// the dropdown. Write-restricted: only createdByUserId (or an ADMIN) may
+// rename/edit-membership/delete a view — enforced in routes/contact_views.js,
+// not at the schema level.
+model SavedContactView {
+  id              Int      @id @default(autoincrement())
+  name            String
+  createdByUserId Int
+  createdBy       User     @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  members SavedContactViewMember[]
+
+  /// View names are unique per tenant so the dropdown never shows ambiguous duplicates.
+  @@unique([tenantId, name])
+  @@index([tenantId, createdByUserId])
+}
+
+// One row per (view, contact) — the view's actual membership list. Modeled
+// as rows (not a JSON array on SavedContactView) so a deleted Contact
+// cleanly cascades out of every view it belonged to, and so membership is
+// directly queryable/joinable.
+model SavedContactViewMember {
+  id        Int              @id @default(autoincrement())
+  viewId    Int
+  view      SavedContactView @relation(fields: [viewId], references: [id], onDelete: Cascade)
+  contactId Int
+  contact   Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  addedAt   DateTime         @default(now())
+
+  @@unique([viewId, contactId])
+  @@index([contactId])
 }
 
 model Activity {

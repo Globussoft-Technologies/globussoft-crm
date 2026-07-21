@@ -2,9 +2,15 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import React, { useState, useEffect, useContext } from 'react';
-import { Search, Plus, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge, EyeOff } from 'lucide-react';
+import { Search, Plus, Trash2, Pencil, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, Users, GitMerge, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import DuplicateContactModal from '../components/DuplicateContactModal';
+import ColumnPicker from '../components/ColumnPicker';
+import TopScrollSync from '../components/TopScrollSync';
+import SavedViewsBar from '../components/SavedViewsBar';
+import ScrollableSelect from '../components/ScrollableSelect';
+import InlineCellEditor from '../components/InlineCellEditor';
+import EditContactModal from '../components/EditContactModal';
 import { AuthContext } from '../App';
 import { accessibleSubBrands } from '../utils/travelSubBrand';
 
@@ -30,6 +36,36 @@ const parseCSV = (text) => {
     headers.forEach((h, i) => { row[h] = values[i] || ''; });
     return row;
   });
+};
+
+// Excel (.xlsx/.xls) import — reads the first sheet, treats row 1 as headers,
+// and produces the exact same row shape parseCSV does (lowercased header
+// keys, string values, __columnCount/__expectedCount for the same
+// short/long-row validation) so the preview + validateCsvRow + handleImport
+// code paths stay format-blind below this point.
+// `xlsx` (SheetJS) is dynamically imported here rather than at module scope
+// — it's a ~350KB library that only a small fraction of visitors to this
+// page will ever need (only those who click Import CSV/Excel AND choose an
+// .xlsx/.xls file), so keeping it out of Contacts.jsx's main code-split
+// chunk avoids a multi-hundred-KB hit on every Contacts page load.
+const parseExcel = async (arrayBuffer) => {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(arrayBuffer, { type: 'array' });
+  const firstSheetName = wb.SheetNames[0];
+  if (!firstSheetName) return [];
+  const ws = wb.Sheets[firstSheetName];
+  const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+  if (aoa.length < 2) return [];
+  const headers = (aoa[0] || []).map(h => String(h ?? '').trim().toLowerCase().replace(/['"]/g, ''));
+  return aoa.slice(1)
+    .filter(cells => cells.some(c => String(c ?? '').trim() !== '')) // skip blank trailing rows
+    .map(cells => {
+      const row = {};
+      row.__columnCount = cells.length;
+      row.__expectedCount = headers.length;
+      headers.forEach((h, i) => { row[h] = String(cells[i] ?? '').trim(); });
+      return row;
+    });
 };
 
 // #154: same validation rules as backend, run client-side so the user sees row
@@ -76,8 +112,37 @@ const Contacts = () => {
   const isTravel = tenant?.vertical === 'travel';
   const isWellness = tenant?.vertical === 'wellness';
   const isAdmin = user?.role === 'ADMIN';
+  // Bulk-select + bulk-assign — mirrors Leads.jsx exactly, same backend
+  // endpoint (/api/contacts/bulk-assign), so this works unmodified across
+  // all three verticals (generic/wellness/travel) with no gating beyond
+  // the existing ADMIN-only role check.
+  const [selectedContacts, setSelectedContacts] = useState([]);
+  const [bulkAgent, setBulkAgent] = useState('');
+  // Generic-vertical-only "Saved Views" — a named fixed list of contact IDs
+  // (see components/SavedViewsBar.jsx). activeViewId null = "All Contacts"
+  // (no filtering). activeViewMemberIds is the fetched membership of
+  // whichever view is currently selected.
+  const [activeViewId, setActiveViewId] = useState(null);
+  const [activeViewMemberIds, setActiveViewMemberIds] = useState(null);
+  useEffect(() => {
+    if (isWellness || isTravel || activeViewId == null) {
+      setActiveViewMemberIds(null);
+      return;
+    }
+    fetchApi(`/api/contact-views/${activeViewId}/members`)
+      .then(d => setActiveViewMemberIds(new Set(Array.isArray(d.contactIds) ? d.contactIds : [])))
+      .catch(() => setActiveViewMemberIds(new Set()));
+  }, [activeViewId, isWellness, isTravel]);
   // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
+  // Generic-vertical-only "Customize table" column-visibility picker
+  // (personal per-user preference — see components/ColumnPicker.jsx).
+  // null = "not loaded yet, show every builtin column".
+  const [visibleColumns, setVisibleColumns] = useState(null);
+  const isColVisible = (key) => {
+    if (isWellness || isTravel || visibleColumns === null) return true;
+    return visibleColumns.includes(key);
+  };
   const assignableStaff = (contact) => {
     if (!isTravel || !contact?.subBrand) return staff;
     return staff.filter(
@@ -103,12 +168,29 @@ const Contacts = () => {
   const [dupModal, setDupModal] = useState(null);
   const [creatingContact, setCreatingContact] = useState(false);
 
+  // Full Edit Contact modal — a second entry point alongside the inline
+  // per-cell custom-field editing above, for editing everything (name,
+  // email, phone, company, status, custom fields) in one place at once.
+  const [editingContact, setEditingContact] = useState(null);
+
   // #461: search + status filter inputs were rendered without value/onChange
   // and the table read straight from `contacts`, so neither one filtered.
   // Wire both to local state and derive a filtered view client-side
   // (mirrors the existing Leads.jsx pattern). Status === 'All' = show all.
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
+  // Assigned-To + Lead Score range filters, same client-side pattern as
+  // search/status above. assignedToFilter: '' = all, 'unassigned' = no
+  // assignee, else a staff id (string, matches <option value>). scoreFilter:
+  // '' = all, else "min-max" bucket key parsed at filter time.
+  const [assignedToFilter, setAssignedToFilter] = useState('');
+  const [scoreFilter, setScoreFilter] = useState('');
+  const SCORE_BUCKETS = [
+    { value: '0-25', label: '0 - 25', min: 0, max: 25 },
+    { value: '26-50', label: '26 - 50', min: 26, max: 50 },
+    { value: '51-75', label: '51 - 75', min: 51, max: 75 },
+    { value: '76-100', label: '76 - 100', min: 76, max: 100 },
+  ];
 
   const handleFindDupes = async () => {
     try {
@@ -208,6 +290,32 @@ const Contacts = () => {
     fetchContacts();
   };
 
+  const handleBulkAssign = async () => {
+    if (selectedContacts.length === 0) return;
+    await fetchApi('/api/contacts/bulk-assign', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contactIds: selectedContacts, assignedToId: bulkAgent || null }),
+    });
+    setSelectedContacts([]);
+    setBulkAgent('');
+    fetchContacts();
+  };
+
+  const toggleSelectContact = (id) => {
+    setSelectedContacts(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAllContacts = () => {
+    if (selectedContacts.length === visibleContacts.length) {
+      setSelectedContacts([]);
+    } else {
+      setSelectedContacts(visibleContacts.map(c => c.id));
+    }
+  };
+
   const handleAddContact = async (e) => {
     e.preventDefault();
     // #607: block submit when the email is invalid. Surface the same inline
@@ -263,16 +371,18 @@ const Contacts = () => {
   const handleFileSelect = (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    const isExcel = /\.xlsx?$/i.test(file.name);
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      const rows = parseCSV(ev.target.result);
+    reader.onload = async (ev) => {
+      const rows = isExcel ? await parseExcel(ev.target.result) : parseCSV(ev.target.result);
       if (rows.length > 0) {
         setCsvHeaders(Object.keys(rows[0]));
         setCsvRows(rows);
         setImportResult(null);
       }
     };
-    reader.readAsText(file);
+    if (isExcel) reader.readAsArrayBuffer(file);
+    else reader.readAsText(file);
   };
 
   const handleImport = async () => {
@@ -314,8 +424,17 @@ const Contacts = () => {
   // #461: derive the visible rows from `contacts` + the two filter inputs.
   // Search matches name / email / company / title (case-insensitive). The
   // dropdown supports the canonical statuses; 'All' disables status filtering.
+  // A selected Saved View additionally restricts to its fixed membership
+  // list — applied first so search/status still narrow within the view.
   const visibleContacts = contacts.filter((c) => {
+    if (activeViewMemberIds && !activeViewMemberIds.has(c.id)) return false;
     if (statusFilter !== 'All' && c.status !== statusFilter) return false;
+    if (assignedToFilter === 'unassigned' && c.assignedToId) return false;
+    if (assignedToFilter && assignedToFilter !== 'unassigned' && String(c.assignedToId || '') !== assignedToFilter) return false;
+    if (scoreFilter) {
+      const bucket = SCORE_BUCKETS.find(b => b.value === scoreFilter);
+      if (bucket && (c.aiScore < bucket.min || c.aiScore > bucket.max)) return false;
+    }
     const term = searchTerm.trim().toLowerCase();
     if (!term) return true;
     return (
@@ -325,6 +444,15 @@ const Contacts = () => {
       (c.title || '').toLowerCase().includes(term)
     );
   });
+
+  // colSpan for the loading/empty-state row must track exactly how many
+  // <th> render in the header above, including the generic-only optional
+  // columns the "Customize table" picker can hide.
+  const visibleCfCols = customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).length;
+  const contactsColSpan = 2 /* Name + Actions */
+    + (isAdmin ? 1 : 0) /* bulk-select checkbox column */
+    + ['email', 'phone', 'company', 'aiScore', 'status', 'assignedTo', 'createdAt'].filter(isColVisible).length
+    + visibleCfCols;
 
   return (
     <div style={{ padding: '2rem' }}>
@@ -340,6 +468,21 @@ const Contacts = () => {
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {/* Generic-vertical-only "Customize table" column picker — personal
+              per-user preference, matches the Freshsales reference UI. */}
+          {!isWellness && !isTravel && (
+            <ColumnPicker tableKey="contacts" onColumnsChange={setVisibleColumns} />
+          )}
+          {/* Generic-vertical-only "Saved Views" — tenant-shared named lists
+              of hand-picked contacts (see components/SavedViewsBar.jsx). */}
+          {!isWellness && !isTravel && (
+            <SavedViewsBar
+              activeViewId={activeViewId}
+              onSelectView={setActiveViewId}
+              selectedIds={selectedContacts}
+              allContacts={contacts}
+            />
+          )}
           <button
             onClick={handleRescore}
             disabled={rescoring}
@@ -354,14 +497,43 @@ const Contacts = () => {
             <GitMerge size={15} /> Find Duplicates
           </button>
           <button onClick={() => { setShowImportModal(true); setCsvRows([]); setCsvHeaders([]); setImportResult(null); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Upload size={15} /> Import CSV
+            <Upload size={15} /> Import CSV/Excel
           </button>
           <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Plus size={18} /> Add Contact
           </button>
         </div>
       </header>
-      
+
+      {/* Bulk Assign Bar — admin only, same pattern + backend endpoint as Leads.jsx */}
+      {isAdmin && selectedContacts.length > 0 && (
+        <div className="card" style={{ padding: '0.75rem 1.25rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', flexWrap: 'wrap' }}>
+          <Users size={18} color="var(--primary-color, var(--accent-color))" />
+          <span style={{ fontWeight: '500', fontSize: '0.875rem' }}>{selectedContacts.length} contact{selectedContacts.length !== 1 ? 's' : ''} selected</span>
+          <select
+            className="input-field"
+            value={bulkAgent}
+            onChange={e => setBulkAgent(e.target.value)}
+            style={{ width: '200px', padding: '0.5rem' }}
+          >
+            <option value="">Unassign</option>
+            {staff.map(s => (
+              <option key={s.id} value={s.id}>{s.name || s.email}</option>
+            ))}
+          </select>
+          <button className="btn-primary" onClick={handleBulkAssign} style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>
+            <UserCheck size={15} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} />
+            Assign
+          </button>
+          {/* Clear must (a) drop the underlying selection so checkbox rows
+              un-tick, AND (b) reset the bulk-agent dropdown so a
+              re-selection doesn't pick up the previously-chosen agent. */}
+          <button onClick={() => { setSelectedContacts([]); setBulkAgent(''); }} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.875rem' }}>
+            Clear
+          </button>
+        </div>
+      )}
+
       <div className="card" style={{ overflow: 'hidden' }}>
         <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center' }}>
           <div style={{ position: 'relative', flex: 1, maxWidth: '300px' }}>
@@ -388,63 +560,133 @@ const Contacts = () => {
             <option value="Churned">Churned</option>
             <option value="Junk">Junk</option>
           </select>
-          {(searchTerm || statusFilter !== 'All') && (
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-              Showing {visibleContacts.length} of {contacts.length}
-            </span>
+          {/* Custom scrollable dropdown (not a native <select>) so a long
+              staff list caps at ~5 visible rows and scrolls for the rest,
+              instead of the browser rendering every option at once. */}
+          <ScrollableSelect
+            value={assignedToFilter}
+            onChange={setAssignedToFilter}
+            width={170}
+            ariaLabel="Filter by assigned to"
+            options={[
+              { value: '', label: 'All Assignees' },
+              { value: 'unassigned', label: 'Unassigned' },
+              ...staff.map(s => ({ value: String(s.id), label: s.name || s.email })),
+            ]}
+          />
+          <select
+            className="input-field"
+            value={scoreFilter}
+            onChange={e => setScoreFilter(e.target.value)}
+            style={{ width: '150px' }}
+            aria-label="Filter by lead score"
+          >
+            <option value="">All Scores</option>
+            {SCORE_BUCKETS.map(b => (
+              <option key={b.value} value={b.value}>{b.label}</option>
+            ))}
+          </select>
+          {(searchTerm || statusFilter !== 'All' || assignedToFilter || scoreFilter || activeViewId != null) && (
+            <>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Showing {visibleContacts.length} of {contacts.length}
+              </span>
+              <button
+                onClick={() => { setSearchTerm(''); setStatusFilter('All'); setAssignedToFilter(''); setScoreFilter(''); }}
+                style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontSize: '0.8rem' }}
+              >
+                Clear filters
+              </button>
+            </>
           )}
         </div>
         
         {/* #633: stable-table — pins tableLayout=fixed so row hover never
-            shifts column widths, plus column widths set explicitly below.
-            Wrapped in an overflow-x:auto container (rather than relying on
-            .stable-table's mobile-only <768px scroll rule) because the
-            dynamic Lead-custom-field columns below can push total column
-            width past 100% on desktop too — without this wrapper the
-            overflow spills into the page's own horizontal scrollbar instead
-            of scrolling just the table. minWidth ensures the fixed-percent
-            columns don't get crushed once custom-field columns are added. */}
-        <div style={{ overflowX: 'auto' }}>
-        <table className="stable-table" style={{ borderCollapse: 'collapse', textAlign: 'left', minWidth: customFieldDefs.length ? `${900 + customFieldDefs.length * 140}px` : undefined }}>
+            shifts column widths. Columns use FIXED pixel widths (not
+            percentages) so a column's content (phone numbers, dates, etc.)
+            gets a sane minimum instead of stretching/shrinking proportionally
+            once minWidth forces the table wider than its container — that
+            proportional stretch was what caused phone numbers to wrap
+            awkwardly. TopScrollSync adds a second scrollbar pinned to the
+            TOP of the table (mirrors the bottom one) so the user can scroll
+            right from wherever they already are, without having to scroll
+            all the way down the page to reach the native bottom scrollbar
+            first. tableMinWidth is computed once and shared between the
+            table's own minWidth and TopScrollSync's spacer so the two
+            scrollbars stay in lockstep. */}
+        {(() => {
+          const visibleCfColsList = customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`));
+          const colWidths = {
+            name: 220, email: 220, phone: 150, company: 160,
+            aiScore: 110, status: 110, assignedTo: 150, createdAt: 120,
+          };
+          const tableMinWidth = (isAdmin ? 40 : 0) /* bulk-select checkbox column */
+            + colWidths.name
+            + (isColVisible('email') ? colWidths.email : 0)
+            + (isColVisible('phone') ? colWidths.phone : 0)
+            + (isColVisible('company') ? colWidths.company : 0)
+            + (isColVisible('aiScore') ? colWidths.aiScore : 0)
+            + (isColVisible('status') ? colWidths.status : 0)
+            + visibleCfColsList.length * 160
+            + (isColVisible('assignedTo') ? colWidths.assignedTo : 0)
+            + (isColVisible('createdAt') ? colWidths.createdAt : 0)
+            + 120; /* Actions — wide enough for Edit + Delete icons and the "Actions" header without truncating */
+          return (
+        <TopScrollSync scrollWidth={`${tableMinWidth}px`}>
+        <table className="stable-table" style={{ borderCollapse: 'collapse', textAlign: 'left', minWidth: `${tableMinWidth}px` }}>
           <colgroup>
-            <col style={{ width: '18%' }} />
-            <col style={{ width: '20%' }} />
-            <col style={{ width: '12%' }} />
-            <col style={{ width: '14%' }} />
-            <col style={{ width: '10%' }} />
-            <col style={{ width: '10%' }} />
-            {customFieldDefs.map(f => <col key={f.id} style={{ width: '140px' }} />)}
-            <col style={{ width: '10%' }} />
-            <col style={{ width: '6%' }} />
+            {isAdmin && <col style={{ width: '40px' }} />}
+            <col style={{ width: `${colWidths.name}px` }} />
+            {isColVisible('email') && <col style={{ width: `${colWidths.email}px` }} />}
+            {isColVisible('phone') && <col style={{ width: `${colWidths.phone}px` }} />}
+            {isColVisible('company') && <col style={{ width: `${colWidths.company}px` }} />}
+            {isColVisible('aiScore') && <col style={{ width: `${colWidths.aiScore}px` }} />}
+            {isColVisible('status') && <col style={{ width: `${colWidths.status}px` }} />}
+            {visibleCfColsList.map(f => <col key={f.id} style={{ width: '160px' }} />)}
+            {isColVisible('assignedTo') && <col style={{ width: `${colWidths.assignedTo}px` }} />}
+            {isColVisible('createdAt') && <col style={{ width: `${colWidths.createdAt}px` }} />}
+            <col style={{ width: '120px' }} />
           </colgroup>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
+              {isAdmin && (
+                <th style={{ padding: '1rem', width: '40px' }}>
+                  <input type="checkbox" checked={selectedContacts.length === visibleContacts.length && visibleContacts.length > 0} onChange={toggleSelectAllContacts} style={{ cursor: 'pointer' }} />
+                </th>
+              )}
               <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
-              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>
-              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Phone</th>
-              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Category</th>
+              {isColVisible('email') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>}
+              {isColVisible('phone') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Phone</th>}
+              {isColVisible('company') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Category</th>}
               {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
-              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>
-              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Status</th>
-              {/* Generic-vertical-only Lead custom fields (Settings > Lead Fields). */}
-              {customFieldDefs.map(f => (
+              {isColVisible('aiScore') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>}
+              {isColVisible('status') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Status</th>}
+              {/* Generic-vertical-only Lead custom fields (Settings > Lead Fields),
+                  each independently toggleable via the "Customize table" picker. */}
+              {customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).map(f => (
                 <th key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{f.label}</th>
               ))}
-              <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>
-              <th style={{ padding: '1rem', textAlign: 'right' }}>Actions</th>
+              {isColVisible('assignedTo') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>}
+              {isColVisible('createdAt') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>}
+              <th style={{ padding: '1rem', textAlign: 'right', whiteSpace: 'nowrap' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={8 + customFieldDefs.length} style={{ padding: '2rem', textAlign: 'center' }}>Loading contacts...</td></tr>
+              <tr><td colSpan={contactsColSpan} style={{ padding: '2rem', textAlign: 'center' }}>Loading contacts...</td></tr>
             ) : visibleContacts.length === 0 ? (
-              <tr><td colSpan={8 + customFieldDefs.length} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              <tr><td colSpan={contactsColSpan} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
                 {contacts.length === 0
                   ? 'No contacts yet. Click "Add Contact" or import a CSV.'
                   : `No contacts match "${searchTerm}"${statusFilter !== 'All' ? ` with status ${statusFilter}` : ''}.`}
               </td></tr>
             ) : visibleContacts.map(contact => (
               <tr key={contact.id} style={{ borderBottom: '1px solid var(--border-color)' }} className="table-row-hover">
+                {isAdmin && (
+                  <td style={{ padding: '1rem' }}>
+                    <input type="checkbox" checked={selectedContacts.includes(contact.id)} onChange={() => toggleSelectContact(contact.id)} style={{ cursor: 'pointer' }} />
+                  </td>
+                )}
                 <td style={{ padding: '1rem' }}>
                   <div style={{ fontWeight: '500' }}>
                     <Link to={`/contacts/${contact.id}`} style={{ color: 'var(--text-primary)', textDecoration: 'none', display: 'block', pointerEvents: 'all', position: 'relative', zIndex: 10 }} className="hover-underline">
@@ -458,92 +700,104 @@ const Contacts = () => {
                     on narrow viewports with no affordance. Cap the cell width,
                     add ellipsis, and surface the full address via the native
                     title-attribute tooltip on hover. */}
-                <td
-                  style={{
-                    padding: '1rem',
-                    color: 'var(--text-secondary)',
-                    maxWidth: 240,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                  title={contact.email || ''}
-                >
-                  {contact.email}
-                </td>
-                <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.phone || '—'}</td>
-                <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.company}</td>
-                <td style={{ padding: '1rem' }}>
-                  <span style={{ 
-                    padding: '0.25rem 0.75rem', 
-                    borderRadius: '999px', 
-                    fontSize: '0.75rem',
-                    fontWeight: 'bold',
-                    backgroundColor: contact.aiScore > 75 ? 'rgba(16, 185, 129, 0.1)' : contact.aiScore > 40 ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                    color: contact.aiScore > 75 ? 'var(--success-color)' : contact.aiScore > 40 ? 'var(--warning-color)' : '#ef4444'
-                  }}>
-                    {contact.aiScore}/100
-                  </span>
-                </td>
-                <td style={{ padding: '1rem' }}>
-                  <span style={{ 
-                    padding: '0.25rem 0.75rem', 
-                    borderRadius: '999px', 
-                    fontSize: '0.75rem',
-                    backgroundColor: contact.status === 'Lead' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(16, 185, 129, 0.1)',
-                    color: contact.status === 'Lead' ? 'var(--accent-color)' : 'var(--success-color)'
-                  }}>
-                    {contact.status}
-                  </span>
-                </td>
-                {/* Generic-vertical-only Lead custom fields — value or a
-                    dash for contacts that predate the field. */}
-                {customFieldDefs.map(f => {
-                  const raw = contact.customFields?.[f.fieldKey];
-                  let display;
-                  if (raw === null || raw === undefined || raw === '') {
-                    display = null;
-                  } else if (f.fieldType === 'checkbox') {
-                    display = raw ? 'Yes' : 'No';
-                  } else if (f.fieldType === 'date') {
-                    display = formatDate(raw);
-                  } else if (f.fieldType === 'multiselect') {
-                    display = Array.isArray(raw) ? raw.join(', ') : String(raw);
-                  } else if (f.fieldType === 'url') {
-                    display = (
-                      <a href={String(raw)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)' }}>
-                        {String(raw)}
-                      </a>
-                    );
-                  } else {
-                    display = String(raw);
-                  }
-                  return (
-                    <td key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                      {display ?? <span style={{ color: 'var(--border-color)' }}>—</span>}
-                    </td>
-                  );
-                })}
-                <td style={{ padding: '1rem' }}>
-                  {isAdmin ? (
-                    <select
-                      className="input-field"
-                      value={contact.assignedToId || ''}
-                      onChange={e => handleAssign(contact.id, e.target.value)}
-                      style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
-                    >
-                      <option value="">Unassigned</option>
-                      {assignableStaff(contact).map(s => (
-                        <option key={s.id} value={s.id}>{s.name || s.email}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span style={{ fontSize: '0.875rem', color: contact.assignedToId ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-                      {contact.assignedTo?.name || contact.assignedTo?.email || 'Unassigned'}
+                {isColVisible('email') && (
+                  <td
+                    style={{
+                      padding: '1rem',
+                      color: 'var(--text-secondary)',
+                      maxWidth: 240,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                    title={contact.email || ''}
+                  >
+                    {contact.email}
+                  </td>
+                )}
+                {isColVisible('phone') && <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.phone || '—'}</td>}
+                {isColVisible('company') && <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{contact.company}</td>}
+                {isColVisible('aiScore') && (
+                  <td style={{ padding: '1rem' }}>
+                    <span style={{
+                      padding: '0.25rem 0.75rem',
+                      borderRadius: '999px',
+                      fontSize: '0.75rem',
+                      fontWeight: 'bold',
+                      backgroundColor: contact.aiScore > 75 ? 'rgba(16, 185, 129, 0.1)' : contact.aiScore > 40 ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                      color: contact.aiScore > 75 ? 'var(--success-color)' : contact.aiScore > 40 ? 'var(--warning-color)' : '#ef4444'
+                    }}>
+                      {contact.aiScore}/100
                     </span>
-                  )}
-                </td>
-                <td style={{ padding: '1rem', textAlign: 'right' }}>
+                  </td>
+                )}
+                {isColVisible('status') && (
+                  <td style={{ padding: '1rem' }}>
+                    <span style={{
+                      padding: '0.25rem 0.75rem',
+                      borderRadius: '999px',
+                      fontSize: '0.75rem',
+                      backgroundColor: contact.status === 'Lead' ? 'rgba(59, 130, 246, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                      color: contact.status === 'Lead' ? 'var(--accent-color)' : 'var(--success-color)'
+                    }}>
+                      {contact.status}
+                    </span>
+                  </td>
+                )}
+                {/* Generic-vertical-only Lead custom fields — inline
+                    click-to-add/edit/remove directly in the cell
+                    (Freshsales-style), no need to open a separate edit
+                    form just to fill in one field. Each field's column is
+                    independently toggleable via the picker. */}
+                {customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).map(f => (
+                  <td key={f.id} style={{ padding: '0.5rem 1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                    <InlineCellEditor
+                      contactId={contact.id}
+                      field={f}
+                      value={contact.customFields?.[f.fieldKey]}
+                      onSaved={(newValue) => {
+                        setContacts(prev => prev.map(c => c.id === contact.id
+                          ? { ...c, customFields: { ...c.customFields, [f.fieldKey]: newValue } }
+                          : c));
+                      }}
+                    />
+                  </td>
+                ))}
+                {isColVisible('assignedTo') && (
+                  <td style={{ padding: '1rem' }}>
+                    {isAdmin ? (
+                      <select
+                        className="input-field"
+                        value={contact.assignedToId || ''}
+                        onChange={e => handleAssign(contact.id, e.target.value)}
+                        style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
+                      >
+                        <option value="">Unassigned</option>
+                        {assignableStaff(contact).map(s => (
+                          <option key={s.id} value={s.id}>{s.name || s.email}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span style={{ fontSize: '0.875rem', color: contact.assignedToId ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                        {contact.assignedTo?.name || contact.assignedTo?.email || 'Unassigned'}
+                      </span>
+                    )}
+                  </td>
+                )}
+                {isColVisible('createdAt') && (
+                  <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                    {contact.createdAt ? formatDate(contact.createdAt) : '—'}
+                  </td>
+                )}
+                <td style={{ padding: '1rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <button
+                    onClick={() => setEditingContact(contact)}
+                    aria-label={`Edit contact ${contact.name || contact.email || ''}`}
+                    title="Edit contact"
+                    style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', marginRight: '0.5rem' }}
+                  >
+                    <Pencil size={16} />
+                  </button>
                   <button
                     onClick={() => handleDelete(contact.id)}
                     aria-label={`Delete contact ${contact.name || contact.email || ''}`}
@@ -557,7 +811,9 @@ const Contacts = () => {
             ))}
           </tbody>
         </table>
-        </div>
+        </TopScrollSync>
+          );
+        })()}
       </div>
 
       {showImportModal && (
@@ -565,7 +821,7 @@ const Contacts = () => {
           <div className="card" style={{ padding: '2rem', width: '600px', maxHeight: '80vh', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <FileSpreadsheet size={20} color="var(--accent-color)" /> Import CSV
+                <FileSpreadsheet size={20} color="var(--accent-color)" /> Import CSV/Excel
               </h3>
               <button onClick={() => setShowImportModal(false)} aria-label="Close import dialog" title="Close" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><X size={20} /></button>
             </div>
@@ -573,9 +829,9 @@ const Contacts = () => {
             <div style={{ marginBottom: '1.5rem' }}>
               <label style={{ display: 'block', padding: '2rem', border: '2px dashed var(--border-color)', borderRadius: '12px', textAlign: 'center', cursor: 'pointer', transition: 'var(--transition)' }}>
                 <Upload size={32} style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }} />
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Click to select a .csv file</p>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>Click to select a .csv or .xlsx/.xls file</p>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '0.25rem' }}>Expected columns: name, email, company, title, status</p>
-                <input type="file" accept=".csv" onChange={handleFileSelect} style={{ display: 'none' }} />
+                <input type="file" accept=".csv,.xlsx,.xls" onChange={handleFileSelect} style={{ display: 'none' }} />
               </label>
             </div>
 
@@ -804,6 +1060,18 @@ const Contacts = () => {
           creating={creatingContact}
           onEditDetails={() => setDupModal(null)}
           onCreateAnyway={() => submitNewContact(true)}
+        />
+      )}
+
+      {editingContact && (
+        <EditContactModal
+          contact={editingContact}
+          customFieldDefs={customFieldDefs}
+          onClose={() => setEditingContact(null)}
+          onSaved={(updated) => {
+            setContacts(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
+            setEditingContact(null);
+          }}
         />
       )}
     </div>

@@ -23,6 +23,7 @@ import {
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import TopScrollSync from "../../components/TopScrollSync";
 import {
   accessibleSubBrands,
   defaultSubBrandFor,
@@ -525,7 +526,7 @@ export default function TravelPipeline() {
               : `No deals match "${search}".`}
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <TopScrollSync scrollWidth={780}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 780 }}>
               <thead>
                 <tr>
@@ -642,7 +643,7 @@ export default function TravelPipeline() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TopScrollSync>
         )}
 
         {/* Load more */}

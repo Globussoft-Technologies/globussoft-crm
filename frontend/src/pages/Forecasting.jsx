@@ -6,6 +6,7 @@ import {
 import { TrendingUp, IndianRupee, Target, Save } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { formatMoney, formatMoneyCompact } from '../utils/money';
+import TopScrollSync from '../components/TopScrollSync';
 
 // ─── Period helpers ─────────────────────────────────────────────
 function currentQuarter() {
@@ -278,7 +279,7 @@ export default function Forecasting() {
         padding: '1.5rem',
       }}>
         <h3 style={{ margin: '0 0 1rem', fontSize: '1.05rem' }}>Per-Rep Forecast Breakdown</h3>
-        <div style={{ overflowX: 'auto' }}>
+        <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
             <thead>
               <tr style={{ textAlign: 'left', color: 'var(--text-secondary)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -318,7 +319,7 @@ export default function Forecasting() {
               </tfoot>
             )}
           </table>
-        </div>
+        </TopScrollSync>
       </div>
     </div>
   );

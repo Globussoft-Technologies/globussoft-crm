@@ -3,6 +3,7 @@ import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 import { ScrollText, Filter, Download, ChevronDown, User, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react';
+import TopScrollSync from '../components/TopScrollSync';
 
 const ACTION_COLOR = {
   CREATE: '#10b981',
@@ -934,7 +935,7 @@ export default function AuditLog() {
 
       {/* Table */}
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{ overflowX: 'auto' }}>
+        <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.03)' }}>
@@ -1059,7 +1060,7 @@ export default function AuditLog() {
               })}
             </tbody>
           </table>
-        </div>
+        </TopScrollSync>
 
         {/* Pagination */}
         <div style={{

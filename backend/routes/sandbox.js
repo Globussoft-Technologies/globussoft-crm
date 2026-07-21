@@ -253,6 +253,10 @@ async function wipeTenantData(tenantId) {
   await prisma.invoice.deleteMany({ where: { tenantId } });
   await prisma.contract.deleteMany({ where: { tenantId } });
   await prisma.deal.deleteMany({ where: { tenantId } });
+  // Travel vertical — TravelQuote.contactId is onDelete: Restrict, so it
+  // must be drained before Contact or the wipe throws FK_CONSTRAINT_VIOLATION
+  // (TravelQuoteLine + TravelQuoteSnapshot cascade off TravelQuote itself).
+  await prisma.travelQuote.deleteMany({ where: { tenantId } });
   await prisma.contact.deleteMany({ where: { tenantId } });
   await prisma.pipelineStage.deleteMany({ where: { tenantId } });
   await prisma.pipeline.deleteMany({ where: { tenantId } });

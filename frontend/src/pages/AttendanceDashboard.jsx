@@ -36,6 +36,7 @@ import {
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
+import TopScrollSync from '../components/TopScrollSync';
 
 // ──────────────────────────────────────────────────────────────────
 // Date-range presets
@@ -432,7 +433,7 @@ export default function AttendanceDashboard() {
             No attendance rows for the selected period.
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
+          <TopScrollSync>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, color: 'var(--text-primary)' }}>
               <thead>
                 <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
@@ -492,7 +493,7 @@ export default function AttendanceDashboard() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TopScrollSync>
         )}
 
         {summary?.policy ? (

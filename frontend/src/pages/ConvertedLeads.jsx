@@ -4,6 +4,7 @@ import { UserPlus, Search, Users, Filter, Undo2 } from 'lucide-react';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import { AuthContext } from '../App';
+import TopScrollSync from '../components/TopScrollSync';
 
 // #366: include Junk so the chip can show its count if the tenant uses it.
 const STATUSES = ['Lead', 'Prospect', 'Customer', 'Churned', 'Junk'];
@@ -264,7 +265,7 @@ const ConvertedLeads = () => {
 
           {/* overflow-x wrapper — the dynamic Lead-custom-field columns
               can push this table wider than the viewport. */}
-          <div style={{ overflowX: 'auto' }}>
+          <TopScrollSync scrollWidth={customFieldDefs.length ? `${900 + customFieldDefs.length * 140}px` : undefined}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: customFieldDefs.length ? `${900 + customFieldDefs.length * 140}px` : undefined }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
@@ -393,7 +394,7 @@ const ConvertedLeads = () => {
               ))}
             </tbody>
           </table>
-          </div>
+          </TopScrollSync>
         </div>
       </div>
     </div>

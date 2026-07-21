@@ -55,6 +55,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ShieldAlert, Filter, ChevronLeft, ChevronRight, AlertCircle } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const DEFAULT_LIMIT = 100;
 const DEBOUNCE_MS = 300;
@@ -303,7 +304,8 @@ export default function CSPViolations() {
           </div>
         </div>
       ) : (
-        <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+        <div className="card" style={{ padding: 0 }}>
+        <TopScrollSync>
           <table
             style={{
               width: "100%",
@@ -351,6 +353,7 @@ export default function CSPViolations() {
               ))}
             </tbody>
           </table>
+        </TopScrollSync>
         </div>
       )}
 

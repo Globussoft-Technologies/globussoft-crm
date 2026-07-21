@@ -4,6 +4,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDate } from '../utils/date';
+import TopScrollSync from '../components/TopScrollSync';
 
 const STATUS_STYLES = {
   Draft:      { bg: 'rgba(100,116,139,0.12)', color: '#94a3b8', border: 'rgba(100,116,139,0.3)' },
@@ -254,7 +255,7 @@ export default function Contracts() {
               <p style={{ color: 'var(--text-secondary)' }}>No contracts yet. Create your first contract to get started.</p>
             </div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
+            <TopScrollSync>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
@@ -342,7 +343,7 @@ export default function Contracts() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TopScrollSync>
           )}
         </div>
       </div>

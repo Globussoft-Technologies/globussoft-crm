@@ -5,6 +5,7 @@ import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDate } from '../utils/date';
 import { Receipt, Plus, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
+import TopScrollSync from '../components/TopScrollSync';
 
 const CATEGORY_OPTIONS = [
   'Building Rent',
@@ -403,7 +404,7 @@ export default function Expenses() {
               No expenses in the selected range.
             </p>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
+            <TopScrollSync>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
@@ -515,7 +516,7 @@ export default function Expenses() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TopScrollSync>
           )}
         </div>
       </div>

@@ -96,6 +96,7 @@ import { useEffect, useState, useContext, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown, Plane, Hotel, Search, Car, LayoutTemplate, CreditCard, CheckCircle } from "lucide-react";
 import { FlightResultsBoard, HotelResultsGrid, TransferResultsList, SuggestedItinerary } from "../../components/TravelSearchResults";
+import TopScrollSync from "../../components/TopScrollSync";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
@@ -2030,7 +2031,7 @@ export default function QuoteBuilder() {
             )}
           </div>
         </div>
-        <div style={{ overflowX: "auto" }}>
+        <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 880 }}>
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
@@ -2263,7 +2264,7 @@ export default function QuoteBuilder() {
               })}
             </tbody>
           </table>
-        </div>
+        </TopScrollSync>
       </section>
 
       <section

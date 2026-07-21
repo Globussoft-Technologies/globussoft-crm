@@ -12,6 +12,7 @@ import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
 import { DateRangeFilter, resolveDateRangeYmd, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
 import PageHeader from '../../components/PageHeader';
+import TopScrollSync from '../../components/TopScrollSync';
 
 const EMPTY = {
   productId: '', vendorId: '', quantity: '', unitCost: '',
@@ -283,7 +284,7 @@ export default function InventoryReceipts() {
         </form>
       )}
 
-      <div className="glass" style={{ padding: '0.5rem 0', overflowX: 'auto' }}>
+      <div className="glass" style={{ padding: '0.5rem 0' }}>
         {loading ? (
           <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>Loading…</div>
         ) : filtered.length === 0 ? (
@@ -291,6 +292,7 @@ export default function InventoryReceipts() {
             {receipts.length === 0 ? 'No receipts in window.' : `No receipts match "${searchQuery}".`}
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
@@ -356,6 +358,7 @@ export default function InventoryReceipts() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

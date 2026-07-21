@@ -15,6 +15,7 @@ import {
 import { RefreshCw } from "lucide-react";
 import { superAdminFetch } from "../../utils/superAdminApi";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const DAY_OPTIONS = [7, 14, 30, 90];
 const STATUS_COLORS = { success: "#6fcf73", failed: "#f28b82", running: "#60a5fa" };
@@ -245,7 +246,7 @@ export default function SuperAdminCronAnalytics() {
           </Card>
 
           <Card title="Average duration by cron (ms)">
-            <div style={{ overflowX: "auto" }}>
+            <TopScrollSync>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid var(--border-color, rgba(255,255,255,0.08))" }}>
@@ -266,7 +267,7 @@ export default function SuperAdminCronAnalytics() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TopScrollSync>
           </Card>
         </div>
       )}

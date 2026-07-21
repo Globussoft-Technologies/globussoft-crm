@@ -44,6 +44,7 @@ import {
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import TopScrollSync from '../../components/TopScrollSync';
 
 const DEFAULT_SECTOR = 'travel';
 
@@ -1027,7 +1028,7 @@ export default function BrochureEngine() {
             <div style={emptyStyle}>No brochures generated yet. Switch to <strong>Generate</strong> to make your first one.</div>
           )}
           {!historyLoading && history.length > 0 && (
-            <div style={{ overflowX: 'auto' }}>
+            <TopScrollSync>
               <table style={tableStyle}>
                 <thead>
                   <tr>
@@ -1064,7 +1065,7 @@ export default function BrochureEngine() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TopScrollSync>
           )}
         </div>
       )}

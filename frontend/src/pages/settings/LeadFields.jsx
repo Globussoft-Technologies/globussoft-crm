@@ -22,11 +22,12 @@
 
 import { useContext, useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { Plus, Trash2, Loader, ListChecks, ArrowUp, ArrowDown } from "lucide-react";
+import { Plus, Trash2, Loader, ListChecks, ArrowUp, ArrowDown, Pencil, Check, X } from "lucide-react";
 import { AuthContext } from "../../App";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { EmptyState, FormField } from "../../components/ui";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const FIELD_TYPE_OPTIONS = [
   { value: "text", label: "Text field" },
@@ -66,6 +67,15 @@ export default function LeadFields() {
   const [savingNew, setSavingNew] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [reordering, setReordering] = useState(false);
+  // Editing options (add/rename/remove choices) for a dropdown/radio/
+  // multiselect field. Renaming or removing a choice that's already stored
+  // on some lead's value doesn't retroactively fix that lead's data (the
+  // stored string just stops matching any option) — surfaced as a one-time
+  // warning on save rather than blocked outright, since adding options is
+  // always safe and blocking the whole editor would punish the safe case too.
+  const [editingOptionsId, setEditingOptionsId] = useState(null);
+  const [editingOptionsText, setEditingOptionsText] = useState("");
+  const [savingOptions, setSavingOptions] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -204,6 +214,49 @@ export default function LeadFields() {
     }
   };
 
+  const openOptionsEditor = (field) => {
+    setEditingOptionsId(field.id);
+    setEditingOptionsText(Array.isArray(field.options) ? field.options.join(", ") : "");
+  };
+
+  const cancelOptionsEditor = () => {
+    setEditingOptionsId(null);
+    setEditingOptionsText("");
+  };
+
+  const handleSaveOptions = async (field) => {
+    const newOpts = editingOptionsText.split(",").map((o) => o.trim()).filter(Boolean);
+    if (!newOpts.length) {
+      notify.error("Enter at least one option, separated by commas");
+      return;
+    }
+    const oldOpts = Array.isArray(field.options) ? field.options : [];
+    const removedOrRenamed = oldOpts.filter((o) => !newOpts.includes(o));
+    if (removedOrRenamed.length) {
+      const ok = await notify.confirm({
+        title: "Some existing choices are being removed",
+        message: `"${removedOrRenamed.join('", "')}" ${removedOrRenamed.length > 1 ? "are" : "is"} no longer in the list. Any lead that already has one of these values saved will keep showing it, but it won't match any selectable option going forward. Continue?`,
+        confirmText: "Save anyway",
+        destructive: true,
+      });
+      if (!ok) return;
+    }
+    setSavingOptions(true);
+    try {
+      await fetchApi(`/api/lead-custom-fields/${field.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ options: newOpts }),
+      });
+      notify.success("Options updated");
+      cancelOptionsEditor();
+      await load();
+    } catch (err) {
+      notify.error(err?.message || "Failed to update options");
+    } finally {
+      setSavingOptions(false);
+    }
+  };
+
   return (
     <div style={{ padding: "2rem", maxWidth: "860px", margin: "0 auto", animation: "fadeIn 0.3s ease" }}>
       <h1 style={{ fontSize: "1.5rem", fontWeight: "bold", marginBottom: "0.25rem" }}>Lead Fields</h1>
@@ -226,7 +279,8 @@ export default function LeadFields() {
             body="Add your first field below to start capturing extra details on every lead."
           />
         ) : (
-          <div style={{ overflowX: "auto", marginTop: "0.75rem" }}>
+          <div style={{ marginTop: "0.75rem" }}>
+          <TopScrollSync>
             <table className="stable-table" style={{ borderCollapse: "collapse", width: "100%" }}>
               <thead>
                 <tr style={{ background: "var(--subtle-bg)" }}>
@@ -276,7 +330,51 @@ export default function LeadFields() {
                     <td style={{ ...td, fontWeight: 500 }}>{f.label}</td>
                     <td style={td}>{FIELD_TYPE_LABELS[f.fieldType] || f.fieldType}</td>
                     <td style={{ ...td, color: "var(--text-secondary)" }}>
-                      {Array.isArray(f.options) ? f.options.join(", ") : "—"}
+                      {editingOptionsId === f.id ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                          <input
+                            type="text"
+                            className="input-field"
+                            value={editingOptionsText}
+                            onChange={(e) => setEditingOptionsText(e.target.value)}
+                            placeholder="Comma-separated options"
+                            style={{ minWidth: "220px", padding: "0.4rem 0.6rem", fontSize: "0.85rem" }}
+                            autoFocus
+                          />
+                          <button
+                            onClick={() => handleSaveOptions(f)}
+                            disabled={savingOptions}
+                            aria-label="Save options"
+                            title="Save"
+                            style={{ ...iconBtn, color: "var(--success-color, #22c55e)" }}
+                          >
+                            {savingOptions ? <Loader size={14} className="spin" /> : <Check size={14} />}
+                          </button>
+                          <button
+                            onClick={cancelOptionsEditor}
+                            disabled={savingOptions}
+                            aria-label="Cancel editing options"
+                            title="Cancel"
+                            style={iconBtn}
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ) : FIELD_TYPES_WITH_OPTIONS.has(f.fieldType) ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                          <span>{Array.isArray(f.options) ? f.options.join(", ") : "—"}</span>
+                          <button
+                            onClick={() => openOptionsEditor(f)}
+                            aria-label={`Edit options for ${f.label}`}
+                            title="Edit options"
+                            style={iconBtn}
+                          >
+                            <Pencil size={12} />
+                          </button>
+                        </div>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td style={td}>
                       <input
@@ -301,6 +399,7 @@ export default function LeadFields() {
                 ))}
               </tbody>
             </table>
+          </TopScrollSync>
           </div>
         )}
       </div>

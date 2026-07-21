@@ -2406,11 +2406,10 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
     const body = await res.json();
     const drugs = Array.isArray(body.drugs) ? body.drugs : JSON.parse(body.drugs);
     expect(drugs[0].name).toBe('Drug name only');
-    // The shape persists as-stored — undefined sister fields don't get
-    // synthesised into "" or "0".
-    expect(drugs[0].dosage).toBeUndefined();
-    expect(drugs[0].freq).toBeUndefined();
-    expect(drugs[0].duration).toBeUndefined();
+    // Optional sister fields are normalised to null (not "" or "0").
+    expect(drugs[0].dosage).toBeNull();
+    expect(drugs[0].frequency).toBeNull();
+    expect(drugs[0].duration).toBeNull();
   });
 
   test('#114 POST /prescriptions: drug with empty/whitespace name rejected (DRUG_NAME_REQUIRED)', async ({ request }) => {

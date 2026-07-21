@@ -143,6 +143,11 @@ const NON_TENANT_MODELS = new Set([
   // between role.tenantId and version.tenantId) without strengthening
   // isolation, because every query path joins through Role.
   'RolePermissionVersion',
+  // SavedContactView↔Contact junction. Both parents (SavedContactView and
+  // Contact) carry tenantId and cascade on tenant delete; members are
+  // scoped through the parent joins. A redundant tenantId would risk
+  // drift from the parents.
+  'SavedContactViewMember',
   // Globally-shared templates (real-estate, healthcare, education, legal,
   // saas) — seeded once, read by all tenants when they pick an industry.
   // Read-only from a tenant's perspective; no tenant data lives here.

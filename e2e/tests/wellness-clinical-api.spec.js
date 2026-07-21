@@ -1286,8 +1286,8 @@ test.describe('Wellness API — Prescriptions', () => {
     expect(res.status(), await res.text()).toBe(201);
     const body = await res.json();
     expect(body.id).toBeTruthy();
-    // drugs is JSON-stringified on the row.
-    const drugs = JSON.parse(body.drugs);
+    // drugs is now normalized to a real array on the way out; tolerate legacy JSON-string rows.
+    const drugs = Array.isArray(body.drugs) ? body.drugs : JSON.parse(body.drugs);
     expect(drugs[0].name).toBe('Amoxicillin 500mg');
   });
 

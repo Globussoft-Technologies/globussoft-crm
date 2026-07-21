@@ -55,7 +55,8 @@ test.describe.serial('Wellness deep — PDF content (Rx, Consent, Invoice)', () 
     // Find a Rx that has known-good drug data
     const list = await (await request.get(`${API}/wellness/prescriptions?limit=10`, { headers: auth() })).json();
     const rx = list.find((r) => {
-      try { return JSON.parse(r.drugs).length > 0; } catch { return false; }
+      const d = Array.isArray(r.drugs) ? r.drugs : (() => { try { return JSON.parse(r.drugs); } catch { return []; } })();
+      return d.length > 0;
     });
     if (!rx) test.skip(true, 'no prescription with parseable drugs');
 
@@ -71,7 +72,7 @@ test.describe.serial('Wellness deep — PDF content (Rx, Consent, Invoice)', () 
     expect(parsed.text.length).toBeGreaterThan(50);           // has rendered text
 
     // The Rx PDF should reference the patient and at least one drug
-    const drugs = JSON.parse(rx.drugs);
+    const drugs = Array.isArray(rx.drugs) ? rx.drugs : JSON.parse(rx.drugs);
     const firstDrugName = drugs[0]?.name || '';
     if (firstDrugName) {
       expect(parsed.text.toLowerCase()).toContain(firstDrugName.toLowerCase().split(' ')[0]);

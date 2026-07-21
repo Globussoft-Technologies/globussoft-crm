@@ -2833,8 +2833,8 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
       expect(row.instructions).not.toMatch(/^ENC:v1:/);
       expect(row.instructions).toContain('encrypt-test');
     }
-    // drugs is JSON-stringified; verify it parses + contains the drug.
-    const parsed = JSON.parse(row.drugs);
+    // drugs is JSON-stringified on the row but now normalized to a real array in the response.
+    const parsed = Array.isArray(row.drugs) ? row.drugs : JSON.parse(row.drugs);
     expect(parsed[0].name).toContain('Encrypt-Test');
   });
 

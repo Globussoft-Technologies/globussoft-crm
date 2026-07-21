@@ -135,12 +135,11 @@ export default function MyPrescriptions() {
       {!loading && !error && prescriptions.length > 0 && (
         <div style={{ display: 'grid', gap: '0.75rem' }}>
           {prescriptions.map((rx) => {
-            let drugs = [];
-            try {
-              drugs = JSON.parse(rx.drugs || '[]');
-            } catch {
-              drugs = [];
+            let drugs = rx.drugs;
+            if (typeof drugs === 'string') {
+              try { drugs = JSON.parse(drugs || '[]'); } catch { drugs = []; }
             }
+            if (!Array.isArray(drugs)) drugs = [];
             return (
               <div key={rx.id} className="glass" style={{ padding: '1rem' }}>
                 <div

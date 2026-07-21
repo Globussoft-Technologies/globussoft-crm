@@ -95,7 +95,12 @@ prisma.payment.create = vi.fn();
 prisma.payment.update = vi.fn();
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.findFirst = vi.fn();
+prisma.invoice.findMany = vi.fn();
 prisma.invoice.update = vi.fn();
+prisma.visit = prisma.visit || {};
+prisma.visit.findFirst = vi.fn();
+prisma.visit.findMany = vi.fn();
+prisma.visit.update = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 // eventBus.emitEvent reads automationRule.findMany — stub so the
@@ -165,6 +170,7 @@ beforeEach(() => {
   prisma.payment.create.mockReset();
   prisma.payment.update.mockReset();
   prisma.invoice.findFirst.mockReset();
+  prisma.invoice.findMany.mockReset().mockResolvedValue([]);
   prisma.invoice.update.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.paymentGatewayConfig.findFirst.mockReset();
@@ -176,6 +182,9 @@ beforeEach(() => {
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.update.mockReset().mockResolvedValue({});
+  prisma.visit.findFirst.mockReset().mockResolvedValue(null);
+  prisma.visit.findMany.mockReset().mockResolvedValue([]);
+  prisma.visit.update.mockReset().mockResolvedValue({});
 
   // Sensible defaults — each test overrides what it cares about.
   prisma.payment.findMany.mockResolvedValue([]);
@@ -281,6 +290,48 @@ describe('GET / — list payments under tenant scope', () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_DATE_RANGE');
     expect(prisma.payment.findMany).not.toHaveBeenCalled();
+  });
+
+  test('enriches visit-linked payments with service and staff names', async () => {
+    prisma.payment.findMany.mockResolvedValue([
+      {
+        id: 1,
+        invoiceId: 10,
+        amount: 99.5,
+        currency: 'USD',
+        gateway: 'stripe',
+        status: 'SUCCESS',
+        tenantId: 1,
+        metadata: null,
+        createdAt: new Date('2026-05-01'),
+      },
+      {
+        id: 2,
+        invoiceId: null,
+        amount: 1500,
+        currency: 'INR',
+        gateway: 'razorpay',
+        status: 'SUCCESS',
+        tenantId: 1,
+        metadata: '{"visitId":42}',
+        createdAt: new Date('2026-05-02'),
+      },
+    ]);
+    prisma.invoice.findMany.mockResolvedValue([
+      { id: 10, visitId: 20 },
+    ]);
+    prisma.visit.findMany.mockResolvedValue([
+      { id: 20, service: { id: 200, name: 'Hair Botox' }, doctor: { id: 5, name: 'Dr. Anita Das' } },
+      { id: 42, service: { id: 201, name: 'Acne Peel' }, doctor: { id: 6, name: 'Dr. Harsh' } },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/payments');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].service).toEqual({ id: 200, name: 'Hair Botox' });
+    expect(res.body[0].staff).toEqual({ id: 5, name: 'Dr. Anita Das' });
+    expect(res.body[1].service).toEqual({ id: 201, name: 'Acne Peel' });
+    expect(res.body[1].staff).toEqual({ id: 6, name: 'Dr. Harsh' });
   });
 });
 
@@ -917,5 +968,103 @@ describe('POST /webhook/razorpay — payment_link.paid tmc-instalment reconcilia
     // Non-fatal: instalment was updated, webhook succeeds despite itinerary lookup error.
     expect(res.status).toBe(200);
     expect(prisma.tripInstalmentPayment.update).toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// POST /webhook/razorpay — payment_link.paid for wellness visits
+// When a visit-linked payment link is paid, the Visit row must flip to
+// paymentStatus='paid' so the Log Visit UI disables the copy action.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('POST /webhook/razorpay — payment_link.paid wellness-visit reconciliation', () => {
+  function makePlinkPaidEvent(plinkId) {
+    return {
+      event: 'payment_link.paid',
+      payload: {
+        payment_link: {
+          entity: {
+            id: plinkId,
+            notes: { tenantId: '1', invoiceId: '55' },
+          },
+        },
+        payment: {
+          entity: { id: 'pay_wellness_123' },
+        },
+      },
+    };
+  }
+
+  test('marks linked invoice PAID and updates Visit.paymentStatus to paid', async () => {
+    prisma.payment.findFirst.mockResolvedValue({
+      id: 77,
+      tenantId: 1,
+      invoiceId: 55,
+      gateway: 'razorpay',
+      gatewayId: 'plink_visit_55',
+      status: 'PENDING',
+    });
+    prisma.invoice.findFirst.mockResolvedValue({ id: 55, tenantId: 1, status: 'PENDING', visitId: 99 });
+    prisma.payment.update.mockResolvedValue({
+      id: 77,
+      tenantId: 1,
+      invoiceId: 55,
+      status: 'SUCCESS',
+      paidAt: new Date(),
+    });
+
+    const eventObj = makePlinkPaidEvent('plink_visit_55');
+    const bodyStr = JSON.stringify(eventObj);
+    const sig = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(bodyStr)
+      .digest('hex');
+
+    const res = await request(makeApp())
+      .post('/api/payments/webhook/razorpay')
+      .set('content-type', 'application/json')
+      .set('x-razorpay-signature', sig)
+      .send(bodyStr);
+
+    expect(res.status).toBe(200);
+    expect(prisma.invoice.update).toHaveBeenCalledWith({
+      where: { id: 55 },
+      data: { status: 'PAID' },
+    });
+    expect(prisma.visit.update).toHaveBeenCalledWith({
+      where: { id: 99 },
+      data: { paymentStatus: 'paid' },
+    });
+  });
+
+  test('still returns 200 when the visit update fails (best-effort)', async () => {
+    prisma.payment.findFirst.mockResolvedValue({
+      id: 78,
+      tenantId: 1,
+      invoiceId: 56,
+      gateway: 'razorpay',
+      gatewayId: 'plink_visit_56',
+      status: 'PENDING',
+    });
+    prisma.invoice.findFirst.mockResolvedValue({ id: 56, tenantId: 1, status: 'PENDING', visitId: 100 });
+    prisma.payment.update.mockResolvedValue({ id: 78, status: 'SUCCESS' });
+    prisma.visit.update.mockRejectedValue(new Error('DB timeout'));
+
+    const eventObj = makePlinkPaidEvent('plink_visit_56');
+    const bodyStr = JSON.stringify(eventObj);
+    const sig = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(bodyStr)
+      .digest('hex');
+
+    const res = await request(makeApp())
+      .post('/api/payments/webhook/razorpay')
+      .set('content-type', 'application/json')
+      .set('x-razorpay-signature', sig)
+      .send(bodyStr);
+
+    expect(res.status).toBe(200);
+    expect(prisma.invoice.update).toHaveBeenCalled();
+    expect(prisma.visit.update).toHaveBeenCalled();
   });
 });

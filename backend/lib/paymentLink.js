@@ -63,7 +63,7 @@ function resolveGateway(pref, currency) {
  *   branch reconciles it back to the TravelPaymentSchedule + TravelInvoice.
  * @returns {Promise<{url, gateway, paymentId}|{error, code}>}
  */
-async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId, currency, gatewayPref, tenantName, baseUrl, travelContext }) {
+async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId, currency, gatewayPref, tenantName, baseUrl, travelContext, description }) {
   const amount = Number(invoice?.amount);
   if (!invoice?.id || !amount || isNaN(amount) || amount <= 0) {
     return { error: "Invoice with a positive amount is required", code: "BAD_INVOICE" };
@@ -77,6 +77,7 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
   const amountMinor = Math.round(amount * 100);
   const invoiceLabel = invoice.invoiceNum || `Invoice #${invoice.id}`;
   const label = tenantName ? `${tenantName} — ${invoiceLabel}` : invoiceLabel;
+  const paymentDescription = description || label;
 
   try {
     if (gateway === "razorpay") {
@@ -131,6 +132,7 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
           // travel-milestone branch reconciles via the metadata instead.
           invoiceId: travelContext ? null : invoice.id,
           contactId: contactId ? Number(contactId) : null,
+          description: paymentDescription,
           amount,
           currency: cur,
           gateway: "razorpay",
@@ -178,6 +180,8 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
     const payment = await prisma.payment.create({
       data: {
         invoiceId: invoice.id,
+        contactId: contactId ? Number(contactId) : null,
+        description: paymentDescription,
         amount,
         currency: cur,
         gateway: "stripe",

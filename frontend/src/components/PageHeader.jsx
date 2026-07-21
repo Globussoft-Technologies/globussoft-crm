@@ -94,6 +94,7 @@ const PageHeader = ({
               alignItems: 'center',
               gap: '0.5rem',
               flexWrap: 'wrap',
+              color: 'var(--text-primary)',
             }}
           >
             <span>{title}</span>
@@ -113,8 +114,9 @@ const PageHeader = ({
                 <>
                   <span
                     style={{
-                      background: 'rgba(38, 88, 85, 0.14)',
-                      color: 'var(--primary-color, var(--accent-color))',
+                      background: 'var(--page-header-count-bg, rgba(38, 88, 85, 0.14))',
+                      color: 'var(--page-header-count-text, var(--primary-color, var(--accent-color)))',
+                      border: '1px solid var(--page-header-count-border, transparent)',
                       padding: '2px 10px',
                       borderRadius: 999,
                       fontSize: '0.72rem',

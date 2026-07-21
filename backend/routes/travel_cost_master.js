@@ -26,6 +26,7 @@ const {
   assertValidSubBrand,
   narrowWhereBySubBrand,
 } = require("../middleware/travelGuards");
+const { collapseCostMasterDuplicates } = require("../lib/travelCostMasterDedupe");
 
 const VALID_CATEGORIES = ["hotel", "flight", "transport", "visa", "insurance"];
 
@@ -109,6 +110,15 @@ function withAttributes(row) {
   return { ...row, attributes: parseAttributes(row.attributesJson) };
 }
 
+function naturalWhereFor(row, tenantId = row.tenantId) {
+  return {
+    tenantId,
+    subBrand: row.subBrand,
+    category: row.category,
+    routeOrSku: row.routeOrSku,
+  };
+}
+
 function assertValidCategory(c) {
   if (!VALID_CATEGORIES.includes(c)) {
     const err = new Error(`category must be one of: ${VALID_CATEGORIES.join(", ")}`);
@@ -157,6 +167,7 @@ router.get("/cost-master", verifyToken, requireTravelTenant, async (req, res) =>
 
     const allowed = await getSubBrandAccessSet(req.user.userId);
     narrowWhereBySubBrand(where, allowed);
+    await collapseCostMasterDuplicates(where);
 
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
     const skip = parseInt(req.query.offset, 10) || 0;
@@ -263,6 +274,7 @@ router.post(
           isActive: isActive !== false,
         },
       });
+      await collapseCostMasterDuplicates(naturalWhereFor(created));
       res.status(201).json(withAttributes(created));
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -711,7 +723,15 @@ router.patch(
       if (Object.keys(data).length === 0) {
         return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
       }
-      const updated = await prisma.travelCostMaster.update({ where: { id }, data });
+      const existingWhere = naturalWhereFor(existing, req.travelTenant.id);
+      const updatedWhere = {
+        ...existingWhere,
+        category: data.category !== undefined ? data.category : existing.category,
+        routeOrSku: data.routeOrSku !== undefined ? data.routeOrSku : existing.routeOrSku,
+      };
+      await prisma.travelCostMaster.updateMany({ where: existingWhere, data });
+      await collapseCostMasterDuplicates(updatedWhere);
+      const updated = { ...existing, ...data };
       res.json(withAttributes(updated));
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -737,7 +757,7 @@ router.delete(
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!existing) return res.status(404).json({ error: "Rate not found", code: "NOT_FOUND" });
-      await prisma.travelCostMaster.delete({ where: { id } });
+      await prisma.travelCostMaster.deleteMany({ where: naturalWhereFor(existing, req.travelTenant.id) });
       res.json({ deleted: true, id });
     } catch (e) {
       console.error("[travel-cost] delete error:", e.message);

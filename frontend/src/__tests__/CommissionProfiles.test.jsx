@@ -95,8 +95,25 @@ const sampleRows = [
 
 const COMMISSION_URL = '/api/staff/commission-profiles';
 
+const COMMISSION_DATA_URL = '/api/staff/commission-data';
+
+const sampleCommissionData = [
+  {
+    id: 1,
+    employeeName: 'Anita Das',
+    periodStart: '2026-07-01T00:00:00.000Z',
+    periodEnd: '2026-08-01T00:00:00.000Z',
+    serviceRevenue: 1900,
+    productRevenue: 300,
+    totalSales: 2200,
+    discount: 50,
+    netSales: 2150,
+  },
+];
+
 function defaultFetchMock(url) {
   if (url === COMMISSION_URL) return Promise.resolve(sampleRows);
+  if (url === COMMISSION_DATA_URL) return Promise.resolve(sampleCommissionData);
   return Promise.resolve(null);
 }
 
@@ -406,5 +423,23 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     // Give the rejected promise a tick to settle.
     await new Promise((r) => setTimeout(r, 0));
     expect(deleteCalled).toBe(false);
+  });
+
+  it('renders the Historical Data tab with period, employee, and revenue breakdown columns', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Senior Doctor Cut')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Historical Data/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Anita Das')).toBeInTheDocument();
+    });
+
+    // Period, Service Revenue, Product Revenue, Total Sales, Discount, Net Sales columns render.
+    expect(screen.getByText('₹1900.00')).toBeInTheDocument();
+    expect(screen.getByText('₹300.00')).toBeInTheDocument();
+    expect(screen.getByText('₹2200.00')).toBeInTheDocument();
+    expect(screen.getByText('-₹50.00')).toBeInTheDocument();
+    expect(screen.getByText('₹2150.00')).toBeInTheDocument();
   });
 });

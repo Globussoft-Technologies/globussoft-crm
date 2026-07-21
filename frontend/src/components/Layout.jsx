@@ -201,15 +201,6 @@ const Layout = () => {
     if (!isMobileViewport && sidebarOpen) setSidebarOpen(false);
   }, [isMobileViewport, sidebarOpen]);
 
-  // T1.2: warn admin/manager when SMS provider is not configured. Patient
-  // portal OTP login + appointment reminders silently fail without it. The
-  // /api/auth/me response includes features.smsConfigured (set in
-  // backend/routes/auth.js:331). Hide for regular USERs since they can't
-  // do anything about it.
-  const role = user?.role;
-  const isStaff = role === "ADMIN" || role === "MANAGER";
-  const showSmsBanner = isStaff && user?.features?.smsConfigured === false;
-
   const [daysRemaining, setDaysRemaining] = useState(null);
   // trialEndsAt state was consumed by the old SubscriptionExpiryModal —
   // removed alongside the move to the hard SubscriptionGate paywall.
@@ -302,34 +293,6 @@ const Layout = () => {
           overflow: "hidden",
         }}
       >
-        {showSmsBanner && (
-          <div
-            role="alert"
-            data-testid="sms-not-configured-banner"
-            style={{
-              background: "#fef3c7",
-              borderBottom: "1px solid #f59e0b",
-              color: "#92400e",
-              padding: "10px 24px",
-              fontSize: "0.85rem",
-              lineHeight: 1.4,
-              display: "flex",
-              alignItems: "center",
-              gap: "0.75rem",
-              flexShrink: 0,
-            }}
-          >
-            <span aria-hidden="true" style={{ fontSize: "1.1rem" }}>
-              ⚠️
-            </span>
-            <span style={{ flex: 1 }}>
-              <strong>SMS provider not configured.</strong> Patient portal OTP
-              login and appointment reminders are not delivering. Configure
-              `MSG91_AUTH_KEY` (or another provider) in the backend `.env` to
-              restore SMS dispatch.
-            </span>
-          </div>
-        )}
         <header
           style={{
             display: "flex",

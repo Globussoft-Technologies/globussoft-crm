@@ -14,6 +14,10 @@ const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 const { ipKeyGenerator } = require("express-rate-limit");
 const prisma = require("../lib/prisma");
+const {
+  normalizePrescriptionDrugs,
+  normalizePrescriptionList,
+} = require("../lib/prescriptionHelpers");
 const { runForTenant, executeApproved } = require("../cron/orchestratorEngine");
 const {
   getAllTreatmentPlans,
@@ -598,6 +602,156 @@ async function maybeAutoCreditLoyalty(visit, tenantId) {
   } catch (err) {
     console.error("[wellness] auto-credit loyalty failed:", err.message);
   }
+}
+
+// Helper: ensure a wellness Patient is backed by a CRM Contact so that
+// invoice-based payment flows (Razorpay Payment Links, etc.) can reuse the
+// generic billing model. If the patient already has a contactId, verify it
+// still exists; otherwise create a contact from the patient's name/email/phone
+// and back-link it. Failures are thrown so the caller can decide whether to
+// abort the parent operation.
+async function ensurePatientContact(patient, tenantId) {
+  if (!patient) throw new Error("Patient not found");
+
+  const desiredName = patient.name || "Unnamed patient";
+  const desiredEmail = patient.email || null;
+  const desiredPhone = patient.phone || null;
+
+  if (patient.contactId) {
+    const existing = await prisma.contact.findUnique({
+      where: { id: patient.contactId },
+    });
+    if (existing) {
+      if (
+        existing.name !== desiredName ||
+        existing.email !== desiredEmail ||
+        existing.phone !== desiredPhone
+      ) {
+        return await prisma.contact.update({
+          where: { id: existing.id },
+          data: {
+            name: desiredName,
+            email: desiredEmail,
+            phone: desiredPhone,
+          },
+        });
+      }
+      return existing;
+    }
+  }
+
+  const contactData = {
+    name: desiredName,
+    email: desiredEmail,
+    phone: desiredPhone,
+    tenantId,
+    status: "lead",
+  };
+
+  try {
+    const contact = await prisma.contact.create({ data: contactData });
+    await prisma.patient.update({
+      where: { id: patient.id },
+      data: { contactId: contact.id },
+    });
+    return contact;
+  } catch (err) {
+    // If the create failed because a contact with this email/phone already
+    // exists, link to that one instead of leaving the patient orphaned.
+    const existing = await prisma.contact.findFirst({
+      where: {
+        tenantId,
+        OR: [
+          ...(desiredEmail ? [{ email: desiredEmail }] : []),
+          ...(desiredPhone ? [{ phone: desiredPhone }] : []),
+        ],
+      },
+    });
+    if (existing) {
+      await prisma.patient.update({
+        where: { id: patient.id },
+        data: { contactId: existing.id },
+      });
+      if (
+        existing.name !== desiredName ||
+        existing.email !== desiredEmail ||
+        existing.phone !== desiredPhone
+      ) {
+        return await prisma.contact.update({
+          where: { id: existing.id },
+          data: {
+            name: desiredName,
+            email: desiredEmail,
+            phone: desiredPhone,
+          },
+        });
+      }
+      return existing;
+    }
+    throw err;
+  }
+}
+
+// Helper: create (or reuse) an Invoice for a completed wellness visit and
+// generate a hosted Razorpay Payment Link via the shared payment-link factory.
+// Returns { url, gateway, paymentId } on success, or { error, code } when the
+// tenant has no payment gateway configured. Never throws for gateway issues;
+// caller handles/ignores the error object.
+async function generateVisitPaymentLink({ visit, tenantId, baseUrl }) {
+  const { createInvoicePaymentLink } = require("../lib/paymentLink");
+
+  const patient = await prisma.patient.findUnique({
+    where: { id: visit.patientId },
+    select: { id: true, name: true, email: true, phone: true, contactId: true },
+  });
+
+  const contact = await ensurePatientContact(patient, tenantId);
+
+  let invoice = await prisma.invoice.findFirst({
+    where: { visitId: visit.id, tenantId },
+  });
+
+  if (!invoice) {
+    const invoiceNum = `WLV-${visit.id}-${Date.now()}`;
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + 7);
+
+    invoice = await prisma.invoice.create({
+      data: {
+        invoiceNum,
+        amount: Math.round(Number(visit.amountCharged) * 100) / 100,
+        dueDate,
+        contactId: contact.id,
+        tenantId,
+        visitId: visit.id,
+      },
+    });
+  }
+
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { name: true },
+  });
+
+  return createInvoicePaymentLink({
+    tenantId,
+    invoice: {
+      id: invoice.id,
+      invoiceNum: invoice.invoiceNum,
+      amount: invoice.amount,
+    },
+    contact: {
+      name: contact.name,
+      email: contact.email,
+      phone: contact.phone,
+    },
+    contactId: contact.id,
+    currency: "INR",
+    gatewayPref: "razorpay",
+    tenantName: tenant?.name,
+    baseUrl,
+    description: `Wellness Visit #${visit.id}`,
+  });
 }
 
 // Day boundaries in IST (UTC+05:30). Wellness clinics are India-based, so
@@ -1642,6 +1796,9 @@ router.get("/patients/:id", phiReadGate, async (req, res) => {
         );
       });
     }
+    if (patient.prescriptions) {
+      patient.prescriptions = patient.prescriptions.map(normalizePrescriptionDrugs);
+    }
     res.json(patient);
   } catch (e) {
     console.error("[wellness] get patient error:", e.message);
@@ -1804,7 +1961,7 @@ router.get("/patients/:id/prescriptions", phiReadGate, async (req, res) => {
         auditErr.message,
       );
     });
-    res.json(items);
+    res.json(items.map(normalizePrescriptionDrugs));
   } catch (e) {
     console.error("[wellness] list patient prescriptions error:", e.message);
     res.status(500).json({ error: "Failed to list patient prescriptions" });
@@ -2726,6 +2883,9 @@ router.get("/visits/:id", phiReadGate, async (req, res) => {
     } catch (auditErr) {
       console.warn("[wellness] audit VISIT_READ failed:", auditErr.message);
     }
+    if (visit.prescriptions) {
+      visit.prescriptions = visit.prescriptions.map(normalizePrescriptionDrugs);
+    }
     res.json(visit);
   } catch (e) {
     console.error("[wellness] get visit error:", e.message);
@@ -3152,6 +3312,48 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
       }
     }
 
+    // Generate a hosted payment link when a visit transitions INTO completed
+    // with a positive charge. The link is stored on the visit so the Log Visit
+    // UI can render a "Copy" action. Uses the same tenant BYOK Razorpay keys
+    // as the rest of the CRM; gateway issues are logged but do NOT fail the
+    // clinical visit update.
+    if (
+      data.status === "completed" &&
+      existing.status !== "completed" &&
+      existing.paymentStatus !== "paid" &&
+      Number(updated.amountCharged) > 0
+    ) {
+      try {
+        const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+        const link = await generateVisitPaymentLink({
+          visit: updated,
+          tenantId: req.user.tenantId,
+          baseUrl: getFrontendUrlFromRequest(req),
+        });
+        if (link.error) {
+          console.error(
+            "[wellness] visit payment-link generation failed:",
+            link.error,
+          );
+        } else {
+          const finalVisit = await prisma.visit.update({
+            where: { id: updated.id },
+            data: {
+              paymentLinkUrl: link.url,
+              paymentLinkGeneratedAt: new Date(),
+            },
+          });
+          updated.paymentLinkUrl = finalVisit.paymentLinkUrl;
+          updated.paymentLinkGeneratedAt = finalVisit.paymentLinkGeneratedAt;
+        }
+      } catch (hookErr) {
+        console.error(
+          "[wellness] visit payment-link hook failed:",
+          hookErr.message,
+        );
+      }
+    }
+
     // #179: audit visit update. Status transitions (booked → in-treatment →
     // completed → cancelled / no-show) are the highest-signal field; always
     // capture from/to explicitly when status changed.
@@ -3182,6 +3384,46 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     const mapped = httpFromPrismaError(e);
     if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to update visit" });
+  }
+});
+
+// Generate or regenerate a hosted Razorpay Payment Link for a completed
+// wellness visit. Returns { url, gateway } on success; 404 if the visit is
+// not completed/paid, 400 if it has no charge, and 502/503 for gateway
+// failures. Uses the same tenant BYOK keys as the rest of the CRM.
+router.post("/visits/:id/payment-link", phiWriteGate, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const visit = await prisma.visit.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+    });
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+    if (visit.status !== "completed")
+      return res.status(400).json({ error: "Visit is not completed", code: "VISIT_NOT_COMPLETED" });
+    if (!Number(visit.amountCharged) || Number(visit.amountCharged) <= 0)
+      return res.status(400).json({ error: "Visit has no charge", code: "VISIT_NO_CHARGE" });
+    if (visit.paymentStatus === "paid")
+      return res.status(400).json({ error: "Visit is already paid", code: "VISIT_ALREADY_PAID" });
+
+    const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+    const link = await generateVisitPaymentLink({
+      visit,
+      tenantId: req.user.tenantId,
+      baseUrl: getFrontendUrlFromRequest(req),
+    });
+
+    if (link.error)
+      return res.status(502).json({ error: link.error, code: link.code });
+
+    await prisma.visit.update({
+      where: { id: visit.id },
+      data: { paymentLinkUrl: link.url, paymentLinkGeneratedAt: new Date() },
+    });
+
+    res.json({ url: link.url, gateway: link.gateway, paymentId: link.paymentId });
+  } catch (err) {
+    console.error("[wellness] visit payment-link error:", err.message);
+    res.status(500).json({ error: "Failed to generate payment link" });
   }
 });
 
@@ -3647,7 +3889,7 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
         auditErr.message,
       );
     });
-    res.json({ items, total });
+    res.json({ items: items.map(normalizePrescriptionDrugs), total });
   } catch (e) {
     console.error("[wellness] list prescriptions error:", e.message);
     res.status(500).json({ error: "Failed to list prescriptions" });
@@ -3704,7 +3946,7 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
         drugCount: namedDrugs.length,
       },
     );
-    res.status(201).json(rx);
+    res.status(201).json(normalizePrescriptionDrugs(rx));
   } catch (e) {
     console.error("[wellness] create prescription error:", e.message);
     res.status(500).json({ error: "Failed to create prescription" });
@@ -3778,7 +4020,7 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
         newInstructions: updated.instructions || null,
       },
     );
-    res.json(updated);
+    res.json(normalizePrescriptionDrugs(updated));
   } catch (e) {
     console.error("[wellness] amend prescription error:", e.message);
     res.status(500).json({ error: "Failed to amend prescription" });
@@ -9838,7 +10080,7 @@ router.get(
       }
       res.json({
         patient: { id: patient.id, name: patient.name },
-        prescriptions,
+        prescriptions: prescriptions.map(normalizePrescriptionDrugs),
       });
     } catch (e) {
       console.error("[wellness] my-prescriptions list error:", e.message);
@@ -10861,7 +11103,7 @@ router.get(
           auditErr.message,
         );
       }
-      res.json(prescriptions);
+      res.json(prescriptions.map(normalizePrescriptionDrugs));
     } catch (e) {
       console.error("[wellness] portal prescriptions error:", e.message);
       res.status(500).json({ error: "Failed to load prescriptions" });
@@ -15162,35 +15404,82 @@ router.get("/doctors/:doctorId/time-slots", verifyToken, async (req, res) => {
   }
 });
 
+// Resolve the patient for an appointment booking.
+//
+// When a staff member is booking on behalf of a patient they may pass an
+// explicit `patientId`. In that case we validate the patient belongs to the
+// current tenant and return it. Customers (self-booking) cannot pass a
+// patientId for another person; they always resolve to their own Patient
+// row, creating it on first book. This prevents staff bookings from being
+// silently attached to the logged-in admin's patient record.
+async function resolveBookingPatient(req, tenantId) {
+  const { userId, role } = req.user;
+  const requestedPatientId = req.body.patientId
+    ? parseInt(req.body.patientId, 10)
+    : null;
+
+  if (requestedPatientId && role !== "CUSTOMER") {
+    const patient = await prisma.patient.findFirst({
+      where: { id: requestedPatientId, tenantId },
+    });
+    if (!patient) {
+      const error = new Error("Patient not found");
+      error.name = "AppointmentError";
+      error.status = 404;
+      error.code = "PATIENT_NOT_FOUND";
+      throw error;
+    }
+    return patient;
+  }
+
+  // Always use the current user's profile name for self-booking patients.
+  // This prevents the appointment list from showing stale or admin names.
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { name: true, email: true },
+  });
+  const userName = user?.name || user?.email || "Patient";
+  const userEmail = user?.email || null;
+
+  let patient = await prisma.patient.findFirst({
+    where: { tenant: { id: tenantId }, user: { id: userId } },
+  });
+
+  if (!patient) {
+    patient = await prisma.patient.create({
+      data: {
+        name: userName,
+        email: userEmail,
+        source: "self-booking",
+        tenant: { connect: { id: tenantId } },
+        user: { connect: { id: userId } },
+      },
+    });
+  } else if (patient.name !== userName || patient.email !== userEmail) {
+    patient = await prisma.patient.update({
+      where: { id: patient.id },
+      data: {
+        name: userName,
+        email: userEmail,
+      },
+    });
+  }
+
+  return patient;
+}
+
 // User appointment booking endpoint
 // Allows any authenticated user to book an appointment
 // Legacy CUSTOMER-session booking endpoint. Thin adapter around
 // appointmentService.bookAppointment — business rules live in the
 // service so this route and /portal/appointments/book can't drift.
-// Patient resolution (create-on-first-book) stays at the route layer
-// because the CUSTOMER cohort's user→patient mapping differs from the
-// phone+OTP cohort's already-resolved req.patient.
+// Patient resolution (create-on-first-book or explicit patientId for staff)
+// stays at the route layer because the CUSTOMER cohort's user→patient
+// mapping differs from the phone+OTP cohort's already-resolved req.patient.
 router.post("/appointments/book", verifyToken, async (req, res) => {
   try {
     const { userId, tenantId } = req.user;
-    let patient = await prisma.patient.findFirst({
-      where: { tenant: { id: tenantId }, user: { id: userId } },
-    });
-    if (!patient) {
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { name: true, email: true },
-      });
-      patient = await prisma.patient.create({
-        data: {
-          name: user?.name || user?.email || "Patient",
-          email: user?.email || null,
-          source: "self-booking",
-          tenant: { connect: { id: tenantId } },
-          user: { connect: { id: userId } },
-        },
-      });
-    }
+    const patient = await resolveBookingPatient(req, tenantId);
 
     const { visit } = await appointmentService.bookAppointment({
       tenantId,
@@ -15257,7 +15546,7 @@ router.post("/appointments/book-and-pay", verifyToken, async (req, res) => {
       NOT_CONFIGURED_MESSAGE,
     } = require("../lib/tenantPaymentGateway");
 
-    const { userId, tenantId } = req.user;
+    const { userId, tenantId, role } = req.user;
     const {
       reason,
       doctorId,
@@ -15266,6 +15555,7 @@ router.post("/appointments/book-and-pay", verifyToken, async (req, res) => {
       appointmentDate,
       appointmentTime,
       bookingType,
+      patientId,
     } = req.body || {};
 
     if (!reason || !serviceId || !appointmentDate || !appointmentTime) {
@@ -15287,6 +15577,57 @@ router.post("/appointments/book-and-pay", verifyToken, async (req, res) => {
         error: "This service is consultation-priced. Please choose 'Pay after service' instead.",
         code: "SERVICE_NOT_PAYABLE",
       });
+    }
+
+    // Validate explicit patientId (staff booking on behalf of a patient) just
+    // like the /appointments/book path. The id is stashed in metadata so
+    // confirm-payment can bind the visit to the same patient. For self-booking,
+    // resolve the patient now so the Payment row can be linked to the correct
+    // contact and the payments list shows the customer's name instead of admin.
+    let resolvedPatientId = null;
+    let resolvedContactId = null;
+    const requestedPatientId = patientId ? parseInt(patientId, 10) : null;
+    if (requestedPatientId && role !== "CUSTOMER") {
+      const patient = await prisma.patient.findFirst({
+        where: { id: requestedPatientId, tenantId },
+      });
+      if (!patient) {
+        return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+      }
+      resolvedPatientId = patient.id;
+      const contact = await ensurePatientContact(patient, tenantId);
+      resolvedContactId = contact.id;
+    } else {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { name: true, email: true },
+      });
+      const userName = user?.name || user?.email || "Patient";
+      const userEmail = user?.email || null;
+
+      let patient = await prisma.patient.findFirst({
+        where: { tenant: { id: tenantId }, user: { id: userId } },
+      });
+
+      if (!patient) {
+        patient = await prisma.patient.create({
+          data: {
+            name: userName,
+            email: userEmail,
+            source: "self-booking",
+            tenant: { connect: { id: tenantId } },
+            user: { connect: { id: userId } },
+          },
+        });
+      } else if (patient.name !== userName || patient.email !== userEmail) {
+        patient = await prisma.patient.update({
+          where: { id: patient.id },
+          data: { name: userName, email: userEmail },
+        });
+      }
+
+      const contact = await ensurePatientContact(patient, tenantId);
+      resolvedContactId = contact.id;
     }
 
     // Server-side price computation. baseAmount + 18% GST + ₹49 convenience.
@@ -15331,6 +15672,7 @@ router.post("/appointments/book-and-pay", verifyToken, async (req, res) => {
     const payment = await prisma.payment.create({
       data: {
         invoiceId: null,
+        contactId: resolvedContactId,
         amount: total,
         currency: "INR",
         gateway: "razorpay",
@@ -15347,6 +15689,7 @@ router.post("/appointments/book-and-pay", verifyToken, async (req, res) => {
           appointmentTime,
           reason: String(reason).slice(0, 1000),
           bookingType: bookingType || "CLINIC_VISIT",
+          patientId: resolvedPatientId,
           breakdown,
         }),
       },
@@ -15430,25 +15773,51 @@ router.post("/appointments/confirm-payment", verifyToken, async (req, res) => {
         .json({ error: "Signature verification failed", code: "BAD_SIGNATURE" });
     }
 
-    // Resolve / lazy-create the Patient row for this user (same shape as
-    // /appointments/book) so appointmentService has a patient to bind to.
-    let patient = await prisma.patient.findFirst({
-      where: { tenant: { id: tenantId }, user: { id: userId } },
-    });
-    if (!patient) {
+    // Resolve the Patient row. If the booking was started on behalf of a
+    // specific patient (staff flow), the patientId was verified at
+    // /book-and-pay time and is stashed in metadata. Otherwise fall back to
+    // the logged-in user's own patient record (self-booking).
+    let patient;
+    if (existingMeta.patientId) {
+      patient = await prisma.patient.findFirst({
+        where: { id: existingMeta.patientId, tenantId },
+      });
+      if (!patient) {
+        return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+      }
+    } else {
+      // Always use the current user's profile name for self-booking patients.
+      // This prevents the appointment list from showing stale or admin names.
       const user = await prisma.user.findUnique({
         where: { id: userId },
         select: { name: true, email: true },
       });
-      patient = await prisma.patient.create({
-        data: {
-          name: user?.name || user?.email || "Patient",
-          email: user?.email || null,
-          source: "self-booking",
-          tenant: { connect: { id: tenantId } },
-          user: { connect: { id: userId } },
-        },
+      const userName = user?.name || user?.email || "Patient";
+      const userEmail = user?.email || null;
+
+      patient = await prisma.patient.findFirst({
+        where: { tenant: { id: tenantId }, user: { id: userId } },
       });
+
+      if (!patient) {
+        patient = await prisma.patient.create({
+          data: {
+            name: userName,
+            email: userEmail,
+            source: "self-booking",
+            tenant: { connect: { id: tenantId } },
+            user: { connect: { id: userId } },
+          },
+        });
+      } else if (patient.name !== userName || patient.email !== userEmail) {
+        patient = await prisma.patient.update({
+          where: { id: patient.id },
+          data: {
+            name: userName,
+            email: userEmail,
+          },
+        });
+      }
     }
 
     // Create the visit using the same service that backs /appointments/book.

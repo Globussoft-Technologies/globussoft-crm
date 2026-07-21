@@ -252,16 +252,25 @@ export default function CommissionProfiles() {
       {/* Data Tab */}
       {activeTab === 'data' && (
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem', tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: '20%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '9%' }} />
+            </colgroup>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
                 <th style={th}>Period</th>
                 <th style={th}>Employee</th>
-                <th style={th}>Service Revenue</th>
-                <th style={th}>Product Revenue</th>
-                <th style={th}>Total Sales</th>
-                <th style={th}>Discount</th>
-                <th style={th}>Net Sales</th>
+                <th style={{ ...th, textAlign: 'right' }}>Service Revenue</th>
+                <th style={{ ...th, textAlign: 'right' }}>Product Revenue</th>
+                <th style={{ ...th, textAlign: 'right' }}>Total Sales</th>
+                <th style={{ ...th, textAlign: 'right' }}>Discount</th>
+                <th style={{ ...th, textAlign: 'right' }}>Net Sales</th>
               </tr>
             </thead>
             <tbody>
@@ -277,11 +286,11 @@ export default function CommissionProfiles() {
                     {new Date(record.periodStart).toLocaleDateString()} - {new Date(record.periodEnd).toLocaleDateString()}
                   </td>
                   <td style={{ ...td, fontWeight: 500 }}>{record.employeeName}</td>
-                  <td style={{ ...td, textAlign: 'right' }}>₹{parseFloat(record.serviceRevenue || 0).toFixed(2)}</td>
-                  <td style={{ ...td, textAlign: 'right' }}>₹{parseFloat(record.productRevenue || 0).toFixed(2)}</td>
-                  <td style={{ ...td, textAlign: 'right', fontWeight: 600, color: '#fbbf24' }}>₹{parseFloat(record.totalSales || 0).toFixed(2)}</td>
-                  <td style={{ ...td, textAlign: 'right', color: '#ef4444' }}>-₹{parseFloat(record.discount || 0).toFixed(2)}</td>
-                  <td style={{ ...td, textAlign: 'right', color: '#22c55e' }}>₹{parseFloat(record.netSales || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.serviceRevenue || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.productRevenue || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'right', fontWeight: 600, color: '#fbbf24', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.totalSales || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'right', color: '#ef4444', fontVariantNumeric: 'tabular-nums' }}>-₹{parseFloat(record.discount || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'right', color: '#22c55e', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.netSales || 0).toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>

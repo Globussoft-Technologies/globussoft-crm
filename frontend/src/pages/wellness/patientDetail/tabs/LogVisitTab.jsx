@@ -6,12 +6,16 @@ import { formatDate } from '../../../../utils/date';
 // ── Log visit tab ──────────────────────────────────────────────────
 // Shows booked appointments; clicking one lets you mark it as visited (completed)
 // and optionally add notes/amount. Marking as visited triggers auto-consumption.
+// When a visit is completed with a charge, a Razorpay payment link is generated
+// and surfaced here so staff can copy it and share it with the patient.
 export default function LogVisitTab({ patient, services, doctors: _doctors, onSaved }) {
   const notify = useNotify();
   const [selectedVisitId, setSelectedVisitId] = useState(null);
   const [notes, setNotes] = useState('');
   const [consumptionRules, setConsumptionRules] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+  const [generatingLinkId, setGeneratingLinkId] = useState(null);
+  const [copiedId, setCopiedId] = useState(null);
 
   const visits = patient.visits || [];
   const bookedAppointments = visits.filter((v) =>
@@ -34,6 +38,34 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
     }
   };
 
+  const copyToClipboard = async (text, id) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch (_err) {
+      notify.error('Failed to copy link');
+    }
+  };
+
+  const generatePaymentLink = async (visit) => {
+    if (generatingLinkId) return;
+    setGeneratingLinkId(visit.id);
+    try {
+      const result = await fetchApi(`/api/wellness/visits/${visit.id}/payment-link`, {
+        method: 'POST',
+      });
+      if (result?.url) {
+        onSaved();
+        notify.success('Payment link generated');
+      }
+    } catch (_err) {
+      // fetchApi already toasted
+    } finally {
+      setGeneratingLinkId(null);
+    }
+  };
+
   const markAsVisited = async (e) => {
     e.preventDefault();
     if (!selectedVisit || !selectedService) {
@@ -43,7 +75,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
     if (submitting) return;
     setSubmitting(true);
     try {
-      await fetchApi(`/api/wellness/visits/${selectedVisit.id}`, {
+      const result = await fetchApi(`/api/wellness/visits/${selectedVisit.id}`, {
         method: 'PUT',
         body: JSON.stringify({
           status: 'completed',
@@ -55,10 +87,111 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
       setNotes('');
       setConsumptionRules([]);
       onSaved();
-      notify.success('Appointment marked as visited & auto-consumption triggered.');
+      if (result?.paymentLinkUrl) {
+        notify.success('Appointment marked as visited. Payment link generated.');
+      } else if (Number(selectedService.basePrice) > 0) {
+        notify.success('Appointment marked as visited. A payment link could not be generated; check the payment gateway configuration.');
+      } else {
+        notify.success('Appointment marked as visited & auto-consumption triggered.');
+      }
     } catch (_err) { /* fetchApi already toasted */ } finally {
       setSubmitting(false);
     }
+  };
+
+  const renderPaymentLinkBlock = (visit) => {
+    if (!visit.amountCharged || visit.amountCharged <= 0) return null;
+
+    if (visit.paymentStatus === 'paid') {
+      return (
+        <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span
+            style={{
+              fontSize: '0.8rem',
+              padding: '0.3rem 0.7rem',
+              background: 'rgba(16, 185, 129, 0.15)',
+              color: 'var(--success-color)',
+              border: '1px solid rgba(16, 185, 129, 0.3)',
+              borderRadius: 999,
+              fontWeight: 600,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.3rem',
+            }}
+          >
+            ✓ Paid
+          </span>
+          {visit.paymentLinkUrl && (
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              Payment collected
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    if (visit.paymentLinkUrl) {
+      return (
+        <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <input
+            readOnly
+            value={visit.paymentLinkUrl}
+            onClick={(e) => e.target.select()}
+            aria-label="Payment link"
+            style={{
+              flex: 1,
+              fontSize: '0.8rem',
+              padding: '0.4rem 0.6rem',
+              background: 'rgba(0,0,0,0.2)',
+              border: '1px solid rgba(16, 185, 129, 0.3)',
+              borderRadius: 6,
+              color: 'var(--text-primary)',
+              outline: 'none',
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => copyToClipboard(visit.paymentLinkUrl, visit.id)}
+            style={{
+              fontSize: '0.8rem',
+              padding: '0.4rem 0.75rem',
+              background: copiedId === visit.id ? 'rgba(16, 185, 129, 0.25)' : 'rgba(16, 185, 129, 0.1)',
+              color: 'var(--success-color)',
+              border: '1px solid rgba(16, 185, 129, 0.3)',
+              borderRadius: 6,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              fontWeight: 500,
+            }}
+          >
+            {copiedId === visit.id ? 'Copied!' : 'Copy'}
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ marginTop: '0.5rem' }}>
+        <button
+          type="button"
+          onClick={() => generatePaymentLink(visit)}
+          disabled={generatingLinkId === visit.id}
+          style={{
+            fontSize: '0.8rem',
+            padding: '0.4rem 0.75rem',
+            background: generatingLinkId === visit.id ? 'rgba(107,114,128,0.15)' : 'rgba(16, 185, 129, 0.1)',
+            color: 'var(--success-color)',
+            border: '1px solid rgba(16, 185, 129, 0.3)',
+            borderRadius: 6,
+            cursor: generatingLinkId === visit.id ? 'not-allowed' : 'pointer',
+            opacity: generatingLinkId === visit.id ? 0.7 : 1,
+            fontWeight: 500,
+          }}
+        >
+          {generatingLinkId === visit.id ? 'Generating…' : 'Generate payment link'}
+        </button>
+      </div>
+    );
   };
 
   return (
@@ -122,6 +255,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                     Doctor: {visit.doctor?.name || '—'}
                     {visit.amountCharged > 0 && <> · Amount: ₹{visit.amountCharged.toLocaleString('en-IN')}</>}
                   </div>
+                  {renderPaymentLinkBlock(visit)}
                 </div>
               ))}
             </div>

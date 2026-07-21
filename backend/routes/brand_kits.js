@@ -289,26 +289,17 @@ router.get("/by-subbrand/:subBrand", async (req, res) => {
     // single travel-vertical tenant. Multi-travel-tenant deployments
     // (uncommon) MUST pass ?tenantId — otherwise the resolver returns
     // the first travel tenant by id (deterministic, but ambiguous).
-    let tenantId = null;
-    if (req.query && req.query.tenantId !== undefined) {
-      const n = parseInt(String(req.query.tenantId), 10);
-      if (!Number.isFinite(n)) {
-        return res.status(400).json({ error: "tenantId must be a number", code: "INVALID_TENANT_ID" });
-      }
-      tenantId = n;
-    } else {
-      const travel = await prisma.tenant.findFirst({
-        where: { vertical: "travel" },
-        select: { id: true },
-        orderBy: { id: "asc" },
+    // A sub-brand name is not globally unique. Do not resolve it against an
+    // arbitrary first travel tenant when the caller omitted its organization.
+    if (!req.query || req.query.tenantId === undefined) {
+      return res.status(400).json({
+        error: "tenantId is required",
+        code: "TENANT_ID_REQUIRED",
       });
-      if (!travel) {
-        return res.status(404).json({
-          error: "No travel tenant configured; pass ?tenantId explicitly",
-          code: "NO_TRAVEL_TENANT",
-        });
-      }
-      tenantId = travel.id;
+    }
+    const tenantId = parseInt(String(req.query.tenantId), 10);
+    if (!Number.isFinite(tenantId) || tenantId <= 0) {
+      return res.status(400).json({ error: "tenantId must be a positive number", code: "INVALID_TENANT_ID" });
     }
 
     const brandKit = await prisma.brandKit.findFirst({

@@ -63,7 +63,7 @@ export default function Settings() {
   // Only `reload` is consumed here (busts the shared cache Sidebar also
   // reads from after a save/delete) — the card displays the brand's OWN
   // values via `branding` state, not the fallback-resolved `effective`.
-  const { reload: reloadEffectiveBrand } = useEffectiveBrand(brandingSubBrand);
+  const { reload: reloadEffectiveBrand } = useEffectiveBrand(brandingSubBrand, ctxTenant?.id);
 
   // ── Role Recovery section ────────────────────────────────────────
   // Lockout-scenario recovery surface. Reuses the existing /api/roles
@@ -505,7 +505,7 @@ export default function Settings() {
       }
       setShowAddBrand(false);
       loadBrandKits();
-      invalidateEffectiveBrandCache(addBrandForm.subBrand);
+      invalidateEffectiveBrandCache(addBrandForm.subBrand, ctxTenant?.id);
       reloadEffectiveBrand();
     } catch (err) {
       setAddBrandError(err?.body?.error || err?.message || "Failed to save brand.");

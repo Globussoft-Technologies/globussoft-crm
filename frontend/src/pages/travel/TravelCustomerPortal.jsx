@@ -397,7 +397,15 @@ function Dashboard({ token, contact, onUpdateContact, onLogout, theme, onToggleT
     let alive = true;
     (async () => {
       try {
-        const res = await fetch(`/api/brand-kits/by-subbrand/${encodeURIComponent(sb)}`);
+        // The portal token is tenant-bound. Forward that tenant ID so the
+        // public resolver never falls back to another travel organization
+        // that happens to use the same sub-brand name.
+        const tenantId = profile?.tenantId;
+        if (!tenantId) {
+          if (alive) setBrandKit(null);
+          return;
+        }
+        const res = await fetch(`/api/brand-kits/by-subbrand/${encodeURIComponent(sb)}?tenantId=${encodeURIComponent(tenantId)}`);
         if (!res.ok) {
           if (alive) setBrandKit(null);
           return;
@@ -409,7 +417,7 @@ function Dashboard({ token, contact, onUpdateContact, onLogout, theme, onToggleT
       }
     })();
     return () => { alive = false; };
-  }, [profile?.subBrand]);
+  }, [profile?.subBrand, profile?.tenantId]);
 
   // G092 — apply palette as CSS vars at the document root so existing
   // `var(--primary-color, …)` references throughout the portal page

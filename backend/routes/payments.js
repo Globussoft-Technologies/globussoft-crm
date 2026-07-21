@@ -221,7 +221,7 @@ function parseGatewayError(err, gateway) {
 }
 
 async function markInvoicePaid(invoiceId, tenantId) {
-  if (!invoiceId) return;
+  if (!invoiceId) return null;
   try {
     const where = tenantId
       ? { id: parseInt(invoiceId), tenantId }
@@ -233,8 +233,20 @@ async function markInvoicePaid(invoiceId, tenantId) {
         data: { status: "PAID" },
       });
     }
+    // If this invoice is linked to a wellness visit, mirror the payment onto
+    // the Visit row so the Log Visit UI can disable the copy-link action.
+    if (inv?.visitId) {
+      await prisma.visit.update({
+        where: { id: inv.visitId },
+        data: { paymentStatus: "paid" },
+      }).catch((err) => {
+        console.error("[Payments] markVisitPaid error:", err.message);
+      });
+    }
+    return inv;
   } catch (err) {
     console.error("[Payments] markInvoicePaid error:", err.message);
+    return null;
   }
 }
 
@@ -866,16 +878,21 @@ router.get("/", async (req, res) => {
       contacts.forEach((c) => { contactMap[c.id] = c; });
     }
 
+    // Parse metadata for every payment once — it is reused for travel-invoice
+    // resolution, wellness visit linking, and any future enrichment.
+    const parsedMetaMap = {};
+    for (const p of payments) {
+      let meta = {};
+      try { meta = JSON.parse(p.metadata || "{}"); } catch (_) {}
+      parsedMetaMap[p.id] = meta;
+    }
+
     // For travel payments (invoiceId=null, contactId=null), resolve customer +
     // invoice label from the TravelInvoice referenced in payment metadata.
-    const parsedMetaMap = {};
     const travelInvIdsToFetch = [];
     for (const p of payments) {
       if (!p.contactId && !p.invoiceId) {
-        let meta = {};
-        try { meta = JSON.parse(p.metadata || "{}"); } catch (_) {}
-        parsedMetaMap[p.id] = meta;
-        if (meta.travelInvoiceId) travelInvIdsToFetch.push(Number(meta.travelInvoiceId));
+        if (parsedMetaMap[p.id].travelInvoiceId) travelInvIdsToFetch.push(Number(parsedMetaMap[p.id].travelInvoiceId));
       }
     }
     const travelInvMap = {};
@@ -899,6 +916,60 @@ router.get("/", async (req, res) => {
       }
     }
 
+    // Resolve service + staff for wellness-visit payments. Walk Payment →
+    // Invoice → Visit, or fall back to Payment.metadata.visitId. The POS page
+    // surfaces these two columns so the cashier sees what was paid for and who
+    // diagnosed the patient without leaving the sale view.
+    const invoiceIds = [...new Set(payments.map((p) => p.invoiceId).filter(Boolean))];
+    const invoiceMap = {};
+    if (invoiceIds.length > 0) {
+      const invoices = await prisma.invoice.findMany({
+        where: { id: { in: invoiceIds }, tenantId },
+        select: { id: true, visitId: true },
+      });
+      invoices.forEach((inv) => { invoiceMap[inv.id] = inv; });
+    }
+
+    const visitIdsToFetch = [];
+    for (const p of payments) {
+      if (p.invoiceId && invoiceMap[p.invoiceId]?.visitId) {
+        visitIdsToFetch.push(invoiceMap[p.invoiceId].visitId);
+      }
+      const metaVisitId = Number(parsedMetaMap[p.id]?.visitId);
+      if (Number.isFinite(metaVisitId)) visitIdsToFetch.push(metaVisitId);
+    }
+    const uniqueVisitIds = [...new Set(visitIdsToFetch.filter(Number.isFinite))];
+
+    const visitServiceMap = {};
+    const visitStaffMap = {};
+    if (uniqueVisitIds.length > 0) {
+      const visits = await prisma.visit.findMany({
+        where: { id: { in: uniqueVisitIds }, tenantId },
+        select: {
+          id: true,
+          service: { select: { id: true, name: true } },
+          doctor: { select: { id: true, name: true } },
+        },
+      });
+      visits.forEach((v) => {
+        if (v.service) visitServiceMap[v.id] = v.service;
+        if (v.doctor) visitStaffMap[v.id] = v.doctor;
+      });
+    }
+
+    const paymentVisitMap = {};
+    for (const p of payments) {
+      let visitId = null;
+      if (p.invoiceId && invoiceMap[p.invoiceId]?.visitId) {
+        visitId = invoiceMap[p.invoiceId].visitId;
+      }
+      if (!visitId) {
+        const metaVisitId = Number(parsedMetaMap[p.id]?.visitId);
+        if (Number.isFinite(metaVisitId)) visitId = metaVisitId;
+      }
+      if (visitId) paymentVisitMap[p.id] = visitId;
+    }
+
     res.json(payments.map((p) => {
       let contact = p.contactId ? (contactMap[p.contactId] || null) : null;
       let travelInvoiceNum = null;
@@ -915,7 +986,10 @@ router.get("/", async (req, res) => {
       if (!itineraryId && parsedMetaMap[p.id] && parsedMetaMap[p.id].itineraryId) {
         itineraryId = Number(parsedMetaMap[p.id].itineraryId) || null;
       }
-      return { ...serialize(p), contact, travelInvoiceNum, itineraryId };
+      const visitId = paymentVisitMap[p.id];
+      const service = visitId ? (visitServiceMap[visitId] || null) : null;
+      const staff = visitId ? (visitStaffMap[visitId] || null) : null;
+      return { ...serialize(p), contact, travelInvoiceNum, itineraryId, service, staff };
     }));
   } catch (err) {
     console.error("[Payments] list error:", err);

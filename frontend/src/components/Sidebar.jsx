@@ -176,6 +176,7 @@ const Sidebar = ({
   // and get the tenant-wide kit / Tenant.logoUrl, unchanged from before.
   const { effective: effectiveBrand } = useEffectiveBrand(
     tenant?.vertical === "travel" ? activeSubBrand : null,
+    tenant?.id,
   );
   const role = user?.role || "USER";
   const isAdmin = role === "ADMIN";

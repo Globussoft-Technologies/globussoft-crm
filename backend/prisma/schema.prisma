@@ -3982,6 +3982,15 @@ model Visit {
   photosAfter   String?  @db.Text // JSON array of URLs
   amountCharged Float?
 
+  // Payment link generated when a visit is completed with a charge. Stored on
+  // the visit so the front-end can render a "copy link" action without joining
+  // Invoice → Payment on every patient-detail load.
+  paymentLinkUrl         String?   @db.Text
+  paymentLinkGeneratedAt DateTime?
+  // Tracks whether the visit charge has been collected. Mirrors the linked
+  // Payment row status so the Log Visit UI can disable the link once paid.
+  paymentStatus          String    @default("unpaid") // unpaid, paid
+
   // Agent B: telehealth — Jitsi room name (e.g. "gbs-123-john-doe")
   videoRoom String?
 

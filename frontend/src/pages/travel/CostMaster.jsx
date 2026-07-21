@@ -261,7 +261,7 @@ export default function CostMaster() {
     try {
       await fetchApi(`/api/travel/cost-master/${rate.id}`, { method: "DELETE" });
       notify.success("Rate deleted");
-      setRates((prev) => prev.filter((r) => r.id !== rate.id));
+      load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to delete rate");
     }

@@ -9,9 +9,21 @@ import { RestoredBanner, RxDetailModal } from '../shared/components';
 
 const INITIAL_RX = {
   visitId: '',
-  drugs: [{ name: '', dosage: '', frequency: '', duration: '' }],
+  drugs: [{ name: '', drugId: '', strengthValue: '', strengthUnit: '', dosage: '', frequency: '', duration: '' }],
   instructions: '',
 };
+
+// Pull the leading numeric value out of a free-text default like "1 capsule" or
+// "5 days" so we can pre-fill the numeric dosage / frequency / duration fields.
+function extractNumber(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const str = String(value).trim();
+  if (str === '') return '';
+  const direct = parseInt(str, 10);
+  if (!Number.isNaN(direct)) return direct;
+  const match = str.match(/\d+/);
+  return match ? parseInt(match[0], 10) : '';
+}
 
 // Typeahead over the tenant's Drug catalogue (GET /api/wellness/drugs?q=…).
 // Free-text entry still works — selecting a row just auto-fills the sibling
@@ -151,7 +163,7 @@ export default function PrescribeTab({ patient, onSaved }) {
   };
   const addDrug = () => setDraft((s) => ({
     ...s,
-    drugs: [...s.drugs, { name: '', dosage: '', frequency: '', duration: '' }],
+    drugs: [...s.drugs, { name: '', drugId: '', strengthValue: '', strengthUnit: '', dosage: '', frequency: '', duration: '' }],
   }));
 
   const validDrugs = drugs.filter((d) => d.name && d.name.trim());
@@ -280,17 +292,20 @@ export default function PrescribeTab({ patient, onSaved }) {
                 const next = [...s.drugs];
                 next[i] = {
                   ...next[i],
+                  drugId: drug.id || '',
                   name: drug.name,
-                  dosage: next[i].dosage || drug.defaultDosage || '',
-                  frequency: next[i].frequency || drug.defaultFrequency || '',
-                  duration: next[i].duration || drug.defaultDuration || '',
+                  strengthValue: drug.strengthValue || '',
+                  strengthUnit: drug.strengthUnit || '',
+                  dosage: next[i].dosage || extractNumber(drug.defaultDosage) || '',
+                  frequency: next[i].frequency || extractNumber(drug.defaultFrequency) || '',
+                  duration: next[i].duration || extractNumber(drug.defaultDuration) || '',
                 };
                 return { ...s, drugs: next };
               })}
             />
-            <input placeholder="Dosage" value={d.dosage} onChange={(e) => setDrug(i, 'dosage', e.target.value)} style={inputStyle} />
-            <input placeholder="Frequency" value={d.frequency} onChange={(e) => setDrug(i, 'frequency', e.target.value)} style={inputStyle} />
-            <input placeholder="Duration" value={d.duration} onChange={(e) => setDrug(i, 'duration', e.target.value)} style={inputStyle} />
+            <input type="number" min="1" placeholder="Dosage" value={d.dosage} onChange={(e) => setDrug(i, 'dosage', e.target.value === '' ? '' : parseInt(e.target.value, 10) || '')} style={inputStyle} />
+            <input type="number" min="1" placeholder="Frequency" value={d.frequency} onChange={(e) => setDrug(i, 'frequency', e.target.value === '' ? '' : parseInt(e.target.value, 10) || '')} style={inputStyle} />
+            <input type="number" min="1" placeholder="Duration" value={d.duration} onChange={(e) => setDrug(i, 'duration', e.target.value === '' ? '' : parseInt(e.target.value, 10) || '')} style={inputStyle} />
           </div>
         ))}
         <button type="button" onClick={addDrug} style={{ background: 'transparent', border: '1px dashed rgba(255,255,255,0.15)', color: 'var(--text-secondary)', padding: '0.4rem 0.75rem', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', marginBottom: '1rem' }}>

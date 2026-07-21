@@ -762,13 +762,72 @@ export default function App() {
     }
   }, [token]);
 
-  // Mark auth as ready after the very first render so any fetch helpers
-  // that wait on whenAuthReady() unblock once we've had a chance to read
-  // sessionStorage. This runs synchronously after mount.
+  // #347 + #1284: gate initial mount until we've finished rehydrating the
+  // token from sessionStorage AND validated it against the server. Without
+  // this gate, child pages fire fetches in their own useEffect before AuthContext
+  // finishes mounting, racing the token and getting 403s. A stale localStorage
+  // user/tenant (e.g. from a previous account) can also diverge from the token
+  // in memory/sessionStorage; validating /api/auth/me on mount syncs the
+  // AuthContext to the actual authenticated identity before any vertical route
+  // guards render.
   useEffect(() => {
-    setLoading(false);
-    markAuthReady();
-  }, []);
+    let cancelled = false;
+
+    async function validateSession() {
+      if (!token) {
+        if (!cancelled) {
+          // No token means no authenticated session — clear any stale identity
+          // from localStorage so the UI can't show a user from a previous
+          // account while the route table routes an unauthenticated visitor.
+          setUser(null);
+          setTenant(null);
+          setLoading(false);
+          markAuthReady();
+        }
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/auth/me", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (res.ok) {
+          const profile = await res.json();
+          if (!cancelled) {
+            setUser(profile);
+            if (profile.tenant) setTenant(profile.tenant);
+          }
+        } else if (res.status === 401 || res.status === 403) {
+          // The token is expired, revoked, or for the wrong tenant/vertical.
+          // Wipe the session so the user is not trapped with a UI that shows
+          // one identity while the API rejects requests as another. The route
+          // table will naturally redirect to /login.
+          throw new Error("Session invalid");
+        }
+        // For other server errors (5xx, network blips), keep the existing
+        // localStorage user/tenant so a transient backend issue does not log
+        // the user out. The next successful /api call will surface the error.
+      } catch (err) {
+        if (!cancelled) {
+          clearAuthToken();
+          setUser(null);
+          setTenant(null);
+          setTokenState(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          markAuthReady();
+        }
+      }
+    }
+
+    validateSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   useEffect(() => {
     if (user) {

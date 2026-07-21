@@ -56,7 +56,9 @@ prisma.travelCostMaster = {
   count: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  updateMany: vi.fn(),
   delete: vi.fn(),
+  deleteMany: vi.fn(),
 };
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
@@ -100,7 +102,13 @@ beforeEach(() => {
   prisma.travelCostMaster.count.mockReset();
   prisma.travelCostMaster.create.mockReset();
   prisma.travelCostMaster.update.mockReset();
+  prisma.travelCostMaster.updateMany.mockReset();
   prisma.travelCostMaster.delete.mockReset();
+  prisma.travelCostMaster.deleteMany.mockReset();
+  prisma.travelCostMaster.findMany.mockResolvedValue([]);
+  prisma.travelCostMaster.count.mockResolvedValue(0);
+  prisma.travelCostMaster.updateMany.mockResolvedValue({ count: 1 });
+  prisma.travelCostMaster.deleteMany.mockResolvedValue({ count: 1 });
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -412,17 +420,22 @@ describe('PATCH /api/travel/cost-master/:id', () => {
     prisma.travelCostMaster.findFirst.mockResolvedValue({
       id: 10, tenantId: 1, subBrand: 'tmc', category: 'hotel', routeOrSku: 'AGRA-DLX', baseRate: '4500.00', isActive: true,
     });
-    prisma.travelCostMaster.update.mockResolvedValue({
-      id: 10, tenantId: 1, subBrand: 'tmc', category: 'hotel', routeOrSku: 'AGRA-DLX', baseRate: 5000, isActive: true,
-    });
     const res = await request(makeApp())
       .patch('/api/travel/cost-master/10')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
       .send({ baseRate: 5000 });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ id: 10, baseRate: 5000 });
-    expect(prisma.travelCostMaster.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 10 }, data: expect.objectContaining({ baseRate: 5000 }) }),
+    expect(prisma.travelCostMaster.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          tenantId: 1,
+          subBrand: 'tmc',
+          category: 'hotel',
+          routeOrSku: 'AGRA-DLX',
+        },
+        data: expect.objectContaining({ baseRate: 5000 }),
+      }),
     );
   });
 
@@ -433,7 +446,7 @@ describe('PATCH /api/travel/cost-master/:id', () => {
       .send({ baseRate: 5000 });
     expect(res.status).toBe(403);
     expect(prisma.travelCostMaster.findFirst).not.toHaveBeenCalled();
-    expect(prisma.travelCostMaster.update).not.toHaveBeenCalled();
+    expect(prisma.travelCostMaster.updateMany).not.toHaveBeenCalled();
   });
 
   test('cross-tenant target returns 404 NOT_FOUND (no update)', async () => {
@@ -444,7 +457,7 @@ describe('PATCH /api/travel/cost-master/:id', () => {
       .send({ baseRate: 1000 });
     expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
-    expect(prisma.travelCostMaster.update).not.toHaveBeenCalled();
+    expect(prisma.travelCostMaster.updateMany).not.toHaveBeenCalled();
   });
 
   test('empty body returns 400 EMPTY_BODY (no update)', async () => {
@@ -457,7 +470,7 @@ describe('PATCH /api/travel/cost-master/:id', () => {
       .send({});
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'EMPTY_BODY' });
-    expect(prisma.travelCostMaster.update).not.toHaveBeenCalled();
+    expect(prisma.travelCostMaster.updateMany).not.toHaveBeenCalled();
   });
 
   test('invalid category in PATCH returns 400 INVALID_CATEGORY', async () => {
@@ -470,7 +483,7 @@ describe('PATCH /api/travel/cost-master/:id', () => {
       .send({ category: 'cruise' });
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'INVALID_CATEGORY' });
-    expect(prisma.travelCostMaster.update).not.toHaveBeenCalled();
+    expect(prisma.travelCostMaster.updateMany).not.toHaveBeenCalled();
   });
 
   test('negative baseRate in PATCH returns 400 INVALID_BASE_RATE', async () => {
@@ -483,7 +496,7 @@ describe('PATCH /api/travel/cost-master/:id', () => {
       .send({ baseRate: -50 });
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'INVALID_BASE_RATE' });
-    expect(prisma.travelCostMaster.update).not.toHaveBeenCalled();
+    expect(prisma.travelCostMaster.updateMany).not.toHaveBeenCalled();
   });
 
   test('PATCH on row caller cannot reach via sub-brand returns 403 SUB_BRAND_DENIED', async () => {
@@ -500,7 +513,7 @@ describe('PATCH /api/travel/cost-master/:id', () => {
       .send({ baseRate: 7500 });
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ code: 'SUB_BRAND_DENIED' });
-    expect(prisma.travelCostMaster.update).not.toHaveBeenCalled();
+    expect(prisma.travelCostMaster.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -511,29 +524,41 @@ describe('PATCH /api/travel/cost-master/:id', () => {
 describe('DELETE /api/travel/cost-master/:id', () => {
   test('happy delete returns 200 + { deleted: true, id }', async () => {
     prisma.travelCostMaster.findFirst.mockResolvedValue({
-      id: 20, tenantId: 1, subBrand: 'tmc', category: 'hotel',
+      id: 20, tenantId: 1, subBrand: 'tmc', category: 'hotel', routeOrSku: 'AGRA-DLX',
     });
-    prisma.travelCostMaster.delete.mockResolvedValue({ id: 20 });
     const res = await request(makeApp())
       .delete('/api/travel/cost-master/20')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ deleted: true, id: 20 });
-    expect(prisma.travelCostMaster.delete).toHaveBeenCalledWith({ where: { id: 20 } });
+    expect(prisma.travelCostMaster.deleteMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 1,
+        subBrand: 'tmc',
+        category: 'hotel',
+        routeOrSku: 'AGRA-DLX',
+      },
+    });
   });
 
   test('MANAGER role IS allowed to delete (cost_master.delete in MANAGER_PERMISSIONS)', async () => {
     prisma.user.findUnique.mockResolvedValue({ role: 'MANAGER', subBrandAccess: null });
     prisma.travelCostMaster.findFirst.mockResolvedValue({
-      id: 20, tenantId: 1, subBrand: 'tmc', category: 'hotel',
+      id: 20, tenantId: 1, subBrand: 'tmc', category: 'hotel', routeOrSku: 'AGRA-DLX',
     });
-    prisma.travelCostMaster.delete.mockResolvedValue({ id: 20 });
     const res = await request(makeApp())
       .delete('/api/travel/cost-master/20')
       .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ deleted: true, id: 20 });
-    expect(prisma.travelCostMaster.delete).toHaveBeenCalledWith({ where: { id: 20 } });
+    expect(prisma.travelCostMaster.deleteMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 1,
+        subBrand: 'tmc',
+        category: 'hotel',
+        routeOrSku: 'AGRA-DLX',
+      },
+    });
   });
 
   test('USER role is rejected with 403 (no delete permission)', async () => {
@@ -541,7 +566,7 @@ describe('DELETE /api/travel/cost-master/:id', () => {
       .delete('/api/travel/cost-master/20')
       .set('Authorization', `Bearer ${tokenFor('USER')}`);
     expect(res.status).toBe(403);
-    expect(prisma.travelCostMaster.delete).not.toHaveBeenCalled();
+    expect(prisma.travelCostMaster.deleteMany).not.toHaveBeenCalled();
   });
 
   test('cross-tenant DELETE returns 404 NOT_FOUND (no delete call)', async () => {
@@ -551,7 +576,7 @@ describe('DELETE /api/travel/cost-master/:id', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
-    expect(prisma.travelCostMaster.delete).not.toHaveBeenCalled();
+    expect(prisma.travelCostMaster.deleteMany).not.toHaveBeenCalled();
   });
 });
 
@@ -627,15 +652,12 @@ describe('hotel preference attributes (PRD §4.3 gap A7)', () => {
     prisma.travelCostMaster.findFirst.mockResolvedValue({
       id: 71, tenantId: 1, subBrand: 'rfu', category: 'hotel',
     });
-    prisma.travelCostMaster.update.mockImplementation(({ data }) =>
-      Promise.resolve({ id: 71, tenantId: 1, subBrand: 'rfu', category: 'hotel', ...data }),
-    );
     const res = await request(makeApp())
       .patch('/api/travel/cost-master/71')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
       .send({ attributes: { view: 'kaaba_facing', roomCategory: 'Suite' } });
     expect(res.status).toBe(200);
-    const calledData = prisma.travelCostMaster.update.mock.calls[0][0].data;
+    const calledData = prisma.travelCostMaster.updateMany.mock.calls[0][0].data;
     expect(JSON.parse(calledData.attributesJson)).toEqual({
       view: 'kaaba_facing',
       roomCategory: 'Suite',
@@ -653,7 +675,7 @@ describe('hotel preference attributes (PRD §4.3 gap A7)', () => {
       .send({ attributes: { view: 'garden' } });
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'INVALID_ATTRIBUTES' });
-    expect(prisma.travelCostMaster.update).not.toHaveBeenCalled();
+    expect(prisma.travelCostMaster.updateMany).not.toHaveBeenCalled();
   });
 
   test('PATCH attributes:null clears attributesJson', async () => {
@@ -661,15 +683,12 @@ describe('hotel preference attributes (PRD §4.3 gap A7)', () => {
       id: 72, tenantId: 1, subBrand: 'rfu', category: 'hotel',
       attributesJson: '{"view":"standard"}',
     });
-    prisma.travelCostMaster.update.mockImplementation(({ data }) =>
-      Promise.resolve({ id: 72, tenantId: 1, subBrand: 'rfu', category: 'hotel', ...data }),
-    );
     const res = await request(makeApp())
       .patch('/api/travel/cost-master/72')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
       .send({ attributes: null });
     expect(res.status).toBe(200);
-    expect(prisma.travelCostMaster.update.mock.calls[0][0].data.attributesJson).toBeNull();
+    expect(prisma.travelCostMaster.updateMany.mock.calls[0][0].data.attributesJson).toBeNull();
     expect(res.body.attributes).toBeNull();
   });
 

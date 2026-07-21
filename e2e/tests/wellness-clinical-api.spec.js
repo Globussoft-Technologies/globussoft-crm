@@ -2827,14 +2827,15 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
     const rxList = Array.isArray(listBody) ? listBody : listBody.items;
     const row = rxList.find((r) => r.id === rxId);
     expect(row).toBeTruthy();
-    expect(row.drugs, 'drugs must not be raw ENC:v1: ciphertext').not.toMatch(/^ENC:v1:/);
+    const drugs = Array.isArray(row.drugs) ? row.drugs : JSON.parse(row.drugs);
+    if (typeof row.drugs === 'string') {
+      expect(row.drugs, 'drugs must not be raw ENC:v1: ciphertext').not.toMatch(/^ENC:v1:/);
+    }
     if (row.instructions != null) {
       expect(row.instructions).not.toMatch(/^ENC:v1:/);
       expect(row.instructions).toContain('encrypt-test');
     }
-    // drugs is JSON-stringified on the row but now normalized to a real array in the response.
-    const parsed = Array.isArray(row.drugs) ? row.drugs : JSON.parse(row.drugs);
-    expect(parsed[0].name).toContain('Encrypt-Test');
+    expect(drugs[0].name).toContain('Encrypt-Test');
   });
 
   test('#224 GET /patients/:id (nested includes) — no ENC:v1: leak in nested visits[].notes / prescriptions[].drugs', async ({ request }) => {

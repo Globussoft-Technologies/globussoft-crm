@@ -94,7 +94,7 @@ prisma.sandboxSnapshot = {
 const scopeModels = [
   'contact', 'deal', 'activity', 'task', 'invoice',
   'estimate', 'estimateLineItem', 'contract', 'quote', 'quoteLineItem',
-  'pipeline', 'pipelineStage', 'emailMessage',
+  'pipeline', 'pipelineStage', 'emailMessage', 'travelQuote',
 ];
 for (const m of scopeModels) {
   prisma[m] = prisma[m] || {};

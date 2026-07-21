@@ -350,12 +350,12 @@ describe('Geo-tagged attendance (wellness only)', () => {
       expect(prisma.attendance.create).not.toHaveBeenCalled();
     });
 
-    test('wellness tenant, assigned + fuzzy GPS (accuracy > 100m) → 403 ACCURACY_TOO_LOW', async () => {
+    test('wellness tenant, assigned + fuzzy GPS (accuracy > 500m) → 403 ACCURACY_TOO_LOW', async () => {
       prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
       prisma.userLocation.findMany.mockResolvedValue([{ location: RANCHI_CLINIC }]);
 
       const res = await authedReq('post', '/api/attendance/clock-in').send({
-        latitude: NEARBY_COORDS.latitude, longitude: NEARBY_COORDS.longitude, accuracy: 500,
+        latitude: NEARBY_COORDS.latitude, longitude: NEARBY_COORDS.longitude, accuracy: 600,
       });
 
       expect(res.status).toBe(403);

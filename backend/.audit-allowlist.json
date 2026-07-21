@@ -139,6 +139,51 @@
       "sunsetBy": "2026-09-16"
     },
     {
+      "ghsa": "GHSA-w8wr-v893-vjvp",
+      "package": "tar",
+      "severity": "critical",
+      "title": "node-tar arbitrary file creation/overwrite via insufficient symlink protection",
+      "reason": "Transitive via @mapbox/node-pre-gyp at install-time only; same mitigation as GHSA-34x7-hfp2-rc4v.",
+      "addedOn": "2026-07-21",
+      "sunsetBy": "2026-10-21"
+    },
+    {
+      "ghsa": "GHSA-23hp-3jrh-7fpw",
+      "package": "tar",
+      "severity": "critical",
+      "title": "node-tar arbitrary file creation/overwrite via insufficient absolute path protection",
+      "reason": "Transitive via @mapbox/node-pre-gyp at install-time only; same mitigation as GHSA-34x7-hfp2-rc4v.",
+      "addedOn": "2026-07-21",
+      "sunsetBy": "2026-10-21"
+    },
+    {
+      "ghsa": "GHSA-8x88-c5mf-7j5w",
+      "package": "tar",
+      "severity": "critical",
+      "title": "node-tar arbitrary file creation/overwrite via insufficient relative path protection",
+      "reason": "Transitive via @mapbox/node-pre-gyp at install-time only; same mitigation as GHSA-34x7-hfp2-rc4v.",
+      "addedOn": "2026-07-21",
+      "sunsetBy": "2026-10-21"
+    },
+    {
+      "ghsa": "GHSA-gvwx-54wh-qm9j",
+      "package": "tar",
+      "severity": "critical",
+      "title": "node-tar insufficient symlink protection allows arbitrary file creation/overwrite",
+      "reason": "Transitive via @mapbox/node-pre-gyp at install-time only; same mitigation as GHSA-34x7-hfp2-rc4v.",
+      "addedOn": "2026-07-21",
+      "sunsetBy": "2026-10-21"
+    },
+    {
+      "ghsa": null,
+      "package": "canvas",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable @mapbox/node-pre-gyp → tar",
+      "reason": "Install-time dependency of pdfjs-dist used to fetch prebuilt binaries. The underlying tar advisories are allowlisted above; runtime exposure is zero.",
+      "addedOn": "2026-07-21",
+      "sunsetBy": "2026-10-21"
+    },
+    {
       "ghsa": null,
       "package": "@mapbox/node-pre-gyp",
       "severity": "high",

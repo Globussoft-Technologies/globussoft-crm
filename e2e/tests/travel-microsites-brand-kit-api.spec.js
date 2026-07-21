@@ -162,7 +162,7 @@ test.describe("Travel microsites — G095 brand-kit block", () => {
 test.describe("Travel branding — G092 public brand-kit endpoint", () => {
   test("GET /api/brand-kits/by-subbrand/tmc is reachable without auth", async ({ request }) => {
     const res = await retryOn5xx(() =>
-      request.get(`${BASE_URL}/api/brand-kits/by-subbrand/tmc`, { timeout: REQUEST_TIMEOUT }),
+      request.get(`${BASE_URL}/api/brand-kits/by-subbrand/tmc?tenantId=1`, { timeout: REQUEST_TIMEOUT }),
     );
     // 200 when a kit exists; 404 when not (BRAND_KIT_NOT_FOUND). Either
     // is a green test as long as the route is auth-free.

@@ -6,6 +6,7 @@ import { formatDate } from '../../utils/date';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
 import PageHeader from '../../components/PageHeader';
 import Modal from '../../components/ui/Modal';
+import TopScrollSync from '../../components/TopScrollSync';
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All', icon: null },
@@ -271,7 +272,8 @@ export default function Waitlist() {
           {visibleItems.length === 0 ? (
             <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No entries in the selected range.</div>
           ) : (
-        <div className="glass" style={{ padding: '0.5rem', overflowX: 'auto' }}>
+        <div className="glass" style={{ padding: '0.5rem' }}>
+        <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
             <thead>
               <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
@@ -321,6 +323,7 @@ export default function Waitlist() {
               })}
             </tbody>
           </table>
+        </TopScrollSync>
         </div>
           )}
         </>

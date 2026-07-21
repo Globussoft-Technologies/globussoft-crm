@@ -3,6 +3,7 @@ import { FileSignature, Plus, Send, Eye, X, Check } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
+import TopScrollSync from '../components/TopScrollSync';
 
 const STATUS_STYLES = {
   PENDING:  { bg: 'rgba(245,158,11,0.12)', color: '#f59e0b', border: 'rgba(245,158,11,0.3)' },
@@ -180,7 +181,7 @@ export default function Signatures() {
             <p style={{ color: 'var(--text-secondary)' }}>No signature requests yet. Send your first one to get started.</p>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
+          <TopScrollSync>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
@@ -256,7 +257,7 @@ export default function Signatures() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TopScrollSync>
         )}
       </div>
 

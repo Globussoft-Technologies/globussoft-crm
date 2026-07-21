@@ -21,6 +21,7 @@ import { TrendingUp, Plus, CheckCircle2, XCircle, Download, AlertTriangle } from
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import TopScrollSync from "../../components/TopScrollSync";
 
 // Current FY label long-form e.g. "FY2026-27" (mirrors lib/travelFiscalYear.js).
 function currentFyLong() {
@@ -340,7 +341,8 @@ export default function SupplierCommissions() {
           <div>No commission entries for {fy}.</div>
         </div>
       ) : (
-        <div style={{ overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: 6 }}>
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 6 }}>
+        <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead style={{ background: "#f9fafb" }}>
               <tr>
@@ -394,6 +396,7 @@ export default function SupplierCommissions() {
               ))}
             </tbody>
           </table>
+        </TopScrollSync>
         </div>
       )}
     </div>

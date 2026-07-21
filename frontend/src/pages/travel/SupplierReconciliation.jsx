@@ -45,6 +45,7 @@ import {
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import TopScrollSync from "../../components/TopScrollSync";
 
 // Current statementMonth YYYY-MM
 function currentStatementMonth() {
@@ -759,7 +760,7 @@ export default function SupplierReconciliation() {
               )}
 
               {/* Lines grid */}
-              <div style={{ overflowX: "auto" }}>
+              <TopScrollSync>
                 <table
                   style={{
                     width: "100%",
@@ -822,7 +823,7 @@ export default function SupplierReconciliation() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TopScrollSync>
             </div>
           )}
         </>
@@ -920,7 +921,7 @@ export default function SupplierReconciliation() {
           )}
 
           {/* Uploads list */}
-          <div style={{ overflowX: "auto" }}>
+          <TopScrollSync>
             <table
               style={{
                 width: "100%",
@@ -1027,7 +1028,7 @@ export default function SupplierReconciliation() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TopScrollSync>
         </>
       )}
     </div>

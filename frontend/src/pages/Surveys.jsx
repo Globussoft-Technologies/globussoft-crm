@@ -5,6 +5,7 @@ import { ClipboardList, Send, Plus, BarChart3, X, ArrowLeft, MessageSquare, User
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts';
+import TopScrollSync from '../components/TopScrollSync';
 
 const TYPE_COLORS = {
   NPS:     { bg: 'rgba(59,130,246,0.12)',  color: '#3b82f6' },
@@ -615,7 +616,7 @@ export default function Surveys() {
           {responses.length === 0 ? (
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>No responses yet. Send the survey to get started.</p>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
+            <TopScrollSync>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
@@ -657,7 +658,7 @@ export default function Surveys() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TopScrollSync>
           )}
         </div>
 

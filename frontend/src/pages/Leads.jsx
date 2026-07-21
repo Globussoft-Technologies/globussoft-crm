@@ -5,6 +5,8 @@ import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UserPlus, Search, ArrowRightCircle, UserCheck, Users, Plus, X, Pencil, Trash2, RefreshCw } from 'lucide-react';
 import { AuthContext } from '../App';
+import ColumnPicker from '../components/ColumnPicker';
+import TopScrollSync from '../components/TopScrollSync';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
 // #600 — wellness vertical replaces the generic CRM source taxonomy with one
@@ -106,6 +108,11 @@ const Leads = () => {
   // Fetched once; empty array for wellness/travel (no fetch attempted) or
   // for a generic tenant that hasn't defined any fields yet.
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
+  // Generic-vertical-only "Customize table" column-visibility picker
+  // (personal per-user preference — see components/ColumnPicker.jsx).
+  // null = "not loaded yet, show every builtin column" so the table never
+  // flashes empty while the preference GET is in flight.
+  const [visibleColumns, setVisibleColumns] = useState(null);
   // #600 — Initial source defaults differ per vertical: wellness leads
   // typically arrive walk-in/WhatsApp; generic CRM leads default to Organic.
   const [newLead, setNewLead] = useState({
@@ -588,6 +595,14 @@ const Leads = () => {
     return acc;
   }, {});
 
+  // Generic-vertical-only "Customize table" column visibility (see
+  // components/ColumnPicker.jsx). Wellness/travel tenants and the initial
+  // "preference not loaded yet" moment both default to "show everything" so
+  // this never hides a column for anyone outside the feature's own scope.
+  const isColVisible = (key) => {
+    if (isWellness || isTravel || visibleColumns === null) return true;
+    return visibleColumns.includes(key);
+  };
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
@@ -616,6 +631,11 @@ const Leads = () => {
             it sits alongside future header controls; primary styling per
             the c031ba0 travel/Leads pattern. */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* Generic-vertical-only "Customize table" column picker — personal
+              per-user preference, matches the Freshsales reference UI. */}
+          {!isWellness && !isTravel && (
+            <ColumnPicker tableKey="leads" onColumnsChange={setVisibleColumns} />
+          )}
           <button
             type="button"
             onClick={fetchLeads}
@@ -737,6 +757,19 @@ const Leads = () => {
 
       {/* #892 — Leads Table (full-width; Create Lead form now lives in the
           drawer below, triggered by the header CTA). */}
+      {(() => {
+        // Base 900px covers the always-visible Name/Actions columns plus
+        // headroom; each optional/custom-field column shown adds its own
+        // share so a wide row (many custom fields + all optional columns
+        // visible) never gets squeezed by a stale fixed minWidth.
+        const leadsOptionalCols = ['email', 'company', 'phone', 'aiScore', 'source', 'assignedTo', 'createdAt'].filter(isColVisible).length;
+        const leadsVisibleCfCols = customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).length;
+        const leadsTableMinWidth = 400
+          + leadsOptionalCols * 140
+          + leadsVisibleCfCols * 160
+          + (isTravel ? 280 : 0)
+          + (isAdmin ? 40 : 0);
+        return (
       <div className="card leads-table-wrapper" style={{ overflow: 'visible' }}>
           <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
             <div style={{ position: 'relative', maxWidth: '300px' }}>
@@ -752,8 +785,15 @@ const Leads = () => {
             </div>
           </div>
 
-          <div style={{ overflowX: 'auto' }}>
-          <table className="leads-table" style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', textAlign: 'left' }}>
+          {/* TopScrollSync adds a second scrollbar pinned to the TOP of the
+              table (mirrors the native bottom one) so the user can scroll
+              right from wherever they already are, instead of having to
+              scroll all the way down the page to reach the bottom scrollbar
+              first. leadsTableMinWidth grows with each optional/custom-field
+              column shown so a wide row never gets squeezed by a stale
+              fixed minWidth. */}
+          <TopScrollSync scrollWidth={`${leadsTableMinWidth}px`}>
+          <table className="leads-table" style={{ width: '100%', minWidth: `${leadsTableMinWidth}px`, borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
                 {isAdmin && (
@@ -762,30 +802,42 @@ const Leads = () => {
                   </th>
                 )}
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{isTravel ? 'Category' : 'Company'}</th>
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Phone</th>
+                {isColVisible('email') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>}
+                {isColVisible('company') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{isTravel ? 'Category' : 'Company'}</th>}
+                {isColVisible('phone') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Phone</th>}
                 {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>
+                {isColVisible('aiScore') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>}
+                {isColVisible('source') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>}
                 {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Sub-brand</th>}
                 {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Amount</th>}
                 {/* Generic-vertical-only Lead custom fields (Settings > Lead Fields) —
-                    one column per admin-defined field, in displayOrder. */}
-                {customFieldDefs.map(f => (
+                    one column per admin-defined field, in displayOrder, each
+                    independently toggleable via the "Customize table" picker. */}
+                {customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).map(f => (
                   <th key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{f.label}</th>
                 ))}
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>
+                {isColVisible('assignedTo') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>}
+                {isColVisible('createdAt') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>}
                 <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {loading ? (
-                <tr><td colSpan={(isAdmin ? 10 : 9) + (isTravel ? 2 : 0) + customFieldDefs.length} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
-              ) : filteredLeads.length === 0 ? (
-                <tr><td colSpan={(isAdmin ? 10 : 9) + (isTravel ? 2 : 0) + customFieldDefs.length} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
-              ) : filteredLeads.map(lead => (
+              {(() => {
+                // colSpan must track exactly how many <th> render above,
+                // including the generic-only optional columns the
+                // "Customize table" picker can hide.
+                const optionalCols = ['email', 'company', 'phone', 'aiScore', 'source', 'assignedTo', 'createdAt'].filter(isColVisible).length;
+                const visibleCfCols = customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).length;
+                const colSpan = (isAdmin ? 1 : 0) + 1 /* name */ + optionalCols + (isTravel ? 2 : 0) + visibleCfCols + 1 /* actions */;
+                if (loading) {
+                  return <tr><td colSpan={colSpan} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>;
+                }
+                if (filteredLeads.length === 0) {
+                  return <tr><td colSpan={colSpan} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>;
+                }
+                return null;
+              })()}
+              {!loading && filteredLeads.length > 0 && filteredLeads.map(lead => (
                 <tr
                   key={lead.id}
                   style={{ borderBottom: '1px solid var(--border-color)', cursor: 'pointer' }}
@@ -799,36 +851,42 @@ const Leads = () => {
                     </td>
                   )}
                   <td style={{ padding: '1rem', fontWeight: '500' }}>{lead.name}</td>
-                  <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.email}</td>
-                  <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.company || <span style={{ color: 'var(--border-color)' }}>—</span>}</td>
-                  <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
-                    {lead.phone || <span style={{ color: 'var(--border-color)' }}>—</span>}
-                  </td>
-                  <td style={{ padding: '1rem' }}>
-                    <span style={{
-                      padding: '0.25rem 0.75rem',
-                      borderRadius: '999px',
-                      fontSize: '0.75rem',
-                      fontWeight: 'bold',
-                      backgroundColor: lead.aiScore > 75 ? 'rgba(16, 185, 129, 0.1)' : lead.aiScore > 40 ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                      color: lead.aiScore > 75 ? 'var(--success-color)' : lead.aiScore > 40 ? 'var(--warning-color)' : '#ef4444',
-                    }}>
-                      {lead.aiScore}/100
-                    </span>
-                  </td>
-                  <td style={{ padding: '1rem' }}>
-                    <span style={{
-                      padding: '0.25rem 0.75rem',
-                      borderRadius: '999px',
-                      fontSize: '0.75rem',
-                      backgroundColor: 'rgba(139, 92, 246, 0.1)',
-                      color: 'var(--primary-color, var(--accent-color, #8b5cf6))',
-                      whiteSpace: 'nowrap',
-                      display: 'inline-block',
-                    }}>
-                      {lead.source || 'Organic'}
-                    </span>
-                  </td>
+                  {isColVisible('email') && <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.email}</td>}
+                  {isColVisible('company') && <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.company || <span style={{ color: 'var(--border-color)' }}>—</span>}</td>}
+                  {isColVisible('phone') && (
+                    <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
+                      {lead.phone || <span style={{ color: 'var(--border-color)' }}>—</span>}
+                    </td>
+                  )}
+                  {isColVisible('aiScore') && (
+                    <td style={{ padding: '1rem' }}>
+                      <span style={{
+                        padding: '0.25rem 0.75rem',
+                        borderRadius: '999px',
+                        fontSize: '0.75rem',
+                        fontWeight: 'bold',
+                        backgroundColor: lead.aiScore > 75 ? 'rgba(16, 185, 129, 0.1)' : lead.aiScore > 40 ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                        color: lead.aiScore > 75 ? 'var(--success-color)' : lead.aiScore > 40 ? 'var(--warning-color)' : '#ef4444',
+                      }}>
+                        {lead.aiScore}/100
+                      </span>
+                    </td>
+                  )}
+                  {isColVisible('source') && (
+                    <td style={{ padding: '1rem' }}>
+                      <span style={{
+                        padding: '0.25rem 0.75rem',
+                        borderRadius: '999px',
+                        fontSize: '0.75rem',
+                        backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                        color: 'var(--primary-color, var(--accent-color, #8b5cf6))',
+                        whiteSpace: 'nowrap',
+                        display: 'inline-block',
+                      }}>
+                        {lead.source || 'Organic'}
+                      </span>
+                    </td>
+                  )}
                   {isTravel && (
                     <td style={{ padding: '1rem' }}>
                       {lead.subBrand ? (
@@ -869,8 +927,10 @@ const Leads = () => {
                   })()}
                   {/* Generic-vertical-only Lead custom fields — shows every
                       defined field's value, or a dash for leads that predate
-                      the field (backend fills the key with null). */}
-                  {customFieldDefs.map(f => {
+                      the field (backend fills the key with null). Each
+                      field's column is independently toggleable via the
+                      "Customize table" picker (same cf_ prefix as the header). */}
+                  {customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).map(f => {
                     const raw = lead.customFields?.[f.fieldKey];
                     let display;
                     if (raw === null || raw === undefined || raw === '') {
@@ -896,28 +956,32 @@ const Leads = () => {
                       </td>
                     );
                   })}
-                  <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
-                    {isAdmin ? (
-                      <select
-                        className="input-field"
-                        value={lead.assignedToId || ''}
-                        onChange={e => handleAssign(lead.id, e.target.value)}
-                        style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
-                      >
-                        <option value="">Unassigned</option>
-                        {staff.map(s => (
-                          <option key={s.id} value={s.id}>{s.name || s.email}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span style={{ fontSize: '0.875rem', color: lead.assignedToId ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-                        {lead.assignedTo?.name || lead.assignedTo?.email || 'Unassigned'}
-                      </span>
-                    )}
-                  </td>
-                  <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                    {formatDate(lead.createdAt)}
-                  </td>
+                  {isColVisible('assignedTo') && (
+                    <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
+                      {isAdmin ? (
+                        <select
+                          className="input-field"
+                          value={lead.assignedToId || ''}
+                          onChange={e => handleAssign(lead.id, e.target.value)}
+                          style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
+                        >
+                          <option value="">Unassigned</option>
+                          {staff.map(s => (
+                            <option key={s.id} value={s.id}>{s.name || s.email}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span style={{ fontSize: '0.875rem', color: lead.assignedToId ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                          {lead.assignedTo?.name || lead.assignedTo?.email || 'Unassigned'}
+                        </span>
+                      )}
+                    </td>
+                  )}
+                  {isColVisible('createdAt') && (
+                    <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                      {formatDate(lead.createdAt)}
+                    </td>
+                  )}
                   <td style={{ padding: '1rem', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                     <button
                       onClick={() => openEdit(lead)}
@@ -945,8 +1009,10 @@ const Leads = () => {
               ))}
             </tbody>
           </table>
-          </div>
+          </TopScrollSync>
         </div>
+        );
+      })()}
 
         {/* #892 — Create Lead drawer. Mounted only when `creating` is true.
             Close triggers: X button, ESC keypress (handled by the useEffect

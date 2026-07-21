@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Eye, Globe, Users, UserCheck, Calendar, Copy, ChevronDown, ChevronRight } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
+import TopScrollSync from '../components/TopScrollSync';
 
 function timeAgo(d) {
   if (!d) return '';
@@ -132,7 +133,7 @@ export default function WebVisitors() {
             <div>No visitors tracked yet. Install the snippet below on your site.</div>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
+          <TopScrollSync>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: 'rgba(255,255,255,0.03)', textAlign: 'left' }}>
@@ -209,7 +210,7 @@ export default function WebVisitors() {
                 })}
               </tbody>
             </table>
-          </div>
+          </TopScrollSync>
         )}
       </div>
 

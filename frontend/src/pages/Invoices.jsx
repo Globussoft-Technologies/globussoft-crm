@@ -18,6 +18,7 @@ import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { SUB_BRAND_IDS, subBrandShortLabel } from "../utils/travelSubBrand";
+import TopScrollSync from "../components/TopScrollSync";
 
 const STATUS_CONFIG = {
   PAID: { color: "#10b981", bg: "rgba(16,185,129,0.15)", label: "Paid" },
@@ -830,7 +831,7 @@ export default function Invoices() {
               </p>
             </div>
           ) : (
-            <div style={{ overflowX: "auto" }}>
+            <TopScrollSync>
               {/* #243: table-layout fixed + per-column widths so the Contact
                   cell can no longer expand past its allotted space and bleed
                   on top of the sticky Actions column. The Contact cell itself
@@ -1199,7 +1200,7 @@ export default function Invoices() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TopScrollSync>
           )}
         </div>
       </div>

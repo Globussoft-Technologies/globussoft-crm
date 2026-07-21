@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
-import { MapPin, Plus, Phone, Mail, Building2, Pencil, Trash2 } from 'lucide-react';
+import { MapPin, Plus, Phone, Mail, Building2, Pencil, Trash2, Crosshair, ShieldCheck } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import PageHeader from '../../components/PageHeader';
 
 const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
-const EMPTY_FORM = { name: '', addressLine: '', city: '', state: '', pincode: '', phone: '', email: '' };
+// Mirrors backend/lib/attendanceGeofence.js DEFAULT_RADIUS_M — shown as a
+// placeholder only; leaving the field blank lets the backend default apply.
+const DEFAULT_RADIUS_M = 150;
+const EMPTY_FORM = { name: '', addressLine: '', city: '', state: '', pincode: '', phone: '', email: '', latitude: '', longitude: '', geofenceRadiusM: '' };
 
 export default function Locations() {
   const notify = useNotify();
@@ -38,8 +41,35 @@ export default function Locations() {
       pincode: loc.pincode || '',
       phone: loc.phone || '',
       email: loc.email || '',
+      latitude: loc.latitude ?? '',
+      longitude: loc.longitude ?? '',
+      geofenceRadiusM: loc.geofenceRadiusM ?? '',
     });
     setShowAdd(true);
+  };
+
+  // Fills lat/lng from the browser's current position — lets an admin stand
+  // at the clinic's front desk and capture exact coordinates instead of
+  // looking them up manually.
+  const [locating, setLocating] = useState(false);
+  const useCurrentLocation = () => {
+    if (!('geolocation' in navigator)) {
+      notify.error('Geolocation is not supported by this browser');
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setForm((f) => ({ ...f, latitude: pos.coords.latitude.toFixed(6), longitude: pos.coords.longitude.toFixed(6) }));
+        notify.success('Coordinates captured');
+        setLocating(false);
+      },
+      () => {
+        notify.error('Could not read current location — check browser permissions');
+        setLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
   };
 
   const submit = async (e) => {
@@ -49,13 +79,31 @@ export default function Locations() {
       notify.error('Enter a valid phone number (digits, +, spaces, hyphens only)');
       return;
     }
+    if (form.latitude !== '' && (Number.isNaN(Number(form.latitude)) || Number(form.latitude) < -90 || Number(form.latitude) > 90)) {
+      notify.error('Latitude must be a number between -90 and 90');
+      return;
+    }
+    if (form.longitude !== '' && (Number.isNaN(Number(form.longitude)) || Number(form.longitude) < -180 || Number(form.longitude) > 180)) {
+      notify.error('Longitude must be a number between -180 and 180');
+      return;
+    }
+    if (form.geofenceRadiusM !== '' && (Number.isNaN(Number(form.geofenceRadiusM)) || Number(form.geofenceRadiusM) <= 0)) {
+      notify.error('Geofence radius must be a positive number of meters');
+      return;
+    }
+    const payload = {
+      ...form,
+      latitude: form.latitude === '' ? null : Number(form.latitude),
+      longitude: form.longitude === '' ? null : Number(form.longitude),
+      geofenceRadiusM: form.geofenceRadiusM === '' ? null : Math.round(Number(form.geofenceRadiusM)),
+    };
     setSaving(true);
     try {
       if (editingId) {
-        await fetchApi(`/api/wellness/locations/${editingId}`, { method: 'PUT', body: JSON.stringify(form) });
+        await fetchApi(`/api/wellness/locations/${editingId}`, { method: 'PUT', body: JSON.stringify(payload) });
         notify.success(`Updated "${form.name}"`);
       } else {
-        await fetchApi('/api/wellness/locations', { method: 'POST', body: JSON.stringify(form) });
+        await fetchApi('/api/wellness/locations', { method: 'POST', body: JSON.stringify(payload) });
         notify.success(`Created "${form.name}"`);
       }
       resetForm();
@@ -134,11 +182,45 @@ export default function Locations() {
             style={inputStyle}
           />
           <input placeholder="Email — e.g. clinic@brand.in" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={inputStyle} />
-          {/* #386: scaffolding — geocoding + Google Maps autofill not wired yet.
-              Tip surfaces the expected affordance without promising behaviour. */}
-          <div style={{ gridColumn: '1 / -1', fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '-0.25rem' }}>
-            Tip: paste a Google Maps share-link to auto-fill (coming soon)
+
+          <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+            <ShieldCheck size={15} color="var(--accent-color)" />
+            <strong style={{ fontSize: '0.85rem' }}>Geofenced check-in (optional)</strong>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>— staff assigned to this clinic must be physically nearby to clock in/out</span>
           </div>
+          <input
+            placeholder="Latitude — e.g. 23.3441"
+            inputMode="decimal"
+            value={form.latitude}
+            onChange={(e) => setForm({ ...form, latitude: e.target.value })}
+            style={inputStyle}
+          />
+          <input
+            placeholder="Longitude — e.g. 85.3096"
+            inputMode="decimal"
+            value={form.longitude}
+            onChange={(e) => setForm({ ...form, longitude: e.target.value })}
+            style={inputStyle}
+          />
+          <input
+            placeholder={`Radius in meters — default ${DEFAULT_RADIUS_M}`}
+            inputMode="numeric"
+            value={form.geofenceRadiusM}
+            onChange={(e) => setForm({ ...form, geofenceRadiusM: e.target.value.replace(/\D/g, '') })}
+            style={inputStyle}
+          />
+          <button
+            type="button"
+            onClick={useCurrentLocation}
+            disabled={locating}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem', padding: '0.55rem 0.75rem', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.3)', color: 'var(--accent-color)', borderRadius: 8, cursor: locating ? 'wait' : 'pointer', fontSize: '0.85rem' }}
+          >
+            <Crosshair size={14} /> {locating ? 'Locating…' : 'Use my current location'}
+          </button>
+          <div style={{ gridColumn: '1 / -1', fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '-0.25rem' }}>
+            Leave latitude/longitude blank to skip geofencing for this clinic — staff assigned here can clock in/out from anywhere.
+          </div>
+
           <button type="submit" disabled={saving} style={{ padding: '0.55rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
             {saving ? 'Saving…' : (editingId ? 'Save changes' : 'Save location')}
           </button>
@@ -184,6 +266,17 @@ export default function Locations() {
               </div>
             </div>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', lineHeight: 1.4 }}>{loc.addressLine}</p>
+            <div style={{ marginBottom: '0.5rem' }}>
+              {loc.latitude != null && loc.longitude != null ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem', color: 'var(--success-color)', background: 'rgba(16,185,129,0.1)', padding: '0.15rem 0.5rem', borderRadius: 999 }}>
+                  <ShieldCheck size={11} /> Geofenced — {loc.geofenceRadiusM ?? DEFAULT_RADIUS_M}m radius
+                </span>
+              ) : (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem', color: 'var(--text-secondary)', background: 'rgba(100,100,100,0.1)', padding: '0.15rem 0.5rem', borderRadius: 999 }}>
+                  No geofence — clock-in allowed from anywhere
+                </span>
+              )}
+            </div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
               {loc.phone && <span><Phone size={12} style={{ verticalAlign: 'middle' }} /> {loc.phone}</span>}
               {loc.email && <span><Mail size={12} style={{ verticalAlign: 'middle' }} /> {loc.email}</span>}

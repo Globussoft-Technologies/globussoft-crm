@@ -3,6 +3,7 @@ import { X, FileText, Download, Eye } from 'lucide-react';
 import { getAuthToken } from '../../../../utils/api';
 import { useNotify } from '../../../../utils/notify';
 import { computeAgeFromDob, sexLabel, parseRxInstructions, th, td } from './helpers';
+import TopScrollSync from '../../../../components/TopScrollSync';
 
 // #226: shown above autosaved forms when a draft has been rehydrated from
 // sessionStorage. Lets the user discard the restored input in one click.
@@ -147,7 +148,8 @@ export function RxDetailModal({ rx, patient, onClose }) {
         <div style={{ ...headerRowStyle, whiteSpace: 'pre-wrap' }}><strong>Advice/Referrals:</strong> {parsed.advice || '—'}</div>
 
         <h3 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: '1rem 0 0.4rem' }}>Prescriptions</h3>
-        <div style={{ overflowX: 'auto', marginBottom: '1rem' }}>
+        <div style={{ marginBottom: '1rem' }}>
+        <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', minWidth: 720 }}>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
@@ -186,6 +188,7 @@ export function RxDetailModal({ rx, patient, onClose }) {
               })}
             </tbody>
           </table>
+        </TopScrollSync>
         </div>
 
         <div style={headerRowStyle}><strong>Notes:</strong> {parsed.notes || '—'}</div>

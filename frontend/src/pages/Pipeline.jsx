@@ -7,6 +7,7 @@ import { formatMoney, currencySymbol } from '../utils/money';
 import { io } from 'socket.io-client';
 import DealModal from '../components/DealModal';
 import { AuthContext } from '../App';
+import TopScrollSync from '../components/TopScrollSync';
 
 // Slugify a PipelineStage.name → stage column id.
 export const slugifyStageName = (name) =>
@@ -475,7 +476,7 @@ const Pipeline = () => {
               : 'No deals match the current filters.'}
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
+          <TopScrollSync>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
               <thead>
                 <tr>
@@ -602,7 +603,7 @@ const Pipeline = () => {
                 })}
               </tbody>
             </table>
-          </div>
+          </TopScrollSync>
         )}
       </div>
 

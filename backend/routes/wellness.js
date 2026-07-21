@@ -6463,6 +6463,46 @@ router.post(
   },
 );
 
+// Validates optional geofencing fields on Location create/update. Returns
+// null when valid, or an { error, code } body to send as a 400. Coordinates
+// must arrive as a pair (both or neither) — a lone lat or lng can't anchor a
+// geofence. Mirrors the DEFAULT_RADIUS_M note in lib/attendanceGeofence.js:
+// radius is optional even when coordinates are set (falls back at punch time).
+function validateGeofenceFields({ latitude, longitude, geofenceRadiusM }) {
+  const hasLat = latitude !== undefined && latitude !== null && latitude !== "";
+  const hasLng = longitude !== undefined && longitude !== null && longitude !== "";
+  if (hasLat !== hasLng) {
+    return {
+      error: "Latitude and longitude must be set together",
+      code: "INCOMPLETE_COORDS",
+    };
+  }
+  if (hasLat) {
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+      return { error: "Latitude must be between -90 and 90", code: "INVALID_LATITUDE" };
+    }
+    if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+      return { error: "Longitude must be between -180 and 180", code: "INVALID_LONGITUDE" };
+    }
+  }
+  if (
+    geofenceRadiusM !== undefined &&
+    geofenceRadiusM !== null &&
+    geofenceRadiusM !== ""
+  ) {
+    const r = parseFloat(geofenceRadiusM);
+    if (!Number.isFinite(r) || r <= 0) {
+      return {
+        error: "Geofence radius must be a positive number of meters",
+        code: "INVALID_RADIUS",
+      };
+    }
+  }
+  return null;
+}
+
 // ── Locations (multi-clinic) ───────────────────────────────────────
 
 router.get("/locations", async (req, res) => {
@@ -6522,6 +6562,7 @@ router.post(
         email,
         latitude,
         longitude,
+        geofenceRadiusM,
         hours,
       } = req.body;
       if (!name || !addressLine || !city) {
@@ -6543,6 +6584,11 @@ router.post(
           code: "INVALID_PINCODE",
         });
       }
+      // Geofencing (wellness attendance) — lat/lng and radius are optional;
+      // when supplied they must be sane values. See lib/attendanceGeofence.js
+      // for how these feed the clock-in/out radius check.
+      const geoErr = validateGeofenceFields({ latitude, longitude, geofenceRadiusM });
+      if (geoErr) return res.status(400).json(geoErr);
       const loc = await prisma.location.create({
         data: {
           name,
@@ -6553,8 +6599,20 @@ router.post(
           country: country || "India",
           phone: phone || null,
           email: email || null,
-          latitude: latitude !== undefined ? parseFloat(latitude) : null,
-          longitude: longitude !== undefined ? parseFloat(longitude) : null,
+          latitude:
+            latitude !== undefined && latitude !== null && latitude !== ""
+              ? parseFloat(latitude)
+              : null,
+          longitude:
+            longitude !== undefined && longitude !== null && longitude !== ""
+              ? parseFloat(longitude)
+              : null,
+          geofenceRadiusM:
+            geofenceRadiusM !== undefined &&
+            geofenceRadiusM !== null &&
+            geofenceRadiusM !== ""
+              ? Math.round(parseFloat(geofenceRadiusM))
+              : null,
           hours: hours
             ? typeof hours === "object"
               ? JSON.stringify(hours)
@@ -6612,6 +6670,7 @@ router.put(
         "email",
         "latitude",
         "longitude",
+        "geofenceRadiusM",
         "hours",
         "isActive",
       ];
@@ -6629,6 +6688,33 @@ router.put(
           error: "Pincode must be exactly 6 digits",
           code: "INVALID_PINCODE",
         });
+      }
+
+      // Same geofencing validation as POST. Uses the EXISTING row's
+      // lat/lng/radius as fallback for fields not present in this partial
+      // update, so e.g. patching just `geofenceRadiusM` doesn't get flagged
+      // as INCOMPLETE_COORDS against an already-complete pair.
+      const geoErr = validateGeofenceFields({
+        latitude: data.latitude !== undefined ? data.latitude : existing.latitude,
+        longitude: data.longitude !== undefined ? data.longitude : existing.longitude,
+        geofenceRadiusM:
+          data.geofenceRadiusM !== undefined
+            ? data.geofenceRadiusM
+            : existing.geofenceRadiusM,
+      });
+      if (geoErr) return res.status(400).json(geoErr);
+
+      if (data.latitude !== undefined) {
+        data.latitude = data.latitude === null || data.latitude === "" ? null : parseFloat(data.latitude);
+      }
+      if (data.longitude !== undefined) {
+        data.longitude = data.longitude === null || data.longitude === "" ? null : parseFloat(data.longitude);
+      }
+      if (data.geofenceRadiusM !== undefined) {
+        data.geofenceRadiusM =
+          data.geofenceRadiusM === null || data.geofenceRadiusM === ""
+            ? null
+            : Math.round(parseFloat(data.geofenceRadiusM));
       }
 
       const updated = await prisma.location.update({ where: { id }, data });
@@ -6726,6 +6812,112 @@ router.delete(
     } catch (e) {
       console.error("[wellness] delete location error:", e.message);
       res.status(500).json({ error: "Failed to delete location" });
+    }
+  },
+);
+
+// ── Staff ↔ Location assignment (geo-tagged attendance) ─────────────
+//
+// UserLocation is a many-to-many join between User and Location — see the
+// schema comment at prisma/schema.prisma's UserLocation model. A staff
+// member with NO rows here is not geofenced at all (attendance.js's
+// resolveGeofenceContext treats [] as "not enforced"); one row enforces a
+// single clinic; multiple rows let the punch succeed from ANY of them (e.g.
+// a doctor splitting time across two locations). Admin/manager only, same
+// gate as clinic location config itself.
+//
+// #348 namespacing rule (see docs/API_NAMESPACING.md): /api/wellness/* is
+// clinical-resources-only, and org resources like staff have NO wellness
+// alias — router.all("/staff/*", ...) above 410s any /wellness/staff/*
+// path unconditionally. This endpoint is about the Location side of the
+// relationship (which clinics is this user geofenced to), so it's namespaced
+// under /location-assignments/:userId rather than /staff/:userId/locations
+// to stay clear of that guard and the org/clinical split it enforces.
+router.get(
+  "/location-assignments/:userId",
+  adminOrPerm("settings", "manage"),
+  async (req, res) => {
+    try {
+      const userId = parseInt(req.params.userId, 10);
+      const target = await prisma.user.findFirst({
+        where: { id: userId, tenantId: req.user.tenantId },
+        select: { id: true },
+      });
+      if (!target) return res.status(404).json({ error: "Staff member not found" });
+
+      const rows = await prisma.userLocation.findMany({
+        where: { userId, location: { tenantId: req.user.tenantId } },
+        select: { location: { select: { id: true, name: true, city: true } } },
+      });
+      res.json({ locations: rows.map((r) => r.location) });
+    } catch (e) {
+      console.error("[wellness] get staff locations error:", e.message);
+      res.status(500).json({ error: "Failed to load staff locations" });
+    }
+  },
+);
+
+router.put(
+  "/location-assignments/:userId",
+  adminOrPerm("settings", "manage"),
+  async (req, res) => {
+    try {
+      const userId = parseInt(req.params.userId, 10);
+      const target = await prisma.user.findFirst({
+        where: { id: userId, tenantId: req.user.tenantId },
+        select: { id: true, name: true },
+      });
+      if (!target) return res.status(404).json({ error: "Staff member not found" });
+
+      const { locationIds } = req.body;
+      if (!Array.isArray(locationIds)) {
+        return res.status(400).json({ error: "locationIds must be an array" });
+      }
+      const ids = [...new Set(locationIds.map((n) => parseInt(n, 10)))].filter(Number.isFinite);
+
+      // Verify every id belongs to this tenant before wiring — prevents an
+      // admin from (even accidentally) assigning staff to another tenant's
+      // clinic via a crafted id.
+      if (ids.length > 0) {
+        const owned = await prisma.location.count({
+          where: { id: { in: ids }, tenantId: req.user.tenantId },
+        });
+        if (owned !== ids.length) {
+          return res.status(400).json({ error: "One or more locations not found", code: "INVALID_LOCATION_ID" });
+        }
+      }
+
+      // Replace-all semantics inside a transaction — simplest correct model
+      // for a small per-user assignment set (staff are rarely assigned to
+      // more than a handful of clinics).
+      await prisma.$transaction([
+        prisma.userLocation.deleteMany({ where: { userId } }),
+        ...ids.map((locationId) =>
+          prisma.userLocation.create({ data: { userId, locationId } }),
+        ),
+      ]);
+
+      try {
+        await writeAudit(
+          "UserLocation",
+          "UPDATE",
+          userId,
+          req.user.userId,
+          req.user.tenantId,
+          { staffName: target.name, locationIds: ids },
+        );
+      } catch (auditErr) {
+        console.warn("[audit]", auditErr.message);
+      }
+
+      const rows = await prisma.userLocation.findMany({
+        where: { userId },
+        select: { location: { select: { id: true, name: true, city: true } } },
+      });
+      res.json({ locations: rows.map((r) => r.location) });
+    } catch (e) {
+      console.error("[wellness] set staff locations error:", e.message);
+      res.status(500).json({ error: "Failed to update staff locations" });
     }
   },
 );

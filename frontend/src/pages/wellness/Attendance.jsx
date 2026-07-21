@@ -16,6 +16,28 @@ import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
 
+// Wraps navigator.geolocation.getCurrentPosition in a promise. Resolves to
+// null (never rejects) when geolocation is unsupported, denied, or times
+// out — the backend's geofence check already fails open with LOCATION_REQUIRED
+// when no coords are sent, so the punch flow degrades gracefully either way.
+function getCurrentCoords() {
+  return new Promise((resolve) => {
+    if (!('geolocation' in navigator)) {
+      resolve(null);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+      }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+    );
+  });
+}
+
 function fmtDate(s) {
   if (!s) return '—';
   return new Date(s).toLocaleDateString();
@@ -31,6 +53,29 @@ function fmtMinutes(m) {
   const h = Math.floor(m / 60);
   const mm = m % 60;
   return `${h}h ${mm}m`;
+}
+
+// Turns the backend's geofence error codes (see lib/attendanceGeofence.js)
+// into a friendlier message. fetchApi (utils/api.js) attaches `code` and
+// `serverMessage` directly on the thrown Error — NOT `e.body.code` /
+// `e.body.error`, which don't exist on this error shape (a prior version of
+// this helper read those and silently always fell through to the generic
+// fallback, because e.body was always undefined).
+//
+// For OUTSIDE_RADIUS and ACCURACY_TOO_LOW specifically, the SERVER's message
+// is already the best copy — lib/attendanceGeofence.js builds it with the
+// actual clinic name, live distance, and required radius baked in (e.g.
+// "You're 3400m from Ranchi — outside the allowed range. Move closer and
+// try again."). Don't replace that with a generic string; only LOCATION_REQUIRED
+// needs frontend-authored copy, since the server's version of that message
+// doesn't mention the browser-permission angle.
+function geofenceErrorMessage(e) {
+  const code = e && e.code;
+  const serverMsg = e && e.serverMessage;
+  if (code === 'LOCATION_REQUIRED') {
+    return 'Location access is required to clock in/out here. Please allow location access in your browser and try again.';
+  }
+  return serverMsg;
 }
 
 function statusClass(s) {
@@ -76,12 +121,16 @@ export default function Attendance() {
   const onClockIn = async () => {
     setBusy(true);
     try {
-      await fetchApi('/api/attendance/clock-in', { method: 'POST', body: JSON.stringify({}) });
+      const coords = await getCurrentCoords();
+      // silent: true — fetchApi's default auto-toast would show the raw
+      // server error alongside our friendlier geofenceErrorMessage below,
+      // stacking two red banners for one failure. We handle the toast
+      // ourselves here so there's exactly one.
+      await fetchApi('/api/attendance/clock-in', { method: 'POST', body: JSON.stringify(coords || {}), silent: true });
       notify.success('Clocked in');
       load();
     } catch (e) {
-      const msg = e && e.body && e.body.error;
-      notify.error(msg || 'Clock-in failed');
+      notify.error(geofenceErrorMessage(e) || 'Clock-in failed. Please try again.');
     } finally {
       setBusy(false);
     }
@@ -90,12 +139,12 @@ export default function Attendance() {
   const onClockOut = async () => {
     setBusy(true);
     try {
-      await fetchApi('/api/attendance/clock-out', { method: 'POST', body: JSON.stringify({}) });
+      const coords = await getCurrentCoords();
+      await fetchApi('/api/attendance/clock-out', { method: 'POST', body: JSON.stringify(coords || {}), silent: true });
       notify.success('Clocked out');
       load();
     } catch (e) {
-      const msg = e && e.body && e.body.error;
-      notify.error(msg || 'Clock-out failed');
+      notify.error(geofenceErrorMessage(e) || 'Clock-out failed. Please try again.');
     } finally {
       setBusy(false);
     }

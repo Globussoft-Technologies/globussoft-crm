@@ -26,7 +26,25 @@
 const { haversineDistanceMeters } = require("./poiDedup");
 
 const DEFAULT_RADIUS_M = 150;
-const ACCURACY_THRESHOLD_M = 100;
+// Was 100m — raised to 500m after confirming (via a real Chrome DevTools
+// payload capture) that ordinary laptop/WiFi-based geolocation routinely
+// reports ±500m accuracy, nowhere near 100m-GPS-grade. At 100m, staff
+// checking in from a desktop at their own clinic could get blocked by their
+// own device's positioning method, not by actually being far away. 500m
+// still catches genuinely-unusable multi-km-off readings while letting
+// normal desktop/laptop check-ins reach the real distance/radius check below.
+const ACCURACY_THRESHOLD_M = 500;
+
+// Formats a meter distance for a user-facing message. Below 1km, whole
+// meters ("340m"); at or above 1km, kilometers to 1 decimal ("1500.1km") —
+// a 7-digit meter count (e.g. "1500143m") reads as noise, and testers hitting
+// this from another city/country routinely produce distances in that range.
+function formatDistanceM(meters) {
+  if (meters >= 1000) {
+    return `${(meters / 1000).toFixed(1)}km`;
+  }
+  return `${Math.round(meters)}m`;
+}
 
 /**
  * @param {{latitude:number, longitude:number, accuracy:number}} coords
@@ -44,7 +62,7 @@ function checkAccuracy(coords) {
     return {
       ok: false,
       code: "ACCURACY_TOO_LOW",
-      error: `Your location reading isn't precise enough (±${Math.round(accuracy)}m). Move somewhere with a clearer GPS signal and try again.`,
+      error: `We can't verify your location precisely enough to check in. Your device's location reading is only accurate to ±${formatDistanceM(accuracy)} — we need it accurate to within ${ACCURACY_THRESHOLD_M}m. Try moving outdoors or near a window, or use a phone with GPS enabled, then try again.`,
     };
   }
   return { ok: true };
@@ -72,14 +90,18 @@ function checkWithinAnyRadius(coords, locations) {
     if (distance <= radius) {
       return { ok: true, matchedLocationId: loc.id };
     }
-    if (!nearest || distance < nearest.distance) nearest = { id: loc.id, name: loc.name, distance };
+    if (!nearest || distance < nearest.distance) nearest = { id: loc.id, name: loc.name, distance, radius };
   }
+  // `radius` here is whatever's actually configured for the nearest clinic —
+  // the admin's Location.geofenceRadiusM if they set one, otherwise
+  // DEFAULT_RADIUS_M (150m). Never hardcode a number in this message; it
+  // must always reflect the real per-location value from `nearest.radius`.
   return {
     ok: false,
     code: "OUTSIDE_RADIUS",
     error: nearest
-      ? `You're ${Math.round(nearest.distance)}m from ${nearest.name} — outside the allowed range. Move closer and try again.`
-      : "You're outside the allowed range of your assigned clinic. Move closer and try again.",
+      ? `You're too far from ${nearest.name} to check in. Check-in is only available within ${nearest.radius}m of your assigned location (you're currently ${formatDistanceM(nearest.distance)} away). Please move closer and try again.`
+      : "You're too far from your assigned location to check in. Please move closer and try again.",
   };
 }
 

@@ -305,11 +305,16 @@ export default function CostMaster() {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      const text = await file.text();
+      // FormData upload (not raw text body) so both CSV and binary XLSX
+      // files work — the backend's multer middleware already accepts
+      // either via upload.single("file") and picks the parser by
+      // extension/mimetype.
+      const formData = new FormData();
+      formData.append("file", file);
       const res = await fetch("/api/travel/cost-master/import.csv", {
         method: "POST",
-        headers: { Authorization: `Bearer ${getAuthToken()}`, "Content-Type": "text/csv" },
-        body: text,
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+        body: formData,
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || `Import failed (${res.status})`);
@@ -343,11 +348,11 @@ export default function CostMaster() {
             <Download size={14} /> Export CSV
           </button>
           <button type="button" onClick={() => fileRef.current?.click()} style={secondaryBtn}
-            title="Bulk-upload supplier rates. Columns: subBrand, category, routeOrSku, baseRate, currency, supplierId, seasonId, attributesJson, validFrom, validTo, isActive.">
-            <Upload size={14} /> Import CSV
+            title="Bulk-upload supplier rates (CSV or Excel). Columns: subBrand, category, routeOrSku, baseRate, currency, supplierId, seasonId, attributesJson, validFrom, validTo, isActive.">
+            <Upload size={14} /> Import CSV/Excel
           </button>
-          <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={importCsv}
-            style={{ display: "none" }} aria-label="Upload cost-master CSV" />
+          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,text/csv" onChange={importCsv}
+            style={{ display: "none" }} aria-label="Upload cost-master CSV or Excel file" />
           {!adding && (
             <button type="button" onClick={() => { setAdding(true); setEditingId(null); }} style={primaryBtn}>
               <Plus size={14} /> Add rate

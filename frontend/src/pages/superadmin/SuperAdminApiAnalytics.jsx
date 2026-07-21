@@ -18,6 +18,7 @@ import { RefreshCw, ListFilter } from "lucide-react";
 import { superAdminFetch } from "../../utils/superAdminApi";
 import { useNotify } from "../../utils/notify";
 import CalendarRangePicker from "../../components/CalendarRangePicker";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const DAY_OPTIONS = [7, 14, 30, 90];
 // Dark-mode categorical steps from the validated reference palette (8 slots,
@@ -512,7 +513,8 @@ function CallLogTab() {
       ) : calls.length === 0 ? (
         <p style={{ color: "var(--text-secondary, #9aa0ab)" }}>No calls match these filters.</p>
       ) : (
-        <div style={{ overflowX: "auto", border: "1px solid var(--border-color, rgba(255,255,255,0.08))", borderRadius: 8 }}>
+        <div style={{ border: "1px solid var(--border-color, rgba(255,255,255,0.08))", borderRadius: 8 }}>
+        <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
             <thead style={{ background: "rgba(107,114,128,0.08)" }}>
               <tr>
@@ -541,6 +543,7 @@ function CallLogTab() {
               ))}
             </tbody>
           </table>
+        </TopScrollSync>
         </div>
       )}
 

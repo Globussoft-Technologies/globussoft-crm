@@ -5,6 +5,7 @@ import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
 import PageHeader from '../../components/PageHeader';
+import TopScrollSync from '../../components/TopScrollSync';
 
 export default function Products() {
   const notify = useNotify();
@@ -369,7 +370,7 @@ export default function Products() {
           {products.length === 0 ? 'No products yet.' : 'No products match your filters.'}
         </div>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
+        <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '2px solid var(--border-color)' }}>
@@ -480,7 +481,7 @@ export default function Products() {
               ))}
             </tbody>
           </table>
-        </div>
+        </TopScrollSync>
       )}
 
       {/* Product Details Modal */}

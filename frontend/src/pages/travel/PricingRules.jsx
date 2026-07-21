@@ -64,14 +64,17 @@ async function downloadCsv(notify, url, filename) {
   }
 }
 async function uploadCsv(notify, url, file, onDone) {
-  const text = await file.text();
+  // FormData upload (not raw text body) so both CSV and binary XLSX files
+  // work — the backend's multer middleware already accepts either via
+  // upload.single("file") and picks the parser by extension/mimetype.
+  const formData = new FormData();
+  formData.append("file", file);
   const res = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${getAuthToken()}`,
-      "Content-Type": "text/csv",
     },
-    body: text,
+    body: formData,
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body?.error || `Import failed (${res.status})`);
@@ -251,17 +254,17 @@ function SeasonsSection() {
             type="button"
             onClick={() => fileRef.current?.click()}
             style={secondaryBtn}
-            title="Bulk-upload seasons. Columns: subBrand, seasonName, startDate, endDate, multiplier."
+            title="Bulk-upload seasons (CSV or Excel). Columns: subBrand, seasonName, startDate, endDate, multiplier."
           >
-            <Upload size={14} /> Import CSV
+            <Upload size={14} /> Import CSV/Excel
           </button>
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,.xls,text/csv"
             onChange={importCsv}
             style={{ display: "none" }}
-            aria-label="Upload seasons CSV"
+            aria-label="Upload seasons CSV or Excel file"
           />
           {!showForm && (
             <button type="button" onClick={() => { setAdding(true); setEditingId(null); setForm(blankForm); }} style={primaryBtn}>
@@ -552,17 +555,17 @@ function MarkupRulesSection() {
             type="button"
             onClick={() => fileRef.current?.click()}
             style={secondaryBtn}
-            title="Bulk-upload markup rules. Columns: subBrand, scope, matchKeyJson, markupPct OR markupFlat, priority, isActive."
+            title="Bulk-upload markup rules (CSV or Excel). Columns: subBrand, scope, matchKeyJson, markupPct OR markupFlat, priority, isActive."
           >
-            <Upload size={14} /> Import CSV
+            <Upload size={14} /> Import CSV/Excel
           </button>
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,.xls,text/csv"
             onChange={importCsv}
             style={{ display: "none" }}
-            aria-label="Upload markup rules CSV"
+            aria-label="Upload markup rules CSV or Excel file"
           />
           {!showForm && (
             <button type="button" onClick={() => { setAdding(true); setEditingId(null); setForm(blankForm); }} style={primaryBtn}>

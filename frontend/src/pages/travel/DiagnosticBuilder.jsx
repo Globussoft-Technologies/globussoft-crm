@@ -167,14 +167,18 @@ export default function DiagnosticBuilder() {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      const text = await file.text();
+      // FormData upload (not raw text body) so both CSV and binary XLSX
+      // files work — the backend's multer middleware already accepts
+      // either via upload.single("file") and picks the parser by
+      // extension/mimetype.
+      const formData = new FormData();
+      formData.append('file', file);
       const res = await fetch('/api/travel/diagnostic-banks/import.csv', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${getAuthToken()}`,
-          'Content-Type': 'text/csv',
         },
-        body: text,
+        body: formData,
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || `Import failed (${res.status})`);
@@ -256,14 +260,14 @@ export default function DiagnosticBuilder() {
             type="button"
             onClick={() => fileRef.current?.click()}
             style={secondaryBtn}
-            title="Bulk-upload diagnostic banks. Columns: subBrand, version, questionsJson, scoringRulesJson, isActive."
+            title="Bulk-upload diagnostic banks (CSV or Excel). Columns: subBrand, version, questionsJson, scoringRulesJson, isActive."
           >
-            <Upload size={14} aria-hidden /> Import CSV
+            <Upload size={14} aria-hidden /> Import CSV/Excel
           </button>
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,.xls,text/csv"
             onChange={importCsv}
             style={{ display: 'none' }}
             aria-label="Upload diagnostic-banks CSV"

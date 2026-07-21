@@ -552,8 +552,12 @@ describe('<Attendance /> — error states', () => {
   it('surfaces a 4xx error message from /clock-in via notify.error', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/attendance/clock-in' && opts?.method === 'POST') {
+        // fetchApi's real error shape attaches `code`/`serverMessage`
+        // directly on the thrown Error (see utils/api.js) — NOT
+        // `err.body.error`, which never existed on this contract.
         const err = new Error('Bad request');
-        err.body = { error: 'Clock-in window closed' };
+        err.code = 'CLOCK_IN_WINDOW_CLOSED';
+        err.serverMessage = 'Clock-in window closed';
         return Promise.reject(err);
       }
       if (url.startsWith('/api/attendance/me')) return Promise.resolve([]);
@@ -578,7 +582,8 @@ describe('<Attendance /> — error states', () => {
       if (url === '/api/attendance/clock-in' && opts?.method === 'POST') {
         const err = new Error('Conflict');
         err.status = 409;
-        err.body = { error: 'Already clocked in today' };
+        err.code = 'ALREADY_CLOCKED_IN';
+        err.serverMessage = 'Already clocked in today';
         return Promise.reject(err);
       }
       if (url.startsWith('/api/attendance/me')) return Promise.resolve([]);
@@ -596,9 +601,12 @@ describe('<Attendance /> — error states', () => {
     });
   });
 
-  it('falls back to a generic message when the rejection has no body.error', async () => {
+  it('falls back to a generic message when the rejection has no serverMessage', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/attendance/clock-in' && opts?.method === 'POST') {
+        // No code/serverMessage attached (e.g. a network-level failure) —
+        // geofenceErrorMessage() returns undefined, so the component's own
+        // final fallback string is what should surface.
         return Promise.reject(new Error('network down'));
       }
       if (url.startsWith('/api/attendance/me')) return Promise.resolve([]);
@@ -612,7 +620,7 @@ describe('<Attendance /> — error states', () => {
     await user.click(punchIn);
 
     await waitFor(() => {
-      expect(notify.error).toHaveBeenCalledWith('Clock-in failed');
+      expect(notify.error).toHaveBeenCalledWith('Clock-in failed. Please try again.');
     });
   });
 });

@@ -71,6 +71,7 @@
 import { useEffect, useState, useContext } from "react";
 import { Percent, Plus, Pencil, Trash2, Calculator, List, Download } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
+import TopScrollSync from "../../components/TopScrollSync";
 import { useNotify } from "../../utils/notify";
 import {
   SUB_BRAND_BG,
@@ -1153,7 +1154,7 @@ export default function CommissionProfilesAdmin() {
 
           {!ledgerLoading && !ledgerError && ledgerData
             && (ledgerData.entries || []).length > 0 && (
-            <div style={{ overflowX: "auto" }}>
+            <TopScrollSync>
               <table
                 data-testid="commission-profile-ledger-table"
                 style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
@@ -1228,7 +1229,7 @@ export default function CommissionProfilesAdmin() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TopScrollSync>
           )}
         </div>
       )}

@@ -34,7 +34,7 @@ const FAR = { latitude: 23.3541, longitude: 85.3096, accuracy: 20 };
 describe('attendanceGeofence — module shape', () => {
   it('exports the expected constants + functions', () => {
     expect(DEFAULT_RADIUS_M).toBe(150);
-    expect(ACCURACY_THRESHOLD_M).toBe(100);
+    expect(ACCURACY_THRESHOLD_M).toBe(500);
     expect(typeof checkAccuracy).toBe('function');
     expect(typeof checkWithinAnyRadius).toBe('function');
     expect(typeof evaluatePunchGeofence).toBe('function');
@@ -54,15 +54,26 @@ describe('checkAccuracy', () => {
     expect(out.code).toBe('LOCATION_REQUIRED');
   });
 
-  it('accuracy worse than the 100m threshold → ACCURACY_TOO_LOW', () => {
-    const out = checkAccuracy({ latitude: 23.34, longitude: 85.3, accuracy: 150 });
+  it('accuracy worse than the 500m threshold → ACCURACY_TOO_LOW', () => {
+    const out = checkAccuracy({ latitude: 23.34, longitude: 85.3, accuracy: 750 });
     expect(out.ok).toBe(false);
     expect(out.code).toBe('ACCURACY_TOO_LOW');
-    expect(out.error).toMatch(/150m/);
+    expect(out.error).toMatch(/750m/);
   });
 
-  it('accuracy exactly at the threshold (100m) is accepted, not rejected', () => {
-    const out = checkAccuracy({ latitude: 23.34, longitude: 85.3, accuracy: 100 });
+  it('accuracy exactly at the threshold (500m) is accepted, not rejected', () => {
+    const out = checkAccuracy({ latitude: 23.34, longitude: 85.3, accuracy: 500 });
+    expect(out.ok).toBe(true);
+  });
+
+  it('typical laptop/WiFi-based accuracy (500m, matches a real Chrome DevTools capture) is accepted', () => {
+    // Regression pin for the 100m -> 500m threshold change: ordinary
+    // desktop/laptop geolocation (WiFi-based, not GPS) commonly reports
+    // exactly this accuracy. Confirmed via a real browser payload capture
+    // ({ latitude: 12.93282, longitude: 77.61566, accuracy: 500 }) that
+    // used to be rejected under the old 100m threshold even for staff
+    // checking in from their own desk.
+    const out = checkAccuracy({ latitude: 12.93282, longitude: 77.61566, accuracy: 500 });
     expect(out.ok).toBe(true);
   });
 
@@ -161,11 +172,13 @@ describe('evaluatePunchGeofence — orchestrator', () => {
   it('wellness tenant, assigned + fuzzy GPS reading → enforced + rejected ACCURACY_TOO_LOW BEFORE the distance check runs', () => {
     // FAR coords would also fail on distance, but accuracy is checked first —
     // pin that a fuzzy-but-in-range reading still gets ACCURACY_TOO_LOW, not
-    // OUTSIDE_RADIUS, so the user gets the right actionable message.
+    // OUTSIDE_RADIUS, so the user gets the right actionable message. Uses
+    // 5000m (well above the 500m threshold) rather than exactly 500m, since
+    // 500m is now the accepted boundary, not a rejected value.
     const out = evaluatePunchGeofence({
       vertical: 'wellness',
       assignedLocations: [CLINIC],
-      coords: { latitude: NEARBY.latitude, longitude: NEARBY.longitude, accuracy: 500 },
+      coords: { latitude: NEARBY.latitude, longitude: NEARBY.longitude, accuracy: 5000 },
     });
     expect(out.enforced).toBe(true);
     expect(out.ok).toBe(false);

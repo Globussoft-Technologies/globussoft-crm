@@ -4,6 +4,7 @@ import { useNotify } from '../utils/notify';
 import {
   Database, Camera, Download, Trash2, AlertTriangle, RotateCcw, X, Plus, ShieldAlert,
 } from 'lucide-react';
+import TopScrollSync from '../components/TopScrollSync';
 
 const RED = '#ef4444';
 const RED_BG = 'rgba(239,68,68,0.1)';
@@ -253,7 +254,7 @@ export default function Sandbox() {
             <div style={{ fontSize: '0.85rem' }}>Click <strong>Create Snapshot</strong> above to capture your current tenant data.</div>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
+          <TopScrollSync>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: 'var(--subtle-bg-4)', textAlign: 'left' }}>
@@ -305,7 +306,7 @@ export default function Sandbox() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TopScrollSync>
         )}
       </div>
 

@@ -38,9 +38,19 @@ export default function ColumnPicker({ tableKey, onColumnsChange }) {
     setLoading(true);
     try {
       const data = await fetchApi(`/api/table-column-prefs/${tableKey}`);
+      // A well-formed response always has both fields as arrays (see
+      // backend/routes/table_column_preferences.js's GET handler). If the
+      // response is malformed/unexpected (e.g. an error body, or `null`),
+      // fail safe by leaving the parent's default column set alone —
+      // do NOT call onColumnsChange with an empty array, which would
+      // silently hide every optional column instead of just falling back.
+      if (!Array.isArray(data?.visible)) {
+        loadedOnce.current = true;
+        return;
+      }
       setAvailable(Array.isArray(data.availableColumns) ? data.availableColumns : []);
-      setDraftVisible(Array.isArray(data.visible) ? data.visible : []);
-      onColumnsChange?.(Array.isArray(data.visible) ? data.visible : []);
+      setDraftVisible(data.visible);
+      onColumnsChange?.(data.visible);
       loadedOnce.current = true;
     } catch (_err) {
       // Best-effort — a failed load just means the table falls back to

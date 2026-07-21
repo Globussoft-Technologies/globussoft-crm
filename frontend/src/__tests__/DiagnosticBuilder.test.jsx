@@ -523,7 +523,11 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
       expect(url).toBe('/api/travel/diagnostic-banks/import.csv');
       expect(opts.method).toBe('POST');
       expect(opts.headers.Authorization).toBe('Bearer test-token');
-      expect(opts.headers['Content-Type']).toBe('text/csv');
+      // Upload now goes over FormData (not a raw text/csv body) so binary
+      // XLSX files survive the trip too — no explicit Content-Type header
+      // is set, since fetch/FormData compute the multipart boundary itself.
+      expect(opts.headers['Content-Type']).toBeUndefined();
+      expect(opts.body).toBeInstanceOf(FormData);
     });
     await waitFor(() => {
       expect(notifyObj.success).toHaveBeenCalled();

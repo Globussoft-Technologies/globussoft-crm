@@ -2404,7 +2404,7 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
     );
     expect(res.status(), `body: ${await res.text()}`).toBe(201);
     const body = await res.json();
-    const drugs = JSON.parse(body.drugs);
+    const drugs = Array.isArray(body.drugs) ? body.drugs : JSON.parse(body.drugs);
     expect(drugs[0].name).toBe('Drug name only');
     // The shape persists as-stored — undefined sister fields don't get
     // synthesised into "" or "0".

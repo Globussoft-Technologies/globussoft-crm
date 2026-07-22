@@ -408,6 +408,10 @@ export default function Staff() {
   // wellnessRole } when an admin clicked Edit on a row.
   const [editing, setEditing] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  // Reset-password modal state. Keeps the existing email flow and adds a
+  // direct password-setting path from the same staff-row action.
+  const [resettingPassword, setResettingPassword] = useState(null);
+  const [resetPasswordValue, setResetPasswordValue] = useState('');
   // Add-Staff modal state. null when closed; the form draft when open.
   // POSTs to /api/staff which creates a user inside the current tenant.
   // The created user lands on the role-aware Dashboard variant on first login.
@@ -587,6 +591,7 @@ export default function Staff() {
       // Geo-tagged attendance (wellness only) — filled in async below once
       // GET /staff/:userId/locations returns; empty until then so the
       // picker renders with nothing checked rather than stale data.
+      password: '',
       locationIds: [],
     });
     if (isWellness) {
@@ -620,6 +625,11 @@ export default function Staff() {
   const saveEdit = async () => {
     if (!editing) return;
     if (!editing.rbacRoleId) { notify.error('Please choose a role.'); return; }
+    const manualPassword = (editing.password || '').trim();
+    if (manualPassword && manualPassword.length < 6) {
+      notify.error('Manual password must be at least 6 characters.');
+      return;
+    }
     // Same single-pick → 3-field derivation as saveCreate. The backend
     // contract still accepts role + wellnessRole + rbacRoleId independently;
     // we just stop asking the admin to fill them out separately.
@@ -646,6 +656,7 @@ export default function Staff() {
           ...(isTravel
             ? { subBrandAccess: accessTier === 'ADMIN' || !editing.subBrandAccess?.length ? null : editing.subBrandAccess }
             : {}),
+          ...(manualPassword ? { password: manualPassword } : {}),
         }),
       });
       notify.success('Staff member updated.');
@@ -752,19 +763,45 @@ export default function Staff() {
     }
   };
 
-  const resetPassword = async (member) => {
-    const target = member.name || member.email || 'this user';
-    if (!await notify.confirm({
-      title: 'Reset password',
-      message: `Send a password-reset link to ${member.email}? The link is valid for 1 hour.`,
-      confirmText: 'Send reset link',
-      cancelText: 'Cancel',
-    })) return;
+  const resetPassword = (member) => {
+    setResettingPassword(member);
+    setResetPasswordValue('');
+  };
+
+  const closeResetPassword = () => {
+    setResettingPassword(null);
+    setResetPasswordValue('');
+  };
+
+  const sendResetLink = async () => {
+    if (!resettingPassword) return;
+    const target = resettingPassword.name || resettingPassword.email || 'this user';
     try {
-      await fetchApi(`/api/staff/${member.id}/reset-password`, { method: 'POST', body: JSON.stringify({}) });
+      await fetchApi(`/api/staff/${resettingPassword.id}/reset-password`, { method: 'POST', body: JSON.stringify({}) });
       notify.success(`Password reset link sent to ${target}.`);
+      closeResetPassword();
     } catch (err) {
       notify.error(err.message || 'Failed to send password reset.');
+    }
+  };
+
+  const saveManualPassword = async () => {
+    if (!resettingPassword) return;
+    const target = resettingPassword.name || resettingPassword.email || 'this user';
+    const password = (resetPasswordValue || '').trim();
+    if (password.length < 6) {
+      notify.error('Manual password must be at least 6 characters.');
+      return;
+    }
+    try {
+      await fetchApi(`/api/staff/${resettingPassword.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ password }),
+      });
+      notify.success(`Password updated for ${target}.`);
+      closeResetPassword();
+    } catch (err) {
+      if (!err.status) notify.error(err.message || 'Failed to update password.');
     }
   };
 
@@ -1495,6 +1532,76 @@ export default function Staff() {
                 }}
               >
                 {savingCreate ? 'Adding…' : (<><UserPlus size={14} /> Add staff member</>)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset-password modal. Keeps the existing email reset-link flow and
+          adds a direct password-set path for admins who need immediate access. */}
+      {resettingPassword && (
+        <div
+          data-testid="staff-reset-modal"
+          onClick={(e) => { if (e.target === e.currentTarget) closeResetPassword(); }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000, padding: '1rem',
+          }}
+        >
+          <div className="card" style={{ width: '100%', maxWidth: 460, padding: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Reset password</h3>
+              <button
+                onClick={closeResetPassword}
+                aria-label="Close"
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p style={{ margin: '0 0 1rem', fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              Send a password-reset link to {resettingPassword.email}? The link is valid for 1 hour.
+            </p>
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              Manual password <span style={{ fontWeight: 400 }}>(optional, set a new password immediately)</span>
+              <input
+                type="password"
+                className="input-field"
+                value={resetPasswordValue}
+                onChange={(e) => setResetPasswordValue(e.target.value)}
+                placeholder="Type a new password"
+                data-testid="staff-reset-password-input"
+                autoComplete="new-password"
+                style={{ width: '100%', marginTop: '0.25rem' }}
+              />
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem', flexWrap: 'wrap' }}>
+              <button
+                onClick={closeResetPassword}
+                style={{
+                  background: 'transparent', color: 'var(--text-secondary)',
+                  border: '1px solid var(--border-color)', borderRadius: '6px',
+                  padding: '0.4rem 0.9rem', cursor: 'pointer', fontSize: '0.85rem',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={sendResetLink}
+                className="btn-primary"
+                style={{ padding: '0.4rem 0.9rem', fontSize: '0.85rem' }}
+              >
+                Send reset link
+              </button>
+              <button
+                onClick={saveManualPassword}
+                className="btn-primary"
+                data-testid="staff-reset-password-save"
+                style={{ padding: '0.4rem 0.9rem', fontSize: '0.85rem' }}
+              >
+                Set password
               </button>
             </div>
           </div>

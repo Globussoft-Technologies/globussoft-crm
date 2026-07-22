@@ -3,6 +3,7 @@ import { DollarSign, Plus, Edit, Star, Trash2, RefreshCw, X, TrendingUp } from '
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatCurrency } from '../utils/currency';
+import TopScrollSync from '../components/TopScrollSync';
 
 export default function Currencies() {
   const notify = useNotify();
@@ -193,10 +194,11 @@ export default function Currencies() {
       )}
 
       {/* Table */}
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="card" style={{ padding: 0, overflow: 'visible' }}>
         {loading ? (
           <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading currencies...</div>
         ) : (
+          <TopScrollSync>
           <table className="stable-table" style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: 'var(--subtle-bg)', textAlign: 'left' }}>
@@ -280,6 +282,7 @@ export default function Currencies() {
               )}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

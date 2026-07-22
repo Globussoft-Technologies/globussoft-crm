@@ -31,6 +31,7 @@ import { useEffect, useState } from "react";
 import { MessageSquare, RefreshCw, AlertTriangle, Trash2 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const STATUS_FILTERS = [
   { value: "", label: "All statuses" },
@@ -264,7 +265,7 @@ export default function TravelWhatsAppLog() {
         </select>
       </div>
 
-      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="glass" style={{ padding: 0, overflow: "visible" }}>
         {loading ? (
           <div style={empty} role="status">Loading&hellip;</div>
         ) : loadError ? (
@@ -272,6 +273,7 @@ export default function TravelWhatsAppLog() {
             Failed to load WhatsApp messages. Use Refresh to retry.
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -360,6 +362,7 @@ export default function TravelWhatsAppLog() {
               )}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

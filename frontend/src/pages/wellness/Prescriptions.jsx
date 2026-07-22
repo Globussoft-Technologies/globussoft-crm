@@ -13,6 +13,7 @@ import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatDate } from '../../utils/date';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
+import TopScrollSync from '../../components/TopScrollSync';
 
 /**
  * Prescriptions — tenant-wide list of every prescription the signed-in
@@ -396,10 +397,11 @@ export default function Prescriptions() {
         style={{
           border: '1px solid var(--border-color)',
           borderRadius: 10,
-          overflow: 'hidden',
+          overflow: 'visible',
           background: 'var(--subtle-bg-2)',
         }}
       >
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
           <thead>
             <tr style={{ background: 'var(--subtle-bg-3)' }}>
@@ -498,6 +500,7 @@ export default function Prescriptions() {
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       </div>
 
       {!loading && !error && total > 0 && (

@@ -5,6 +5,7 @@ import {
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
+import TopScrollSync from '../components/TopScrollSync';
 import {
   Award, Plus, Edit2, Trash2, Trophy, Table as TableIcon, BarChart3, Target,
 } from 'lucide-react';
@@ -240,7 +241,8 @@ export default function Quotas() {
           )}
         </div>
       ) : (
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card" style={{ padding: 0, overflow: 'visible' }}>
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
@@ -288,6 +290,7 @@ export default function Quotas() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         </div>
       )}
 

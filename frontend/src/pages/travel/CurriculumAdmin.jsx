@@ -57,6 +57,7 @@ import { GraduationCap, Plus, Edit2, Trash2, X, AlertTriangle } from 'lucide-rea
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
+import TopScrollSync from '../../components/TopScrollSync';
 
 // learningOutcome max length matches schema (prisma/schema.prisma —
 // TravelCurriculumMapping.learningOutcome is VarChar(300)).
@@ -501,7 +502,7 @@ export default function CurriculumAdmin() {
           background: 'var(--surface-color)',
           borderRadius: 8,
           border: '1px solid var(--border-color)',
-          overflow: 'hidden',
+          overflow: 'visible',
         }}
       >
         {loading ? (
@@ -512,6 +513,7 @@ export default function CurriculumAdmin() {
             with &ldquo;New Mapping&rdquo; or clear the filters to widen the search.
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
               <tr>
@@ -573,6 +575,7 @@ export default function CurriculumAdmin() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

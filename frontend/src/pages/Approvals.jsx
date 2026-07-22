@@ -2,6 +2,7 @@ import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
 import { useNotify } from '../utils/notify';
+import TopScrollSync from '../components/TopScrollSync';
 import { CheckSquare, Check, X, Clock, Plus, Eye, Filter } from 'lucide-react';
 
 const STATUS_CONFIG = {
@@ -248,7 +249,7 @@ export default function Approvals() {
       </div>
 
       {/* ── Table ───────────────────────────────────────────── */}
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="card" style={{ padding: 0, overflow: 'visible' }}>
         {loading ? (
           <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading approvals...</div>
         ) : requests.length === 0 ? (
@@ -257,6 +258,7 @@ export default function Approvals() {
             <div>No approval requests found.</div>
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
             <thead style={{ background: 'rgba(255,255,255,0.03)' }}>
               <tr style={{ textAlign: 'left' }}>
@@ -318,6 +320,7 @@ export default function Approvals() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

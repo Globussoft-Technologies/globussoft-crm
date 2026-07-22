@@ -3,6 +3,7 @@ import { Shield, Download, Trash2, Clock, AlertTriangle, CheckCircle2, Save } fr
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
+import TopScrollSync from '../components/TopScrollSync';
 
 // CRM messaging entities — visible to every tenant.
 const CRM_RETENTION_ENTITIES = [
@@ -468,6 +469,7 @@ function RetentionTable({ title, subtitle, rows, updatePolicy, testId }) {
       {subtitle && (
         <p style={{ color: 'var(--text-secondary, #6b7280)', fontSize: '0.8rem', margin: '0 0 0.5rem' }}>{subtitle}</p>
       )}
+      <TopScrollSync>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ borderBottom: '1px solid var(--border-color, #e5e7eb)' }}>
@@ -510,6 +512,7 @@ function RetentionTable({ title, subtitle, rows, updatePolicy, testId }) {
           ))}
         </tbody>
       </table>
+      </TopScrollSync>
     </div>
   );
 }

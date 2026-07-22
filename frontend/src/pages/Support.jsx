@@ -1,6 +1,7 @@
 import { fetchApi } from '../utils/api';
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, MessageCircle } from 'lucide-react';
+import TopScrollSync from '../components/TopScrollSync';
 
 const Support = () => {
   const [tickets, setTickets] = useState([]);
@@ -25,7 +26,8 @@ const Support = () => {
         </button>
       </header>
 
-      <div className="card" style={{ overflow: 'hidden' }}>
+      <div className="card" style={{ overflow: 'visible' }}>
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
@@ -62,6 +64,7 @@ const Support = () => {
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       </div>
     </div>
   );

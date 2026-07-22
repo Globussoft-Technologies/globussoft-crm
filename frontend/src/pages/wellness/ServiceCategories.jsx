@@ -28,6 +28,7 @@ import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
 import PageHeader from '../../components/PageHeader';
+import TopScrollSync from '../../components/TopScrollSync';
 
 const EMPTY_FORM = { name: '', parentId: '', displayOrder: 0, isActive: true, imageUrl: '' };
 
@@ -290,6 +291,7 @@ export default function ServiceCategories() {
       ) : filtered.length === 0 ? (
         <p style={{ color: 'var(--text-secondary)' }}>No categories match “{q}”.</p>
       ) : (
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-soft)' }}>
@@ -346,6 +348,7 @@ export default function ServiceCategories() {
             })}
           </tbody>
         </table>
+        </TopScrollSync>
       )}
 
       {!loading && filtered.length > 0 && (

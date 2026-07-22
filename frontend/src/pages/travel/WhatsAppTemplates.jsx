@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { LayoutTemplate, RefreshCw, ArrowLeft, ExternalLink } from "lucide-react";
 import { fetchApi } from "../../utils/api";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const STATUS_COLORS = {
   APPROVED: { background: "rgba(34, 197, 94, 0.18)", color: "var(--success-color, #22c55e)" },
@@ -97,7 +98,7 @@ export default function TravelWhatsAppTemplates() {
         </div>
       )}
 
-      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="glass" style={{ padding: 0, overflow: "visible" }}>
         {loading ? (
           <div style={empty} role="status">Loading&hellip;</div>
         ) : loadError ? (
@@ -110,6 +111,7 @@ export default function TravelWhatsAppTemplates() {
             dashboard and it appears here after Meta approval.
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -143,6 +145,7 @@ export default function TravelWhatsAppTemplates() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </div>

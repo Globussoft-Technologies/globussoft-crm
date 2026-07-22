@@ -50,6 +50,7 @@ import {
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
+import TopScrollSync from '../../components/TopScrollSync';
 
 const VALID_REASONS = [
   { value: 'USER_REQUESTED', label: 'User requested' },
@@ -236,7 +237,7 @@ export default function BlockedNumbers() {
         <button type="submit" className="btn-secondary" style={{ padding: '0.45rem 0.9rem' }}>Go</button>
       </form>
 
-      <div style={{ border: '1px solid var(--border-color)', borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ border: '1px solid var(--border-color)', borderRadius: 8, overflow: 'visible' }}>
         {loading ? (
           <p style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading…</p>
         ) : filteredRows.length === 0 ? (
@@ -247,6 +248,7 @@ export default function BlockedNumbers() {
             </p>
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
             <thead style={{ background: 'rgba(107,114,128,0.08)' }}>
               <tr>
@@ -305,6 +307,7 @@ export default function BlockedNumbers() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

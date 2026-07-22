@@ -8,6 +8,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Pill, Plus, Pencil, Trash2, Search } from 'lucide-react';
+import TopScrollSync from '../../components/TopScrollSync';
 
 const ICON_BTN_STYLE = {
   display: 'inline-flex',
@@ -204,6 +205,7 @@ export default function Drugs() {
       ) : drugs.length === 0 ? (
         <p style={{ color: 'var(--text-secondary)' }}>No drugs match.</p>
       ) : (
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-soft)' }}>
@@ -251,6 +253,7 @@ export default function Drugs() {
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       )}
     </div>
   );

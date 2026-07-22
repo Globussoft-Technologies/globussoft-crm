@@ -15,6 +15,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
+import TopScrollSync from '../../components/TopScrollSync';
 
 // Wraps navigator.geolocation.getCurrentPosition in a promise. Resolves to
 // null (never rejects) when geolocation is unsupported, denied, or times
@@ -229,6 +230,7 @@ export default function Attendance() {
         ) : history.length === 0 ? (
           <div style={{ color: 'var(--text-secondary, #888)', padding: 20, textAlign: 'center' }}>No attendance rows yet. Clock in to get started.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
@@ -260,6 +262,7 @@ export default function Attendance() {
               })}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </section>
 
@@ -395,6 +398,7 @@ function ManagerStaffSnapshot() {
             <Stat label="Total minutes" value={totalMinutes} />
           </div>
           {Object.keys(summary.byUser || {}).length > 0 ? (
+            <TopScrollSync>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
@@ -413,6 +417,7 @@ function ManagerStaffSnapshot() {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
           ) : (
             <div style={{ color: 'var(--text-secondary, #888)' }}>Nobody clocked in today yet.</div>
           )}

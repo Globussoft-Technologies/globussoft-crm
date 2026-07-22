@@ -569,6 +569,7 @@ export default function Products() {
                   No auto-consumption recorded yet for this product.
                 </div>
               ) : (
+                <TopScrollSync>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                   <thead>
                     <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
@@ -591,6 +592,7 @@ export default function Products() {
                     ))}
                   </tbody>
                 </table>
+                </TopScrollSync>
               )}
             </div>
 

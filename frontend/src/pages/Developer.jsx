@@ -195,7 +195,7 @@ export default function Developer() {
             as they land.
           </p>
         ) : (
-          <div style={{ maxHeight: 320, overflowY: 'auto', fontSize: '0.85rem', fontFamily: 'monospace' }}>
+          <div style={{ maxHeight: 320, overflowY: 'auto', overflowX: 'auto', fontSize: '0.85rem', fontFamily: 'monospace' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead style={{ position: 'sticky', top: 0, background: 'var(--surface-color, #fff)' }}>
                 <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color, #e5e7eb)' }}>
@@ -443,7 +443,7 @@ export default function Developer() {
             No CSP violations in the selected window.
           </p>
         ) : (
-          <div style={{ maxHeight: 320, overflowY: 'auto', fontSize: '0.85rem' }}>
+          <div style={{ maxHeight: 320, overflowY: 'auto', overflowX: 'auto', fontSize: '0.85rem' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead style={{ position: 'sticky', top: 0, background: 'var(--surface-color, #fff)' }}>
                 <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color, #e5e7eb)' }}>

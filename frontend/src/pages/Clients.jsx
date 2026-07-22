@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { Building2, Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatDateMedium as formatDate } from '../utils/date';
+import TopScrollSync from '../components/TopScrollSync';
 
 const Clients = () => {
   const [clients, setClients] = useState([]);
@@ -46,7 +47,7 @@ const Clients = () => {
         </div>
       </header>
 
-      <div className="card" style={{ overflow: 'hidden' }}>
+      <div className="card" style={{ overflow: 'visible' }}>
         <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
           <div style={{ position: 'relative', maxWidth: '300px' }}>
             <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
@@ -61,6 +62,7 @@ const Clients = () => {
           </div>
         </div>
 
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
@@ -120,6 +122,7 @@ const Clients = () => {
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       </div>
     </div>
   );

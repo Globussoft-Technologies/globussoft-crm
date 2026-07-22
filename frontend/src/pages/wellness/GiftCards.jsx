@@ -10,6 +10,7 @@ import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import { formatDate } from '../../utils/date';
 import PageHeader from '../../components/PageHeader';
+import TopScrollSync from '../../components/TopScrollSync';
 
 export default function GiftCardsPage() {
   const [list, setList] = useState([]);
@@ -158,6 +159,7 @@ export default function GiftCardsPage() {
       ) : list.length === 0 ? (
         <div style={{ color: 'var(--text-secondary)' }}>No gift cards yet.</div>
       ) : (
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
@@ -237,6 +239,7 @@ export default function GiftCardsPage() {
             })}
           </tbody>
         </table>
+        </TopScrollSync>
       )}
 
       {issueOpen && (

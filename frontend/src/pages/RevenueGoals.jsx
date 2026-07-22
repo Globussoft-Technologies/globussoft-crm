@@ -25,6 +25,7 @@ import { Plus, Pencil, Trash2, Target, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
+import TopScrollSync from '../components/TopScrollSync';
 
 const PERIOD_OPTIONS = [
   { value: 'MONTHLY', label: 'Monthly' },
@@ -223,7 +224,8 @@ export default function RevenueGoals() {
         </div>
       )}
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="card" style={{ padding: 0, overflow: 'visible' }}>
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
           <thead>
             <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
@@ -274,6 +276,7 @@ export default function RevenueGoals() {
             })}
           </tbody>
         </table>
+        </TopScrollSync>
       </div>
 
       {editing && (

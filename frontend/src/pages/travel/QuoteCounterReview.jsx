@@ -25,6 +25,7 @@ import { ThumbsUp, ThumbsDown, Copy, ArrowLeft } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import TopScrollSync from "../../components/TopScrollSync";
 
 function fmt(n) {
   const v = Number(n) || 0;
@@ -189,6 +190,7 @@ export default function QuoteCounterReview() {
           <p style={{ margin: "4px 0" }}>
             Total: <strong>{quote.currency} {fmt(ourTotal)}</strong>
           </p>
+          <TopScrollSync>
           <table style={{ width: "100%", marginTop: 12, fontSize: 13 }}>
             <thead>
               <tr>
@@ -212,6 +214,7 @@ export default function QuoteCounterReview() {
               )}
             </tbody>
           </table>
+          </TopScrollSync>
         </section>
 
         <section

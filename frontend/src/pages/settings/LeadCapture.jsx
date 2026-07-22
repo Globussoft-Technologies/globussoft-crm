@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 
 // Canonical 17-channel allowlist — mirrors backend/routes/lead_capture_settings.js
 // ALLOWED_CHANNELS. The GET response carries this in `allowedChannels` so the UI
@@ -286,6 +287,7 @@ export default function LeadCapture() {
           409 CHANNEL_DISABLED). Cooldown windows suppress same-contact
           re-leads within the window (per PRD FR-3.7.2; range 0–86400 sec).
         </p>
+        <TopScrollSync>
         <table style={tableStyle} role="table" aria-label="Channels and cooldowns">
           <thead>
             <tr>
@@ -328,6 +330,7 @@ export default function LeadCapture() {
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       </section>
 
       {/* Section 3: Form routing mappings */}
@@ -409,6 +412,7 @@ export default function LeadCapture() {
         {mappings.length === 0 ? (
           <div style={emptyState}>No form-routing mappings configured yet.</div>
         ) : (
+          <TopScrollSync>
           <table style={tableStyle} role="table" aria-label="Form-routing mappings">
             <thead>
               <tr>
@@ -455,6 +459,7 @@ export default function LeadCapture() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </section>
 

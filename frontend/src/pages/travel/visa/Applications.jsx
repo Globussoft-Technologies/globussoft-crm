@@ -51,6 +51,7 @@ import { FileText, Filter, AlertTriangle, ShieldAlert, Layers, Plus, X } from 'l
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { AuthContext } from '../../../App';
+import TopScrollSync from '../../../components/TopScrollSync';
 
 const PAGE_SIZE = 50;
 
@@ -456,7 +457,7 @@ export default function VisaApplications() {
           background: 'var(--surface-color)',
           borderRadius: 8,
           border: '1px solid var(--border-color)',
-          overflow: 'hidden',
+          overflow: 'visible',
         }}
       >
         {loading ? (
@@ -468,6 +469,7 @@ export default function VisaApplications() {
             created in the system.
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
@@ -533,6 +535,7 @@ export default function VisaApplications() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { formatMoney } from '../utils/money';
+import TopScrollSync from '../components/TopScrollSync';
 import { Trophy, Users, TrendingUp, Phone, Mail, CheckSquare, Download, Calendar } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
@@ -135,12 +136,13 @@ export default function AgentReports() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '1.5rem', alignItems: 'start' }}>
         {/* Agent Performance Table */}
-        <div className="card" style={{ overflow: 'hidden' }}>
+        <div className="card" style={{ overflow: 'visible' }}>
           <div style={{ padding: '1.25rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ fontSize: '1.1rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Users size={18} color="var(--accent-color)" /> Agent Performance
             </h3>
           </div>
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
@@ -193,6 +195,7 @@ export default function AgentReports() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         </div>
 
         {/* Right Panel: Leaderboard Chart */}

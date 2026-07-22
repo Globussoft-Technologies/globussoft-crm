@@ -4,6 +4,7 @@ import { fetchApi } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
 import { formatDate } from '../../utils/date';
 import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
+import TopScrollSync from '../../components/TopScrollSync';
 
 export default function Visits() {
   // Visit reports require a window — opt out of the "All time" option in the
@@ -132,7 +133,8 @@ export default function Visits() {
           )}
         </div>
 
-        <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '15%' }} />
@@ -188,6 +190,7 @@ export default function Visits() {
               )}
             </tbody>
           </table>
+          </TopScrollSync>
         </div>
 
         {patientDetails.count > detailsLimit && (
@@ -282,7 +285,8 @@ export default function Visits() {
             </div>
           </div>
 
-          <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
+          <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
+            <TopScrollSync>
             <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '25%' }} />
@@ -341,6 +345,7 @@ export default function Visits() {
                 )}
               </tbody>
             </table>
+            </TopScrollSync>
           </div>
 
           {data.count > limit && (

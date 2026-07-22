@@ -43,6 +43,7 @@ import { Bell, CalendarClock, AlertTriangle, CheckCircle2, Clock, Send } from "l
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
+import TopScrollSync from "../../components/TopScrollSync";
 
 // Sub-brand selector — mirror of the four canonical travel sub-brands.
 // Keep in lockstep with the backend's VALID_SUB_BRANDS list; mismatch
@@ -365,12 +366,13 @@ export default function MilestoneTracker() {
       </div>
 
       {/* Table */}
-      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="glass" style={{ padding: 0, overflow: "visible" }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : milestones.length === 0 ? (
           <div style={empty}>No upcoming milestones in this window.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -450,6 +452,7 @@ export default function MilestoneTracker() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

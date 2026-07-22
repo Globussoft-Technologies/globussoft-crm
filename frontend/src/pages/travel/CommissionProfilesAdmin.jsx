@@ -1234,10 +1234,11 @@ export default function CommissionProfilesAdmin() {
         </div>
       )}
 
-      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="glass" style={{ padding: 0, overflow: "visible" }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -1390,6 +1391,7 @@ export default function CommissionProfilesAdmin() {
               )}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </div>

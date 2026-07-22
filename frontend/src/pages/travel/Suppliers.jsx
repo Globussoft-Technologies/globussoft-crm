@@ -12,6 +12,7 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import PasswordInput from "../../components/PasswordInput";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const CATEGORIES = [
   { value: "", label: "All categories" },
@@ -154,13 +155,14 @@ export default function Suppliers() {
 
       <div style={{
         background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)", overflow: "hidden",
+        border: "1px solid var(--border-color)", overflow: "visible",
       }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : creds.length === 0 ? (
           <div style={empty}>No credentials stored.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -194,6 +196,7 @@ export default function Suppliers() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

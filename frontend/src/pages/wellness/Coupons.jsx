@@ -11,6 +11,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import PageHeader from '../../components/PageHeader';
+import TopScrollSync from '../../components/TopScrollSync';
 
 export default function CouponsPage() {
   const [coupons, setCoupons] = useState([]);
@@ -66,6 +67,7 @@ export default function CouponsPage() {
       ) : coupons.length === 0 ? (
         <div style={{ color: 'var(--text-secondary)' }}>No coupons yet.</div>
       ) : (
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
@@ -93,6 +95,7 @@ export default function CouponsPage() {
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       )}
 
       {editOpen !== null && (

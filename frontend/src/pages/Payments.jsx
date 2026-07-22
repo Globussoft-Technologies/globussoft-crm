@@ -19,6 +19,7 @@ import { AuthContext } from '../App';
 import { formatMoney } from '../utils/money';
 import { DateRangeFilter, resolveDateRange, DATE_FILTER_OPTIONS } from '../components/wellness/DateRangeFilter';
 import RazorpayGatewayCard from '../components/RazorpayGatewayCard';
+import TopScrollSync from '../components/TopScrollSync';
 
 // ── Style constants ───────────────────────────────────────────────
 // Theme-aware so cards stay clearly delineated under BOTH light + dark
@@ -429,7 +430,8 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
       {/* Payments table — wrap in a clearly-delineated card. `box-shadow`
           + padding give it visual weight against the page background, and
           theme variables keep contrast under both modes. */}
-      <div style={{ ...GLASS, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
+      <div style={{ ...GLASS, overflow: 'visible', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
           <thead>
             <tr style={{ background: 'var(--surface-hover)', borderBottom: '1px solid var(--border-color)' }}>
@@ -595,6 +597,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       </div>
 
       {/* Admin configuration section */}

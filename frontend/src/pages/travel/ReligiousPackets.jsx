@@ -12,6 +12,7 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import { useActiveSubBrand } from "../../utils/subBrand";
+import TopScrollSync from "../../components/TopScrollSync";
 import {
   accessibleSubBrands,
   defaultSubBrandFor,
@@ -226,13 +227,14 @@ export default function ReligiousPackets() {
 
       <div style={{
         background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)", overflow: "hidden",
+        border: "1px solid var(--border-color)", overflow: "visible",
       }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : packets.length === 0 ? (
           <div style={empty}>No packets in this filter.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -276,6 +278,7 @@ export default function ReligiousPackets() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

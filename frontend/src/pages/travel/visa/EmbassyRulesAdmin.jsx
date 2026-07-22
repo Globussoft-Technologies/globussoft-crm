@@ -50,6 +50,7 @@ import { Shield, Plus, Edit2, Trash2, X, AlertTriangle } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { AuthContext } from '../../../App';
+import TopScrollSync from '../../../components/TopScrollSync';
 
 const SEVERITIES = ['info', 'warning', 'blocker'];
 
@@ -477,7 +478,7 @@ export default function EmbassyRulesAdmin() {
           background: 'var(--surface-color)',
           borderRadius: 8,
           border: '1px solid var(--border-color)',
-          overflow: 'hidden',
+          overflow: 'visible',
         }}
       >
         {loading ? (
@@ -488,6 +489,7 @@ export default function EmbassyRulesAdmin() {
             &ldquo;New Rule&rdquo; or clear the filters to widen the search.
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
@@ -539,6 +541,7 @@ export default function EmbassyRulesAdmin() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

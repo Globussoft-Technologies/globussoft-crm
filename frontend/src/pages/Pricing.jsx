@@ -4,6 +4,7 @@ import { Check, ArrowRight, X, Plus, Loader } from 'lucide-react';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import TopScrollSync from '../components/TopScrollSync';
 
 const C = {
   bg: '#f8fafc', bg2: '#ffffff', text: '#1e293b', text2: '#334155', text3: '#64748b', text4: '#94a3b8',
@@ -487,7 +488,8 @@ export default function Pricing() {
       <section style={{ maxWidth: 1120, margin: '0 auto', padding: '0 20px 64px' }}>
         <h2 style={{ fontSize: '1.75rem', fontWeight: 800, color: C.text, textAlign: 'center', marginBottom: 8, letterSpacing: '-0.03em' }}>Compare all features</h2>
         <p style={{ textAlign: 'center', color: C.text3, fontSize: '0.88rem', marginBottom: 36 }}>Everything you need to know, side by side</p>
-        <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'hidden', background: C.card }}>
+        <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: 'visible', background: C.card }}>
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
             <thead>
               <tr>
@@ -537,6 +539,7 @@ export default function Pricing() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         </div>
       </section>
 

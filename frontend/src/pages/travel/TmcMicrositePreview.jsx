@@ -19,6 +19,7 @@ import { Globe, ExternalLink, Copy } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import TopScrollSync from "../../components/TopScrollSync";
 
 function micrositePublicUrl(publicUuid) {
   if (typeof window === "undefined") return `/p/tripmicrosite/${publicUuid}`;
@@ -119,7 +120,7 @@ export default function TmcMicrositePreview() {
 
       <div style={{
         background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)", overflow: "hidden", marginTop: 16,
+        border: "1px solid var(--border-color)", overflow: "visible", marginTop: 16,
       }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
@@ -129,6 +130,7 @@ export default function TmcMicrositePreview() {
             (POST <code>/api/travel/trips/:tripId/microsite</code>).
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -187,6 +189,7 @@ export default function TmcMicrositePreview() {
               })}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </div>

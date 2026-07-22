@@ -17,7 +17,7 @@
  *   4. Empty state: "No commission profiles yet." copy renders when the
  *      list endpoint returns [].
  *   5. List state: one row per profile with name + basis label + percent
- *      formatted with `%` + flat amount + category filter.
+ *      formatted with `%` + flat amount + period window.
  *   6. Active vs disabled badges: row's active state renders the "Active"
  *      green span; isActive=false renders the "Disabled" subdued span.
  *   7. Basis enum value gets mapped to its human label
@@ -31,7 +31,7 @@
  *      fire POST.
  *  11. Happy-path create: POST /api/staff/commission-profiles fires with
  *      the right body shape (trimmed name, numeric percentage, flatAmount
- *      null, basis enum, appliesToCategory null on empty, isActive true).
+ *      null, basis enum, period + periodStart/periodEnd, isActive true).
  *      Modal closes; list re-fetches.
  *  12. Edit row: clicking the Edit icon opens the modal pre-filled with
  *      the row's values + the heading flips to "Edit commission profile".
@@ -79,7 +79,9 @@ const sampleRows = [
     basis: 'REVENUE_PERCENT',
     percentage: 25,
     flatAmount: null,
-    appliesToCategory: 'Aesthetics',
+    period: 'MONTHLY',
+    periodStart: '2026-07-01T00:00:00.000Z',
+    periodEnd: '2026-08-01T00:00:00.000Z',
     isActive: true,
   },
   {
@@ -88,7 +90,9 @@ const sampleRows = [
     basis: 'FLAT_PER_INVOICE',
     percentage: null,
     flatAmount: 500,
-    appliesToCategory: null,
+    period: 'QUARTERLY',
+    periodStart: '2026-04-01T00:00:00.000Z',
+    periodEnd: '2026-07-01T00:00:00.000Z',
     isActive: false,
   },
 ];
@@ -115,6 +119,22 @@ function defaultFetchMock(url) {
   if (url === COMMISSION_URL) return Promise.resolve(sampleRows);
   if (url === COMMISSION_DATA_URL) return Promise.resolve(sampleCommissionData);
   return Promise.resolve(null);
+}
+
+function formatDateInput(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getCommissionWindowBounds() {
+  const today = new Date();
+  const currentMonthStart = formatDateInput(new Date(today.getFullYear(), today.getMonth(), 1));
+  const maxWindowEnd = formatDateInput(new Date(today.getFullYear(), today.getMonth() + 12, 1));
+  const defaultMonthEnd = formatDateInput(new Date(today.getFullYear(), today.getMonth() + 1, 1));
+  return { currentMonthStart, maxWindowEnd, defaultMonthEnd };
 }
 
 function renderPage() {
@@ -176,7 +196,7 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     });
   });
 
-  it('renders one row per profile with name + formatted percent + flat amount + category', async () => {
+  it('renders one row per profile with name + formatted percent + flat amount + period window', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Senior Doctor Cut')).toBeInTheDocument());
     expect(screen.getByText('Helper Flat Bonus')).toBeInTheDocument();
@@ -185,7 +205,18 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     // Flat amount column — row 2 renders 500 as toLocaleString'd "500"; row 1 has em-dash.
     expect(screen.getByText('500')).toBeInTheDocument();
     // Category filter column — row 1 = "Aesthetics", row 2 = em-dash.
-    expect(screen.getByText('Aesthetics')).toBeInTheDocument();
+    const monthlyStart = new Date('2026-07-01T00:00:00.000Z').toLocaleDateString();
+    const monthlyEnd = new Date('2026-08-01T00:00:00.000Z').toLocaleDateString();
+    const quarterlyStart = new Date('2026-04-01T00:00:00.000Z').toLocaleDateString();
+    const quarterlyEnd = new Date('2026-07-01T00:00:00.000Z').toLocaleDateString();
+    expect(screen.getByText('MONTHLY')).toBeInTheDocument();
+    expect(screen.getByText('QUARTERLY')).toBeInTheDocument();
+    expect(
+      screen.getAllByText((_, node) => node?.textContent?.includes(monthlyStart) && node.textContent.includes(monthlyEnd)).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText((_, node) => node?.textContent?.includes(quarterlyStart) && node.textContent.includes(quarterlyEnd)).length,
+    ).toBeGreaterThan(0);
   });
 
   it('renders the Active green badge for isActive=true rows and Disabled for isActive=false', async () => {
@@ -221,6 +252,14 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     // Name input renders empty.
     const nameInput = screen.getByTestId('profile-form-name');
     expect(nameInput).toHaveValue('');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    const { currentMonthStart, maxWindowEnd, defaultMonthEnd } = getCommissionWindowBounds();
+    expect(dateInputs[0].value).toBe(currentMonthStart);
+    expect(dateInputs[0].min).toBe(currentMonthStart);
+    expect(dateInputs[0].max).toBe(maxWindowEnd);
+    expect(dateInputs[1].value).toBe(defaultMonthEnd);
+    expect(dateInputs[1].min).toBe(currentMonthStart);
+    expect(dateInputs[1].max).toBe(maxWindowEnd);
   });
 
   it('Save with empty name shows the "Name is required." error and does NOT POST', async () => {
@@ -269,7 +308,63 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     expect(postCall).toBeUndefined();
   });
 
-  it('happy-path create: POST fires with trimmed name + numeric percentage + flatAmount null + category null', async () => {
+  it('Save with a periodStart before the current month errors and does NOT POST', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Senior Doctor Cut')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /New profile/i }));
+    await screen.findByRole('heading', { name: /New commission profile/i });
+
+    fireEvent.change(screen.getByTestId('profile-form-name'), { target: { value: 'Future bonus' } });
+    const numberInputs = document.querySelectorAll('input[type="number"]');
+    fireEvent.change(numberInputs[0], { target: { value: '10' } });
+
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    const { currentMonthStart } = getCommissionWindowBounds();
+    const priorMonthStart = formatDateInput(new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1));
+    fireEvent.change(dateInputs[0], { target: { value: priorMonthStart } });
+    fireEvent.change(dateInputs[1], { target: { value: currentMonthStart } });
+
+    fireEvent.click(screen.getByTestId('profile-form-save'));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Period start cannot be before the current month.');
+    });
+    const postCall = fetchApiMock.mock.calls.find(
+      ([, opts]) => opts && opts.method === 'POST',
+    );
+    expect(postCall).toBeUndefined();
+  });
+
+  it('Save with a periodEnd beyond one year from the current month errors and does NOT POST', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Senior Doctor Cut')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /New profile/i }));
+    await screen.findByRole('heading', { name: /New commission profile/i });
+
+    fireEvent.change(screen.getByTestId('profile-form-name'), { target: { value: 'Future bonus' } });
+    const numberInputs = document.querySelectorAll('input[type="number"]');
+    fireEvent.change(numberInputs[0], { target: { value: '10' } });
+
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    const { currentMonthStart } = getCommissionWindowBounds();
+    const overLimitEnd = formatDateInput(new Date(new Date().getFullYear(), new Date().getMonth() + 12, 2));
+    fireEvent.change(dateInputs[0], { target: { value: currentMonthStart } });
+    fireEvent.change(dateInputs[1], { target: { value: overLimitEnd } });
+
+    fireEvent.click(screen.getByTestId('profile-form-save'));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Profile period cannot exceed one year from the current month.');
+    });
+    const postCall = fetchApiMock.mock.calls.find(
+      ([, opts]) => opts && opts.method === 'POST',
+    );
+    expect(postCall).toBeUndefined();
+  });
+
+  it('happy-path create: POST fires with trimmed name + numeric percentage + flatAmount null + period window', async () => {
     let postBody = null;
     let listCallCount = 0;
     fetchApiMock.mockImplementation((url, opts) => {
@@ -301,7 +396,6 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     expect(numberInputs.length).toBeGreaterThanOrEqual(2);
     fireEvent.change(numberInputs[0], { target: { value: '15' } });
     // Leave flat amount blank to pin "flatAmount: null when empty".
-    // Leave category blank to pin "appliesToCategory: null when empty".
 
     fireEvent.click(screen.getByTestId('profile-form-save'));
 
@@ -312,7 +406,9 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     expect(postBody.percentage).toBe(15);
     expect(postBody.flatAmount).toBeNull();
     expect(postBody.basis).toBe('REVENUE_PERCENT');
-    expect(postBody.appliesToCategory).toBeNull();
+    expect(postBody.period).toBe('MONTHLY');
+    expect(postBody.periodStart).toMatch(/T00:00:00\.000Z$/);
+    expect(postBody.periodEnd).toMatch(/T00:00:00\.000Z$/);
     expect(postBody.isActive).toBe(true);
 
     // Modal closes + list re-loads.
@@ -349,6 +445,7 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
 
     // Pre-filled name = "Senior Doctor Cut".
     expect(screen.getByTestId('profile-form-name')).toHaveValue('Senior Doctor Cut');
+    expect(screen.getByDisplayValue('Monthly')).toBeInTheDocument();
 
     // Bump the percentage to 30.
     const numberInputs = document.querySelectorAll('input[type="number"]');
@@ -362,7 +459,9 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     expect(putBody.name).toBe('Senior Doctor Cut');
     expect(putBody.percentage).toBe(30);
     expect(putBody.basis).toBe('REVENUE_PERCENT');
-    expect(putBody.appliesToCategory).toBe('Aesthetics');
+    expect(putBody.period).toBe('MONTHLY');
+    expect(putBody.periodStart).toBe('2026-07-01T00:00:00.000Z');
+    expect(putBody.periodEnd).toBe('2026-08-01T00:00:00.000Z');
     expect(putBody.isActive).toBe(true);
   });
 

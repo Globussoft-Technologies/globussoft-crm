@@ -692,6 +692,48 @@ async function ensurePatientContact(patient, tenantId) {
   }
 }
 
+// Attach invoice status to already-fetched visit rows without relying on a
+// Prisma back-reference. Some wellness visit payloads need to know whether the
+// linked charge is paid so the UI can disable the payment-link surface, but
+// Visit does not expose an `invoice` include in this schema shape.
+async function attachInvoiceStateToVisits(visits, tenantId) {
+  if (!Array.isArray(visits) || visits.length === 0) return visits;
+  const visitIds = visits
+    .map((visit) => Number(visit && visit.id))
+    .filter((id) => Number.isFinite(id));
+  if (visitIds.length === 0) return visits;
+
+  try {
+    const invoices = await prisma.invoice.findMany({
+      where: { tenantId, visitId: { in: visitIds } },
+      select: { id: true, visitId: true, status: true, paidAt: true },
+    });
+    if (!invoices.length) return visits;
+
+    const invoiceByVisitId = new Map(
+      invoices.map((invoice) => [
+        invoice.visitId,
+        {
+          id: invoice.id,
+          status: invoice.status,
+          paidAt: invoice.paidAt,
+        },
+      ]),
+    );
+
+    return visits.map((visit) => {
+      const invoice = invoiceByVisitId.get(visit.id);
+      return invoice ? { ...visit, invoice } : visit;
+    });
+  } catch (err) {
+    console.error(
+      "[wellness] attach invoice state to visits failed:",
+      err.message,
+    );
+    return visits;
+  }
+}
+
 // Helper: create (or reuse) an Invoice for a completed wellness visit and
 // generate a hosted Razorpay Payment Link via the shared payment-link factory.
 // Returns { url, gateway, paymentId } on success, or { error, code } when the
@@ -1767,6 +1809,12 @@ router.get("/patients/:id", phiReadGate, async (req, res) => {
       },
     });
     if (!patient) return res.status(404).json({ error: "Patient not found" });
+    if (patient.visits?.length) {
+      patient.visits = await attachInvoiceStateToVisits(
+        patient.visits,
+        req.user.tenantId,
+      );
+    }
     // PRD §11: log every patient detail read. Capture the FIELD NAMES returned
     // (so reviewers know what columns were exposed) but NEVER the values —
     // logging allergies/dob/phone here would defeat the audit-log's HIPAA role.
@@ -1833,6 +1881,10 @@ router.get("/patients/:id/visits", phiReadGate, async (req, res) => {
         doctor: { select: { id: true, name: true } },
       },
     });
+    const visitsWithInvoiceState = await attachInvoiceStateToVisits(
+      visits,
+      req.user.tenantId,
+    );
     // Audit-log the read same as the flat /visits list (PRD §11 clinical reads).
     // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
     writeAudit(
@@ -1851,7 +1903,7 @@ router.get("/patients/:id/visits", phiReadGate, async (req, res) => {
         auditErr.message,
       );
     });
-    res.json(visits);
+    res.json(visitsWithInvoiceState);
   } catch (e) {
     console.error("[wellness] list patient visits error:", e.message);
     res.status(500).json({ error: "Failed to list patient visits" });
@@ -15859,6 +15911,14 @@ router.post("/appointments/confirm-payment", verifyToken, async (req, res) => {
         code: "BOOKING_AFTER_PAYMENT_FAILED",
         paymentId: payment.id,
       });
+    }
+
+    if (visit?.id) {
+      await prisma.visit.update({
+        where: { id: visit.id },
+        data: { paymentStatus: "paid" },
+      });
+      visit.paymentStatus = "paid";
     }
 
     // Mark Payment SUCCESS + stash visitId for idempotency.

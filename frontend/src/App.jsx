@@ -99,7 +99,6 @@ const SequenceBuilder = lazy(() => import("./pages/SequenceBuilder"));
 const Tasks = lazy(() => import("./pages/Tasks"));
 const CallifiedData = lazy(() => import("./pages/CallifiedData"));
 const Tickets = lazy(() => import("./pages/Tickets"));
-const Support = lazy(() => import("./pages/Support"));
 const Staff = lazy(() => import("./pages/Staff"));
 const Invoices = lazy(() => import("./pages/Invoices"));
 const LeadScoring = lazy(() => import("./pages/LeadScoring"));
@@ -618,25 +617,9 @@ function WellnessOnly({ children }) {
   return children;
 }
 
-// Guard for pages that belong to generic + travel but NOT wellness (e.g.
-// Landing Pages, which has travel-specific AI generation + sub-brand
-// concepts that have no meaning in a clinic context). A wellness user who
-// lands here via a bookmark or direct URL is redirected to their home.
-function NotWellness({ children }) {
-  const { user, tenant } = useContext(AuthContext);
-  if (tenant?.vertical === "wellness") {
-    return <Navigate to={landingFor(user, tenant)} replace />;
-  }
-  return children;
-}
-
-// Sibling of WellnessOnly for the travel vertical. Inline-defined here to
-// match the WellnessOnly pattern (no separate component file). Main added
-// the <TravelOnly>...</TravelOnly> wrapper at every travel route (41 call
-// sites at App.jsx:1174-1289) but the inline component definition was
-// dropped by the main→staging_crm Python union pass on commit bd25d6f2.
-// This restores the definition so the 41 react/jsx-no-undef lint errors
-// clear.
+// Guard for pages that belong to the travel vertical only. Generic CRM and
+// wellness tenants should be bounced away so landing pages never appear in
+// non-travel search, sidebar, or direct-URL access.
 function TravelOnly({ children }) {
   const { user, tenant } = useContext(AuthContext);
   if (tenant && tenant.vertical !== "travel") {
@@ -1344,10 +1327,10 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
-                    <Route path="landing-pages" element={<NotWellness><LandingPages /></NotWellness>} />
+                    <Route path="landing-pages" element={<TravelOnly><LandingPages /></TravelOnly>} />
                     <Route
                       path="landing-pages/builder/:id"
-                      element={<NotWellness><LandingPageBuilder /></NotWellness>}
+                      element={<TravelOnly><LandingPageBuilder /></TravelOnly>}
                     />
                     <Route path="objects" element={<CustomObjects />} />
                     <Route
@@ -1359,7 +1342,6 @@ export default function App() {
                       path="sequences/:id/builder"
                       element={<GenericOnly><SequenceBuilder /></GenericOnly>}
                     />
-                    <Route path="support" element={<Support />} />
                     <Route
                       path="settings"
                       element={

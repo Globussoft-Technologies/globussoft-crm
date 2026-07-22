@@ -68,6 +68,10 @@ prisma.patient = {
   update: vi.fn(),
   count: vi.fn(),
 };
+prisma.visit = prisma.visit || {};
+prisma.visit.findMany = vi.fn();
+prisma.invoice = prisma.invoice || {};
+prisma.invoice.findMany = vi.fn();
 // Permissively stub the other prisma surfaces touched at module load time
 // (referral linkage on source=referral, tenant lookup in phiWriteGate, etc).
 prisma.tenant = prisma.tenant || {};
@@ -121,6 +125,8 @@ beforeEach(() => {
   prisma.patient.create.mockReset();
   prisma.patient.update.mockReset();
   prisma.patient.count.mockReset();
+  prisma.visit.findMany.mockReset();
+  prisma.invoice.findMany.mockReset();
   prisma.auditLog.create.mockReset();
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
   prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });

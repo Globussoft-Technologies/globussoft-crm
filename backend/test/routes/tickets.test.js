@@ -75,6 +75,7 @@ import prisma from '../../lib/prisma.js';
 // `require('../lib/prisma')` resolves at import time.
 prisma.ticket = {
   findMany: vi.fn(),
+  count: vi.fn(),
   findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
@@ -128,6 +129,7 @@ function makeApp() {
 
 beforeEach(() => {
   prisma.ticket.findMany.mockReset();
+  prisma.ticket.count.mockReset();
   prisma.ticket.findFirst.mockReset();
   prisma.ticket.create.mockReset();
   prisma.ticket.update.mockReset();
@@ -168,6 +170,65 @@ describe('GET / — list tickets', () => {
       where: { tenantId: 1 },
       include: { assignee: { select: { id: true, name: true, email: true } } },
       orderBy: { createdAt: 'desc' },
+    });
+  });
+});
+
+describe('GET / — paginated list', () => {
+  test('returns a paginated envelope with counts and skip/take args', async () => {
+    prisma.ticket.findMany.mockResolvedValue([
+      {
+        id: 11, subject: 'Login broken', status: 'Open', priority: 'High',
+        tenantId: 1, createdAt: new Date('2026-05-20'),
+        assignee: { id: 7, name: 'Owner', email: 'o@example.com' },
+      },
+      {
+        id: 12, subject: 'Slow page', status: 'Pending', priority: 'Medium',
+        tenantId: 1, createdAt: new Date('2026-05-19'),
+        assignee: null,
+      },
+    ]);
+    prisma.ticket.count
+      .mockResolvedValueOnce(12)
+      .mockResolvedValueOnce(7)
+      .mockResolvedValueOnce(2);
+
+    const res = await request(makeApp())
+      .get('/api/tickets?page=2&limit=2')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(expect.objectContaining({
+      tickets: expect.any(Array),
+      total: 12,
+      page: 2,
+      limit: 2,
+      totalPages: 6,
+      openCount: 7,
+      urgentCount: 2,
+    }));
+    expect(res.body.tickets).toHaveLength(2);
+
+    expect(prisma.ticket.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1 },
+      include: { assignee: { select: { id: true, name: true, email: true } } },
+      orderBy: { createdAt: 'desc' },
+      skip: 2,
+      take: 2,
+    });
+    expect(prisma.ticket.count).toHaveBeenNthCalledWith(1, { where: { tenantId: 1 } });
+    expect(prisma.ticket.count).toHaveBeenNthCalledWith(2, {
+      where: {
+        tenantId: 1,
+        status: { notIn: ['Resolved', 'Closed'] },
+      },
+    });
+    expect(prisma.ticket.count).toHaveBeenNthCalledWith(3, {
+      where: {
+        tenantId: 1,
+        priority: 'Urgent',
+        status: { not: 'Closed' },
+      },
     });
   });
 });

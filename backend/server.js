@@ -70,6 +70,7 @@ const rateLimit = require("express-rate-limit");
 // gets constructed. The patch MUST run before any `require("./routes/...")`
 // below — that's why this block sits up here, not down by the route mounts.
 const { validateNumericId } = require("./middleware/validateNumericId");
+const { resolveSubscriptionAccess } = require("./lib/subscriptionAccess");
 {
   const _RouterFactory = express.Router;
   // express.Router is a callable factory (not a class). Wrap it to attach
@@ -1063,9 +1064,20 @@ app.use("/api", (req, res, next) => {
     /^\/brand-kits\/by-subbrand\/[^/]+$/.test(req.path)
   )
     return next();
-  verifyToken(req, res, (err) => {
+  verifyToken(req, res, async (err) => {
     if (err) return next(err);
-    checkSubscription(req, res, next);
+    try {
+      const access = await resolveSubscriptionAccess(req.user);
+      if (!access) {
+        return res.status(401).json({ error: "Subscription context missing" });
+      }
+      req.user.subscriptionStatus = access.subscriptionStatus;
+      req.user.trialEndsAt = access.trialEndsAt;
+      return checkSubscription(req, res, next);
+    } catch (accessErr) {
+      console.error("[subscription-access] refresh failed:", accessErr && accessErr.message);
+      return next(accessErr);
+    }
   });
 });
 

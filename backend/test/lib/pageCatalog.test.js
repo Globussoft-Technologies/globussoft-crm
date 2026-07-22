@@ -261,6 +261,7 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     const paths = pages.map((p) => p.path);
     expect(paths).toContain('/wellness/patients');
     expect(paths).toContain('/wellness/calendar');
+    expect(paths).toContain('/wellness/invoices');
   });
 
   it('generic vertical excludes both /wellness/* and /travel/* paths', () => {
@@ -270,6 +271,7 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
       expect(p.startsWith('/wellness')).toBe(false);
       expect(p.startsWith('/travel')).toBe(false);
     }
+    expect(paths).not.toContain('/landing-pages');
   });
 
   it('every vertical includes the cross-vertical core (/home, /contacts, /tasks, /notification-settings)', () => {
@@ -297,6 +299,16 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     expect(travel).not.toContain('/revenue-goals');
     expect(generic).not.toContain('/portal');
     expect(generic).not.toContain('/revenue-goals');
+  });
+
+  it('Landing Pages is travel-only and stays out of generic/wellness catalogs', () => {
+    const travel = getCatalogForVertical('travel').map((p) => p.path);
+    const wellness = getCatalogForVertical('wellness').map((p) => p.path);
+    const generic = getCatalogForVertical('generic').map((p) => p.path);
+
+    expect(travel).toContain('/landing-pages');
+    expect(wellness).not.toContain('/landing-pages');
+    expect(generic).not.toContain('/landing-pages');
   });
 
   it('unknown / null vertical falls back to the cross-vertical core only', () => {
@@ -357,6 +369,13 @@ describe('getAccessiblePages', () => {
     expect(paths).toContain('/wellness/prescriptions');
     expect(paths).not.toContain('/estimates'); // needs estimates.read
     expect(paths).not.toContain('/wellness/pos'); // needs pos.read
+  });
+
+  it('includes the wellness invoice ledger when invoices.read is granted', () => {
+    const perms = new Set(['invoices.read']);
+    const pages = getAccessiblePages(perms, { vertical: 'wellness' });
+    const paths = pages.map((p) => p.path);
+    expect(paths).toContain('/wellness/invoices');
   });
 
   it('returns a clinical-only set for a Doctor', () => {

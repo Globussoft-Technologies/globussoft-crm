@@ -19,7 +19,7 @@ const categoryOptions = [
   // Generic CRM workflow surfaces
   { key: 'deal', label: 'Deals & Opportunities', paths: ['/deals', '/pipeline', '/pipelines', '/deal-insights'] },
   { key: 'task', label: 'Tasks', paths: ['/tasks'] },
-  { key: 'ticket', label: 'Support Tickets', paths: ['/tickets', '/support'] },
+  { key: 'ticket', label: 'Support Tickets', paths: ['/tickets'] },
   { key: 'lead', label: 'Leads', paths: ['/leads', '/converted-leads', '/lead-routing', '/lead-scoring'] },
   { key: 'approval', label: 'Approvals', paths: ['/approvals'] },
   { key: 'leave', label: 'Leave Requests', paths: ['/wellness/leave', '/leaves'] },
@@ -29,7 +29,7 @@ const categoryOptions = [
   { key: 'prescription', label: 'Prescriptions', paths: ['/wellness/prescriptions', '/wellness/my-prescriptions'] },
   { key: 'visit', label: 'Visits', paths: ['/wellness/visits'] },
   { key: 'membership', label: 'Memberships', paths: ['/wellness/memberships'] },
-  { key: 'payment', label: 'Payments & Transactions', paths: ['/payments', '/wellness/my-transactions', '/wellness/wallet', '/invoices'] },
+  { key: 'payment', label: 'Payments & Transactions', paths: ['/payments', '/wellness/my-transactions', '/wellness/wallet', '/invoices', '/wellness/invoices'] },
   { key: 'waitlist', label: 'Waitlist', paths: ['/wellness/waitlist'] },
   { key: 'inventory', label: 'Inventory', paths: ['/wellness/inventory', '/wellness/inventory-receipts', '/wellness/inventory-adjustments'] },
 ];

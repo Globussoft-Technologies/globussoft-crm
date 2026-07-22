@@ -24,6 +24,11 @@ const TERMINAL_STATUSES = ["resolved", "closed", "cancelled"];
 router.get("/", async (req, res) => {
   try {
     const isSummary = req.query.fields === "summary";
+    const pageRaw = req.query.page;
+    const limitRaw = req.query.limit;
+    const usePagination = pageRaw != null || limitRaw != null;
+    const page = Math.max(1, parseInt(pageRaw || "1", 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(limitRaw || "10", 10) || 10));
     const findManyArgs = {
       where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },
@@ -43,8 +48,68 @@ router.get("/", async (req, res) => {
         assignee: { select: { id: true, name: true, email: true } },
       };
     }
-    const tickets = await prisma.ticket.findMany(findManyArgs);
-    res.json(tickets);
+    const [tickets, total, openCount, urgentCount] = usePagination
+      ? await Promise.all([
+        prisma.ticket.findMany({
+          ...findManyArgs,
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        prisma.ticket.count({ where: { tenantId: req.user.tenantId } }),
+        prisma.ticket.count({
+          where: {
+            tenantId: req.user.tenantId,
+            status: { notIn: ["Resolved", "Closed"] },
+          },
+        }),
+        prisma.ticket.count({
+          where: {
+            tenantId: req.user.tenantId,
+            priority: "Urgent",
+            status: { not: "Closed" },
+          },
+        }),
+      ])
+      : [
+        await prisma.ticket.findMany(findManyArgs),
+        null,
+        null,
+        null,
+      ];
+
+    if (!usePagination) {
+      return res.json(tickets);
+    }
+
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+    const safePage = totalPages > 0 ? Math.min(page, totalPages) : 1;
+
+    if (safePage !== page) {
+      const clampedTickets = await prisma.ticket.findMany({
+        ...findManyArgs,
+        skip: (safePage - 1) * limit,
+        take: limit,
+      });
+      return res.json({
+        tickets: clampedTickets,
+        total,
+        page: safePage,
+        limit,
+        totalPages,
+        openCount,
+        urgentCount,
+      });
+    }
+
+    return res.json({
+      tickets,
+      total,
+      page,
+      limit,
+      totalPages,
+      openCount,
+      urgentCount,
+    });
   } catch (_err) {
     res.status(500).json({ error: "Failed to fetch tickets." });
   }

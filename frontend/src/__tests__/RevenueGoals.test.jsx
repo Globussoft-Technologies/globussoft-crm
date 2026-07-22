@@ -147,6 +147,22 @@ function defaultFetchMock(url) {
   return Promise.resolve(null);
 }
 
+function formatDateInput(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getGoalWindowBounds() {
+  const today = new Date();
+  const currentMonthStart = formatDateInput(new Date(today.getFullYear(), today.getMonth(), 1));
+  const maxWindowEnd = formatDateInput(new Date(today.getFullYear(), today.getMonth() + 12, 1));
+  const defaultMonthEnd = formatDateInput(new Date(today.getFullYear(), today.getMonth() + 1, 1));
+  return { currentMonthStart, maxWindowEnd, defaultMonthEnd };
+}
+
 function renderPage({ role = 'ADMIN', userId = 99 } = {}) {
   return render(
     <AuthContext.Provider value={{ user: { userId, role } }}>
@@ -313,6 +329,14 @@ describe('<RevenueGoals /> — admin page surface', () => {
     expect(optionValues).toContain('1');
     expect(optionValues).toContain('2');
     expect(optionValues).toContain('3');
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    const { currentMonthStart, maxWindowEnd, defaultMonthEnd } = getGoalWindowBounds();
+    expect(dateInputs[0].value).toBe(currentMonthStart);
+    expect(dateInputs[0].min).toBe(currentMonthStart);
+    expect(dateInputs[0].max).toBe(maxWindowEnd);
+    expect(dateInputs[1].value).toBe(defaultMonthEnd);
+    expect(dateInputs[1].min).toBe(currentMonthStart);
+    expect(dateInputs[1].max).toBe(maxWindowEnd);
   });
 
   it('save with empty userId fires notify.error("Pick a staff member.") and does NOT POST', async () => {
@@ -386,6 +410,60 @@ describe('<RevenueGoals /> — admin page surface', () => {
 
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith('Period start + end are required.');
+    });
+    const postCall = fetchApiMock.mock.calls.find(
+      ([u, opts]) => u === '/api/staff/revenue-goals' && opts?.method === 'POST',
+    );
+    expect(postCall).toBeUndefined();
+  });
+
+  it('save with a periodStart before the current month fires "Period start cannot be before the current month."', async () => {
+    renderPage({ role: 'ADMIN' });
+    await waitFor(() => expect(screen.getByTestId('revenue-goal-new')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('revenue-goal-new'));
+    await screen.findByTestId('goal-form-save');
+
+    fireEvent.change(screen.getByTestId('goal-form-user'), { target: { value: '1' } });
+    fireEvent.change(screen.getByTestId('goal-form-target'), { target: { value: '50000' } });
+
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    expect(dateInputs.length).toBe(2);
+    const { currentMonthStart } = getGoalWindowBounds();
+    const priorMonthStart = formatDateInput(new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1));
+    fireEvent.change(dateInputs[0], { target: { value: priorMonthStart } });
+    fireEvent.change(dateInputs[1], { target: { value: currentMonthStart } });
+
+    fireEvent.click(screen.getByTestId('goal-form-save'));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Period start cannot be before the current month.');
+    });
+    const postCall = fetchApiMock.mock.calls.find(
+      ([u, opts]) => u === '/api/staff/revenue-goals' && opts?.method === 'POST',
+    );
+    expect(postCall).toBeUndefined();
+  });
+
+  it('save with a periodEnd beyond one year from the current month fires "Goal period cannot exceed one year from the current month."', async () => {
+    renderPage({ role: 'ADMIN' });
+    await waitFor(() => expect(screen.getByTestId('revenue-goal-new')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('revenue-goal-new'));
+    await screen.findByTestId('goal-form-save');
+
+    fireEvent.change(screen.getByTestId('goal-form-user'), { target: { value: '1' } });
+    fireEvent.change(screen.getByTestId('goal-form-target'), { target: { value: '50000' } });
+
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    expect(dateInputs.length).toBe(2);
+    const { currentMonthStart } = getGoalWindowBounds();
+    const overLimitEnd = formatDateInput(new Date(new Date().getFullYear(), new Date().getMonth() + 12, 2));
+    fireEvent.change(dateInputs[0], { target: { value: currentMonthStart } });
+    fireEvent.change(dateInputs[1], { target: { value: overLimitEnd } });
+
+    fireEvent.click(screen.getByTestId('goal-form-save'));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Goal period cannot exceed one year from the current month.');
     });
     const postCall = fetchApiMock.mock.calls.find(
       ([u, opts]) => u === '/api/staff/revenue-goals' && opts?.method === 'POST',

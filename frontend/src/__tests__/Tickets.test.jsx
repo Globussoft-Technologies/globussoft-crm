@@ -102,9 +102,30 @@ const sampleTickets = [
   },
 ];
 
+function getPathAndQuery(url) {
+  const [path, queryString = ''] = String(url).split('?');
+  return { path, params: new URLSearchParams(queryString) };
+}
+
 function defaultFetchMock(url, opts) {
   const method = (opts && opts.method) || 'GET';
-  if (url === '/api/tickets' && method === 'GET') {
+  const { path, params } = getPathAndQuery(url);
+  if (path === '/api/tickets' && method === 'GET') {
+    const page = Number(params.get('page') || '1');
+    const limit = Number(params.get('limit') || String(sampleTickets.length));
+    if (params.has('page') || params.has('limit')) {
+      const start = (page - 1) * limit;
+      const tickets = sampleTickets.slice(start, start + limit);
+      return Promise.resolve({
+        tickets,
+        total: sampleTickets.length,
+        page,
+        limit,
+        totalPages: Math.max(1, Math.ceil(sampleTickets.length / limit)),
+        openCount: 1,
+        urgentCount: 1,
+      });
+    }
     return Promise.resolve(sampleTickets);
   }
   if (url === '/api/auth/users' && method === 'GET') {
@@ -149,7 +170,7 @@ describe('<Tickets /> — page surface', () => {
     renderTickets();
     await waitFor(() => {
       const ticketsCall = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/tickets' && (!o || !o.method || o.method === 'GET'),
+        ([u, o]) => typeof u === 'string' && u.startsWith('/api/tickets') && (!o || !o.method || o.method === 'GET'),
       );
       const usersCall = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/auth/users' && (!o || !o.method || o.method === 'GET'),
@@ -162,7 +183,7 @@ describe('<Tickets /> — page surface', () => {
   it('shows "Loading..." before the initial fetch resolves', async () => {
     let resolveTickets;
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/tickets') {
+      if (typeof url === 'string' && url.startsWith('/api/tickets')) {
         return new Promise((r) => { resolveTickets = r; });
       }
       if (url === '/api/auth/users') return Promise.resolve(sampleUsers);
@@ -177,7 +198,7 @@ describe('<Tickets /> — page surface', () => {
 
   it('renders empty-state message when /api/tickets returns []', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/tickets') return Promise.resolve([]);
+      if (typeof url === 'string' && url.startsWith('/api/tickets')) return Promise.resolve({ tickets: [], total: 0, page: 1, limit: 5, totalPages: 0, openCount: 0, urgentCount: 0 });
       if (url === '/api/auth/users') return Promise.resolve(sampleUsers);
       return Promise.resolve({});
     });
@@ -227,7 +248,7 @@ describe('<Tickets /> — page surface', () => {
 
   it('stats bar hides Urgent pill when no urgent-and-not-closed tickets exist', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/tickets') {
+      if (typeof url === 'string' && url.startsWith('/api/tickets')) {
         return Promise.resolve([
           {
             id: 201,
@@ -249,6 +270,80 @@ describe('<Tickets /> — page surface', () => {
     // don't collide with the always-present `<option value="Urgent">Urgent`
     // in the Create-form Priority dropdown.
     expect(screen.queryByText(/\d+\s+Urgent/)).not.toBeInTheDocument();
+  });
+
+  it('paginates the ticket list and fetches the next slice when navigating pages', async () => {
+    const pagedTickets = Array.from({ length: 6 }, (_, index) => ({
+      id: 300 + index,
+      subject: `Paged ticket ${index + 1}`,
+      description: '',
+      status: index === 0 ? 'Open' : 'Pending',
+      priority: index === 0 ? 'Urgent' : 'Medium',
+      assignee: index % 2 === 0 ? sampleUsers[0] : null,
+      createdAt: '2026-04-20T09:00:00.000Z',
+    }));
+
+    fetchApiMock.mockImplementation((url) => {
+      if (typeof url === 'string' && url.startsWith('/api/tickets')) {
+        const [, query = ''] = url.split('?');
+        const params = new URLSearchParams(query);
+        const page = Number(params.get('page') || '1');
+        const limit = Number(params.get('limit') || '5');
+        const start = (page - 1) * limit;
+        const tickets = pagedTickets.slice(start, start + limit);
+        return Promise.resolve({
+          tickets,
+          total: pagedTickets.length,
+          page,
+          limit,
+          totalPages: Math.max(1, Math.ceil(pagedTickets.length / limit)),
+          openCount: 1,
+          urgentCount: 1,
+        });
+      }
+      if (url === '/api/auth/users') return Promise.resolve(sampleUsers);
+      return Promise.resolve({});
+    });
+
+    renderTickets();
+
+    expect(await screen.findByLabelText(/Rows per page/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Page 1 of \d+/)).not.toBeInTheDocument();
+    expect(await screen.findByText('Paged ticket 1')).toBeInTheDocument();
+    expect(screen.getByText('Paged ticket 6')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/Rows per page/i), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText(/Custom rows per page/i), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: /Apply/i }));
+
+    expect(await screen.findByText(/Showing 1-2 of 6 tickets/)).toBeInTheDocument();
+    expect(screen.getByText(/Page 1 of 3/)).toBeInTheDocument();
+    expect(screen.getByText('Paged ticket 1')).toBeInTheDocument();
+    expect(screen.getByText('Paged ticket 2')).toBeInTheDocument();
+    expect(screen.queryByText('Paged ticket 3')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Next/i }));
+
+    expect(await screen.findByText(/Showing 3-4 of 6 tickets/)).toBeInTheDocument();
+    expect(screen.getByText(/Page 2 of 3/)).toBeInTheDocument();
+    expect(screen.getByText('Paged ticket 3')).toBeInTheDocument();
+    expect(screen.getByText('Paged ticket 4')).toBeInTheDocument();
+    expect(screen.queryByText('Paged ticket 1')).not.toBeInTheDocument();
+  });
+
+  it('keeps scrolling on the page shell instead of the ticket card', async () => {
+    renderTickets();
+    await waitFor(() =>
+      expect(screen.getByText('Login page not loading')).toBeInTheDocument(),
+    );
+
+    const pageShell = document.querySelector('.tickets-page');
+    const ticketCards = document.querySelectorAll('.tickets-grid .card');
+    expect(pageShell).toBeTruthy();
+    expect(pageShell.style.overflowY).toBe('');
+    expect(pageShell.style.minHeight).toBe('100%');
+    expect(ticketCards.length).toBeGreaterThanOrEqual(2);
+    expect(ticketCards[1].style.overflow).toBe('hidden');
   });
 
   it('submitting the Create form POSTs /api/tickets with subject, description, priority, and parsed assigneeId', async () => {
@@ -416,7 +511,7 @@ describe('<Tickets /> — page surface', () => {
     // Override mock so the POST rejects, but GETs still succeed (so the
     // initial-mount fetches that already ran don't trip a re-render error).
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/tickets' && opts?.method === 'POST') {
+      if (typeof url === 'string' && url.startsWith('/api/tickets') && opts?.method === 'POST') {
         return Promise.reject(new Error('500 internal'));
       }
       return defaultFetchMock(url, opts);

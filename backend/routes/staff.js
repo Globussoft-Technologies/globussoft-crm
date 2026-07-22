@@ -676,7 +676,7 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
     });
     if (!target) return res.status(404).json({ error: "User not found." });
 
-    const { name, email, role, wellnessRole, commissionProfileId, rbacRoleId, subBrandAccess } =
+    const { name, email, password, role, wellnessRole, commissionProfileId, rbacRoleId, subBrandAccess } =
       req.body || {};
     const data = {};
     const changed = {};
@@ -743,6 +743,16 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
         data.email = trimmed;
         changed.email = { from: target.email, to: data.email };
       }
+    }
+    if (password !== undefined) {
+      if (password === null || password === '') {
+        return res.status(400).json({ error: "Password must be at least 6 characters." });
+      }
+      if (typeof password !== "string" || password.length < 6) {
+        return res.status(400).json({ error: "Password must be at least 6 characters." });
+      }
+      data.password = await bcrypt.hash(password, 10);
+      changed.password = { updated: true };
     }
     if (role !== undefined) {
       if (!VALID_ROLES.includes(role)) {

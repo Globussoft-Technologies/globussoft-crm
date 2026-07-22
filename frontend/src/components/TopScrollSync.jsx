@@ -50,7 +50,19 @@ const TopScrollSync = ({ scrollWidth, children }) => {
     if (scrollWidth !== undefined) return undefined;
     const bottom = bottomRef.current;
     if (!bottom || typeof ResizeObserver === 'undefined') return undefined;
-    const measure = () => setMeasuredWidth(bottom.scrollWidth);
+    // Usually `bottom.scrollWidth` alone is enough — the wrapped table
+    // overflows this div directly, so the div's own scrollWidth captures
+    // it. But tables that manage their own horizontal overflow (e.g. the
+    // `.stable-table` mobile rule sets `display:block; overflow-x:auto`
+    // directly on the <table>) clip their content one level deeper — the
+    // overflow never reaches this wrapper, so its scrollWidth reads equal
+    // to its clientWidth even though the table's own content is wider.
+    // Taking the max of both catches that case without affecting the
+    // normal case (where they're already equal).
+    const measure = () => setMeasuredWidth(Math.max(
+      bottom.scrollWidth,
+      bottom.firstElementChild ? bottom.firstElementChild.scrollWidth : 0,
+    ));
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(bottom);

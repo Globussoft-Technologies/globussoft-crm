@@ -1032,3 +1032,50 @@ html[data-theme="dark"] .travel-subbrand-popup {
 html[data-theme="dark"] .travel-flight-details-box {
   background-color: #14161b !important;
 }
+
+/* Table scrollbars: keep the synced top bar and native bottom bar easy to grab.
+   Scoped to TopScrollSync so dense tables remain usable without changing the
+   scrollbar size for the rest of the application. */
+.top-scroll-sync {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.top-scroll-sync__top,
+.top-scroll-sync__bottom {
+  scrollbar-width: auto;
+  scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
+}
+
+.top-scroll-sync__top::-webkit-scrollbar,
+.top-scroll-sync__bottom::-webkit-scrollbar {
+  height: 16px;
+}
+
+.top-scroll-sync__top::-webkit-scrollbar-track,
+.top-scroll-sync__bottom::-webkit-scrollbar-track {
+  background: rgba(128, 128, 128, 0.12);
+  border-radius: 8px;
+}
+
+.top-scroll-sync__top::-webkit-scrollbar-thumb,
+.top-scroll-sync__bottom::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.72);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+  min-width: 48px;
+  cursor: grab;
+}
+
+.top-scroll-sync__top::-webkit-scrollbar-thumb:active,
+.top-scroll-sync__bottom::-webkit-scrollbar-thumb:active {
+  cursor: grabbing;
+}
+
+.top-scroll-sync__top::-webkit-scrollbar-thumb:hover,
+.top-scroll-sync__bottom::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.95);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}

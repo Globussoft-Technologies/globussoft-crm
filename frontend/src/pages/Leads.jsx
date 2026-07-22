@@ -3,7 +3,7 @@ import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Search, ArrowRightCircle, UserCheck, Users, Plus, X, Pencil, Trash2, RefreshCw } from 'lucide-react';
+import { UserPlus, Search, ArrowRightCircle, UserCheck, Users, Plus, X, Pencil, Trash2, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { AuthContext } from '../App';
 import ColumnPicker from '../components/ColumnPicker';
 import TopScrollSync from '../components/TopScrollSync';
@@ -37,6 +37,7 @@ const WELLNESS_SOURCE_OPTIONS = [
 // whitespace/dashes/parens before testing.
 const INDIAN_MOBILE_RE = /^(?:\+?91)?[6-9]\d{9}$/;
 const FIELD_LIMITS = { name: 191, email: 191, company: 191, title: 200, phone: 20 };
+const LEADS_PAGE_SIZE_OPTIONS = [25, 50, 100];
 // Reject all C0 controls (NUL/BEL/etc.) + DEL. \t \n \r are intentionally
 // included — text inputs shouldn't carry them either, and any paste-from-
 // malicious-source typically smuggles via NUL or BEL. Detecting control
@@ -87,6 +88,9 @@ const Leads = () => {
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [leadsPage, setLeadsPage] = useState(0);
+  const [leadsPageSize, setLeadsPageSize] = useState(25);
+  const [pageInput, setPageInput] = useState('1');
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [bulkAgent, setBulkAgent] = useState('');
   // #892 — Create Lead surface is a header CTA + drawer (not the inline
@@ -132,7 +136,7 @@ const Leads = () => {
 
   const fetchLeads = () => {
     setLoading(true);
-    fetchApi('/api/contacts?status=Lead')
+    fetchApi('/api/contacts?status=Lead&limit=500')
       .then(data => {
         setLeads(data);
         setLoading(false);
@@ -587,6 +591,30 @@ const Leads = () => {
     return matchesSearch && matchesSource && matchesSubBrand && matchesStage;
   });
 
+  const leadsPageCount = Math.max(1, Math.ceil(filteredLeads.length / leadsPageSize));
+  const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
+  const paginatedLeads = filteredLeads.slice(currentLeadsPage * leadsPageSize, (currentLeadsPage + 1) * leadsPageSize);
+  const pageStart = filteredLeads.length ? currentLeadsPage * leadsPageSize + 1 : 0;
+  const pageEnd = Math.min((currentLeadsPage + 1) * leadsPageSize, filteredLeads.length);
+
+  useEffect(() => {
+    setLeadsPage(0);
+  }, [searchTerm, sourceFilter, subBrandFilter, stageFilter, leadsPageSize]);
+
+  useEffect(() => {
+    setPageInput(String(currentLeadsPage + 1));
+  }, [currentLeadsPage]);
+
+  const goToLeadsPage = () => {
+    const requestedPage = Number.parseInt(pageInput, 10);
+    if (!Number.isFinite(requestedPage)) {
+      setPageInput(String(currentLeadsPage + 1));
+      return;
+    }
+    const nextPage = Math.min(Math.max(requestedPage, 1), leadsPageCount);
+    setLeadsPage(nextPage - 1);
+    setPageInput(String(nextPage));
+  };
   // Source chip options and counts derived from the full unfiltered leads list
   const sourceOptions = isTravel ? TRAVEL_SOURCE_OPTIONS : isWellness ? WELLNESS_SOURCE_OPTIONS : SOURCE_OPTIONS.map(s => ({ value: s, label: s }));
   const sourceCounts = leads.reduce((acc, lead) => {
@@ -608,10 +636,14 @@ const Leads = () => {
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
       <style>{`
         .leads-table-wrapper {
-          overflow-x: auto;
+          overflow: visible;
         }
         .leads-table {
           width: 100%;
+        }
+        .leads-table th,
+        .leads-table td {
+          white-space: nowrap;
         }
       `}</style>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
@@ -758,16 +790,17 @@ const Leads = () => {
       {/* #892 — Leads Table (full-width; Create Lead form now lives in the
           drawer below, triggered by the header CTA). */}
       {(() => {
-        // Base 900px covers the always-visible Name/Actions columns plus
-        // headroom; each optional/custom-field column shown adds its own
-        // share so a wide row (many custom fields + all optional columns
-        // visible) never gets squeezed by a stale fixed minWidth.
+        // Base 600px covers the always-visible Name/Actions columns plus a
+        // safety buffer; each optional/custom-field column adds a generous
+        // 200px share. This guarantees the table is never squeezed below the
+        // width required for all visible columns, so the top/bottom
+        // horizontal scrollbars can actually reach every column.
         const leadsOptionalCols = ['email', 'company', 'phone', 'aiScore', 'source', 'assignedTo', 'createdAt'].filter(isColVisible).length;
         const leadsVisibleCfCols = customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).length;
-        const leadsTableMinWidth = 400
-          + leadsOptionalCols * 140
-          + leadsVisibleCfCols * 160
-          + (isTravel ? 280 : 0)
+        const leadsTableMinWidth = 600
+          + leadsOptionalCols * 200
+          + leadsVisibleCfCols * 200
+          + (isTravel ? 320 : 0)
           + (isAdmin ? 40 : 0);
         return (
       <div className="card leads-table-wrapper" style={{ overflow: 'visible' }}>
@@ -792,7 +825,7 @@ const Leads = () => {
               first. leadsTableMinWidth grows with each optional/custom-field
               column shown so a wide row never gets squeezed by a stale
               fixed minWidth. */}
-          <TopScrollSync scrollWidth={`${leadsTableMinWidth}px`}>
+          <TopScrollSync>
           <table className="leads-table" style={{ width: '100%', minWidth: `${leadsTableMinWidth}px`, borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
@@ -837,7 +870,7 @@ const Leads = () => {
                 }
                 return null;
               })()}
-              {!loading && filteredLeads.length > 0 && filteredLeads.map(lead => (
+              {!loading && filteredLeads.length > 0 && paginatedLeads.map(lead => (
                 <tr
                   key={lead.id}
                   style={{ borderBottom: '1px solid var(--border-color)', cursor: 'pointer' }}
@@ -1010,6 +1043,48 @@ const Leads = () => {
             </tbody>
           </table>
           </TopScrollSync>
+          {!loading && filteredLeads.length > 0 && (
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem',
+              flexWrap: 'wrap', padding: '0.75rem 7.5rem 0.75rem 1rem',
+              borderTop: '1px solid var(--border-color)', background: 'var(--surface-color)',
+              position: 'relative', zIndex: 2,
+            }}>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem', whiteSpace: 'nowrap' }}>
+                Showing {pageStart}-{pageEnd} of {filteredLeads.length}
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <label htmlFor="leads-page-size" style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>Rows</label>
+                <select
+                  id="leads-page-size" value={leadsPageSize}
+                  onChange={e => { setLeadsPageSize(Number(e.target.value)); setLeadsPage(0); }}
+                  className="input-field"
+                  style={{ width: 'auto', minWidth: '4.5rem', padding: '0.35rem 0.5rem', fontSize: '0.8125rem' }}
+                  aria-label="Rows per page"
+                >
+                  {LEADS_PAGE_SIZE_OPTIONS.map(size => <option key={size} value={size}>{size}</option>)}
+                </select>
+                <button type="button" title="Previous page" aria-label="Previous page"
+                  onClick={() => setLeadsPage(currentLeadsPage - 1)} disabled={currentLeadsPage === 0}
+                  style={{ ...actionIconBtn, opacity: currentLeadsPage === 0 ? 0.45 : 1 }}>
+                  <ChevronLeft size={16} />
+                </button>
+                <form onSubmit={e => { e.preventDefault(); goToLeadsPage(); }} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <label htmlFor="leads-page-number" style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>Page</label>
+                  <input id="leads-page-number" type="number" min="1" max={leadsPageCount} value={pageInput}
+                    onChange={e => setPageInput(e.target.value)} onBlur={goToLeadsPage}
+                    style={{ width: '3.5rem', padding: '0.35rem 0.4rem', textAlign: 'center', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+                    aria-label="Page number" />
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>of {leadsPageCount}</span>
+                </form>
+                <button type="button" title="Next page" aria-label="Next page"
+                  onClick={() => setLeadsPage(currentLeadsPage + 1)} disabled={currentLeadsPage >= leadsPageCount - 1}
+                  style={{ ...actionIconBtn, opacity: currentLeadsPage >= leadsPageCount - 1 ? 0.45 : 1 }}>
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         );
       })()}

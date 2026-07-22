@@ -53,14 +53,7 @@ const PAGE_INFO = [
     title: "Patients",
     keywords: ["patient", "patients", "client", "clients", "record", "profile", "medical history", "add patient", "new patient", "create patient", "search patient", "find patient"],
     description:
-      "Patient registry. Search patients, open clinical profiles, view visit history, prescriptions, packages and wallet balance. Use the + Add button to create a new patient.",
-  },
-  {
-    path: "/wellness/patients/:id",
-    title: "Patient Detail",
-    keywords: ["patient detail", "patient profile", "case history", "prescribe", "consent", "treatment plan", "log visit", "patient record"],
-    description:
-      "Individual patient record with case history, prescriptions, consent forms, treatment plans, visits, photos, wallet and memberships.",
+      "Patient registry. Search patients, open clinical profiles from the list, and view visit history, prescriptions, packages and wallet balance. Use the + Add button to create a new patient.",
   },
   {
     path: "/wellness/visits",
@@ -75,12 +68,6 @@ const PAGE_INFO = [
     keywords: ["prescription", "prescriptions", "rx", "drug", "medicine", "write prescription", "edit prescription", "download prescription"],
     description:
       "Tenant-wide prescription list. Create, edit, download PDF and send prescriptions to patients.",
-  },
-  {
-    path: "/wellness/my-prescriptions",
-    title: "My Prescriptions",
-    keywords: ["my prescription", "my prescriptions", "own rx", "self prescription"],
-    description: "Staff-authenticated self-view of your own prescriptions.",
   },
   {
     path: "/wellness/services",
@@ -247,18 +234,6 @@ const PAGE_INFO = [
     description: "All-staff attendance KPIs, present/absent summary and manager edits.",
   },
   {
-    path: "/wellness/attendance",
-    title: "Attendance",
-    keywords: ["my attendance", "self attendance", "mark attendance"],
-    description: "Mark your own attendance and view your attendance calendar.",
-  },
-  {
-    path: "/wellness/attendance/calendar",
-    title: "Attendance Calendar",
-    keywords: ["attendance calendar", "attendance month view", "leave calendar"],
-    description: "Month grid of attendance and approved leave per staff member.",
-  },
-  {
     path: "/wellness/leave",
     title: "Leave",
     keywords: ["leave", "apply leave", "approve leave", "reject leave"],
@@ -299,12 +274,6 @@ const PAGE_INFO = [
     title: "WhatsApp Threads",
     keywords: ["whatsapp", "chat", "thread", "message"],
     description: "Two-way WhatsApp agent inbox for patient conversations.",
-  },
-  {
-    path: "/wellness/whatsapp/templates",
-    title: "WhatsApp Templates",
-    keywords: ["whatsapp template", "templates", "meta template", "message template"],
-    description: "Create and sync WhatsApp message templates with Meta approval status.",
   },
   {
     path: "/wellness/reports",
@@ -420,6 +389,8 @@ function buildSystemPrompt({ pageContext } = {}) {
     "- NEVER add a 'This is based on...' or source citation line.",
     "- ALWAYS call search_help_docs first and base your answer on the returned articles/docs.",
     "- When the user asks where a feature or page is, call get_page_info. It returns a ranked list of matching pages.",
+    "- Only suggest pages that are listed in the admin/staff dashboard sidebar. Do NOT suggest customer portal pages, practitioner self-views (My Prescriptions, My Appointments, My Bookings, My Transactions, Buy Gift Cards), or dynamic routes with placeholders like :id.",
+    "- If the best match is not an admin dashboard page, fall back to the closest admin dashboard page and explain the difference.",
     "- If one result is a clear exact match for what they asked (title or route matches the question closely and the score is much higher than the rest), answer with a brief plain sentence first, then give one deep-link button.",
     "- If two or more results are equally relevant, say you found a few related options, give a one-sentence explanation of what each is for or which one to pick, and list each one as a separate clickable button. Do not guess one when the question is ambiguous.",
     "- If the user asks about adding, creating, booking, editing or doing something, tell them the exact page/button/menu path and steps. Do not just say where to view it.",

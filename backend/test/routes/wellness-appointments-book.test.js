@@ -44,6 +44,7 @@ prisma.visit = prisma.visit || {};
 prisma.visit.create = vi.fn();
 prisma.visit.findFirst = vi.fn();
 prisma.visit.findUnique = vi.fn();
+prisma.visit.update = vi.fn();
 
 prisma.service = prisma.service || {};
 prisma.service.findFirst = vi.fn();
@@ -125,6 +126,7 @@ function resetMocks() {
   prisma.visit.create.mockReset();
   prisma.visit.findFirst.mockReset();
   prisma.visit.findUnique.mockReset();
+  prisma.visit.update.mockReset();
   prisma.service.findFirst.mockReset();
   prisma.payment.create.mockReset();
   prisma.payment.findFirst.mockReset();
@@ -230,6 +232,10 @@ beforeEach(() => {
   });
 
   prisma.visit.create.mockResolvedValue(makeVisitEnvelope({ id: 1, patientId: 42 }));
+  prisma.visit.update.mockImplementation(async (args) => ({
+    id: args.where.id,
+    ...args.data,
+  }));
   prisma.leaveRequest.findFirst.mockResolvedValue(null);
   prisma.membership.findFirst.mockResolvedValue(null);
   prisma.tenant.findUnique.mockResolvedValue({ id: 1, name: 'Enhanced Wellness' });

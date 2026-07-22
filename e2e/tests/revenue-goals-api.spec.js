@@ -117,18 +117,17 @@ test.afterAll(async ({ request }) => {
   }
 });
 
-// Future-window goal (so we don't accidentally pick up real demo sales).
+// Future-window goal that stays within the backend's allowed 12-month window.
 //
-// v3.7.4 — periodStart is now unique-per-run instead of hardcoded
-// 2099-01-01. The @@unique([tenantId, userId, period, periodStart])
-// constraint on StaffRevenueGoal means any two runs that hit the
-// same admin + same period + same hardcoded start collide on P2002.
-// `Date.now() / 1000 % 365` spreads picks across all days of 2099,
-// effectively eliminating collisions across the ~few-runs-per-day
-// e2e-full cadence. The 30-day period stays inside 2099.
+// v3.9.3 — Revenue-goal validation now rejects periodStart/periodEnd that are
+// more than 12 months from the current month, so the old 2099 window no longer
+// passes. We use a day in the current month plus a 30-day period, which keeps
+// the dates valid while still avoiding the @@unique([tenantId, userId, period,
+// periodStart]) collisions that the original 2099 window was guarding against.
 function farFutureWindow() {
-  const dayOffset = Math.floor(Date.now() / 1000) % 365; // 0-364
-  const start = new Date(Date.UTC(2099, 0, 1 + dayOffset));
+  const now = new Date();
+  const dayOffset = Math.floor(Date.now()) % 30; // 0-29, unique per ms
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1 + dayOffset));
   const end = new Date(start.getTime() + 30 * 86_400_000);
   return { periodStart: start.toISOString(), periodEnd: end.toISOString() };
 }

@@ -288,6 +288,7 @@ const Layout = () => {
         className="app-main"
         style={{
           flex: 1,
+          minWidth: 0,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -457,6 +458,8 @@ const Layout = () => {
           className="animate-fade-in"
           style={{
             flex: 1,
+            minWidth: 0,
+            overflowX: "hidden",
             overflowY: "auto",
             padding: "0",
             backgroundColor: "transparent",

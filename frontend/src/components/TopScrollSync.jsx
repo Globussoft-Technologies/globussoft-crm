@@ -61,11 +61,11 @@ const TopScrollSync = ({ scrollWidth, children }) => {
   const spacerWidth = scrollWidth !== undefined ? scrollWidth : `${measuredWidth}px`;
 
   return (
-    <div>
-      <div ref={topRef} style={{ overflowX: 'auto', overflowY: 'hidden', height: '14px' }}>
+    <div className="top-scroll-sync">
+      <div ref={topRef} className="top-scroll-sync__top" style={{ overflowX: 'auto', overflowY: 'hidden', height: '16px', minWidth: 0, maxWidth: '100%' }}>
         <div style={{ width: spacerWidth, height: '1px' }} />
       </div>
-      <div ref={bottomRef} style={{ overflowX: 'auto' }}>
+      <div ref={bottomRef} className="top-scroll-sync__bottom" style={{ overflowX: 'auto', minWidth: 0, maxWidth: '100%' }}>
         {children}
       </div>
     </div>

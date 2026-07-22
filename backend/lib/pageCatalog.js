@@ -411,6 +411,13 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'payments', action: 'read' }],
   },
   {
+    path: '/wellness/invoices',
+    label: 'Invoices',
+    description: 'Invoice ledger + payment links',
+    category: 'Finance',
+    requiredPermissions: [{ module: 'invoices', action: 'read' }],
+  },
+  {
     path: '/wellness/wallet',
     label: 'Patient Wallets',
     description: 'Patient pre-paid wallet balances + history',
@@ -488,7 +495,9 @@ const PAGE_CATALOG = [
     label: 'Landing Pages',
     description: 'Lead-capture landing pages',
     category: 'Marketing',
-    vertical: 'generic',
+    // Travel-only surface. Generic CRM and wellness tenants should not
+    // see this in /api/pages/me, /api/pages/catalog, or the omnibar.
+    vertical: 'travel',
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
 

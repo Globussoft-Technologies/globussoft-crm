@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDate } from '../utils/date';
@@ -32,6 +32,8 @@ function Badge({ label, config }) {
 }
 
 const EMPTY_FORM = { subject: '', description: '', priority: 'Medium', assigneeId: '' };
+const PAGE_SIZE_PRESETS = [10, 20, 30, 50];
+const DEFAULT_PAGE_SIZE = 10;
 
 export default function Tickets() {
   const notify = useNotify();
@@ -39,24 +41,38 @@ export default function Tickets() {
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [pageSizeMode, setPageSizeMode] = useState(String(DEFAULT_PAGE_SIZE));
+  const [customPageSize, setCustomPageSize] = useState(String(DEFAULT_PAGE_SIZE));
+  const [totalTickets, setTotalTickets] = useState(0);
+  const [openCount, setOpenCount] = useState(0);
+  const [urgentCount, setUrgentCount] = useState(0);
 
-  useEffect(() => { loadData(); }, []);
-
-  const loadData = async () => {
+  const loadData = useCallback(async (targetPage = 1, targetPageSize = pageSize) => {
     try {
       setLoading(true);
       const [t, u] = await Promise.all([
-        fetchApi('/api/tickets'),
+        fetchApi(`/api/tickets?page=${targetPage}&limit=${targetPageSize}`),
         fetchApi('/api/auth/users').catch(() => []),
       ]);
-      setTickets(Array.isArray(t) ? t : []);
+      const ticketList = Array.isArray(t) ? t : Array.isArray(t?.tickets) ? t.tickets : [];
+      setTickets(ticketList);
+      setTotalTickets(Array.isArray(t) ? ticketList.length : Number(t?.total) || ticketList.length);
+      setOpenCount(Array.isArray(t) ? ticketList.filter((ticket) => ticket.status === 'Open').length : Number(t?.openCount) || 0);
+      setUrgentCount(Array.isArray(t) ? ticketList.filter((ticket) => ticket.priority === 'Urgent' && ticket.status !== 'Closed').length : Number(t?.urgentCount) || 0);
+      if (!Array.isArray(t) && Number.isFinite(Number(t?.page)) && Number(t.page) !== targetPage) {
+        setPage(Number(t.page));
+      }
       setUsers(Array.isArray(u) ? u : []);
     } catch (err) {
       console.error('Failed to load tickets:', err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [pageSize]);
+
+  useEffect(() => { loadData(page, pageSize); }, [page, pageSize, loadData]);
 
   const createTicket = async (e) => {
     e.preventDefault();
@@ -71,7 +87,11 @@ export default function Tickets() {
       }
       await fetchApi('/api/tickets', { method: 'POST', body: JSON.stringify(payload) });
       setForm(EMPTY_FORM);
-      loadData();
+      if (page === 1) {
+        await loadData(1);
+      } else {
+        setPage(1);
+      }
     } catch (err) {
       notify.error('Failed to create ticket.');
     }
@@ -80,7 +100,7 @@ export default function Tickets() {
   const updateStatus = async (id, status) => {
     try {
       await fetchApi(`/api/tickets/${id}`, { method: 'PUT', body: JSON.stringify({ status }) });
-      loadData();
+      loadData(page);
     } catch (err) {
       console.error('Failed to update ticket status:', err);
     }
@@ -95,7 +115,7 @@ export default function Tickets() {
     })) return;
     try {
       await fetchApi(`/api/tickets/${id}`, { method: 'DELETE' });
-      loadData();
+      loadData(page);
     } catch (err) {
       console.error('Failed to delete ticket:', err);
     }
@@ -104,12 +124,33 @@ export default function Tickets() {
   const updateField = (field, value) => {
     setForm({ ...form, [field]: value });
   };
-
-  const openCount = tickets.filter(t => t.status === 'Open').length;
-  const urgentCount = tickets.filter(t => t.priority === 'Urgent' && t.status !== 'Closed').length;
+  const handlePageSizeModeChange = (value) => {
+    setPageSizeMode(value);
+    if (value === 'custom') {
+      setCustomPageSize(String(pageSize));
+      return;
+    }
+    const nextPageSize = parseInt(value, 10);
+    if (!Number.isFinite(nextPageSize) || nextPageSize <= 0) return;
+    setPageSize(nextPageSize);
+    setPage(1);
+  };
+  const applyCustomPageSize = () => {
+    const parsed = parseInt(customPageSize, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    const nextPageSize = Math.min(100, parsed);
+    setPageSize(nextPageSize);
+    setPageSizeMode('custom');
+    setCustomPageSize(String(nextPageSize));
+    setPage(1);
+  };
+  const totalPages = Math.max(1, Math.ceil(totalTickets / pageSize));
+  const showPagination = totalTickets > pageSize;
+  const startItem = totalTickets === 0 ? 0 : ((page - 1) * pageSize) + 1;
+  const endItem = Math.min(page * pageSize, totalTickets);
 
   return (
-    <div className="tickets-page" style={{ padding: '2rem', height: '100%', overflowY: 'auto', animation: 'fadeIn 0.5s ease-out' }}>
+    <div className="tickets-page" style={{ padding: '2rem', minHeight: '100%', animation: 'fadeIn 0.5s ease-out' }}>
       <header style={{ marginBottom: '2rem' }}>
         <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <Ticket size={26} color="var(--accent-color)" /> Support Tickets
@@ -120,7 +161,7 @@ export default function Tickets() {
       </header>
 
       {/* Stats bar */}
-      {tickets.length > 0 && (
+      {totalTickets > 0 && (
         <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
           {urgentCount > 0 && (
             <span style={{
@@ -141,12 +182,12 @@ export default function Tickets() {
             padding: '0.4rem 1rem', borderRadius: '999px', background: 'var(--subtle-bg-4)',
             color: 'var(--text-secondary)', fontSize: '0.8rem', border: '1px solid var(--border-color)',
           }}>
-            {tickets.length} total
+            {totalTickets} total
           </span>
         </div>
       )}
 
-      <div className="tickets-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
+      <div className="tickets-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem', alignItems: 'start' }}>
 
         {/* Create Ticket Panel */}
         <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
@@ -205,7 +246,7 @@ export default function Tickets() {
         </div>
 
         {/* Tickets Table */}
-        <div className="card" style={{ padding: '2rem', overflow: 'auto' }}>
+        <div className="card" style={{ padding: '2rem', overflow: 'hidden' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Ticket size={20} color="var(--accent-color)" /> All Tickets
           </h3>
@@ -282,6 +323,108 @@ export default function Tickets() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+      {!loading && totalTickets > 0 && (
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: '1rem',
+              marginTop: '1.5rem',
+              flexWrap: 'wrap',
+            }}>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', margin: 0 }}>
+                Showing {startItem}-{endItem} of {totalTickets} tickets
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <label style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  color: 'var(--text-secondary)',
+                  fontSize: '0.875rem',
+                }}>
+                  <span>Rows per page</span>
+                  <select
+                    aria-label="Rows per page"
+                    value={pageSizeMode === 'custom' ? 'custom' : String(pageSize)}
+                    onChange={(e) => handlePageSizeModeChange(e.target.value)}
+                    style={{
+                      padding: '0.55rem 0.75rem',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-color)',
+                      background: 'var(--input-bg)',
+                      color: 'var(--text-primary)',
+                    }}
+                  >
+                    {PAGE_SIZE_PRESETS.map((size) => (
+                      <option key={size} value={size}>{size}</option>
+                    ))}
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+                {pageSizeMode === 'custom' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      aria-label="Custom rows per page"
+                      value={customPageSize}
+                      onChange={(e) => setCustomPageSize(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          applyCustomPageSize();
+                        }
+                      }}
+                      placeholder="Type number"
+                      style={{
+                        width: '120px',
+                        padding: '0.55rem 0.75rem',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border-color)',
+                        background: 'var(--input-bg)',
+                        color: 'var(--text-primary)',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={applyCustomPageSize}
+                      style={{ padding: '0.65rem 1rem' }}
+                    >
+                      Apply
+                    </button>
+                  </div>
+                )}
+                {showPagination && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+                      disabled={page <= 1}
+                      style={{ padding: '0.65rem 1rem', opacity: page <= 1 ? 0.6 : 1 }}
+                    >
+                      Previous
+                    </button>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                      Page {page} of {totalPages}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+                      disabled={page >= totalPages}
+                      style={{ padding: '0.65rem 1rem', opacity: page >= totalPages ? 0.6 : 1 }}
+                    >
+                      Next
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           )}
         </div>

@@ -164,7 +164,7 @@ export default function Approvals() {
   const tabBtnStyle = (active) => ({
     padding: '0.55rem 1.1rem',
     borderRadius: '8px 8px 0 0',
-    background: active ? 'var(--card-bg, rgba(255,255,255,0.05))' : 'transparent',
+    background: active ? 'var(--surface-color, rgba(255,255,255,0.85))' : 'transparent',
     color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
     border: 'none',
     borderBottom: active ? '2px solid var(--accent-color, #6366f1)' : '2px solid transparent',
@@ -551,14 +551,18 @@ function Modal({ title, children, onClose }) {
       <div
         onClick={(e) => e.stopPropagation()}
         className="card"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         style={{
           maxWidth: '520px', width: '100%',
           padding: '1.5rem 1.75rem',
           animation: 'modalIn 0.18s ease-out',
-          background: 'var(--card-bg, rgba(20,22,32,0.92))',
-          border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+          background: 'var(--modal-bg, var(--surface-color, #ffffff))',
+          color: 'var(--text-primary)',
+          border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
           borderRadius: '12px',
-          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)',
+          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.28)',
           maxHeight: '90vh', overflowY: 'auto',
         }}
       >

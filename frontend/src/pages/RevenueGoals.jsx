@@ -40,20 +40,51 @@ const SCOPE_OPTIONS = [
 ];
 
 function emptyForm() {
-  const today = new Date();
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  const fmt = (d) => d.toISOString().slice(0, 10);
+  const { currentMonthStart, defaultMonthEnd } = getGoalWindowBounds();
   return {
     userId: '',
     period: 'MONTHLY',
-    periodStart: fmt(monthStart),
-    periodEnd: fmt(monthEnd),
+    periodStart: currentMonthStart,
+    periodEnd: defaultMonthEnd,
     targetAmount: '',
     scope: 'ALL',
     scopeFilter: '',
     notes: '',
   };
+}
+
+function formatDateInput(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function addMonthsToDateInput(dateInput, months) {
+  const d = new Date(`${dateInput}T00:00:00`);
+  d.setMonth(d.getMonth() + months);
+  return formatDateInput(d);
+}
+
+function getGoalWindowBounds() {
+  const today = new Date();
+  const currentMonthStart = formatDateInput(new Date(today.getFullYear(), today.getMonth(), 1));
+  return {
+    currentMonthStart,
+    maxWindowEnd: addMonthsToDateInput(currentMonthStart, 12),
+    defaultMonthEnd: addMonthsToDateInput(currentMonthStart, 1),
+  };
+}
+
+function isDateInputBeforeMin(value, minDate) {
+  if (!value) return false;
+  return value < minDate;
+}
+
+function isDateInputAfterMax(value, maxDate) {
+  if (!value) return false;
+  return value > maxDate;
 }
 
 function progressColor(pct) {
@@ -97,8 +128,8 @@ export default function RevenueGoals() {
     id: row.id,
     userId: String(row.userId),
     period: row.period || 'MONTHLY',
-    periodStart: row.periodStart ? new Date(row.periodStart).toISOString().slice(0, 10) : '',
-    periodEnd: row.periodEnd ? new Date(row.periodEnd).toISOString().slice(0, 10) : '',
+    periodStart: row.periodStart ? formatDateInput(row.periodStart) : '',
+    periodEnd: row.periodEnd ? formatDateInput(row.periodEnd) : '',
     targetAmount: String(row.targetAmount || ''),
     scope: row.scope || 'ALL',
     scopeFilter: row.scopeFilter || '',
@@ -113,6 +144,29 @@ export default function RevenueGoals() {
     }
     if (!editing.periodStart || !editing.periodEnd) {
       notify.error('Period start + end are required.'); return;
+    }
+    const { currentMonthStart, maxWindowEnd } = getGoalWindowBounds();
+    if (isDateInputBeforeMin(editing.periodStart, currentMonthStart)) {
+      notify.error('Period start cannot be before the current month.');
+      return;
+    }
+    if (isDateInputBeforeMin(editing.periodEnd, currentMonthStart)) {
+      notify.error('Period end cannot be before the current month.');
+      return;
+    }
+    if (isDateInputAfterMax(editing.periodStart, maxWindowEnd) || isDateInputAfterMax(editing.periodEnd, maxWindowEnd)) {
+      notify.error('Goal period cannot exceed one year from the current month.');
+      return;
+    }
+    const start = new Date(editing.periodStart);
+    const end = new Date(editing.periodEnd);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      notify.error('Period dates must be valid.');
+      return;
+    }
+    if (start.getTime() > end.getTime()) {
+      notify.error('Period start must be on or before period end.');
+      return;
     }
     setSaving(true);
     try {
@@ -354,6 +408,8 @@ export default function RevenueGoals() {
                   <input
                     type="date"
                     className="input-field"
+                    min={getGoalWindowBounds().currentMonthStart}
+                    max={getGoalWindowBounds().maxWindowEnd}
                     value={editing.periodStart}
                     onChange={(e) => setEditing({ ...editing, periodStart: e.target.value })}
                     style={{ width: '100%', marginTop: '0.25rem' }}
@@ -363,6 +419,8 @@ export default function RevenueGoals() {
                   <input
                     type="date"
                     className="input-field"
+                    min={editing.periodStart || getGoalWindowBounds().currentMonthStart}
+                    max={getGoalWindowBounds().maxWindowEnd}
                     value={editing.periodEnd}
                     onChange={(e) => setEditing({ ...editing, periodEnd: e.target.value })}
                     style={{ width: '100%', marginTop: '0.25rem' }}

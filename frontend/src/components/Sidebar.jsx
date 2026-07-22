@@ -17,7 +17,6 @@ import {
   LayoutDashboard,
   Briefcase,
   Settings,
-  LifeBuoy,
   Send,
   Inbox as InboxIcon,
   Mail,
@@ -1105,6 +1104,7 @@ const PAGE_ICON_BY_PATH = {
   // Finance
   "/wellness/pos": Calculator,
   "/invoices": Receipt,
+  "/wellness/invoices": Receipt,
   "/estimates": FileSpreadsheet,
   "/expenses": IndianRupee,
   "/payments": CreditCard,
@@ -1203,7 +1203,9 @@ const PATH_COUNT_KEY = {
 
 // Some links want to highlight as active even when on a different path.
 // Path → list of additional pathnames to treat as matches.
-const PATH_MATCH_ALIASES = {};
+const PATH_MATCH_ALIASES = {
+  "/wellness/invoices": ["/invoices"],
+};
 
 function renderWellnessNav({
   Link,
@@ -1824,12 +1826,10 @@ function renderTravelNav({
           Gated by marketing.read so it's visible alongside the other
           marketing-output surfaces (Flyer Studio, Landing Pages). */}
       <Link to="/travel/brochures" icon={Sparkles} label="Brochure Engine" requiredPermission={{ module: "marketing", action: "read" }} />
-      {/* Destination Landing Pages — backed by the existing LandingPage
-          platform (/api/landing-pages). Travel-flavoured sub-section is
-          driven by the LandingPage.subBrand column + the
-          "travel_destination" template preset. Same admin surface for
-          all 4 sub-brands; the LandingPages.jsx list filters by sub-brand
-          via the ?subBrand= query param. */}
+      {/* Destination Landing Pages — travel-only surface backed by the
+          existing LandingPage platform (/api/landing-pages). The shared
+          catalog now marks /landing-pages as travel-vertical, and the
+          dedicated travel nav below is the only place the shortcut appears. */}
       <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" requiredPermission={{ module: "marketing", action: "read" }} />
 
       {/* Visa Sure sub-brand cluster — inBrand() is a tenant feature
@@ -2054,17 +2054,10 @@ function renderGenericNav({
       <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly />
       <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly />
       <Link to="/social" icon={Send} label="Social Media" managerOnly />
-      <Link
-        to="/landing-pages"
-        icon={PanelTop}
-        label="Landing Pages"
-        managerOnly
-      />
       {/* Marketplace Leads sidebar link removed by request. Route stays
           mounted in App.jsx so /marketplace-leads is reachable by deep
           link / direct URL. */}
 
-      <Link to="/support" icon={LifeBuoy} label="Support" managerOnly />
       <Link
         to="/knowledge-base"
         icon={BookOpen}

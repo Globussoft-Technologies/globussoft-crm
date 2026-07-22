@@ -124,6 +124,39 @@ async function validateWellnessRole(req, value) {
   return null;
 }
 
+function formatLocalDateInput(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addMonthsToDateInput(dateInput, months) {
+  const d = new Date(`${dateInput}T00:00:00`);
+  d.setMonth(d.getMonth() + months);
+  return formatLocalDateInput(d);
+}
+
+function getGoalWindowBounds() {
+  const today = new Date();
+  const currentMonthStart = formatLocalDateInput(
+    new Date(today.getFullYear(), today.getMonth(), 1),
+  );
+  return {
+    currentMonthStart,
+    maxWindowEnd: addMonthsToDateInput(currentMonthStart, 12),
+  };
+}
+
+function toDateInputKey(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "string") return value.slice(0, 10);
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return formatLocalDateInput(d);
+}
+
 // Module-scoped reset / invite token stores. Mirrors the pattern in
 // routes/auth.js's `resetTokens` Map — in-memory, 1-hour TTL, hex-32 key.
 // In a multi-instance deploy these would move to Redis; the demo box runs
@@ -1187,6 +1220,7 @@ const VALID_COMMISSION_BASIS = [
   "REVENUE_PERCENT",
   "FLAT_PER_INVOICE",
 ];
+const VALID_COMMISSION_PERIOD = ["MONTHLY", "QUARTERLY", "YEARLY"];
 
 function validateCommissionBody(body, { partial = false } = {}) {
   const errors = [];
@@ -1219,6 +1253,53 @@ function validateCommissionBody(body, { partial = false } = {}) {
   ) {
     errors.push("either percentage or flatAmount must be set");
   }
+  if (
+    body.period !== undefined &&
+    body.period !== null &&
+    body.period !== "" &&
+    !VALID_COMMISSION_PERIOD.includes(body.period)
+  ) {
+    errors.push(`period must be one of: ${VALID_COMMISSION_PERIOD.join(", ")}`);
+  }
+  const hasPeriodStart = body.periodStart !== undefined && body.periodStart !== null && body.periodStart !== "";
+  const hasPeriodEnd = body.periodEnd !== undefined && body.periodEnd !== null && body.periodEnd !== "";
+  if (hasPeriodStart) {
+    const d = new Date(body.periodStart);
+    if (Number.isNaN(d.getTime())) errors.push("periodStart must be a valid date");
+  }
+  if (hasPeriodEnd) {
+    const d = new Date(body.periodEnd);
+    if (Number.isNaN(d.getTime())) errors.push("periodEnd must be a valid date");
+  }
+  if ((hasPeriodStart || hasPeriodEnd) && !(hasPeriodStart && hasPeriodEnd)) {
+    errors.push("periodStart and periodEnd must both be set");
+  }
+  if (hasPeriodStart && hasPeriodEnd) {
+    const start = new Date(body.periodStart);
+    const end = new Date(body.periodEnd);
+    if (start.getTime() >= end.getTime()) {
+      errors.push("periodStart must be before periodEnd");
+    }
+  }
+  const { currentMonthStart, maxWindowEnd } = getGoalWindowBounds();
+  if (hasPeriodStart) {
+    const startKey = toDateInputKey(body.periodStart);
+    if (startKey && startKey < currentMonthStart) {
+      errors.push("periodStart cannot be before the current month");
+    }
+    if (startKey && startKey > maxWindowEnd) {
+      errors.push("periodStart cannot be more than one year from the current month");
+    }
+  }
+  if (hasPeriodEnd) {
+    const endKey = toDateInputKey(body.periodEnd);
+    if (endKey && endKey < currentMonthStart) {
+      errors.push("periodEnd cannot be before the current month");
+    }
+    if (endKey && endKey > maxWindowEnd) {
+      errors.push("periodEnd cannot be more than one year from the current month");
+    }
+  }
   return errors;
 }
 
@@ -1243,7 +1324,7 @@ router.post("/commission-profiles", verifyRole(["ADMIN"]), async (req, res) => {
     if (errors.length)
       return res.status(400).json({ error: errors.join("; ") });
 
-    const { name, percentage, flatAmount, basis, appliesToCategory, isActive } =
+    const { name, percentage, flatAmount, basis, period, periodStart, periodEnd, appliesToCategory, isActive } =
       req.body;
     const row = await prisma.commissionProfile.create({
       data: {
@@ -1254,6 +1335,9 @@ router.post("/commission-profiles", verifyRole(["ADMIN"]), async (req, res) => {
         flatAmount:
           flatAmount == null || flatAmount === "" ? null : String(flatAmount),
         basis: basis || "REVENUE_PERCENT",
+        period: period || null,
+        periodStart: periodStart ? new Date(periodStart) : null,
+        periodEnd: periodEnd ? new Date(periodEnd) : null,
         appliesToCategory: appliesToCategory || null,
         isActive: isActive === false ? false : true,
       },
@@ -1304,6 +1388,9 @@ router.put(
         percentage,
         flatAmount,
         basis,
+        period,
+        periodStart,
+        periodEnd,
         appliesToCategory,
         isActive,
       } = req.body || {};
@@ -1316,6 +1403,11 @@ router.put(
         data.flatAmount =
           flatAmount == null || flatAmount === "" ? null : String(flatAmount);
       if (basis !== undefined) data.basis = basis;
+      if (period !== undefined) data.period = period || null;
+      if (periodStart !== undefined)
+        data.periodStart = periodStart ? new Date(periodStart) : null;
+      if (periodEnd !== undefined)
+        data.periodEnd = periodEnd ? new Date(periodEnd) : null;
       if (appliesToCategory !== undefined)
         data.appliesToCategory = appliesToCategory || null;
       if (isActive !== undefined) data.isActive = Boolean(isActive);
@@ -1399,6 +1491,7 @@ const VALID_GOAL_SCOPE = ["ALL", "SERVICE", "PRODUCT", "MEMBERSHIP"];
 
 function validateGoalBody(body, { partial = false } = {}) {
   const errors = [];
+  const { currentMonthStart, maxWindowEnd } = getGoalWindowBounds();
   // PRD Gap §1.6 follow-up: stripDangerous deletes req.body.userId, so we
   // accept `targetUserId` (non-stripped name per the CLAUDE.md standing rule).
   // Legacy `userId` in body would silently be dropped — caller must use
@@ -1422,17 +1515,33 @@ function validateGoalBody(body, { partial = false } = {}) {
     if (!Number.isFinite(n) || n < 0) errors.push("targetAmount must be >= 0");
   }
   if (!partial || body.periodStart !== undefined) {
-    const d = new Date(body.periodStart);
-    if (isNaN(d.getTime())) errors.push("periodStart must be a valid date");
+    const startKey = toDateInputKey(body.periodStart);
+    if (!startKey) errors.push("periodStart must be a valid date");
+    else {
+      if (startKey < currentMonthStart) {
+        errors.push("periodStart cannot be before the current month");
+      }
+      if (startKey > maxWindowEnd) {
+        errors.push("periodStart cannot be more than one year from the current month");
+      }
+    }
   }
   if (!partial || body.periodEnd !== undefined) {
-    const d = new Date(body.periodEnd);
-    if (isNaN(d.getTime())) errors.push("periodEnd must be a valid date");
+    const endKey = toDateInputKey(body.periodEnd);
+    if (!endKey) errors.push("periodEnd must be a valid date");
+    else {
+      if (endKey < currentMonthStart) {
+        errors.push("periodEnd cannot be before the current month");
+      }
+      if (endKey > maxWindowEnd) {
+        errors.push("periodEnd cannot be more than one year from the current month");
+      }
+    }
   }
-  if (!partial && body.periodStart && body.periodEnd) {
-    if (
-      new Date(body.periodStart).getTime() >= new Date(body.periodEnd).getTime()
-    ) {
+  if ((!partial || body.periodStart !== undefined) && (!partial || body.periodEnd !== undefined) && body.periodStart && body.periodEnd) {
+    const startKey = toDateInputKey(body.periodStart);
+    const endKey = toDateInputKey(body.periodEnd);
+    if (startKey && endKey && startKey >= endKey) {
       errors.push("periodStart must be before periodEnd");
     }
   }

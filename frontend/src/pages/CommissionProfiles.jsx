@@ -4,7 +4,7 @@
  * Tenant-scoped commission rule sets. Each profile pins:
  *   - basis: PER_SERVICE | PER_PRODUCT | REVENUE_PERCENT | FLAT_PER_INVOICE
  *   - either percentage (0..100) OR flatAmount (currency-neutral)
- *   - optional appliesToCategory (Service category filter)
+ *   - period + periodStart/periodEnd validity window
  *   - isActive flag (soft-disable without deletion)
  *
  * Backend: GET/POST/PUT/DELETE /api/staff/commission-profiles
@@ -26,16 +26,70 @@ const BASIS_OPTIONS = [
   { value: 'FLAT_PER_INVOICE', label: 'Flat per invoice' },
 ];
 
+const PERIOD_OPTIONS = [
+  { value: 'MONTHLY', label: 'Monthly' },
+  { value: 'QUARTERLY', label: 'Quarterly' },
+  { value: 'YEARLY', label: 'Yearly' },
+];
+
+function currentPeriodWindow() {
+  const { currentMonthStart, defaultMonthEnd } = getCommissionWindowBounds();
+  return {
+    period: 'MONTHLY',
+    periodStart: currentMonthStart,
+    periodEnd: defaultMonthEnd,
+  };
+}
+
+function formatDateInput(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function addMonthsToDateInput(dateInput, months) {
+  const d = new Date(`${dateInput}T00:00:00`);
+  d.setMonth(d.getMonth() + months);
+  return formatDateInput(d);
+}
+
+function getCommissionWindowBounds() {
+  const today = new Date();
+  const currentMonthStart = formatDateInput(new Date(today.getFullYear(), today.getMonth(), 1));
+  return {
+    currentMonthStart,
+    maxWindowEnd: addMonthsToDateInput(currentMonthStart, 12),
+    defaultMonthEnd: addMonthsToDateInput(currentMonthStart, 1),
+  };
+}
+
+function isDateInputBeforeMin(value, minDate) {
+  if (!value) return false;
+  return value < minDate;
+}
+
+function isDateInputAfterMax(value, maxDate) {
+  if (!value) return false;
+  return value > maxDate;
+}
+
 function emptyForm() {
   return {
     name: '',
     percentage: '',
     flatAmount: '',
     basis: 'REVENUE_PERCENT',
-    appliesToCategory: '',
+    ...currentPeriodWindow(),
     appliesToProduct: '',
     isActive: true,
   };
+}
+
+function formatWindow(start, end) {
+  if (!start || !end) return '—';
+  return `${new Date(start).toLocaleDateString()} → ${new Date(end).toLocaleDateString()}`;
 }
 
 export default function CommissionProfiles() {
@@ -46,21 +100,18 @@ export default function CommissionProfiles() {
   const [editing, setEditing] = useState(null); // null | { id?, ...form }
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('rules'); // 'rules' or 'data'
-  const [services, setServices] = useState([]); // services/categories list
   const [products, setProducts] = useState([]); // products list
 
   const load = async () => {
     setLoading(true);
     try {
-      const [profilesData, dataRecords, servicesData, productsData] = await Promise.all([
+      const [profilesData, dataRecords, productsData] = await Promise.all([
         fetchApi('/api/staff/commission-profiles'),
         fetchApi('/api/staff/commission-data'),
-        fetchApi('/api/wellness/services'), // fetch available services
         fetchApi('/api/wellness/products') // fetch available products
       ]);
       setRows(Array.isArray(profilesData) ? profilesData : []);
       setCommissionData(Array.isArray(dataRecords) ? dataRecords : []);
-      setServices(Array.isArray(servicesData) ? servicesData : []);
       setProducts(Array.isArray(productsData) ? productsData : []);
     } catch (err) {
       notify.error(err.message || 'Failed to load commission data.');
@@ -78,7 +129,9 @@ export default function CommissionProfiles() {
     percentage: row.percentage == null ? '' : String(row.percentage),
     flatAmount: row.flatAmount == null ? '' : String(row.flatAmount),
     basis: row.basis || 'REVENUE_PERCENT',
-    appliesToCategory: row.appliesToCategory || '',
+    period: row.period || 'MONTHLY',
+    periodStart: row.periodStart ? new Date(row.periodStart).toISOString().slice(0, 10) : currentPeriodWindow().periodStart,
+    periodEnd: row.periodEnd ? new Date(row.periodEnd).toISOString().slice(0, 10) : currentPeriodWindow().periodEnd,
     appliesToProduct: row.appliesToProduct || '',
     isActive: row.isActive !== false,
   });
@@ -93,6 +146,33 @@ export default function CommissionProfiles() {
       notify.error('Either percentage or flat amount must be set.');
       return;
     }
+    if (!editing.periodStart || !editing.periodEnd) {
+      notify.error('Period start + end are required.');
+      return;
+    }
+    const { currentMonthStart, maxWindowEnd } = getCommissionWindowBounds();
+    if (isDateInputBeforeMin(editing.periodStart, currentMonthStart)) {
+      notify.error('Period start cannot be before the current month.');
+      return;
+    }
+    if (isDateInputBeforeMin(editing.periodEnd, currentMonthStart)) {
+      notify.error('Period end cannot be before the current month.');
+      return;
+    }
+    if (isDateInputAfterMax(editing.periodStart, maxWindowEnd) || isDateInputAfterMax(editing.periodEnd, maxWindowEnd)) {
+      notify.error('Profile period cannot exceed one year from the current month.');
+      return;
+    }
+    const start = new Date(editing.periodStart);
+    const end = new Date(editing.periodEnd);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      notify.error('Period dates must be valid.');
+      return;
+    }
+    if (start.getTime() > end.getTime()) {
+      notify.error('Period start must be on or before period end.');
+      return;
+    }
     setSaving(true);
     try {
       const body = {
@@ -100,7 +180,9 @@ export default function CommissionProfiles() {
         percentage: editing.percentage === '' ? null : Number(editing.percentage),
         flatAmount: editing.flatAmount === '' ? null : Number(editing.flatAmount),
         basis: editing.basis,
-        appliesToCategory: editing.appliesToCategory || null,
+        period: editing.period || 'MONTHLY',
+        periodStart: new Date(editing.periodStart).toISOString(),
+        periodEnd: new Date(editing.periodEnd).toISOString(),
         appliesToProduct: editing.appliesToProduct || null,
         isActive: editing.isActive,
       };
@@ -206,7 +288,7 @@ export default function CommissionProfiles() {
                 <th style={th}>Basis</th>
                 <th style={th}>Percent</th>
                 <th style={th}>Flat</th>
-                <th style={th}>Category filter</th>
+                <th style={th}>Period</th>
                 <th style={th}>Active</th>
                 <th style={th}>Actions</th>
               </tr>
@@ -224,7 +306,12 @@ export default function CommissionProfiles() {
                   <td style={td}>{BASIS_OPTIONS.find((b) => b.value === row.basis)?.label || row.basis}</td>
                   <td style={td}>{row.percentage == null ? '—' : `${row.percentage}%`}</td>
                   <td style={td}>{row.flatAmount == null ? '—' : Number(row.flatAmount).toLocaleString()}</td>
-                  <td style={td}>{row.appliesToCategory || '—'}</td>
+                  <td style={td}>
+                    <div style={{ fontWeight: 600 }}>{row.period || '—'}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      {formatWindow(row.periodStart, row.periodEnd)}
+                    </div>
+                  </td>
                   <td style={td}>
                     {row.isActive ? (
                       <span style={{ color: '#22c55e', fontWeight: 600 }}>Active</span>
@@ -266,11 +353,11 @@ export default function CommissionProfiles() {
               <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
                 <th style={th}>Period</th>
                 <th style={th}>Employee</th>
-                <th style={{ ...th, textAlign: 'right' }}>Service Revenue</th>
-                <th style={{ ...th, textAlign: 'right' }}>Product Revenue</th>
-                <th style={{ ...th, textAlign: 'right' }}>Total Sales</th>
-                <th style={{ ...th, textAlign: 'right' }}>Discount</th>
-                <th style={{ ...th, textAlign: 'right' }}>Net Sales</th>
+                <th style={{ ...th, textAlign: 'center' }}>Service Revenue</th>
+                <th style={{ ...th, textAlign: 'center' }}>Product Revenue</th>
+                <th style={{ ...th, textAlign: 'center' }}>Total Sales</th>
+                <th style={{ ...th, textAlign: 'center' }}>Discount</th>
+                <th style={{ ...th, textAlign: 'center' }}>Net Sales</th>
               </tr>
             </thead>
             <tbody>
@@ -282,15 +369,15 @@ export default function CommissionProfiles() {
                 </td></tr>
               ) : commissionData.map((record) => (
                 <tr key={record.id} style={{ borderTop: '1px solid var(--border-color)' }}>
-                  <td style={{ ...td, fontSize: '0.85rem' }}>
+                  <td style={{ ...td, fontSize: '0.85rem', verticalAlign: 'middle' }}>
                     {new Date(record.periodStart).toLocaleDateString()} - {new Date(record.periodEnd).toLocaleDateString()}
                   </td>
-                  <td style={{ ...td, fontWeight: 500 }}>{record.employeeName}</td>
-                  <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.serviceRevenue || 0).toFixed(2)}</td>
-                  <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.productRevenue || 0).toFixed(2)}</td>
-                  <td style={{ ...td, textAlign: 'right', fontWeight: 600, color: '#fbbf24', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.totalSales || 0).toFixed(2)}</td>
-                  <td style={{ ...td, textAlign: 'right', color: '#ef4444', fontVariantNumeric: 'tabular-nums' }}>-₹{parseFloat(record.discount || 0).toFixed(2)}</td>
-                  <td style={{ ...td, textAlign: 'right', color: '#22c55e', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.netSales || 0).toFixed(2)}</td>
+                  <td style={{ ...td, fontWeight: 500, verticalAlign: 'middle' }}>{record.employeeName}</td>
+                  <td style={{ ...td, textAlign: 'center', verticalAlign: 'middle', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.serviceRevenue || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'center', verticalAlign: 'middle', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.productRevenue || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'center', verticalAlign: 'middle', fontWeight: 600, color: '#fbbf24', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.totalSales || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'center', verticalAlign: 'middle', color: '#ef4444', fontVariantNumeric: 'tabular-nums' }}>-₹{parseFloat(record.discount || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'center', verticalAlign: 'middle', color: '#22c55e', fontVariantNumeric: 'tabular-nums' }}>₹{parseFloat(record.netSales || 0).toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
@@ -339,6 +426,44 @@ export default function CommissionProfiles() {
                   ))}
                 </select>
               </Field>
+              <Field label="Period">
+                <select
+                  className="input-field"
+                  value={editing.period}
+                  onChange={(e) => setEditing({ ...editing, period: e.target.value })}
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                >
+                  {PERIOD_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              <Field label="Period start">
+                <input
+                  type="date"
+                  className="input-field"
+                  min={getCommissionWindowBounds().currentMonthStart}
+                  max={getCommissionWindowBounds().maxWindowEnd}
+                  value={editing.periodStart}
+                  onChange={(e) => setEditing({ ...editing, periodStart: e.target.value })}
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                />
+              </Field>
+              <Field label="Period end">
+                <input
+                  type="date"
+                  className="input-field"
+                  min={editing.periodStart || getCommissionWindowBounds().currentMonthStart}
+                  max={getCommissionWindowBounds().maxWindowEnd}
+                  value={editing.periodEnd}
+                  onChange={(e) => setEditing({ ...editing, periodEnd: e.target.value })}
+                  style={{ width: '100%', marginTop: '0.25rem' }}
+                />
+              </Field>
+              </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 <Field label="Percentage (0..100)">
                   <input
@@ -364,23 +489,6 @@ export default function CommissionProfiles() {
                   />
                 </Field>
               </div>
-              {(editing.basis === 'PER_SERVICE' || editing.basis === 'REVENUE_PERCENT') && (
-                <Field label="Service filter (optional)">
-                  <select
-                    className="input-field"
-                    value={editing.appliesToCategory}
-                    onChange={(e) => setEditing({ ...editing, appliesToCategory: e.target.value })}
-                    style={{ width: '100%', marginTop: '0.25rem' }}
-                  >
-                    <option value="">All services</option>
-                    {services.map((service) => (
-                      <option key={service.id} value={service.name}>
-                        {service.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              )}
               {(editing.basis === 'PER_PRODUCT' || editing.basis === 'REVENUE_PERCENT') && (
                 <Field label="Product filter (optional)">
                   <select

@@ -1,5 +1,11 @@
-import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import {
   CreditCard,
   IndianRupee,
@@ -11,54 +17,86 @@ import {
   Settings as SettingsIcon,
   AlertTriangle,
   Plus,
-} from 'lucide-react';
-import { Link } from 'react-router-dom';
-import { fetchApi } from '../utils/api';
-import { useNotify } from '../utils/notify';
-import { AuthContext } from '../App';
-import { formatMoney } from '../utils/money';
-import { DateRangeFilter, resolveDateRange, DATE_FILTER_OPTIONS } from '../components/wellness/DateRangeFilter';
-import RazorpayGatewayCard from '../components/RazorpayGatewayCard';
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
+import { Link } from "react-router-dom";
+import { fetchApi } from "../utils/api";
+import { useNotify } from "../utils/notify";
+import { AuthContext } from "../App";
+import { formatMoney } from "../utils/money";
+import {
+  DateRangeFilter,
+  resolveDateRange,
+  DATE_FILTER_OPTIONS,
+} from "../components/wellness/DateRangeFilter";
+import RazorpayGatewayCard from "../components/RazorpayGatewayCard";
 
 // ── Style constants ───────────────────────────────────────────────
 // Theme-aware so cards stay clearly delineated under BOTH light + dark
 // modes. Pre-fix these used hardcoded `rgba(255,255,255,0.05)` which
 // rendered near-invisibly on light backgrounds.
 const GLASS = {
-  background: 'var(--surface-color)',
-  border: '1px solid var(--border-color)',
-  backdropFilter: 'blur(12px)',
-  borderRadius: '12px',
+  background: "var(--surface-color)",
+  border: "1px solid var(--border-color)",
+  backdropFilter: "blur(12px)",
+  borderRadius: "12px",
 };
 
 const STATUS_CONFIG = {
-  SUCCESS:  { color: '#10b981', bg: 'rgba(16,185,129,0.15)', label: 'Success', Icon: CheckCircle },
-  PENDING:  { color: '#f59e0b', bg: 'rgba(245,158,11,0.15)', label: 'Pending', Icon: Clock },
-  FAILED:   { color: '#ef4444', bg: 'rgba(239,68,68,0.15)', label: 'Failed',  Icon: XCircle },
-  REFUNDED: { color: '#9ca3af', bg: 'rgba(156,163,175,0.15)', label: 'Refunded', Icon: RefreshCw },
+  SUCCESS: {
+    color: "#10b981",
+    bg: "rgba(16,185,129,0.15)",
+    label: "Success",
+    Icon: CheckCircle,
+  },
+  PENDING: {
+    color: "#f59e0b",
+    bg: "rgba(245,158,11,0.15)",
+    label: "Pending",
+    Icon: Clock,
+  },
+  FAILED: {
+    color: "#ef4444",
+    bg: "rgba(239,68,68,0.15)",
+    label: "Failed",
+    Icon: XCircle,
+  },
+  REFUNDED: {
+    color: "#9ca3af",
+    bg: "rgba(156,163,175,0.15)",
+    label: "Refunded",
+    Icon: RefreshCw,
+  },
 };
 
 const GATEWAY_CONFIG = {
-  stripe:   { color: '#635bff', bg: 'rgba(99,91,255,0.15)', label: 'Stripe' },
-  razorpay: { color: '#3395ff', bg: 'rgba(51,149,255,0.15)', label: 'Razorpay' },
+  stripe: { color: "#635bff", bg: "rgba(99,91,255,0.15)", label: "Stripe" },
+  razorpay: {
+    color: "#3395ff",
+    bg: "rgba(51,149,255,0.15)",
+    label: "Razorpay",
+  },
 };
 
 function StatusBadge({ status }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.PENDING;
   const Icon = cfg.Icon;
   return (
-    <span style={{
-      padding: '0.25rem 0.6rem',
-      borderRadius: '999px',
-      fontSize: '0.72rem',
-      fontWeight: 600,
-      backgroundColor: cfg.bg,
-      color: cfg.color,
-      border: `1px solid ${cfg.color}33`,
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '0.3rem',
-    }}>
+    <span
+      style={{
+        padding: "0.25rem 0.6rem",
+        borderRadius: "999px",
+        fontSize: "0.72rem",
+        fontWeight: 600,
+        backgroundColor: cfg.bg,
+        color: cfg.color,
+        border: `1px solid ${cfg.color}33`,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.3rem",
+      }}
+    >
       <Icon size={12} />
       {cfg.label}
     </span>
@@ -66,19 +104,25 @@ function StatusBadge({ status }) {
 }
 
 function GatewayBadge({ gateway }) {
-  const key = String(gateway || '').toLowerCase();
-  const cfg = GATEWAY_CONFIG[key] || { color: '#9ca3af', bg: 'rgba(156,163,175,0.15)', label: gateway || 'Unknown' };
+  const key = String(gateway || "").toLowerCase();
+  const cfg = GATEWAY_CONFIG[key] || {
+    color: "#9ca3af",
+    bg: "rgba(156,163,175,0.15)",
+    label: gateway || "Unknown",
+  };
   return (
-    <span style={{
-      padding: '0.2rem 0.6rem',
-      borderRadius: '6px',
-      fontSize: '0.7rem',
-      fontWeight: 600,
-      backgroundColor: cfg.bg,
-      color: cfg.color,
-      border: `1px solid ${cfg.color}33`,
-      textTransform: 'capitalize',
-    }}>
+    <span
+      style={{
+        padding: "0.2rem 0.6rem",
+        borderRadius: "6px",
+        fontSize: "0.7rem",
+        fontWeight: 600,
+        backgroundColor: cfg.bg,
+        color: cfg.color,
+        border: `1px solid ${cfg.color}33`,
+        textTransform: "capitalize",
+      }}
+    >
       {cfg.label}
     </span>
   );
@@ -93,7 +137,7 @@ function formatCurrency(amount) {
 }
 
 function formatDate(value) {
-  if (!value) return '—';
+  if (!value) return "—";
   try {
     return new Date(value).toLocaleString();
   } catch {
@@ -103,25 +147,31 @@ function formatDate(value) {
 
 export default function Payments() {
   const { user } = useContext(AuthContext) || {};
-  const isAdmin = user?.role === 'ADMIN';
+  const isAdmin = user?.role === "ADMIN";
   const notify = useNotify();
 
   const [payments, setPayments] = useState([]);
   const [config, setConfig] = useState(null);
-  const [tab, setTab] = useState('all');
+  const [tab, setTab] = useState("all");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [refundingId, setRefundingId] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   // Default to last30 to preserve the prior "Total Collected (30D)" semantics —
   // user can now switch to today / this week / this month / this year / custom
   // and the KPI label and table follow.
-  const [dateFilter, setDateFilter] = useState({ preset: 'last30', start: '', end: '' });
+  const [dateFilter, setDateFilter] = useState({
+    preset: "last30",
+    start: "",
+    end: "",
+  });
   const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
   const filterLabel = useMemo(() => {
     const o = DATE_FILTER_OPTIONS.find((x) => x.value === dateFilter.preset);
-    return o ? o.label : 'All time';
+    return o ? o.label : "All time";
   }, [dateFilter.preset]);
 
   useEffect(() => {
@@ -130,16 +180,16 @@ export default function Payments() {
 
   async function loadAll() {
     setLoading(true);
-    setError('');
+    setError("");
     try {
       const [list, cfg] = await Promise.all([
-        fetchApi('/api/payments').catch(() => []),
-        fetchApi('/api/payments/config').catch(() => null),
+        fetchApi("/api/payments").catch(() => []),
+        fetchApi("/api/payments/config").catch(() => null),
       ]);
       setPayments(Array.isArray(list) ? list : []);
       setConfig(cfg);
     } catch (err) {
-      setError(err.message || 'Failed to load payments');
+      setError(err.message || "Failed to load payments");
     } finally {
       setLoading(false);
     }
@@ -152,42 +202,56 @@ export default function Payments() {
     const m = p && p.metadata;
     return Boolean(
       m &&
-        (m.type === 'travel-quote-advance' ||
-          m.type === 'travel-payment-schedule' ||
-          m.type === 'travel-itinerary' ||
-          m.kind === 'travel-milestone' ||
-          m.kind === 'travel-invoice'),
+      (m.type === "travel-quote-advance" ||
+        m.type === "travel-payment-schedule" ||
+        m.type === "travel-itinerary" ||
+        m.kind === "travel-milestone" ||
+        m.kind === "travel-invoice"),
     );
   }, []);
 
   // Resolve the Refund button state for a row: whether it's clickable, whether
   // it's an admin OVERRIDE (booking payment), and the tooltip explaining why.
-  const refundState = useCallback((p) => {
-    if (!p) return { enabled: false };
-    if (p.status === 'REFUNDED') return { refunded: true };
-    const captured =
-      p.status === 'SUCCESS' &&
-      String(p.gateway || '').toLowerCase() === 'razorpay' &&
-      /^pay_/.test(String(p.gatewayId || ''));
-    const booking = isBookingPayment(p);
-    const canManage = isAdmin || user?.role === 'MANAGER';
-    if (!captured) {
-      return { enabled: false, title: 'Only captured Razorpay payments can be refunded (not pending / manual / failed)' };
-    }
-    if (booking && !isAdmin) {
-      return { enabled: false, title: "Refund this booking through its cancellation flow (Itineraries → cancellation)" };
-    }
-    if (!booking && !canManage) {
-      return { enabled: false, title: 'Only admins / managers can issue refunds' };
-    }
-    return {
-      enabled: true,
-      override: booking,
-      title: booking
-        ? 'Admin override — refund now (bypasses the cancellation policy)'
-        : `Refund ${formatCurrency(p.amount)} via Razorpay`,
-    };
-  }, [isBookingPayment, isAdmin, user]);
+  const refundState = useCallback(
+    (p) => {
+      if (!p) return { enabled: false };
+      if (p.status === "REFUNDED") return { refunded: true };
+      const captured =
+        p.status === "SUCCESS" &&
+        String(p.gateway || "").toLowerCase() === "razorpay" &&
+        /^pay_/.test(String(p.gatewayId || ""));
+      const booking = isBookingPayment(p);
+      const canManage = isAdmin || user?.role === "MANAGER";
+      if (!captured) {
+        return {
+          enabled: false,
+          title:
+            "Only captured Razorpay payments can be refunded (not pending / manual / failed)",
+        };
+      }
+      if (booking && !isAdmin) {
+        return {
+          enabled: false,
+          title:
+            "Refund this booking through its cancellation flow (Itineraries → cancellation)",
+        };
+      }
+      if (!booking && !canManage) {
+        return {
+          enabled: false,
+          title: "Only admins / managers can issue refunds",
+        };
+      }
+      return {
+        enabled: true,
+        override: booking,
+        title: booking
+          ? "Admin override — refund now (bypasses the cancellation policy)"
+          : `Refund ${formatCurrency(p.amount)} via Razorpay`,
+      };
+    },
+    [isBookingPayment, isAdmin, user],
+  );
 
   async function handleRefund(p) {
     const st = refundState(p);
@@ -195,35 +259,38 @@ export default function Payments() {
     let reason = null;
     if (st.override) {
       reason = await notify.prompt({
-        title: 'Refund override',
-        message: 'This refund bypasses the cancellation policy. Reason (required):',
-        placeholder: 'e.g. goodwill / billing error',
-        confirmText: 'Refund',
+        title: "Refund override",
+        message:
+          "This refund bypasses the cancellation policy. Reason (required):",
+        placeholder: "e.g. goodwill / billing error",
+        confirmText: "Refund",
       });
-      if (reason == null || String(reason).trim() === '') return; // cancelled / empty
+      if (reason == null || String(reason).trim() === "") return; // cancelled / empty
     } else {
       const ok = await notify.confirm({
-        title: 'Refund payment?',
+        title: "Refund payment?",
         message: `Refund ${formatCurrency(p.amount)} back to the customer via Razorpay? This cannot be undone.`,
-        confirmText: 'Refund',
-        cancelText: 'Cancel',
+        confirmText: "Refund",
+        cancelText: "Cancel",
         destructive: true,
       });
       if (!ok) return;
     }
     setRefundingId(p.id);
-    setError('');
-    setNotice('');
+    setError("");
+    setNotice("");
     try {
       const res = await fetchApi(`/api/payments/${p.id}/refund`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(reason ? { reason: String(reason).trim() } : {}),
       });
-      setNotice(`Refund of ${formatCurrency(p.amount)} issued${res?.refund?.id ? ` (${res.refund.id})` : ''}.`);
+      setNotice(
+        `Refund of ${formatCurrency(p.amount)} issued${res?.refund?.id ? ` (${res.refund.id})` : ""}.`,
+      );
       await loadAll();
     } catch (err) {
-      setError(err?.message || 'Refund failed. Please try again.');
+      setError(err?.message || "Refund failed. Please try again.");
     } finally {
       setRefundingId(null);
     }
@@ -231,88 +298,139 @@ export default function Payments() {
 
   // Row date: paidAt when set (SUCCESS / REFUNDED), createdAt otherwise.
   // useCallback so it's stable across renders for the useMemo dep arrays below.
-  const inDateRange = useCallback((p) => {
-    if (!rangeStart || !rangeEnd) return true;
-    const ts = new Date(p.paidAt || p.createdAt).getTime();
-    return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
-  }, [rangeStart, rangeEnd]);
+  const inDateRange = useCallback(
+    (p) => {
+      if (!rangeStart || !rangeEnd) return true;
+      const ts = new Date(p.paidAt || p.createdAt).getTime();
+      return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+    },
+    [rangeStart, rangeEnd],
+  );
 
   const filtered = useMemo(() => {
     return payments.filter((p) => {
-      if (tab !== 'all' && String(p.gateway || '').toLowerCase() !== tab) return false;
+      if (tab !== "all" && String(p.gateway || "").toLowerCase() !== tab)
+        return false;
       return inDateRange(p);
     });
   }, [payments, tab, inDateRange]);
 
+  // Reset to the first page whenever the filter changes so the user does not
+  // land on an empty page after narrowing the result set.
+  useEffect(() => {
+    setPage(1);
+  }, [tab, dateFilter]);
+
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(filtered.length / pageSize)),
+    [filtered.length, pageSize],
+  );
+  const safePage = Math.min(page, totalPages);
+  const paginated = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, safePage, pageSize]);
+
   const stats = useMemo(() => {
-    let collected = 0, pending = 0, failed = 0;
+    let collected = 0,
+      pending = 0,
+      failed = 0;
     for (const p of payments) {
       if (!inDateRange(p)) continue;
-      if (p.status === 'SUCCESS') collected += Number(p.amount || 0);
-      else if (p.status === 'PENDING') pending += 1;
-      else if (p.status === 'FAILED') failed += 1;
+      if (p.status === "SUCCESS") collected += Number(p.amount || 0);
+      else if (p.status === "PENDING") pending += 1;
+      else if (p.status === "FAILED") failed += 1;
     }
     return { collected, pending, failed };
   }, [payments, inDateRange]);
 
   // ── Render ─────────────────────────────────────────────────────
   return (
-    <div style={{ padding: '2rem', color: 'var(--text-primary)', minHeight: '100vh' }}>
+    <div
+      style={{
+        padding: "2rem",
+        color: "var(--text-primary)",
+        minHeight: "100vh",
+      }}
+    >
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <CreditCard size={28} style={{ color: '#635bff' }} />
-          <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 700 }}>Payments</h1>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "0.5rem",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <CreditCard size={28} style={{ color: "#635bff" }} />
+          <h1 style={{ margin: 0, fontSize: "1.75rem", fontWeight: 700 }}>
+            Payments
+          </h1>
         </div>
         <button
           onClick={loadAll}
           disabled={loading}
           style={{
             ...GLASS,
-            padding: '0.5rem 1rem',
-            color: 'var(--text-primary)',
-            cursor: loading ? 'not-allowed' : 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-            fontSize: '0.85rem',
+            padding: "0.5rem 1rem",
+            color: "var(--text-primary)",
+            cursor: loading ? "not-allowed" : "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.4rem",
+            fontSize: "0.85rem",
           }}
         >
-          <RefreshCw size={14} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+          <RefreshCw
+            size={14}
+            style={{ animation: loading ? "spin 1s linear infinite" : "none" }}
+          />
           Refresh
         </button>
       </div>
 
-      <p style={{ margin: '0 0 1.5rem 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-        Customer payment UI is implemented at the invoice level (separate page) — this dashboard is for tenants to track received payments.
+      <p
+        style={{
+          margin: "0 0 1.5rem 0",
+          color: "var(--text-secondary)",
+          fontSize: "0.85rem",
+        }}
+      >
+        Customer payment UI is implemented at the invoice level (separate page)
+        — this dashboard is for tenants to track received payments.
       </p>
 
       {error && (
-        <div style={{
-          ...GLASS,
-          padding: '0.8rem 1rem',
-          marginBottom: '1rem',
-          borderColor: 'rgba(239,68,68,0.3)',
-          color: '#ef4444',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-        }}>
+        <div
+          style={{
+            ...GLASS,
+            padding: "0.8rem 1rem",
+            marginBottom: "1rem",
+            borderColor: "rgba(239,68,68,0.3)",
+            color: "#ef4444",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+          }}
+        >
           <AlertTriangle size={16} /> {error}
         </div>
       )}
 
       {notice && (
-        <div style={{
-          ...GLASS,
-          padding: '0.8rem 1rem',
-          marginBottom: '1rem',
-          borderColor: 'rgba(16,185,129,0.3)',
-          color: '#10b981',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-        }}>
+        <div
+          style={{
+            ...GLASS,
+            padding: "0.8rem 1rem",
+            marginBottom: "1rem",
+            borderColor: "rgba(16,185,129,0.3)",
+            color: "#10b981",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+          }}
+        >
           <CheckCircle size={16} /> {notice}
         </div>
       )}
@@ -329,48 +447,137 @@ export default function Payments() {
           Key storage is env-var-driven, not DB-backed, so the honest UX
           is to name the env vars + direct admins to ops. The full
           DB-backed provider-config UI is tracked separately. */}
-      {!loading && config && !config?.stripe?.configured && !config?.razorpay?.configured && (
-        <div style={{
-          ...GLASS,
-          padding: '1rem 1.25rem',
-          marginBottom: '1.5rem',
-          borderColor: 'rgba(245,158,11,0.35)',
-          background: 'rgba(245,158,11,0.08)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', marginBottom: '0.75rem' }}>
-            <AlertTriangle size={18} style={{ color: '#f59e0b', flexShrink: 0, marginTop: '0.15rem' }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.2rem' }}>
-                Stripe / Razorpay not configured
-              </div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Payment-gateway keys are configured server-side as environment variables (not via this UI). Ask your administrator to set the variables below and restart the backend. Activating either gateway will enable the payment table + the per-invoice Pay-Now flow.
+      {!loading &&
+        config &&
+        !config?.stripe?.configured &&
+        !config?.razorpay?.configured && (
+          <div
+            style={{
+              ...GLASS,
+              padding: "1rem 1.25rem",
+              marginBottom: "1.5rem",
+              borderColor: "rgba(245,158,11,0.35)",
+              background: "rgba(245,158,11,0.08)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "0.75rem",
+                marginBottom: "0.75rem",
+              }}
+            >
+              <AlertTriangle
+                size={18}
+                style={{
+                  color: "#f59e0b",
+                  flexShrink: 0,
+                  marginTop: "0.15rem",
+                }}
+              />
+              <div style={{ flex: 1 }}>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    fontSize: "0.95rem",
+                    marginBottom: "0.2rem",
+                  }}
+                >
+                  Stripe / Razorpay not configured
+                </div>
+                <div
+                  style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}
+                >
+                  Payment-gateway keys are configured server-side as environment
+                  variables (not via this UI). Ask your administrator to set the
+                  variables below and restart the backend. Activating either
+                  gateway will enable the payment table + the per-invoice
+                  Pay-Now flow.
+                </div>
               </div>
             </div>
-          </div>
-          <div style={{ marginLeft: '2.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
-              <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Stripe — required env vars</summary>
-              <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
-{`STRIPE_SECRET_KEY=sk_live_...        # from dashboard.stripe.com → Developers → API keys
+            <div
+              style={{
+                marginLeft: "2.5rem",
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.5rem",
+              }}
+            >
+              <details
+                style={{
+                  background: "rgba(0,0,0,0.18)",
+                  borderRadius: 6,
+                  padding: "0.5rem 0.75rem",
+                }}
+              >
+                <summary
+                  style={{
+                    fontSize: "0.8rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Stripe — required env vars
+                </summary>
+                <pre
+                  style={{
+                    fontSize: "0.75rem",
+                    margin: "0.5rem 0 0 0",
+                    color: "var(--text-secondary)",
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {`STRIPE_SECRET_KEY=sk_live_...        # from dashboard.stripe.com → Developers → API keys
 STRIPE_WEBHOOK_SECRET=whsec_...     # from dashboard.stripe.com → Developers → Webhooks
-                                      # endpoint URL: <BASE_URL>/api/payments/webhook/stripe`}</pre>
-            </details>
-            <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
-              <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Razorpay — required env vars</summary>
-              <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
-{`RAZORPAY_KEY_ID=rzp_live_...        # from dashboard.razorpay.com → Settings → API Keys
+                                      # endpoint URL: <BASE_URL>/api/payments/webhook/stripe`}
+                </pre>
+              </details>
+              <details
+                style={{
+                  background: "rgba(0,0,0,0.18)",
+                  borderRadius: 6,
+                  padding: "0.5rem 0.75rem",
+                }}
+              >
+                <summary
+                  style={{
+                    fontSize: "0.8rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Razorpay — required env vars
+                </summary>
+                <pre
+                  style={{
+                    fontSize: "0.75rem",
+                    margin: "0.5rem 0 0 0",
+                    color: "var(--text-secondary)",
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {`RAZORPAY_KEY_ID=rzp_live_...        # from dashboard.razorpay.com → Settings → API Keys
 RAZORPAY_KEY_SECRET=...
 RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings → Webhooks
-                                      # endpoint URL: <BASE_URL>/api/payments/webhook/razorpay`}</pre>
-            </details>
+                                      # endpoint URL: <BASE_URL>/api/payments/webhook/razorpay`}
+                </pre>
+              </details>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
       {/* Stats row — labels are window-aware so the KPI value the user sees
           always matches what the date filter is showing. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: "1rem",
+          marginBottom: "1.5rem",
+        }}
+      >
         <StatCard
           icon={<IndianRupee size={20} />}
           label={`Total Collected (${filterLabel})`}
@@ -397,31 +604,46 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
           + --border so tabs stay readable on light AND dark. */}
       <div
         style={{
-          display: 'flex', alignItems: 'center', gap: '0.5rem',
-          marginBottom: '1rem', flexWrap: 'wrap',
+          display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+          marginBottom: "1rem",
+          flexWrap: "wrap",
         }}
       >
-        {['all', 'stripe', 'razorpay'].map(t => (
+        {["all", "stripe", "razorpay"].map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             style={{
-              padding: '0.5rem 1.1rem',
-              borderRadius: '8px',
-              border: tab === t ? '1px solid rgba(99,91,255,0.5)' : '1px solid var(--border-color)',
-              background: tab === t ? 'rgba(99,91,255,0.18)' : 'var(--surface-color)',
-              color: 'var(--text-primary)',
-              cursor: 'pointer',
-              fontSize: '0.85rem',
-              textTransform: 'capitalize',
+              padding: "0.5rem 1.1rem",
+              borderRadius: "8px",
+              border:
+                tab === t
+                  ? "1px solid rgba(99,91,255,0.5)"
+                  : "1px solid var(--border-color)",
+              background:
+                tab === t ? "rgba(99,91,255,0.18)" : "var(--surface-color)",
+              color: "var(--text-primary)",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+              textTransform: "capitalize",
               fontWeight: tab === t ? 600 : 400,
-              transition: 'background 0.15s, border-color 0.15s',
+              transition: "background 0.15s, border-color 0.15s",
             }}
           >
-            {t === 'all' ? 'All' : t}
+            {t === "all" ? "All" : t}
           </button>
         ))}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <div
+          style={{
+            marginLeft: "auto",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            flexWrap: "wrap",
+          }}
+        >
           <DateRangeFilter value={dateFilter} onChange={setDateFilter} />
         </div>
       </div>
@@ -429,10 +651,27 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
       {/* Payments table — wrap in a clearly-delineated card. `box-shadow`
           + padding give it visual weight against the page background, and
           theme variables keep contrast under both modes. */}
-      <div style={{ ...GLASS, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+      <div
+        style={{
+          ...GLASS,
+          overflow: "hidden",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+        }}
+      >
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            fontSize: "0.85rem",
+          }}
+        >
           <thead>
-            <tr style={{ background: 'var(--surface-hover)', borderBottom: '1px solid var(--border-color)' }}>
+            <tr
+              style={{
+                background: "var(--surface-hover)",
+                borderBottom: "1px solid var(--border-color)",
+              }}
+            >
               <Th>Customer</Th>
               <Th>For</Th>
               <Th>Amount</Th>
@@ -450,34 +689,58 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                 line under what looked like a blank box. */}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={8} style={{ padding: '3rem 2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                <td
+                  colSpan={8}
+                  style={{
+                    padding: "3rem 2rem",
+                    textAlign: "center",
+                    color: "var(--text-secondary)",
+                  }}
+                >
                   {loading ? (
-                    'Loading payments...'
+                    "Loading payments..."
                   ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
-                      <CreditCard size={36} style={{ opacity: 0.35, color: '#635bff' }} />
-                      <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: "0.75rem",
+                      }}
+                    >
+                      <CreditCard
+                        size={36}
+                        style={{ opacity: 0.35, color: "#635bff" }}
+                      />
+                      <div
+                        style={{
+                          fontSize: "1rem",
+                          fontWeight: 600,
+                          color: "var(--text-primary)",
+                        }}
+                      >
                         No payments yet
                       </div>
-                      <div style={{ fontSize: '0.82rem', maxWidth: 380 }}>
-                        Once a customer pays an invoice via Stripe or Razorpay, the
-                        transaction will appear here with status, amount, and gateway details.
+                      <div style={{ fontSize: "0.82rem", maxWidth: 380 }}>
+                        Once a customer pays an invoice via Stripe or Razorpay,
+                        the transaction will appear here with status, amount,
+                        and gateway details.
                       </div>
                       <Link
                         to="/invoices"
                         style={{
-                          marginTop: '0.4rem',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.4rem',
-                          padding: '0.5rem 1rem',
-                          background: 'rgba(99,91,255,0.18)',
-                          border: '1px solid rgba(99,91,255,0.4)',
-                          borderRadius: '8px',
-                          color: '#a4a0ff',
-                          fontSize: '0.85rem',
+                          marginTop: "0.4rem",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "0.4rem",
+                          padding: "0.5rem 1rem",
+                          background: "rgba(99,91,255,0.18)",
+                          border: "1px solid rgba(99,91,255,0.4)",
+                          borderRadius: "8px",
+                          color: "#a4a0ff",
+                          fontSize: "0.85rem",
                           fontWeight: 600,
-                          textDecoration: 'none',
+                          textDecoration: "none",
                         }}
                       >
                         <Plus size={14} /> Process your first payment
@@ -487,38 +750,61 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                 </td>
               </tr>
             )}
-            {filtered.map(p => (
+            {paginated.map((p) => (
               <tr
                 key={p.id}
                 onClick={() => setSelected(p)}
                 style={{
-                  borderTop: '1px solid var(--border-color)',
-                  cursor: 'pointer',
-                  transition: 'background 0.15s',
+                  borderTop: "1px solid var(--border-color)",
+                  cursor: "pointer",
+                  transition: "background 0.15s",
                 }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface-hover)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.background = "var(--surface-hover)")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.background = "transparent")
+                }
               >
                 <Td>
-                  {p.contact
-                    ? <span style={{ fontWeight: 600 }}>{p.contact.name || p.contact.email || `#${p.contactId}`}</span>
-                    : <span style={{ color: 'var(--text-secondary)' }}>—</span>
-                  }
+                  {p.contact ? (
+                    <span style={{ fontWeight: 600 }}>
+                      {p.contact.name || p.contact.email || `#${p.contactId}`}
+                    </span>
+                  ) : (
+                    <span style={{ color: "var(--text-secondary)" }}>—</span>
+                  )}
                 </Td>
-                <Td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <Td
+                  style={{
+                    maxWidth: 200,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   {(() => {
                     const label = p.description
                       ? p.description
                       : p.invoiceId
                         ? `Invoice #${p.invoiceId}`
                         : p.travelInvoiceNum || null;
-                    if (!label) return <span style={{ color: 'var(--text-secondary)' }}>—</span>;
+                    if (!label)
+                      return (
+                        <span style={{ color: "var(--text-secondary)" }}>
+                          —
+                        </span>
+                      );
                     if (p.itineraryId) {
                       return (
                         <Link
                           to={`/travel/itineraries/${p.itineraryId}`}
-                          onClick={e => e.stopPropagation()}
-                          style={{ color: 'var(--accent-color)', textDecoration: 'none', fontWeight: 500 }}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            color: "var(--accent-color)",
+                            textDecoration: "none",
+                            fontWeight: 500,
+                          }}
                           title="View itinerary"
                         >
                           {label}
@@ -528,22 +814,28 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                     return <span title={String(label)}>{label}</span>;
                   })()}
                 </Td>
-                <Td><strong>{formatCurrency(p.amount)}</strong></Td>
-                <Td><GatewayBadge gateway={p.gateway} /></Td>
-                <Td><StatusBadge status={p.status} /></Td>
+                <Td>
+                  <strong>{formatCurrency(p.amount)}</strong>
+                </Td>
+                <Td>
+                  <GatewayBadge gateway={p.gateway} />
+                </Td>
+                <Td>
+                  <StatusBadge status={p.status} />
+                </Td>
                 <Td>{formatDate(p.paidAt)}</Td>
-                <Td onClick={e => e.stopPropagation()}>
+                <Td onClick={(e) => e.stopPropagation()}>
                   <button
                     onClick={() => setSelected(p)}
                     style={{
-                      padding: '0.3rem 0.7rem',
-                      background: 'rgba(99,91,255,0.15)',
-                      border: '1px solid rgba(99,91,255,0.3)',
-                      borderRadius: '6px',
-                      color: '#a4a0ff',
-                      cursor: 'pointer',
-                      fontSize: '0.75rem',
-                      marginRight: '0.4rem',
+                      padding: "0.3rem 0.7rem",
+                      background: "rgba(99,91,255,0.15)",
+                      border: "1px solid rgba(99,91,255,0.3)",
+                      borderRadius: "6px",
+                      color: "#a4a0ff",
+                      cursor: "pointer",
+                      fontSize: "0.75rem",
+                      marginRight: "0.4rem",
                     }}
                   >
                     View
@@ -556,13 +848,13 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                           disabled
                           title="Already refunded"
                           style={{
-                            padding: '0.3rem 0.7rem',
-                            background: 'rgba(156,163,175,0.1)',
-                            border: '1px solid rgba(156,163,175,0.2)',
-                            borderRadius: '6px',
-                            color: '#9ca3af',
-                            cursor: 'not-allowed',
-                            fontSize: '0.75rem',
+                            padding: "0.3rem 0.7rem",
+                            background: "rgba(156,163,175,0.1)",
+                            border: "1px solid rgba(156,163,175,0.2)",
+                            borderRadius: "6px",
+                            color: "#9ca3af",
+                            cursor: "not-allowed",
+                            fontSize: "0.75rem",
                           }}
                         >
                           Refunded
@@ -576,17 +868,24 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                         disabled={!st.enabled || busy}
                         title={st.title}
                         style={{
-                          padding: '0.3rem 0.7rem',
-                          background: st.enabled ? 'rgba(239,68,68,0.15)' : 'rgba(156,163,175,0.1)',
-                          border: `1px solid ${st.enabled ? 'rgba(239,68,68,0.3)' : 'rgba(156,163,175,0.2)'}`,
-                          borderRadius: '6px',
-                          color: st.enabled ? '#f87171' : '#9ca3af',
-                          cursor: st.enabled && !busy ? 'pointer' : 'not-allowed',
-                          fontSize: '0.75rem',
+                          padding: "0.3rem 0.7rem",
+                          background: st.enabled
+                            ? "rgba(239,68,68,0.15)"
+                            : "rgba(156,163,175,0.1)",
+                          border: `1px solid ${st.enabled ? "rgba(239,68,68,0.3)" : "rgba(156,163,175,0.2)"}`,
+                          borderRadius: "6px",
+                          color: st.enabled ? "#f87171" : "#9ca3af",
+                          cursor:
+                            st.enabled && !busy ? "pointer" : "not-allowed",
+                          fontSize: "0.75rem",
                           opacity: busy ? 0.6 : 1,
                         }}
                       >
-                        {busy ? 'Refunding…' : st.override ? 'Refund*' : 'Refund'}
+                        {busy
+                          ? "Refunding…"
+                          : st.override
+                            ? "Refund*"
+                            : "Refund"}
                       </button>
                     );
                   })()}
@@ -595,23 +894,154 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
             ))}
           </tbody>
         </table>
+        {filtered.length > 0 && (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "0.85rem 1rem",
+              borderTop: "1px solid var(--border-color)",
+              fontSize: "0.8rem",
+              color: "var(--text-secondary)",
+              flexWrap: "wrap",
+              gap: "0.75rem",
+            }}
+          >
+            <div data-testid="payment-pagination">
+              Page{" "}
+              <strong style={{ color: "var(--text-primary)" }}>
+                {safePage}
+              </strong>{" "}
+              of{" "}
+              <strong style={{ color: "var(--text-primary)" }}>
+                {totalPages}
+              </strong>{" "}
+              · {filtered.length.toLocaleString()} payments
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                flexWrap: "wrap",
+              }}
+            >
+              <label
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.35rem",
+                }}
+              >
+                Per page:
+                <select
+                  aria-label="Payments per page"
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setPage(1);
+                  }}
+                  style={{
+                    padding: "0.35rem 0.5rem",
+                    borderRadius: "6px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--surface-color)",
+                    color: "var(--text-primary)",
+                    fontSize: "0.8rem",
+                    cursor: "pointer",
+                  }}
+                >
+                  {[10, 25, 50].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                aria-label="Previous page"
+                disabled={safePage <= 1}
+                onClick={() => setPage((p) => Math.max(p - 1, 1))}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.3rem",
+                  padding: "0.4rem 0.8rem",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--surface-color)",
+                  color: "var(--text-primary)",
+                  cursor: safePage <= 1 ? "not-allowed" : "pointer",
+                  opacity: safePage <= 1 ? 0.4 : 1,
+                  fontSize: "0.8rem",
+                }}
+              >
+                <ChevronLeft size={14} /> Previous
+              </button>
+              <button
+                type="button"
+                aria-label="Next page"
+                disabled={safePage >= totalPages}
+                onClick={() => setPage((p) => Math.min(p + 1, totalPages))}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.3rem",
+                  padding: "0.4rem 0.8rem",
+                  borderRadius: "6px",
+                  border: "1px solid var(--border-color)",
+                  background: "var(--surface-color)",
+                  color: "var(--text-primary)",
+                  cursor: safePage >= totalPages ? "not-allowed" : "pointer",
+                  opacity: safePage >= totalPages ? 0.4 : 1,
+                  fontSize: "0.8rem",
+                }}
+              >
+                Next <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Admin configuration section */}
       {isAdmin && (
-        <div style={{ ...GLASS, padding: '1.25rem', marginTop: '2rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+        <div style={{ ...GLASS, padding: "1.25rem", marginTop: "2rem" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              marginBottom: "1rem",
+            }}
+          >
             <SettingsIcon size={18} />
-            <h3 style={{ margin: 0, fontSize: '1rem' }}>Gateway Configuration</h3>
+            <h3 style={{ margin: 0, fontSize: "1rem" }}>
+              Gateway Configuration
+            </h3>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+              gap: "1rem",
+            }}
+          >
             <ConfigCard
               name="Stripe"
               configured={!!config?.stripe?.configured}
               extras={[
-                { label: 'API key (STRIPE_SECRET_KEY)', ok: !!config?.stripe?.configured },
-                { label: 'Webhook secret (STRIPE_WEBHOOK_SECRET)', ok: !!config?.stripe?.webhookConfigured },
+                {
+                  label: "API key (STRIPE_SECRET_KEY)",
+                  ok: !!config?.stripe?.configured,
+                },
+                {
+                  label: "Webhook secret (STRIPE_WEBHOOK_SECRET)",
+                  ok: !!config?.stripe?.webhookConfigured,
+                },
               ]}
               hint="Get keys from dashboard.stripe.com → Developers → API keys. Configure webhook endpoint at /api/payments/webhook/stripe."
               brandColor="#635bff"
@@ -620,22 +1050,39 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
               name="Razorpay"
               configured={!!config?.razorpay?.configured}
               extras={[
-                { label: 'Key ID (RAZORPAY_KEY_ID)', ok: !!config?.razorpay?.configured, value: config?.razorpay?.keyId },
-                { label: 'Key secret (RAZORPAY_KEY_SECRET)', ok: !!config?.razorpay?.configured },
+                {
+                  label: "Key ID (RAZORPAY_KEY_ID)",
+                  ok: !!config?.razorpay?.configured,
+                  value: config?.razorpay?.keyId,
+                },
+                {
+                  label: "Key secret (RAZORPAY_KEY_SECRET)",
+                  ok: !!config?.razorpay?.configured,
+                },
               ]}
               hint="Get keys from dashboard.razorpay.com → Settings → API Keys. Webhook endpoint: /api/payments/webhook/razorpay."
               brandColor="#3395ff"
             />
           </div>
 
-          <p style={{ marginTop: '1rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-            Add the env vars to your root <code>.env</code> file and restart the backend (PM2). Keys are loaded once at startup and never exposed to the frontend.
+          <p
+            style={{
+              marginTop: "1rem",
+              fontSize: "0.78rem",
+              color: "var(--text-secondary)",
+            }}
+          >
+            Add the env vars to your root <code>.env</code> file and restart the
+            backend (PM2). Keys are loaded once at startup and never exposed to
+            the frontend.
           </p>
         </div>
       )}
 
       {/* Detail modal */}
-      {selected && <DetailModal payment={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <DetailModal payment={selected} onClose={() => setSelected(null)} />
+      )}
 
       <style>{`@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }`}</style>
     </div>
@@ -645,227 +1092,515 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
 // ── Sub-components ───────────────────────────────────────────────
 function Th({ children }) {
   return (
-    <th style={{
-      padding: '0.75rem 1rem',
-      textAlign: 'left',
-      fontSize: '0.75rem',
-      textTransform: 'uppercase',
-      letterSpacing: '0.05em',
-      color: 'var(--text-secondary)',
-      fontWeight: 600,
-    }}>{children}</th>
+    <th
+      style={{
+        padding: "0.75rem 1rem",
+        textAlign: "left",
+        fontSize: "0.75rem",
+        textTransform: "uppercase",
+        letterSpacing: "0.05em",
+        color: "var(--text-secondary)",
+        fontWeight: 600,
+      }}
+    >
+      {children}
+    </th>
   );
 }
 
 function Td({ children, onClick }) {
-  return <td onClick={onClick} style={{ padding: '0.75rem 1rem', verticalAlign: 'middle' }}>{children}</td>;
+  return (
+    <td
+      onClick={onClick}
+      style={{ padding: "0.75rem 1rem", verticalAlign: "middle" }}
+    >
+      {children}
+    </td>
+  );
 }
 
 function StatCard({ icon, label, value, color }) {
-  const bgAlpha = color === '#10b981' ? '0.08' : color === '#f59e0b' ? '0.08' : '0.08';
+  const bgAlpha =
+    color === "#10b981" ? "0.08" : color === "#f59e0b" ? "0.08" : "0.08";
   const getBgColor = () => {
-    if (color === '#10b981') return 'rgba(16,185,129,0.1)';
-    if (color === '#f59e0b') return 'rgba(245,158,11,0.1)';
-    if (color === '#ef4444') return 'rgba(239,68,68,0.1)';
-    return 'rgba(99,91,255,0.1)';
+    if (color === "#10b981") return "rgba(16,185,129,0.1)";
+    if (color === "#f59e0b") return "rgba(245,158,11,0.1)";
+    if (color === "#ef4444") return "rgba(239,68,68,0.1)";
+    return "rgba(99,91,255,0.1)";
   };
 
   return (
-    <div style={{
-      padding: '1.5rem',
-      borderRadius: '12px',
-      background: getBgColor(),
-      border: `1.5px solid ${color}40`,
-      boxShadow: `0 0 20px ${color}15`,
-      transition: 'all 0.3s ease',
-      cursor: 'default',
-      position: 'relative',
-      overflow: 'hidden',
-    }}
-    onMouseEnter={e => {
-      e.currentTarget.style.background = getBgColor();
-      e.currentTarget.style.transform = 'translateY(-2px)';
-      e.currentTarget.style.boxShadow = `0 8px 24px ${color}25`;
-    }}
-    onMouseLeave={e => {
-      e.currentTarget.style.background = getBgColor();
-      e.currentTarget.style.transform = 'translateY(0)';
-      e.currentTarget.style.boxShadow = `0 0 20px ${color}15`;
-    }}
+    <div
+      style={{
+        padding: "1.5rem",
+        borderRadius: "12px",
+        background: getBgColor(),
+        border: `1.5px solid ${color}40`,
+        boxShadow: `0 0 20px ${color}15`,
+        transition: "all 0.3s ease",
+        cursor: "default",
+        position: "relative",
+        overflow: "hidden",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = getBgColor();
+        e.currentTarget.style.transform = "translateY(-2px)";
+        e.currentTarget.style.boxShadow = `0 8px 24px ${color}25`;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = getBgColor();
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow = `0 0 20px ${color}15`;
+      }}
     >
-      <div style={{ position: 'relative', zIndex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-          <div style={{
-            width: '40px',
-            height: '40px',
-            borderRadius: '10px',
-            background: `${color}20`,
-            border: `1px solid ${color}60`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color,
-          }}>
+      <div style={{ position: "relative", zIndex: 1 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+            marginBottom: "1rem",
+          }}
+        >
+          <div
+            style={{
+              width: "40px",
+              height: "40px",
+              borderRadius: "10px",
+              background: `${color}20`,
+              border: `1px solid ${color}60`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color,
+            }}
+          >
             {icon}
           </div>
-          <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', fontWeight: 600 }}>{label}</span>
+          <span
+            style={{
+              fontSize: "0.75rem",
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              color: "var(--text-secondary)",
+              fontWeight: 600,
+            }}
+          >
+            {label}
+          </span>
         </div>
-        <div style={{ fontSize: '2.2rem', fontWeight: 700, color, lineHeight: 1 }}>{value}</div>
+        <div
+          style={{ fontSize: "2.2rem", fontWeight: 700, color, lineHeight: 1 }}
+        >
+          {value}
+        </div>
       </div>
 
-      <div style={{
-        position: 'absolute',
-        top: 0,
-        right: -40,
-        width: '120px',
-        height: '120px',
-        borderRadius: '50%',
-        background: `${color}10`,
-        filter: 'blur(30px)',
-      }} />
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          right: -40,
+          width: "120px",
+          height: "120px",
+          borderRadius: "50%",
+          background: `${color}10`,
+          filter: "blur(30px)",
+        }}
+      />
     </div>
   );
 }
 
 function ConfigCard({ name, configured, extras, hint, brandColor }) {
-  const borderColor = configured ? `${brandColor}60` : 'rgba(255,255,255,0.1)';
-  const bgColor = configured ? `${brandColor}08` : 'rgba(255,255,255,0.02)';
+  const borderColor = configured ? `${brandColor}60` : "rgba(255,255,255,0.1)";
+  const bgColor = configured ? `${brandColor}08` : "rgba(255,255,255,0.02)";
 
   return (
-    <div style={{
-      padding: '1.25rem',
-      borderRadius: '12px',
-      background: bgColor,
-      border: `1px solid ${borderColor}`,
-      boxShadow: `0 0 16px ${configured ? `${brandColor}12` : 'rgba(0,0,0,0.1)'}`,
-      transition: 'all 0.3s ease',
-      position: 'relative',
-    }}>
-      <div style={{ position: 'absolute', top: 0, left: 0, width: '4px', height: '100%', background: brandColor, borderRadius: '12px 0 0 12px', opacity: configured ? 1 : 0.3 }} />
+    <div
+      style={{
+        padding: "1.25rem",
+        borderRadius: "12px",
+        background: bgColor,
+        border: `1px solid ${borderColor}`,
+        boxShadow: `0 0 16px ${configured ? `${brandColor}12` : "rgba(0,0,0,0.1)"}`,
+        transition: "all 0.3s ease",
+        position: "relative",
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "4px",
+          height: "100%",
+          background: brandColor,
+          borderRadius: "12px 0 0 12px",
+          opacity: configured ? 1 : 0.3,
+        }}
+      />
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', paddingLeft: '0.5rem' }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "1rem",
+          paddingLeft: "0.5rem",
+        }}
+      >
         <div>
-          <strong style={{ color: brandColor, fontSize: '0.95rem' }}>{name}</strong>
+          <strong style={{ color: brandColor, fontSize: "0.95rem" }}>
+            {name}
+          </strong>
         </div>
         {configured ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', color: '#10b981', fontSize: '0.78rem', fontWeight: 600, background: 'rgba(16,185,129,0.1)', padding: '0.3rem 0.7rem', borderRadius: '6px', border: '1px solid rgba(16,185,129,0.3)' }}>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.4rem",
+              color: "#10b981",
+              fontSize: "0.78rem",
+              fontWeight: 600,
+              background: "rgba(16,185,129,0.1)",
+              padding: "0.3rem 0.7rem",
+              borderRadius: "6px",
+              border: "1px solid rgba(16,185,129,0.3)",
+            }}
+          >
             <CheckCircle size={14} /> Configured
           </span>
         ) : (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', color: '#f59e0b', fontSize: '0.78rem', fontWeight: 600, background: 'rgba(245,158,11,0.1)', padding: '0.3rem 0.7rem', borderRadius: '6px', border: '1px solid rgba(245,158,11,0.3)' }}>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.4rem",
+              color: "#f59e0b",
+              fontSize: "0.78rem",
+              fontWeight: 600,
+              background: "rgba(245,158,11,0.1)",
+              padding: "0.3rem 0.7rem",
+              borderRadius: "6px",
+              border: "1px solid rgba(245,158,11,0.3)",
+            }}
+          >
             <AlertTriangle size={14} /> Not configured
           </span>
         )}
       </div>
 
-      <ul style={{ listStyle: 'none', padding: '0 0 0 0.5rem', margin: '0 0 1rem 0', fontSize: '0.78rem' }}>
+      <ul
+        style={{
+          listStyle: "none",
+          padding: "0 0 0 0.5rem",
+          margin: "0 0 1rem 0",
+          fontSize: "0.78rem",
+        }}
+      >
         {extras.map((x, i) => (
-          <li key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.45rem', color: 'var(--text-secondary)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', width: '16px', justifyContent: 'center' }}>
-              {x.ok ? <CheckCircle size={13} color="#10b981" /> : <XCircle size={13} color="#ef4444" />}
+          <li
+            key={i}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              marginBottom: "0.45rem",
+              color: "var(--text-secondary)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                width: "16px",
+                justifyContent: "center",
+              }}
+            >
+              {x.ok ? (
+                <CheckCircle size={13} color="#10b981" />
+              ) : (
+                <XCircle size={13} color="#ef4444" />
+              )}
             </div>
             <span>{x.label}</span>
-            {x.value && <code style={{ marginLeft: 'auto', color: 'var(--text-primary)', fontSize: '0.7rem', background: 'rgba(255,255,255,0.05)', padding: '0.2rem 0.4rem', borderRadius: '4px' }}>{x.value}</code>}
+            {x.value && (
+              <code
+                style={{
+                  marginLeft: "auto",
+                  color: "var(--text-primary)",
+                  fontSize: "0.7rem",
+                  background: "rgba(255,255,255,0.05)",
+                  padding: "0.2rem 0.4rem",
+                  borderRadius: "4px",
+                }}
+              >
+                {x.value}
+              </code>
+            )}
           </li>
         ))}
       </ul>
 
-      <p style={{ margin: 0, fontSize: '0.73rem', color: 'var(--text-secondary)', lineHeight: 1.6, paddingLeft: '0.5rem' }}>{hint}</p>
+      <p
+        style={{
+          margin: 0,
+          fontSize: "0.73rem",
+          color: "var(--text-secondary)",
+          lineHeight: 1.6,
+          paddingLeft: "0.5rem",
+        }}
+      >
+        {hint}
+      </p>
     </div>
   );
 }
 
 function DetailModal({ payment, onClose }) {
-  const meta = payment.metadata && typeof payment.metadata === 'object' ? payment.metadata : {};
+  const meta =
+    payment.metadata && typeof payment.metadata === "object"
+      ? payment.metadata
+      : {};
   const contact = payment.contact || null;
   return createPortal(
     <div
       onClick={onClose}
       style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
-        backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', zIndex: 1000, padding: '1rem',
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.55)",
+        backdropFilter: "blur(4px)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+        padding: "1rem",
       }}
     >
       <div
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         style={{
-          background: 'var(--bg-color)',
-          border: '1px solid var(--border-color)',
-          borderRadius: '12px',
-          boxShadow: 'var(--glass-shadow, 0 8px 32px rgba(0,0,0,0.25))',
-          padding: '1.5rem',
-          maxWidth: '560px',
-          width: '100%',
-          maxHeight: '85vh',
-          overflowY: 'auto',
-          color: 'var(--text-primary)',
+          background: "var(--bg-color)",
+          border: "1px solid var(--border-color)",
+          borderRadius: "12px",
+          boxShadow: "var(--glass-shadow, 0 8px 32px rgba(0,0,0,0.25))",
+          padding: "1.5rem",
+          maxWidth: "560px",
+          width: "100%",
+          maxHeight: "85vh",
+          overflowY: "auto",
+          color: "var(--text-primary)",
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "1rem",
+          }}
+        >
           <h3 style={{ margin: 0 }}>Payment #{payment.id}</h3>
-          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer' }}>
+          <button
+            onClick={onClose}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--text-primary)",
+              cursor: "pointer",
+            }}
+          >
             <X size={20} />
           </button>
         </div>
 
-        <DetailRow label="Status"><StatusBadge status={payment.status} /></DetailRow>
-        <DetailRow label="Amount"><strong>{formatCurrency(payment.amount)} {payment.currency}</strong></DetailRow>
-        <DetailRow label="Gateway"><GatewayBadge gateway={payment.gateway} /></DetailRow>
-        <DetailRow label="Paid On">{formatDate(payment.paidAt) || '—'}</DetailRow>
+        <DetailRow label="Status">
+          <StatusBadge status={payment.status} />
+        </DetailRow>
+        <DetailRow label="Amount">
+          <strong>
+            {formatCurrency(payment.amount)} {payment.currency}
+          </strong>
+        </DetailRow>
+        <DetailRow label="Gateway">
+          <GatewayBadge gateway={payment.gateway} />
+        </DetailRow>
+        <DetailRow label="Paid On">
+          {formatDate(payment.paidAt) || "—"}
+        </DetailRow>
         <DetailRow label="Created">{formatDate(payment.createdAt)}</DetailRow>
 
         {contact && (
-          <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'var(--subtle-bg)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-            <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Customer</div>
-            <div style={{ fontWeight: 600 }}>{contact.name || '—'}</div>
-            {contact.email && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{contact.email}</div>}
-            {contact.phone && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{contact.phone}</div>}
+          <div
+            style={{
+              marginTop: "1rem",
+              padding: "0.75rem",
+              background: "var(--subtle-bg)",
+              borderRadius: "8px",
+              border: "1px solid var(--border-color)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: "0.73rem",
+                color: "var(--text-secondary)",
+                marginBottom: "0.4rem",
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
+              }}
+            >
+              Customer
+            </div>
+            <div style={{ fontWeight: 600 }}>{contact.name || "—"}</div>
+            {contact.email && (
+              <div
+                style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}
+              >
+                {contact.email}
+              </div>
+            )}
+            {contact.phone && (
+              <div
+                style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}
+              >
+                {contact.phone}
+              </div>
+            )}
           </div>
         )}
 
         {payment.description && (
-          <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'var(--subtle-bg)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-            <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Payment for</div>
+          <div
+            style={{
+              marginTop: "0.75rem",
+              padding: "0.75rem",
+              background: "var(--subtle-bg)",
+              borderRadius: "8px",
+              border: "1px solid var(--border-color)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: "0.73rem",
+                color: "var(--text-secondary)",
+                marginBottom: "0.3rem",
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
+              }}
+            >
+              Payment for
+            </div>
             <div style={{ fontWeight: 500 }}>{payment.description}</div>
           </div>
         )}
 
-        <div style={{ marginTop: '0.75rem' }}>
-          <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reference</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-            {payment.gatewayId && <div style={{ fontSize: '0.8rem' }}>Gateway ID: <code style={{ fontSize: '0.75rem', background: 'rgba(0,0,0,0.06)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>{payment.gatewayId}</code></div>}
-            {payment.invoiceId && <div style={{ fontSize: '0.8rem' }}>Invoice: <strong>#{payment.invoiceId}</strong></div>}
-            {!payment.invoiceId && payment.travelInvoiceNum && <div style={{ fontSize: '0.8rem' }}>Invoice: <strong>{payment.travelInvoiceNum}</strong></div>}
+        <div style={{ marginTop: "0.75rem" }}>
+          <div
+            style={{
+              fontSize: "0.73rem",
+              color: "var(--text-secondary)",
+              marginBottom: "0.4rem",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+            }}
+          >
+            Reference
+          </div>
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}
+          >
+            {payment.gatewayId && (
+              <div style={{ fontSize: "0.8rem" }}>
+                Gateway ID:{" "}
+                <code
+                  style={{
+                    fontSize: "0.75rem",
+                    background: "rgba(0,0,0,0.06)",
+                    padding: "0.15rem 0.4rem",
+                    borderRadius: 4,
+                  }}
+                >
+                  {payment.gatewayId}
+                </code>
+              </div>
+            )}
+            {payment.invoiceId && (
+              <div style={{ fontSize: "0.8rem" }}>
+                Invoice: <strong>#{payment.invoiceId}</strong>
+              </div>
+            )}
+            {!payment.invoiceId && payment.travelInvoiceNum && (
+              <div style={{ fontSize: "0.8rem" }}>
+                Invoice: <strong>{payment.travelInvoiceNum}</strong>
+              </div>
+            )}
             {(payment.itineraryId || meta.itineraryId) && (
-              <div style={{ fontSize: '0.8rem' }}>
-                Itinerary:{' '}
+              <div style={{ fontSize: "0.8rem" }}>
+                Itinerary:{" "}
                 <Link
                   to={`/travel/itineraries/${payment.itineraryId || meta.itineraryId}`}
                   onClick={onClose}
-                  style={{ color: 'var(--accent-color)', fontWeight: 600, textDecoration: 'none' }}
+                  style={{
+                    color: "var(--accent-color)",
+                    fontWeight: 600,
+                    textDecoration: "none",
+                  }}
                 >
                   View itinerary →
                 </Link>
               </div>
             )}
-            {meta.quoteId && <div style={{ fontSize: '0.8rem' }}>Quote: <strong>#{meta.quoteId}</strong></div>}
-            {meta.subBrand && <div style={{ fontSize: '0.8rem' }}>Sub-brand: <strong style={{ textTransform: 'capitalize' }}>{meta.subBrand}</strong></div>}
-            {meta.destination && <div style={{ fontSize: '0.8rem' }}>Destination: <strong>{meta.destination}</strong></div>}
-            {meta.kind && <div style={{ fontSize: '0.8rem' }}>Type: <strong style={{ textTransform: 'capitalize' }}>{meta.kind}</strong></div>}
+            {meta.quoteId && (
+              <div style={{ fontSize: "0.8rem" }}>
+                Quote: <strong>#{meta.quoteId}</strong>
+              </div>
+            )}
+            {meta.subBrand && (
+              <div style={{ fontSize: "0.8rem" }}>
+                Sub-brand:{" "}
+                <strong style={{ textTransform: "capitalize" }}>
+                  {meta.subBrand}
+                </strong>
+              </div>
+            )}
+            {meta.destination && (
+              <div style={{ fontSize: "0.8rem" }}>
+                Destination: <strong>{meta.destination}</strong>
+              </div>
+            )}
+            {meta.kind && (
+              <div style={{ fontSize: "0.8rem" }}>
+                Type:{" "}
+                <strong style={{ textTransform: "capitalize" }}>
+                  {meta.kind}
+                </strong>
+              </div>
+            )}
           </div>
         </div>
       </div>
     </div>,
-    document.body
+    document.body,
   );
 }
 
 function DetailRow({ label, children }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.45rem 0', borderBottom: '1px solid var(--border-color)' }}>
-      <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>{label}</span>
-      <span style={{ fontSize: '0.85rem' }}>{children}</span>
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        padding: "0.45rem 0",
+        borderBottom: "1px solid var(--border-color)",
+      }}
+    >
+      <span style={{ color: "var(--text-secondary)", fontSize: "0.82rem" }}>
+        {label}
+      </span>
+      <span style={{ fontSize: "0.85rem" }}>{children}</span>
     </div>
   );
 }

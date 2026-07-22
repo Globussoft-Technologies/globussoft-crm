@@ -169,6 +169,7 @@ const SAMPLE_WELLNESS_PAGES = [
   { category: 'Leads & Revenue', path: '/tasks', label: 'Tasks' },
   { category: 'Leads & Revenue', path: '/wellness/telecaller-queue', label: 'Telecaller Queue' },
   { category: 'Finance', path: '/wellness/pos', label: 'Point of Sale' },
+  { category: 'Finance', path: '/wellness/invoices', label: 'Invoices' },
   { category: 'Products', path: '/wellness/products', label: 'Products' },
   { category: 'Products', path: '/wellness/product-categories', label: 'Categories' },
   { category: 'Products', path: '/wellness/auto-consumption', label: 'Auto-consumption' },
@@ -299,6 +300,19 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Point of Sale')).toBeTruthy();
     });
 
+    it('renders the wellness invoice entry in Finance when /wellness/invoices is accessible', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        accessiblePages: [
+          { category: 'Finance', path: '/wellness/pos', label: 'Point of Sale' },
+          { category: 'Finance', path: '/wellness/invoices', label: 'Invoices' },
+        ],
+      });
+      await screen.findByText('Invoices');
+      expect(document.querySelector('a[href="/wellness/invoices"]')).toBeTruthy();
+    });
+
     it('does NOT render generic-only items (Pipeline / CPQ / Win-Loss) under wellness vertical', () => {
       renderSidebar({ vertical: 'wellness', role: 'ADMIN' });
       // These are generic-vertical-only navs.
@@ -346,6 +360,13 @@ describe('Sidebar — load-bearing render surface', () => {
       // Phase 3 Visa Sure section is admin-only. "Visa Sure" appears both as
       // a section label AND as a switcher option — accept ≥1 match.
       expect(screen.getAllByText('Visa Sure').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('renders Landing Pages only for travel tenants', () => {
+      renderSidebar({ vertical: 'travel', role: 'MANAGER', permissions: ['marketing.read'] });
+      const link = screen.getByText('Landing Pages').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/landing-pages');
     });
 
     it('renders the Leads link under Sales pipeline', () => {
@@ -1120,6 +1141,13 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Marketing')).toBeNull();
       expect(screen.queryByText('Lead Routing')).toBeNull();
       expect(screen.queryByText('Territories')).toBeNull();
+    });
+  });
+
+  describe('Generic Landing Pages visibility', () => {
+    it('does NOT render Landing Pages in the generic sidebar', () => {
+      renderSidebar({ vertical: 'generic', role: 'MANAGER' });
+      expect(screen.queryByText('Landing Pages')).toBeNull();
     });
   });
 

@@ -104,6 +104,7 @@ const ALL_CATEGORY_PATHS = [
   { path: '/wellness/visits' },
   { path: '/wellness/memberships' },
   { path: '/wellness/my-transactions' },
+  { path: '/wellness/invoices' },
   { path: '/wellness/waitlist' },
   { path: '/wellness/inventory' },
 ];
@@ -223,6 +224,19 @@ describe('UserSettings (Notification Settings)', () => {
     expect(screen.queryByText('Approvals')).toBeNull();
     expect(screen.queryByText('Leave Requests')).toBeNull();
     expect(screen.queryByText('Expense Reports')).toBeNull();
+  });
+
+  it('shows Payments & Transactions when /wellness/invoices is accessible', async () => {
+    setSuccessfulLoad(SAMPLE_PREFS, [
+      { path: '/wellness/invoices' },
+      { path: '/notification-settings' },
+    ]);
+    render(<UserSettings />);
+    await waitFor(() => {
+      expect(screen.getByText('Payments & Transactions')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Appointments & Bookings')).toBeNull();
+    expect(screen.queryByText('Visits')).toBeNull();
   });
 
   it('hides the entire Categories section when no sidebar paths match', async () => {

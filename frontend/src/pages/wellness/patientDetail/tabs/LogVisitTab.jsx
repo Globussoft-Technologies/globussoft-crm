@@ -16,6 +16,11 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
   const [submitting, setSubmitting] = useState(false);
   const [generatingLinkId, setGeneratingLinkId] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
+  // Live deployments sometimes reload the patient before the DB replica has
+  // caught up with the payment-link write, so the button re-appears even
+  // though the POST succeeded. Cache generated URLs locally so the UI reflects
+  // the successful creation immediately.
+  const [generatedLinks, setGeneratedLinks] = useState({});
 
   const visits = patient.visits || [];
   const bookedAppointments = visits.filter((v) =>
@@ -55,9 +60,13 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
       const result = await fetchApi(`/api/wellness/visits/${visit.id}/payment-link`, {
         method: 'POST',
       });
-      if (result?.url) {
+      const linkUrl = result?.url || result?.paymentLinkUrl;
+      if (linkUrl) {
+        setGeneratedLinks((prev) => ({ ...prev, [visit.id]: linkUrl }));
         onSaved();
         notify.success('Payment link generated');
+      } else {
+        notify.error('Payment link could not be generated. Please check the gateway configuration.');
       }
     } catch (_err) {
       // fetchApi already toasted
@@ -102,40 +111,89 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
   const renderPaymentLinkBlock = (visit) => {
     if (!visit.amountCharged || visit.amountCharged <= 0) return null;
 
-    if (visit.paymentStatus === 'paid') {
+    const linkUrl = visit.paymentLinkUrl || generatedLinks[visit.id];
+    const isPaid =
+      String(visit.paymentStatus || '').toLowerCase() === 'paid' ||
+      String(visit.invoice?.status || '').toUpperCase() === 'PAID';
+
+    if (isPaid) {
       return (
-        <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span
-            style={{
-              fontSize: '0.8rem',
-              padding: '0.3rem 0.7rem',
-              background: 'rgba(16, 185, 129, 0.15)',
-              color: 'var(--success-color)',
-              border: '1px solid rgba(16, 185, 129, 0.3)',
-              borderRadius: 999,
-              fontWeight: 600,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.3rem',
-            }}
-          >
-            ✓ Paid
-          </span>
-          {visit.paymentLinkUrl && (
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-              Payment collected
+        <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span
+              style={{
+                fontSize: '0.8rem',
+                padding: '0.3rem 0.7rem',
+                background: 'rgba(16, 185, 129, 0.15)',
+                color: 'var(--success-color)',
+                border: '1px solid rgba(16, 185, 129, 0.3)',
+                borderRadius: 999,
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.3rem',
+              }}
+            >
+              ✓ Paid
             </span>
+            {linkUrl && (
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Payment collected
+              </span>
+            )}
+          </div>
+          {linkUrl && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <input
+                readOnly
+                disabled
+                value={linkUrl}
+                aria-label="Payment link"
+                style={{
+                  flex: 1,
+                  fontSize: '0.8rem',
+                  padding: '0.4rem 0.6rem',
+                  background: 'rgba(16, 185, 129, 0.08)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  borderRadius: 6,
+                  color: 'var(--success-color)',
+                  outline: 'none',
+                  opacity: 0.7,
+                  cursor: 'not-allowed',
+                }}
+              />
+              <button
+                type="button"
+                disabled
+                aria-disabled="true"
+                title="Payment already collected"
+                style={{
+                  fontSize: '0.8rem',
+                  padding: '0.4rem 0.75rem',
+                  background: 'rgba(16, 185, 129, 0.1)',
+                  color: 'var(--success-color)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  borderRadius: 6,
+                  cursor: 'not-allowed',
+                  whiteSpace: 'nowrap',
+                  fontWeight: 500,
+                  opacity: 0.45,
+                }}
+              >
+                Copy
+              </button>
+            </div>
           )}
         </div>
       );
     }
 
-    if (visit.paymentLinkUrl) {
+    if (linkUrl) {
       return (
         <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <input
             readOnly
-            value={visit.paymentLinkUrl}
+            value={linkUrl}
             onClick={(e) => e.target.select()}
             aria-label="Payment link"
             style={{
@@ -151,7 +209,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
           />
           <button
             type="button"
-            onClick={() => copyToClipboard(visit.paymentLinkUrl, visit.id)}
+            onClick={() => copyToClipboard(linkUrl, visit.id)}
             style={{
               fontSize: '0.8rem',
               padding: '0.4rem 0.75rem',

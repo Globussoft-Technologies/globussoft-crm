@@ -14,6 +14,7 @@ import prisma from '../../lib/prisma.js';
 prisma.staffRevenueGoal = {
   findMany: vi.fn(),
   update: vi.fn().mockResolvedValue({}),
+  create: vi.fn(),
 };
 prisma.sale = { aggregate: vi.fn() };
 prisma.saleLineItem = { findMany: vi.fn() };
@@ -26,6 +27,21 @@ import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
 const staffRouter = requireCJS('../../routes/staff');
+
+function formatDateInput(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getGoalWindowBounds() {
+  const today = new Date();
+  const currentMonthStart = formatDateInput(new Date(today.getFullYear(), today.getMonth(), 1));
+  const maxWindowEnd = formatDateInput(new Date(today.getFullYear(), today.getMonth() + 12, 1));
+  return { currentMonthStart, maxWindowEnd };
+}
 
 function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   const app = express();
@@ -41,6 +57,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 beforeEach(() => {
   prisma.staffRevenueGoal.findMany.mockReset();
   prisma.staffRevenueGoal.update.mockReset().mockResolvedValue({});
+  prisma.staffRevenueGoal.create.mockReset();
   prisma.sale.aggregate.mockReset();
   prisma.saleLineItem.findMany.mockReset();
   prisma.invoice.findMany.mockReset();
@@ -155,5 +172,46 @@ describe('GET /api/staff/revenue-goals — achievement aggregation', () => {
     expect(res.status).toBe(200);
     expect(res.body[0].achievedAmount).toBe(800);
     expect(prisma.payment.aggregate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/staff/revenue-goals — date validation', () => {
+  test('rejects a periodStart before the current month before Prisma create is called', async () => {
+    const { currentMonthStart } = getGoalWindowBounds();
+    const priorMonthStart = formatDateInput(new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1));
+    const res = await request(makeApp({ tenantId: 1 }))
+      .post('/api/staff/revenue-goals')
+      .send({
+        targetUserId: 5,
+        period: 'MONTHLY',
+        periodStart: priorMonthStart,
+        periodEnd: currentMonthStart,
+        targetAmount: 1000,
+        scope: 'ALL',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/periodStart cannot be before the current month/i);
+    expect(prisma.staffRevenueGoal.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects a periodEnd beyond one year from the current month before Prisma create is called', async () => {
+    const { currentMonthStart } = getGoalWindowBounds();
+    const overLimitEnd = formatDateInput(new Date(new Date().getFullYear(), new Date().getMonth() + 12, 2));
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .post('/api/staff/revenue-goals')
+      .send({
+        targetUserId: 5,
+        period: 'MONTHLY',
+        periodStart: currentMonthStart,
+        periodEnd: overLimitEnd,
+        targetAmount: 1000,
+        scope: 'ALL',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/periodEnd cannot be more than one year from the current month/i);
+    expect(prisma.staffRevenueGoal.create).not.toHaveBeenCalled();
   });
 });

@@ -432,6 +432,24 @@ describe('<Approvals /> — page surface', () => {
     });
   });
 
+  it('Create modal uses the theme-aware surface token instead of a hard-coded dark panel', async () => {
+    const prevTheme = document.documentElement.getAttribute('data-theme');
+    document.documentElement.setAttribute('data-theme', 'light');
+
+    renderApprovals(ADMIN_USER);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /New Request/i })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /New Request/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.getAttribute('style')).toContain('var(--modal-bg, var(--surface-color, #ffffff))');
+    expect(dialog.getAttribute('style')).not.toContain('rgba(20,22,32,0.92)');
+
+    if (prevTheme == null) document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', prevTheme);
+  });
+
   it('Create submit: POSTs /api/approvals with entity + entityId + reason payload', async () => {
     renderApprovals(ADMIN_USER);
     await waitFor(() => {

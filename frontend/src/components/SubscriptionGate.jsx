@@ -19,8 +19,7 @@ import { fetchApi } from '../utils/api';
 //   - ADMIN (the buyer): sees the Upgrade CTA that drops them on /pricing.
 //   - MANAGER / USER / wellness staff: see a "contact your admin" message.
 //     They can't buy — only the workspace admin can.
-//   - OWNER (platform staff, isOwner=true): bypassed entirely. Owner never
-//     subscribes; owner manages the catalog.
+//   - No role bypass: everyone must have valid coverage before using the CRM.
 //
 // State source:
 //   GET /api/subscriptions/status — returns
@@ -108,7 +107,6 @@ export default function SubscriptionGate({ children }) {
   //   - Platform OWNER (isOwner) → never blocked.
   //   - Route is in the allow-list → children (so they can actually pay).
   if (!token || !user) return children;
-  if (user.isOwner) return children;
   if (isPathAllowed(location.pathname)) return children;
 
   // Wait for the first status fetch before deciding. A fast-rendered gate

@@ -143,7 +143,7 @@ describe('<wellness/LogVisitTab /> — payment link surface', () => {
     expect(screen.getByRole('button', { name: /Generate payment link/i })).toBeInTheDocument();
   });
 
-  it('calls the payment-link endpoint and refreshes the patient when Generate is clicked', async () => {
+  it('calls the payment-link endpoint, refreshes the patient, and shows the link immediately', async () => {
     fetchApiMock.mockResolvedValue({ url: 'https://rzp.io/l/visit-11', gateway: 'razorpay' });
 
     const patient = {
@@ -175,6 +175,10 @@ describe('<wellness/LogVisitTab /> — payment link surface', () => {
       expect(onSaved).toHaveBeenCalled();
       expect(notifyObj.success).toHaveBeenCalledWith('Payment link generated');
     });
+    // The link surface should render immediately from the POST response,
+    // without waiting for the parent re-fetch to complete.
+    expect(screen.getByDisplayValue('https://rzp.io/l/visit-11')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy/i })).toBeInTheDocument();
   });
 
   it('reflects the payment link returned by mark-as-visited after the patient refreshes', async () => {
@@ -230,7 +234,7 @@ describe('<wellness/LogVisitTab /> — payment link surface', () => {
     expect(await screen.findByDisplayValue('https://rzp.io/l/visit-10')).toBeInTheDocument();
   });
 
-  it('shows a Paid badge and hides Copy/Generate for a paid completed visit', () => {
+  it('shows a Paid badge and disables Copy for a paid completed visit', () => {
     const patient = {
       id: 1,
       visits: [
@@ -243,7 +247,7 @@ describe('<wellness/LogVisitTab /> — payment link surface', () => {
           doctor: { name: 'Anita Das' },
           amountCharged: 25000,
           paymentLinkUrl: 'https://rzp.io/l/visit-12',
-          paymentStatus: 'paid',
+          invoice: { id: 77, status: 'PAID', paidAt: '2026-07-18T10:00:00.000Z' },
         },
       ],
     };
@@ -251,7 +255,69 @@ describe('<wellness/LogVisitTab /> — payment link surface', () => {
     renderTab({ patient });
 
     expect(screen.getByText(/Paid/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Copy/i })).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('https://rzp.io/l/visit-12')).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Copy/i })).toBeDisabled();
     expect(screen.queryByRole('button', { name: /Generate payment link/i })).not.toBeInTheDocument();
+  });
+
+  it('handles a backend response that returns paymentLinkUrl instead of url', async () => {
+    fetchApiMock.mockResolvedValue({ paymentLinkUrl: 'https://rzp.io/l/visit-11-alt', gateway: 'razorpay' });
+
+    const patient = {
+      id: 1,
+      visits: [
+        {
+          id: 11,
+          status: 'completed',
+          visitDate: '2026-07-19T10:00:00.000Z',
+          serviceId: 1,
+          service: sampleServices[0],
+          doctor: { name: 'Dr. Manose' },
+          amountCharged: 18000,
+          paymentLinkUrl: null,
+        },
+      ],
+    };
+
+    const { onSaved } = renderTab({ patient });
+
+    fireEvent.click(screen.getByRole('button', { name: /Generate payment link/i }));
+
+    await waitFor(() => {
+      expect(onSaved).toHaveBeenCalled();
+      expect(notifyObj.success).toHaveBeenCalledWith('Payment link generated');
+    });
+    expect(screen.getByDisplayValue('https://rzp.io/l/visit-11-alt')).toBeInTheDocument();
+  });
+
+  it('notifies the user when the backend response does not contain a link URL', async () => {
+    fetchApiMock.mockResolvedValue({ gateway: 'razorpay' });
+
+    const patient = {
+      id: 1,
+      visits: [
+        {
+          id: 11,
+          status: 'completed',
+          visitDate: '2026-07-19T10:00:00.000Z',
+          serviceId: 1,
+          service: sampleServices[0],
+          doctor: { name: 'Dr. Manose' },
+          amountCharged: 18000,
+          paymentLinkUrl: null,
+        },
+      ],
+    };
+
+    renderTab({ patient });
+
+    fireEvent.click(screen.getByRole('button', { name: /Generate payment link/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        'Payment link could not be generated. Please check the gateway configuration.'
+      );
+    });
+    expect(screen.getByRole('button', { name: /Generate payment link/i })).toBeInTheDocument();
   });
 });

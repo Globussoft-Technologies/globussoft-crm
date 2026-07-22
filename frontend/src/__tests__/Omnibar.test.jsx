@@ -56,6 +56,7 @@ vi.mock('../utils/api', () => ({
           { path: '/contacts', label: 'Contacts', description: 'Contact directory', category: 'Sales' },
           { path: '/settings', label: 'Settings', description: 'Tenant settings + integrations', category: 'Admin' },
           { path: '/wellness/patients', label: 'Patients', description: 'Patient directory + clinical records', category: 'Clinical' },
+          { path: '/wellness/invoices', label: 'Invoices', description: 'Invoice ledger + payment links', category: 'Finance' },
         ],
       });
     }
@@ -86,12 +87,13 @@ describe('Omnibar (inline top-bar)', () => {
     fetchApi.mockImplementation((url) => {
       if (url === '/api/pages/me') {
         return Promise.resolve({
-          pages: [
-            { path: '/contacts', label: 'Contacts', description: 'Contact directory', category: 'Sales' },
-            { path: '/settings', label: 'Settings', description: 'Tenant settings + integrations', category: 'Admin' },
-            { path: '/wellness/patients', label: 'Patients', description: 'Patient directory + clinical records', category: 'Clinical' },
-          ],
-        });
+        pages: [
+          { path: '/contacts', label: 'Contacts', description: 'Contact directory', category: 'Sales' },
+          { path: '/settings', label: 'Settings', description: 'Tenant settings + integrations', category: 'Admin' },
+          { path: '/wellness/patients', label: 'Patients', description: 'Patient directory + clinical records', category: 'Clinical' },
+          { path: '/wellness/invoices', label: 'Invoices', description: 'Invoice ledger + payment links', category: 'Finance' },
+        ],
+      });
       }
       return Promise.resolve({ contacts: [], deals: [], invoices: [] });
     });
@@ -188,6 +190,17 @@ describe('Omnibar (inline top-bar)', () => {
     fireEvent.change(input, { target: { value: 'sett' } });
     expect(await screen.findByText(/^Pages$/i, {}, { timeout: 2000 })).toBeInTheDocument();
     expect(screen.getByText('Settings')).toBeInTheDocument();
+  });
+
+  it('matches the wellness invoice page from /api/pages/me', async () => {
+    await renderOmnibarAndWaitForPages();
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'invoice' } });
+    expect(await screen.findByText(/^Pages$/i, {}, { timeout: 2000 })).toBeInTheDocument();
+    expect(screen.getByText('Invoices')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Invoices'));
+    expect(navigateMock).toHaveBeenCalledWith('/wellness/invoices');
   });
 
   it('matches accessible pages by description (e.g. "directory" → Contacts + Patients)', async () => {

@@ -108,6 +108,25 @@ function defaultFetchMock(url) {
   return Promise.resolve(null);
 }
 
+function generatePayments(count) {
+  const out = [];
+  for (let i = 1; i <= count; i += 1) {
+    out.push({
+      id: i,
+      invoiceId: 100 + i,
+      amount: 100 + i,
+      currency: 'USD',
+      gateway: i % 2 === 0 ? 'stripe' : 'razorpay',
+      status: i % 3 === 0 ? 'PENDING' : 'SUCCESS',
+      gatewayId: i % 2 === 0 ? `pi_ST${i}` : `pay_RZP${i}`,
+      paidAt: new Date(Date.now() - 86_400_000).toISOString(),
+      createdAt: new Date(Date.now() - 86_400_000).toISOString(),
+      metadata: {},
+    });
+  }
+  return out;
+}
+
 describe('<Payments /> — page surface', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
@@ -403,5 +422,84 @@ describe('<Payments /> — page surface', () => {
     // Same amount also renders in the row's Amount cell (row #121).
     const matches = screen.getAllByText('$1000.00');
     expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('<Payments /> — pagination', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/payments') return Promise.resolve(generatePayments(25));
+      if (url === '/api/payments/config') return Promise.resolve({ stripe: { configured: true }, razorpay: { configured: true } });
+      return Promise.resolve(null);
+    });
+  });
+
+  it('shows only the first page of payments by default', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+    expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 1 of 3/);
+    expect(screen.getAllByText(/Invoice #/).length).toBe(10);
+    expect(screen.queryByText('Invoice #111')).not.toBeInTheDocument();
+  });
+
+  it('navigates to the next and previous pages', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
+    await waitFor(() => {
+      expect(screen.queryByText('Invoice #101')).not.toBeInTheDocument();
+      expect(screen.getByText('Invoice #111')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 2 of 3/);
+
+    fireEvent.click(screen.getByRole('button', { name: /Previous page/i }));
+    await waitFor(() => {
+      expect(screen.getByText('Invoice #101')).toBeInTheDocument();
+      expect(screen.queryByText('Invoice #111')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 1 of 3/);
+  });
+
+  it('disables previous on the first page and next on the last page', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+
+    const prev = screen.getByRole('button', { name: /Previous page/i });
+    const next = screen.getByRole('button', { name: /Next page/i });
+    expect(prev).toBeDisabled();
+    expect(next).toBeEnabled();
+
+    fireEvent.click(next);
+    fireEvent.click(next);
+    await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 3 of 3/));
+    expect(prev).toBeEnabled();
+    expect(next).toBeDisabled();
+  });
+
+  it('changing the per-page size updates the page count and resets to page 1', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
+    await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 2 of 3/));
+
+    fireEvent.change(screen.getByLabelText(/Payments per page/i), { target: { value: '25' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 1 of 1/);
+      expect(screen.getAllByText(/Invoice #/).length).toBe(25);
+    });
+  });
+
+  it('resets to page 1 when a gateway tab is selected', async () => {
+    renderPayments();
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
+    await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 2 of 3/));
+
+    fireEvent.click(screen.getByRole('button', { name: /^stripe$/i }));
+    await waitFor(() => expect(screen.getByTestId('payment-pagination')).toHaveTextContent(/Page 1 of/i));
   });
 });

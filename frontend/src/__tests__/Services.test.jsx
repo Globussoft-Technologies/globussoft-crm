@@ -27,7 +27,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -846,6 +846,41 @@ describe('<Services /> — Active Treatments populated state', () => {
     expect(screen.getByText(/2\/6 sessions/)).toBeInTheDocument();
     // Active treatments empty-state copy MUST NOT render when rows exist
     expect(screen.queryByText(/No active treatment plans yet\./i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the cancelled badge inside the treatment card container', async () => {
+    const user = userEvent.setup();
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/activetreatment') {
+        return Promise.resolve({
+          data: [
+            {
+              id: 502,
+              name: 'Very long cancelled treatment plan name that should wrap cleanly',
+              status: 'cancelled',
+              totalSessions: 4,
+              completedSessions: 1,
+              totalPrice: 12000,
+              startedAt: '2026-04-01T00:00:00Z',
+              nextDueAt: null,
+              patient: { name: 'Meera Shah' },
+              service: { name: 'Acne Vulgaris Treatment', durationMin: 60, basePrice: 3000, targetRadiusKm: 20, category: 'acne' },
+            },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+
+    const card = await screen.findByTestId('treatment-card-502');
+    const badge = within(card).getByTestId('treatment-status-502');
+    expect(badge).toHaveTextContent(/cancelled/i);
+    expect(card).toContainElement(badge);
   });
 });
 

@@ -42,6 +42,7 @@
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
+import bcrypt from 'bcryptjs';
 
 import prisma from '../../lib/prisma.js';
 
@@ -128,6 +129,37 @@ describe('PUT /:id — edit', () => {
     const auditArgs = prisma.auditLog.create.mock.calls[0][0];
     expect(auditArgs.data.action).toBe('EDIT');
     expect(auditArgs.data.entity).toBe('User');
+  });
+
+  test('manual password change is hashed and persisted on PUT /:id', async () => {
+    prisma.user.findFirst.mockResolvedValue({
+      id: 22, tenantId: 1, name: 'Old Name', email: 'old@x.com',
+      role: 'USER', wellnessRole: null, createdAt: new Date('2026-01-01'), deactivatedAt: null,
+    });
+    prisma.user.update.mockImplementation(async ({ data }) => ({
+      id: 22,
+      email: 'old@x.com',
+      name: 'Old Name',
+      role: 'USER',
+      wellnessRole: null,
+      createdAt: new Date('2026-01-01'),
+      deactivatedAt: null,
+    }));
+
+    const res = await request(makeApp())
+      .put('/api/staff/22')
+      .send({ password: 'ManualPw!234' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.user.update).toHaveBeenCalledTimes(1);
+    const updateArgs = prisma.user.update.mock.calls[0][0];
+    expect(updateArgs.data.password).toBeDefined();
+    expect(updateArgs.data.password).not.toBe('ManualPw!234');
+    expect(await bcrypt.compare('ManualPw!234', updateArgs.data.password)).toBe(true);
+    expect(res.body).not.toHaveProperty('password');
+    const auditArgs = prisma.auditLog.create.mock.calls[0][0];
+    const details = JSON.parse(auditArgs.data.details);
+    expect(details.changed.password).toEqual({ updated: true });
   });
 
   test('no-op edit returns 200 + current row, no audit', async () => {

@@ -5554,6 +5554,11 @@ model CommissionProfile {
   flatAmount        Decimal? @db.Decimal(12, 2)
   // PER_SERVICE | PER_PRODUCT | REVENUE_PERCENT | FLAT_PER_INVOICE.
   basis             String   @default("REVENUE_PERCENT")
+  // Optional validity window for the rule. Mirrors Revenue Goals so the UI
+  // can show when the commission rule applies.
+  period            String?
+  periodStart       DateTime?
+  periodEnd         DateTime?
   // Optional Service category filter (e.g. "Aesthetics"). Null = applies to all.
   appliesToCategory String?
   // Optional Product filter (e.g. "Hair Dye"). Null = applies to all.

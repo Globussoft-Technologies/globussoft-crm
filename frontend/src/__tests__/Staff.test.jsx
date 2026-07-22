@@ -494,6 +494,7 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
       // commissionProfileId column is sent (null when unassigned) — pins the
       // PRD Gap §1.5 shape so backend can clear / set the FK.
       expect(body).toHaveProperty('commissionProfileId');
+      expect(body).not.toHaveProperty('password');
     });
   });
 
@@ -539,12 +540,14 @@ describe('<Staff /> — Reset password (POST /api/staff/:id/reset-password)', ()
     fetchApiMock.mockReset();
   });
 
-  it('clicking Reset Password confirms, then POSTs to /reset-password', async () => {
+  it('clicking Reset Password opens the modal and POSTs the reset link', async () => {
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId('staff-action-reset-password-2'));
+    await waitFor(() => expect(screen.getByTestId('staff-reset-modal')).toBeInTheDocument());
 
+    fireEvent.click(screen.getByText('Send reset link'));
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find(
         (c) => c[0] === '/api/staff/2/reset-password' && c[1]?.method === 'POST'
@@ -552,6 +555,33 @@ describe('<Staff /> — Reset password (POST /api/staff/:id/reset-password)', ()
       expect(post).toBeTruthy();
       // Body is empty JSON object (SUT:247).
       expect(JSON.parse(post[1].body)).toEqual({});
+    });
+  });
+
+  it('manual password entry in the reset modal PUTs the new password', async () => {
+    renderStaff('ADMIN');
+    await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+    await waitFor(() => {
+      const urls = fetchApiMock.mock.calls.map((c) => c[0]);
+      expect(urls).toContain('/api/roles');
+      expect(urls).toContain('/api/wellness/role-types?activeOnly=1');
+    });
+
+    fireEvent.click(screen.getByTestId('staff-action-reset-password-2'));
+    await waitFor(() => expect(screen.getByTestId('staff-reset-modal')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('staff-reset-password-input'), {
+      target: { value: 'ManualPw!234' },
+    });
+    fireEvent.click(screen.getByTestId('staff-reset-password-save'));
+
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(
+        (c) => c[0] === '/api/staff/2' && c[1]?.method === 'PUT'
+      );
+      expect(put).toBeTruthy();
+      const body = JSON.parse(put[1].body);
+      expect(body.password).toBe('ManualPw!234');
     });
   });
 });

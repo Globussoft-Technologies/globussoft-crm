@@ -10,6 +10,19 @@ export default function TreatmentCard({ treatment, onChanged, onSelect }) {
   const progressPercent = treatment.totalSessions > 0 ? Math.round((treatment.completedSessions / treatment.totalSessions) * 100) : 0;
   const nextDueDate = treatment.nextDueAt ? formatDate(treatment.nextDueAt) : 'Not scheduled';
   const startDate = formatDate(treatment.startedAt);
+  const statusBadgeStyle = {
+    background: statusColor[treatment.status] || statusColor.active,
+    color: '#fff',
+    padding: '0.15rem 0.5rem',
+    borderRadius: 4,
+    fontSize: '0.65rem',
+    textTransform: 'uppercase',
+    fontWeight: 600,
+    flexShrink: 0,
+    whiteSpace: 'nowrap',
+    lineHeight: 1.4,
+    marginTop: '0.1rem',
+  };
 
   const updateStatus = async (newStatus) => {
     try {
@@ -32,8 +45,16 @@ export default function TreatmentCard({ treatment, onChanged, onSelect }) {
   };
 
   return (
-    <div className="glass" style={{ padding: '1.25rem', position: 'relative', cursor: 'pointer', transition: 'all 0.3s ease' }} onClick={() => onSelect(treatment)}>
-      <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem', zIndex: 10 }}>
+    <div
+      className="glass"
+      data-testid={`treatment-card-${treatment.id}`}
+      style={{ padding: '1.25rem', position: 'relative', cursor: 'pointer', transition: 'all 0.3s ease' }}
+      onClick={() => onSelect(treatment)}
+    >
+      <div
+        style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', display: 'flex', gap: '0.25rem', zIndex: 10 }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <button onClick={() => updateStatus(treatment.status === 'active' ? 'paused' : 'active')} title={treatment.status === 'active' ? 'Pause' : 'Resume'} style={iconBtn}>
           <Clock size={12} />
         </button>
@@ -41,14 +62,14 @@ export default function TreatmentCard({ treatment, onChanged, onSelect }) {
           <Trash2 size={12} />
         </button>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.5rem' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.5rem', paddingRight: '6.5rem' }}>
         <div>
           <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             {treatment.patient?.name}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
-            <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: '0.15rem', flex: 1 }}>{treatment.name}</h3>
-            <span style={{ background: statusColor[treatment.status] || statusColor.active, color: '#fff', padding: '0.15rem 0.5rem', borderRadius: 4, fontSize: '0.65rem', textTransform: 'uppercase', fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', minWidth: 0 }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: '0.15rem', flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{treatment.name}</h3>
+            <span data-testid={`treatment-status-${treatment.id}`} style={statusBadgeStyle}>
               {statusLabel}
             </span>
           </div>

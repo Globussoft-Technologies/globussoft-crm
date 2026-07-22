@@ -242,6 +242,33 @@ describe('renderPrescriptionPdf', () => {
     const pageCount = (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
     expect(pageCount).toBe(1);
   });
+  test('a long prescription paginates without overlapping callouts', async () => {
+    const drugs = Array.from({ length: 12 }, (_, i) => ({
+      name: `DermCare Serum ${i + 1} Extra Strength`,
+      dosage: `${i + 1} ml`,
+      frequency: i % 2 === 0 ? 'BID' : 'OD',
+      duration: `${8 + i} weeks`,
+      preparation: 'Topical treatment',
+      route: 'scalp',
+    }));
+    const tailMarker = 'TAIL-MARKER-9152';
+    const buf = await renderPrescriptionPdf(
+      {
+        drugs,
+        instructions: `Apply every night for best results. ${'Follow the evening routine carefully. '.repeat(8)}${tailMarker} advice section tail.`,
+        createdAt: '2026-04-15T10:00:00Z',
+      },
+      patientFixture(),
+      clinicFixture(),
+      { name: 'Dr. Vikas Singh' },
+    );
+    const txt = extractPdfText(buf);
+    const pageCount = (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+    expect(pageCount).toBeGreaterThan(1);
+    expect(txt).toContain(tailMarker);
+    expect(txt).toContain("Doctor's Signature");
+  });
+
 
   test('"no medications listed" placeholder when drugs list is empty', async () => {
     const buf = await renderPrescriptionPdf(
@@ -920,6 +947,28 @@ function patientWithPhotos({ beforeUrls = [], afterUrls = [] } = {}) {
 }
 
 describe('renderPatientSummaryPdf — visit photos', () => {
+  test('expands visit cards for long notes without truncating into the next card', async () => {
+    const patient = patientWithPhotos();
+    patient.visits[0].notes = `${'Long clinical note content that must remain inside the visit card. '.repeat(18)}SUMMARY-TAIL-MARKER`;
+    patient.visits.push({
+      id: 100,
+      visitDate: '2026-05-20T00:00:00Z',
+      service: { name: 'Follow-up' },
+      doctor: { name: 'Dr Priyambada' },
+      status: 'completed',
+      notes: 'Second visit after the long note.',
+    });
+    const buf = await renderPatientSummaryPdf({
+      patient,
+      tenant: { name: 'Enhanced Wellness' },
+      clinic: { name: 'Ranchi Clinic' },
+    });
+    const txt = extractPdfText(buf);
+    const pageCount = (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+    expect(pageCount).toBeGreaterThan(1);
+    expect(txt).toContain('SUMMARY-TAIL-MARKER');
+    expect(txt).toContain('Visit #100');
+  });
   test('returns a non-empty Buffer when no photos are present', async () => {
     const buf = await renderPatientSummaryPdf({
       patient: patientWithPhotos(),
@@ -1079,3 +1128,4 @@ describe('renderTravelDiagnosticPdf — curriculum-fit section', () => {
     expect(buf.slice(0, 4).toString()).toBe('%PDF');
   });
 });
+

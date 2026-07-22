@@ -536,25 +536,36 @@ function drawBrandedHeader(doc, { brandName, tagline, clinic, logoBuffer, leftX,
 // continues the brand voice from the header band without competing for
 // attention with the body's section titles.
 function drawInfoStrip(doc, pairs, { x, y, w }) {
-  const stripH = 42;
+  const colW = w / pairs.length;
+  const pairHeights = pairs.map((pair) => {
+    const cw = colW - 24;
+    const value = pair.value == null || pair.value === "" ? "—" : String(pair.value);
+    doc.font("Helvetica-Bold").fontSize(7.5);
+    const labelH = doc.heightOfString(String(pair.label || "").toUpperCase(), {
+      width: cw,
+      lineGap: 0,
+    });
+    doc.font("Helvetica-Bold").fontSize(11);
+    const valueH = doc.heightOfString(value, { width: cw, lineGap: 0 });
+    return Math.max(labelH, 0) + valueH;
+  });
+  const stripH = Math.max(42, 23 + Math.max(...pairHeights, 0) + 9);
   doc.save();
   doc.rect(x, y, w, stripH).fill(BRAND.tealSoft);
   doc.restore();
-  const colW = w / pairs.length;
   pairs.forEach((pair, i) => {
     const cx = x + colW * i + 12;
     const cw = colW - 24;
+    const value = pair.value == null || pair.value === "" ? "—" : String(pair.value);
     doc.font("Helvetica-Bold").fontSize(7.5).fillColor(BRAND.teal)
       .text(String(pair.label || "").toUpperCase(), cx, y + 9, {
-        width: cw, characterSpacing: 1.3, lineBreak: false,
+        width: cw, characterSpacing: 1.3,
       });
     doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
-      .text(pair.value == null || pair.value === "" ? "—" : String(pair.value),
-        cx, y + 23, { width: cw, lineBreak: false, ellipsis: true });
+      .text(value, cx, y + 23, { width: cw, ellipsis: true });
   });
   return y + stripH;
 }
-
 // Serif section title with a muted subtitle below. The reference uses a
 // large display-serif chapter heading with NO underline accent — the
 // generous size + subtitle pairing carries enough visual weight on its
@@ -649,13 +660,20 @@ function drawKvGrid(doc, rows, { x, y, w, cols = 3 }) {
 // element flows directly below — callers should NOT add extra offset
 // (the function used to leak doc.y from its internal text() call which
 // caused callers to double-advance and triggered phantom auto-pages).
+function measureCalloutHeight(doc, { w, heading, body }) {
+  const padX = 14;
+  const padY = 12;
+  const bodyH = body ? doc.heightOfString(body, { width: w - padX * 2 - 16 }) : 0;
+  const headH = heading ? 14 : 0;
+  return padY * 2 + headH + (heading && body ? 4 : 0) + bodyH;
+}
+
 function drawCalloutBox(doc, { x, y, w, heading, body, kind = "warning" }) {
   const palette = STATUS_PILL[kind] || STATUS_PILL.warning;
   const padX = 14, padY = 12;
   doc.font("Helvetica").fontSize(9.5);
-  const bodyH = body ? doc.heightOfString(body, { width: w - padX * 2 - 16 }) : 0;
   const headH = heading ? 14 : 0;
-  const h = padY * 2 + headH + (heading && body ? 4 : 0) + bodyH;
+  const h = measureCalloutHeight(doc, { w, heading, body });
   doc.save();
   doc.roundedRect(x, y, w, h, 4).fillAndStroke(palette.bg, palette.border);
   doc.rect(x, y, 4, h).fill(palette.border);
@@ -979,7 +997,14 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
       // and tighter when the medication is single-line. Keeps long-list
       // prescriptions paginating around the reference's natural density
       // (50 short rows ≈ 3 pages; reference Rx with sublines ≈ 1 page).
-      const rowH = subText ? 44 : 32;
+      const medW = cols[1].w - 16;
+      doc.font("Helvetica-Bold").fontSize(11);
+      const medH = doc.heightOfString(medName, { width: medW, lineGap: 0 });
+      const subH = subText
+        ? (doc.font("Helvetica").fontSize(8.5), doc.heightOfString(subText, { width: medW, lineGap: 0 }))
+        : 0;
+      const contentH = 8 + medH + (subText ? 4 + subH : 0) + 8;
+      const rowH = Math.max(subText ? 44 : 32, contentH);
 
       if (rowY + rowH > contentBottom) {
         doc.addPage();
@@ -1009,13 +1034,13 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
         });
       // MEDICATION — bold name + optional Form · Route subline
       doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
-        .text(medName, cols[1].x + 8, subText ? rowY + 8 : rowY + rowH / 2 - 7, {
-          width: cols[1].w - 16, ellipsis: true, lineBreak: false,
+        .text(medName, cols[1].x + 8, subText ? rowY + 8 : rowY + rowH / 2 - medH / 2, {
+          width: medW, ellipsis: true,
         });
       if (subText) {
         doc.font("Helvetica").fontSize(8.5).fillColor(BRAND.textMuted)
-          .text(subText, cols[1].x + 8, rowY + 24, {
-            width: cols[1].w - 16, ellipsis: true, lineBreak: false,
+          .text(subText, cols[1].x + 8, rowY + 8 + medH + 4, {
+            width: medW, ellipsis: true,
           });
       }
       // DOSAGE
@@ -1051,7 +1076,12 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   // the caller supplies a free-form instructions block without an
   // explicit "Advice:" prefix (which falls into parsed.notes instead).
   if (parsed.advice) {
-    ensureSpace(60);
+    const adviceH = measureCalloutHeight(doc, {
+      w: usableW,
+      heading: "Instructions",
+      body: parsed.advice,
+    });
+    ensureSpace(adviceH + 12);
     drawCalloutBox(doc, {
       x: leftX, y: doc.y, w: usableW,
       heading: "Instructions",
@@ -1069,12 +1099,18 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   // the per-Rx clinician guidance directly under the table. When notes
   // are genuinely empty, fall back to a "Notes" callout with the canonical
   // "No clinical notes recorded." placeholder — vitest pins both shapes.
-  ensureSpace(60);
   const notesHeading = parsed.notes ? "Instructions" : "Notes";
+  const notesBody = parsed.notes || "No clinical notes recorded.";
+  const notesH = measureCalloutHeight(doc, {
+    w: usableW,
+    heading: notesHeading,
+    body: notesBody,
+  });
+  ensureSpace(notesH + 12);
   drawCalloutBox(doc, {
     x: leftX, y: doc.y, w: usableW,
     heading: notesHeading,
-    body: parsed.notes || "No clinical notes recorded.",
+    body: notesBody,
     kind: "warning",
   });
   doc.moveDown(0.6);
@@ -1716,7 +1752,11 @@ async function renderPatientSummaryPdf({
       // Header (44pt) + meta row (28pt) + optional notes (16pt) + photos
       // (200pt when present — bigger thumbnails per the reference).
       const noteText = scrubZyluText(v.notes);
-      const baseH = 44 + 32 + (noteText ? 22 : 0);
+      doc.font("Helvetica").fontSize(9);
+      const noteH = noteText
+        ? doc.heightOfString(`Notes · ${noteText}`, { width: usableW - 32, lineGap: 0 })
+        : 0;
+      const baseH = 44 + 32 + (noteText ? noteH + 8 : 0);
       const photoH = hasPhotos ? 220 : 0;
       const cardH = baseH + photoH + 14;
       ensureSpace(cardH + 14);
@@ -1779,7 +1819,7 @@ async function renderPatientSummaryPdf({
         doc.font("Helvetica-Bold").fontSize(9).fillColor(BRAND.textMuted)
           .text("Notes · ", leftX + 16, cursorY, { continued: true })
           .font("Helvetica").fillColor(BRAND.textBody).text(noteText, { width: usableW - 64 });
-        cursorY = doc.y + 2;
+        cursorY += noteH + 2;
       }
 
       // Before / After photo strip — green dot bullets, large hero
@@ -1889,9 +1929,18 @@ async function renderPatientSummaryPdf({
       // Pre-estimate the Rx block height (header card + Rx mark + table +
       // 2 callouts). If it doesn't fit on the current page, force a new
       // page so the Rx block stays visually contiguous.
-      const calloutH = (parsed.advice ? 90 : 0) + 70;
+      const adviceH = parsed.advice
+        ? measureCalloutHeight(doc, { w: usableW, heading: "Instructions", body: parsed.advice })
+        : 0;
+      const notesHeadingPre = parsed.notes ? "Instructions" : "Notes";
+      const notesBodyPre = parsed.notes || "No clinical notes recorded.";
+      const notesH = measureCalloutHeight(doc, {
+        w: usableW,
+        heading: notesHeadingPre,
+        body: notesBodyPre,
+      });
       const rowsH = 24 + drugs.length * 44 + 14;
-      const blockH = 100 + 36 + rowsH + calloutH + 18;
+      const blockH = 100 + 36 + rowsH + adviceH + notesH + 30;
       if (i > 0) ensureSpace(blockH);
 
       // Rx card — header band with Rx #, date · appt #, PRESCRIBED BY
@@ -2005,7 +2054,14 @@ async function renderPatientSummaryPdf({
           // Row height — taller when there's a Form · Route subline, tight
           // when it's a single-line medication. Matches the reference's
           // natural row density (two-line rows ≈ 44pt, one-liners ≈ 32pt).
-          const rowH = subText ? 44 : 32;
+          const medW = cols[1].w - 16;
+      doc.font("Helvetica-Bold").fontSize(11);
+      const medH = doc.heightOfString(medName, { width: medW, lineGap: 0 });
+      const subH = subText
+        ? (doc.font("Helvetica").fontSize(8.5), doc.heightOfString(subText, { width: medW, lineGap: 0 }))
+        : 0;
+      const contentH = 8 + medH + (subText ? 4 + subH : 0) + 8;
+      const rowH = Math.max(subText ? 44 : 32, contentH);
 
           if (rowY + rowH > contentBottom) {
             doc.addPage();
@@ -2033,13 +2089,13 @@ async function renderPatientSummaryPdf({
             });
           // MEDICATION — bold name + optional Form · Route subline.
           doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
-            .text(medName, cols[1].x + 8, subText ? rowY + 8 : rowY + rowH / 2 - 7, {
-              width: cols[1].w - 16, ellipsis: true, lineBreak: false,
+            .text(medName, cols[1].x + 8, subText ? rowY + 8 : rowY + rowH / 2 - medH / 2, {
+              width: medW, ellipsis: true,
             });
           if (subText) {
             doc.font("Helvetica").fontSize(8.5).fillColor(BRAND.textMuted)
-              .text(subText, cols[1].x + 8, rowY + 24, {
-                width: cols[1].w - 16, ellipsis: true, lineBreak: false,
+              .text(subText, cols[1].x + 8, rowY + 8 + medH + 4, {
+                width: medW, ellipsis: true,
               });
           }
           // DOSAGE — regular weight, dark body.
@@ -5027,3 +5083,4 @@ module.exports = {
   fetchLogoBuffer,
   _resetLogoCache,
 };
+

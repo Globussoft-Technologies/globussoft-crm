@@ -85,6 +85,7 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { geocode } from "../../lib/geocoder";
 import PoiPicker from "../../components/PoiPicker";
+import TopScrollSync from "../../components/TopScrollSync";
 
 // Converts a free-text destination name to a URL-safe slug for PoiPicker.
 // e.g. "VIETNAM" → "vietnam", "Goa Beach" → "goa-beach"
@@ -1254,6 +1255,7 @@ export default function ItineraryEditor() {
                 <X size={16} />
               </button>
             </div>
+            <TopScrollSync>
             <table style={{ width: "100%", fontSize: "0.8rem", borderCollapse: "collapse" }}>
               <tbody>
                 {[
@@ -1272,6 +1274,7 @@ export default function ItineraryEditor() {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
           </div>
         </div>
       )}

@@ -29,6 +29,7 @@ import { AuthContext } from "../../App";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { useActiveSubBrand } from "../../utils/subBrand";
+import TopScrollSync from "../../components/TopScrollSync";
 
 export default function TravelDashboard() {
   const { user, tenant } = useContext(AuthContext) || {};
@@ -145,6 +146,7 @@ export default function TravelDashboard() {
             {data.recentTrips.length === 0 ? (
               <div style={empty}>No trips yet. Create one via <code>POST /api/travel/trips</code> or the Trips page.</div>
             ) : (
+              <TopScrollSync>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
@@ -171,6 +173,7 @@ export default function TravelDashboard() {
                   ))}
                 </tbody>
               </table>
+              </TopScrollSync>
             )}
           </section>
 
@@ -183,6 +186,7 @@ export default function TravelDashboard() {
               {workload.perUser.length === 0 && workload.unassigned.openTasks === 0 ? (
                 <div style={empty}>No open tasks across the team.</div>
               ) : (
+                <TopScrollSync>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
@@ -220,6 +224,7 @@ export default function TravelDashboard() {
                     )}
                   </tbody>
                 </table>
+                </TopScrollSync>
               )}
               <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 8, marginBottom: 0 }}>
                 {workload.totals.openTasks} open · {workload.totals.overdueTasks} overdue team-wide.

@@ -3,6 +3,7 @@ import { Key, Globe, Plus, Trash2, Copy, CheckCircle2, Activity, ShieldCheck, Sh
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
+import TopScrollSync from '../components/TopScrollSync';
 
 // #899 — Travel-vertical sub-brand options for API key scoping. Mirrors the
 // VALID_API_KEY_SUB_BRANDS list in backend/routes/developer.js.
@@ -196,6 +197,7 @@ export default function Developer() {
           </p>
         ) : (
           <div style={{ maxHeight: 320, overflowY: 'auto', fontSize: '0.85rem', fontFamily: 'monospace' }}>
+            <TopScrollSync>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead style={{ position: 'sticky', top: 0, background: 'var(--surface-color, #fff)' }}>
                 <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color, #e5e7eb)' }}>
@@ -239,6 +241,7 @@ export default function Developer() {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
           </div>
         )}
       </div>
@@ -444,6 +447,7 @@ export default function Developer() {
           </p>
         ) : (
           <div style={{ maxHeight: 320, overflowY: 'auto', fontSize: '0.85rem' }}>
+            <TopScrollSync>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead style={{ position: 'sticky', top: 0, background: 'var(--surface-color, #fff)' }}>
                 <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color, #e5e7eb)' }}>
@@ -497,6 +501,7 @@ export default function Developer() {
                 })}
               </tbody>
             </table>
+            </TopScrollSync>
           </div>
         )}
 

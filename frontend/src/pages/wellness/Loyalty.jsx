@@ -4,6 +4,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney, currencySymbol } from '../../utils/money';
 import { formatDate } from '../../utils/date';
+import TopScrollSync from '../../components/TopScrollSync';
 
 // #298: Indian phone numbers were rendering as the raw "+919826720222" 12-digit
 // stream. Group as +91 XXXXX XXXXX. Falls back to the original string for
@@ -314,6 +315,7 @@ function SearchTab({ onCreditChange }) {
               <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No transactions yet.</div>
             )}
             {loyalty.transactions.length > 0 && (
+              <TopScrollSync>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                 <thead>
                   <tr><th style={th}>Date</th><th style={th}>Type</th><th style={{ ...th, textAlign: 'right' }}>Pts</th><th style={th}>Reason</th></tr>
@@ -329,6 +331,7 @@ function SearchTab({ onCreditChange }) {
                   ))}
                 </tbody>
               </table>
+              </TopScrollSync>
             )}
           </>
         )}
@@ -431,7 +434,8 @@ function ReferralsTab({ referrals, onChanged }) {
         </form>
       )}
 
-      <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
           <thead>
             <tr>
@@ -481,6 +485,7 @@ function ReferralsTab({ referrals, onChanged }) {
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       </div>
     </div>
   );

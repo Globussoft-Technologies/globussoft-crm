@@ -3,6 +3,7 @@ import { Send, Plus, Trash2, Edit2, Play, X, ToggleLeft, ToggleRight, Filter, Lo
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import TopScrollSync from '../components/TopScrollSync';
 
 const ASSIGN_TYPES = [
   { value: 'round_robin', label: 'Round Robin (all users)' },
@@ -331,7 +332,7 @@ export default function LeadRouting() {
         </div>
       </header>
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="card" style={{ padding: 0, overflow: 'visible' }}>
         {loading ? (
           <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading rules...</div>
         ) : rules.length === 0 ? (
@@ -341,6 +342,7 @@ export default function LeadRouting() {
             <button onClick={openNew} className="btn-primary"><Plus size={16} /> Create First Rule</button>
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.03)', textAlign: 'left' }}>
@@ -381,6 +383,7 @@ export default function LeadRouting() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

@@ -3,6 +3,7 @@ import { fetchApi } from '../../../../utils/api';
 import { useNotify } from '../../../../utils/notify';
 import { formatDate } from '../../../../utils/date';
 import { formatMoney } from '../../../../utils/money';
+import TopScrollSync from '../../../../components/TopScrollSync';
 
 // ── Wallet tab — balance + recent transactions + redeem-giftcard ──
 // Wave 11 Agent FF. Read-only history; redeem flow lets staff paste a gift
@@ -82,6 +83,7 @@ export default function WalletTab({ patient }) {
       {transactions.length === 0 ? (
         <div style={{ color: 'var(--text-secondary)' }}>No transactions yet.</div>
       ) : (
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
@@ -104,6 +106,7 @@ export default function WalletTab({ patient }) {
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       )}
     </div>
   );

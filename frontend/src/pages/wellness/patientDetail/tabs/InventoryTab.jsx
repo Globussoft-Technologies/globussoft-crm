@@ -5,6 +5,7 @@ import { useNotify } from '../../../../utils/notify';
 import { formatDate } from '../../../../utils/date';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../../../components/wellness/DateRangeFilter';
 import { labelStyle, inputStyle } from '../shared/helpers';
+import TopScrollSync from '../../../../components/TopScrollSync';
 
 // ── Inventory consumption tab ─────────────────────────────────────
 export default function InventoryTab({ patient, onSaved: _onSaved }) {
@@ -129,7 +130,8 @@ export default function InventoryTab({ patient, onSaved: _onSaved }) {
         <>
           {loading && <div>Loading…</div>}
           {!loading && (
-            <div className="glass" style={{ padding: 0, marginBottom: '1rem', overflow: 'hidden' }}>
+            <div className="glass" style={{ padding: 0, marginBottom: '1rem', overflow: 'visible' }}>
+              <TopScrollSync>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
@@ -181,6 +183,7 @@ export default function InventoryTab({ patient, onSaved: _onSaved }) {
                   )}
                 </tbody>
               </table>
+              </TopScrollSync>
             </div>
           )}
 

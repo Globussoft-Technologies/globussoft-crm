@@ -46,6 +46,7 @@ import { useEffect, useMemo, useState, useContext } from "react";
 import { ShieldOff, Plus, Pencil, Trash2, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 import {
   SUB_BRAND_BG,
   accessibleSubBrands,
@@ -563,6 +564,7 @@ export default function CancellationPolicies() {
               days-before first) and picks the first tier whose threshold is
               ≤ the actual days-before-service-start.
             </div>
+            <TopScrollSync>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
@@ -620,6 +622,7 @@ export default function CancellationPolicies() {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
             <button
               type="button"
               onClick={addTierRow}
@@ -671,10 +674,11 @@ export default function CancellationPolicies() {
         </form>
       )}
 
-      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="glass" style={{ padding: 0, overflow: "visible" }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -822,6 +826,7 @@ export default function CancellationPolicies() {
               )}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </div>

@@ -41,6 +41,7 @@ import { useNavigate } from "react-router-dom";
 import { Inbox, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 
 // Channels mirror VALID_CHANNELS in backend/routes/travel_inbound_leads.js:61
 // (voyagr / webform / whatsapp / ads / adsgpt / metaads / manual). The
@@ -291,7 +292,7 @@ export default function InboundLeads() {
       </div>
 
       {/* Table */}
-      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="glass" style={{ padding: 0, overflow: "visible" }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : filtered.length === 0 ? (
@@ -299,6 +300,7 @@ export default function InboundLeads() {
             No inbound leads yet — external producers haven&apos;t started sending.
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -433,6 +435,7 @@ export default function InboundLeads() {
               })}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </div>

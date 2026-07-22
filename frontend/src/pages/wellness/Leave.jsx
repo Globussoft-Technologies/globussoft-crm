@@ -15,6 +15,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
+import TopScrollSync from '../../components/TopScrollSync';
 
 function fmtDate(s) {
   if (!s) return '—';
@@ -287,6 +288,7 @@ export default function Leave() {
         ) : visibleRequests.length === 0 ? (
           <div style={{ color: 'var(--text-secondary, #888)' }}>No requests in the selected range.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
@@ -344,6 +346,7 @@ export default function Leave() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </section>
     </div>

@@ -34,6 +34,7 @@ import {
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const STATUS_COLORS = {
   draft: { bg: "rgba(120,120,120,0.12)", color: "#5C6E82" },
@@ -310,12 +311,13 @@ export default function LeadDetail() {
             {(itineraries || []).length} {(itineraries || []).length === 1 ? "itinerary" : "itineraries"}
           </span>
         </div>
-        <div style={cardWrap}>
+        <div style={{ ...cardWrap, overflow: "visible" }}>
           {itinError ? (
             <div style={emptyError}>Itineraries unavailable: {itinError}</div>
           ) : !itineraries || itineraries.length === 0 ? (
             <div style={empty}>No itineraries linked to this contact yet.</div>
           ) : (
+            <TopScrollSync>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
@@ -344,6 +346,7 @@ export default function LeadDetail() {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
           )}
         </div>
       </section>
@@ -357,7 +360,8 @@ export default function LeadDetail() {
               {tripsToShow.length} {tripsToShow.length === 1 ? "trip" : "trips"}
             </span>
           </div>
-          <div style={cardWrap}>
+          <div style={{ ...cardWrap, overflow: "visible" }}>
+            <TopScrollSync>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
@@ -386,6 +390,7 @@ export default function LeadDetail() {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
           </div>
         </section>
       )}

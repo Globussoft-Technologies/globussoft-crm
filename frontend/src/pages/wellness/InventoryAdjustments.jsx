@@ -14,6 +14,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
 import PageHeader from '../../components/PageHeader';
+import TopScrollSync from '../../components/TopScrollSync';
 
 const REASONS = ['SHRINKAGE', 'DAMAGE', 'EXPIRY', 'RECOUNT', 'TRANSFER_OUT', 'TRANSFER_IN', 'MANUAL'];
 const EMPTY = { productId: '', quantityDelta: '', reason: 'RECOUNT', notes: '' };
@@ -141,6 +142,7 @@ export default function InventoryAdjustments() {
         ) : adjustments.length === 0 ? (
           <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>No adjustments recorded.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
@@ -165,6 +167,7 @@ export default function InventoryAdjustments() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </div>

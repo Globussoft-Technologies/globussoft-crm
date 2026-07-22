@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { CalendarDays, Trash2, Plus, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const KINDS = [
   { value: "holiday", label: "Holiday / break (trips OK)" },
@@ -131,12 +132,13 @@ export default function SchoolTermCalendar() {
       </form>
 
       {/* Table */}
-      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="glass" style={{ padding: 0, overflow: "visible" }}>
         {loading ? (
           <div style={empty}>Loading…</div>
         ) : rows.length === 0 ? (
           <div style={empty}>No term windows yet — add one above, or run the school-terms seed.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
               <th style={th}>School</th><th style={th}>Board</th><th style={th}>Type</th><th style={th}>Label</th><th style={th}>From</th><th style={th}>To</th><th style={th}></th>
@@ -159,6 +161,7 @@ export default function SchoolTermCalendar() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </div>

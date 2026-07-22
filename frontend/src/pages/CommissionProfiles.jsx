@@ -18,6 +18,7 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Pencil, Trash2, Award, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import TopScrollSync from '../components/TopScrollSync';
 
 const BASIS_OPTIONS = [
   { value: 'PER_SERVICE', label: 'Per service' },
@@ -198,7 +199,8 @@ export default function CommissionProfiles() {
 
       {/* Rules Tab */}
       {activeTab === 'rules' && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card" style={{ padding: 0, overflow: 'visible' }}>
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
@@ -246,12 +248,14 @@ export default function CommissionProfiles() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         </div>
       )}
 
       {/* Data Tab */}
       {activeTab === 'data' && (
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card" style={{ padding: 0, overflow: 'visible' }}>
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem', tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '20%' }} />
@@ -295,6 +299,7 @@ export default function CommissionProfiles() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         </div>
       )}
 

@@ -8,6 +8,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
 import PageHeader from '../../components/PageHeader';
+import TopScrollSync from '../../components/TopScrollSync';
 
 const UNIT_OPTIONS = ['ml', 'gm', 'kg', 'piece', 'unit', 'bottle', 'tube', 'pack', 'ltr'];
 const EMPTY = { serviceId: '', productId: '', quantityPerVisit: '', unit: '', isActive: true };
@@ -167,6 +168,7 @@ export default function AutoConsumptionRules() {
         ) : rules.length === 0 ? (
           <div style={{ padding: '1rem', color: 'var(--text-secondary)' }}>No rules configured. Add one to start auto-consumption on visits.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
@@ -198,6 +200,7 @@ export default function AutoConsumptionRules() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </div>

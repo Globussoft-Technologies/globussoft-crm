@@ -13,6 +13,7 @@ import { Link } from "react-router-dom";
 import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X, Trash2, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 
 // School is captured as free-text so the operator doesn't have to pre-create
 // a Contact row for every new school. The backend POST /api/travel/trips
@@ -209,7 +210,7 @@ export default function Trips() {
 
       <div style={{
         background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)", overflow: "hidden",
+        border: "1px solid var(--border-color)", overflow: "visible",
       }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
@@ -220,6 +221,7 @@ export default function Trips() {
         ) : visibleTrips.length === 0 ? (
           <div style={empty}>No trips match &ldquo;{search}&rdquo;.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -294,6 +296,7 @@ export default function Trips() {
               })}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

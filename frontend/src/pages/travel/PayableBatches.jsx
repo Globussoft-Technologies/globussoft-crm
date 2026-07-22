@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const STATUSES = [
   { value: "", label: "All statuses" },
@@ -148,6 +149,7 @@ export default function PayableBatches() {
           </div>
         )}
         {!loading && batches.length > 0 && (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -188,6 +190,7 @@ export default function PayableBatches() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </section>
 
@@ -232,6 +235,7 @@ export default function PayableBatches() {
             </button>
           </div>
           {selected.payables && selected.payables.length > 0 ? (
+            <TopScrollSync>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr>
@@ -254,6 +258,7 @@ export default function PayableBatches() {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
           ) : (
             <p style={{ color: "var(--text-secondary, #6b7280)" }}>No payables attached yet.</p>
           )}

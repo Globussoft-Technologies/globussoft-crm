@@ -6,6 +6,7 @@ import { Truck, Plus, Pencil, Trash2, Archive, ArchiveRestore, Search } from 'lu
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import PageHeader from '../../components/PageHeader';
+import TopScrollSync from '../../components/TopScrollSync';
 
 const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
 const EMPTY = { name: '', contactPerson: '', phone: '', email: '', gstin: '', addressLine: '', isActive: true };
@@ -202,6 +203,7 @@ export default function Vendors() {
                 : `No ${statusFilter} vendors.`}
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
@@ -241,6 +243,7 @@ export default function Vendors() {
               })}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </div>

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const TABS = [
   { key: "tmc", label: "TMC", icon: School },
@@ -277,6 +278,7 @@ function TmcTab({ dateParams }) {
           <QuoteFunnelCard quotes={data.quotes} />
 
           <Card title="Deal funnel">
+            <TopScrollSync>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr><th style={th}>Stage</th><th style={thRight}>Count</th><th style={thRight}>Amount</th></tr>
@@ -294,6 +296,7 @@ function TmcTab({ dateParams }) {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
           </Card>
 
           <Card title="Diagnostics by classification">
@@ -304,6 +307,7 @@ function TmcTab({ dateParams }) {
             {data.revenue.topDestinations.length === 0 ? (
               <div style={empty}>No revenue recorded yet.</div>
             ) : (
+              <TopScrollSync>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr><th style={th}>Destination</th><th style={thRight}>Revenue</th></tr>
@@ -317,6 +321,7 @@ function TmcTab({ dateParams }) {
                   ))}
                 </tbody>
               </table>
+              </TopScrollSync>
             )}
           </Card>
         </div>
@@ -352,6 +357,7 @@ function RfuTab({ dateParams }) {
           />
 
           <Card title="Itinerary revenue by status">
+            <TopScrollSync>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr><th style={th}>Status</th><th style={thRight}>Count</th><th style={thRight}>Revenue</th></tr>
@@ -369,11 +375,13 @@ function RfuTab({ dateParams }) {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
           </Card>
 
           <QuoteFunnelCard quotes={data.quotes} />
 
           <Card title="Deal funnel">
+            <TopScrollSync>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr><th style={th}>Stage</th><th style={thRight}>Count</th><th style={thRight}>Amount</th></tr>
@@ -391,6 +399,7 @@ function RfuTab({ dateParams }) {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
           </Card>
 
           <Card title="Diagnostics by classification" wide>
@@ -414,6 +423,7 @@ function CrossBrandTab({ dateParams }) {
           {Object.keys(data.subBrands).length === 0 ? (
             <div style={empty}>No deal activity across any sub-brand yet.</div>
           ) : (
+            <TopScrollSync>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr>
@@ -440,6 +450,7 @@ function CrossBrandTab({ dateParams }) {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
           )}
         </Card>
       )}
@@ -479,6 +490,7 @@ function QuoteFunnelCard({ quotes }) {
   const entries = Object.entries(byStatus);
   return (
     <Card title="Quote pipeline">
+      <TopScrollSync>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
         <thead>
           <tr><th style={th}>Status</th><th style={thRight}>Count</th><th style={thRight}>Amount</th></tr>
@@ -496,6 +508,7 @@ function QuoteFunnelCard({ quotes }) {
           ))}
         </tbody>
       </table>
+      </TopScrollSync>
     </Card>
   );
 }

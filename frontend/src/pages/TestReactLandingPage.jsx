@@ -14,6 +14,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import LandingPageReactRenderer from '../components/landing-page-renderers/LandingPageReactRenderer';
+import TopScrollSync from '../components/TopScrollSync';
 
 export default function TestReactLandingPage() {
   const [searchParams] = useSearchParams();
@@ -198,6 +199,7 @@ export default function TestReactLandingPage() {
           }}
         >
           <div style={{ fontWeight: '600', marginBottom: '12px' }}>Landing Page Info</div>
+          <TopScrollSync>
           <table
             style={{
               width: '100%',
@@ -238,6 +240,7 @@ export default function TestReactLandingPage() {
               </tr>
             </tbody>
           </table>
+          </TopScrollSync>
         </div>
       )}
     </div>

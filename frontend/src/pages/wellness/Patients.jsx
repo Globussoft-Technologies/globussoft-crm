@@ -22,6 +22,7 @@ import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 import { formatDate } from "../../utils/date";
 import CsvImportExportToolbar from "../../components/wellness/CsvImportExportToolbar";
 import PageHeader from "../../components/PageHeader";
+import TopScrollSync from "../../components/TopScrollSync";
 
 import PatientPager from "./patients/PatientPager";
 import TagPickerPopover from "./patients/TagPickerPopover";
@@ -685,6 +686,7 @@ export default function Patients() {
 
       {!loading && (
         <div className="glass" style={{ padding: 0, overflow: "visible" }}>
+          <TopScrollSync>
           <table className="stable-table" style={{ borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -798,6 +800,7 @@ export default function Patients() {
               )}
             </tbody>
           </table>
+          </TopScrollSync>
           <PatientPager
             total={total}
             page={page}

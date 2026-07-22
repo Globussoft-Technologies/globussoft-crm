@@ -6,6 +6,7 @@ import { formatMoney } from '../../utils/money';
 import { formatPercent } from '../../utils/percent';
 import Avatar from '../../components/Avatar';
 import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
+import TopScrollSync from '../../components/TopScrollSync';
 
 const TABS = [
   { key: 'pnl', label: 'P&L by Service', icon: BarChart3 },
@@ -225,7 +226,8 @@ function PnlTable({ data, onNavigate }) {
         { label: 'Contribution', value: formatMoney(totals.contribution || 0) },
         { label: 'Services', value: (servicesCount || 0).toLocaleString('en-IN') },
       ]} onVisitsClick={() => onNavigate && onNavigate('/wellness/visits')} />
-      <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
+        <TopScrollSync>
         <table style={tableStyle}>
           <colgroup>
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
@@ -252,6 +254,7 @@ function PnlTable({ data, onNavigate }) {
             {rows.length === 0 && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No services with revenue in this window.</td></tr>}
           </tbody>
         </table>
+        </TopScrollSync>
       </div>
     </>
   );
@@ -269,7 +272,8 @@ function ProTable({ data }) {
         { label: 'Visits', value: (totals.visits || 0).toLocaleString('en-IN') },
         { label: 'Revenue', value: formatMoney(totals.revenue || 0) },
       ]} />
-      <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
+        <TopScrollSync>
         <table style={tableStyle}>
           <colgroup>
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
@@ -297,6 +301,7 @@ function ProTable({ data }) {
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       </div>
     </>
   );
@@ -338,7 +343,8 @@ function LocTable({ data }) {
         { label: 'Visits', value: (totals.visits || 0).toLocaleString('en-IN') },
         { label: 'Revenue', value: formatMoney(totals.revenue || 0) },
       ]} />
-      <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
+        <TopScrollSync>
         <table style={tableStyle}>
           <colgroup>
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
@@ -357,6 +363,7 @@ function LocTable({ data }) {
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       </div>
     </>
   );
@@ -380,7 +387,8 @@ function AttTable({ data }) {
         { label: 'Qualified', value: (totals.qualified || 0).toLocaleString('en-IN') },
         { label: 'Revenue', value: formatMoney(totals.revenue || 0) },
       ]} />
-      <div className="glass" style={{ padding: 0, overflow: 'hidden' }}>
+      <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
+        <TopScrollSync>
         <table style={tableStyle}>
           <colgroup>
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
@@ -400,6 +408,7 @@ function AttTable({ data }) {
             {rows.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No leads in this window.</td></tr>}
           </tbody>
         </table>
+        </TopScrollSync>
       </div>
     </>
   );

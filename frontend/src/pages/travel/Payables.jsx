@@ -54,6 +54,7 @@ import { formatMoney } from "../../utils/money";
 import { useActiveSubBrand } from "../../utils/subBrand";
 // Branding Wave 4 G102: per-sub-brand brand-kit lookup for active-chip tint.
 import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const STATUS_CHIPS = [
   { value: "", label: "All" },
@@ -347,12 +348,13 @@ export default function Payables() {
       </div>
 
       {/* Table */}
-      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="glass" style={{ padding: 0, overflow: "visible" }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : filtered.length === 0 ? (
           <div style={empty}>No payables found</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -419,6 +421,7 @@ export default function Payables() {
               })}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

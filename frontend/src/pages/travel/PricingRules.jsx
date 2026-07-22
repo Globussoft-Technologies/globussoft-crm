@@ -35,6 +35,7 @@ import {
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import {
   accessibleSubBrands,
@@ -357,6 +358,7 @@ function SeasonsSection() {
         ) : seasons.length === 0 ? (
           <div style={empty}>No seasons yet. Add one above.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -388,6 +390,7 @@ function SeasonsSection() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </section>
@@ -677,6 +680,7 @@ function MarkupRulesSection() {
         ) : rules.length === 0 ? (
           <div style={empty}>No markup rules yet. Add one above.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -716,6 +720,7 @@ function MarkupRulesSection() {
               ))}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </section>
@@ -751,7 +756,7 @@ const formBox = {
 };
 const tableWrap = {
   background: "var(--surface-color)", borderRadius: 8,
-  border: "1px solid var(--border-color)", overflow: "hidden",
+  border: "1px solid var(--border-color)", overflow: "visible",
 };
 const selectStyle = {
   padding: "6px 10px", borderRadius: 6,

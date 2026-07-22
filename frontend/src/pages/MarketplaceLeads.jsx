@@ -4,6 +4,7 @@ import { formatPercent } from '../utils/percent';
 import React, { useState, useEffect } from 'react';
 import { ShoppingBag, Search, Download, RefreshCw, Settings, CheckCircle2, XCircle, AlertCircle, ExternalLink, Filter } from 'lucide-react';
 import PasswordInput from '../components/PasswordInput';
+import TopScrollSync from '../components/TopScrollSync';
 
 const PROVIDERS = [
   { key: 'all', label: 'All Sources' },
@@ -580,7 +581,8 @@ const MarketplaceLeads = () => {
           );
         })()
       ) : (
-        <div className="card" style={{ overflow: 'hidden' }}>
+        <div className="card" style={{ overflow: 'visible' }}>
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
@@ -665,6 +667,7 @@ const MarketplaceLeads = () => {
               })}
             </tbody>
           </table>
+          </TopScrollSync>
 
           {/* Pagination */}
           {totalPages > 1 && (

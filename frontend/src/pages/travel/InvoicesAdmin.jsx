@@ -54,6 +54,7 @@ import { useActiveSubBrand } from "../../utils/subBrand";
 // Branding Wave 4 G102: per-sub-brand brand-kit lookup for primary CTA tint.
 import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 import { AuthContext } from "../../App";
+import TopScrollSync from "../../components/TopScrollSync";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -997,11 +998,12 @@ export default function InvoicesAdmin() {
 
       <div
         className="glass"
-        style={{ padding: 0, overflow: "hidden" }}
+        style={{ padding: 0, overflow: "visible" }}
       >
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -1222,6 +1224,7 @@ export default function InvoicesAdmin() {
               )}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 
@@ -1381,6 +1384,7 @@ export default function InvoicesAdmin() {
                 {(!historyData.milestones || historyData.milestones.length === 0) ? (
                   <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>No milestones on this invoice.</div>
                 ) : (
+                  <TopScrollSync>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr>
@@ -1405,6 +1409,7 @@ export default function InvoicesAdmin() {
                       ))}
                     </tbody>
                   </table>
+                  </TopScrollSync>
                 )}
 
                 {/* Payments / transactions */}
@@ -1412,6 +1417,7 @@ export default function InvoicesAdmin() {
                 {(!historyData.payments || historyData.payments.length === 0) ? (
                   <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>No payments recorded yet.</div>
                 ) : (
+                  <TopScrollSync>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr>
@@ -1434,6 +1440,7 @@ export default function InvoicesAdmin() {
                       ))}
                     </tbody>
                   </table>
+                  </TopScrollSync>
                 )}
               </>
             )}

@@ -1,5 +1,6 @@
 import { Plus, X, Package } from 'lucide-react';
 import { inputStyle } from './utils';
+import TopScrollSync from '../../../components/TopScrollSync';
 
 export function EntitlementEditor({ entitlements, services, onAdd, onRemove, onUpdate }) {
   return (
@@ -15,6 +16,7 @@ export function EntitlementEditor({ entitlements, services, onAdd, onRemove, onU
       {entitlements.length === 0 ? (
         <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>Add at least one service + quantity (e.g. Facial × 10).</p>
       ) : (
+        <TopScrollSync>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
@@ -43,6 +45,7 @@ export function EntitlementEditor({ entitlements, services, onAdd, onRemove, onU
             ))}
           </tbody>
         </table>
+        </TopScrollSync>
       )}
     </div>
   );

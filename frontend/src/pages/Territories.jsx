@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Network, Plus, Trash2, Edit2, X, MapPin, Users, Eye, ArrowLeft } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import TopScrollSync from '../components/TopScrollSync';
 
 export default function Territories() {
   const notify = useNotify();
@@ -166,7 +167,7 @@ export default function Territories() {
           </div>
         </div>
 
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="card" style={{ padding: 0, overflow: 'visible' }}>
           <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
             <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0 }}>Contacts in this Territory ({viewContacts.length})</h3>
           </div>
@@ -175,6 +176,7 @@ export default function Territories() {
           ) : viewContacts.length === 0 ? (
             <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No contacts assigned to this territory yet.</div>
           ) : (
+            <TopScrollSync>
             <table className="stable-table" style={{ borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: 'rgba(255,255,255,0.03)', textAlign: 'left' }}>
@@ -197,6 +199,7 @@ export default function Territories() {
                 ))}
               </tbody>
             </table>
+            </TopScrollSync>
           )}
         </div>
 

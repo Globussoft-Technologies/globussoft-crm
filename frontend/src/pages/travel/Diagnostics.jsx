@@ -19,6 +19,7 @@ import { ClipboardCheck, Plus, Compass, Filter } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
+import TopScrollSync from '../../components/TopScrollSync';
 
 const SUB_BRANDS = [
   { value: '', label: 'All sub-brands' },
@@ -132,7 +133,7 @@ export default function Diagnostics() {
       {/* Table */}
       <div style={{
         background: 'var(--surface-color)', borderRadius: 8,
-        border: '1px solid var(--border-color)', overflow: 'hidden',
+        border: '1px solid var(--border-color)', overflow: 'visible',
       }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
@@ -143,6 +144,7 @@ export default function Diagnostics() {
               : <>No diagnostics submitted yet. Click <strong>Take diagnostic</strong> to start.</>}
           </div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
@@ -198,6 +200,7 @@ export default function Diagnostics() {
               })}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
     </div>

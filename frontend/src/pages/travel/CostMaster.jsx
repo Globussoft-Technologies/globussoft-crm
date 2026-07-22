@@ -7,6 +7,7 @@ import {
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import {
   accessibleSubBrands, defaultSubBrandFor,
@@ -455,12 +456,13 @@ export default function CostMaster() {
       )}
 
       {/* Table */}
-      <div style={{ background: "var(--surface-color)", borderRadius: 12, border: "1px solid var(--border-color)", overflow: "hidden" }}>
+      <div style={{ background: "var(--surface-color)", borderRadius: 12, border: "1px solid var(--border-color)", overflow: "visible" }}>
         {loading ? (
           <div style={emptyStyle}>Loading&hellip;</div>
         ) : rates.length === 0 ? (
           <div style={emptyStyle}>No rates yet. Add one using the &ldquo;+ Add rate&rdquo; button above.</div>
         ) : (
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -520,6 +522,7 @@ export default function CostMaster() {
               )}
             </tbody>
           </table>
+          </TopScrollSync>
         )}
       </div>
 

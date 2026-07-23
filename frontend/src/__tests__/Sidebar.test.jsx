@@ -35,7 +35,7 @@
  *     standing rule on RTL hook mocks).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import { AuthContext } from '../App';
@@ -298,6 +298,59 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Attendance')).toBeTruthy();
       expect(screen.getByText('Unified Inbox')).toBeTruthy();
       expect(screen.getByText('Point of Sale')).toBeTruthy();
+    });
+
+    it('shows wellness submodules only while their module is hovered', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        accessiblePages: [
+          { category: 'Clinical', path: '/wellness/calendar', label: 'Calendar' },
+          { category: 'Clinical', path: '/wellness/patients', label: 'Patients' },
+        ],
+      });
+
+      const clinicalModule = await screen.findByRole('button', { name: 'Clinical' });
+      const moduleGroup = clinicalModule.parentElement;
+      const calendarLink = screen.getByText('Calendar').closest('a');
+      const submodulePanel = calendarLink.parentElement;
+
+      expect(clinicalModule.getAttribute('aria-expanded')).toBe('false');
+      expect(submodulePanel.style.display).toBe('none');
+
+      fireEvent.mouseEnter(moduleGroup);
+      expect(clinicalModule.getAttribute('aria-expanded')).toBe('true');
+      expect(submodulePanel.style.display).toBe('flex');
+
+      fireEvent.mouseLeave(moduleGroup);
+      await waitFor(() => {
+        expect(clinicalModule.getAttribute('aria-expanded')).toBe('false');
+        expect(submodulePanel.style.display).toBe('none');
+      });
+    });
+
+    it('closes the previous wellness flyout when another module opens', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        accessiblePages: [
+          { category: 'Clinical', path: '/wellness/calendar', label: 'Calendar' },
+          { category: 'Catalog', path: '/wellness/services', label: 'Service Catalog' },
+        ],
+      });
+
+      const clinicalModule = await screen.findByRole('button', { name: 'Clinical' });
+      const catalogModule = screen.getByRole('button', { name: 'Catalog' });
+      const clinicalPanel = screen.getByText('Calendar').closest('a').parentElement;
+      const catalogPanel = screen.getByText('Service Catalog').closest('a').parentElement;
+
+      fireEvent.mouseEnter(clinicalModule.parentElement);
+      expect(clinicalPanel.style.display).toBe('flex');
+      expect(catalogPanel.style.display).toBe('none');
+
+      fireEvent.mouseEnter(catalogModule.parentElement);
+      expect(clinicalPanel.style.display).toBe('none');
+      expect(catalogPanel.style.display).toBe('flex');
     });
 
     it('renders the wellness invoice entry in Finance when /wellness/invoices is accessible', async () => {

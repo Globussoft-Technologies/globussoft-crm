@@ -11,6 +11,7 @@ import {
   useMemo,
 } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { createPortal } from "react-dom";
 import { io } from "socket.io-client";
 import {
   Users,
@@ -211,6 +212,7 @@ const Sidebar = ({
   } = usePermissions();
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
+  const [openWellnessGroup, setOpenWellnessGroup] = useState(null);
   const location = useLocation();
 
   // T2.1: ref to the <aside> so the focus-trap effect below can locate
@@ -1020,6 +1022,9 @@ const Sidebar = ({
                 hasPermission,
                 permissionsReady,
                 sectionLabelStyle,
+                isMobileViewport,
+                openWellnessGroup,
+                onOpenWellnessGroup: setOpenWellnessGroup,
                 counts,
                 accessiblePages,
               })
@@ -1191,6 +1196,223 @@ const WELLNESS_CATEGORY_ORDER = [
 // section header.
 const WELLNESS_HEADERLESS_CATEGORIES = new Set(["Core", "Manager"]);
 
+const WELLNESS_CATEGORY_ICON = {
+  Clinical: HeartPulse,
+  Catalog: Layers,
+  Scheduling: Calendar,
+  Staff: UsersRound,
+  "Leads & Revenue": Target,
+  Finance: IndianRupee,
+  Marketing: Megaphone,
+  Reports: BarChart3,
+  Appointments: Calendar,
+  Products: Package,
+  "Inventory Admin": ClipboardList,
+  User: UserCircle,
+  Admin: Shield,
+};
+
+function WellnessNavGroup({
+  label,
+  paths = [],
+  children,
+  moduleColor,
+  isMobileViewport = false,
+  activeGroup = null,
+  onActivate = () => {},
+}) {
+  const isOpen = activeGroup === label;
+  const [isPinned, setIsPinned] = useState(false);
+  const [panelPosition, setPanelPosition] = useState({ top: 12 });
+  const groupLocation = useLocation();
+  const triggerRef = useRef(null);
+  const panelRef = useRef(null);
+  const closeTimerRef = useRef(null);
+  const triggerHoverRef = useRef(false);
+  const panelHoverRef = useRef(false);
+  const pinnedRef = useRef(false);
+  const Icon = WELLNESS_CATEGORY_ICON[label] || LayoutDashboard;
+  const panelId = `wellness-nav-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  const isActive = paths.some(
+    (path) =>
+      groupLocation.pathname === path ||
+      groupLocation.pathname.startsWith(`${path}/`),
+  );
+
+  const updatePanelPosition = useCallback(() => {
+    if (isMobileViewport) {
+      setPanelPosition({ top: 72 });
+      return;
+    }
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    setPanelPosition({
+      top: Math.max(12, Math.min(rect.top, window.innerHeight - 232)),
+    });
+  }, [isMobileViewport]);
+
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const deactivatePanel = useCallback(() => {
+    onActivate((current) => (current === label ? null : current));
+  }, [label, onActivate]);
+
+  const openPanel = useCallback(() => {
+    clearCloseTimer();
+    updatePanelPosition();
+    onActivate(label);
+  }, [clearCloseTimer, label, onActivate, updatePanelPosition]);
+
+  const scheduleClose = useCallback(() => {
+    clearCloseTimer();
+    closeTimerRef.current = setTimeout(() => {
+      if (!triggerHoverRef.current && !panelHoverRef.current && !pinnedRef.current) {
+        deactivatePanel();
+      }
+    }, 120);
+  }, [clearCloseTimer, deactivatePanel]);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    updatePanelPosition();
+    const nav = document.querySelector("#app-sidebar > nav");
+    nav?.addEventListener("scroll", updatePanelPosition);
+    window.addEventListener("resize", updatePanelPosition);
+    return () => {
+      nav?.removeEventListener("scroll", updatePanelPosition);
+      window.removeEventListener("resize", updatePanelPosition);
+    };
+  }, [isOpen, updatePanelPosition]);
+
+  useEffect(() => {
+    if (activeGroup !== label) {
+      pinnedRef.current = false;
+      setIsPinned(false);
+    }
+  }, [activeGroup, label]);
+
+  useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
+
+  const setPinned = (next) => {
+    pinnedRef.current = next;
+    setIsPinned(next);
+  };
+
+  const panel = (
+    <div
+      ref={panelRef}
+      id={panelId}
+      role="menu"
+      aria-label={`${label} submodules`}
+      onMouseEnter={() => {
+        panelHoverRef.current = true;
+        openPanel();
+      }}
+      onMouseLeave={() => {
+        panelHoverRef.current = false;
+        scheduleClose();
+      }}
+      onFocusCapture={openPanel}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) scheduleClose();
+      }}
+      onClick={() => {
+        setPinned(false);
+        deactivatePanel();
+      }}
+      style={{
+        position: "fixed",
+        top: panelPosition.top,
+        left: isMobileViewport ? 12 : 254,
+        width: isMobileViewport ? "calc(100vw - 24px)" : 252,
+        maxWidth: "calc(100vw - 24px)",
+        maxHeight: isMobileViewport ? "min(220px, calc(100vh - 96px))" : 220,
+        overflowY: "auto",
+        display: isOpen ? "flex" : "none",
+        flexDirection: "column",
+        gap: "0.25rem",
+        padding: "0.625rem",
+        borderRadius: 12,
+        border: "1px solid var(--border-color)",
+        background: "var(--surface-color, #16181d)",
+        boxShadow: "0 14px 34px rgba(0, 0, 0, 0.28)",
+        zIndex: 1200,
+      }}
+    >
+      {children}
+    </div>
+  );
+
+  return (
+    <>
+      <div
+        ref={triggerRef}
+        onMouseEnter={() => {
+          triggerHoverRef.current = true;
+          openPanel();
+        }}
+        onMouseLeave={() => {
+          triggerHoverRef.current = false;
+          scheduleClose();
+        }}
+        onFocusCapture={openPanel}
+        onBlurCapture={(event) => {
+          if (
+            !event.currentTarget.contains(event.relatedTarget) &&
+            !panelRef.current?.contains(event.relatedTarget)
+          ) {
+            scheduleClose();
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            setPinned(false);
+            deactivatePanel();
+            event.currentTarget.querySelector("button")?.focus();
+          }
+        }}
+        style={{ display: "flex" }}
+      >
+        <button
+          type="button"
+          className={`nav-link ${isActive ? "active" : ""}`}
+          aria-expanded={isOpen}
+          aria-controls={panelId}
+          onClick={() => {
+            if (isPinned) {
+              setPinned(false);
+              deactivatePanel();
+            } else {
+              setPinned(true);
+              openPanel();
+            }
+          }}
+          style={{
+            ...navStyle,
+            width: "100%",
+            border: "none",
+            background: "transparent",
+            cursor: "pointer",
+            fontFamily: "inherit",
+            textAlign: "left",
+            color: moduleColor || navStyle.color,
+          }}
+        >
+          <Icon size={20} />
+          <span style={{ flex: 1 }}>{label}</span>
+        </button>
+      </div>
+      {typeof document !== "undefined" ? createPortal(panel, document.body) : null}
+    </>
+  );
+}
+
 // Count-badge mapping. Path → key on the `counts` state object. Live counters
 // come from /api/{contacts|tasks|tickets|email} polling + socket events and
 // are rendered as a pill on the right side of the matching nav entry.
@@ -1217,6 +1439,9 @@ function renderWellnessNav({
   hasPermission = () => false,
   permissionsReady = false,
   sectionLabelStyle,
+  isMobileViewport = false,
+  openWellnessGroup = null,
+  onOpenWellnessGroup = () => {},
   counts = {},
   accessiblePages = [],
 }) {
@@ -1271,11 +1496,21 @@ function renderWellnessNav({
   const renderCategory = (category, { showHeader } = { showHeader: true }) => {
     const items = byCategory[category];
     if (!items || items.length === 0) return null;
+    if (!showHeader) {
+      return <Fragment key={category}>{items.map(renderPage)}</Fragment>;
+    }
     return (
-      <Fragment key={category}>
-        {showHeader && <div style={labelStyle}>{category}</div>}
+      <WellnessNavGroup
+        key={category}
+        label={category}
+        paths={items.map((page) => page.path)}
+        moduleColor={labelStyle.color}
+        isMobileViewport={isMobileViewport}
+        activeGroup={openWellnessGroup}
+        onActivate={onOpenWellnessGroup}
+      >
         {items.map(renderPage)}
-      </Fragment>
+      </WellnessNavGroup>
     );
   };
 
@@ -1295,11 +1530,18 @@ function renderWellnessNav({
       extras !== null && extras !== undefined && extras !== false;
     if (!hasItems && !hasExtras) return null;
     return (
-      <Fragment key={category}>
-        <div style={labelStyle}>{category}</div>
+      <WellnessNavGroup
+        key={category}
+        label={category}
+        paths={items.map((page) => page.path)}
+        moduleColor={labelStyle.color}
+        isMobileViewport={isMobileViewport}
+        activeGroup={openWellnessGroup}
+        onActivate={onOpenWellnessGroup}
+      >
         {items.map(renderPage)}
         {extras}
-      </Fragment>
+      </WellnessNavGroup>
     );
   };
 
@@ -1397,22 +1639,25 @@ function renderWellnessNav({
           return null;
         }
         return (
-          <>
-            <div style={labelStyle}>Admin</div>
+          <WellnessNavGroup
+            label="Admin"
+            paths={adminCatalogItems.map((page) => page.path)}
+            moduleColor={labelStyle.color}
+            isMobileViewport={isMobileViewport}
+            activeGroup={openWellnessGroup}
+            onActivate={onOpenWellnessGroup}
+          >
             {otherAdminItems.map(renderPage)}
             {/* Settings — pinned LAST in the sidebar per UX requirement.
                 Only renders if /api/pages/me granted access (i.e. the
                 user has settings.read on at least one assigned role). */}
             {settingsPage && renderPage(settingsPage)}
-          </>
+          </WellnessNavGroup>
         );
       })()}
 
       {!isAdmin && isManager && (
-        <>
-          <div style={labelStyle}>Settings</div>
-          <Link to="/settings" icon={Settings} label="Settings" />
-        </>
+        <Link to="/settings" icon={Settings} label="Settings" />
       )}
 
       {/* Notification Settings is rendered via the page-catalog "User"

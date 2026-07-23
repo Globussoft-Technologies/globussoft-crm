@@ -1,4 +1,4 @@
-import { lazy } from "react";
+import { lazy, Suspense } from "react";
 import { Link } from "react-router-dom";
 import {
   Users,
@@ -226,7 +226,13 @@ export default function Landing() {
             >
               Login
             </Link>
-            <GitHubCatIcon C={C} />
+            <Suspense
+              fallback={
+                <span style={{ width: 44, height: 44 }} aria-hidden="true" />
+              }
+            >
+              <GitHubCatIcon C={C} />
+            </Suspense>
             <Link
               to="/get-started"
               style={{

@@ -176,11 +176,26 @@ jobs:
         # package. cron/backupEngine.js shells `mysqldump` from PATH;
         # without this step the G-15 spec would skip its file-creation
         # tests with a "mysqldump unreachable" warning. Adds ~5s install.
+        # Wrapped with timeout+retry because apt mirrors occasionally hang
+        # and the default 20m job timeout wastes the whole api_tests gate.
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends mysql-client
-          mysqldump --version
+          export DEBIAN_FRONTEND=noninteractive
+          for attempt in 1 2 3; do
+            echo "::notice::apt-get update attempt $attempt"
+            if timeout 90 sudo apt-get update -qq; then
+              echo "::notice::apt-get install mysql-client attempt $attempt"
+              if timeout 180 sudo apt-get install -y --no-install-recommends mysql-client; then
+                mysqldump --version
+                echo "::notice::mysql-client installed successfully on attempt $attempt"
+                exit 0
+              fi
+            fi
+            echo "::warning::mysql-client install attempt $attempt failed; waiting 5s before retry"
+            sleep 5
+          done
+          echo "::error::Failed to install mysql-client after 3 attempts"
+          exit 1
 
       - name: Wait for MySQL ready
         run: |

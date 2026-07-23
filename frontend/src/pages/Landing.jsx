@@ -17,6 +17,8 @@ import {
 const GitHubCatIcon = lazy(() => import("../components/GitHubCatIcon"));
 
 // Light theme palette
+const OPEN_SOURCE_URL = "https://github.com/Globussoft-Technologies/globussoft-crm.git"
+
 const C = {
   bg: "#ffffff",
   bg2: "#f8fafc",
@@ -704,6 +706,24 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* Open source */}
+      <section style={{ padding: "72px 0", background: C.bg2 }}>
+        <div style={{ maxWidth: 900, margin: "0 auto", padding: "0 24px", textAlign: "center" }}>
+          <div style={{ display: "inline-block", padding: "6px 14px", borderRadius: 50, background: C.accentLight, border: "1px solid #e2e8f0", color: C.accent, fontSize: "0.75rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 16 }}>
+            Open source CRM
+          </div>
+          <h2 style={{ fontSize: "clamp(1.7rem, 3vw, 2.4rem)", fontWeight: 800, marginBottom: 14, color: C.text }}>
+            Built openly with the community
+          </h2>
+          <p style={{ color: C.text2, fontSize: "1.05rem", lineHeight: 1.7, maxWidth: 680, margin: "0 auto 24px" }}>
+            Explore the Globus CRM source code, follow the project, and help shape the future of an enterprise-grade CRM.
+          </p>
+          <a href={OPEN_SOURCE_URL} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "12px 22px", borderRadius: 10, border: "1px solid #e2e8f0", background: C.card, color: C.text, textDecoration: "none", fontWeight: 600 }}>
+            View the source on GitHub <ArrowRight size={16} />
+          </a>
+        </div>
+      </section>
+
       {/* Trust / Tech */}
       <section style={{ padding: "80px 0", background: C.bg2 }}>
         <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 24px" }}>
@@ -934,6 +954,9 @@ export default function Landing() {
               >
                 Pricing
               </Link>
+              <a href={OPEN_SOURCE_URL} target="_blank" rel="noopener noreferrer" style={{ display: "block", fontSize: "0.88rem", color: C.text2, marginBottom: 10, textDecoration: "none" }}>
+                Open Source on GitHub
+              </a>
             </div>
             <div>
               <h4

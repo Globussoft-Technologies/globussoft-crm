@@ -1,5 +1,5 @@
-﻿/**
- * Wellness vertical routes â€” clinical CRM modules.
+/**
+ * Wellness vertical routes — clinical CRM modules.
  *
  * All endpoints below are tenant-scoped and require auth (mounted under the
  * global auth guard in server.js).
@@ -32,21 +32,21 @@ const {
   renderConsentPdf,
   renderBrandedInvoicePdf,
   renderPatientSummaryPdf,
-  // â‚¹-glyph fix for the route-level landscape report PDF below.
+  // ₹-glyph fix for the route-level landscape report PDF below.
   applyRupeeCapableFonts,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
-// #920 slice S42 â€” wellness PHI list-endpoint slim projections.
+// #920 slice S42 — wellness PHI list-endpoint slim projections.
 // `?fields=summary` opts into a SQL-level slim shape that drops every PHI
 // column from Patient / Visit / Prescription list responses; default shape
-// stays full row (back-compat). The PRD Â§11 PHI-read audit row is still
+// stays full row (back-compat). The PRD §11 PHI-read audit row is still
 // written on both paths, but the PII_DISCLOSED row is SKIPPED on the slim
-// path because no PHI columns are in the response â€” the operator never
+// path because no PHI columns are in the response — the operator never
 // SAW PHI, so no disclosure event happened.
 const listProjection = require("../lib/listProjection");
 const { isFullShape } = listProjection;
 const { verifyToken } = require("../middleware/auth");
-// Patient-portal notification inbox (additive â€” patient-scoped, separate from
+// Patient-portal notification inbox (additive — patient-scoped, separate from
 // the staff Notification table). Backs /portal/me/notifications* below.
 const {
   listPatientNotifications,
@@ -70,14 +70,14 @@ const {
 // `IST_OFFSET_MS` shortcut + naive `new Date(req.body.visitDate)` constructions
 // in this file pre-date the helper at backend/lib/datetime.js (commit 663bd7c).
 // They worked correctly only when both server clock and clinic operated in IST
-// â€” for the wellness vertical that's a product-anchored guarantee (India-based
+// — for the wellness vertical that's a product-anchored guarantee (India-based
 // clinics, cron schedules pinned to 07:00 IST), so we keep the TZ literally
 // pinned to Asia/Kolkata here rather than reading from tenant.locale. The
 // migration is a clarity + DST-safety win, not a tenant-multi-TZ enabler.
 const { parseDateTimeLocalInTZ, formatInTenantTZ } = require("../lib/datetime");
 // Wave 11 Agent GG: 4-class booking-conflict gate.
 const { assertVisitSlotAvailable } = require("../lib/bookingAvailability");
-// Centralized appointment service â€” book / cancel / reschedule business
+// Centralized appointment service — book / cancel / reschedule business
 // rules. Both the legacy /appointments/* routes (CUSTOMER session) and
 // the new /portal/appointments/* routes (verifyPatientToken accepts both
 // CUSTOMER + phone+OTP) converge on this service so business logic
@@ -90,12 +90,12 @@ const appointmentService = require("../services/appointmentService");
 // the second axis: allow lists like ["doctor","admin"] gate clinical writes,
 // ["admin","manager"] gates org-wide reports + catalog edits.
 const { verifyWellnessRole } = require("../middleware/wellnessRole");
-// #539: standard role-gate (orthogonal to verifyWellnessRole â€” checks the
+// #539: standard role-gate (orthogonal to verifyWellnessRole — checks the
 // generic role enum ADMIN/MANAGER/USER from the JWT, not the wellnessRole
 // axis). Used by DELETE /patients/:id and other admin-only operations
 // added to this file.
 const { verifyRole } = require("../middleware/auth");
-// RBAC permission gate for the staff-authed "My Prescriptions" page â€”
+// RBAC permission gate for the staff-authed "My Prescriptions" page —
 // see GET /api/wellness/my-prescriptions below. Lets any role granted
 // `my_prescriptions.read` view their OWN linked Patient's Rx without
 // needing the tenant-wide `prescriptions.read`.
@@ -103,7 +103,7 @@ const {
   requirePermission,
   userHasPermission,
 } = require("../middleware/requirePermission");
-// #920 slice S59 â€” canonical PHI-read gate factory. The original inline
+// #920 slice S59 — canonical PHI-read gate factory. The original inline
 // declaration of `phiReadGate` (which lived just below the `phiReadGate`
 // JSDoc block ~line 365) has been replaced with this factory call so the
 // gate's policy is defined ONCE in middleware/phiReadGate.js and reused by
@@ -119,7 +119,7 @@ const {
   extractKeyFromUrl,
   BUCKET_NAME: S3_BUCKET_NAME,
 } = require("../services/s3Service");
-// Plan #PAT-EXPORT â€” XLSX writer for patients export + import template.
+// Plan #PAT-EXPORT — XLSX writer for patients export + import template.
 // Lazy-loaded at handler time so the require can't crash boot if the
 // install somehow ships without xlsx (it's in package.json so this is
 // belt-and-braces).
@@ -135,15 +135,15 @@ function loadXlsx() {
 // can't forge staff tokens; fall back to JWT_SECRET when unset for transition.
 const { PORTAL_JWT_SECRET, JWT_SECRET } = require("../config/secrets");
 
-// Patient-portal inline JWT middleware â€” used by /portal/* endpoints.
+// Patient-portal inline JWT middleware — used by /portal/* endpoints.
 // Portal endpoints bypass the global user-JWT guard (see server.js openPaths)
 // so we must verify the token here.
 //
 // Accepts TWO token shapes:
 //   A. patient-portal token (phone+OTP flow): { patientId } signed with
-//      PORTAL_JWT_SECRET â€” used by the public /book + /portal pages.
+//      PORTAL_JWT_SECRET — used by the public /book + /portal pages.
 //   B. regular CUSTOMER session token: { userType: 'CUSTOMER', userId,
-//      tenantId } signed with JWT_SECRET â€” used by Customer-role users who
+//      tenantId } signed with JWT_SECRET — used by Customer-role users who
 //      logged in via /auth/customer/register or /auth/login. We resolve
 //      Patient via Patient.userId (see schema.prisma "Self-booking user"
 //      field) so the dashboard widgets next-appointment / my-prescriptions
@@ -170,7 +170,7 @@ async function verifyPatientToken(req, res, next) {
     }
   }
 
-  // Path A â€” patient-portal token
+  // Path A — patient-portal token
   if (decoded.patientId) {
     // Look up the patient row to attach tenantId. The phone+OTP JWT only
     // carries { patientId, phoneLast10 } so tenantId is unavailable from
@@ -200,7 +200,7 @@ async function verifyPatientToken(req, res, next) {
     }
   }
 
-  // Path B â€” any authenticated session that has (or can claim) a linked
+  // Path B — any authenticated session that has (or can claim) a linked
   // Patient row in this tenant.
   //
   // The data model: clinics use BOTH the CUSTOMER system role AND custom
@@ -212,14 +212,14 @@ async function verifyPatientToken(req, res, next) {
   // Resolution order:
   //   1. Direct link via Patient.userId (fast path, applies to ANY role).
   //   2. (CUSTOMER userType only) Claim an unlinked Patient with the
-  //      same (email, tenantId) â€” handles self-registered customers
+  //      same (email, tenantId) — handles self-registered customers
   //      whose Patient record was created by staff first.
   //   3. (CUSTOMER userType only) Auto-create a minimal Patient row
   //      from the User profile so dashboard widgets work on first
   //      sign-in.
   //
   // STAFF-typed users (USER, DOCTOR, MANAGER, etc.) only get the direct
-  // link in step 1 â€” we deliberately do NOT auto-create Patient rows
+  // link in step 1 — we deliberately do NOT auto-create Patient rows
   // for them. Real staff (admins, doctors, receptionists) have no
   // linked Patient row and get rejected with 401 here; the frontend
   // shows the role-mismatch view instead of triggering forced logout.
@@ -239,7 +239,7 @@ async function verifyPatientToken(req, res, next) {
           return res.status(401).json({ error: "Invalid portal token" });
         }
 
-        // Step 2 â€” claim an unlinked Patient with the same email so we
+        // Step 2 — claim an unlinked Patient with the same email so we
         // don't fork the clinical record.
         if (userRow.email) {
           const claimable = await prisma.patient.findFirst({
@@ -259,7 +259,7 @@ async function verifyPatientToken(req, res, next) {
           }
         }
 
-        // Step 3 â€” first-time CUSTOMER with no clinical record; create one.
+        // Step 3 — first-time CUSTOMER with no clinical record; create one.
         if (!patient) {
           patient = await prisma.patient.create({
             data: {
@@ -304,7 +304,7 @@ async function verifyPatientToken(req, res, next) {
   return res.status(401).json({ error: "Invalid portal token" });
 }
 
-// Patient-portal RBAC resolver â€” see lib/portalPermissions.js for the full
+// Patient-portal RBAC resolver — see lib/portalPermissions.js for the full
 // rationale. In short: patient is a Patient row, not a User row, so they
 // can't have UserRole assignments. Every patient on a tenant implicitly
 // inherits that tenant's CUSTOMER role permissions, and the handler still
@@ -324,10 +324,10 @@ const photoUpload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per photo
 });
 
-// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Helpers ────────────────────────────────────────────────────────
 
 // Reject non-numeric :id params with 400 instead of letting Prisma blow up
-// later with "Invalid value provided. Expected Int, provided NaN" â†’ 500.
+// later with "Invalid value provided. Expected Int, provided NaN" → 500.
 router.param("id", (req, res, next, id) => {
   const n = parseInt(id, 10);
   if (Number.isNaN(n) || n < 1) {
@@ -346,19 +346,19 @@ const tenantWhere = (req, extra = {}) => ({
 // #527 / #533 (CRIT-02 + HI-04): PHI access gates.
 //
 // Pre-fix the wellness clinical routes were tenant-scoped but had NO
-// wellnessRole check â€” a JWT with role=USER and no wellnessRole still got
+// wellnessRole check — a JWT with role=USER and no wellnessRole still got
 // 200 on GET /patients (full tenant PII), GET /visits, GET /prescriptions,
 // PUT /patients/:id, etc. Pen-test repro: a USER-role professional editing
 // an Admin-created patient row in tenant 2 (Patient 3584).
 //
 // Two gates layered onto every previously-ungated clinical route:
 //
-//   phiReadGate  â€” reads. Allowed: doctor, professional, telecaller, admin,
+//   phiReadGate  — reads. Allowed: doctor, professional, telecaller, admin,
 //                  manager. Telecaller stays in because they need patient/
-//                  visit context to dispose junk leads. Helper is OUT â€”
+//                  visit context to dispose junk leads. Helper is OUT —
 //                  helpers are non-clinical (front-desk / runner roles).
 //
-//   phiWriteGate â€” writes. Same minus telecaller â€” telecallers route leads
+//   phiWriteGate — writes. Same minus telecaller — telecallers route leads
 //                  but don't author clinical records (Rx + consent already
 //                  use stricter gates: requireClinicalRole / verifyWellnessRole
 //                  with explicit ["doctor"]/["admin"] lists).
@@ -367,15 +367,15 @@ const tenantWhere = (req, extra = {}) => ({
 // WELLNESS_ROLE_FORBIDDEN on every clinical route instead of 200. ADMIN
 // and MANAGER pass through (the verifyWellnessRole "admin"/"manager"
 // special tokens). The cross-professional edit surface stays open by design
-// â€” clinics share patients across providers; the audit log already records
+// — clinics share patients across providers; the audit log already records
 // every UPDATE so cross-user edits are traceable.
 //
-// Tenant.vertical check is inherited from verifyWellnessRole â€” non-wellness
+// Tenant.vertical check is inherited from verifyWellnessRole — non-wellness
 // tenants get 403 WELLNESS_TENANT_REQUIRED before the role check runs.
 // "clinical" is a meta-token resolved by verifyWellnessRole against the
-// per-tenant WellnessRoleType catalog â€” ANY wellnessRole with
+// per-tenant WellnessRoleType catalog — ANY wellnessRole with
 // `canTakeVisits = true` (doctor, professional, nurse, stylist, plus any
-// future custom clinical role added in Settings â†’ Wellness Role Types)
+// future custom clinical role added in Settings → Wellness Role Types)
 // passes the gate automatically with NO code change. The literal
 // "doctor" / "professional" entries stay alongside it so existing JWTs +
 // the legacy PHI_READ_ROLES contract pinned in wellnessOwnership.test.js
@@ -386,14 +386,14 @@ const tenantWhere = (req, extra = {}) => ({
 // match: any user with one of the listed RBAC permissions (granted via
 // Roles & Permissions admin) passes the gate even without a matching
 // wellnessRole. Each entry mirrors the corresponding page in the
-// backend page catalog (lib/pageCatalog.js) â€” granting the page's
+// backend page catalog (lib/pageCatalog.js) — granting the page's
 // listed `requiredPermissions` to a custom role makes that role
-// immediately usable end-to-end (sidebar â†’ page â†’ API).
-// #920 slice S59 â€” was previously an inline `verifyWellnessRole([...], {
+// immediately usable end-to-end (sidebar → page → API).
+// #920 slice S59 — was previously an inline `verifyWellnessRole([...], {
 // anyOfPermissions: [...], deny: ["helper"] })` declaration here. The
 // policy now lives in middleware/phiReadGate.js (imported at the top of
 // this file). `makePhiReadGate()` returns the IDENTICAL middleware the
-// inline form did â€” same allow list, same `anyOfPermissions` cluster,
+// inline form did — same allow list, same `anyOfPermissions` cluster,
 // same `deny: ["helper"]`. The JSDoc above documents the WHY; the
 // middleware module documents the policy contents. All 30+ callsites of
 // `phiReadGate` below continue to work unchanged.
@@ -443,7 +443,7 @@ const phiWriteGate = verifyWellnessRole(
       { module: "patients", action: "write" },
       { module: "appointments", action: "write" },
       // `book_appointment.write` + `waitlist.write` opened in v3.8.x
-      // when the `appointments` module was split per-page â€” a telecaller
+      // when the `appointments` module was split per-page — a telecaller
       // with only `book_appointment.write` still needs to call the
       // booking endpoint, and waitlist promote needs `waitlist.write`.
       { module: "book_appointment", action: "write" },
@@ -454,7 +454,7 @@ const phiWriteGate = verifyWellnessRole(
       { module: "consents", action: "write" },
     ],
     // Per the documented gate intent (comment at line 261):
-    //   "phiWriteGate â€” writes. Same minus telecaller â€” telecallers
+    //   "phiWriteGate — writes. Same minus telecaller — telecallers
     //    route leads but don't author clinical records"
     // The anyOfPermissions backdoor (added in v3.8.x for custom RBAC
     // roles) accidentally lets telecaller through via the
@@ -464,7 +464,7 @@ const phiWriteGate = verifyWellnessRole(
     //   verifyWellnessRole(["telecaller","admin","manager"]) at lines
     //   9173+9226 for queue dispose, plus the booking-specific gates
     //   at /resources, /book/* etc. that list telecaller explicitly.
-    // Helpers are non-clinical (front-desk / runner roles) â€” never get
+    // Helpers are non-clinical (front-desk / runner roles) — never get
     // PHI write access. Pinned by memberships-api.spec.js:642+646 and
     // wellness-rbac-regression-api.spec.js:684 (POLICY 1).
     deny: ["helper", "telecaller"],
@@ -474,7 +474,7 @@ const phiWriteGate = verifyWellnessRole(
 // `adminOrPerm(module, action)` is the canonical factory for admin-only
 // wellness routes that ALSO want to accept a specific RBAC permission
 // grant. Replaces every `verifyWellnessRole(["admin", "manager"])`
-// declaration with a per-route permission unlock â€” so a custom RBAC
+// declaration with a per-route permission unlock — so a custom RBAC
 // role granted e.g. `services.write` can create services even without
 // a matching wellnessRole. The literal `["admin", "manager"]` array
 // stays so RBAC ADMIN/MANAGER continue to short-circuit before any
@@ -484,14 +484,14 @@ const adminOrPerm = (module, action) =>
     anyOfPermissions: [{ module, action }],
   });
 
-// Plan #PAT-FILTERS / #PAT-TAGS â€” querystring helpers shared by the
+// Plan #PAT-FILTERS / #PAT-TAGS — querystring helpers shared by the
 // patient list + export + bulk-tag endpoints.
 //
 // parseListParam: accepts repeated (`?x=a&x=b`) AND comma-joined
-// (`?x=a,b`) forms â€” Express + qs handle them differently depending on
+// (`?x=a,b`) forms — Express + qs handle them differently depending on
 // caller; we normalize to a deduplicated string list with empties dropped.
 // parseDateOnly: returns a Date at UTC midnight for a YYYY-MM-DD input;
-// null for empty / invalid. Avoids the new Date("") â†’ InvalidDate trap.
+// null for empty / invalid. Avoids the new Date("") → InvalidDate trap.
 function parseListParam(raw) {
   if (raw === undefined || raw === null || raw === "") return [];
   const arr = Array.isArray(raw) ? raw : String(raw).split(",");
@@ -507,7 +507,7 @@ function parseListParam(raw) {
 }
 function parseDateOnly(raw) {
   if (!raw || typeof raw !== "string") return null;
-  // Accept YYYY-MM-DD or ISO with timezone â€” collapse to UTC date.
+  // Accept YYYY-MM-DD or ISO with timezone — collapse to UTC date.
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw.trim());
   if (!m) return null;
   const d = new Date(
@@ -516,7 +516,7 @@ function parseDateOnly(raw) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-// Flatten Prisma's PatientTag[] â†’ simple [{id,name,color}] for the API
+// Flatten Prisma's PatientTag[] → simple [{id,name,color}] for the API
 // response. Mutates a shallow copy so the caller can spread further.
 function flattenPatientTags(patient) {
   if (!patient) return patient;
@@ -529,10 +529,10 @@ function flattenPatientTags(patient) {
   };
 }
 
-// #348 â€” namespacing rule. The /api/wellness/* namespace is reserved for
+// #348 — namespacing rule. The /api/wellness/* namespace is reserved for
 // CLINICAL resources (patients, visits, prescriptions, consents, treatments,
-// services, locations, etc.). Org-level resources â€” staff, audit logs,
-// tenants, billing â€” live at /api/<resource> and have NO wellness alias.
+// services, locations, etc.). Org-level resources — staff, audit logs,
+// tenants, billing — live at /api/<resource> and have NO wellness alias.
 //
 // Pre-fix, the inconsistency was: /api/staff -> 200, /api/wellness/staff -> 403
 // (caught by the wellness role gate, no clear error); /api/audit -> 200,
@@ -555,9 +555,9 @@ router.all("/audit/*", wellnessNamespacedRedirect("/api/audit"));
 
 // Gap #22 / #614: Auto-credit loyalty points on completed visits.
 // Earn rule reads from LoyaltyConfig (per-tenant): earnPerVisit (flat) +
-// (earnPercentOfSpend Ã— amount/100) + (earnPerCurrencyUnit Ã— amount). Defaults
+// (earnPercentOfSpend × amount/100) + (earnPerCurrencyUnit × amount). Defaults
 // preserve the original "10% of amountCharged" behaviour byte-identically when
-// no LoyaltyConfig row exists. Idempotent â€” only one 'earned'
+// no LoyaltyConfig row exists. Idempotent — only one 'earned'
 // LoyaltyTransaction per visitId. Failures are swallowed so the visit save
 // is never rolled back by a loyalty issue.
 async function maybeAutoCreditLoyalty(visit, tenantId) {
@@ -568,7 +568,7 @@ async function maybeAutoCreditLoyalty(visit, tenantId) {
     try {
       cfg = await prisma.loyaltyConfig.findUnique({ where: { tenantId } });
     } catch {
-      cfg = null; // schema not yet pushed â€” keep old behaviour
+      cfg = null; // schema not yet pushed — keep old behaviour
     }
     const autoEnabled = cfg ? cfg.autoEarnEnabled !== false : true;
     if (!autoEnabled) return;
@@ -807,9 +807,9 @@ async function generateVisitPaymentLink({ visit, tenantId, baseUrl }) {
 }
 
 // Day boundaries in IST (UTC+05:30). Wellness clinics are India-based, so
-// "today" must mean the IST calendar day â€” using server-local hours would
+// "today" must mean the IST calendar day — using server-local hours would
 // shift the window by 5h30 on UTC servers (the production default), making
-// 00:00â€“05:30 IST visits land on the previous day.
+// 00:00–05:30 IST visits land on the previous day.
 //
 // Migrated from raw IST_OFFSET_MS arithmetic to backend/lib/datetime.js
 // (#313 callsite-sweep, 2026-05-07): the helper handles DST-aware zone math
@@ -820,7 +820,7 @@ async function generateVisitPaymentLink({ visit, tenantId, baseUrl }) {
 const WELLNESS_TZ = "Asia/Kolkata";
 const startOfDay = (d = new Date()) => {
   // Render the input as the IST calendar date, then re-parse "<date>T00:00"
-  // in IST â†’ UTC. Round-trips exactly through the #313 helper.
+  // in IST → UTC. Round-trips exactly through the #313 helper.
   const istDate = formatInTenantTZ(d, WELLNESS_TZ, "yyyy-MM-dd");
   return parseDateTimeLocalInTZ(`${istDate}T00:00:00`, WELLNESS_TZ);
 };
@@ -833,12 +833,12 @@ const endOfDay = (d = new Date()) => {
 };
 
 // #313 callsite-sweep: when the route receives a datetime-local form input
-// (no TZ marker â€” a string like "2026-05-15T10:30" emitted by HTML
+// (no TZ marker — a string like "2026-05-15T10:30" emitted by HTML
 // <input type="datetime-local">), naively `new Date(input)` parses it as
 // UTC and silently drifts by 5h30 on storage. We route those through the
 // helper so the wall-clock the user typed is preserved.
 //
-// Full ISO timestamps (with trailing 'Z' or 'Â±HH:mm' offset) carry their TZ
+// Full ISO timestamps (with trailing 'Z' or '±HH:mm' offset) carry their TZ
 // in-band; the native Date constructor handles them correctly. We detect
 // the difference by sniffing for a TZ marker.
 const DATETIME_LOCAL_RE =
@@ -847,47 +847,47 @@ function parseTenantDateInput(input) {
   if (input == null) return null;
   if (input instanceof Date) return input;
   if (typeof input !== "string") return new Date(input);
-  // datetime-local form (no TZ suffix) â†’ route through tenant-TZ-aware
+  // datetime-local form (no TZ suffix) → route through tenant-TZ-aware
   // parser so the wall-clock is preserved.
   if (DATETIME_LOCAL_RE.test(input)) {
     return parseDateTimeLocalInTZ(input, WELLNESS_TZ);
   }
-  // Full ISO with TZ marker, RFC2822, etc. â€” Date constructor handles it.
+  // Full ISO with TZ marker, RFC2822, etc. — Date constructor handles it.
   return new Date(input);
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// CLINICAL ARTEFACT RETENTION POLICY (issue #21 â€” resolved by product/legal):
+// ─────────────────────────────────────────────────────────────────────
+// CLINICAL ARTEFACT RETENTION POLICY (issue #21 — resolved by product/legal):
 //
-// Clinical artefacts â€” Patient, Visit, Prescription, ConsentForm,
-// AgentRecommendation, ServiceConsumption â€” are PERMANENT. Once created,
+// Clinical artefacts — Patient, Visit, Prescription, ConsentForm,
+// AgentRecommendation, ServiceConsumption — are PERMANENT. Once created,
 // they are NEVER deleted, neither hard-deleted nor soft-deleted.
 //
 // Why:
-//   â€¢ HIPAA Security Rule 164.312(c)(1) integrity controls
-//   â€¢ India MoHFW EMR Standards 2016 require permanent retention with an
+//   • HIPAA Security Rule 164.312(c)(1) integrity controls
+//   • India MoHFW EMR Standards 2016 require permanent retention with an
 //     amendment trail (not deletion)
-//   â€¢ DPDP Act 2023 explicit consent + retention rules accommodate this
+//   • DPDP Act 2023 explicit consent + retention rules accommodate this
 //
 // What this means in code:
-//   â€¢ DO NOT add DELETE endpoints for these resources. Period.
-//   â€¢ DO NOT add `deletedAt` columns to these models in schema.prisma.
-//   â€¢ Corrections happen via PUT/PATCH (amendment) â€” the audit log captures
+//   • DO NOT add DELETE endpoints for these resources. Period.
+//   • DO NOT add `deletedAt` columns to these models in schema.prisma.
+//   • Corrections happen via PUT/PATCH (amendment) — the audit log captures
 //     the prior + new values so the historical state stays auditable.
-//   â€¢ If a row was created in error (typo, test data), use an out-of-band
+//   • If a row was created in error (typo, test data), use an out-of-band
 //     ops script with a written justification recorded in the audit log.
 //     Never expose a DELETE path through the API.
 //
 // The /visits/:id/photos DELETE below is exempt: it removes photo URL
 // strings from a JSON array on the Visit row, NOT the Visit itself. The
 // Visit row + its prescriptions + consent + visit history all stay.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────
 
-// Active treatments â€” clinical PHI. Read: clinical/ops roles only (matches
+// Active treatments — clinical PHI. Read: clinical/ops roles only (matches
 // the consent + treatment-plan posture established in #280, #324, #326).
 // Write (status update): same clinical-write gate used on POST /prescriptions
 // (#326). Without these gates a telecaller / helper / stylist could read all
-// treatment plans and update status â€” same RBAC class as the prescription
+// treatment plans and update status — same RBAC class as the prescription
 // hole #326 closed earlier today.
 router.get(
   "/activetreatment",
@@ -904,11 +904,11 @@ router.get(
 );
 router.put("/treatment-plans/:id", requireClinicalRole, updateTreatmentPlan);
 
-// visited patients â€” PHI read; gate required (was ungated prior to audit).
+// visited patients — PHI read; gate required (was ungated prior to audit).
 router.get("/reports/visit", phiReadGate, getPatientsSummary);
 router.get("/reports/visit/:id", phiReadGate, getPatientDetails);
 
-// â”€â”€ Patients â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Patients ───────────────────────────────────────────────────────
 
 router.get("/patients", phiReadGate, async (req, res) => {
   try {
@@ -924,12 +924,12 @@ router.get("/patients", phiReadGate, async (req, res) => {
     if (locationId) where.locationId = parseInt(locationId);
     // Plan #PAT-FILTERS: multi-select Source. Repeatable querystring
     // (`source=walk-in&source=referral`) AND comma-separated
-    // (`source=walk-in,referral`) â€” accept both because Express parses
+    // (`source=walk-in,referral`) — accept both because Express parses
     // repeated params differently depending on whether the caller used
     // qs vs a manual fetch with a comma list. Empty strings drop.
     const sourceList = parseListParam(req.query.source);
     if (sourceList.length) where.source = { in: sourceList };
-    // Multi-select Gender (rare â€” usually 1-2 values, but list-shape
+    // Multi-select Gender (rare — usually 1-2 values, but list-shape
     // keeps the API consistent with Source / Tags).
     const genderList = parseListParam(req.query.gender);
     if (genderList.length) where.gender = { in: genderList };
@@ -989,10 +989,10 @@ router.get("/patients", phiReadGate, async (req, res) => {
       prisma.patient.findMany(findManyArgs),
       prisma.patient.count({ where }),
     ]);
-    // PRD Â§11: HIPAA / DPDP Act â€” log every PHI read. Patient list is a
+    // PRD §11: HIPAA / DPDP Act — log every PHI read. Patient list is a
     // bulk PHI read; emit ONE row per request (not N), with no PHI values.
     // #534 (PERF-1): fire-and-forget. The audit row is a regulatory log,
-    // not a response-time critical write â€” awaiting it added 30-100ms to
+    // not a response-time critical write — awaiting it added 30-100ms to
     // every list call on a cold connection. The promise still completes
     // (its catch logs to console); response goes out without blocking.
     //
@@ -1032,13 +1032,13 @@ router.get("/patients", phiReadGate, async (req, res) => {
     // S42: slim path skips the PII_DISCLOSED row (no PHI columns in
     // response = no disclosure event happened). BUT we still apply the
     // existing maskRows() viewer-policy filter on `name` for low-trust
-    // viewers â€” telecallers and any generic-USER who bypassed via an
+    // viewers — telecallers and any generic-USER who bypassed via an
     // RBAC permission grant. Patient name CAN be PII when combined with
     // other context (a telecaller seeing "Ravi Kumar, location=Mumbai-1"
     // still has actionable PII on slim path). Masking the name preserves
     // the #680 viewer-tier privacy contract on the slim path too.
     //
-    // No PII_DISCLOSED audit is written even on the un-masked slim path â€”
+    // No PII_DISCLOSED audit is written even on the un-masked slim path —
     // the slim response shape doesn't ship phone/email/dob, so the
     // disclosure surface is structurally narrower than the masked column
     // list (`['name','phone','email','dob']`). Reviewers querying for
@@ -1071,8 +1071,8 @@ router.get("/patients", phiReadGate, async (req, res) => {
         );
       });
     }
-    // Flatten PatientTag[] â†’ [{id,name,color}]. Masking above doesn't touch
-    // the `tags` relation; this is intentional â€” tag names aren't PHI.
+    // Flatten PatientTag[] → [{id,name,color}]. Masking above doesn't touch
+    // the `tags` relation; this is intentional — tag names aren't PHI.
     const finalPatients = outPatients.map(flattenPatientTags);
     res.json({ patients: finalPatients, total });
   } catch (e) {
@@ -1091,12 +1091,12 @@ router.get("/patients", phiReadGate, async (req, res) => {
 //   - lower-trust viewers (telecaller / helper / generic USER on wellness
 //     tenant) can ONLY trigger the export with `?masked=1`, which forces
 //     masked output even though the role is otherwise gated out of CSV.
-//   - `?masked=1` always wins regardless of role â€” admin-triggered exports
+//   - `?masked=1` always wins regardless of role — admin-triggered exports
 //     destined for a third-party (e.g. shared with marketing agency, sent
 //     to print vendor) can be intentionally redacted by toggling the flag.
 //
 // Every unmasked export emits a PII_DISCLOSED audit row with the row count
-// + record IDs (capped at 200) â€” disclosure has full traceability.
+// + record IDs (capped at 200) — disclosure has full traceability.
 router.get("/patients.csv", phiReadGate, async (req, res) => {
   try {
     const { q, locationId } = req.query;
@@ -1148,7 +1148,7 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
       `attachment; filename="patients${mustMask ? "-masked" : ""}-${new Date().toISOString().slice(0, 10)}.csv"`,
     );
     // BOM so Excel auto-detects UTF-8.
-    res.write("ï»¿");
+    res.write("﻿");
     res.write(headers.map(csvEscape).join(",") + "\r\n");
     for (const p of rows) {
       const row = [
@@ -1195,7 +1195,7 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
   }
 });
 
-// â”€â”€ Plan #PAT-TAGS / #PAT-EXPORT â€” patient tagging + filtered CSV/XLSX
+// ── Plan #PAT-TAGS / #PAT-EXPORT — patient tagging + filtered CSV/XLSX
 // export + import template.
 //
 // IMPORTANT route-ordering: every literal path here (/patients/tags,
@@ -1203,12 +1203,12 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
 // MUST be declared BEFORE the dynamic `/patients/:id` route below.
 // Express matches in registration order; `:id` will greedy-match the
 // literal segment otherwise and the literal endpoints become unreachable.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────
 
 // Build the shared patients-list `where` clause from query params, so
 // /patients (list) and /patients/export (download) and the bulk tag
 // endpoints all interpret filters identically. Mirrors the inline logic
-// in GET /patients above â€” the small duplication keeps the list handler
+// in GET /patients above — the small duplication keeps the list handler
 // readable and the export handler self-contained.
 function buildPatientListWhere(req) {
   const where = tenantWhere(req);
@@ -1253,7 +1253,7 @@ function buildPatientListWhere(req) {
 // First-run defaults for the wellness vertical. When a tenant opens the
 // tag picker and has zero tags yet, we seed these 30 once so the user
 // has a useful starting palette instead of an empty popover. They're
-// fully editable / deletable after that â€” we DO NOT re-seed on
+// fully editable / deletable after that — we DO NOT re-seed on
 // subsequent reads, even if the user deletes every tag.
 const WELLNESS_DEFAULT_TAGS = [
   "1 lakh & Above",
@@ -1309,7 +1309,7 @@ async function ensureDefaultTagsSeeded(tenantId) {
   }
 }
 
-// GET /patients/tags â€” list all tenant tags (used by filter panel +
+// GET /patients/tags — list all tenant tags (used by filter panel +
 // per-row popover + bulk-action picker). Read-only; phiReadGate is the
 // correct fence because tag names are intrinsically tied to PHI lists.
 router.get("/patients/tags", phiReadGate, async (req, res) => {
@@ -1332,7 +1332,7 @@ router.get("/patients/tags", phiReadGate, async (req, res) => {
   }
 });
 
-// POST /patients/tags â€” create a new tag (or no-op return existing on
+// POST /patients/tags — create a new tag (or no-op return existing on
 // case-insensitive name collision). Body: { name, color? }.
 // Returns { tag: {id,name,color}, created: bool }.
 router.post("/patients/tags", phiWriteGate, async (req, res) => {
@@ -1341,7 +1341,7 @@ router.post("/patients/tags", phiWriteGate, async (req, res) => {
       typeof req.body.name === "string" ? req.body.name.trim() : "";
     if (!rawName) return res.status(400).json({ error: "name is required" });
     if (rawName.length > 60) {
-      return res.status(400).json({ error: "name must be â‰¤ 60 chars" });
+      return res.status(400).json({ error: "name must be ≤ 60 chars" });
     }
     const color =
       typeof req.body.color === "string" &&
@@ -1368,7 +1368,7 @@ router.post("/patients/tags", phiWriteGate, async (req, res) => {
   }
 });
 
-// POST /patients/tags/bulk â€” add one or more tags to one or more
+// POST /patients/tags/bulk — add one or more tags to one or more
 // patients. Body: { patientIds: number[], tagIds: number[] }.
 // Returns { assigned: count } (rows that were newly linked; existing
 // links are silently no-op'd via skipDuplicates).
@@ -1442,7 +1442,7 @@ router.post("/patients/tags/bulk", phiWriteGate, async (req, res) => {
   }
 });
 
-// DELETE /patients/tags/bulk â€” body-shaped delete (Express + fetch both
+// DELETE /patients/tags/bulk — body-shaped delete (Express + fetch both
 // support DELETE-with-body). Body: { patientIds, tagIds }.
 // Returns { removed: count }.
 router.delete("/patients/tags/bulk", phiWriteGate, async (req, res) => {
@@ -1559,7 +1559,7 @@ async function buildPatientExportPayload(req) {
   return { headers, rows: dataRows, patients, mustMask, piiFields };
 }
 
-// GET /patients/export?format=csv|xlsx&<filters> â€” replaces the older
+// GET /patients/export?format=csv|xlsx&<filters> — replaces the older
 // /patients.csv (which stays for back-compat). format defaults to csv.
 router.get("/patients/export", phiReadGate, async (req, res) => {
   try {
@@ -1608,14 +1608,14 @@ router.get("/patients/export", phiReadGate, async (req, res) => {
       return res.end(buf);
     }
 
-    // CSV path â€” same rowsToCsv writer the legacy /patients.csv uses.
+    // CSV path — same rowsToCsv writer the legacy /patients.csv uses.
     const csv = rowsToCsv(headers, rows);
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader(
       "Content-Disposition",
       `attachment; filename="${baseName}.csv"`,
     );
-    res.write("ï»¿");
+    res.write("﻿");
     res.end(csv);
   } catch (e) {
     console.error("[wellness] patient export error:", e.message);
@@ -1623,7 +1623,7 @@ router.get("/patients/export", phiReadGate, async (req, res) => {
   }
 });
 
-// GET /patients/import-template?format=csv|xlsx â€” column headers the
+// GET /patients/import-template?format=csv|xlsx — column headers the
 // importer expects, plus one example row. Mirrors the customers entity
 // headers in lib/csvEntities.js so a downloaded template imports cleanly.
 router.get("/patients/import-template", phiReadGate, async (req, res) => {
@@ -1678,7 +1678,7 @@ router.get("/patients/import-template", phiReadGate, async (req, res) => {
       "Content-Disposition",
       'attachment; filename="patients-template.csv"',
     );
-    res.write("ï»¿");
+    res.write("﻿");
     res.end(csv);
   } catch (e) {
     console.error("[wellness] patient template error:", e.message);
@@ -1686,7 +1686,7 @@ router.get("/patients/import-template", phiReadGate, async (req, res) => {
   }
 });
 
-// POST /patients/:id/tags â€” assign a single tag to a single patient.
+// POST /patients/:id/tags — assign a single tag to a single patient.
 // Body: either { tagId: number } (existing) or { name: string, color? }
 // (creates the tag inline + assigns). 200 on success.
 router.post("/patients/:id/tags", phiWriteGate, async (req, res) => {
@@ -1711,7 +1711,7 @@ router.post("/patients/:id/tags", phiWriteGate, async (req, res) => {
     } else if (typeof req.body.name === "string" && req.body.name.trim()) {
       const name = req.body.name.trim();
       if (name.length > 60) {
-        return res.status(400).json({ error: "name must be â‰¤ 60 chars" });
+        return res.status(400).json({ error: "name must be ≤ 60 chars" });
       }
       const color =
         typeof req.body.color === "string" &&
@@ -1744,7 +1744,7 @@ router.post("/patients/:id/tags", phiWriteGate, async (req, res) => {
   }
 });
 
-// DELETE /patients/:id/tags/:tagId â€” remove a single tag from a single
+// DELETE /patients/:id/tags/:tagId — remove a single tag from a single
 // patient. Tenant-scoped via the patient join.
 router.delete("/patients/:id/tags/:tagId", phiWriteGate, async (req, res) => {
   try {
@@ -1825,10 +1825,10 @@ router.get("/patients/:id", phiReadGate, async (req, res) => {
         req.user.tenantId,
       );
     }
-    // PRD Â§11: log every patient detail read. Capture the FIELD NAMES returned
-    // (so reviewers know what columns were exposed) but NEVER the values â€”
+    // PRD §11: log every patient detail read. Capture the FIELD NAMES returned
+    // (so reviewers know what columns were exposed) but NEVER the values —
     // logging allergies/dob/phone here would defeat the audit-log's HIPAA role.
-    // #534 (PERF-1): fire-and-forget â€” see PATIENT_LIST_READ above.
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
     {
       const accessedFields = Object.keys(patient).filter(
         (k) =>
@@ -1864,7 +1864,7 @@ router.get("/patients/:id", phiReadGate, async (req, res) => {
   }
 });
 
-// #346 â€” nested patient sub-resources. The Patient detail SPA tabs (visits,
+// #346 — nested patient sub-resources. The Patient detail SPA tabs (visits,
 // Rx, consents, treatment plans) call these REST-shaped paths directly
 // instead of /visits?patientId= etc. Without them every tab returned 404.
 // Each handler mirrors the select shape of the corresponding flat list endpoint
@@ -1872,7 +1872,7 @@ router.get("/patients/:id", phiReadGate, async (req, res) => {
 // patient-existence check so we return 404 for an unknown patient (rather
 // than an empty array, which would mask data-integrity bugs in the UI).
 
-// GET /patients/:id/visits â€” visits for a specific patient
+// GET /patients/:id/visits — visits for a specific patient
 router.get("/patients/:id/visits", phiReadGate, async (req, res) => {
   try {
     const patientId = parseInt(req.params.id);
@@ -1895,8 +1895,8 @@ router.get("/patients/:id/visits", phiReadGate, async (req, res) => {
       visits,
       req.user.tenantId,
     );
-    // Audit-log the read same as the flat /visits list (PRD Â§11 clinical reads).
-    // #534 (PERF-1): fire-and-forget â€” see PATIENT_LIST_READ above.
+    // Audit-log the read same as the flat /visits list (PRD §11 clinical reads).
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
     writeAudit(
       "Patient",
       "PATIENT_VISITS_READ",
@@ -1920,7 +1920,7 @@ router.get("/patients/:id/visits", phiReadGate, async (req, res) => {
   }
 });
 
-// POST /patients/:id/activities â€” log an Activity (e.g. a scheduled meeting)
+// POST /patients/:id/activities — log an Activity (e.g. a scheduled meeting)
 // against a Patient. The Inbox "Calendar Sync" modal lets an owner pick a
 // patient (not just a generic Contact) and schedule a meeting; the Activity
 // timeline is keyed on Contact.id, so we ensure the Patient is linked to a
@@ -1988,7 +1988,7 @@ router.post("/patients/:id/activities", phiWriteGate, async (req, res) => {
   }
 });
 
-// GET /patients/:id/prescriptions â€” Rx for a specific patient
+// GET /patients/:id/prescriptions — Rx for a specific patient
 router.get("/patients/:id/prescriptions", phiReadGate, async (req, res) => {
   try {
     const patientId = parseInt(req.params.id);
@@ -2006,7 +2006,7 @@ router.get("/patients/:id/prescriptions", phiReadGate, async (req, res) => {
         doctor: { select: { id: true, name: true } },
       },
     });
-    // #534 (PERF-1): fire-and-forget â€” see PATIENT_LIST_READ above.
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
     writeAudit(
       "Patient",
       "PATIENT_RX_READ",
@@ -2030,7 +2030,7 @@ router.get("/patients/:id/prescriptions", phiReadGate, async (req, res) => {
   }
 });
 
-// GET /patients/:id/consents â€” signed consent forms for a specific patient
+// GET /patients/:id/consents — signed consent forms for a specific patient
 router.get("/patients/:id/consents", phiReadGate, async (req, res) => {
   try {
     const patientId = parseInt(req.params.id);
@@ -2055,7 +2055,7 @@ router.get("/patients/:id/consents", phiReadGate, async (req, res) => {
         // EXCLUDED: signatureSvg, contentSnapshot, signedPdfBlob
       },
     });
-    // #534 (PERF-1): fire-and-forget â€” see PATIENT_LIST_READ above.
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
     writeAudit(
       "Patient",
       "PATIENT_CONSENTS_READ",
@@ -2079,7 +2079,7 @@ router.get("/patients/:id/consents", phiReadGate, async (req, res) => {
   }
 });
 
-// GET /patients/:id/treatment-plans â€” treatment plans for a specific patient
+// GET /patients/:id/treatment-plans — treatment plans for a specific patient
 router.get("/patients/:id/treatment-plans", phiReadGate, async (req, res) => {
   try {
     const patientId = parseInt(req.params.id);
@@ -2097,7 +2097,7 @@ router.get("/patients/:id/treatment-plans", phiReadGate, async (req, res) => {
       },
       orderBy: { startedAt: "desc" },
     });
-    // #534 (PERF-1): fire-and-forget â€” see PATIENT_LIST_READ above.
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
     writeAudit(
       "Patient",
       "PATIENT_TREATMENTS_READ",
@@ -2121,7 +2121,7 @@ router.get("/patients/:id/treatment-plans", phiReadGate, async (req, res) => {
   }
 });
 
-// #108: a phone is optional, but if supplied must contain 10â€“15 digits after
+// #108: a phone is optional, but if supplied must contain 10–15 digits after
 // stripping formatting (+, -, spaces, parens). Pre-fix the field accepted any
 // text like "abc123notaphone" which then broke dialer / WhatsApp integration.
 // #205: alphanumeric phones like "90361a46074" used to slip through because
@@ -2150,10 +2150,10 @@ const sanitizeHtml = require("sanitize-html");
 // Strips ALL HTML markup (no whitelist) while preserving the inner text so
 // "5 < 6 mg" saves cleanly as "5  6 mg".
 //
-// #187 fix: sanitize-html's default text filter HTML-encodes `&` â†’ `&amp;`
+// #187 fix: sanitize-html's default text filter HTML-encodes `&` → `&amp;`
 // when serialising back, which corrupted ordinary input ("A & B" stored as
 // "A &amp; B" and then displayed literally everywhere we render outside
-// React's auto-escape â€” PDFs, SMS, patient portal). Storage is raw text;
+// React's auto-escape — PDFs, SMS, patient portal). Storage is raw text;
 // entity encoding is a render-time concern handled by React. Override the
 // text filter to decode the four entities the library re-encodes so the
 // stored value matches what the user typed (minus the stripped tags).
@@ -2172,9 +2172,9 @@ function decodeBasicEntities(text) {
 function scrubPlainText(value) {
   if (value == null) return value;
   if (typeof value !== "string") return value;
-  // allowedTags=[] + allowedAttributes={} + disallowedTagsMode='discard' â†’
+  // allowedTags=[] + allowedAttributes={} + disallowedTagsMode='discard' →
   // entire tag is dropped (text content kept). textFilter undoes the
-  // library's default `&` â†’ `&amp;` encoding so storage stays raw.
+  // library's default `&` → `&amp;` encoding so storage stays raw.
   let scrubbed = sanitizeHtml(value, {
     allowedTags: [],
     allowedAttributes: {},
@@ -2183,7 +2183,7 @@ function scrubPlainText(value) {
   });
   // #538 (PT-06) hardening: sanitize-html strips COMPLETE tags but leaves
   // residual single `<` / `>` characters from unclosed/malformed shapes
-  // (e.g. `Mr. <Smith` or `Smith>` â€” neither parses as a tag, so the
+  // (e.g. `Mr. <Smith` or `Smith>` — neither parses as a tag, so the
   // library passes them through). The pen-test flagged this as
   // inconsistent: callers couldn't predict whether their input would be
   // stored verbatim or mutated. Strip ALL residual angle brackets so the
@@ -2206,7 +2206,7 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   });
   if (nameErr) return nameErr;
   // #538 (PT-06): control characters NEVER legitimately appear in a name
-  // (NUL, BEL, vertical-tab, DEL, etc.) â€” these are usually injection
+  // (NUL, BEL, vertical-tab, DEL, etc.) — these are usually injection
   // attempts (template-engine bypass, log-line injection, terminal
   // sequences). Reject pre-scrub so the response is "your input is
   // invalid", not silent mutation. Tag-shaped HTML stays as silent-scrub
@@ -2221,13 +2221,13 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
     };
   }
   // #213: scrub HTML from free-text PHI fields. Strips ALL tags (no whitelist)
-  // â€” patient names + notes never legitimately contain markup. Mutate the
+  // — patient names + notes never legitimately contain markup. Mutate the
   // body so the route's prisma.create/update sees the sanitised string.
   if (body.name != null) body.name = scrubPlainText(body.name);
   if (body.notes != null) body.notes = scrubPlainText(body.notes);
   if (body.allergies != null) body.allergies = scrubPlainText(body.allergies);
   // After scrub, re-check the name still has length (a payload that was
-  // 100% HTML â€” e.g. `<img onerror=â€¦>` â€” collapses to "" and would silently
+  // 100% HTML — e.g. `<img onerror=…>` — collapses to "" and would silently
   // save as a blank name otherwise). Keep this AFTER sanitisation so the
   // 400 reflects the post-scrub state the DB will see.
   if (!isUpdate && (body.name == null || String(body.name).trim() === "")) {
@@ -2235,7 +2235,7 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   }
   // #237 (kept as belt-and-braces): reject any residual JS-shaped payload.
   // sanitize-html already strips tags but it does NOT block raw strings like
-  // "javascript:foo" or "onerror=â€¦" sitting in plain text â€” those are still
+  // "javascript:foo" or "onerror=…" sitting in plain text — those are still
   // a phishing/social-engineering vector in printed receipts.
   if (body.name != null && /onerror\s*=|javascript:/i.test(String(body.name))) {
     return {
@@ -2246,10 +2246,10 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   }
   const emailErr = ensureEmail(body.email);
   if (emailErr) return emailErr;
-  // #536 (PT-04): on create, phone is REQUIRED â€” the SPA marks it as
+  // #536 (PT-04): on create, phone is REQUIRED — the SPA marks it as
   // required + downstream flows (SMS reminders, calendar T-24h/T-1h pings,
   // dedup-by-normalizedPhone) silently no-op for phoneless rows. The
-  // backend was previously accepting null/omit silently â€” UI/API contract
+  // backend was previously accepting null/omit silently — UI/API contract
   // drift. On update (PUT), phone stays optional (don't force users to
   // re-type it on every edit). isValidPhoneOrEmpty's "empty is OK" return
   // is what we use on update; required-check fires only on create.
@@ -2259,7 +2259,7 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
   if (!isValidPhoneOrEmpty(body.phone)) {
     return {
       status: 400,
-      error: "phone must contain 10â€“15 digits",
+      error: "phone must contain 10–15 digits",
       code: "INVALID_PHONE",
     };
   }
@@ -2269,7 +2269,7 @@ function validatePatientInput(body, { isUpdate = false } = {}) {
 }
 
 // #401: Prisma surfaces the unique-constraint target differently per
-// connector â€” on MySQL `e.meta.target` is the constraint NAME (string,
+// connector — on MySQL `e.meta.target` is the constraint NAME (string,
 // e.g. "patient_tenant_normalized_phone_unique"), on Postgres it's the
 // column-name array (["tenantId","normalizedPhone"]). Match either so
 // the route correctly translates P2002 to DUPLICATE_PHONE on both DBs.
@@ -2290,10 +2290,10 @@ const ALLOWED_VISIT_STATUSES = new Set([
 ]);
 
 // #197: visit status state machine. Terminal statuses (completed, cancelled,
-// no-show) are not freely re-openable from a PUT â€” re-opening requires an
+// no-show) are not freely re-openable from a PUT — re-opening requires an
 // explicit /reopen endpoint (TODO if needed). The matrix below allows the
 // natural forward progression and a few corrective backward transitions
-// (e.g. accidentally marking arrived â†’ back to booked).
+// (e.g. accidentally marking arrived → back to booked).
 const VISIT_TRANSITIONS = {
   booked: new Set([
     "booked",
@@ -2327,7 +2327,7 @@ router.post("/patients", phiWriteGate, async (req, res) => {
     // #213: validate FIRST so validatePatientInput can scrub HTML on body.name
     // / body.notes / body.allergies in place, then destructure the sanitised
     // values for persistence. Pre-fix the destructure happened before the
-    // validator and the route saved the raw `<img onerror=â€¦>` payload.
+    // validator and the route saved the raw `<img onerror=…>` payload.
     const inputErr = validatePatientInput(req.body, { isUpdate: false });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     const {
@@ -2342,18 +2342,18 @@ router.post("/patients", phiWriteGate, async (req, res) => {
       source,
       contactId,
     } = req.body;
-    // S100 â€” structured-intake whitelist for firstName + lastName.
+    // S100 — structured-intake whitelist for firstName + lastName.
     // S62 added the Patient.firstName + Patient.lastName columns (additive-
     // nullable). S96 surfaced them in the slim list projection. S97 wired
     // the create-customer modal to send them in POST/PUT bodies. But the
     // route handlers (this file, lines ~2063 POST + ~2210 PUT) did NOT
-    // whitelist the fields â€” they were silently dropped at the destructure
+    // whitelist the fields — they were silently dropped at the destructure
     // boundary, so every new row landed with both columns null despite the
-    // modal sending the data. This closes the S62 â†’ S96 â†’ S97 chain.
+    // modal sending the data. This closes the S62 → S96 → S97 chain.
     //
     // Validation: each is OPTIONAL (some legal-name cultures have a single
     // name, so lastName especially must be optional). When provided, must
-    // be a non-empty string â‰¤80 chars. Empty string â†’ null (don't persist
+    // be a non-empty string ≤80 chars. Empty string → null (don't persist
     // blank-string columns; aligns with how `name` is normalised below).
     // Reject 400 INVALID_NAME_FIELD on length / type violations so the SPA
     // surfaces the error before the user hits "save".
@@ -2433,7 +2433,7 @@ router.post("/patients", phiWriteGate, async (req, res) => {
     const patient = await prisma.patient.create({
       data: {
         name: normalisedName,
-        // S100 â€” structured intake additive to canonical `name`. Existing
+        // S100 — structured intake additive to canonical `name`. Existing
         // clients that send only `name` continue to work unchanged (both
         // columns stay null); S97-modal clients populate both.
         firstName,
@@ -2481,7 +2481,7 @@ router.post("/patients", phiWriteGate, async (req, res) => {
       }
     }
 
-    // #179: audit Patient creation. Don't log raw email/phone (PII) â€” record
+    // #179: audit Patient creation. Don't log raw email/phone (PII) — record
     // entityId + minimal metadata; the row itself can be inspected by admins.
     await writeAudit(
       "Patient",
@@ -2525,7 +2525,7 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
       where: tenantWhere(req, { id }),
     });
     if (!existing) return res.status(404).json({ error: "Patient not found" });
-    // #178: full validation on update mirrors create â€” phone/email/dob all checked.
+    // #178: full validation on update mirrors create — phone/email/dob all checked.
     const inputErr = validatePatientInput(req.body, { isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
@@ -2545,8 +2545,8 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
       if (req.body[k] !== undefined) data[k] = req.body[k];
     if (req.body.dob !== undefined)
       data.dob = req.body.dob ? new Date(req.body.dob) : null;
-    // S100 â€” structured firstName + lastName whitelist (PUT). Mirrors POST
-    // semantics: â‰¤80-char string, empty â†’ null. Explicit null on either
+    // S100 — structured firstName + lastName whitelist (PUT). Mirrors POST
+    // semantics: ≤80-char string, empty → null. Explicit null on either
     // field CLEARS that column on the row (this is the inline-edit /
     // form-clear path; an admin editing a row may legitimately blank the
     // last name on a single-name patient). When the body omits the key
@@ -2604,7 +2604,7 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
 
     // #401: keep normalizedPhone in sync with phone on every PUT that
     // touches phone. Without this, an edit-phone flow would leave the
-    // dedup gate's index pointing at the OLD phone â€” second create
+    // dedup gate's index pointing at the OLD phone — second create
     // attempt with the new phone would slip past the constraint.
     // #595: also canonicalise the stored display value to E.164.
     if (req.body.phone !== undefined) {
@@ -2619,7 +2619,7 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
 
     const updated = await prisma.patient.update({ where: { id }, data });
     // #179: audit only the keys that changed. PII (email/phone) is recorded
-    // by name only â€” the actual values are not stored in the audit blob to
+    // by name only — the actual values are not stored in the audit blob to
     // limit exposure if audit logs leak.
     const changes = diffFields(existing, updated, Object.keys(data));
     const safeKeys = Object.keys(changes).filter(
@@ -2646,7 +2646,7 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
     res.json(updated);
   } catch (e) {
     console.error("[wellness] update patient error:", e.message);
-    // #401: same DUPLICATE_PHONE 409 as create â€” happens when an edit
+    // #401: same DUPLICATE_PHONE 409 as create — happens when an edit
     // would collide with another patient's phone in the same tenant.
     if (e && e.code === "P2002" && isNormalizedPhoneTarget(e.meta?.target)) {
       return res.status(409).json({
@@ -2654,21 +2654,21 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
         code: "DUPLICATE_PHONE",
       });
     }
-    // #168 #165: same validation-error â†’ 400 mapping as create.
+    // #168 #165: same validation-error → 400 mapping as create.
     const mapped = httpFromPrismaError(e);
     if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to update patient" });
   }
 });
 
-// #539 (PT-02): DELETE /patients/:id was missing â€” pen-test reported HTML 404
+// #539 (PT-02): DELETE /patients/:id was missing — pen-test reported HTML 404
 // on a route the demo-monitor scrub script + GDPR DSAR flow both want. This
 // is admin-only because deleting clinical records has compliance + legal
 // weight. Hard-delete (no soft-delete column on Patient yet); if the patient
 // has any FK-bound children (visits/prescriptions/consents/treatment-plans/
 // loyalty/referrals), Prisma's Restrict policy throws P2003 and we surface
 // a 409 telling the caller they need to clear children first OR file a
-// GDPR /export â†’ /retention request which handles the cascade properly.
+// GDPR /export → /retention request which handles the cascade properly.
 // Soft-delete semantics + child-detach are a future migration (#527 PHI
 // scoping arc).
 router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
@@ -2683,7 +2683,7 @@ router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
       where: tenantWhere(req, { id }),
     });
     if (!existing) return res.status(404).json({ error: "Patient not found" });
-    // #628 â€” soft-delete: set deletedAt instead of cascade-orphaning
+    // #628 — soft-delete: set deletedAt instead of cascade-orphaning
     // visits/Rx/consents. Already-soft-deleted rows return 409.
     if (existing.deletedAt) {
       return res.status(409).json({
@@ -2697,7 +2697,7 @@ router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
       data: { deletedAt: new Date() },
     });
 
-    // #179 audit pattern â€” patient name only, no email/phone PII in the blob.
+    // #179 audit pattern — patient name only, no email/phone PII in the blob.
     await writeAudit(
       "Patient",
       "SOFT_DELETE",
@@ -2720,7 +2720,7 @@ router.delete("/patients/:id", verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
-// #628 â€” Restore a soft-deleted patient. Admin-only; clears deletedAt so
+// #628 — Restore a soft-deleted patient. Admin-only; clears deletedAt so
 // the row reappears in default lists. No-op (200 idempotent) if already
 // restored. Pairs with the soft-delete handler above; hard-purge runs
 // through the /privacy retention engine (#576) after the tombstone window.
@@ -2772,7 +2772,7 @@ router.post(
   },
 );
 
-// â”€â”€ Visits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Visits ─────────────────────────────────────────────────────────
 
 // #280: Visits are the source for the doctor calendar at /wellness/calendar.
 // Stylists / helpers are non-clinical staff and must NOT see clinical PHI:
@@ -2841,7 +2841,7 @@ router.get("/visits", phiReadGate, async (req, res) => {
     }
     // #324: doctor calendar PHI scope. A doctor opening /wellness/calendar
     // was seeing every other practitioner's column (16 doctors + professionals)
-    // â€” that's other clinicians' patient lists, prescriptions, and consents
+    // — that's other clinicians' patient lists, prescriptions, and consents
     // surfaced via the visit row. Issue body explicitly asks for "Doctor
     // should see Own calendar column, own patients' Rx + consent". Scope
     // their visit feed to visits they're the assigned doctor on. ADMIN /
@@ -2872,10 +2872,10 @@ router.get("/visits", phiReadGate, async (req, res) => {
       visitFindArgs.select = listProjection("Visit", false);
     }
     const visits = await prisma.visit.findMany(visitFindArgs);
-    // PRD Â§11 / T2.2: staff-side cross-patient visit list is a PHI read
+    // PRD §11 / T2.2: staff-side cross-patient visit list is a PHI read
     // (response includes patient name + phone on full path). One audit row
-    // per request, with the filter params and result count â€” never the row
-    // contents. #534 (PERF-1): fire-and-forget â€” see PATIENT_LIST_READ above.
+    // per request, with the filter params and result count — never the row
+    // contents. #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
     //
     // S42 audit-coordination: VISIT_LIST_READ fires on BOTH paths (the
     // regulatory "operator hit list endpoint" record); the `shape` field
@@ -2921,7 +2921,7 @@ router.get("/visits/:id", phiReadGate, async (req, res) => {
       },
     });
     if (!visit) return res.status(404).json({ error: "Visit not found" });
-    // PRD Â§11: log clinical encounter reads. Don't store notes content â€”
+    // PRD §11: log clinical encounter reads. Don't store notes content —
     // record presence flags only so amendments can still be diffed against
     // the canonical Visit row, not against the audit blob.
     try {
@@ -2988,7 +2988,7 @@ router.post("/visits", phiWriteGate, async (req, res) => {
       if (statusErr) return res.status(statusErr.status).json(statusErr);
     }
     // #109: a "completed" visit (the default the UI submits) must have a service
-    // and doctor â€” anonymous "ghost visits" corrupt revenue/per-pro reports.
+    // and doctor — anonymous "ghost visits" corrupt revenue/per-pro reports.
     // Booked/cancelled/no-show statuses can be partial since the visit hasn't happened.
     const isCompleted =
       !status || status === "completed" || status === "in-treatment";
@@ -3002,7 +3002,7 @@ router.post("/visits", phiWriteGate, async (req, res) => {
         error: "doctorId is required for a completed visit",
         code: "DOCTOR_REQUIRED",
       });
-    // #109: amount must be non-negative â€” negative charges distort revenue analytics.
+    // #109: amount must be non-negative — negative charges distort revenue analytics.
     if (
       amountCharged != null &&
       amountCharged !== "" &&
@@ -3013,8 +3013,8 @@ router.post("/visits", phiWriteGate, async (req, res) => {
         code: "AMOUNT_NEGATIVE",
       });
     }
-    // #277: cap amountCharged at â‚¹50,00,000 (â‚¹50L) to match the Service.basePrice
-    // ceiling from #209. Without this, a visit can store â‚¹1e15 (one quadrillion)
+    // #277: cap amountCharged at ₹50,00,000 (₹50L) to match the Service.basePrice
+    // ceiling from #209. Without this, a visit can store ₹1e15 (one quadrillion)
     // and blow up Owner Dashboard's expectedRevenue tile to twenty trillion.
     if (
       amountCharged != null &&
@@ -3022,7 +3022,7 @@ router.post("/visits", phiWriteGate, async (req, res) => {
       Number(amountCharged) > 5_000_000
     ) {
       return res.status(400).json({
-        error: "amountCharged exceeds the â‚¹50,00,000 per-visit cap",
+        error: "amountCharged exceeds the ₹50,00,000 per-visit cap",
         code: "AMOUNT_TOO_LARGE",
       });
     }
@@ -3096,7 +3096,7 @@ router.post("/visits", phiWriteGate, async (req, res) => {
     await maybeAutoCreditLoyalty(visit, req.user.tenantId);
 
     // S94: denormalize Patient.lastVisitDate cache from the just-created
-    // visit. Best-effort â€” a failure here MUST NOT abort the visit insert
+    // visit. Best-effort — a failure here MUST NOT abort the visit insert
     // (the source-of-truth Visit row exists; the cron/backfillLastVisitEngine
     // sweep will reconcile any drift on its next run). The column was added
     // by S62; population is THIS slice. Read path (S96 listProjection slim
@@ -3171,7 +3171,7 @@ router.post("/visits", phiWriteGate, async (req, res) => {
     res.status(201).json(visit);
   } catch (e) {
     console.error("[wellness] create visit error:", e.message);
-    // #165: bad FK / overflow / null-on-required â†’ 400 with the real reason.
+    // #165: bad FK / overflow / null-on-required → 400 with the real reason.
     const mapped = httpFromPrismaError(e);
     if (mapped) return res.status(mapped.status).json(mapped);
     res.status(500).json({ error: "Failed to create visit" });
@@ -3179,12 +3179,12 @@ router.post("/visits", phiWriteGate, async (req, res) => {
 });
 
 // Staff-side endpoint to assign a doctor to a pending appointment (one
-// where doctorId is null â€” typically a portal self-booking with "No
-// preference â€” admin will assign"). Runs the same availability guards
+// where doctorId is null — typically a portal self-booking with "No
+// preference — admin will assign"). Runs the same availability guards
 // as the booking flow so the assignment can't create a conflict.
 //
 // Once applied, the visit moves out of the patient's "Pending
-// Assignment" bucket and into "Upcoming" â€” the patient's MyBookings
+// Assignment" bucket and into "Upcoming" — the patient's MyBookings
 // picks this up on its next focus/visibility refresh (no extra
 // notification needed for Phase 1).
 router.patch("/visits/:id/assign-doctor", phiWriteGate, async (req, res) => {
@@ -3258,7 +3258,7 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     if (data.locationId !== undefined)
       data.locationId = data.locationId ? parseInt(data.locationId, 10) : null;
     // #170 / #197 (PUT-side parity): visitDate must be in [now-5y, now+1y]
-    // â€” same range as POST /visits. Pre-fix the PUT skipped ensureVisitDate
+    // — same range as POST /visits. Pre-fix the PUT skipped ensureVisitDate
     // and silently accepted year=3001 / year=1800 (parseTenantDateInput
     // only sniffs format, not range), so a UI form-fill bug or scripted
     // caller could relocate a visit to the year 3000. Range-check FIRST,
@@ -3269,7 +3269,7 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
       data.visitDate = parseTenantDateInput(req.body.visitDate);
     }
 
-    // #277: same per-visit cap as POST â€” reject overflow updates.
+    // #277: same per-visit cap as POST — reject overflow updates.
     if (data.amountCharged != null && data.amountCharged !== "") {
       const amt = Number(data.amountCharged);
       if (amt < 0)
@@ -3279,7 +3279,7 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
         });
       if (amt > 5_000_000)
         return res.status(400).json({
-          error: "amountCharged exceeds the â‚¹50,00,000 per-visit cap",
+          error: "amountCharged exceeds the ₹50,00,000 per-visit cap",
           code: "AMOUNT_TOO_LARGE",
         });
     }
@@ -3339,7 +3339,7 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
 
     // Agent B: when a visit transitions to "cancelled", auto-offer the slot
     // to the first matching waitlist entry (same serviceId, status=waiting).
-    // Failures here MUST NOT fail the original update â€” log and continue.
+    // Failures here MUST NOT fail the original update — log and continue.
     if (data.status === "cancelled" && existing.status !== "cancelled") {
       try {
         await offerWaitlistSlotForCancelledVisit(updated, req.user.tenantId);
@@ -3416,8 +3416,8 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
       }
     }
 
-    // #179: audit visit update. Status transitions (booked â†’ in-treatment â†’
-    // completed â†’ cancelled / no-show) are the highest-signal field; always
+    // #179: audit visit update. Status transitions (booked → in-treatment →
+    // completed → cancelled / no-show) are the highest-signal field; always
     // capture from/to explicitly when status changed.
     const changes = diffFields(existing, updated, Object.keys(data));
     if (Object.keys(changes).length > 0) {
@@ -3489,14 +3489,14 @@ router.post("/visits/:id/payment-link", phiWriteGate, async (req, res) => {
   }
 });
 
-// â”€â”€ Visit photos (before/after) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Visit photos (before/after) ────────────────────────────────────
 //
-// #743 â€” photos are stored on the local filesystem and served under
+// #743 — photos are stored on the local filesystem and served under
 // /api/wellness/visits/:id/photos/:filename (proxied to the backend by
 // Nginx). The legacy /uploads/* path fell through to the SPA catch-all and
 // returned text/html. Serving here stamps an explicit image Content-Type,
 // guards against path traversal, tenant-scopes the read, and validates the
-// upload mime. No S3 dependency â€” works in CI / any env without AWS creds.
+// upload mime. No S3 dependency — works in CI / any env without AWS creds.
 const PHOTO_MIME_BY_EXT = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -3566,7 +3566,7 @@ router.post(
       });
       if (!visit) return res.status(404).json({ error: "Visit not found" });
 
-      // #743 â€” reject non-image uploads at the API layer.
+      // #743 — reject non-image uploads at the API layer.
       const files = req.files || [];
       for (const f of files) {
         const mime = photoContentType(f.originalname || "");
@@ -3580,7 +3580,7 @@ router.post(
       }
 
       // S3-primary, local-FS fallback. When AWS creds are configured
-      // (S3_BUCKET_NAME set) photos go to S3 and we store the S3 URL â€”
+      // (S3_BUCKET_NAME set) photos go to S3 and we store the S3 URL —
       // unchanged prod behaviour. When S3 isn't configured (CI / any env
       // without creds) we persist to the local filesystem and store the
       // Nginx-proxied /api/wellness/visits/:id/photos/:filename path (served
@@ -3663,7 +3663,7 @@ router.delete("/visits/:id/photos", phiWriteGate, async (req, res) => {
   }
 });
 
-// â”€â”€ Inventory consumption per visit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Inventory consumption per visit ────────────────────────────────
 
 router.get("/visits/:id/consumptions", phiReadGate, async (req, res) => {
   try {
@@ -3672,9 +3672,9 @@ router.get("/visits/:id/consumptions", phiReadGate, async (req, res) => {
       where: tenantWhere(req, { visitId: id }),
       orderBy: { createdAt: "desc" },
     });
-    // PRD Â§11 / T2.2: consumption items reveal what was administered during a
-    // visit â€” clinical context tied to the patient. Audit per request.
-    // #534 (PERF-1): fire-and-forget â€” see PATIENT_LIST_READ above.
+    // PRD §11 / T2.2: consumption items reveal what was administered during a
+    // visit — clinical context tied to the patient. Audit per request.
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
     writeAudit(
       "Visit",
       "VISIT_CONSUMPTIONS_READ",
@@ -3710,11 +3710,11 @@ router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
       return res.status(400).json({ error: "productName required" });
 
     // #321: cap unitCost + qty + line total. P&L by Service was rendering
-    // PRODUCT COST = â‚¹99,99,98,99,90,48,826 (~100 trillion) because a single
+    // PRODUCT COST = ₹99,99,98,99,90,48,826 (~100 trillion) because a single
     // ServiceConsumption row carried an unbounded unitCost (likely a paise/
-    // rupee unit-mismatch or a fat-fingered entry). Mirrors the â‚¹50L Visit
-    // amountCharged cap from #277. â‚¹10L per unit is already absurd for any
-    // clinic consumable; the line total is capped at â‚¹1Cr to match the
+    // rupee unit-mismatch or a fat-fingered entry). Mirrors the ₹50L Visit
+    // amountCharged cap from #277. ₹10L per unit is already absurd for any
+    // clinic consumable; the line total is capped at ₹1Cr to match the
     // cleanup-script threshold in the output note.
     const qNum = parseInt(qty) || 1;
     const cNum = parseFloat(unitCost) || 0;
@@ -3732,13 +3732,13 @@ router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
     }
     if (cNum > 1_000_000) {
       return res.status(400).json({
-        error: "unitCost exceeds the â‚¹10,00,000 per-unit cap",
+        error: "unitCost exceeds the ₹10,00,000 per-unit cap",
         code: "UNIT_COST_TOO_LARGE",
       });
     }
     if (qNum * cNum > 10_000_000) {
       return res.status(400).json({
-        error: "consumption line total exceeds the â‚¹1,00,00,000 per-line cap",
+        error: "consumption line total exceeds the ₹1,00,00,000 per-line cap",
         code: "LINE_TOTAL_TOO_LARGE",
       });
     }
@@ -3760,7 +3760,7 @@ router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
   }
 });
 
-// PUT /visits/:id/consumptions/:consumptionId â€” AMEND a consumption line.
+// PUT /visits/:id/consumptions/:consumptionId — AMEND a consumption line.
 // Per the CLINICAL ARTEFACT RETENTION POLICY above, ServiceConsumption rows
 // are permanent and MUST NOT be deleted; corrections are made by amending the
 // existing row (typo in product name, wrong qty / unit cost). The audit log
@@ -3815,13 +3815,13 @@ router.put(
       }
       if (cNum > 1_000_000) {
         return res.status(400).json({
-          error: "unitCost exceeds the â‚¹10,00,000 per-unit cap",
+          error: "unitCost exceeds the ₹10,00,000 per-unit cap",
           code: "UNIT_COST_TOO_LARGE",
         });
       }
       if (qNum * cNum > 10_000_000) {
         return res.status(400).json({
-          error: "consumption line total exceeds the â‚¹1,00,00,000 per-line cap",
+          error: "consumption line total exceeds the ₹1,00,00,000 per-line cap",
           code: "LINE_TOTAL_TOO_LARGE",
         });
       }
@@ -3836,7 +3836,7 @@ router.put(
       });
 
       // Amendment trail: capture the before/after for the three editable
-      // fields so the permanent record stays auditable (policy Â§"Corrections").
+      // fields so the permanent record stays auditable (policy §"Corrections").
       writeAudit(
         "ServiceConsumption",
         "CONSUMPTION_AMENDED",
@@ -3871,12 +3871,12 @@ router.put(
   },
 );
 
-// â”€â”€ Prescriptions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Prescriptions ──────────────────────────────────────────────────
 
 // #326: clinical-write gate. The reusable verifyWellnessRole emits
 // `WELLNESS_ROLE_FORBIDDEN` which collides with non-clinical 403s
 // (catalog edits, owner reports). Prescriptions are a medico-legal
-// write â€” frontend + audit need a stable, distinct code so a telecaller
+// write — frontend + audit need a stable, distinct code so a telecaller
 // (or any non-doctor wellnessRole) hitting this route is unmistakably
 // blocked for a clinical reason. Allow only doctor wellnessRole or RBAC
 // ADMIN. MANAGER is explicitly NOT allowed: managers operate the clinic
@@ -3886,7 +3886,7 @@ function requireClinicalRole(req, res, next) {
     return res.status(401).json({ error: "Authentication required" });
   if (req.user.role === "ADMIN") return next();
   if (req.user.wellnessRole === "doctor") return next();
-  // Neutral copy + structured code â€” no internal role-taxonomy leakage.
+  // Neutral copy + structured code — no internal role-taxonomy leakage.
   return res.status(403).json({
     error: "You do not have permission to perform this action",
     code: "CLINICAL_ROLE_REQUIRED",
@@ -3902,7 +3902,7 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
     const skipN = Math.max(parseInt(skip, 10) || 0, 0);
     // #920 slice S42: opt-in slim shape via `?fields=summary`. Drops the
     // patient/doctor includes (patient.name is PHI under the strict
-    // medico-legal classification â€” and crucially, the `drugs` @db.Text
+    // medico-legal classification — and crucially, the `drugs` @db.Text
     // column on Prescription is the load-bearing PHI drop: that's what
     // makes the bare-list call a regulated PHI read). Slim shape returns
     // only FKs the picker can hop on.
@@ -3925,9 +3925,9 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
       prisma.prescription.findMany(rxFindArgs),
       prisma.prescription.count({ where }),
     ]);
-    // PRD Â§11 / T2.2: staff-side prescription list is a PHI read on the
+    // PRD §11 / T2.2: staff-side prescription list is a PHI read on the
     // full path (response embeds patient name + the drugs JSON). Medico-
-    // legal trail. #534 (PERF-1): fire-and-forget â€” see PATIENT_LIST_READ
+    // legal trail. #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ
     // above.
     //
     // S42 audit-coordination: PRESCRIPTION_LIST_READ fires on BOTH paths;
@@ -4016,11 +4016,11 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
 });
 
 // #194: amend a prescription. Restricted to the original prescriber or an
-// ADMIN â€” anyone else gets 403. drugs (when supplied) must keep the
+// ADMIN — anyone else gets 403. drugs (when supplied) must keep the
 // non-empty-with-name invariant of the create path. Hard-delete is NOT
 // exposed: clinical records must persist for the medico-legal trail.
 // #207/#216: same clinical gate on amend. The body still enforces "only the
-// original prescriber or an ADMIN" â€” this gate just keeps non-clinicals out
+// original prescriber or an ADMIN" — this gate just keeps non-clinicals out
 // before the row lookup.
 router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
   try {
@@ -4053,7 +4053,7 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
     if (req.body.instructions !== undefined)
       data.instructions = req.body.instructions;
     const updated = await prisma.prescription.update({ where: { id }, data });
-    // #179: audit Rx amendment. This row is the medico-legal trail â€”
+    // #179: audit Rx amendment. This row is the medico-legal trail —
     // capture before/after drug arrays so the diff is reconstructible without
     // having to read prior versions of the row.
     let priorDrugs = null,
@@ -4089,7 +4089,7 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
   }
 });
 
-// â”€â”€ Consent forms â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Consent forms ──────────────────────────────────────────────────
 
 router.get("/consents", phiReadGate, async (req, res) => {
   try {
@@ -4113,9 +4113,9 @@ router.get("/consents", phiReadGate, async (req, res) => {
         // EXCLUDED: signatureSvg, contentSnapshot, signedPdfBlob
       },
     });
-    // PRD Â§11 / T2.2: staff-side consent list is a PHI read
+    // PRD §11 / T2.2: staff-side consent list is a PHI read
     // (response embeds patient name + signed template type).
-    // #534 (PERF-1): fire-and-forget â€” see PATIENT_LIST_READ above.
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
     writeAudit(
       "ConsentForm",
       "CONSENT_LIST_READ",
@@ -4140,10 +4140,10 @@ router.get("/consents", phiReadGate, async (req, res) => {
 // professional running the visit; admin owner override allowed. Telecallers
 // and helpers cannot record consent.
 //
-// #564 v3.7.3 â€” STAFF-TABLET-HANDOFF workflow (chosen disposition). Staff
+// #564 v3.7.3 — STAFF-TABLET-HANDOFF workflow (chosen disposition). Staff
 // pulls up the form on a tablet during patient intake, hands the tablet to
 // the patient, the patient signs, and staff confirms + submits. The RBAC
-// gate above (doctor/professional/admin only) enforces this â€” telecallers
+// gate above (doctor/professional/admin only) enforces this — telecallers
 // can't capture consent, and the patient portal does NOT POST here (portal
 // path is separate at routes/portal.js when/if patient-self-serve ships).
 // captureMethod defaults to 'tablet-handoff' to record the workflow at the
@@ -4181,12 +4181,12 @@ router.post(
           code: "SIGNATURE_REQUIRED",
         });
       }
-      // #564 â€” DPDP Â§15 / CONSENT_CAPTURE. Snapshot the matching
+      // #564 — DPDP §15 / CONSENT_CAPTURE. Snapshot the matching
       // ConsentTemplate.body server-side so the immutable record reflects the
       // wording shown to the patient at sign time, even if the template body
       // is later edited or the template row is deleted. We deliberately
       // resolve by (tenantId, key=templateName) rather than trusting client
-      // input â€” a tampered request body cannot inject arbitrary contentSnapshot.
+      // input — a tampered request body cannot inject arbitrary contentSnapshot.
       let contentSnapshot = null;
       try {
         const tpl = await prisma.consentTemplate.findFirst({
@@ -4198,7 +4198,7 @@ router.post(
         /* schema/migration race; leave snapshot null */
       }
 
-      // #564 v3.7.3 â€” captureMethod allowlist. Client may set 'tablet-handoff'
+      // #564 v3.7.3 — captureMethod allowlist. Client may set 'tablet-handoff'
       // (default), 'portal-self-serve' (future), or 'imported-pdf' (data
       // migration only). Unknown values fall back to the default so a typo
       // doesn't poison the audit trail.
@@ -4224,7 +4224,7 @@ router.post(
         },
       });
       // #179: audit consent creation. Don't store the signatureSvg in the
-      // audit blob â€” it's a few KB, and the row itself holds the canonical copy.
+      // audit blob — it's a few KB, and the row itself holds the canonical copy.
       // #564: emit CONSENT_CAPTURE alongside the legacy CREATE so DPDP / clinical
       // audit reviewers can grep one canonical action verb across the audit log.
       // v3.7.3: include captureMethod + capturedByUserId so the audit row alone
@@ -4313,7 +4313,7 @@ router.post(
   },
 );
 
-// #194: amend a consent form â€” only the templateName + serviceId metadata
+// #194: amend a consent form — only the templateName + serviceId metadata
 // can be corrected. The signatureSvg is captured-at-signing and is never
 // editable post-hoc: that's a forgery vector, not an amendment. ADMIN only.
 // #207/#216: consent metadata edits are admin-only (matches existing body
@@ -4358,7 +4358,7 @@ router.put(
         });
       }
       const updated = await prisma.consentForm.update({ where: { id }, data });
-      // #179: HIPAA / DPDP â€” consent metadata amendments are PHI-adjacent and
+      // #179: HIPAA / DPDP — consent metadata amendments are PHI-adjacent and
       // must be auditable. signatureSvg is rejected above so it can't appear
       // in the diff. Audit failure must NOT break the user-facing response.
       try {
@@ -4385,7 +4385,7 @@ router.put(
   },
 );
 
-// â”€â”€ #612: Consent templates CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── #612: Consent templates CRUD ───────────────────────────────────
 //
 // Pre-fix the consent-capture dropdown rendered 5 hardcoded options
 // (hair-transplant / botox-fillers / laser / chemical-peel / general)
@@ -4496,7 +4496,7 @@ router.put(
       if (req.body.language !== undefined)
         data.language = req.body.language || "en";
       if (req.body.isActive !== undefined) data.isActive = !!req.body.isActive;
-      // key is immutable post-create â€” historical ConsentForm rows reference it.
+      // key is immutable post-create — historical ConsentForm rows reference it.
       const updated = await prisma.consentTemplate.update({
         where: { id },
         data,
@@ -4531,9 +4531,9 @@ router.delete(
   },
 );
 
-// â”€â”€ Treatment plans â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Treatment plans ────────────────────────────────────────────────
 //
-// #420: Path consolidation. Pre-fix this resource straddled two paths â€”
+// #420: Path consolidation. Pre-fix this resource straddled two paths —
 // POST /wellness/treatments (create) but PUT /wellness/treatment-plans/:id
 // (update). Same Prisma model, two URLs. That broke the G-20 tenant-isolation
 // framework (which assumes one canonical path per resource) and confused
@@ -4545,7 +4545,7 @@ router.delete(
 // No DELETE: TreatmentPlan is in the clinical-no-delete cluster (#21). See the
 // retention-policy comment block at the top of this file.
 
-// GET /treatment-plans â€” list (filterable by patientId / status)
+// GET /treatment-plans — list (filterable by patientId / status)
 router.get("/treatment-plans", phiReadGate, async (req, res) => {
   try {
     const { patientId, status } = req.query;
@@ -4560,8 +4560,8 @@ router.get("/treatment-plans", phiReadGate, async (req, res) => {
       },
       orderBy: { startedAt: "desc" },
     });
-    // PRD Â§11 / T2.2: treatment plans embed patient name + phone + service.
-    // #534 (PERF-1): fire-and-forget â€” see PATIENT_LIST_READ above.
+    // PRD §11 / T2.2: treatment plans embed patient name + phone + service.
+    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
     writeAudit(
       "TreatmentPlan",
       "TREATMENT_PLAN_LIST_READ",
@@ -4588,7 +4588,7 @@ router.get("/treatment-plans", phiReadGate, async (req, res) => {
   }
 });
 
-// GET /treatment-plans/:id â€” read one (tenant-scoped via findFirst)
+// GET /treatment-plans/:id — read one (tenant-scoped via findFirst)
 router.get("/treatment-plans/:id", phiReadGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -4601,7 +4601,7 @@ router.get("/treatment-plans/:id", phiReadGate, async (req, res) => {
     });
     if (!plan)
       return res.status(404).json({ error: "Treatment plan not found" });
-    // PRD Â§11 / T2.2: treatment plan detail reveals patient + service +
+    // PRD §11 / T2.2: treatment plan detail reveals patient + service +
     // session progress. Audit per request.
     try {
       await writeAudit(
@@ -4629,7 +4629,7 @@ router.get("/treatment-plans/:id", phiReadGate, async (req, res) => {
   }
 });
 
-// POST /treatment-plans â€” create
+// POST /treatment-plans — create
 router.post("/treatment-plans", phiWriteGate, async (req, res) => {
   try {
     const { name, totalSessions, totalPrice, patientId, serviceId, nextDueAt } =
@@ -4639,10 +4639,10 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
         .status(400)
         .json({ error: "name, totalSessions, patientId required" });
     }
-    // #745 â€” duplicate-prevention: reject an exact-match plan created in the
+    // #745 — duplicate-prevention: reject an exact-match plan created in the
     // last 5 minutes with 409 IDEMPOTENT_DUPLICATE (kills rapid double-click /
     // retried-seed dup explosions while still allowing legitimate same-name
-    // plans created months apart). TreatmentPlan has no `createdAt` column â€”
+    // plans created months apart). TreatmentPlan has no `createdAt` column —
     // `startedAt` (@default now) serves the dedupe window. Ported from main
     // (partial-port gap).
     {
@@ -4676,7 +4676,7 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
         tenantId: req.user.tenantId,
       },
     });
-    // #179: PHI-adjacent treatment plan create is auditable per PRD Â§11.
+    // #179: PHI-adjacent treatment plan create is auditable per PRD §11.
     try {
       await writeAudit(
         "TreatmentPlan",
@@ -4722,7 +4722,7 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
   }
 });
 
-// â”€â”€ Legacy /treatments paths â€” 410 Gone with canonical pointer (#420) â”€â”€
+// ── Legacy /treatments paths — 410 Gone with canonical pointer (#420) ──
 //
 // Same shape as the namespacing redirect helper at the top of the file
 // (WELLNESS_NAMESPACE_INVALID for /staff and /audit). Callers get a strong,
@@ -4745,7 +4745,7 @@ const treatmentsGone = (req, res) => {
 router.all("/treatments", treatmentsGone);
 router.all("/treatments/*", treatmentsGone);
 
-// â”€â”€ Services (catalog) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Services (catalog) ─────────────────────────────────────────────
 
 router.get("/services", async (req, res) => {
   try {
@@ -4769,13 +4769,13 @@ router.get("/services", async (req, res) => {
 });
 
 // #216: service-catalog mutations are operational, not clinical. Lock to
-// admin/manager â€” clinical staff (doctors/professionals) read the catalog
+// admin/manager — clinical staff (doctors/professionals) read the catalog
 // but don't define pricing or duration.
-// Wave 2 Agent LL â€” validate + normalize the supportedBookingTypes input
+// Wave 2 Agent LL — validate + normalize the supportedBookingTypes input
 // for service create/update endpoints. Returns either an error envelope
 // (suitable for res.status/json) or a JSON-stringified payload ready for
 // the Prisma `data:` field. Empty/omitted input returns null (column
-// default â†’ widget falls back to CLINIC_VISIT-only).
+// default → widget falls back to CLINIC_VISIT-only).
 function normalizeSupportedBookingTypesInput(raw) {
   if (raw == null || raw === "") return { value: null };
   let parsed = raw;
@@ -4837,8 +4837,8 @@ router.post("/services", adminOrPerm("services", "write"), async (req, res) => {
     } = req.body;
     if (!name || !String(name).trim())
       return res.status(400).json({ error: "name required" });
-    // #115: refuse zero-priced services from the catalog. Existing â‚¹0 rows
-    // (e.g. seed-only "spa") stay visible until manually corrected â€” only
+    // #115: refuse zero-priced services from the catalog. Existing ₹0 rows
+    // (e.g. seed-only "spa") stay visible until manually corrected — only
     // new creations are blocked.
     const price = Number(basePrice);
     if (!Number.isFinite(price) || price <= 0) {
@@ -4849,19 +4849,19 @@ router.post("/services", adminOrPerm("services", "write"), async (req, res) => {
           code: "PRICE_REQUIRED",
         });
     }
-    // #209: cap basePrice at â‚¹50L (5_000_000). Public booking page exposes
-    // garbage rows like â‚¹1e15 / 999999 min when there's no upper bound.
+    // #209: cap basePrice at ₹50L (5_000_000). Public booking page exposes
+    // garbage rows like ₹1e15 / 999999 min when there's no upper bound.
     if (price > 5_000_000) {
       return res
         .status(400)
         .json({
-          error: "basePrice exceeds maximum (â‚¹50,00,000)",
+          error: "basePrice exceeds maximum (₹50,00,000)",
           code: "PRICE_TOO_HIGH",
         });
     }
     // #149: durationMin must be positive; targetRadiusKm must be non-negative
     // when supplied (null = unlimited is fine).
-    // #209: cap durationMin at 8 hours (480 min) â€” anything beyond that is
+    // #209: cap durationMin at 8 hours (480 min) — anything beyond that is
     // not a single appointment.
     if (durationMin !== undefined && durationMin !== null) {
       const d = Number(durationMin);
@@ -4900,7 +4900,7 @@ router.post("/services", adminOrPerm("services", "write"), async (req, res) => {
           });
       }
     }
-    // Wave 2 Agent LL â€” validate supportedBookingTypes before write.
+    // Wave 2 Agent LL — validate supportedBookingTypes before write.
     const sbtResult = normalizeSupportedBookingTypesInput(
       supportedBookingTypes,
     );
@@ -4911,7 +4911,7 @@ router.post("/services", adminOrPerm("services", "write"), async (req, res) => {
     }
     // imageUrls is a JSON-stringified array of URLs (matches the Prisma
     // column shape). Accept either an array (we stringify) or a pre-
-    // stringified value â€” frontends typically send the array form.
+    // stringified value — frontends typically send the array form.
     let imageUrlsValue = null;
     if (imageUrls !== undefined && imageUrls !== null && imageUrls !== "") {
       imageUrlsValue = Array.isArray(imageUrls)
@@ -4935,7 +4935,7 @@ router.post("/services", adminOrPerm("services", "write"), async (req, res) => {
         tenantId: req.user.tenantId,
       },
     });
-    // #179: catalog mutations are operational config â€” audit so price/duration
+    // #179: catalog mutations are operational config — audit so price/duration
     // changes are traceable for billing-dispute investigations.
     try {
       await writeAudit(
@@ -4995,7 +4995,7 @@ router.put(
         if (v === null || v === "") data.imageUrls = null;
         else data.imageUrls = Array.isArray(v) ? JSON.stringify(v) : String(v);
       }
-      // Wave 2 Agent LL â€” supportedBookingTypes is handled separately because
+      // Wave 2 Agent LL — supportedBookingTypes is handled separately because
       // it requires JSON-stringification + vocabulary validation, NOT a raw
       // copy of req.body[k] like the other allowed fields.
       if (req.body.supportedBookingTypes !== undefined) {
@@ -5009,7 +5009,7 @@ router.put(
         }
         data.supportedBookingTypes = sbtResult.value;
       }
-      // #115: same price guard on edit â€” can't update a service to â‚¹0.
+      // #115: same price guard on edit — can't update a service to ₹0.
       if (data.basePrice !== undefined) {
         const price = Number(data.basePrice);
         if (!Number.isFinite(price) || price <= 0) {
@@ -5025,7 +5025,7 @@ router.put(
           return res
             .status(400)
             .json({
-              error: "basePrice exceeds maximum (â‚¹50,00,000)",
+              error: "basePrice exceeds maximum (₹50,00,000)",
               code: "PRICE_TOO_HIGH",
             });
         }
@@ -5099,7 +5099,7 @@ router.put(
   },
 );
 
-// â”€â”€ Wellness role catalog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Wellness role catalog ──────────────────────────────────────────
 //
 // Per-tenant catalog that replaces the old hard-coded VALID_WELLNESS_ROLES
 // whitelist in routes/staff.js. Admins maintain rows like
@@ -5107,7 +5107,7 @@ router.put(
 // Calendar grid + Staff edit form read this list to discover which
 // wellnessRole values are valid for the tenant.
 //
-// `key` is a slug stored on User.wellnessRole â€” it's the value the rest
+// `key` is a slug stored on User.wellnessRole — it's the value the rest
 // of the codebase already compares against. Changing it for an in-use
 // role would orphan every staff member with that wellnessRole, so the
 // PUT handler refuses key-edits on rows in use. DELETE is similarly
@@ -5127,7 +5127,7 @@ router.get("/role-types", async (req, res) => {
     let rows = await listRoleTypes(req.user.tenantId, { activeOnly });
     // Defensive auto-seed: if the tenant has no wellness role catalog yet
     // (fresh signup, restored backup, or data drift), plant the defaults
-    // before returning so the Staff form + backend sync can map DOCTOR â†’
+    // before returning so the Staff form + backend sync can map DOCTOR →
     // "doctor" instead of returning an empty dropdown.
     if (rows.length === 0) {
       await seedDefaultsForTenant(req.user.tenantId);
@@ -5333,19 +5333,19 @@ router.delete(
   },
 );
 
-// â”€â”€ Memberships â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Memberships ────────────────────────────────────────────────────
 //
-// Wave 11 Agent EE â€” Memberships (Google Doc audit, 8 May 2026).
+// Wave 11 Agent EE — Memberships (Google Doc audit, 8 May 2026).
 //
 // Wellness clinics sell time-bound prepaid bundles ("Gold Facial Pack:
-// 10 facials over 6 months for â‚¹15,000"). The catalog row is a
+// 10 facials over 6 months for ₹15,000"). The catalog row is a
 // MembershipPlan (admin-managed); a Patient's instance is a Membership
 // (with a running per-service balance); each service consumed against
 // it is a MembershipRedemption row (append-only).
 //
 // Two JSON-string columns to read end-of-end carefully:
-//   plan.entitlements   â†’ JSON `[{ serviceId, quantity }]`
-//   membership.balance  â†’ JSON `[{ serviceId, remaining }]`
+//   plan.entitlements   → JSON `[{ serviceId, quantity }]`
+//   membership.balance  → JSON `[{ serviceId, remaining }]`
 // The balance is stamped from entitlements at purchase, decremented on
 // redeem. Stored stringified because (a) reads/writes always happen
 // as a unit during a redemption, and (b) MySQL JSON column adoption
@@ -5355,7 +5355,7 @@ router.delete(
 // Parse + validate `entitlements` from request body. Returns either an
 // error object (suitable for res.status/json) or a normalized array of
 // `{ serviceId, quantity }` objects. The serviceId values are NOT yet
-// confirmed to belong to this tenant â€” call validateEntitlementServices
+// confirmed to belong to this tenant — call validateEntitlementServices
 // next for that round-trip.
 function parseEntitlementsInput(raw) {
   if (raw == null) {
@@ -5417,7 +5417,7 @@ function parseEntitlementsInput(raw) {
       return {
         error: {
           status: 400,
-          error: "entitlement quantity must be â‰¥ 1",
+          error: "entitlement quantity must be ≥ 1",
           code: "ENTITLEMENT_QUANTITY_INVALID",
         },
       };
@@ -5459,7 +5459,7 @@ async function validateEntitlementServices(req, entitlements) {
   return null;
 }
 
-// GET /membership-plans â€” list active plans, all-roles (clinical staff
+// GET /membership-plans — list active plans, all-roles (clinical staff
 // need to read so they can offer plans to patients during the visit).
 //
 // When the caller has a Patient row (typical for self-service buyers and
@@ -5468,16 +5468,16 @@ async function validateEntitlementServices(req, entitlements) {
 // Plans UI can render the three-state card (never purchased / active /
 // expired) in one round-trip:
 //
-//   hasActiveMembership      â€” bool, true when an unexpired active row exists
-//   activeMembershipId       â€” int | null
-//   activeMembershipEndDate  â€” Date | null
-//   hasExpiredMembership     â€” bool, true when ANY prior row exists that
+//   hasActiveMembership      — bool, true when an unexpired active row exists
+//   activeMembershipId       — int | null
+//   activeMembershipEndDate  — Date | null
+//   hasExpiredMembership     — bool, true when ANY prior row exists that
 //                              isn't currently active (status='expired',
 //                              'cancelled', or status='active' but
 //                              endDate <= now per the lazy-expiry rule)
 //
 // Admin-only / staff-only callers without a matching Patient row get the
-// legacy response shape unchanged. The added fields are additive â€” every
+// legacy response shape unchanged. The added fields are additive — every
 // existing consumer that destructures `id`/`name`/`price`/etc. keeps
 // working without modification.
 router.get("/membership-plans", async (req, res) => {
@@ -5491,7 +5491,7 @@ router.get("/membership-plans", async (req, res) => {
       orderBy: [{ isActive: "desc" }, { name: "asc" }],
       take: 200,
     });
-    // #747 â€” hide test-fixture plans (_teardown_* / _test_*) from default lists
+    // #747 — hide test-fixture plans (_teardown_* / _test_*) from default lists
     // so staff can't accidentally sell a real membership against a test row.
     // Admin override surfaces them via ?includeTeardown=1.
     const visible = includeTeardown
@@ -5499,7 +5499,7 @@ router.get("/membership-plans", async (req, res) => {
       : plans.filter((p) => !/^_teardown_|^_test_/.test(p.name || ""));
 
     // Annotate with per-plan ownership for the calling user. Single query
-    // joined into the response â€” catalog size is bounded (<50 plans, <100
+    // joined into the response — catalog size is bounded (<50 plans, <100
     // memberships per user typically), so the overhead is negligible.
     let annotated = visible;
     if (req.user && req.user.userId && req.user.tenantId) {
@@ -5567,7 +5567,7 @@ router.get("/membership-plans/:id", async (req, res) => {
   }
 });
 
-// POST /membership-plans â€” admin/manager only (catalog mutation, mirrors
+// POST /membership-plans — admin/manager only (catalog mutation, mirrors
 // /services pattern at line 1955).
 router.post(
   "/membership-plans",
@@ -5634,7 +5634,7 @@ router.post(
       } catch (auditErr) {
         console.warn("[audit]", auditErr.message);
       }
-      // PRD Gap Â§13 wave-6a â€” emit membership.plan_created so workflow rules
+      // PRD Gap §13 wave-6a — emit membership.plan_created so workflow rules
       // can react (e.g. announce a new plan to active patients via campaign).
       try {
         require("../lib/eventBus").emitEvent(
@@ -5751,7 +5751,7 @@ router.put(
   },
 );
 
-// DELETE /membership-plans/:id â€” soft-delete (set isActive=false).
+// DELETE /membership-plans/:id — soft-delete (set isActive=false).
 // Existing patient memberships are NOT cancelled; they keep their balance
 // until expiry. Only stops new sales of this plan.
 router.delete(
@@ -5797,7 +5797,7 @@ router.delete(
   },
 );
 
-// POST /patients/:id/memberships â€” purchase a membership for a patient.
+// POST /patients/:id/memberships — purchase a membership for a patient.
 // Computes endDate from plan.durationDays, stamps initial balance from
 // plan.entitlements. Audit-logs MEMBERSHIP_PURCHASE.
 router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
@@ -5820,7 +5820,7 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
     });
     if (!plan)
       return res.status(404).json({ error: "Membership plan not found" });
-    // #748 â€” never post a real purchase against a test-fixture plan, even if it
+    // #748 — never post a real purchase against a test-fixture plan, even if it
     // slipped through with isActive=true. Mirrors the #747 default-list filter.
     if (/^_teardown_|^_test_/.test(plan.name || "")) {
       return res.status(410).json({
@@ -5835,7 +5835,7 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
     }
 
     // Block duplicate active enrollment on the same plan. Staff workflow
-    // historically allowed stacking (the priorCount â†’ isRenewal logic
+    // historically allowed stacking (the priorCount → isRenewal logic
     // below treats every nth purchase as a renewal event), but per the
     // 2026-06 lifecycle requirement we now reject while an active row
     // exists and only allow re-purchase after expiry / cancellation.
@@ -5901,10 +5901,10 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
       const invIdInt = parseInt(invoiceId, 10);
       if (Number.isFinite(invIdInt)) data.invoiceId = invIdInt;
     }
-    // PRD Gap Â§13 wave-6a â€” sniff whether this is a NEW enrollment or a
+    // PRD Gap §13 wave-6a — sniff whether this is a NEW enrollment or a
     // RENEWAL (prior membership of the same plan exists for this patient).
     // Used to disambiguate the `membership.enrolled` vs `membership.renewed`
-    // events emitted below. Best-effort â€” failure to read prior memberships
+    // events emitted below. Best-effort — failure to read prior memberships
     // must NOT break the purchase flow.
     let isRenewal = false;
     try {
@@ -5936,7 +5936,7 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
     } catch (auditErr) {
       console.warn("[audit]", auditErr.message);
     }
-    // PRD Gap Â§13 wave-6a â€” emit membership.enrolled OR membership.renewed
+    // PRD Gap §13 wave-6a — emit membership.enrolled OR membership.renewed
     // so workflow rules can react (welcome SMS on first enrollment,
     // thank-you-for-renewing on re-purchase). Wrapped: workflow failures
     // never break the purchase response.
@@ -5966,7 +5966,7 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
   }
 });
 
-// GET /patients/:id/memberships â€” list a patient's memberships
+// GET /patients/:id/memberships — list a patient's memberships
 // (active + cancelled + expired). Includes plan name + parsed balance
 // for the UI's at-a-glance render.
 router.get("/patients/:id/memberships", phiReadGate, async (req, res) => {
@@ -5998,10 +5998,10 @@ router.get("/patients/:id/memberships", phiReadGate, async (req, res) => {
   }
 });
 
-// GET /memberships/:id â€” fetch a single membership (with redemption history).
+// GET /memberships/:id — fetch a single membership (with redemption history).
 // Numeric-only constraint so non-numeric subpaths like `/memberships/dashboard`
 // (Wave 7D Memberships dashboard endpoint at line ~2698) don't collide here
-// and parse as `:id="dashboard"` â†’ 400. Express matches routes in declaration
+// and parse as `:id="dashboard"` → 400. Express matches routes in declaration
 // order; adding the regex ensures `/memberships/dashboard` falls through to
 // the right handler regardless of order.
 router.get("/memberships/:id(\\d+)", phiReadGate, async (req, res) => {
@@ -6033,14 +6033,14 @@ router.get("/memberships/:id(\\d+)", phiReadGate, async (req, res) => {
   }
 });
 
-// POST /memberships/:id/redeem â€” redeem 1 unit of a service.
+// POST /memberships/:id/redeem — redeem 1 unit of a service.
 //
 // Status codes:
-//   200 â€” redeemed; returns updated balance + redemption row
-//   400 â€” bad serviceId / shape
-//   404 â€” membership not found
-//   409 â€” balance exhausted for that service (MEMBERSHIP_BALANCE_EXHAUSTED)
-//   410 â€” membership expired or cancelled (MEMBERSHIP_EXPIRED / MEMBERSHIP_CANCELLED)
+//   200 — redeemed; returns updated balance + redemption row
+//   400 — bad serviceId / shape
+//   404 — membership not found
+//   409 — balance exhausted for that service (MEMBERSHIP_BALANCE_EXHAUSTED)
+//   410 — membership expired or cancelled (MEMBERSHIP_EXPIRED / MEMBERSHIP_CANCELLED)
 //
 // 410 chosen for expired (mirrors /api/wellness namespace's 410-for-Gone
 // pattern at the top of this file) so the frontend can distinguish "you
@@ -6079,9 +6079,9 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
           where: { id },
           data: { status: "expired" },
         });
-        // PRD Gap Â§13 wave-6a â€” emit membership.expired only on the actual
-        // activeâ†’expired transition (not on every redeem attempt against an
-        // already-expired row). Wrapped: workflow failure â‰  block redeem path.
+        // PRD Gap 13 wave-6a - emit membership.expired only on the actual
+        // active->expired transition (not on every redeem attempt against an
+        // already-expired row). Wrapped: workflow failure does not block the redeem path.
         try {
           require("../lib/eventBus").emitEvent(
             "membership.expired",
@@ -6169,7 +6169,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
     } catch (auditErr) {
       console.warn("[audit]", auditErr.message);
     }
-    // PRD Gap Â§13 wave-6a â€” emit membership.benefit_applied so workflow rules
+    // PRD Gap §13 wave-6a — emit membership.benefit_applied so workflow rules
     // can react (e.g. send SMS confirming the service was redeemed against
     // the membership; trigger reminder once balance hits 1 remaining).
     try {
@@ -6201,7 +6201,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
   }
 });
 
-// Wave 7D â€” GET /memberships/dashboard â€” PRD Gap Â§4 item 8.
+// Wave 7D — GET /memberships/dashboard — PRD Gap §4 item 8.
 // Three aggregates the Memberships page surfaces above its existing list:
 //   - active count + total deferred-revenue value (sum of plan.price scaled
 //     by remaining-balance fraction across the entitlements array)
@@ -6211,7 +6211,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
 //
 // Deferred-revenue maths: a membership's "remaining value" is plan.price *
 // (sum(b.remaining) / sum(plan_qty)). That isn't a perfect dollar-cost
-// allocation per service (a Â£100 facial vs a Â£20 follow-up are valued
+// allocation per service (a £100 facial vs a £20 follow-up are valued
 // equally here), but it's the simplest defensible per-row calculation and
 // matches how the existing Memberships card describes value to admins.
 router.get(
@@ -6248,7 +6248,7 @@ router.get(
 
       // Deferred revenue: per-membership plan.price * (remaining / planTotal).
       // Skip rows with corrupt / unparseable balances rather than failing
-      // the whole aggregate â€” one bad row shouldn't black out the dashboard.
+      // the whole aggregate — one bad row shouldn't black out the dashboard.
       let deferredRevenue = 0;
       for (const m of actives) {
         try {
@@ -6287,7 +6287,7 @@ router.get(
   },
 );
 
-// POST /memberships/:id/cancel â€” admin cancel. Sets status='cancelled',
+// POST /memberships/:id/cancel — admin cancel. Sets status='cancelled',
 // stamps cancelledAt + cancelReason. Idempotent if already cancelled (200).
 router.post(
   "/memberships/:id/cancel",
@@ -6332,7 +6332,7 @@ router.post(
       } catch (auditErr) {
         console.warn("[audit]", auditErr.message);
       }
-      // PRD Gap Â§13 wave-6a â€” emit membership.cancelled so workflow rules can
+      // PRD Gap §13 wave-6a — emit membership.cancelled so workflow rules can
       // react (refund-warning, win-back campaign enrollment, churn flag).
       try {
         require("../lib/eventBus").emitEvent(
@@ -6356,7 +6356,7 @@ router.post(
   },
 );
 
-// â”€â”€ Agent recommendations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Agent recommendations ──────────────────────────────────────────
 
 router.get("/recommendations", async (req, res) => {
   try {
@@ -6367,7 +6367,7 @@ router.get("/recommendations", async (req, res) => {
     // emitted multiple AgentRecommendation rows with the same dedup key
     // (type + title) and the GET endpoint returned every row that
     // matched the requested status filter. Cron-side dedup from #261/
-    // #285 only suppresses re-emits within the same UTC day â€” older
+    // #285 only suppresses re-emits within the same UTC day — older
     // pollution + cross-day collisions still leak through.
     //
     // Response-level dedup: collapse rows by (type + lowercased title)
@@ -6376,7 +6376,7 @@ router.get("/recommendations", async (req, res) => {
     // is already approved/rejected; for terminal status filters, return
     // only the chosen representative so the same card never shows up
     // under two tabs at once.
-    // Pull a wider window â€” we need sibling rows of any status to
+    // Pull a wider window — we need sibling rows of any status to
     // decide whether a pending row is actually superseded.
     const all = await prisma.agentRecommendation.findMany({
       where: tenantWhere(req),
@@ -6417,10 +6417,10 @@ router.get("/recommendations", async (req, res) => {
 });
 
 // #194: amend a recommendation while it's still pending. Once a card is
-// approved/rejected the body is locked â€” the resolved record is the audit
+// approved/rejected the body is locked — the resolved record is the audit
 // artefact for the dispatched action and shouldn't be re-written. ADMIN /
 // MANAGER only since recommendations are operational, not clinical.
-// #216: recommendations are owner-dashboard cards â€” only admin/manager can
+// #216: recommendations are owner-dashboard cards — only admin/manager can
 // amend or resolve. Existing body still enforces ADMIN/MANAGER on /amend;
 // the gate just makes the 403 match the rest of the wellness shape.
 router.put(
@@ -6511,7 +6511,7 @@ router.post(
 
       // #195: an already-rejected card cannot be approved without an explicit
       // /reopen flow. An already-approved card returns idempotently below
-      // (count=0 path) â€” that branch is correct because the dispatcher must
+      // (count=0 path) — that branch is correct because the dispatcher must
       // not fire twice.
       if (rec.status === "rejected") {
         return res.status(422).json({
@@ -6521,8 +6521,8 @@ router.post(
         });
       }
 
-      // Race-safe transition: only flip pendingâ†’approved. `updateMany` with a
-      // status precondition is the atomic gate â€” if count=0 we lost the race
+      // Race-safe transition: only flip pending→approved. `updateMany` with a
+      // status precondition is the atomic gate — if count=0 we lost the race
       // and must NOT fire the dispatcher (double-dispatch would e.g. send
       // the SMS blast twice or create duplicate Tasks).
       const flip = await prisma.agentRecommendation.updateMany({
@@ -6549,7 +6549,7 @@ router.post(
         });
       }
 
-      // We won the race â€” safe to dispatch the approved action
+      // We won the race — safe to dispatch the approved action
       let actionResult = null;
       try {
         actionResult = await executeApproved(current, {
@@ -6580,11 +6580,11 @@ router.post(
   },
 );
 
-// Manual orchestrator trigger â€” useful for demos and testing
+// Manual orchestrator trigger — useful for demos and testing
 // #216: manual cron triggers were comment-claimed "Restricted to ADMIN/MANAGER"
 // but had no actual gate, so a USER/doctor/telecaller could fire them. These
 // dispatch SMS blasts, generate AI recommendations, and rotate orchestrator
-// state â€” operational mutations that must require admin/manager. Add the
+// state — operational mutations that must require admin/manager. Add the
 // missing verifyWellnessRole gate to all four manual run endpoints.
 router.post(
   "/orchestrator/run",
@@ -6602,7 +6602,7 @@ router.post(
   },
 );
 
-// Manual triggers for the other 2 crons â€” for testing + demo replay.
+// Manual triggers for the other 2 crons — for testing + demo replay.
 // #216: now actually restricted to ADMIN/MANAGER (was previously only commented
 // as such; no enforcement). verifyWellnessRole emits WELLNESS_ROLE_FORBIDDEN.
 router.post(
@@ -6626,7 +6626,7 @@ router.post(
   },
 );
 
-// PRD Gap Â§12 #4e â€” manual trigger for the no-show risk Notification fan-out.
+// PRD Gap §12 #4e — manual trigger for the no-show risk Notification fan-out.
 // Mirrors /reminders/run shape: admin/manager only, runs the engine for the
 // caller's tenant, returns { scored, flagged, notified }.
 router.post(
@@ -6657,7 +6657,7 @@ router.post("/ops/run", adminOrPerm("settings", "manage"), async (req, res) => {
     } = require("../cron/wellnessOpsEngine");
     const npsSent = await runNpsForTenant(req.user.tenantId);
     const purged = await runRetentionForTenant(req.user.tenantId);
-    // PRD Gap Â§12 #4d â€” also drive the membership-expiry T-7 notifier so the
+    // PRD Gap §12 #4d — also drive the membership-expiry T-7 notifier so the
     // /ops/run trigger can be exercised end-to-end (mirrors the e2e pattern
     // used by reminders/run + low-stock/run for cron-engine specs).
     const membershipExpiry = await runMembershipExpiryForTenant(
@@ -6672,7 +6672,7 @@ router.post("/ops/run", adminOrPerm("settings", "manage"), async (req, res) => {
 
 // Manual trigger for the low-stock inventory alert engine.
 // Returns the per-tenant breakdown { products, notifications, emails }.
-// #216: gate to admin/manager â€” emails staff and creates notifications.
+// #216: gate to admin/manager — emails staff and creates notifications.
 router.post(
   "/inventory/low-stock/run",
   adminOrPerm("settings", "manage"),
@@ -6707,7 +6707,7 @@ router.post(
       if (!rec)
         return res.status(404).json({ error: "Recommendation not found" });
 
-      // #195: enforce one-way lifecycle pending â†’ approved | rejected. Terminal
+      // #195: enforce one-way lifecycle pending → approved | rejected. Terminal
       // statuses cannot be flipped back without an explicit /reopen flow.
       if (rec.status === "rejected") {
         return res.status(200).json({ ...rec, idempotent: true });
@@ -6769,7 +6769,7 @@ router.post(
 
 // Validates optional geofencing fields on Location create/update. Returns
 // null when valid, or an { error, code } body to send as a 400. Coordinates
-// must arrive as a pair (both or neither) â€” a lone lat or lng can't anchor a
+// must arrive as a pair (both or neither) — a lone lat or lng can't anchor a
 // geofence. Mirrors the DEFAULT_RADIUS_M note in lib/attendanceGeofence.js:
 // radius is optional even when coordinates are set (falls back at punch time).
 function validateGeofenceFields({ latitude, longitude, geofenceRadiusM }) {
@@ -6807,7 +6807,7 @@ function validateGeofenceFields({ latitude, longitude, geofenceRadiusM }) {
   return null;
 }
 
-// â”€â”€ Locations (multi-clinic) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Locations (multi-clinic) ───────────────────────────────────────
 
 router.get("/locations", async (req, res) => {
   try {
@@ -6820,7 +6820,7 @@ router.get("/locations", async (req, res) => {
     // MANAGER / clinical staff see full contact info (they need it to call
     // the clinic / route patients). Telecaller / helper / generic USER on a
     // wellness tenant see masked phone + email (the address itself is OK to
-    // show â€” it's the clinic's public street address).
+    // show — it's the clinic's public street address).
     const fields = ["phone", "email"];
     const out = shouldMaskForViewer(req)
       ? maskRows(locations, fields)
@@ -6849,7 +6849,7 @@ router.get("/locations", async (req, res) => {
   }
 });
 
-// #216: clinic locations are operational config â€” admin/manager only.
+// #216: clinic locations are operational config — admin/manager only.
 router.post(
   "/locations",
   adminOrPerm("settings", "manage"),
@@ -6874,7 +6874,7 @@ router.post(
           .status(400)
           .json({ error: "name, addressLine, city are required" });
       }
-      // #385: enforce Indian PIN code shape â€” exactly 6 digits when supplied.
+      // #385: enforce Indian PIN code shape — exactly 6 digits when supplied.
       // Frontend caps at 6 numeric chars; this gate catches API/scripted callers
       // and any pre-existing bad input that bypassed the new pattern attribute.
       if (
@@ -6888,7 +6888,7 @@ router.post(
           code: "INVALID_PINCODE",
         });
       }
-      // Geofencing (wellness attendance) â€” lat/lng and radius are optional;
+      // Geofencing (wellness attendance) — lat/lng and radius are optional;
       // when supplied they must be sane values. See lib/attendanceGeofence.js
       // for how these feed the clock-in/out radius check.
       const geoErr = validateGeofenceFields({ latitude, longitude, geofenceRadiusM });
@@ -6925,7 +6925,7 @@ router.post(
           tenantId: req.user.tenantId,
         },
       });
-      // #179: clinic location config â€” audit so changes to addresses / hours are traceable.
+      // #179: clinic location config — audit so changes to addresses / hours are traceable.
       try {
         await writeAudit(
           "Location",
@@ -7048,11 +7048,11 @@ router.put(
   },
 );
 
-// DELETE /api/wellness/locations/:id â€” hard-delete a clinic location.
+// DELETE /api/wellness/locations/:id — hard-delete a clinic location.
 // Refuses with 409 LOCATION_IN_USE when any FK-bearing child (patient,
 // visit, resource, holiday, register) still references the row. The
 // caller should soft-disable via PUT { isActive: false } in that case
-// instead â€” preserves PHI links and historical reporting integrity.
+// instead — preserves PHI links and historical reporting integrity.
 // Same admin-only gate as POST/PUT (clinic config is operational).
 router.delete(
   "/locations/:id",
@@ -7069,7 +7069,7 @@ router.delete(
 
       // Count every child relation that has a FK to Location. Even one
       // reference would otherwise cause Prisma to throw a P2003 FK
-      // violation under the schema's default onDelete: NoAction â€” we
+      // violation under the schema's default onDelete: NoAction — we
       // surface a friendly 409 instead so the UI can guide the operator
       // toward the soft-disable affordance.
       const [patients, visits, resources, holidays, registers] =
@@ -7093,7 +7093,7 @@ router.delete(
       const total = patients + visits + resources + holidays + registers;
       if (total > 0) {
         return res.status(409).json({
-          error: `Cannot delete "${existing.name}" â€” ${total} record(s) still reference it. Deactivate it instead.`,
+          error: `Cannot delete "${existing.name}" — ${total} record(s) still reference it. Deactivate it instead.`,
           code: "LOCATION_IN_USE",
           inUse: { patients, visits, resources, holidays, registers },
         });
@@ -7120,9 +7120,9 @@ router.delete(
   },
 );
 
-// â”€â”€ Staff â†” Location assignment (geo-tagged attendance) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Staff ↔ Location assignment (geo-tagged attendance) ─────────────
 //
-// UserLocation is a many-to-many join between User and Location â€” see the
+// UserLocation is a many-to-many join between User and Location — see the
 // schema comment at prisma/schema.prisma's UserLocation model. A staff
 // member with NO rows here is not geofenced at all (attendance.js's
 // resolveGeofenceContext treats [] as "not enforced"); one row enforces a
@@ -7132,7 +7132,7 @@ router.delete(
 //
 // #348 namespacing rule (see docs/API_NAMESPACING.md): /api/wellness/* is
 // clinical-resources-only, and org resources like staff have NO wellness
-// alias â€” router.all("/staff/*", ...) above 410s any /wellness/staff/*
+// alias — router.all("/staff/*", ...) above 410s any /wellness/staff/*
 // path unconditionally. This endpoint is about the Location side of the
 // relationship (which clinics is this user geofenced to), so it's namespaced
 // under /location-assignments/:userId rather than /staff/:userId/locations
@@ -7179,7 +7179,7 @@ router.put(
       }
       const ids = [...new Set(locationIds.map((n) => parseInt(n, 10)))].filter(Number.isFinite);
 
-      // Verify every id belongs to this tenant before wiring â€” prevents an
+      // Verify every id belongs to this tenant before wiring — prevents an
       // admin from (even accidentally) assigning staff to another tenant's
       // clinic via a crafted id.
       if (ids.length > 0) {
@@ -7191,7 +7191,7 @@ router.put(
         }
       }
 
-      // Replace-all semantics inside a transaction â€” simplest correct model
+      // Replace-all semantics inside a transaction — simplest correct model
       // for a small per-user assignment set (staff are rarely assigned to
       // more than a handful of clinics).
       await prisma.$transaction([
@@ -7245,7 +7245,7 @@ router.get(
       // the Resources admin page (settings.read), and any clinical surface
       // that needs to check room availability. Any one of these grants
       // unlocks the endpoint so admins don't have to grant an exact-
-      // matching permission â€” just the permission for the page the user
+      // matching permission — just the permission for the page the user
       // is trying to use.
       anyOfPermissions: [
         { module: "calendar", action: "read" },
@@ -7732,22 +7732,22 @@ router.put(
     }
   },
 );
-// â”€â”€ Reports: P&L per service / per-professional / per-location â”€â”€â”€â”€â”€
+// ── Reports: P&L per service / per-professional / per-location ─────
 //
 // All reports accept ?from=&to=&locationId= filters. Default window: last 30 days.
 
 // #210: date-range guard for /reports endpoints. The picker accepts 5-digit
 // years (e.g. 11900) and inverted ranges (from > to) silently, so reports
-// render â‚¹0 / "No data" with no warning. Returns { error } on bad input
+// render ₹0 / "No data" with no warning. Returns { error } on bad input
 // so callers can return 400; otherwise { from, to } as before.
 const MIN_REPORT_YEAR = 2000;
 const MAX_REPORT_YEAR = 2099;
 // #234 fix: when the client sends to=YYYY-MM-DD (no time part), treat it as
 // end-of-day in UTC instead of midnight start-of-day. Without this, every
-// visit / consumption row created LATER on the to-date is silently excluded â€”
-// which made P&L productCost = â‚¹0 because the only consumption-bearing visits
+// visit / consumption row created LATER on the to-date is silently excluded —
+// which made P&L productCost = ₹0 because the only consumption-bearing visits
 // (388/389/397/398) were on 2026-04-26 13:40-13:56 and got dropped when the
-// client sent to=2026-04-26 â‡’ parsed as 2026-04-26T00:00:00Z. Same off-by-
+// client sent to=2026-04-26 ⇒ parsed as 2026-04-26T00:00:00Z. Same off-by-
 // one was deflating visit counts + revenue across all 4 reports tabs.
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -7803,7 +7803,7 @@ const reportRange = (req) => {
 // #232: every reports tab reads from the same completed-visit window. To
 // stop the four tabs from disagreeing on the headline "visits" count,
 // each endpoint surfaces the canonical total separately from its per-row
-// breakdown â€” and surfaces `unbucketed` when rows don't sum to the total
+// breakdown — and surfaces `unbucketed` when rows don't sum to the total
 // (e.g. visits without a serviceId, doctorId, locationId, or whose join
 // target was deleted). The unbucketed count is what was previously
 // silently dropped from every tab independently, which is what produced
@@ -7815,13 +7815,13 @@ const reportRange = (req) => {
 // AND the Owner-Dashboard yesterday-revenue tile read from the SAME
 // definition (sum(amountCharged) where status='completed'). Pre-this,
 // canonicalVisitTotals included revenue from cancelled / no-show visits
-// whose amountCharged was set when the visit was first scheduled â€”
+// whose amountCharged was set when the visit was first scheduled —
 // inflating every tab's headline by the cancellation rate.
 //
 // `visits` count remains unfiltered (matches whatever the route passed in)
 // so #281's "+N visits without service" footnote math still works (the
 // footnote needs the row-bucketed visits to be a subset of canonical
-// visits â€” which means canonical can't be status-filtered).
+// visits — which means canonical can't be status-filtered).
 const { sumCompleted: pnlSumCompleted } = require("../lib/pnlMath");
 
 function canonicalVisitTotals(visits) {
@@ -7858,12 +7858,12 @@ async function computePnlByService(req) {
   const visits = await prisma.visit.findMany({
     where: visitWhere,
     // #212: id was missing here, so visitIdToCost[v.id || -1] always
-    // resolved to -1 â†’ 0 for every row, making PRODUCT COST â‚¹0
+    // resolved to -1 → 0 for every row, making PRODUCT COST ₹0
     // and CONTRIBUTION = REVENUE on every service.
     // #565 (Wave 9 Agent A) follow-up: status is required because
     // pnlSumCompleted defensively re-applies the status='completed' filter.
     // Without it every row's v.status is undefined and the helper drops
-    // them all â†’ canonical.revenue=0 (visits already pre-filtered by the
+    // them all → canonical.revenue=0 (visits already pre-filtered by the
     // WHERE above, but the helper doesn't trust that).
     select: {
       id: true,
@@ -7929,7 +7929,7 @@ async function computePnlByService(req) {
   // rows. Previously we surfaced `canonical.visits` / `canonical.revenue`
   // (all completed visits including those with no serviceId) in the
   // header but only summed the bucketed rows in productCost /
-  // contribution. The result: a 116-vs-90 visit mismatch and a â‚¹27k
+  // contribution. The result: a 116-vs-90 visit mismatch and a ₹27k
   // revenue discrepancy that destroyed the Owner's trust in the report.
   // We now sum the rows for all four header cards and surface the
   // canonical / unbucketed counts separately as `canonical` so the
@@ -7962,7 +7962,7 @@ async function computePnlByService(req) {
     },
     // #565 (HI-16): canonical revenue scalar surfaced at the top level so
     // OwnerDashboard's "today's revenue" KPI and /wellness/reports's P&L
-    // tab read from the same field. Equals sum(rows[].revenue) â€” the
+    // tab read from the same field. Equals sum(rows[].revenue) — the
     // bucketed-by-service total, which is what the report's Revenue
     // column displays. Pre-fix, OwnerDashboard pulled its revenue from
     // /api/wellness/dashboard's own client-side aggregation, producing
@@ -8082,7 +8082,7 @@ async function computeAttribution(req) {
   // #233: only attribute revenue to source buckets that ALSO had a lead in
   // the same window. Without this, a returning patient whose first contact
   // was last quarter still books their visit revenue against this month's
-  // attribution, producing rows like "google-ad â€” 0 leads â€” â‚¹3,13,398.27 revenue"
+  // attribution, producing rows like "google-ad — 0 leads — ₹3,13,398.27 revenue"
   // that don't match what marketing actually drove.
   for (const v of visits) {
     const rawSrc = v.patient?.source;
@@ -8120,7 +8120,7 @@ async function computePerLocation(req) {
 
   const visits = await prisma.visit.findMany({
     where: { tenantId, visitDate: { gte: from, lte: to }, status: "completed" },
-    // status required for canonicalVisitTotals â€” see comment at computePnlByService.
+    // status required for canonicalVisitTotals — see comment at computePnlByService.
     select: { status: true, locationId: true, amountCharged: true },
   });
   const patients = await prisma.patient.groupBy({
@@ -8169,7 +8169,7 @@ async function computePerLocation(req) {
 router.get(
   "/reports/pnl-by-service",
   // #207/#216 financial-leak fix: financial reports are admin/manager ONLY.
-  // Hard wellnessRole gate (NOT adminOrPerm) â€” the generic `reports.read`
+  // Hard wellnessRole gate (NOT adminOrPerm) — the generic `reports.read`
   // permission is held by the base "User" role (seed.js), which every
   // wellness clinical staffer (doctor/professional/helper/telecaller) has,
   // so a permission fallback would leak P&L/revenue data to them.
@@ -8189,7 +8189,7 @@ router.get(
 
 router.get(
   "/reports/per-professional",
-  // #207/#216 financial-leak fix â€” admin/manager only (see pnl-by-service).
+  // #207/#216 financial-leak fix — admin/manager only (see pnl-by-service).
   verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
@@ -8208,7 +8208,7 @@ router.get(
 
 router.get(
   "/reports/attribution",
-  // #207/#216 financial-leak fix â€” admin/manager only (see pnl-by-service).
+  // #207/#216 financial-leak fix — admin/manager only (see pnl-by-service).
   verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
@@ -8225,7 +8225,7 @@ router.get(
 
 router.get(
   "/reports/per-location",
-  // #207/#216 financial-leak fix â€” admin/manager only (see pnl-by-service).
+  // #207/#216 financial-leak fix — admin/manager only (see pnl-by-service).
   verifyWellnessRole(["admin", "manager"]),
   async (req, res) => {
     try {
@@ -8240,7 +8240,7 @@ router.get(
   },
 );
 
-// â”€â”€ Reports: CSV / PDF export endpoints (#227) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Reports: CSV / PDF export endpoints (#227) ─────────────────────
 //
 // Each existing JSON report has paired .csv and .pdf siblings that re-use the
 // same compute helper above and serialise to text/csv or application/pdf with
@@ -8277,17 +8277,17 @@ function sendCsv(res, baseName, window, csvText) {
   const filename = `${baseName}-${rangeLabel(window)}.csv`;
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-  // BOM so Excel auto-detects UTF-8 (â‚¹ glyph, accented patient names, etc).
-  res.write("ï»¿");
+  // BOM so Excel auto-detects UTF-8 (₹ glyph, accented patient names, etc).
+  res.write("﻿");
   res.end(csvText);
 }
 
-// Generic tabular PDF â€” a renderer matching the prescription/consent style:
+// Generic tabular PDF — a renderer matching the prescription/consent style:
 // clinic letterhead, centered title, range subtitle, and a paginated table.
 async function renderReportPdf(title, columns, rows, range, clinic) {
   const PDFDocument = require("pdfkit");
   const doc = new PDFDocument({ size: "A4", margin: 40, layout: "landscape" });
-  applyRupeeCapableFonts(doc); // â‚¹ glyph fix
+  applyRupeeCapableFonts(doc); // ₹ glyph fix
   const chunks = [];
   const bufPromise = new Promise((resolve, reject) => {
     doc.on("data", (c) => chunks.push(c));
@@ -8295,7 +8295,7 @@ async function renderReportPdf(title, columns, rows, range, clinic) {
     doc.on("error", reject);
   });
 
-  // Letterhead â€” same look as renderPrescriptionPdf's drawClinicHeader.
+  // Letterhead — same look as renderPrescriptionPdf's drawClinicHeader.
   const c = {
     name: clinic?.name || "Clinic",
     addressLine: clinic?.addressLine || "",
@@ -8312,7 +8312,7 @@ async function renderReportPdf(title, columns, rows, range, clinic) {
     [c.city, c.state, c.pincode].filter(Boolean).join(", "),
   ]
     .filter(Boolean)
-    .join("  Â·  ");
+    .join("  ·  ");
   if (addr) doc.text(addr);
   const contact = [c.phone, c.email].filter(Boolean).join("  |  ");
   if (contact) doc.text(contact);
@@ -8337,11 +8337,11 @@ async function renderReportPdf(title, columns, rows, range, clinic) {
       .font("Helvetica")
       .fontSize(9)
       .fillColor("#666")
-      .text(`${isoDay(range.from)} â†’ ${isoDay(range.to)}`, { align: "center" });
+      .text(`${isoDay(range.from)} → ${isoDay(range.to)}`, { align: "center" });
   }
   doc.moveDown(0.6);
 
-  // Table â€” equal-width columns scaled to printable width.
+  // Table — equal-width columns scaled to printable width.
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
   const printW = right - left;
@@ -8448,7 +8448,7 @@ const fmtMoney = (n) => {
   return v.toFixed(2);
 };
 
-// â”€â”€ P&L by service exports â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── P&L by service exports ─────────────────────────────────────────
 
 router.get(
   "/reports/pnl-by-service.csv",
@@ -8596,7 +8596,7 @@ router.get(
   },
 );
 
-// â”€â”€ Per-professional exports â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Per-professional exports ───────────────────────────────────────
 
 router.get(
   "/reports/per-professional.csv",
@@ -8702,7 +8702,7 @@ router.get(
   },
 );
 
-// â”€â”€ Per-location exports â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Per-location exports ───────────────────────────────────────────
 
 router.get(
   "/reports/per-location.csv",
@@ -8850,7 +8850,7 @@ router.get(
   },
 );
 
-// â”€â”€ Attribution exports â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Attribution exports ────────────────────────────────────────────
 
 router.get(
   "/reports/attribution.csv",
@@ -9007,7 +9007,7 @@ router.get(
   },
 );
 
-// â”€â”€ Owner dashboard aggregation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Owner dashboard aggregation ────────────────────────────────────
 
 // #207/#216: the Owner Dashboard data endpoint exposes org-wide P&L,
 // pending-approvals counts, revenue trend, and recommendations. A doctor
@@ -9015,7 +9015,7 @@ router.get(
 // the full clinic financials. Lock to admin/manager.
 router.get(
   "/dashboard",
-  // #207/#216 financial-leak fix â€” owner dashboard shows org-wide P&L, so
+  // #207/#216 financial-leak fix — owner dashboard shows org-wide P&L, so
   // admin/manager ONLY (hard gate). The generic `reports.read` permission is
   // held by the base "User" role that every clinical staffer has, so a
   // permission fallback (adminOrPerm) would leak revenue to doctors.
@@ -9031,7 +9031,7 @@ router.get(
       const yesterdayStart = startOfDay(new Date(Date.now() - 86400000));
       const yesterdayEnd = endOfDay(new Date(Date.now() - 86400000));
       const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000);
-      // PRD Â§6.8 â€” no-show risk: window of upcoming booked visits in next 24h.
+      // PRD §6.8 — no-show risk: window of upcoming booked visits in next 24h.
       const next24hStart = new Date();
       const next24hEnd = new Date(Date.now() + 24 * 3600 * 1000);
 
@@ -9068,7 +9068,7 @@ router.get(
           }),
           select: { id: true, status: true, amountCharged: true },
         }),
-        // #293 fix: when ?locationId= is set, scope these widgets too â€”
+        // #293 fix: when ?locationId= is set, scope these widgets too —
         // previously they fell back to tenant-wide and the Owner saw 36
         // active treatment plans and 2 pending approvals on a freshly
         // created branch with zero patients (very confusing).
@@ -9132,7 +9132,7 @@ router.get(
         }),
         prisma.service.count({ where: { tenantId, isActive: true } }),
         prisma.location.count({ where: { tenantId, isActive: true } }),
-        // PRD Â§6.8 â€” upcoming booked visits in the next 24h, with patient
+        // PRD §6.8 — upcoming booked visits in the next 24h, with patient
         // context needed to score no-show risk (past no-shows, first-visit,
         // engagement signals, reminder confirmation).
         prisma.visit.findMany({
@@ -9165,7 +9165,7 @@ router.get(
         if (key in dayBuckets)
           dayBuckets[key] += parseFloat(v.amountCharged) || 0;
       }
-      // #181: round to 2 decimals â€” float accumulation on amountCharged was producing
+      // #181: round to 2 decimals — float accumulation on amountCharged was producing
       // 14-digit fractional rupees in the dashboard chart axis labels.
       const revenueTrend = Object.entries(dayBuckets).map(
         ([date, revenue]) => ({
@@ -9178,7 +9178,7 @@ router.get(
       // Previously this counted ONLY status=completed visits, which meant a
       // clinic that had a full booked day showed Occupancy 0% until each
       // visit was clinically closed at end-of-day. That's the opposite of
-      // what an Owner expects â€” they want to know what's on the books NOW.
+      // what an Owner expects — they want to know what's on the books NOW.
       // Count booked + completed + arrived/in-progress visits as filled.
       const filledStatuses = new Set([
         "booked",
@@ -9193,7 +9193,7 @@ router.get(
       const completedToday = todayVisits.filter(
         (v) => v.status === "completed",
       ).length;
-      const capacity = 8 * 17; // 17 staff Ã— 8 slots â€” generous baseline
+      const capacity = 8 * 17; // 17 staff × 8 slots — generous baseline
       const occupancyPct = Math.min(
         100,
         Math.round((filledToday / capacity) * 100),
@@ -9212,9 +9212,9 @@ router.get(
         0,
       );
 
-      // â”€â”€ PRD Â§6.8: No-show risk scorer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      // Rule-based, no ML. Score 0â€“100 per upcoming booked visit; aggregate
-      // count of visits scoring â‰¥40 and surface top 5.
+      // ── PRD §6.8: No-show risk scorer ────────────────────────────────
+      // Rule-based, no ML. Score 0–100 per upcoming booked visit; aggregate
+      // count of visits scoring ≥40 and surface top 5.
       const patientIds = upcomingVisits.map((v) => v.patientId);
       const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000);
       const thirtyDaysAgoLoyalty = new Date(Date.now() - 30 * 86400000);
@@ -9236,7 +9236,7 @@ router.get(
               },
               select: { patientId: true },
             }),
-            // +15 if first-visit (no prior visit at all) â€” pull all visit ids per patient
+            // +15 if first-visit (no prior visit at all) — pull all visit ids per patient
             prisma.visit.findMany({
               where: {
                 tenantId,
@@ -9266,7 +9266,7 @@ router.get(
               },
               select: { to: true },
             }),
-            // âˆ’10 if patient has a LoyaltyTransaction in last 30d (engaged)
+            // −10 if patient has a LoyaltyTransaction in last 30d (engaged)
             prisma.loyaltyTransaction.findMany({
               where: {
                 tenantId,
@@ -9282,23 +9282,23 @@ router.get(
         const loyalSet = new Set(loyaltyRecent.map((l) => l.patientId));
 
         // #289 fix: previously the model scored every upcoming visit and
-        // flagged anyone â‰¥ 40. The "no SMS reminder" rule (+20) fires for
+        // flagged anyone ≥ 40. The "no SMS reminder" rule (+20) fires for
         // every visit booked < 24h ago because the reminder cron runs T-24h
-        // and T-1h â€” i.e., a brand-new booking won't have a reminder yet.
+        // and T-1h — i.e., a brand-new booking won't have a reminder yet.
         // Combined with "first-visit patient" (+15), every public-booking
         // visit auto-scored 35; one extra signal (past no-show OR late
-        // hour) pushed it over 40 â†’ "11 of 11 upcoming" (100% flagged).
+        // hour) pushed it over 40 → "11 of 11 upcoming" (100% flagged).
         // A model that flags 100% of visits has zero signal value.
         // Tighten the gate:
-        //   â€¢ Raise threshold from 40 â†’ 60 so background noise alone can't
+        //   • Raise threshold from 40 → 60 so background noise alone can't
         //     clip the bar.
-        //   â€¢ The "no SMS yet" rule only fires when the visit is â‰¥ 24h out
+        //   • The "no SMS yet" rule only fires when the visit is ≥ 24h out
         //     (i.e., the T-24h reminder *should* already be sent). Visits
-        //     scheduled in the next ~6h are exempt â€” the reminder cron
+        //     scheduled in the next ~6h are exempt — the reminder cron
         //     hasn't reached them.
-        //   â€¢ Cap aggregate flagged count at min(N, 0.5 * totalUpcoming):
+        //   • Cap aggregate flagged count at min(N, 0.5 * totalUpcoming):
         //     if more than half the day looks high-risk, the model is
-        //     mis-calibrated and we'd rather show "â€”" than mislead.
+        //     mis-calibrated and we'd rather show "—" than mislead.
         const scored = upcomingVisits.map((v) => {
           const istHour = new Date(
             v.visitDate.getTime() + 5.5 * 3600 * 1000,
@@ -9321,7 +9321,7 @@ router.get(
           score = Math.max(0, Math.min(100, score));
           return {
             visitId: v.id,
-            patientName: v.patient?.name || "â€”",
+            patientName: v.patient?.name || "—",
             score,
             scheduledAt: v.visitDate,
           };
@@ -9330,7 +9330,7 @@ router.get(
         const rawCount = scored.filter((s) => s.score >= 60).length;
         // Sanity guard: if the model would flag > half the upcoming list,
         // treat the result as unreliable and surface 0 instead of a noisy
-        // "11 of 11". The Owner UI can render "â€” / N upcoming" when count
+        // "11 of 11". The Owner UI can render "— / N upcoming" when count
         // is 0 with a non-zero totalUpcoming to indicate "no high-risk".
         const halfCap = Math.floor(upcomingVisits.length / 2);
         noShowRisk.count = rawCount > halfCap ? 0 : rawCount;
@@ -9379,7 +9379,7 @@ router.get(
   },
 );
 
-// â”€â”€ Public booking endpoints (no auth) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Public booking endpoints (no auth) ─────────────────────────────
 // Mounted at /api/wellness/public/* in server.js after these routes get split out.
 // These specific 3 endpoints are added to the open paths list so they bypass
 // the JWT guard.
@@ -9388,7 +9388,7 @@ router.get("/public/tenant/:slug", async (req, res) => {
   try {
     // #378: tenant slugs are lower-kebab-case ([a-z0-9-]+, length 2-64).
     // Reject anything outside that shape with a fast 404 BEFORE the DB
-    // lookup â€” MySQL's default collation is case-insensitive, so a literal
+    // lookup — MySQL's default collation is case-insensitive, so a literal
     // findUnique on "ENHANCED-WELLNESS" would otherwise match the seeded
     // "enhanced-wellness" row. The shape check guarantees public URLs
     // never get a "works in upper, works in lower, ambiguous in between"
@@ -9412,15 +9412,15 @@ router.get("/public/tenant/:slug", async (req, res) => {
     if (!tenant || tenant.vertical !== "wellness")
       return res.status(404).json({ error: "Clinic not found" });
 
-    // Wave 7D â€” also surface the tenant's first active BookingPage rich
+    // Wave 7D — also surface the tenant's first active BookingPage rich
     // content (logo / hero / featured / contact) so the public mini-website
     // can render branding alongside the service catalogue. Single page per
-    // tenant for the MVP â€” picks the most-recently-updated active page.
+    // tenant for the MVP — picks the most-recently-updated active page.
     const [rawServices, allLocations, miniSite, allResources] =
       await Promise.all([
         prisma.service.findMany({
           where: { tenantId: tenant.id, isActive: true },
-          // Wave 2 Agent LL â€” include supportedBookingTypes so the public
+          // Wave 2 Agent LL — include supportedBookingTypes so the public
           // widget can filter the bookingType picker per-service.
           select: {
             id: true,
@@ -9464,7 +9464,7 @@ router.get("/public/tenant/:slug", async (req, res) => {
             },
           })
           .catch(() => null),
-        // Wave 8b â€” surface the tenant's active Resource (rooms / chairs /
+        // Wave 8b — surface the tenant's active Resource (rooms / chairs /
         // equipment) catalogue so the public booking widget can offer
         // CLINIC_VISIT bookers an optional room/resource preference. Empty
         // array on tenants without any resources keeps the widget simple.
@@ -9476,18 +9476,18 @@ router.get("/public/tenant/:slug", async (req, res) => {
           })
           .catch(() => []),
       ]);
-    // Wave 2 Agent LL â€” parse the JSON-string column into a real array on the
+    // Wave 2 Agent LL — parse the JSON-string column into a real array on the
     // wire. Legacy services with null column expose ["CLINIC_VISIT"] (the
     // back-compat default) so the widget always has a non-empty supported
-    // list â€” never has to special-case "no field set".
+    // list — never has to special-case "no field set".
     const services = rawServices.map((s) => ({
       ...s,
       supportedBookingTypes: parseSupportedBookingTypes(
         s.supportedBookingTypes,
       ),
     }));
-    // #291: never expose internal/dev location names ("smoke-test", "e2e-â€¦",
-    // "test-â€¦", "qa-â€¦") on the customer-facing booking page. The seed and
+    // #291: never expose internal/dev location names ("smoke-test", "e2e-…",
+    // "test-…", "qa-…") on the customer-facing booking page. The seed and
     // E2E test suites both create such rows, and they leak into the public
     // /book/<slug> step 2 (Pick a clinic) and step 3 (order summary).
     const INTERNAL_LOCATION_NAME_RE =
@@ -9495,7 +9495,7 @@ router.get("/public/tenant/:slug", async (req, res) => {
     const locations = allLocations.filter(
       (l) => !INTERNAL_LOCATION_NAME_RE.test(String(l.name || "").trim()),
     );
-    // Wave 7D â€” flatten miniSite into a friendlier shape for the widget.
+    // Wave 7D — flatten miniSite into a friendlier shape for the widget.
     let miniSitePayload = null;
     if (miniSite) {
       let featuredServiceIds = [];
@@ -9528,9 +9528,9 @@ router.get("/public/tenant/:slug", async (req, res) => {
         hours,
       };
     }
-    // Wave 8b â€” passthrough resources (already filtered to isActive=true).
+    // Wave 8b — passthrough resources (already filtered to isActive=true).
     // The widget renders these as an optional select per CLINIC_VISIT
-    // booking. Empty array â†’ widget hides the picker entirely.
+    // booking. Empty array → widget hides the picker entirely.
     res.json({
       tenant,
       services,
@@ -9543,19 +9543,19 @@ router.get("/public/tenant/:slug", async (req, res) => {
   }
 });
 
-// Wave 2 Agent LL â€” booking-type vocabulary (2026-05-08 Google Doc audit).
+// Wave 2 Agent LL — booking-type vocabulary (2026-05-08 Google Doc audit).
 // String-enum (not Prisma enum) per the codebase's soft-enum convention
-// â€” matches Visit.status / Service.ticketTier / Patient.source.
-//   CLINIC_VISIT â€” patient comes to the clinic (legacy default)
-//   IN_HOME      â€” staff travels to the patient's address
-//   VIDEO        â€” telehealth call (Jitsi-style URL)
-//   PHONE        â€” voice-only consult (no address, no link)
+// — matches Visit.status / Service.ticketTier / Patient.source.
+//   CLINIC_VISIT — patient comes to the clinic (legacy default)
+//   IN_HOME      — staff travels to the patient's address
+//   VIDEO        — telehealth call (Jitsi-style URL)
+//   PHONE        — voice-only consult (no address, no link)
 const BOOKING_TYPES = ["CLINIC_VISIT", "IN_HOME", "VIDEO", "PHONE"];
 const DEFAULT_TRAVEL_TIME_MIN = 30; // MVP default; future: pincode-distance-based
 
 // Parse the JSON-string column `Service.supportedBookingTypes` into a JS array.
 // Returns the legacy default (`["CLINIC_VISIT"]`) when the column is null/empty
-// or contains unparseable JSON â€” back-compat for services that pre-date the
+// or contains unparseable JSON — back-compat for services that pre-date the
 // column. Filters out any unknown enum values silently.
 function parseSupportedBookingTypes(raw) {
   if (raw == null || raw === "") return ["CLINIC_VISIT"];
@@ -9583,7 +9583,7 @@ function buildVideoCallUrl(tenantSlug, patientId) {
 // Sanitize + validate UTM input from the public widget. Each field is capped
 // at 191 chars (MySQL VARCHAR default) and stripped of control characters.
 // Unknown fields are dropped silently. Returns an object the route handler
-// can spread into the Visit create payload â€” null when input is empty.
+// can spread into the Visit create payload — null when input is empty.
 function sanitizeUtmInput(utm, referrer) {
   const out = {
     utmSource: null,
@@ -9621,9 +9621,9 @@ function sanitizeUtmInput(utm, referrer) {
 
 // #219: rate-limit /public/book per IP. The endpoint is unauthenticated
 // and creates Patient + Visit rows on every 201, so it's the trivial
-// flooding vector â€” Sangeeta's QA pass found the route would 201 five
+// flooding vector — Sangeeta's QA pass found the route would 201 five
 // concurrent requests in <1s with no throttle. 10 / minute / IP is
-// enough headroom for a real clinic's burst (page-loads â†’ form submits)
+// enough headroom for a real clinic's burst (page-loads → form submits)
 // and tight enough to make a flooding attack visible in the limiter
 // headers. Test mode (NODE_ENV=test) bumps the ceiling so the per-push
 // gate's other tests (which fire many requests from 127.0.0.1) don't
@@ -9654,7 +9654,7 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
       email,
       preferredSlot,
       notes,
-      // Wave 2 Agent LL â€” booking-widget completion fields. All optional;
+      // Wave 2 Agent LL — booking-widget completion fields. All optional;
       // bookingType defaults to CLINIC_VISIT for backwards-compat with old
       // payloads (the field-by-field default lives next to the validation
       // block below so the legacy "no bookingType" flow stays visible).
@@ -9662,7 +9662,7 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
       atHomeAddress,
       atHomeCity,
       atHomePincode,
-      // Wave 8b â€” optional Resource (room/chair/equipment) preference
+      // Wave 8b — optional Resource (room/chair/equipment) preference
       // surfaced from the public widget. Validated below against the
       // tenant's resource catalogue and stored on Visit.resourceId.
       resourceId: rawResourceId,
@@ -9677,16 +9677,16 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
     // #219: validation gates on the public endpoint. Anyone on the internet
     // can hit this; the only thing keeping the DB clean is what we check here.
     // Rate limiting (per-IP) is tracked separately as a cross-cutting middleware
-    // change â€” see TODOS.md.
+    // change — see TODOS.md.
     const trimmedName = String(name).trim();
     if (trimmedName.length < 2 || trimmedName.length > 100) {
       return res
         .status(400)
-        .json({ error: "name must be 2â€“100 characters", code: "INVALID_NAME" });
+        .json({ error: "name must be 2–100 characters", code: "INVALID_NAME" });
     }
     const phoneStr = String(phone).trim();
     // Indian mobile: 10 digits starting 6/7/8/9, optionally with +91 / 91 prefix.
-    // Reject letters, short numbers, foreign formats â€” those are the spam vectors.
+    // Reject letters, short numbers, foreign formats — those are the spam vectors.
     if (!/^(\+?91)?[6-9]\d{9}$/.test(phoneStr.replace(/[\s-]/g, ""))) {
       return res.status(400).json({
         error:
@@ -9723,9 +9723,9 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
       }
     }
 
-    // Wave 2 Agent LL â€” bookingType validation. Default to CLINIC_VISIT when
+    // Wave 2 Agent LL — bookingType validation. Default to CLINIC_VISIT when
     // omitted (back-compat for widget payloads from before this column shipped).
-    // Reject unknown values with INVALID_INPUT 400 â€” the widget should never
+    // Reject unknown values with INVALID_INPUT 400 — the widget should never
     // send anything outside the BOOKING_TYPES vocabulary; receiving one means
     // the client is broken or the user is hand-crafting requests.
     const bookingType = rawBookingType
@@ -9748,7 +9748,7 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
       const addr = atHomeAddress != null ? String(atHomeAddress).trim() : "";
       if (addr.length < 5 || addr.length > 500) {
         return res.status(400).json({
-          error: "atHomeAddress is required for IN_HOME bookings (5â€“500 chars)",
+          error: "atHomeAddress is required for IN_HOME bookings (5–500 chars)",
           code: "INVALID_INPUT",
         });
       }
@@ -9786,7 +9786,7 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
         .status(400)
         .json({ error: "Invalid service", code: "INVALID_SERVICE" });
 
-    // Wave 2 Agent LL â€” cross-check chosen bookingType against the service's
+    // Wave 2 Agent LL — cross-check chosen bookingType against the service's
     // supported list. Returns 422 (semantic conflict) rather than 400 because
     // the input shape is valid; the issue is the SERVICE doesn't offer that
     // channel. Lets the widget render an explanatory banner ("This service
@@ -9804,13 +9804,13 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
     // 201 with no side-effects:
     //   (a) `locationId` was used as a truthy gate, but if the client sent
     //       0/""/"null" as a string it could parseInt to NaN and Prisma would
-    //       reject the visit insert â€” the catch returned 500 (not silently),
+    //       reject the visit insert — the catch returned 500 (not silently),
     //       BUT the patient row created above was already committed with no
     //       transactional partner, so retries created orphan patients.
     //   (b) The fallback `findFirst({ isActive: true })` location lookup ran
     //       inline in the visit `create()` call. If no active location existed
     //       for the tenant, locationId resolved to `null` AND the visit insert
-    //       went through â€” but the dashboard / calendar query (which scopes
+    //       went through — but the dashboard / calendar query (which scopes
     //       by locationId) would never see it.
     // Resolve everything before the write, validate, and then run patient +
     // visit inside a $transaction so partial state can't survive a crash.
@@ -9843,7 +9843,7 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
           .json({ error: "Invalid location", code: "INVALID_LOCATION" });
     }
 
-    // Wave 2 Agent LL â€” sanitize UTM + referrer once, outside the transaction
+    // Wave 2 Agent LL — sanitize UTM + referrer once, outside the transaction
     // so the cleanup work doesn't hold the DB connection. The HTTP Referer
     // header is read both from the JSON body (when the widget passes it
     // explicitly) and from the request headers (fallback when the widget
@@ -9853,7 +9853,7 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
       referrer ?? req.get("referer") ?? null,
     );
 
-    // Wave 8b â€” optional Resource preference. Validate against the
+    // Wave 8b — optional Resource preference. Validate against the
     // tenant's catalogue (must be active + tenant-scoped + match the
     // resolved location if both are set). Reject malformed input with
     // INVALID_RESOURCE 400; an unknown ID falls through silently to
@@ -9880,7 +9880,7 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
       const found = await prisma.resource.findFirst({ where: resWhere });
       if (found) {
         // Cross-check the resource's locationId matches the booking's
-        // resolvedLocationId â€” a resource at clinic A can't serve a
+        // resolvedLocationId — a resource at clinic A can't serve a
         // visit at clinic B.
         if (
           found.locationId == null ||
@@ -9889,21 +9889,21 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
           resolvedResourceId = found.id;
         }
       }
-      // Silent fallthrough â€” null resolvedResourceId on stale/foreign id.
+      // Silent fallthrough — null resolvedResourceId on stale/foreign id.
     }
 
-    // Wave 2 Agent LL â€” travel-time + video-link defaults per bookingType.
-    //   IN_HOME â†’ travelTimeMinutes resolved via lib/pincodeZones.js zone
+    // Wave 2 Agent LL — travel-time + video-link defaults per bookingType.
+    //   IN_HOME → travelTimeMinutes resolved via lib/pincodeZones.js zone
     //             lookup (Wave 8b residual closure of the original TODO).
     //             Falls back to DEFAULT_TRAVEL_TIME_MIN when either pincode
-    //             is missing â€” preserves legacy behaviour.
-    //   VIDEO   â†’ videoCallUrl auto-generated as a Jitsi-style room URL
-    //   CLINIC_VISIT / PHONE â†’ both stay null (legacy shape)
+    //             is missing — preserves legacy behaviour.
+    //   VIDEO   → videoCallUrl auto-generated as a Jitsi-style room URL
+    //   CLINIC_VISIT / PHONE → both stay null (legacy shape)
     let travelTimeMinutes = null;
     if (bookingType === "IN_HOME") {
       try {
         const { estimateTravelMinutes } = require("../lib/pincodeZones");
-        // resolvedLocationId may be null on a no-locations tenant â€” fetch
+        // resolvedLocationId may be null on a no-locations tenant — fetch
         // the clinic pincode if a location was resolved, else fall back.
         let clinicPincode = null;
         if (resolvedLocationId) {
@@ -9918,7 +9918,7 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
           normalizedPincode,
         );
       } catch (_e) {
-        // Defensive â€” if the helper throws for any reason, fall back to
+        // Defensive — if the helper throws for any reason, fall back to
         // the legacy 30-min default rather than 500 the booking.
         travelTimeMinutes = DEFAULT_TRAVEL_TIME_MIN;
       }
@@ -9941,7 +9941,7 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
         });
       }
       // Build the videoCallUrl post-patient-resolve so the slug references
-      // a stable patientId (visit ID isn't known yet â€” Date.now toString
+      // a stable patientId (visit ID isn't known yet — Date.now toString
       // gives us per-room uniqueness). Only populated for VIDEO bookings.
       const videoCallUrl =
         bookingType === "VIDEO"
@@ -9959,14 +9959,14 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
           locationId: resolvedLocationId,
           amountCharged: service.basePrice,
           tenantId: tenant.id,
-          // Wave 2 Agent LL â€” booking-widget completion fields
+          // Wave 2 Agent LL — booking-widget completion fields
           bookingType,
           atHomeAddress: normalizedAddress,
           atHomeCity: normalizedCity,
           atHomePincode: normalizedPincode,
           travelTimeMinutes,
           videoCallUrl,
-          // Wave 8b â€” optional Resource (room/chair/equipment) preference.
+          // Wave 8b — optional Resource (room/chair/equipment) preference.
           resourceId: resolvedResourceId,
           utmSource: utmFields.utmSource,
           utmMedium: utmFields.utmMedium,
@@ -9990,7 +9990,7 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
   }
 });
 
-// â”€â”€ PDF exports (prescriptions / consents / branded invoices) â”€â”€â”€â”€â”€
+// ── PDF exports (prescriptions / consents / branded invoices) ─────
 
 async function primaryClinic(tenantId) {
   // Prefer active location; fall back to any location.
@@ -10041,8 +10041,8 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
       logoBuffer,
       treatmentName,
     });
-    // PRD Â§11: PDF export of an Rx is a downloadable PHI artefact; the audit
-    // row is what proves "who pulled this drug list and when". IDs only â€”
+    // PRD §11: PDF export of an Rx is a downloadable PHI artefact; the audit
+    // row is what proves "who pulled this drug list and when". IDs only —
     // never the drug names (those live in the Prescription row itself).
     try {
       await writeAudit(
@@ -10076,20 +10076,20 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
   }
 });
 
-// â”€â”€ /my-prescriptions â€” staff-authed self-view of own Rx â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── /my-prescriptions — staff-authed self-view of own Rx ───────────
 //
 // Companion to the patient-portal /portal/prescriptions endpoint but
 // for staff JWTs. Resolves the logged-in user's linked Patient record
 // (Patient.userId === req.user.userId, same tenant) and returns ONLY
 // that Patient's prescriptions. Gated on `my_prescriptions.read` so
 // admins can grant Rx self-view to any staff role (USER, MANAGER,
-// DOCTOR, â€¦) without exposing the tenant-wide `prescriptions.read`.
+// DOCTOR, …) without exposing the tenant-wide `prescriptions.read`.
 //
 // Cross-patient access is structurally impossible: the WHERE clause
 // hardcodes `patientId: linkedPatient.id`. If the staff user has no
-// linked Patient row, returns an empty list with a 200 â€” the frontend
+// linked Patient row, returns an empty list with a 200 — the frontend
 // renders an explanatory empty state ("Your patient profile isn't
-// linked yet â€” ask your clinic to link it") rather than treating
+// linked yet — ask your clinic to link it") rather than treating
 // missing-link as an error.
 router.get(
   "/my-prescriptions",
@@ -10118,7 +10118,7 @@ router.get(
           doctor: { select: { id: true, name: true } },
         },
       });
-      // PRD Â§11: staff self-access of own Rx list is still a PHI read â€”
+      // PRD §11: staff self-access of own Rx list is still a PHI read —
       // log it. ONE row per request; actorType stays 'user' so the staff-
       // side audit viewer can distinguish self-view from clinician pulls.
       try {
@@ -10218,7 +10218,7 @@ router.get(
   },
 );
 
-// Module-level cache for logo bytes â€” keyed by absolute file path. The
+// Module-level cache for logo bytes — keyed by absolute file path. The
 // bundled globussoft-logo.png is 2.4 MB; without the cache, every PDF
 // download did a fresh fs.readFileSync, which dominated /summary.pdf
 // latency. The cache lives for the process lifetime; PM2 restart picks
@@ -10228,7 +10228,7 @@ const __logoCache = new Map();
 /**
  * Resolve the {tenant, logoBuffer} pair every clinical PDF needs to
  * render the canonical wellness branded header. Both fields are
- * optional from the renderer's perspective â€” tenant.name lifts the
+ * optional from the renderer's perspective — tenant.name lifts the
  * H1 from the location/clinic name to the company brand, and
  * logoBuffer turns on the square logo tile in the header.
  *
@@ -10261,7 +10261,7 @@ function loadCachedLogo(candidatePaths) {
         return buf;
       }
     } catch (_e) {
-      /* swallow â€” fall through to next candidate */
+      /* swallow — fall through to next candidate */
     }
     __logoCache.set(p, null);
   }
@@ -10269,9 +10269,9 @@ function loadCachedLogo(candidatePaths) {
 }
 
 // Bundled fallback logos, used only when the tenant has uploaded none (or the
-// upload can't be loaded). The 400Ã—121 "-pdf" variant is PDF-safe; the
-// original globussoft-logo.png is 21,618Ã—6,558 (~567 MB decoded) and would
-// OOM-kill the process inside PDFKit â€” it stays ONLY as a last-resort and is
+// upload can't be loaded). The 400×121 "-pdf" variant is PDF-safe; the
+// original globussoft-logo.png is 21,618×6,558 (~567 MB decoded) and would
+// OOM-kill the process inside PDFKit — it stays ONLY as a last-resort and is
 // itself size-guarded below, so it can never actually be embedded.
 const DEFAULT_LOGO_CANDIDATES = [
   path.join(__dirname, "..", "..", "frontend", "public", "globussoft-logo-pdf.png"),
@@ -10280,7 +10280,7 @@ const DEFAULT_LOGO_CANDIDATES = [
 
 // Map a stored tenant logoUrl to an on-disk path when it's a locally-served
 // upload. Pure logic + its regression test live in lib/tenantLogo.js; here we
-// bind it to this file's backend dir (routes/ â†’ ..). Returns null for remote
+// bind it to this file's backend dir (routes/ → ..). Returns null for remote
 // (https) URLs / anything that isn't an uploads path.
 const {
   localLogoDiskPath: _localLogoDiskPath,
@@ -10313,11 +10313,11 @@ async function fetchRemoteLogo(url) {
 // uploaded logo (remote S3 URL OR local disk path), then the bundled default.
 // Previously every clinical PDF fell straight to the default because the
 // resolver only matched a "/uploads/" prefix while uploads are stored as
-// "/api/uploads/..." (disk) or "https://..." (S3) â€” so no uploaded logo ever
+// "/api/uploads/..." (disk) or "https://..." (S3) — so no uploaded logo ever
 // matched. This is the single source of truth for "which logo does a PDF use".
 async function resolveLogoBuffer(logoUrl) {
   // 1. Tenant-uploaded logo (remote S3 URL or local disk), but only if it's
-  //    a safe size â€” an oversized upload would OOM PDFKit, so skip it and
+  //    a safe size — an oversized upload would OOM PDFKit, so skip it and
   //    fall through to the bundled default rather than crash the request.
   let buf = null;
   if (typeof logoUrl === "string" && /^https?:\/\//i.test(logoUrl)) {
@@ -10328,21 +10328,21 @@ async function resolveLogoBuffer(logoUrl) {
   }
   if (buf && !isLogoTooLarge(buf)) return buf;
 
-  // 2. Bundled default â€” prefer the PDF-safe 400px logo; the full-size one is
+  // 2. Bundled default — prefer the PDF-safe 400px logo; the full-size one is
   //    a last resort and is itself size-guarded (so it can never embed).
   for (const p of DEFAULT_LOGO_CANDIDATES) {
     const d = loadCachedLogo([p]);
     if (d && !isLogoTooLarge(d)) return d;
   }
 
-  // 3. Nothing safe to embed â†’ header draws its heart-glyph fallback.
+  // 3. Nothing safe to embed → header draws its heart-glyph fallback.
   return null;
 }
 
-// GET /patients/:id/summary.pdf â€” full multi-page dossier for one patient.
+// GET /patients/:id/summary.pdf — full multi-page dossier for one patient.
 // Bundles profile + case history + visits + Rx + treatment plans + wallet
 // + memberships into a single PDF so staff can hand off / archive / share
-// a complete patient record in one click. PHI-heavy â€” audited on every read.
+// a complete patient record in one click. PHI-heavy — audited on every read.
 router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -10443,7 +10443,7 @@ router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
     const fetchS3Photo = (url) =>
       new Promise((resolve) => {
         if (!/^https?:\/\//i.test(url)) {
-          console.warn(`[wellness] photo skipped â€” not an http(s) URL: ${url}`);
+          console.warn(`[wellness] photo skipped — not an http(s) URL: ${url}`);
           return resolve(null);
         }
         const get = (target, hopsLeft) => {
@@ -10465,7 +10465,7 @@ router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
               }
               if (code !== 200) {
                 resp.resume();
-                console.warn(`[wellness] photo fetch ${target} â†’ HTTP ${code}`);
+                console.warn(`[wellness] photo fetch ${target} → HTTP ${code}`);
                 return resolve(null);
               }
               const chunks = [];
@@ -10506,7 +10506,7 @@ router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
         photoFetchTasks.push(
           fetchS3Photo(url).then((buf) => {
             if (buf) photoBuffers.set(url, buf);
-            else photoBuffers.delete(url); // renderer sees missing â†’ placeholder
+            else photoBuffers.delete(url); // renderer sees missing → placeholder
           }),
         );
       }
@@ -10604,7 +10604,7 @@ router.get("/consents/:id/pdf", async (req, res) => {
       );
       console.log(`[wellness] On-demand PDF generated: ${buf.length} bytes`);
     }
-    // PRD Â§11: consent PDF export carries patient PII + signature image; log it.
+    // PRD §11: consent PDF export carries patient PII + signature image; log it.
     try {
       await writeAudit(
         "ConsentForm",
@@ -10646,10 +10646,10 @@ router.get("/consents/:id/pdf", async (req, res) => {
   }
 });
 
-// #564 v3.7.3 â€” POST /consents/:id/archive
+// #564 v3.7.3 — POST /consents/:id/archive
 // Renders the consent PDF once and persists the exact bytes into
 // ConsentForm.signedPdfBlob. After archival, GET /consents/:id/pdf
-// returns the frozen bytes verbatim â€” future PDF-renderer or clinic-
+// returns the frozen bytes verbatim — future PDF-renderer or clinic-
 // letterhead changes cannot retroactively alter the document the patient
 // saw. Idempotent: re-archiving a row that already has a BLOB returns
 // 200 with `alreadyArchived: true` and does NOT overwrite (the whole
@@ -10737,7 +10737,7 @@ router.post(
   },
 );
 
-// â”€â”€ Telecaller queue â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Telecaller queue ───────────────────────────────────────────────
 
 const DISPOSITION_STATUS = {
   interested: "Lead",
@@ -10749,7 +10749,7 @@ const DISPOSITION_STATUS = {
 };
 
 // #214: the queue is the telecaller's daily worklist. Telecaller, manager,
-// or admin only â€” clinical staff (doctor/professional/helper) shouldn't see
+// or admin only — clinical staff (doctor/professional/helper) shouldn't see
 // inbound lead pipeline.
 router.get(
   "/telecaller/queue",
@@ -10850,7 +10850,7 @@ router.post(
   },
 );
 
-// â”€â”€ Patient portal (public login + patient-JWT reads) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Patient portal (public login + patient-JWT reads) ─────────────
 
 // T1.2: public health probe so PatientPortal.jsx can graceful-degrade
 // when the SMS provider is not configured. The phone-OTP form silently
@@ -10860,8 +10860,8 @@ router.post(
 // else (don't leak provider name or env-var keys).
 //
 // Probes the env-var fallback only (MSG91_AUTH_KEY+SENDER_ID or
-// FAST2SMS_API_KEY). Per-tenant DB SmsConfig is unreachable here â€”
-// the patient hasn't yet identified which clinic â€” and a clinic with
+// FAST2SMS_API_KEY). Per-tenant DB SmsConfig is unreachable here —
+// the patient hasn't yet identified which clinic — and a clinic with
 // only a DB config but no env-var fallback would still hit the same
 // "send fails for THIS patient's tenant" problem the env path catches.
 router.get("/portal/health", (req, res) => {
@@ -10873,7 +10873,7 @@ router.get("/portal/health", (req, res) => {
 });
 
 // POST /portal/login  body: {phone, otp}
-// SECURITY: previously accepted any 4-digit OTP without verification â€” anyone
+// SECURITY: previously accepted any 4-digit OTP without verification — anyone
 // who knew a patient's phone could mint a 30-day portal JWT. Now validates
 // the OTP against the PatientOtp table the same way /verify-otp does.
 // Callers should already be using /portal/login/request-otp + /verify-otp;
@@ -10893,7 +10893,7 @@ router.post("/portal/login", async (req, res) => {
     }
     const last10 = digits.slice(-10);
 
-    // Verify OTP against PatientOtp table â€” must be unused and unexpired.
+    // Verify OTP against PatientOtp table — must be unused and unexpired.
     const otpRecord = await prisma.patientOtp.findFirst({
       where: {
         phone: last10,
@@ -10907,7 +10907,7 @@ router.post("/portal/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid or expired code" });
     }
 
-    // Patient.phone may be stored with +91 / spaces / dashes â€” search by "endsWith"
+    // Patient.phone may be stored with +91 / spaces / dashes — search by "endsWith"
     // via contains on last-10 substring.
     const candidates = await prisma.patient.findMany({
       where: { phone: { contains: last10 } },
@@ -10922,7 +10922,7 @@ router.post("/portal/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid or expired code" });
     }
 
-    // Single-use OTP â€” mark consumed before issuing the token.
+    // Single-use OTP — mark consumed before issuing the token.
     await prisma.patientOtp.update({
       where: { id: otpRecord.id },
       data: { used: true },
@@ -10958,7 +10958,7 @@ router.get("/portal/me", verifyPatientToken, async (req, res) => {
       },
     });
     if (!patient) return res.status(404).json({ error: "Patient not found" });
-    // PRD Â§11: patient self-access via portal is still a PHI read. The actor
+    // PRD §11: patient self-access via portal is still a PHI read. The actor
     // is the patient (not a staff user) so userId stays null and actorType
     // = 'patient'. Strip tenantId from the response to keep the public shape.
     try {
@@ -10988,12 +10988,12 @@ router.get("/portal/me", verifyPatientToken, async (req, res) => {
   }
 });
 
-// GET /portal/me/permissions â€” the resolved permission set for the
+// GET /portal/me/permissions — the resolved permission set for the
 // logged-in patient. Patients inherit the tenant's CUSTOMER system role
 // (see lib/portalPermissions.js), so this returns the union of grants on
 // that role. The frontend uses this to hide tabs the patient lacks
 // permission for (e.g. the Prescriptions tab when `my_prescriptions.read`
-// is revoked) â€” purely cosmetic; the backend gate is the security boundary.
+// is revoked) — purely cosmetic; the backend gate is the security boundary.
 router.get("/portal/me/permissions", verifyPatientToken, async (req, res) => {
   try {
     const perms = await getCustomerRolePermissions(req.patient.tenantId);
@@ -11004,15 +11004,15 @@ router.get("/portal/me/permissions", verifyPatientToken, async (req, res) => {
   }
 });
 
-// â”€â”€ Patient notification inbox (Option A: REST inbox for the patient app) â”€â”€
+// ── Patient notification inbox (Option A: REST inbox for the patient app) ──
 //
-// Patient-scoped notifications served from the PatientNotification table â€”
+// Patient-scoped notifications served from the PatientNotification table —
 // distinct from the staff /api/notifications bell (which the portal JWT can't
 // reach by design). All three sit behind verifyPatientToken and scope every
 // query to req.patient.id, so a patient only ever sees / mutates their own
 // rows. The Android app's Room-backed inbox + the web portal can consume these.
 
-// GET /portal/me/notifications â€” newest-first inbox + live unread count.
+// GET /portal/me/notifications — newest-first inbox + live unread count.
 //   ?limit=N (default 50, capped 200)   ?unreadOnly=true
 router.get("/portal/me/notifications", verifyPatientToken, async (req, res) => {
   try {
@@ -11032,7 +11032,7 @@ router.get("/portal/me/notifications", verifyPatientToken, async (req, res) => {
   }
 });
 
-// PUT /portal/me/notifications/:id/read â€” mark ONE read (scoped to patient).
+// PUT /portal/me/notifications/:id/read — mark ONE read (scoped to patient).
 router.put("/portal/me/notifications/:id/read", verifyPatientToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -11041,7 +11041,7 @@ router.put("/portal/me/notifications/:id/read", verifyPatientToken, async (req, 
     }
     const updated = await markPatientNotificationRead(req.patient.id, id);
     if (!updated) {
-      // Either no such id, or it belongs to another patient â€” same 404 either
+      // Either no such id, or it belongs to another patient — same 404 either
       // way so a patient can't probe other patients' notification ids.
       return res.status(404).json({ error: "Notification not found", code: "NOTIFICATION_NOT_FOUND" });
     }
@@ -11052,7 +11052,7 @@ router.put("/portal/me/notifications/:id/read", verifyPatientToken, async (req, 
   }
 });
 
-// POST /portal/me/notifications/mark-all-read â€” mark all unread read.
+// POST /portal/me/notifications/mark-all-read — mark all unread read.
 router.post("/portal/me/notifications/mark-all-read", verifyPatientToken, async (req, res) => {
   try {
     const marked = await markAllPatientNotificationsRead(req.patient.id);
@@ -11066,7 +11066,7 @@ router.post("/portal/me/notifications/mark-all-read", verifyPatientToken, async 
 router.get("/portal/visits", verifyPatientToken, async (req, res) => {
   try {
     // ?upcoming=true returns only future, non-cancelled visits, ordered
-    // soonest-first â€” used by the /home dashboard's "next-appointment"
+    // soonest-first — used by the /home dashboard's "next-appointment"
     // widget so it doesn't have to client-side-filter through every
     // historical visit. Default (no flag) keeps the existing newest-first
     // history view used by the PatientPortal /portal page's "My Visits".
@@ -11075,7 +11075,7 @@ router.get("/portal/visits", verifyPatientToken, async (req, res) => {
     const where = { patientId: req.patient.id };
     if (upcoming) {
       where.visitDate = { gte: new Date() };
-      // Exclude terminal statuses rather than enumerate active ones â€” keeps
+      // Exclude terminal statuses rather than enumerate active ones — keeps
       // the filter forward-compatible with statuses like 'confirmed' /
       // 'checked-in' used by the Calendar grid + /appointments/my but not
       // present in the canonical ALLOWED_VISIT_STATUSES validator.
@@ -11090,7 +11090,7 @@ router.get("/portal/visits", verifyPatientToken, async (req, res) => {
         doctor: { select: { id: true, name: true } },
       },
     });
-    // PRD Â§11: patient-portal list read of own visits. ONE row per request.
+    // PRD §11: patient-portal list read of own visits. ONE row per request.
     try {
       const tenantId = visits.length ? visits[0].tenantId : null;
       if (tenantId) {
@@ -11139,7 +11139,7 @@ router.get(
           doctor: { select: { id: true, name: true } },
         },
       });
-      // PRD Â§11: patient-portal list read of own Rx. ONE row per request.
+      // PRD §11: patient-portal list read of own Rx. ONE row per request.
       try {
         const tenantId = prescriptions.length
           ? prescriptions[0].tenantId
@@ -11173,29 +11173,29 @@ router.get(
   },
 );
 
-// GET /my-transactions â€” the signed-in user/customer's own financial history.
+// GET /my-transactions — the signed-in user/customer's own financial history.
 //
 // Aggregates every money-touching record tied to the caller's own Patient into
 // ONE normalised, date-sorted timeline so the user can see, in one place,
-// everything they paid for â€” POS purchases (services / products / memberships
+// everything they paid for — POS purchases (services / products / memberships
 // / gift cards), online gateway payments, wallet top-ups + spends, membership
 // purchases, treatment-plan packages, gift cards, and platform subscriptions.
 //
 // Auth: the normal app JWT via the global guard (verifyToken populates
 // req.user). NOT mounted under /portal so it works for BOTH a customer-tier
-// USER and a self-registered CUSTOMER â€” whoever is signed in. We resolve the
+// USER and a self-registered CUSTOMER — whoever is signed in. We resolve the
 // caller's OWN Patient via Patient.userId and filter every query on that
 // patient's id, so one user can never read another's history. A signed-in
 // user with no linked Patient simply gets an empty history (not an error).
 //
 // Summary math (de-dup reasoning, documented so future edits don't double
 // count): `totalPaid` = value of purchases the customer made =
-//   Î£ COMPLETED Sale.total âˆ’ Î£ REFUNDED Sale.total   (POS, any tender)
-//   + Î£ SUCCESS Payment.amount                        (online gateway)
-//   + Î£ non-cancelled Subscription.amount             (recurring plans)
+//   Σ COMPLETED Sale.total − Σ REFUNDED Sale.total   (POS, any tender)
+//   + Σ SUCCESS Payment.amount                        (online gateway)
+//   + Σ non-cancelled Subscription.amount             (recurring plans)
 // Wallet TOP_UPs are a FUNDING mechanism (money loaded, later spent at POS
 // which is already in Sale.total) so they are reported SEPARATELY under the
-// wallet block rather than added into totalPaid â€” adding both would count the
+// wallet block rather than added into totalPaid — adding both would count the
 // same rupee twice (once on top-up, once on the wallet-tendered sale).
 router.get("/my-transactions", verifyToken, async (req, res) => {
   try {
@@ -11210,7 +11210,7 @@ router.get("/my-transactions", verifyToken, async (req, res) => {
 
     // Resolve the caller's own Patient. CUSTOMER self-registered users link
     // via Patient.userId; staff/USER who are also a patient resolve the same
-    // way. No linked Patient â‡’ empty history (a 200, not a 404) so the page
+    // way. No linked Patient ⇒ empty history (a 200, not a 404) so the page
     // renders a clean empty state rather than an error toast.
     const patient = await prisma.patient.findFirst({
       where: { userId: req.user.userId, tenantId },
@@ -11295,7 +11295,7 @@ router.get("/my-transactions", verifyToken, async (req, res) => {
       include: { service: { select: { name: true } } },
     });
 
-    // 5. Gift cards received or redeemed by this patient (informational â€”
+    // 5. Gift cards received or redeemed by this patient (informational —
     //    NOT added to totalPaid; the purchase itself already shows up as a
     //    POS sale line / wallet move).
     const giftCards = await prisma.giftCard.findMany({
@@ -11339,7 +11339,7 @@ router.get("/my-transactions", verifyToken, async (req, res) => {
     // 6b. Gift-card-purchase gateway payments. These have invoiceId = null
     //     (the buyer's id lives in Payment.metadata), so the invoice join
     //     above misses them. This is the ACTUAL money the customer spent
-    //     buying a gift card â€” the matching EXPENSE for the wallet credit
+    //     buying a gift card — the matching EXPENSE for the wallet credit
     //     that shows separately as a WalletTransaction. Fetch the tenant's
     //     invoice-less payments raw; buildTransactionTimeline() filters them
     //     down to this caller's confirmed gift-card buys via the metadata.
@@ -11362,7 +11362,7 @@ router.get("/my-transactions", verifyToken, async (req, res) => {
       });
     }
 
-    // â”€â”€ Normalise + summarise (pure helper, unit-tested separately) â”€â”€â”€â”€â”€â”€
+    // ── Normalise + summarise (pure helper, unit-tested separately) ──────
     const { buildTransactionTimeline } = require("../lib/transactionTimeline");
     const { transactions: txns, summary } = buildTransactionTimeline({
       patient,
@@ -11406,17 +11406,17 @@ router.get("/my-transactions", verifyToken, async (req, res) => {
   }
 });
 
-// â”€â”€ Patient-portal product catalogue â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Patient-portal product catalogue ───────────────────────────────
 //
 // Read-only product browsing for patients. Mirrors the staff
 // /products + /product-categories list endpoints but:
 //   - runs under verifyPatientToken (req.patient, not req.user)
 //   - uses requirePortalPermission('products', 'read') so the
 //     CUSTOMER role grant in the Roles & Permissions matrix is the
-//     authoritative switch (admin unchecks it â†’ patients no longer
+//     authoritative switch (admin unchecks it → patients no longer
 //     see the catalogue)
-//   - returns ONLY safe fields â€” no SKU, stock, purchase/dealer
-//     price, manufacturer, or tax internals â€” so the clinic's
+//   - returns ONLY safe fields — no SKU, stock, purchase/dealer
+//     price, manufacturer, or tax internals — so the clinic's
 //     inventory-management data stays out of patient hands even if
 //     the same Product row is shared with the staff endpoint
 //   - hides products flagged Consumption (clinic-only consumables)
@@ -11433,7 +11433,7 @@ router.get(
           tenantId: req.patient.tenantId,
           isActive: true,
           // Consumption-only products are clinic supplies (gauze,
-          // disposables) â€” not part of the patient-facing catalogue.
+          // disposables) — not part of the patient-facing catalogue.
           // Treat null productType as Sale (back-compat with pre-v3.4
           // rows that didn't set the field).
           NOT: { productType: "Consumption" },
@@ -11488,17 +11488,17 @@ router.get(
   },
 );
 
-// GET /portal/prescriptions/:id/pdf â€” patient self-download of an Rx PDF.
+// GET /portal/prescriptions/:id/pdf — patient self-download of an Rx PDF.
 //
 // Staff use the sibling `/prescriptions/:id/pdf` endpoint which runs under
 // the global staff-JWT guard. Patients arrive with a portal token
 // (carries `patientId`, NOT `userId` / `tenantId`) so they hit /portal/*
-// instead â€” the openPaths whitelist in server.js routes /portal/* around
+// instead — the openPaths whitelist in server.js routes /portal/* around
 // the global guard, and verifyPatientToken below proves the patient
 // owns the prescription before we render a PDF.
 //
 // Scope discipline: filter on `patientId: req.patient.id` (NOT tenantId
-// alone â€” the patient already proved tenancy via the OTP login flow, and
+// alone — the patient already proved tenancy via the OTP login flow, and
 // filtering on tenantId would leak Rx for OTHER patients in the same
 // clinic). The Rx's own tenantId then drives the clinic letterhead.
 router.get(
@@ -11526,7 +11526,7 @@ router.get(
         tenant,
         logoBuffer,
       });
-      // PRD Â§11: PDF downloads of PHI go to the audit ledger. ONE row per
+      // PRD §11: PDF downloads of PHI go to the audit ledger. ONE row per
       // request; actorType='patient' so the staff-side audit viewer can
       // distinguish self-downloads from clinician-pulled copies.
       try {
@@ -11564,9 +11564,9 @@ router.get(
   },
 );
 
-// POST /portal/export â€” patient self-DSAR (DPDP Act Â§15 / GDPR Article 15).
+// POST /portal/export — patient self-DSAR (DPDP Act §15 / GDPR Article 15).
 // Closes v3.4.8 carry-over #2: prior to this endpoint, wellness-portal
-// patients had NO mechanism to obtain a copy of their own data â€” they
+// patients had NO mechanism to obtain a copy of their own data — they
 // could only read scoped slices via /portal/me + /portal/visits +
 // /portal/prescriptions. The staff-side equivalent is POST
 // /api/gdpr/export/me but the global auth gate (middleware/auth.js:23)
@@ -11576,20 +11576,20 @@ router.get(
 // Mirrors the SHAPE of /api/gdpr/export/me: returns one JSON envelope
 // keyed by entity, plus a `counts` summary, and writes ONE AuditLog row
 // (action='GDPR_EXPORT_SELF', entity='Patient', actorType='patient').
-// FK chain walked: Patient â†’ Visit â†’ Prescription â†’ ConsentForm â†’
-// TreatmentPlan â†’ LoyaltyTransaction â†’ Referral. Every query filters by
-// `patientId: req.patient.id` (NOT tenantId â€” the patient already proved
+// FK chain walked: Patient → Visit → Prescription → ConsentForm →
+// TreatmentPlan → LoyaltyTransaction → Referral. Every query filters by
+// `patientId: req.patient.id` (NOT tenantId — the patient already proved
 // tenancy via the OTP login flow; filtering on tenantId only would leak
 // other patients' rows in the same clinic).
 //
 // Field-level encryption (WELLNESS_FIELD_KEY, see CLAUDE.md): the Prisma
 // $extends client decrypts on read since v3.2.1, so findMany returns
-// plaintext â€” no manual decryption here.
+// plaintext — no manual decryption here.
 //
 // Audit: writeAudit gets actorType='patient' + patientId=req.patient.id
 // per backend/lib/audit.js convention so a reviewer filtering by
 // _actorType="patient" + action=GDPR_EXPORT_SELF can audit every
-// self-export trivially. Audit failures are caught â€” a logging blip
+// self-export trivially. Audit failures are caught — a logging blip
 // must not block the patient's data-access right.
 router.post("/portal/export", verifyPatientToken, async (req, res) => {
   try {
@@ -11673,7 +11673,7 @@ router.post("/portal/export", verifyPatientToken, async (req, res) => {
       referrals: referrals.length,
     };
 
-    // PRD Â§11 + DPDP Act Â§15: every self-DSAR is itself a PHI access event
+    // PRD §11 + DPDP Act §15: every self-DSAR is itself a PHI access event
     // and MUST land in AuditLog. Distinct action name `_SELF` so reviewers
     // can filter staff-initiated GDPR_EXPORT vs patient-initiated exports
     // without parsing details JSON.
@@ -11686,7 +11686,7 @@ router.post("/portal/export", verifyPatientToken, async (req, res) => {
         null,
         patient.tenantId,
         {
-          reason: "DPDP Â§15 / GDPR Article 15 self-export (portal)",
+          reason: "DPDP §15 / GDPR Article 15 self-export (portal)",
           source: "portal/export",
           counts,
         },
@@ -11697,7 +11697,7 @@ router.post("/portal/export", verifyPatientToken, async (req, res) => {
       console.warn("[wellness] audit portal/export failed:", auditErr.message);
     }
 
-    // Strip tenantId from the public response shape â€” patient never needs
+    // Strip tenantId from the public response shape — patient never needs
     // to see the integer id of their clinic.
     const { tenantId: _t, ...patientPublic } = patient;
 
@@ -11746,7 +11746,7 @@ router.get("/invoices/:id/branded-pdf", async (req, res) => {
   }
 });
 
-// â”€â”€ Agent C: White-label branding (logo + brand color) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Agent C: White-label branding (logo + brand color) ─────────────
 //
 // Logo storage mirrors the visit-photo contract: S3-primary, local-FS
 // fallback. When AWS creds are configured (S3_BUCKET_NAME set) the logo is
@@ -11773,18 +11773,18 @@ const brandingLogoUpload = multer({
 });
 
 // Best-effort delete of a previously-saved logo so replacing the image never
-// leaves an orphan behind. Handles both S3 URLs (http/https â†’ deleteFile) and
-// local paths (/uploads/... or /api/uploads/... â†’ fs.unlink). Never throws â€”
+// leaves an orphan behind. Handles both S3 URLs (http/https → deleteFile) and
+// local paths (/uploads/... or /api/uploads/... → fs.unlink). Never throws —
 // a failed cleanup must not block the new logo from being saved.
 async function deleteOldBrandingLogo(oldLogoUrl) {
   if (!oldLogoUrl) return;
   try {
     if (/^https?:\/\//i.test(oldLogoUrl)) {
-      // Remote URL â€” remove the object if it lives in our S3 bucket.
+      // Remote URL — remove the object if it lives in our S3 bucket.
       const fileKey = extractKeyFromUrl(oldLogoUrl);
       if (fileKey) await deleteFile(fileKey);
     } else {
-      // Local path â€” map /uploads/<rest> or /api/uploads/<rest> back to disk.
+      // Local path — map /uploads/<rest> or /api/uploads/<rest> back to disk.
       const m = oldLogoUrl.match(/\/(?:api\/)?uploads\/(.+)$/);
       if (m) {
         const rel = m[1].split("?")[0];
@@ -11799,7 +11799,7 @@ async function deleteOldBrandingLogo(oldLogoUrl) {
 
 function requireTenantAdmin(req, res, next) {
   if (!req.user || req.user.role !== "ADMIN") {
-    // Neutral copy + structured code â€” no internal role-taxonomy leakage.
+    // Neutral copy + structured code — no internal role-taxonomy leakage.
     return res.status(403).json({
       error: "You do not have permission to perform this action",
       code: "TENANT_ADMIN_REQUIRED",
@@ -11860,7 +11860,7 @@ router.post(
           (path.extname(req.file.originalname || "") || ".png")
             .toLowerCase()
             .replace(/[^.a-z0-9]/g, "") || ".png";
-        // Timestamped name so each replacement is a distinct file â€” the old one
+        // Timestamped name so each replacement is a distinct file — the old one
         // is then explicitly deleted below, and cached URLs never serve stale art.
         const filename = `logo-${Date.now()}${ext}`;
         fs.writeFileSync(path.join(dir, filename), req.file.buffer);
@@ -11886,7 +11886,7 @@ router.post(
   },
 );
 
-// DELETE /branding/logo (2026-07-08) â€” clears Tenant.logoUrl and removes the
+// DELETE /branding/logo (2026-07-08) — clears Tenant.logoUrl and removes the
 // underlying file from S3/disk. Companion to POST /branding/logo, whose only
 // prior path to "remove a logo" was uploading a replacement.
 router.delete("/branding/logo", requireTenantAdmin, async (req, res) => {
@@ -11896,7 +11896,7 @@ router.delete("/branding/logo", requireTenantAdmin, async (req, res) => {
       select: { logoUrl: true },
     });
     if (!current?.logoUrl) {
-      return res.json({ logoUrl: null }); // already logo-less â€” no-op
+      return res.json({ logoUrl: null }); // already logo-less — no-op
     }
     await prisma.tenant.update({
       where: { id: req.user.tenantId },
@@ -11956,7 +11956,7 @@ router.put("/branding/theme-color", requireTenantAdmin, async (req, res) => {
         // Prisma client not yet regenerated after schema migration.
         // The DB column exists; run `prisma generate` + restart to activate.
         return res.status(503).json({
-          error: "Theme color field not yet available â€” restart the backend after running `npx prisma generate`.",
+          error: "Theme color field not yet available — restart the backend after running `npx prisma generate`.",
         });
       }
       throw prismaErr;
@@ -11972,7 +11972,7 @@ router.get("/branding", async (req, res) => {
     // Select fields that exist in the currently-generated Prisma client.
     // themeColor is fetched in a separate try block so a stale Prisma
     // client (not yet regenerated after the schema migration) doesn't
-    // crash the entire branding endpoint â€” it will just return null for
+    // crash the entire branding endpoint — it will just return null for
     // themeColor until the backend is restarted after `prisma generate`.
     const tenant = await prisma.tenant.findUnique({
       where: { id: req.user.tenantId },
@@ -11993,7 +11993,7 @@ router.get("/branding", async (req, res) => {
       });
       themeColor = t2?.themeColor || null;
     } catch (_ignored) {
-      // Prisma client not yet regenerated â€” themeColor unavailable until restart
+      // Prisma client not yet regenerated — themeColor unavailable until restart
     }
 
     res.json({ ...tenant, themeColor });
@@ -12003,12 +12003,12 @@ router.get("/branding", async (req, res) => {
   }
 });
 
-// â”€â”€ Agent D: Loyalty + Referrals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Agent D: Loyalty + Referrals ─────────────────────────────────────
 //
 // Loyalty model: append-only ledger of LoyaltyTransaction rows (positive
 // for credits, negative for redemptions). Balance is SUM(points). Default
 // earn rule (applied client-side / by future cron): 10% of amountCharged
-// rounded down. We do NOT auto-earn here on visit creation â€” keeps the
+// rounded down. We do NOT auto-earn here on visit creation — keeps the
 // route surface explicit; managers/staff credit via /loyalty/:id/credit.
 //
 // Referral lifecycle: pending -> signed_up -> first_visit -> rewarded.
@@ -12017,17 +12017,17 @@ router.get("/branding", async (req, res) => {
 function requireManagerPlus(req, res, next) {
   const role = req.user?.role;
   if (role === "ADMIN" || role === "MANAGER") return next();
-  // Neutral copy + structured code â€” no internal role-taxonomy leakage.
+  // Neutral copy + structured code — no internal role-taxonomy leakage.
   return res.status(403).json({
     error: "You do not have permission to perform this action",
     code: "MANAGER_ROLE_REQUIRED",
   });
 }
 
-// #614 â€” Loyalty rules (earn / burn config). Per-tenant row in LoyaltyConfig.
+// #614 — Loyalty rules (earn / burn config). Per-tenant row in LoyaltyConfig.
 // Defaults mirror the historic hardcoded rule (10% of spend) so behaviour is
 // byte-identical when no row exists. NOTE: these /loyalty/rules routes MUST
-// be registered BEFORE /loyalty/:patientId â€” otherwise Express's :patientId
+// be registered BEFORE /loyalty/:patientId — otherwise Express's :patientId
 // path-param swallows "rules" as an integer-parse failure (400).
 const LOYALTY_DEFAULTS = {
   earnPerVisit: 0,
@@ -12091,7 +12091,7 @@ router.put("/loyalty/rules", requireManagerPlus, async (req, res) => {
     ) {
       return res
         .status(400)
-        .json({ error: "earnPercentOfSpend must be â‰¤ 100" });
+        .json({ error: "earnPercentOfSpend must be ≤ 100" });
     }
 
     const tenantId = req.user.tenantId;
@@ -12196,7 +12196,7 @@ router.post(
           reason,
         },
       });
-      // #179: audit manual loyalty credits â€” these are a fraud surface
+      // #179: audit manual loyalty credits — these are a fraud surface
       // (a manager can hand out points). entityId is the patient, not the tx,
       // so admins can browse a patient's full credit history at a glance.
       await writeAudit(
@@ -12372,7 +12372,7 @@ router.put("/referrals/:id/reward", requireManagerPlus, async (req, res) => {
           tenantId: req.user.tenantId,
           type: "referral_bonus",
           points: rewardPoints,
-          reason: `Referral bonus â€” ${referral.referredName}`,
+          reason: `Referral bonus — ${referral.referredName}`,
         },
       }),
     ]);
@@ -12384,7 +12384,7 @@ router.put("/referrals/:id/reward", requireManagerPlus, async (req, res) => {
   }
 });
 
-// Loyalty leaderboard â€” top patients by points earned this calendar month.
+// Loyalty leaderboard — top patients by points earned this calendar month.
 router.get(
   "/loyalty/leaderboard/month",
   requireManagerPlus,
@@ -12405,7 +12405,7 @@ router.get(
         _sum: { points: true },
         // #440: ties on _sum points used to leak the underlying row order, which
         // varied between query runs (no stable secondary sort). Anchor ties on
-        // patientId asc so the leaderboard is deterministic across refreshes â€”
+        // patientId asc so the leaderboard is deterministic across refreshes —
         // customers complained about jumping from rank 4 to rank 6 with zero
         // points change. Lower id = earlier-registered patient = stable surrogate.
         orderBy: [{ _sum: { points: "desc" } }, { patientId: "asc" }],
@@ -12421,7 +12421,7 @@ router.get(
       const byId = Object.fromEntries(patients.map((p) => [p.id, p]));
       res.json(
         grouped.map((g) => ({
-          patient: byId[g.patientId] || { id: g.patientId, name: "â€”" },
+          patient: byId[g.patientId] || { id: g.patientId, name: "—" },
           earned: g._sum.points || 0,
         })),
       );
@@ -12432,16 +12432,16 @@ router.get(
   },
 );
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────
 // Agent B: Waitlist + auto-fill on cancellation
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────
 
 // Helper: when a visit is cancelled, find the first matching waitlist
 // entry (same serviceId, status=waiting) for the same tenant, mark it
 // "offered" with offeredAt=now, and queue an SMS via SmsMessage. The
 // outbound-SMS cron / smsProvider already drains the queue.
 async function offerWaitlistSlotForCancelledVisit(visit, tenantId) {
-  if (!visit.serviceId) return null; // no service â†’ no waitlist match
+  if (!visit.serviceId) return null; // no service → no waitlist match
   const candidate = await prisma.waitlist.findFirst({
     where: {
       tenantId,
@@ -12564,13 +12564,13 @@ router.put("/waitlist/:id", async (req, res) => {
         : null;
     }
 
-    // #282: side-effects for the waiting â†’ offered â†’ booked state machine.
+    // #282: side-effects for the waiting → offered → booked state machine.
     // Previously the row's `status` flipped but neither `offered_at` nor a
     // calendar Visit were written, defeating the entire purpose of the
     // waitlist (cancellation backfill).
-    //   â€¢ offered: stamp offered_at = now() if not already set, so the UI
-    //     can show "Offered 27/4 14:32" instead of "â€”".
-    //   â€¢ booked: create a real Visit row (status=booked) tied to the
+    //   • offered: stamp offered_at = now() if not already set, so the UI
+    //     can show "Offered 27/4 14:32" instead of "—".
+    //   • booked: create a real Visit row (status=booked) tied to the
     //     waitlist entry's patient + service + location, so it materialises
     //     on /wellness/calendar. Picks visitDate from req.body.visitDate
     //     (if the client supplies a slot), else preferredDateRange parsed
@@ -12591,7 +12591,7 @@ router.put("/waitlist/:id", async (req, res) => {
         data.offeredAt = new Date();
       }
       // Pick a slot for the materialised Visit. Preference order:
-      //   1. body.visitDate (client-supplied â€” explicit slot)
+      //   1. body.visitDate (client-supplied — explicit slot)
       //   2. body.preferredSlot (alias)
       //   3. existing.preferredDateRange parsed as a Date (best-effort)
       //   4. now() + 24h
@@ -12660,14 +12660,14 @@ router.delete("/waitlist/:id", async (req, res) => {
   }
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────
 // Agent B: Patient-portal real SMS-OTP login
 // /portal/login (the legacy mock endpoint above) is left intact for
-// backward compat. New flow: request-otp â†’ verify-otp.
+// backward compat. New flow: request-otp → verify-otp.
 // Both endpoints DO NOT leak whether a phone exists (always return
 // {ok:true} on request-otp). They are public (under /wellness/portal,
 // already on server.js openPaths allowlist).
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────
 
 // #295: hard rate limits on /portal/login/request-otp. Without these any
 // caller could fan out 20+ OTP requests in parallel, costing SMS credits
@@ -12765,7 +12765,7 @@ router.post(
       // enabling unauthenticated account takeover for any patient phone. The
       // OTP is delivered out-of-band via SMS only. E2E tests that need to read
       // the OTP must read it from the PatientOtp DB table directly (no env-var
-      // bypass â€” easier to forget than to disable). Always return ok:true so
+      // bypass — easier to forget than to disable). Always return ok:true so
       // we don't leak whether the phone is registered.
       res.json({ ok: true, expiresAt });
     } catch (e) {
@@ -12790,7 +12790,7 @@ router.post("/portal/login/verify-otp", async (req, res) => {
 
     // #238 demo bypass: when WELLNESS_DEMO_OTP is set in env (e.g. "1234"),
     // accept it as a valid OTP without checking the PatientOtp table. Still
-    // requires a real seeded patient to exist for the phone â€” this is for
+    // requires a real seeded patient to exist for the phone — this is for
     // the demo / QA flow, not an auth weakening for unknown phones.
     //
     // #292 hardening: the bypass was previously accepted for ANY existing
@@ -12799,9 +12799,9 @@ router.post("/portal/login/verify-otp", async (req, res) => {
     //   1. Only honor the bypass outside production (NODE_ENV !== 'production').
     //      Production opt-in still possible via WELLNESS_DEMO_OTP_ALLOW_PROD=1.
     //   2. Restrict to an explicit phone whitelist (last-10-digit match).
-    //      Default whitelist is the seeded demo patient (+919876500001 â†’
+    //      Default whitelist is the seeded demo patient (+919876500001 →
     //      "9876500001"). Override via WELLNESS_DEMO_OTP_PHONES (comma-sep,
-    //      digits only â€” last 10 used).
+    //      digits only — last 10 used).
     const demoOtp = process.env.WELLNESS_DEMO_OTP;
     const demoOtpAllowedInProd =
       process.env.WELLNESS_DEMO_OTP_ALLOW_PROD === "1";
@@ -12847,7 +12847,7 @@ router.post("/portal/login/verify-otp", async (req, res) => {
       return res.status(401).json({ error: "Invalid or expired code" });
     }
 
-    // Mark OTP used (single-use). Skip for demo bypass â€” no record exists.
+    // Mark OTP used (single-use). Skip for demo bypass — no record exists.
     if (record) {
       await prisma.patientOtp.update({
         where: { id: record.id },
@@ -12870,14 +12870,14 @@ router.post("/portal/login/verify-otp", async (req, res) => {
   }
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Wave 11 Agent FF â€” Wallet + GiftCard + Coupon + Cashback ledger system.
+// ─────────────────────────────────────────────────────────────────────
+// Wave 11 Agent FF — Wallet + GiftCard + Coupon + Cashback ledger system.
 //
 // Surface map: see commit body. All routes tenant-scoped via tenantWhere.
 // Sign convention on WalletTransaction.amount: credits positive, debits
 // negative (mirrors QuickBooks). All ledger writes go through Prisma
 // $transaction so balance + ledger row stay in lock-step.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────
 const {
   generateGiftCode,
   hashGiftCode,
@@ -13015,7 +13015,7 @@ router.post(
           reason,
         },
       );
-      // PRD Gap Â§13 wave-6a â€” emit wallet.topup so workflow rules can react to
+      // PRD Gap §13 wave-6a — emit wallet.topup so workflow rules can react to
       // every credit (manual, refund, gift-card redemption, cashback). Wrapped
       // so workflow failures never break the ledger response.
       try {
@@ -13090,7 +13090,7 @@ router.post(
           reason,
         },
       );
-      // PRD Gap Â§13 wave-6a â€” emit wallet.spent so workflow rules can react to
+      // PRD Gap §13 wave-6a — emit wallet.spent so workflow rules can react to
       // every debit (redemption, reversal, manual debit). Mirrors wallet.topup.
       try {
         require("../lib/eventBus").emitEvent(
@@ -13116,7 +13116,7 @@ router.post(
   },
 );
 
-// Wave-B Agent 3 (#653) â€” GET list never returns the bcrypt hash or any
+// Wave-B Agent 3 (#653) — GET list never returns the bcrypt hash or any
 // redeemable secret. The `code` column now stores a masked display value
 // ("ABCD****WXYZ"); we additionally select `codeLast4` for UI display
 // ("ending in WXYZ") and explicitly omit `codeHash`.
@@ -13146,7 +13146,7 @@ router.get("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
           redeemedBy: true,
           createdAt: true,
           updatedAt: true,
-          // codeHash deliberately omitted â€” never leaks via list.
+          // codeHash deliberately omitted — never leaks via list.
         },
       }),
       prisma.giftCard.count({ where }),
@@ -13158,10 +13158,10 @@ router.get("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   }
 });
 
-// Wave-B Agent 3 (#653) â€” POST returns plaintext as `code` + `oneTimeCode`
+// Wave-B Agent 3 (#653) — POST returns plaintext as `code` + `oneTimeCode`
 // in the response (one-time disclosure). The DB stores `codeHash` (bcrypt)
 // + a masked `code` ("ABCD****WXYZ") + `codeLast4`. Subsequent reads of
-// the row will NEVER return the redeemable plaintext again â€” operators
+// the row will NEVER return the redeemable plaintext again — operators
 // who lose it must reissue.
 router.post(
   "/giftcards",
@@ -13174,11 +13174,11 @@ router.post(
           .status(400)
           .json({ error: "amount must be a positive number" });
       }
-      // v3.7.17 â€” optional template-style fields. All nullable, all
+      // v3.7.17 — optional template-style fields. All nullable, all
       // tolerant of missing values to keep the legacy /giftcards POST
       // contract working for existing callers (wallet-giftcard spec,
       // PointOfSale issue flow). validityDays takes precedence over
-      // an explicit expiresAt â€” if both are sent we honor expiresAt.
+      // an explicit expiresAt — if both are sent we honor expiresAt.
       const name =
         typeof req.body.name === "string" && req.body.name.trim()
           ? req.body.name.trim()
@@ -13275,7 +13275,7 @@ router.post(
           .status(500)
           .json({ error: "Failed to allocate gift-card code" });
       }
-      // Audit row stores ONLY the masked code + last-4 â€” never the
+      // Audit row stores ONLY the masked code + last-4 — never the
       // plaintext, so a leaked audit log cannot redeem.
       await writeAudit(
         "GiftCard",
@@ -13290,7 +13290,7 @@ router.post(
           issuedTo,
         },
       );
-      // PRD Gap Â§13 wave-6a â€” emit giftcard.issued so workflow rules can react
+      // PRD Gap §13 wave-6a — emit giftcard.issued so workflow rules can react
       // (e.g. send WhatsApp ack to issuedTo, log against an attribution campaign).
       // The event carries the plaintext so workflow rules (SMS/WhatsApp to the
       // recipient) can transmit the redeemable secret. Subscribers must treat
@@ -13328,14 +13328,14 @@ router.post(
   },
 );
 
-// v3.7.17 â€” PATCH /giftcards/:id for admin-driven status transitions.
+// v3.7.17 — PATCH /giftcards/:id for admin-driven status transitions.
 //
 // Allowed flips:
-//   active     â‡„ cancelled
+//   active     ⇄ cancelled
 //
 // Disallowed:
 //   * Flipping TO or FROM `redeemed` (that's a redeemer-driven terminal
-//     state â€” only POST /giftcards/redeem can set it).
+//     state — only POST /giftcards/redeem can set it).
 //   * Flipping TO `expired` (computed from expiresAt; an admin who
 //     wants to retire a card uses `cancelled`).
 //
@@ -13361,7 +13361,7 @@ router.patch(
       });
       if (!existing)
         return res.status(404).json({ error: "Gift card not found" });
-      // Redeemed cards are terminal â€” admins can't reactivate them.
+      // Redeemed cards are terminal — admins can't reactivate them.
       if (existing.status === "redeemed") {
         return res.status(409).json({
           error: "Redeemed gift cards cannot change status",
@@ -13396,10 +13396,10 @@ router.patch(
   },
 );
 
-// Wave-B Agent 3 (#653) â€” Lookup now hashes the incoming code via
+// Wave-B Agent 3 (#653) — Lookup now hashes the incoming code via
 // bcrypt.compare against candidate rows narrowed by codeLast4. We never
 // plaintext-match against the (masked) `code` column. The 404 path is
-// indistinguishable from "wrong code" by design â€” the route returns the
+// indistinguishable from "wrong code" by design — the route returns the
 // same GIFTCARD_NOT_FOUND code whether the row is absent or the hash
 // mismatched, so an attacker can't enumerate which last-4 are in use.
 router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
@@ -13473,7 +13473,7 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
         type: "CREDIT_GIFTCARD",
         absAmount: giftCard.amount,
         performedBy: req.user.userId,
-        // Reason uses the MASKED code (giftCard.code) â€” never the plaintext â€”
+        // Reason uses the MASKED code (giftCard.code) — never the plaintext —
         // so the ledger row + audit trail does not leak the redeemable secret.
         reason: `Gift card ${giftCard.code} redeemed`,
         giftCardId: giftCard.id,
@@ -13521,7 +13521,7 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
         transactionId: tx.id,
       },
     );
-    // PRD Gap Â§13 wave-6a â€” emit giftcard.redeemed so workflow rules can
+    // PRD Gap §13 wave-6a — emit giftcard.redeemed so workflow rules can
     // react (top-up confirmation SMS, refer-a-friend bonus on redemption).
     try {
       require("../lib/eventBus").emitEvent(
@@ -13548,24 +13548,24 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
   }
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Gift-card STOREFRONT â€” customer-facing purchase flow.
+// ─────────────────────────────────────────────────────────────────────
+// Gift-card STOREFRONT — customer-facing purchase flow.
 //
-//   GET  /giftcards/storefront                  â€” list buyable gift cards
-//   POST /giftcards/:id/purchase/order          â€” create Razorpay order
-//   POST /giftcards/:id/purchase/confirm        â€” verify + credit wallet
+//   GET  /giftcards/storefront                  — list buyable gift cards
+//   POST /giftcards/:id/purchase/order          — create Razorpay order
+//   POST /giftcards/:id/purchase/confirm        — verify + credit wallet
 //
 // Visibility model: any authenticated user in the tenant can browse +
 // buy. The admin-curated catalogue lives in the existing /giftcards
-// admin page (status="active", no issuedTo, no redeemedAt) â€” those rows
+// admin page (status="active", no issuedTo, no redeemedAt) — those rows
 // double as storefront inventory. Code / codeHash are NEVER returned
 // from these endpoints; the buyer doesn't need the redemption secret
 // because the confirm handler credits the wallet directly on payment
 // success. Mirrors the /api/payments/create-razorpay-order +
 // /confirm-razorpay handshake used by Invoices "Pay Now".
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────
 
-// GET /giftcards/storefront â€” open to any tenant-authenticated user
+// GET /giftcards/storefront — open to any tenant-authenticated user
 // (no wellnessRole gate). Returns active, unissued, unredeemed,
 // not-yet-expired gift cards. Display-safe projection only.
 router.get("/giftcards/storefront", async (req, res) => {
@@ -13577,7 +13577,7 @@ router.get("/giftcards/storefront", async (req, res) => {
         status: "active",
         issuedTo: null,
         redeemedAt: null,
-        // Only cards with a price are listed in the storefront â€” a row
+        // Only cards with a price are listed in the storefront — a row
         // with price=null is admin-issuance only (sold offline / gifted).
         price: { not: null },
         OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
@@ -13601,7 +13601,7 @@ router.get("/giftcards/storefront", async (req, res) => {
   }
 });
 
-// Storefront-state guard â€” single source of truth for "is this card still
+// Storefront-state guard — single source of truth for "is this card still
 // buyable?" Used by both the order + confirm handlers so a card that
 // gets reserved / sold between the two calls returns the same 409.
 async function loadStorefrontCard(tenantId, id) {
@@ -13685,8 +13685,8 @@ async function resolveSelfPatient(user) {
   return patient;
 }
 
-// POST /giftcards/:id/purchase/order â€” body: { patientId? }. Omit patientId
-// to buy for YOURSELF (the storefront default â€” the credit lands on the
+// POST /giftcards/:id/purchase/order — body: { patientId? }. Omit patientId
+// to buy for YOURSELF (the storefront default — the credit lands on the
 // signed-in user's own wallet); supply patientId to GIFT the card to another
 // patient. Creates a Razorpay order for the card's `price` (sale price),
 // records a Payment
@@ -13695,7 +13695,7 @@ async function resolveSelfPatient(user) {
 // the confirm handler needs to credit the right wallet.
 router.post("/giftcards/:id/purchase/order", async (req, res) => {
   try {
-    // Customer payment (customer â†’ tenant) â€” use the tenant's OWN Razorpay
+    // Customer payment (customer → tenant) — use the tenant's OWN Razorpay
     // keys (BYOK) so the money settles into the clinic's account, not the
     // platform's. No silent env fallback.
     const {
@@ -13717,7 +13717,7 @@ router.post("/giftcards/:id/purchase/order", async (req, res) => {
 
     // Recipient resolution. A supplied patientId means "gift this card to
     // that patient" (staff / gift flow). No patientId means "buy for
-    // myself" â€” resolve (or lazily create) the Patient linked to the
+    // myself" — resolve (or lazily create) the Patient linked to the
     // signed-in user so the wallet credit has a home. This makes the
     // customer storefront default to self without exposing the whole
     // patient directory in a typeahead.
@@ -13820,7 +13820,7 @@ router.post("/giftcards/:id/purchase/order", async (req, res) => {
   }
 });
 
-// POST /giftcards/:id/purchase/confirm â€” body: { paymentId,
+// POST /giftcards/:id/purchase/confirm — body: { paymentId,
 // razorpay_order_id, razorpay_payment_id, razorpay_signature }. Verifies
 // the HMAC, marks the Payment SUCCESS, marks the gift card redeemed by
 // the buyer's patient, credits the wallet, audits, emits.
@@ -13864,7 +13864,7 @@ router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
     });
     if (!payment) return res.status(404).json({ error: "Payment not found" });
 
-    // HMAC-SHA256(order_id|payment_id) under the key secret â€” same
+    // HMAC-SHA256(order_id|payment_id) under the key secret — same
     // contract as /api/payments/confirm-razorpay.
     const expected = require("crypto")
       .createHmac("sha256", secret)
@@ -13901,7 +13901,7 @@ router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
         .json({ error: "Payment is missing patient context" });
     }
 
-    // Re-verify storefront eligibility â€” guards against a concurrent
+    // Re-verify storefront eligibility — guards against a concurrent
     // admin issuance / redemption between order-create and confirm.
     let card;
     try {
@@ -13935,7 +13935,7 @@ router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
     });
 
     // Find-or-create the wallet for the buyer's patient, then credit it
-    // by the gift card's `amount` (gift value â€” distinct from `price`
+    // by the gift card's `amount` (gift value — distinct from `price`
     // which is what they paid). Same writeWalletTransaction helper used
     // by /giftcards/redeem so the ledger shape is identical.
     const wallet = await getOrCreateWallet(req, patientId);
@@ -14022,27 +14022,27 @@ router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
   }
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Self-service membership purchase â€” mirrors the gift-card storefront flow
+// ─────────────────────────────────────────────────────────────────
+// Self-service membership purchase — mirrors the gift-card storefront flow
 // above. A patient-portal / wellness user browses /wellness/memberships,
 // clicks "Buy", goes through the Razorpay handshake, and ends up with an
 // active Membership row in their own account (no admin involvement).
 //
-//   POST /membership-plans/:id/purchase/order   â€” create Razorpay order
-//   POST /membership-plans/:id/purchase/confirm â€” verify + create Membership
+//   POST /membership-plans/:id/purchase/order   — create Razorpay order
+//   POST /membership-plans/:id/purchase/confirm — verify + create Membership
 //
 // Authenticated against the regular JWT (any tenant user can buy a plan for
-// themself). The Patient row is get-or-created from req.user â€” same pattern
+// themself). The Patient row is get-or-created from req.user — same pattern
 // /appointments/book uses so a user who's never been to the clinic can still
 // purchase + immediately apply the membership at booking time.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────
 
 router.post(
   "/membership-plans/:id/purchase/order",
   verifyToken,
   async (req, res) => {
     try {
-      // Customer payment (customer â†’ tenant) â€” use the tenant's OWN Razorpay
+      // Customer payment (customer → tenant) — use the tenant's OWN Razorpay
       // keys (BYOK); no silent env fallback.
       const {
         getTenantRazorpayClient,
@@ -14107,8 +14107,8 @@ router.post(
 
       // Reject duplicate purchase while an active membership exists for
       // the same plan. Active = status='active' AND endDate > now. Lazy
-      // expiry means we MUST check both fields together â€” checking
-      // status alone would let a user re-buy past expiry (acceptable â€”
+      // expiry means we MUST check both fields together — checking
+      // status alone would let a user re-buy past expiry (acceptable —
       // they should be able to renew), but also let them double-buy on
       // an unexpired-but-stale row (NOT acceptable). Returns 409 BEFORE
       // touching Razorpay so the user is never charged for the duplicate.
@@ -14201,7 +14201,7 @@ router.post(
 
 // Verifies the Razorpay signature, marks the Payment SUCCESS, and creates
 // the Membership row (matching the staff-side /patients/:id/memberships
-// purchase semantics â€” endDate from durationDays, balance stamped from
+// purchase semantics — endDate from durationDays, balance stamped from
 // plan.entitlements). Defence-in-depth: metadata.planId must match URL :id.
 router.post(
   "/membership-plans/:id/purchase/confirm",
@@ -14286,7 +14286,7 @@ router.post(
       }
 
       // Re-verify plan eligibility (in case an admin deactivated between
-      // order-create and confirm â€” Razorpay still charged the user; we
+      // order-create and confirm — Razorpay still charged the user; we
       // fail the Payment so an operator refunds out-of-band).
       const plan = await prisma.membershipPlan.findFirst({
         where: { id: planIdInt, tenantId: req.user.tenantId },
@@ -14301,7 +14301,7 @@ router.post(
           .json({ error: "Membership plan is no longer available" });
       }
 
-      // Defence-in-depth duplicate-active check â€” the /order endpoint
+      // Defence-in-depth duplicate-active check — the /order endpoint
       // gates the same condition, but a race (two concurrent orders
       // created in the same tick, or a /confirm called against a stale
       // order that pre-dated the user's now-active membership) could
@@ -14348,7 +14348,7 @@ router.post(
         },
       });
 
-      // Stamp initial balance from plan.entitlements â€” same shape the
+      // Stamp initial balance from plan.entitlements — same shape the
       // staff-side /patients/:id/memberships POST writes so redemption,
       // expiry-notification, and balance reads work identically.
       let entitlements;
@@ -14453,10 +14453,10 @@ router.post(
 );
 
 // Admin-applied gift-card credit. The /giftcards/redeem path above requires
-// the plaintext code (recipient flow â€” SMS/email/printed card â†’ patient
+// the plaintext code (recipient flow — SMS/email/printed card → patient
 // portal). This route is the parallel operator flow: an ADMIN or MANAGER
 // applies a gift card they (or another operator) issued directly to a
-// patient's wallet, by row id. No code/hash check â€” we trust the
+// patient's wallet, by row id. No code/hash check — we trust the
 // authenticated session, the same way we trust admins to issue cards or
 // manually credit wallets via /wallets/:id/credit.
 //
@@ -14465,7 +14465,7 @@ router.post(
 // to redeem). This endpoint is gated on JWT + role + audit-logged, so it
 // doesn't undermine that protection. A compromised admin session could
 // apply gift cards, but the same session could already issue arbitrary new
-// cards or credit wallets directly â€” the ceiling doesn't move.
+// cards or credit wallets directly — the ceiling doesn't move.
 //
 // Distinct audit action ("APPLY") + event ("giftcard.applied") so the
 // trail clearly distinguishes operator-applied from code-redeemed entries.
@@ -14529,7 +14529,7 @@ router.post(
           type: "CREDIT_GIFTCARD",
           absAmount: giftCard.amount,
           performedBy: req.user.userId,
-          // Masked code only â€” never the plaintext (which we don't have anyway).
+          // Masked code only — never the plaintext (which we don't have anyway).
           reason: `Gift card ${giftCard.code} applied by operator`,
           giftCardId: giftCard.id,
         });
@@ -14611,7 +14611,7 @@ function validateCouponBody(body) {
   if (!Number.isFinite(v) || v <= 0)
     errors.push("discountValue must be a positive number");
   if (body.discountType === "PERCENT" && v > 100)
-    errors.push("PERCENT discountValue must be â‰¤ 100");
+    errors.push("PERCENT discountValue must be ≤ 100");
   if (body.maxRedemptions != null) {
     const m = parseInt(body.maxRedemptions, 10);
     if (!Number.isFinite(m) || m < 0)
@@ -14950,7 +14950,7 @@ function validateCashbackRuleBody(body) {
   const v = Number(body.earnPercent);
   if (!Number.isFinite(v) || v < 0)
     errors.push("earnPercent must be a non-negative number");
-  if (v > 100) errors.push("earnPercent must be â‰¤ 100");
+  if (v > 100) errors.push("earnPercent must be ≤ 100");
   if (body.minSpend != null) {
     const m = Number(body.minSpend);
     if (!Number.isFinite(m) || m < 0)
@@ -15205,7 +15205,7 @@ router.post("/visits/:id/apply-cashback", phiWriteGate, async (req, res) => {
         transactionId: tx.id,
       },
     );
-    // PRD Gap Â§13 wave-6a â€” emit cashback.credited so workflow rules can
+    // PRD Gap §13 wave-6a — emit cashback.credited so workflow rules can
     // react (cashback-redemption SMS, loyalty-tier upgrades).
     try {
       require("../lib/eventBus").emitEvent(
@@ -15269,7 +15269,7 @@ router.get("/doctors/availability", verifyToken, async (req, res) => {
       });
       const ids = refs.map((r) => r.doctorId).filter(Boolean);
       if (ids.length) {
-        // No tenantId filter here â€” security is guaranteed by the Visit.tenantId
+        // No tenantId filter here — security is guaranteed by the Visit.tenantId
         // scope above. Doctor users may belong to a shared/admin tenant while
         // only serving visits for this tenant.
         doctors = await prisma.user.findMany({
@@ -15533,10 +15533,10 @@ async function resolveBookingPatient(req, tenantId) {
 // User appointment booking endpoint
 // Allows any authenticated user to book an appointment
 // Legacy CUSTOMER-session booking endpoint. Thin adapter around
-// appointmentService.bookAppointment â€” business rules live in the
+// appointmentService.bookAppointment — business rules live in the
 // service so this route and /portal/appointments/book can't drift.
 // Patient resolution (create-on-first-book or explicit patientId for staff)
-// stays at the route layer because the CUSTOMER cohort's userâ†’patient
+// stays at the route layer because the CUSTOMER cohort's user→patient
 // mapping differs from the phone+OTP cohort's already-resolved req.patient.
 router.post("/appointments/book", verifyToken, async (req, res) => {
   try {
@@ -15584,7 +15584,7 @@ router.post("/appointments/book", verifyToken, async (req, res) => {
   }
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────
 // Pay-now booking flow: customer pays via Razorpay BEFORE the slot is
 // reserved. Two-step handshake mirrors the gift-card storefront pattern.
 //   1. POST /appointments/book-and-pay
@@ -15593,9 +15593,9 @@ router.post("/appointments/book", verifyToken, async (req, res) => {
 //   2. POST /appointments/confirm-payment
 //        Verifies the HMAC signature, creates the Visit using the
 //        existing appointmentService, marks Payment SUCCESS.
-// "Pay later" path is the existing /appointments/book â€” Visit created
+// "Pay later" path is the existing /appointments/book — Visit created
 // immediately, no payment row.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────
 
 const APPOINTMENT_GST_RATE = 0.18;
 const APPOINTMENT_CONVENIENCE_FEE = 49;
@@ -15692,7 +15692,7 @@ router.post("/appointments/book-and-pay", verifyToken, async (req, res) => {
       resolvedContactId = contact.id;
     }
 
-    // Server-side price computation. baseAmount + 18% GST + â‚¹49 convenience.
+    // Server-side price computation. baseAmount + 18% GST + ₹49 convenience.
     const baseAmount = Number(service.basePrice);
     const tax = Math.round(baseAmount * APPOINTMENT_GST_RATE * 100) / 100;
     const total = Math.round((baseAmount + tax + APPOINTMENT_CONVENIENCE_FEE) * 100) / 100;
@@ -16033,7 +16033,7 @@ router.get("/appointments/my", verifyToken, async (req, res) => {
 // List active memberships the current user can apply to a booking. The
 // staff-side `/patients/:id/memberships` endpoint is phiReadGate-protected,
 // so the self-booking page can't reach it from the patient's own session.
-// This endpoint mirrors that read but scopes by req.user â†’ patient and
+// This endpoint mirrors that read but scopes by req.user → patient and
 // filters to active, non-expired rows.
 router.get("/appointments/my-memberships", verifyToken, async (req, res) => {
   try {
@@ -16085,7 +16085,7 @@ router.get("/appointments/my-memberships", verifyToken, async (req, res) => {
 });
 
 // Cancel appointment
-// Legacy CUSTOMER-session cancellation endpoint. Thin adapter â€” see
+// Legacy CUSTOMER-session cancellation endpoint. Thin adapter — see
 // appointmentService.cancelAppointment for the business rules.
 router.post("/appointments/:id/cancel", verifyToken, async (req, res) => {
   try {
@@ -16118,12 +16118,12 @@ router.post("/appointments/:id/cancel", verifyToken, async (req, res) => {
   }
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Patient portal appointment endpoints â€” accept BOTH cohorts via
+// ───────────────────────────────────────────────────────────────────
+// Patient portal appointment endpoints — accept BOTH cohorts via
 // verifyPatientToken (Path A = phone+OTP, Path B = CUSTOMER session
 // resolved to Patient). Business logic lives in appointmentService;
 // these routes only handle token verification + envelope shape.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ───────────────────────────────────────────────────────────────────
 
 router.get("/portal/appointments", verifyPatientToken, async (req, res) => {
   try {

@@ -316,8 +316,8 @@ function ImportModal({
 
     const useAsync = tooBig || tooLong;
     const endpoint = useAsync
-      ? `/api/wellness/csv/${entity}/import/async`
-      : `/api/wellness/csv/${entity}/import`;
+      ? (importAsyncUrl || `/api/wellness/csv/${entity}/import/async`)
+      : (importUrl || `/api/wellness/csv/${entity}/import`);
 
     try {
       const fd = new FormData();
@@ -372,7 +372,7 @@ function ImportModal({
     const id = setInterval(tick, 1500);
     tick();
     return () => clearInterval(id);
-  }, [jobId, onImported]);
+  }, [jobId, jobUrl, onImported]);
 
   const downloadErrorReport = () => {
     if (!result?.errors?.length) return;

@@ -39,8 +39,8 @@
     },
     {
       "pattern": "index-*.js",
-      "maxKB": 250,
-      "comment": "Main SPA entry chunk. Critical-path; keep tight."
+      "maxKB": 260,
+      "comment": "Main SPA entry chunk. Critical-path; keep tight. Bumped 250→260 on 2026-07-23: PR #1251 added the open-source section + footer GitHub link to Landing.jsx, pushing the chunk 0.5 KB over the 250 KB cap."
     },
     {
       "pattern": "Dashboards-*.js",

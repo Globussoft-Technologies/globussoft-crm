@@ -1,4 +1,4 @@
-const path = require("path");
+﻿const path = require("path");
 // Load env. Historical convention pointed at the repo root, but in practice
 // the keys (GEMINI_API_KEY, OPENAI_API_KEY, Mailgun, etc.) live in
 // backend/.env. Load root first (no-op if absent), then backend/.env with
@@ -19,7 +19,7 @@ console.log(
     `OPENAI=${process.env.OPENAI_API_KEY ? "set" : "MISSING"}`,
 );
 
-// Fail fast in production if JWT secrets are missing — refuses to boot rather than
+// Fail fast in production if JWT secrets are missing â€” refuses to boot rather than
 // silently fall back to the dev secret baked into the source.
 if (process.env.NODE_ENV === "production") {
   if (!process.env.JWT_SECRET) {
@@ -29,14 +29,14 @@ if (process.env.NODE_ENV === "production") {
   }
   if (!process.env.PORTAL_JWT_SECRET) {
     console.warn(
-      "[startup] PORTAL_JWT_SECRET not set — patient portal tokens will reuse JWT_SECRET. Set a separate value for defense in depth.",
+      "[startup] PORTAL_JWT_SECRET not set â€” patient portal tokens will reuse JWT_SECRET. Set a separate value for defense in depth.",
     );
   }
 }
 
 // #447-follow-up + 940b4f0-wave learning: surface the canonical app version
 // in /api/health + the / root response. Reading from package.json means the
-// version field tracks bumps automatically — no more hardcoded literals
+// version field tracks bumps automatically â€” no more hardcoded literals
 // drifting from reality (the previous "3.2.0" string sat in source for 5+
 // release tags, misleading the deploy-divergence diagnosis in the
 // triaging-stuck-deploy-gate skill). Required at top so the read happens
@@ -53,8 +53,8 @@ const swaggerUi = require("swagger-ui-express");
 const YAML = require("yamljs");
 const rateLimit = require("express-rate-limit");
 
-// ── Issue #423 — validate numeric `:id` path params BEFORE any route file
-// is loaded ─────────────────────────────────────────────────────────────
+// â”€â”€ Issue #423 â€” validate numeric `:id` path params BEFORE any route file
+// is loaded â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Handlers like `/deals/:id`, `/tasks/:id`, `/tickets/:id` did
 // `parseInt(req.params.id)` without isNaN check, then handed NaN to Prisma
 // which threw and surfaced as a 500. The fix is one param callback that
@@ -68,7 +68,7 @@ const rateLimit = require("express-rate-limit");
 // Each `routes/*.js` exports its own `express.Router()`, so we monkey-patch
 // the Router factory to auto-register the validator on every Router that
 // gets constructed. The patch MUST run before any `require("./routes/...")`
-// below — that's why this block sits up here, not down by the route mounts.
+// below â€” that's why this block sits up here, not down by the route mounts.
 const { validateNumericId } = require("./middleware/validateNumericId");
 const { resolveSubscriptionAccess } = require("./lib/subscriptionAccess");
 {
@@ -96,7 +96,7 @@ const app = express();
 app.set("trust proxy", 1); // trust first proxy (Nginx)
 const server = http.createServer(app);
 
-// ── Express 4 Async Error Patch ─────────────────────────────────────
+// â”€â”€ Express 4 Async Error Patch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Express 4 does not catch rejected promises in async route handlers.
 // This patch wraps every route handler so that `throw` or a rejected
 // promise inside an async handler is forwarded to `next(err)` and
@@ -106,7 +106,7 @@ const server = http.createServer(app);
 function patchAsyncErrorHandling(target, methods) {
   for (const method of methods) {
     const original = target[method];
-    // Preserve `this` — Express's verb methods operate on the calling
+    // Preserve `this` â€” Express's verb methods operate on the calling
     // router/app instance (this.stack etc.). Binding to `target` (the shared
     // prototype) would point them at the wrong object, so forward with .call.
     target[method] = function (path, ...handlers) {
@@ -127,30 +127,30 @@ const HTTP_METHODS = ["get", "post", "put", "patch", "delete"];
 patchAsyncErrorHandling(app, HTTP_METHODS);
 // In Express 4 the verb methods live on the `express.Router` function object
 // itself (router instances inherit from it via setPrototypeOf), NOT on
-// `express.Router.prototype` — patch the former so sub-routers are covered.
+// `express.Router.prototype` â€” patch the former so sub-routers are covered.
 patchAsyncErrorHandling(express.Router, HTTP_METHODS);
 
 // Initialize Sentry early for full request capture (no-op if SENTRY_DSN not set)
 initSentry(app);
 
-// CORS — restrict to known origins
+// CORS â€” restrict to known origins
 //
 // The four hardcoded entries below are intentional fail-safes:
-//   - crm.globusdemos.com         → demo (always-on, never moves)
-//   - localhost:5173 / localhost:5000 → local dev (Vite + same-origin SSR)
-//   - globuscrm.globussoft.com    → production (added in PR #511; canonical
+//   - crm.globusdemos.com         â†’ demo (always-on, never moves)
+//   - localhost:5173 / localhost:5000 â†’ local dev (Vite + same-origin SSR)
+//   - globuscrm.globussoft.com    â†’ production (added in PR #511; canonical
 //                                   prod hostname for the customer-facing
 //                                   deployment)
 // These exist as literals so a misconfigured deploy (missing env-var,
 // typo in CORS_ALLOWED_ORIGINS) can never lock the demo or production
-// out of CORS — which would brick the Inbox count poll, websocket
+// out of CORS â€” which would brick the Inbox count poll, websocket
 // upgrade, and every fetch from the frontend. Additional origins are
 // env-driven via FRONTEND_URL (single) and CORS_ALLOWED_ORIGINS (CSV).
 const ALLOWED_ORIGINS = [
   "https://crm.globusdemos.com",
   "http://localhost:5173",
   "http://localhost:5000",
-  // #657 — keep 127.0.0.1 and localhost in lockstep. Some test runners
+  // #657 â€” keep 127.0.0.1 and localhost in lockstep. Some test runners
   // (Playwright, supertest) resolve BASE_URL through 127.0.0.1 even when
   // the caller typed `localhost`; without these entries the CORS layer
   // 500s on legitimate per-push gate runs and the originCheck layer
@@ -158,7 +158,7 @@ const ALLOWED_ORIGINS = [
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5000",
   "https://globuscrm.globussoft.com",
-  // Dr. Haror's external marketing site — consumes the public wellness
+  // Dr. Haror's external marketing site â€” consumes the public wellness
   // catalog + payment endpoints (POST /api/wellness/public/payment/order +
   // /confirm). Hardcoded because it's part of the product surface, not a
   // one-off env override.
@@ -178,17 +178,17 @@ app.use(
       // Allow requests with no origin (server-to-server, curl, Postman)
       if (!origin || ALLOWED_ORIGINS.includes(origin))
         return callback(null, true);
-      // GlobusCRM browser extension (2026-07-09) — chrome-extension://<id>
+      // GlobusCRM browser extension (2026-07-09) â€” chrome-extension://<id>
       // origins. The id is regenerated on every unpacked reload/reinstall
       // (and again once published to the Chrome Web Store), so an exact-
       // match allowlist entry would break on the next reload. Mirrors the
-      // same allowance in middleware/originCheck.js — see that file's
+      // same allowance in middleware/originCheck.js â€” see that file's
       // comment for the trust-boundary rationale (verifyToken's JWT bearer
       // check is what actually gates these routes).
       if (origin.startsWith("chrome-extension://")) return callback(null, true);
-      // #657 — for unknown origins, do NOT error-out (which sends a 500
+      // #657 â€” for unknown origins, do NOT error-out (which sends a 500
       // and breaks the originCheck layer below). Just decline to set the
-      // Access-Control-Allow-Origin response header — the browser will
+      // Access-Control-Allow-Origin response header â€” the browser will
       // refuse to read the response, AND the state-changing POSTs are
       // rejected with a proper 403 by originCheck (next middleware).
       callback(null, false);
@@ -196,11 +196,11 @@ app.use(
     credentials: true,
   }),
 );
-// ─── WhatsApp webhook (P1 — must mount BEFORE express.json) ──────────────
+// â”€â”€â”€ WhatsApp webhook (P1 â€” must mount BEFORE express.json) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Meta signs the raw request body with HMAC-SHA-256 using META_APP_SECRET.
 // Any JSON re-serialization would change the byte stream and break the
-// signature check. We therefore mount the webhook router here — earlier
-// than the global JSON body parser — with its own express.raw() so the
+// signature check. We therefore mount the webhook router here â€” earlier
+// than the global JSON body parser â€” with its own express.raw() so the
 // middleware in middleware/metaWebhook.js sees a Buffer.
 //
 // The router responds 200 immediately and processes events asynchronously
@@ -209,14 +209,14 @@ app.use(
 // already flushed.
 //
 // Existing GET/POST /webhook stubs inside routes/whatsapp.js are tombstones
-// that log + 503 if they ever fire — that would indicate this mount-order
+// that log + 503 if they ever fire â€” that would indicate this mount-order
 // is wrong.
 // Attach `req.io` BEFORE the webhook mount so the webhook handler can
 // emit Socket.IO events to connected operators (real-time inbox push).
 // Pre-fix: the matching middleware lower down (~line 322) ran AFTER
-// the webhook router → `req.io` was undefined inside handleMessagesEvent
-// → emit silently no-op'd → frontend never received the
-// `whatsapp:received` event → users had to refresh manually.
+// the webhook router â†’ `req.io` was undefined inside handleMessagesEvent
+// â†’ emit silently no-op'd â†’ frontend never received the
+// `whatsapp:received` event â†’ users had to refresh manually.
 app.use((req, _res, next) => {
   req.io = io;
   next();
@@ -228,7 +228,7 @@ app.use(express.json({ limit: "25mb" }));
 // Twilio voice/telephony/SMS webhooks and Mailgun/Razorpay form posts send
 // `application/x-www-form-urlencoded`. Without this parser req.body is empty
 // and every webhook 400s on a missing-field check. Found by the e2e smoke
-// suite — every voice/telephony webhook test failed for the same reason.
+// suite â€” every voice/telephony webhook test failed for the same reason.
 app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
 // Security middleware
@@ -244,32 +244,32 @@ const {
   readTenantEmbedAllowlist,
 } = require("./middleware/security");
 const { originCheck } = require("./middleware/originCheck");
-// #917 slice S35 (FR-3.X) — CSP-nonce static-file middleware. Substitutes
+// #917 slice S35 (FR-3.X) â€” CSP-nonce static-file middleware. Substitutes
 // `__CSP_NONCE__` placeholders in frontend/index.html with the per-request
 // nonce minted by attachNonce so the strict Report-Only CSP header's
 // `'nonce-<base64>'` source-list value matches what the browser sees on the
 // served inline `<script>` / `<style>` / `<meta name="csp-nonce">` tags.
 const cspNonceStaticMiddleware = require("./middleware/cspNonceStaticMiddleware");
-// #917 slice S1 (FR-3.2) — mint a per-request CSP nonce BEFORE the strict
+// #917 slice S1 (FR-3.2) â€” mint a per-request CSP nonce BEFORE the strict
 // Report-Only CSP middleware runs. The CSP function-directives read
 // res.locals.cspNonce to advertise `'nonce-<base64>'` on script-src/style-src.
 app.use(attachNonce);
 app.use(helmetMiddleware);
-// #917 slice 1 — additive strict CSP in Report-Only mode (no 'unsafe-inline'
+// #917 slice 1 â€” additive strict CSP in Report-Only mode (no 'unsafe-inline'
 // on script-src/style-src). Browsers log violations to devtools without
 // blocking. Promotion to enforce-mode is a future slice once inline-script /
 // inline-style surface is migrated to external bundles + nonces.
 app.use(helmetStrictReportOnlyMiddleware);
-// #917 slice S119 (FR-3.X) — cspNonceStaticMiddleware mount MOVED to AFTER
+// #917 slice S119 (FR-3.X) â€” cspNonceStaticMiddleware mount MOVED to AFTER
 // the swagger-ui mount further down. S115 placed it here, but the
 // middleware's fall-through rules (GET + non-`/api/` prefix + no dot)
-// MATCH `/api-docs` and `/api-docs/` — so the SPA index.html was being
+// MATCH `/api-docs` and `/api-docs/` â€” so the SPA index.html was being
 // served instead of Swagger UI's HTML, reding the e2e api-docs spec and
 // the per-push api_tests gate. See the new mount immediately after
 // `app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(...))` below.
-app.use(permissionsPolicyMiddleware); // #186 — Permissions-Policy header
+app.use(permissionsPolicyMiddleware); // #186 â€” Permissions-Policy header
 app.use(cookieParser());
-// #657 — CSRF defense layer for browser flows. Mounted EARLY (before
+// #657 â€” CSRF defense layer for browser flows. Mounted EARLY (before
 // rate-limiting + auth) so a forged-origin POST short-circuits to 403
 // without burning rate-limit budget or hitting verifyToken's DB lookup.
 // Webhook + external-API paths bypass internally; non-browser callers
@@ -296,7 +296,7 @@ const apiLimiter = rateLimit({
 // NOT count toward the limit, so a legitimate user who fat-fingers and then
 // succeeds doesn't burn budget. The per-username limiter keys on the lowercased
 // email so an attacker can't escape it by rotating IPs.
-// IMPORTANT: only applied to /api/auth/login itself — /api/auth/2fa/verify
+// IMPORTANT: only applied to /api/auth/login itself â€” /api/auth/2fa/verify
 // is a separate endpoint with its own threat model.
 const { ipKeyGenerator } = require("express-rate-limit");
 const loginIpLimiter = rateLimit({
@@ -313,7 +313,7 @@ const loginIpLimiter = rateLimit({
 });
 const loginUsernameLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  // 10/hr was too tight for the 8-shard e2e-full release-validation run —
+  // 10/hr was too tight for the 8-shard e2e-full release-validation run â€”
   // ~120+ spec files each do beforeAll login against admin@globussoft.com,
   // and under contention some return 5xx (counted as failures since
   // skipSuccessfulRequests only skips 2xx). The 10-budget got burned in
@@ -345,7 +345,7 @@ app.post(
   (req, res, next) => next(),
 );
 
-// Super Admin login — a single, extremely high-privilege account with no
+// Super Admin login â€” a single, extremely high-privilege account with no
 // account-lockout/2FA of its own, so brute-force protection matters even
 // more here than on the regular multi-user login. Tighter budget than the
 // app login (5/15min per IP is already tight; there's no legitimate-traffic
@@ -374,7 +374,7 @@ app.post(
 // has higher legitimate-use churn (typo-prone email entry), but tight
 // enough that a 1000-email enumeration attack hits the wall fast.
 //
-// Note we do NOT use skipSuccessfulRequests here — every successful call
+// Note we do NOT use skipSuccessfulRequests here â€” every successful call
 // counts toward the budget regardless. /forgot-password's success branch
 // already returns identical-shape response for known and unknown emails
 // (per #526), so distinguishing "valid email" vs "noop" via skip count
@@ -453,7 +453,7 @@ app.use("/api", apiLimiter);
 // body) lands in the route with `req.body = {}` (because neither
 // express.json nor express.urlencoded matched), then routes typically
 // destructure missing fields and 500. Pen-test flagged the 500 as the
-// wrong contract — should be 415 (Unsupported Media Type).
+// wrong contract â€” should be 415 (Unsupported Media Type).
 //
 // Conservative matching:
 //   - Only POST / PUT / PATCH (DELETE/GET don't carry bodies in our routes)
@@ -475,9 +475,9 @@ const SUPPORTED_CONTENT_TYPES = [
 const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = [
   "/api/marketing/submit",
   "/api/csv/",
-  // v3.9.1+ — travel CSV import endpoints accept text/csv same as /api/csv/.
+  // v3.9.1+ â€” travel CSV import endpoints accept text/csv same as /api/csv/.
   // Without these the global 415 guard fires BEFORE verifyToken, so the
-  // gate spec's "401 without token" case sees 415 and fails — see commit
+  // gate spec's "401 without token" case sees 415 and fails â€” see commit
   // 2840d46 (first push of travel_csv_io.js) and 769c484 (extending to
   // seasons + markup-rules). Every new travel /<resource>/import.csv
   // endpoint must be added here.
@@ -485,11 +485,11 @@ const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = [
   "/api/travel/diagnostic-banks/import.csv",
   "/api/travel/seasons/import.csv",
   "/api/travel/markup-rules/import.csv",
-  // #917 slice 2 — CSP violation reports use application/csp-report or
+  // #917 slice 2 â€” CSP violation reports use application/csp-report or
   // application/reports+json, neither of which is in SUPPORTED_CONTENT_TYPES.
   // The route's own express.json() parser handles them.
   "/api/csp/report",
-  // #921 / FR-3.7 (S5) — new SecurityIncident-backed CSP report sink.
+  // #921 / FR-3.7 (S5) â€” new SecurityIncident-backed CSP report sink.
   // Same content-type handling rationale as /api/csp/report above.
   "/api/security/csp-report",
 ];
@@ -501,7 +501,7 @@ app.use("/api", (req, res, next) => {
     .split(";")[0]
     .trim()
     .toLowerCase();
-  if (!ct) return next(); // missing → back-compat pass-through
+  if (!ct) return next(); // missing â†’ back-compat pass-through
   if (SUPPORTED_CONTENT_TYPES.includes(ct)) return next();
   if (
     CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES.some((p) =>
@@ -531,7 +531,7 @@ const presenceColors = [
 const { setIO } = require("./lib/eventBus");
 setIO(io);
 
-// Travel WhatsApp Web (QR-scan) transport (Q9) — hand the socket server to the
+// Travel WhatsApp Web (QR-scan) transport (Q9) â€” hand the socket server to the
 // session manager so QR codes + inbound messages + delivery receipts can be
 // pushed live to the tenant room. Sessions are lazy (an operator scans the QR
 // from the chat UI to link the number); LocalAuth resumes prior links on the
@@ -548,7 +548,7 @@ try {
 
 // req.io is now attached at the top of the middleware chain (above the
 // webhook mount) so the WhatsApp webhook handler can use it. No need
-// to re-attach here — left as a comment marker only.
+// to re-attach here â€” left as a comment marker only.
 
 io.on("connection", (socket) => {
   console.log(`[Socket] Client connected: ${socket.id}`);
@@ -584,9 +584,9 @@ io.on("connection", (socket) => {
 
 // Import Enterprise Routes
 const authRoutes = require("./routes/auth");
-// Public status page API — unauthenticated health/status endpoints (PRD_STATUS_PAGE.md).
+// Public status page API â€” unauthenticated health/status endpoints (PRD_STATUS_PAGE.md).
 const statusRoutes = require("./routes/status");
-// Super Admin Portal — completely separate auth + module surface from the
+// Super Admin Portal â€” completely separate auth + module surface from the
 // rest of the app (see middleware/superAdminAuth.js for the contract).
 const superAdminAuthRoutes = require("./routes/super_admin_auth");
 const superAdminCronRoutes = require("./routes/super_admin_cron");
@@ -596,7 +596,7 @@ const { requireSuperAdmin } = require("./middleware/superAdminAuth");
 const rolesRoutes = require("./routes/roles");
 const widgetsRoutes = require("./routes/widgets");
 const pagesRoutes = require("./routes/pages");
-// /api/users — per-target user endpoints (currently just :userId/permissions).
+// /api/users â€” per-target user endpoints (currently just :userId/permissions).
 // Sister surface to /api/auth/me/* but addresses ANY user, with same-tenant +
 // roles.read guards inside the handler.
 const usersRoutes = require("./routes/users");
@@ -614,8 +614,8 @@ const marketingRoutes = require("./routes/marketing");
 const reportsRoutes = require("./routes/reports");
 const developerRoutes = require("./routes/developer");
 const settingsRoutes = require("./routes/settings");
-// G009 (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.7) — admin surface for per-channel
-// toggles + cooldowns + Meta form-ID → sub-brand routing mappings. Distinct
+// G009 (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.7) â€” admin surface for per-channel
+// toggles + cooldowns + Meta form-ID â†’ sub-brand routing mappings. Distinct
 // from the generic settings route above (which owns webhook signing creds).
 const leadCaptureSettingsRoutes = require("./routes/lead_capture_settings");
 const billingRoutes = require("./routes/billing");
@@ -653,10 +653,10 @@ const {
 const { renderPage } = require("./services/landingPageRenderer");
 const tenantsRoutes = require("./routes/tenants");
 const tenantSettingsRoutes = require("./routes/tenant_settings");
-// #870 — per-user preference surface (theme persistence for cross-device roaming).
+// #870 â€” per-user preference surface (theme persistence for cross-device roaming).
 const userPreferencesRoutes = require("./routes/user_preferences");
 const auth2faRoutes = require("./routes/auth_2fa");
-// #654 — step-up auth for destructive admin flows (5-min stepUpToken bound
+// #654 â€” step-up auth for destructive admin flows (5-min stepUpToken bound
 // to (userId, tenantId)). See backend/routes/auth_stepup.js + the
 // requireStepUp() middleware factory in middleware/auth.js.
 const authStepupRoutes = require("./routes/auth_stepup");
@@ -701,7 +701,7 @@ const dataEnrichmentRoutes = require("./routes/data_enrichment");
 const slaRoutes = require("./routes/sla");
 const leadSlaRoutes = require("./routes/lead_sla");
 const cannedResponsesRoutes = require("./routes/canned_responses");
-// #917 slice 2 — CSP violation-report ingestion (public, no-auth, browser-emitted)
+// #917 slice 2 â€” CSP violation-report ingestion (public, no-auth, browser-emitted)
 const cspRoutes = require("./routes/csp");
 // Tier 3
 const scimRoutes = require("./routes/scim");
@@ -718,7 +718,7 @@ const funnelRoutes = require("./routes/funnel");
 const zapierRoutes = require("./routes/zapier");
 const voiceTranscriptionRoutes = require("./routes/voice_transcription");
 const emailThreadingRoutes = require("./routes/email_threading");
-// Travel CRM vertical (Day 1 scaffolding — Phase 1 per docs/TRAVEL_CRM_PRD.md).
+// Travel CRM vertical (Day 1 scaffolding â€” Phase 1 per docs/TRAVEL_CRM_PRD.md).
 // Hosts TMC (school trips), RFU (Umrah), Travel Stall, Visa Sure sub-brands.
 const travelRoutes = require("./routes/travel");
 const travelDiagnosticsRoutes = require("./routes/travel_diagnostics");
@@ -728,38 +728,38 @@ const travelItinerariesRoutes = require("./routes/travel_itineraries");
 const travelTripsRoutes = require("./routes/travel_trips");
 const travelCostMasterRoutes = require("./routes/travel_cost_master");
 const travelSuppliersRoutes = require("./routes/travel_suppliers");
-// PRD_TRAVEL_SUPPLIER_MASTER G035/G036/G037 — supplier PO ledger + state
+// PRD_TRAVEL_SUPPLIER_MASTER G035/G036/G037 â€” supplier PO ledger + state
 // machine + PDF + auto-PO on booking-confirm.
 const travelPurchaseOrdersRoutes = require("./routes/travel_purchase_orders");
 const travelQuotesRoutes = require("./routes/travel_quotes");
 const travelInvoicesRoutes = require("./routes/travel_invoices");
-// G018 (PRD_TRAVEL_QUOTE_BUILDER DD-5.4) — FX-rate read endpoints.
+// G018 (PRD_TRAVEL_QUOTE_BUILDER DD-5.4) â€” FX-rate read endpoints.
 // /api/fx/latest + /api/fx/history serve the cached rates that
 // cron/fxRateEngine.js refreshes hourly.
 const travelFxRoutes = require("./routes/travel_fx");
-// Brand kits — multi-vertical (travel + generic + wellness). Mounted at
+// Brand kits â€” multi-vertical (travel + generic + wellness). Mounted at
 // /api/brand-kits, not /api/travel, because subBrand is optional.
 const brandKitsRoutes = require("./routes/brand_kits");
-// AdsGPT operator routes — thin wrapper around services/adsGptClient.js
+// AdsGPT operator routes â€” thin wrapper around services/adsGptClient.js
 // (stub today, real-mode post Q1 cred handover). Mounted at /api/adsgpt;
 // not under /api/travel because the cap applies tenant-wide (any vertical).
 const adsgptRoutes = require("./routes/adsgpt");
-// RateHawk operator routes — thin wrapper around services/ratehawkClient.js
+// RateHawk operator routes â€” thin wrapper around services/ratehawkClient.js
 // (stub today, real-mode post Q19 cred handover). Mounted at /api/ratehawk;
 // not under /api/travel because the cap applies tenant-wide (any vertical).
 const ratehawkRoutes = require("./routes/ratehawk");
-// Callified operator routes — thin wrapper around services/callifiedClient.js
+// Callified operator routes â€” thin wrapper around services/callifiedClient.js
 // (stub today, real-mode post Q1 cred handover from Yasin). Mounted at
 // /api/callified; AI calling cap + featureFlag gate live in the service.
 const callifiedRoutes = require("./routes/callified");
-// BookingExpedia operator routes — thin wrapper around services/bookingExpediaClient.js
+// BookingExpedia operator routes â€” thin wrapper around services/bookingExpediaClient.js
 // (stub today, real-mode post Q-cluster B6/C cred handover). Mounted at
 // /api/booking-expedia; Booking.com is Phase 1, Expedia code paths throw
 // 503 EXPEDIA_NOT_YET_ENABLED until DC-4 demand-threshold flips. FINAL
-// wrapper in the cred-stub series (4/4 — adsgpt, ratehawk, callified, this).
+// wrapper in the cred-stub series (4/4 â€” adsgpt, ratehawk, callified, this).
 const bookingExpediaRoutes = require("./routes/booking_expedia");
 const travelMicrositesRoutes = require("./routes/travel_microsites");
-// Brochure Engine — wraps the vendored agentic-orchcrm engine behind the
+// Brochure Engine â€” wraps the vendored agentic-orchcrm engine behind the
 // CRM's JWT + tenant guard. Subprocess-based bridge (see
 // services/brochureEngineBridge.js) keeps the ESM/CJS boundary clean.
 const travelBrochuresRoutes = require("./routes/travel_brochures");
@@ -773,63 +773,63 @@ const travelCsvIoRoutes = require("./routes/travel_csv_io");
 const travelDashboardRoutes = require("./routes/travel_dashboard");
 const travelReportsRoutes = require("./routes/travel_reports");
 const travelTravelStallRoutes = require("./routes/travel_travelstall");
-// Visa Sure Phase 3 — EmbassyRule CRUD (PC-3 + PC-7 resolved 2026-05-24).
+// Visa Sure Phase 3 â€” EmbassyRule CRUD (PC-3 + PC-7 resolved 2026-05-24).
 // Mounted at /api/embassy-rules (not under /api/travel) because authorship
 // is tenant-wide ADMIN, not sub-brand-scoped. Backs the risk-flag engine.
 const embassyRulesRoutes = require("./routes/embassy_rules");
-// TMC (Travel) Phase 1 — TravelCurriculumMapping CRUD (PC-1 + PC-2/3/4/5
+// TMC (Travel) Phase 1 â€” TravelCurriculumMapping CRUD (PC-1 + PC-2/3/4/5
 // resolved 2026-05-24). Mounted at /api/travel-curriculum (sibling of
 // /api/embassy-rules) since authorship is tenant-wide ADMIN / advisor-head,
 // not sub-brand-scoped. Backs the diagnostic-engine destination scoring.
 const travelCurriculumRoutes = require("./routes/travel_curriculum");
 const travelSchoolTermRoutes = require("./routes/travel_school_terms");
-// TS18 Phase 2 SHELL — Travel Stall personalised destination recommender
+// TS18 Phase 2 SHELL â€” Travel Stall personalised destination recommender
 // (LLM consumer). Mounted at /api/travel-personalised-destinations so the
 // URL is sibling-flat with /api/embassy-rules / /api/travel-curriculum
 // (operator-tools that aren't sub-brand-scoped path-wise). STUB MODE
 // per Q11 cred-block until Travel Stall LLM keys land.
 const travelPersonalisedDestinationsRoutes = require("./routes/travel_personalised_destinations");
-// Tick #183 — Per-tenant per-sub-brand default theme map (#876 + DD-5.3
+// Tick #183 â€” Per-tenant per-sub-brand default theme map (#876 + DD-5.3
 // RESOLVED 2026-05-24). Backs the future frontend resolution chain
-// user.themePreference → tenant.subBrandThemes[activeSubBrand] → 'system'.
+// user.themePreference â†’ tenant.subBrandThemes[activeSubBrand] â†’ 'system'.
 const subBrandThemesRoutes = require("./routes/sub_brand_themes");
 // Wellness vertical (Enhanced Wellness, future clinic clients)
 const wellnessRoutes = require("./routes/wellness");
-// Wave 11 Agent HH — Inventory backbone (categories, vendors, receipts,
+// Wave 11 Agent HH â€” Inventory backbone (categories, vendors, receipts,
 // adjustments, auto-consumption rules). Mounted under /api/wellness so URLs
 // stay uniform; routes/inventory.js declares only paths that wellness.js does
 // not own.
 const inventoryRoutes = require("./routes/inventory");
-// Wellness Admin Support Chatbot — staff-facing AI help widget. Chat turns
+// Wellness Admin Support Chatbot â€” staff-facing AI help widget. Chat turns
 // + ticket creation at /api/support-chat; BYOK provider config under
 // /api/wellness/ai-provider-config.
 const supportChatRoutes = require("./routes/support_chat");
 const wellnessAiConfigRoutes = require("./routes/wellness_ai_config");
-// Wave 2 Agent II — POS / cash register / shift / sale backbone.
+// Wave 2 Agent II â€” POS / cash register / shift / sale backbone.
 const posRoutes = require("./routes/pos");
-// D16 Wallet Top-up Arc 1 slice 2-partial — read-only wallet endpoints
-// (GET balance + GET transactions). PRD: docs/PRD_WALLET_TOPUP.md §3.
+// D16 Wallet Top-up Arc 1 slice 2-partial â€” read-only wallet endpoints
+// (GET balance + GET transactions). PRD: docs/PRD_WALLET_TOPUP.md Â§3.
 // Top-up/redeem/reverse/expiry routes land in subsequent slices once
 // Agent A's WalletBonusRule + WalletCreditBatch schema lands.
 const walletRoutes = require("./routes/wallet");
-// Wave 2 Agent JJ — Staff Attendance + Biometric webhook + Leave Management.
+// Wave 2 Agent JJ â€” Staff Attendance + Biometric webhook + Leave Management.
 const attendanceRoutes = require("./routes/attendance");
 const leaveRoutes = require("./routes/leave");
-// External partner API v1 (Callified.ai, Globus Phone, etc. — API key auth)
+// External partner API v1 (Callified.ai, Globus Phone, etc. â€” API key auth)
 const externalRoutes = require("./routes/external");
-// Flight Quotation plugin endpoint (#908) — API key auth via X-API-Key
+// Flight Quotation plugin endpoint (#908) â€” API key auth via X-API-Key
 const travelFlightQuotesRoutes = require("./routes/travel_flight_quotes");
-// Voyagr (OJR) CMS lead-capture API v1 — API key auth via X-API-Key
+// Voyagr (OJR) CMS lead-capture API v1 â€” API key auth via X-API-Key
 // (mirror partner-API pattern). See docs/MANUAL_CODING_BACKLOG.md cluster F1.
-// CORS: voyagr's server-to-server call (Next.js API route → CRM) has no
+// CORS: voyagr's server-to-server call (Next.js API route â†’ CRM) has no
 // Origin header so doesn't need CORS allowlist entry. If voyagr ever calls
 // directly from the browser, the voyagr production domain(s) will need to
-// be added to corsAllowlist below — left as a follow-up since prod domains
+// be added to corsAllowlist below â€” left as a follow-up since prod domains
 // are not finalised yet.
 const voyagrRoutes = require("./routes/voyagr");
-// Admin tooling — manual triggers + read APIs for ops actions (G-15 backup)
+// Admin tooling â€” manual triggers + read APIs for ops actions (G-15 backup)
 const adminRoutes = require("./routes/admin");
-// Wave 7 Agent A — Service catalogue depth (PRD Gap §10):
+// Wave 7 Agent A â€” Service catalogue depth (PRD Gap Â§10):
 //   service-categories: hierarchical taxonomy CRUD
 //   drugs:              drug catalogue + typeahead
 //   csv_io:             services / products / membership-plans import+export
@@ -837,9 +837,9 @@ const adminRoutes = require("./routes/admin");
 const serviceCategoriesRoutes = require("./routes/service_categories");
 const drugsRoutes = require("./routes/drugs");
 const csvIoRoutes = require("./routes/csv_io");
-// Wave 3 — Staff availability blocks (breaks, leave, personal time)
+// Wave 3 â€” Staff availability blocks (breaks, leave, personal time)
 const blockTimesRoutes = require("./routes/block-times");
-// Issue #816 — per-entity CSV import/export with template + async modes for
+// Issue #816 â€” per-entity CSV import/export with template + async modes for
 // the wellness list pages (services, packages, products, customers, bookings).
 const wellnessCsvRoutes = require("./routes/wellnessCsv");
 
@@ -854,7 +854,7 @@ const wellnessCsvRoutes = require("./routes/wellnessCsv");
 // registered BEFORE the `app.use('/api-docs', ...)` mount because
 // Express matches handlers in declaration order.
 //
-// Both routes are public on purpose — docs discoverability is the
+// Both routes are public on purpose â€” docs discoverability is the
 // whole point. The Nginx site config additionally proxies `/api-docs*`
 // to the backend (commit applied via scripts/apply-api-docs-nginx.py
 // closing #542). The button was removed from the Developer page UI.
@@ -871,12 +871,12 @@ app.use(
   }),
 );
 
-// Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
+// Global auth guard â€” protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  // /portal/set-password was previously in openPaths — that's a real
+  // /portal/set-password was previously in openPaths â€” that's a real
   // security hole: any anonymous caller could rewrite a contact's portal
   // password to a value of their choice. Per #537 + portal-api.spec.js:41
-  // the route requires a staff (admin / manager) token — the staff user
+  // the route requires a staff (admin / manager) token â€” the staff user
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
@@ -958,7 +958,7 @@ app.use("/api", (req, res, next) => {
     "/landing-pages/public",
     "/landing-pages/wanderlux-static",
     "/brochure-assets",
-    // Diagnostic PDFs are public by design (PRD §4.2) — the unguessable
+    // Diagnostic PDFs are public by design (PRD Â§4.2) â€” the unguessable
     // 16-byte random suffix in the filename is the access-control mechanism.
     // They are opened via plain <a href> (no fetch, no Authorization header)
     // from the public report page, WhatsApp links, and email delivery.
@@ -966,24 +966,36 @@ app.use("/api", (req, res, next) => {
     // Public landing-page submit + tracking pixels are referenced by
     // rendered pages as /api/pages/<slug>/submit and /api/pages/<slug>/track.
     "/pages/",
-    // Super Admin Portal — deliberately its OWN auth system (env-based
+    // Super Admin Portal â€” deliberately its OWN auth system (env-based
     // credentials, no User/tenant table, dedicated JWT secret), so it must
     // bypass the app's verifyToken guard entirely. Every actual route
     // (except /super-admin/auth/login itself) is independently protected
-    // by requireSuperAdmin at the route level — same pattern as /portal/*
+    // by requireSuperAdmin at the route level â€” same pattern as /portal/*
     // above being globally open but individually gated by its own JWT.
     "/super-admin",
   ];
   if (openPaths.some((p) => req.path.startsWith(p))) return next();
-  // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
+  // Public marketing catalog â€” the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
   // by the route-level verifyToken+verifyRole middleware below.
   if (req.method === "GET" && req.path === "/subscriptions/plans")
     return next();
+  // Billing/self-serve subscription endpoints must stay reachable even when
+  // the current subscription is expired, otherwise the admin cannot renew.
+  // Route handlers below still enforce auth + ADMIN role, so this only
+  // bypasses the paywall layer, not authorization.
+  if (
+    (req.method === "GET" && req.path === "/subscriptions/status") ||
+    (req.method === "GET" && req.path === "/subscriptions/invoices") ||
+    (req.method === "POST" && req.path === "/subscriptions/create-order") ||
+    (req.method === "POST" && req.path === "/subscriptions/verify-payment")
+  ) {
+    return next();
+  }
   // The travel itinerary PDF is opened in a NEW TAB via a plain <a href>
-  // (no fetch → no Authorization header), so the frontend passes the bearer
+  // (no fetch â†’ no Authorization header), so the frontend passes the bearer
   // JWT as a ?_t= query param. Promote it to the Authorization header so
-  // verifyToken can validate. SCOPED to exactly /travel/itineraries/:id/pdf —
+  // verifyToken can validate. SCOPED to exactly /travel/itineraries/:id/pdf â€”
   // this does NOT broaden token-in-URL acceptance for any other route, and
   // verifyToken still fully validates the token (no auth bypass).
   if (
@@ -995,7 +1007,7 @@ app.use("/api", (req, res, next) => {
   ) {
     req.headers.authorization = `Bearer ${req.query._t}`;
   }
-  // Brochure Engine SSE stream — EventSource (the browser SSE client)
+  // Brochure Engine SSE stream â€” EventSource (the browser SSE client)
   // intentionally rejects custom request headers, so the frontend passes
   // the JWT on the URL as ?token=<jwt> when subscribing to the live trace.
   // Same pattern + same trust boundary as the itinerary PDF case above:
@@ -1011,8 +1023,8 @@ app.use("/api", (req, res, next) => {
   ) {
     req.headers.authorization = `Bearer ${req.query.token}`;
   }
-  // TMC public readiness PDF — `/travel/diagnostics/:id/readiness-report.pdf`
-  // is designed public per PRD §5.1 DD-5.2 (the school clicks the report-
+  // TMC public readiness PDF â€” `/travel/diagnostics/:id/readiness-report.pdf`
+  // is designed public per PRD Â§5.1 DD-5.2 (the school clicks the report-
   // download URL surfaced after public submit-tmc).  Can't be a prefix
   // entry in openPaths because the `:id` segment is dynamic; suffix match
   // on the route shape lets it through without auth.  Tightly scoped to
@@ -1023,8 +1035,8 @@ app.use("/api", (req, res, next) => {
     /^\/travel\/diagnostics\/\d+\/readiness-report\.pdf$/.test(req.path)
   )
     return next();
-  // D1 — landing-page preview is opened in a NEW TAB via window.open()
-  // (no fetch → no Authorization header), authorised by a short-lived
+  // D1 â€” landing-page preview is opened in a NEW TAB via window.open()
+  // (no fetch â†’ no Authorization header), authorised by a short-lived
   // single-purpose `?previewToken=<jwt>` query param. The route handler
   // itself enforces auth via the previewAuth helper (validates the
   // previewToken JWT, falls back to Authorization header, then cookie).
@@ -1035,7 +1047,7 @@ app.use("/api", (req, res, next) => {
   // gated by the global guard.
   if (req.method === "GET" && /^\/landing-pages\/\d+\/preview$/.test(req.path))
     return next();
-  // Slice C9 — TravelQuote customer-share landing endpoints (PRD §3.7).
+  // Slice C9 â€” TravelQuote customer-share landing endpoints (PRD Â§3.7).
   // Public, JWT-gated by `:shareToken` segment (verified inside the route).
   // GET = read-only envelope; POST = accept|reject|counter customer actions.
   if (
@@ -1050,12 +1062,12 @@ app.use("/api", (req, res, next) => {
     )
   )
     return next();
-  // G092 (PRD_TRAVEL_PER_SUBBRAND_BRANDING FR-3.3.f) — Customer-portal
+  // G092 (PRD_TRAVEL_PER_SUBBRAND_BRANDING FR-3.3.f) â€” Customer-portal
   // brand-kit consumer. The portal (TravelCustomerPortal.jsx) is auth-
   // gated by a separate PORTAL JWT but reads /api/brand-kits/by-subbrand/:sub
   // BEFORE the customer logs in (so the login screen itself can carry
   // the sub-brand chrome). We expose ONLY the public-safe fields (no
-  // version history, no createdBy / audit metadata) — handler implements
+  // version history, no createdBy / audit metadata) â€” handler implements
   // the field filter. Sub-path is also reachable by the public microsite
   // and embed-widget consumers (G093 / G095) for the same reason. GET
   // only; mutations stay role-gated below.
@@ -1086,21 +1098,21 @@ const { stripDangerous } = require("./middleware/validateInput");
 app.use(stripDangerous);
 
 // #426: scrub credential-shaped fields (currently: portalPasswordHash) from
-// every API response payload — wraps res.json globally so direct queries AND
+// every API response payload â€” wraps res.json globally so direct queries AND
 // nested `include: { contact: true }` are both covered. See middleware
 // header for the full deny-list and extension protocol.
 const { scrubResponse } = require("./middleware/scrubResponse");
 app.use(scrubResponse);
 
-// Apply the #423 numeric-id validator to the app itself too — covers any
-// future `app.get('/foo/:id', …)` registered directly on the app rather
+// Apply the #423 numeric-id validator to the app itself too â€” covers any
+// future `app.get('/foo/:id', â€¦)` registered directly on the app rather
 // than on a sub-router. The Router factory was already patched up top so
 // every imported sub-router has the callback attached.
 app.param("id", validateNumericId);
 
 // Map API Endpoints
 app.use("/api/auth", authRoutes);
-// Super Admin Portal — /login is open (checked inside the route itself);
+// Super Admin Portal â€” /login is open (checked inside the route itself);
 // every other /api/super-admin/* route is gated by requireSuperAdmin here
 // at the mount point, so no individual route file can forget the guard.
 app.use("/api/super-admin/auth", superAdminAuthRoutes);
@@ -1108,7 +1120,7 @@ app.use("/api/super-admin/cron", requireSuperAdmin, superAdminCronRoutes);
 app.use("/api/super-admin/cron-analytics", requireSuperAdmin, superAdminCronAnalyticsRoutes);
 app.use("/api/super-admin/api-analytics", requireSuperAdmin, superAdminApiAnalyticsRoutes);
 app.use("/api/roles", rolesRoutes);
-// SPEC §C3 — unified /api/me + /api/permissions endpoints. Both come
+// SPEC Â§C3 â€” unified /api/me + /api/permissions endpoints. Both come
 // from the same module so the SPEC-named endpoint surface is contiguous.
 const { meRouter, permissionsRouter } = require("./routes/me");
 app.use("/api/me", meRouter);
@@ -1134,13 +1146,13 @@ app.use("/api/deals_documents", dealsDocumentsRoutes);
 app.use("/api/marketing", marketingRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/developer", developerRoutes);
-// G009 — mount BEFORE generic /api/settings so the more-specific prefix wins
+// G009 â€” mount BEFORE generic /api/settings so the more-specific prefix wins
 // even though settings.js has no catch-all today; defensive against future
 // surface additions on the generic settings router.
 app.use("/api/settings/lead-capture", leadCaptureSettingsRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/billing", billingRoutes);
-// PRD Gap §2 items 7a-d — `/api/v1/invoices` stable public-API alias for the
+// PRD Gap Â§2 items 7a-d â€” `/api/v1/invoices` stable public-API alias for the
 // legacy /api/billing surface. Includes a NEW POST /:id/payments endpoint
 // (item 7c) and a /complete alias for mark-paid (item 7d). Mounted alongside
 // /api/billing so existing consumers stay green.
@@ -1169,7 +1181,7 @@ app.use("/api/audit", auditRoutes);
 app.use("/api/marketplace-leads", marketplaceLeadsRoutes);
 app.use("/api/sms", smsRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
-// Vertical-agnostic WhatsApp Web (QR-scan) transport — same engine as travel,
+// Vertical-agnostic WhatsApp Web (QR-scan) transport â€” same engine as travel,
 // scoped to req.user.tenantId, so the wellness inbox can use scan-and-connect
 // instead of the Meta Cloud API. Mounted AFTER /api/whatsapp so the shared
 // threads CRUD is unaffected.
@@ -1187,14 +1199,14 @@ app.use("/api/telephony", telephonyRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);
 app.use("/api/tenants", tenantsRoutes);
-// /api/tenant-settings — operator-writable cap-override surface backing the
+// /api/tenant-settings â€” operator-writable cap-override surface backing the
 // per-tenant cap pattern (helper at backend/lib/tenantSettings.js). Mounted
 // next to /api/tenants because the URL space + audience are sibling concerns.
 app.use("/api/tenant-settings", tenantSettingsRoutes);
-// #870 — GET/PUT /api/user/theme; per-user theme preference for cross-device roaming.
+// #870 â€” GET/PUT /api/user/theme; per-user theme preference for cross-device roaming.
 app.use("/api/user", userPreferencesRoutes);
 app.use("/api/auth/2fa", auth2faRoutes);
-// #654 — POST /api/auth/step-up — mints a 5-min stepUpToken for destructive
+// #654 â€” POST /api/auth/step-up â€” mints a 5-min stepUpToken for destructive
 // admin flows. Mounted after /api/auth/2fa so the URL space stays tidy.
 app.use("/api/auth/step-up", authStepupRoutes);
 app.use("/api/sso", ssoRoutes);
@@ -1238,7 +1250,7 @@ app.use("/api/data-enrichment", dataEnrichmentRoutes);
 app.use("/api/sla", slaRoutes);
 app.use("/api/lead-sla", leadSlaRoutes);
 app.use("/api/canned-responses", cannedResponsesRoutes);
-// #917 slice 2 — public CSP violation-report endpoint. Exempt from auth via
+// #917 slice 2 â€” public CSP violation-report endpoint. Exempt from auth via
 // openPaths (above) and from the JSON-content-type guard via
 // CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES (browsers send application/csp-report).
 app.use("/api/csp", cspRoutes);
@@ -1259,16 +1271,16 @@ app.use("/api/voice-transcription", voiceTranscriptionRoutes);
 app.use("/api/email-threading", emailThreadingRoutes);
 // Travel vertical (Day 1-8: /health, diagnostics, itineraries, trips, cost-master)
 app.use("/api/travel", travelRoutes);
-// v3.9.1 — CSV I/O routes MUST mount BEFORE the CRUD routes below.
+// v3.9.1 â€” CSV I/O routes MUST mount BEFORE the CRUD routes below.
 // `/cost-master/export.csv` would otherwise be caught by `/cost-master/:id`
-// in travelCostMasterRoutes (with id="export.csv" → parseInt → NaN → 400
+// in travelCostMasterRoutes (with id="export.csv" â†’ parseInt â†’ NaN â†’ 400
 // INVALID_ID); same for `/diagnostic-banks/export.csv` vs
 // `/diagnostic-banks/:id` in travelDiagnosticsRoutes. The CRUD routes
 // use `:id` as a numeric route param so the more-specific export/import
 // paths in travelCsvIoRoutes need precedence.
 app.use("/api/travel", travelCsvIoRoutes);
 // Dashboard mounts BEFORE the CRUD route files for the same reason as
-// travelCsvIoRoutes — /dashboard would otherwise look like a `:id` capture
+// travelCsvIoRoutes â€” /dashboard would otherwise look like a `:id` capture
 // in any travel route that uses `:id` at the path's first segment. (No
 // current collision, but defensive ordering keeps it that way.)
 app.use("/api/travel", travelDashboardRoutes);
@@ -1276,17 +1288,17 @@ app.use("/api/travel", travelReportsRoutes);
 app.use("/api/travel", travelDiagnosticsRoutes);
 app.use("/api/travel/visa/analytics", travelVisaAnalyticsRoutes);
 app.use("/api/travel/visa", travelVisaRoutes);
-app.use("/api/travel", travelReviewsRoutes); // literal /reviews paths — mount before parametric itinerary routes
+app.use("/api/travel", travelReviewsRoutes); // literal /reviews paths â€” mount before parametric itinerary routes
 app.use("/api/travel", travelItinerariesRoutes);
 app.use("/api/travel", travelTripsRoutes);
-// Slice C2 — passport OCR upload + verification queue (stub-mode pending PC-1).
+// Slice C2 â€” passport OCR upload + verification queue (stub-mode pending PC-1).
 app.use("/api/travel/passport", require("./routes/travel_passport"));
 app.use("/api/travel", travelCostMasterRoutes);
 app.use("/api/travel", travelSuppliersRoutes);
-// PRD_TRAVEL_SUPPLIER_MASTER G035/G036/G037 — supplier PO ledger.
+// PRD_TRAVEL_SUPPLIER_MASTER G035/G036/G037 â€” supplier PO ledger.
 app.use("/api/travel", travelPurchaseOrdersRoutes);
-// Slice C9 — TravelQuote customer-share public landing (PRD §3.7).
-// MUST be mounted BEFORE travelQuotesRoutes — the operator route has
+// Slice C9 â€” TravelQuote customer-share public landing (PRD Â§3.7).
+// MUST be mounted BEFORE travelQuotesRoutes â€” the operator route has
 // `:id` capture on `/quotes/:id` which would otherwise match `/quotes/public/...`
 // at validateNumericId and 400 INVALID_ID before reaching the public router.
 app.use("/api/travel/quotes/public", require("./routes/travel_quotes_public"));
@@ -1306,29 +1318,29 @@ app.use(
 // /api/travel/cancellation-policies fell through to the global 404.
 app.use("/api/travel", require("./routes/travel_cancellation_policies"));
 app.use("/api/travel", travelQuotesRoutes);
-// G018 — FX-rate read endpoints. Mounted at /api/fx (cross-currency
+// G018 â€” FX-rate read endpoints. Mounted at /api/fx (cross-currency
 // reference data; tenant-agnostic; verifyToken at the router level).
 app.use("/api/fx", travelFxRoutes);
-// MUST mount travel_invoice_ledgers BEFORE travelInvoicesRoutes — the latter has
+// MUST mount travel_invoice_ledgers BEFORE travelInvoicesRoutes â€” the latter has
 // GET /invoices/:id which would otherwise catch /invoices/customer-ledger,
 // /invoices/tds-register, /invoices/commission-ledger as :id="customer-ledger" etc.
 // See G030 spec failure (run 27463877000) for the original collision report.
 app.use("/api/travel", require("./routes/travel_invoice_ledgers"));
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
-// S78 (Marketing Flyer #908) — mount the mixed-auth flyer share + public render
+// S78 (Marketing Flyer #908) â€” mount the mixed-auth flyer share + public render
 // router. POST /:id/share is auth-gated inside the router (verifyToken +
 // verifyRole + requireTravelTenant); GET /public/:slug + /public/:slug/meta
 // bypass auth via the '/v1/flyers/public' entry added to openPaths above.
 // Same shape as travel_quotes_public mount (line 877).
 app.use("/api/v1/flyers", require("./routes/travel_flyer_public"));
 app.use("/api/travel", require("./routes/travel_commission_profiles"));
-// PRD_TRAVEL_SUPPLIER_MASTER G045 (FR-3.1.e, FR-3.5.a, FR-3.5.b) —
+// PRD_TRAVEL_SUPPLIER_MASTER G045 (FR-3.1.e, FR-3.5.a, FR-3.5.b) â€”
 // supplier-side commission ledger CRUD + per-FY statement + CSV + stats.
 // Distinct from travel_commission_profiles (B2B sub-agent commission shapes):
 // this ledger tracks SUPPLIER-side commissions EARNED on confirmed bookings.
 app.use("/api/travel", require("./routes/travel_supplier_commissions"));
-// PRD_TRAVEL_GST_COMPLIANCE G030 + G031 + G032 (FR-3.4.4 / FR-3.4.6 / FR-3.4.7) —
+// PRD_TRAVEL_GST_COMPLIANCE G030 + G031 + G032 (FR-3.4.4 / FR-3.4.6 / FR-3.4.7) â€”
 // GST ledger endpoints cluster (customer-ledger + TDS register + commission-ledger).
 // Read-only analytics on existing TravelInvoice + TravelPaymentSchedule +
 // TravelSupplierCommissionEntry rows. JSON or CSV per ?format=csv flag.
@@ -1336,29 +1348,29 @@ app.use("/api/travel", require("./routes/travel_supplier_commissions"));
 // collision on /invoices/customer-ledger etc. This second mount is a no-op
 // because Express short-circuits on the first match; leaving the line documents
 // the route's location in the topology.
-// PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 (FR-3.3.c, FR-3.4.a-c) —
+// PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 (FR-3.3.c, FR-3.4.a-c) â€”
 // supplier-statement reconciliation (PNR-keyed line match + tolerance +
 // bulk-reconcile) plus supplier-invoice PDF uploads + match-to-payable.
 // Distinct file from travel_suppliers.js to avoid merge collisions with
 // G040-G043 (status/payment-terms enums) which is concurrently editing
 // the parent suppliers router.
 app.use("/api/travel", require("./routes/travel_supplier_reconciliation"));
-// PRD_TRAVEL_BILLING G022 (FR-3.5.e) — supplier-payable batch runs.
+// PRD_TRAVEL_BILLING G022 (FR-3.5.e) â€” supplier-payable batch runs.
 // Groups N payables into a single bank-transfer run + CSV export. State
-// machine: draft → approved → sent_to_bank → settled (or cancelled).
+// machine: draft â†’ approved â†’ sent_to_bank â†’ settled (or cancelled).
 app.use("/api/travel", require("./routes/travel_payable_batches"));
-// PRD_TRAVEL_BILLING G024 (FR-3.6.c) — settlement-timeline aggregator that
+// PRD_TRAVEL_BILLING G024 (FR-3.6.c) â€” settlement-timeline aggregator that
 // drives the SettlementGantt.jsx Gantt-chart view (inflow + outflow on
 // one date axis).
 app.use("/api/travel", require("./routes/travel_settlement_timeline"));
-// WS-1 — sub-brand session scope (POST /session/switch-brand + GET
+// WS-1 â€” sub-brand session scope (POST /session/switch-brand + GET
 // /session/active-brand). Authoritative server-side validation behind the
 // sidebar sub-brand switcher; reuses middleware/travelGuards.js plumbing.
 app.use("/api/travel", require("./routes/travel_session"));
-// Q9 — travel 2-way WhatsApp chat (Wati transport): /whatsapp/status +
+// Q9 â€” travel 2-way WhatsApp chat (Wati transport): /whatsapp/status +
 // /whatsapp/send + /whatsapp/webhook. Router carries the full /whatsapp/*
 // segment internally, so the mount prefix is /api/travel (NOT
-// /api/travel/whatsapp — see the cancellation-policies double-prefix
+// /api/travel/whatsapp â€” see the cancellation-policies double-prefix
 // post-mortem at the mount above). The webhook sub-path is in openPaths.
 // Wellness/generic WhatsApp (routes/whatsapp*.js, Meta Cloud) is untouched.
 app.use("/api/travel", require("./routes/travel_whatsapp"));
@@ -1368,7 +1380,7 @@ app.use("/api/ratehawk", ratehawkRoutes);
 app.use("/api/callified", callifiedRoutes);
 app.use("/api/booking-expedia", bookingExpediaRoutes);
 app.use("/api/travel", travelMicrositesRoutes);
-// Brochure Engine — paths internally start with /brochures; route file owns
+// Brochure Engine â€” paths internally start with /brochures; route file owns
 // verifyToken + requireTravelTenant + requirePermission per endpoint.
 app.use("/api/travel", travelBrochuresRoutes);
 app.use("/api/travel", travelRfuProfilesRoutes);
@@ -1378,14 +1390,14 @@ app.use("/api/travel", travelTripBillingRoutes);
 app.use("/api/travel", travelWebcheckinRoutes);
 app.use("/api/travel", travelTravelStallRoutes);
 app.use("/api/travel", require("./routes/travel_inbound_leads"));
-// TBO flight/hotel SEARCH (quote builder) — literal /search/* paths, data-only.
+// TBO flight/hotel SEARCH (quote builder) â€” literal /search/* paths, data-only.
 app.use("/api/travel", require("./routes/travel_search"));
-// PRD_TRAVEL_MULTICHANNEL_LEADS G015 — canonical body-channel alias.
+// PRD_TRAVEL_MULTICHANNEL_LEADS G015 â€” canonical body-channel alias.
 // Routes to /api/leads/intake; the alias router forwards to the legacy
 // /api/travel/inbound/leads/:channel handler so both surfaces share one
 // envelope, idempotency contract, Touchpoint write, and cooldown gate.
 app.use("/api/leads", require("./routes/leads_intake"));
-// Browser-extension lead capture (Gmail/WhatsApp Web scraping) — vertical-
+// Browser-extension lead capture (Gmail/WhatsApp Web scraping) â€” vertical-
 // agnostic, authenticated as a normal logged-in staff user (verifyToken),
 // distinct from the travel-specific multi-channel intake above.
 app.use("/api/leads", require("./routes/leads_extension_capture"));
@@ -1410,42 +1422,42 @@ app.use(
 app.use("/api/tenant/sub-brand-themes", subBrandThemesRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
-// Wellness Admin Support Chatbot — AI chat turns + ticket creation
+// Wellness Admin Support Chatbot â€” AI chat turns + ticket creation
 // (wellness-tenant gated inside the router).
 app.use("/api/support-chat", supportChatRoutes);
 // BYOK provider config for the chatbot. Mounted on /api/wellness so it
 // sits beside the other wellness admin surfaces; declares only
 // /ai-provider-config paths that wellness.js does NOT own.
 app.use("/api/wellness", wellnessAiConfigRoutes);
-// Wave 11 Agent HH — Inventory backbone. Mounted on /api/wellness so paths
+// Wave 11 Agent HH â€” Inventory backbone. Mounted on /api/wellness so paths
 // like /api/wellness/inventory/receipts work; declares only paths wellness.js
 // does NOT own (product-categories, vendors, inventory/receipts,
 // inventory/adjustments, inventory/movements, auto-consumption-rules).
 app.use("/api/wellness", inventoryRoutes);
-// Wave 3 — Staff availability blocks (breaks, leave, personal time). Wellness-gated.
+// Wave 3 â€” Staff availability blocks (breaks, leave, personal time). Wellness-gated.
 app.use("/api/wellness/block-times", blockTimesRoutes);
-// Wave 7 Agent A — Service catalogue depth + Drug catalogue + CSV io.
+// Wave 7 Agent A â€” Service catalogue depth + Drug catalogue + CSV io.
 app.use("/api/wellness/service-categories", serviceCategoriesRoutes);
 app.use("/api/wellness/drugs", drugsRoutes);
 app.use("/api/csv", csvIoRoutes);
-// Issue #816 — /api/wellness/csv/:entity/{template|export|import|import/async|jobs}.
+// Issue #816 â€” /api/wellness/csv/:entity/{template|export|import|import/async|jobs}.
 app.use("/api/wellness/csv", wellnessCsvRoutes);
-// Wave 2 Agent II — POS / cash register / shift / sale backbone. Mounted at
+// Wave 2 Agent II â€” POS / cash register / shift / sale backbone. Mounted at
 // /api/pos. Wellness-vertical-gated; generic tenants get a clean 403.
 app.use("/api/pos", posRoutes);
-// D16 Wallet Top-up Arc 1 slice 2-partial — GET /api/wallet/:patientId/balance
+// D16 Wallet Top-up Arc 1 slice 2-partial â€” GET /api/wallet/:patientId/balance
 // + GET /api/wallet/:patientId/transactions. phiReadGate-protected.
-// Slice 5b — admin bonus-rule CRUD at /api/wallet/rules. MUST mount BEFORE
+// Slice 5b â€” admin bonus-rule CRUD at /api/wallet/rules. MUST mount BEFORE
 // the `/api/wallet` line below so the `:patientId` segment doesn't catch
 // '/rules' first.
-// D16 polish — POST /api/wallet/admin/run-expiry admin manual trigger for
+// D16 polish â€” POST /api/wallet/admin/run-expiry admin manual trigger for
 // walletExpiryEngine (mirror of /api/forecasting/snapshot/run pattern).
 // MUST mount BEFORE `/api/wallet/rules` AND `/api/wallet` for the same
 // `:patientId`-segment-shadowing reason.
 app.use("/api/wallet/admin", require("./routes/wallet_admin"));
 app.use("/api/wallet/rules", require("./routes/wallet_rules"));
 app.use("/api/wallet", walletRoutes);
-// Wave 2 Agent JJ — Staff Attendance + Biometric webhook + Leave Management.
+// Wave 2 Agent JJ â€” Staff Attendance + Biometric webhook + Leave Management.
 // Cross-vertical (wellness AND generic). Mounted top-level. The biometric
 // webhook (POST /api/attendance/biometric/webhook) is in openPaths and
 // authenticates via X-API-Key against BiometricDevice.apiKey.
@@ -1453,30 +1465,30 @@ app.use("/api/attendance", attendanceRoutes);
 app.use("/api/leave", leaveRoutes);
 // External partner API (API key auth, versioned)
 app.use("/api/v1/external", externalRoutes);
-// Voyagr (OJR) CMS lead-capture API (API key auth — bypasses global
+// Voyagr (OJR) CMS lead-capture API (API key auth â€” bypasses global
 // verifyToken via /v1/voyagr entry in openPaths above; uses its own
 // X-API-Key middleware).
 app.use("/api/v1/voyagr", voyagrRoutes);
-// Flight Quotation plugin endpoint (#908 FR-5) — X-API-Key auth (externalAuth);
+// Flight Quotation plugin endpoint (#908 FR-5) â€” X-API-Key auth (externalAuth);
 // applies markup server-side + persists a flight ItineraryItem.
 app.use("/api/v1/flight-plugin", travelFlightQuotesRoutes);
 // Admin tooling (ADMIN-only ops triggers + read APIs)
 app.use("/api/admin", adminRoutes);
 
-// PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.7 (S5) — SecurityIncident ingest
+// PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.7 (S5) â€” SecurityIncident ingest
 // + ADMIN triage listing. POST /api/security/csp-report is public (exempt
 // via openPaths + CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES); GET /incidents and
 // POST /incidents/:id/review re-assert verifyToken + verifyRole(['ADMIN'])
-// at the route. Separate from /api/csp (slice 2 of #917) — see route header.
+// at the route. Separate from /api/csp (slice 2 of #917) â€” see route header.
 app.use("/api/security", require("./routes/security_reports"));
 
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);
 
-// Public legal/policy pages — rendered from Markdown (no auth)
+// Public legal/policy pages â€” rendered from Markdown (no auth)
 app.use(require("./routes/legal"));
 
-// Public /trips marketing surface — renders the currently featured
+// Public /trips marketing surface â€” renders the currently featured
 // PUBLISHED landing page when one exists. When no featured page is set,
 // falls through to the SPA shell so the frontend TripsResolver can show
 // the hardcoded Japan TripsLanding fallback instead of a bare 404.
@@ -1488,7 +1500,7 @@ app.get("/trips", async (req, res, next) => {
       orderBy: { featuredAt: "desc" },
     });
     if (!page) {
-      // No featured page yet — fall through to the SPA shell so the frontend
+      // No featured page yet â€” fall through to the SPA shell so the frontend
       // TripsResolver can render the hardcoded Japan TripsLanding fallback.
       return next();
     }
@@ -1530,7 +1542,7 @@ app.get("/trips", async (req, res, next) => {
   }
 });
 
-// #917 slice S119 (FR-3.X) — CSP-nonce static-file middleware.
+// #917 slice S119 (FR-3.X) â€” CSP-nonce static-file middleware.
 // Substitutes `__CSP_NONCE__` placeholders in the SPA index.html with the
 // per-request nonce minted by attachNonce. Mounted AFTER the public landing
 // page route (`/p/*`) so server-rendered pages are served by the backend
@@ -1546,10 +1558,10 @@ app.get("/trips", async (req, res, next) => {
 //   - BEFORE the final SPA catch-all/static fallback (so we substitute nonce)
 app.use(cspNonceStaticMiddleware);
 
-// #921 slice S38 → S66 → S129 — wire the iframe-embedding override on /embed/*
+// #921 slice S38 â†’ S66 â†’ S129 â€” wire the iframe-embedding override on /embed/*
 // BEFORE the lead-form gate handler. S4 (commit 6561bdc) made the global
 // default X-Frame-Options: DENY + CSP frame-ancestors 'none' so no page
-// can be iframed by anyone — but the embed widget is the ONE intentionally-
+// can be iframed by anyone â€” but the embed widget is the ONE intentionally-
 // public iframe surface (partner sites embed our /embed/lead-form.html
 // into their own pages via an iframe pointing at our origin). Without
 // this override every partner-side embed silently broke when S4 landed.
@@ -1565,25 +1577,25 @@ app.use(cspNonceStaticMiddleware);
 // the DOMINANT use case: cross-origin partner iframes. S66's per-tenant
 // lookup needs `req.user?.tenantId`, but partner-iframe requests are
 // fundamentally unauthenticated + sit OUTSIDE the `/api` prefix, so the
-// global JWT guard never runs and `req.user` is always undefined → the
+// global JWT guard never runs and `req.user` is always undefined â†’ the
 // S66 lookup short-circuited to the wildcard fallback for every real-
 // world partner embed. The fix is to give partners an EXPLICIT opt-in
-// channel: append `?key=glbs_…` to the iframe src. The new pre-S66
-// middleware below resolves that key → tenant via `prisma.apiKey.findUnique`
+// channel: append `?key=glbs_â€¦` to the iframe src. The new pre-S66
+// middleware below resolves that key â†’ tenant via `prisma.apiKey.findUnique`
 // and synthesises `req.user = { tenantId: apiKey.tenantId, userId: null }`
 // so S66's existing logic finds the tenant and applies its per-tenant
 // `embedAllowlistJson` allowlist.
 //
 // Tenant resolution (in order):
-//   - `?key=glbs_…` query param (S129 — partner-iframe opt-in path,
+//   - `?key=glbs_â€¦` query param (S129 â€” partner-iframe opt-in path,
 //     resolved by the pre-mount middleware below).
-//   - `req.user?.tenantId` already populated by upstream auth — e.g. a
+//   - `req.user?.tenantId` already populated by upstream auth â€” e.g. a
 //     future "preview your own embed inside the admin UI" flow.
 //   - Otherwise: `req.user` remains undefined, S66 short-circuits to null,
 //     wildcard `['*']` is applied (the partner-iframe back-compat default).
 //
 // Fail-soft per the canonical middleware/auth.js pattern: a Prisma error
-// or shape-invalid key never 500s the /embed/* response — it leaves
+// or shape-invalid key never 500s the /embed/* response â€” it leaves
 // `req.user` unset and lets the S66 wildcard fallback do its job. The
 // existing #297 `/embed/lead-form.html` 404 gate handler runs AFTER this
 // middleware (different express verb mount), so an unknown key still 404s
@@ -1591,13 +1603,13 @@ app.use(cspNonceStaticMiddleware);
 // any other /embed/* asset that may legitimately load before the gate
 // fires (e.g. preflight, future /embed/preview/*).
 app.use("/embed", async (req, res, next) => {
-  // S129 — pre-mount tenant resolution from `?key=glbs_…`. Only fires
+  // S129 â€” pre-mount tenant resolution from `?key=glbs_â€¦`. Only fires
   // when `req.user` is currently undefined (so an upstream-auth flow that
   // already set it wins) AND the query param is present + shape-valid.
   if (!req.user && req.query && typeof req.query.key === "string") {
     const key = req.query.key;
     // Same shape check as the #297 lead-form gate so behaviour stays
-    // consistent across both handlers: `glbs_` prefix + ≥8 base64ish chars.
+    // consistent across both handlers: `glbs_` prefix + â‰¥8 base64ish chars.
     if (/^glbs_[A-Za-z0-9_-]{8,}$/.test(key)) {
       try {
         const prismaClient = require("./lib/prisma");
@@ -1607,23 +1619,23 @@ app.use("/embed", async (req, res, next) => {
         });
         if (apiKey && apiKey.tenantId) {
           // Synthesise the minimal req.user shape S66 reads. userId stays
-          // null because this is an unauthenticated partner-iframe path —
+          // null because this is an unauthenticated partner-iframe path â€”
           // anything downstream that wants a real user must re-authenticate.
           req.user = { tenantId: apiKey.tenantId, userId: null };
         }
-        // Unknown key → leave req.user unset → S66 falls back to wildcard.
+        // Unknown key â†’ leave req.user unset â†’ S66 falls back to wildcard.
         // (The #297 gate handler will still 404 the lead-form for an
         // unknown key; the wildcard CSP applies to any other /embed/*
         // path the partner might request alongside the form.)
       } catch (e) {
-        // Fail-soft per middleware/auth.js Issue #180 pattern — log + leave
+        // Fail-soft per middleware/auth.js Issue #180 pattern â€” log + leave
         // req.user unset so the S66 wildcard fallback keeps partner embeds
         // alive even if the lookup blows up unexpectedly.
-        console.warn("[embed] ?key= → tenant resolution failed:", e.message);
+        console.warn("[embed] ?key= â†’ tenant resolution failed:", e.message);
       }
     }
   }
-  // S66 — resolve per-tenant allowlist from req.user.tenantId. The S129
+  // S66 â€” resolve per-tenant allowlist from req.user.tenantId. The S129
   // block above is what populates req.user.tenantId on the partner-iframe
   // `?key=` path; this block reads it (whether S129 set it or upstream
   // auth set it) and falls through to wildcard when no tenant is resolved.
@@ -1631,7 +1643,7 @@ app.use("/embed", async (req, res, next) => {
   try {
     const tenantId = req.user && req.user.tenantId;
     if (tenantId) {
-      // Lazy-require the prisma singleton — the canonical const lives
+      // Lazy-require the prisma singleton â€” the canonical const lives
       // further down in the file (line ~1117 below); this mount runs
       // earlier in the middleware stack than that declaration, but
       // `require()` is idempotent + the cached module exports work fine.
@@ -1642,14 +1654,14 @@ app.use("/embed", async (req, res, next) => {
       }
     }
   } catch (e) {
-    // Fail-open — log + fall back to wildcard so partner embeds keep
+    // Fail-open â€” log + fall back to wildcard so partner embeds keep
     // working even if the per-tenant lookup blows up unexpectedly.
     console.warn("[embed] per-tenant allowlist lookup failed:", e.message);
   }
   return allowIframeEmbedding({ allowList })(req, res, next);
 });
 
-// #297: /embed/lead-form.html — server-side gate so a malformed/revoked
+// #297: /embed/lead-form.html â€” server-side gate so a malformed/revoked
 // API key returns 404 at GET time rather than letting the form render and
 // only failing on submit. Pre-fix the static file always loaded with 200
 // regardless of key, so bots probing /embed?key=garbage got a 200 +
@@ -1658,7 +1670,7 @@ app.use("/embed", async (req, res, next) => {
 // key is missing (slug-mode), or shape+DB valid. In production Nginx
 // serves the static asset directly from /var/www/.../embed/, but the
 // per-push API gate (against the Express backend on :5000) hits this
-// route — see public-booking-api.spec.js for the contract pin.
+// route â€” see public-booking-api.spec.js for the contract pin.
 app.get("/embed/lead-form.html", async (req, res, next) => {
   try {
     const key = req.query.key ? String(req.query.key) : null;
@@ -1704,17 +1716,17 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
 // mount is the one that actually works on the deployed demo + the Vite dev
 // server, because Nginx only proxies `/api/*` to the backend (and the Vite
 // dev proxy is configured the same way). Bare `/uploads/*` requests hit
-// the static-frontend host first and fall through the SPA catch-all → the
-// browser renders the React index.html as if it were an image → broken
+// the static-frontend host first and fall through the SPA catch-all â†’ the
+// browser renders the React index.html as if it were an image â†’ broken
 // image. New upload routes should return `/api/uploads/...` URLs; the
 // PHI gating remains the route-level concern (filenames are
 // pseudo-random, but the static mount itself is intentionally public so
 // `<img src>` works without an Authorization header).
-// EXCEPTION — visa docs (passport / bank scans) are private. Block direct
+// EXCEPTION â€” visa docs (passport / bank scans) are private. Block direct
 // static access to /uploads/visa-docs/* unless the request carries a valid
 // short-lived signed `?t=` token, minted by the authed view-url endpoints
 // after a staff role/sub-brand OR owning-customer check. (S3-backed visa docs
-// never hit this path — their signed URL points straight at AWS.) Registered
+// never hit this path â€” their signed URL points straight at AWS.) Registered
 // BEFORE the static mounts so it intercepts first.
 const visaDocStore = require("./lib/visaDocStore");
 const gateVisaDocs = (req, res, next) => {
@@ -1724,7 +1736,7 @@ const gateVisaDocs = (req, res, next) => {
     .status(403)
     .json({
       error:
-        "Forbidden — open this document from your portal or the advisor app.",
+        "Forbidden â€” open this document from your portal or the advisor app.",
     });
 };
 app.use("/uploads/visa-docs", gateVisaDocs);
@@ -1732,7 +1744,7 @@ app.use("/api/uploads/visa-docs", gateVisaDocs);
 app.use("/api/uploads", require("./routes/file-uploads"));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use("/api/uploads", express.static(path.join(__dirname, "uploads")));
-// Brochure Engine — serves PDFs generated by the agentic-orchcrm subprocess.
+// Brochure Engine â€” serves PDFs generated by the agentic-orchcrm subprocess.
 // The engine writes into <repo>/agentic-orchcrm/apps/web/public/generated/
 // (or GENERATED_DIR env if set); this static mount exposes them at
 // /brochure-assets/<file>.pdf so the operator UI can preview / download.
@@ -1745,7 +1757,7 @@ const {
 app.use("/brochure-assets", express.static(BROCHURE_ASSETS_DIR));
 app.use("/api/brochure-assets", express.static(BROCHURE_ASSETS_DIR));
 
-// Favicon explicit handler — serves logo-header-nobg.png with correct MIME type.
+// Favicon explicit handler â€” serves logo-header-nobg.png with correct MIME type.
 // Essential for /trips (server-rendered) and any subroute that doesn't benefit
 // from the SPA's frontend dist static serving. Without this, favicon requests
 // from /trips, /api/*, and other non-SPA paths would 404 or get wrong MIME type.
@@ -1777,20 +1789,20 @@ const prisma = require("./lib/prisma");
 // vulnerable-version targeting.
 //
 // Two-tier response now:
-//   - Unauthenticated (no Authorization header) → minimal body:
+//   - Unauthenticated (no Authorization header) â†’ minimal body:
 //     { status, timestamp } only. Enough for liveness/readiness probes
 //     and the demo-monitor cron. No version, no uptime, no DB string.
-//   - Authenticated (any valid JWT) → full body: status, version,
+//   - Authenticated (any valid JWT) â†’ full body: status, version,
 //     uptime, timestamp, database. For ops + the
 //     `triaging-stuck-deploy-gate` skill's deploy-divergence check.
 //
-// Detection of "authenticated" is intentionally minimal — just the
+// Detection of "authenticated" is intentionally minimal â€” just the
 // presence of an Authorization header. We do NOT verify the JWT here
 // (that would add a DB round-trip for revoked-token check on every
 // liveness probe). The server only DISCLOSES extra fields to callers
 // who can present a token; it doesn't grant any access. If a stolen
 // token is used to probe /api/health, the worst outcome is fingerprint
-// disclosure to a caller who already has a tenant credential — not a
+// disclosure to a caller who already has a tenant credential â€” not a
 // new escalation.
 // Public status page API (PRD_STATUS_PAGE.md). Mounted before the global
 // auth guard's route-level checks because /api/status/* is in openPaths.
@@ -1845,7 +1857,7 @@ app.use("/api", (req, res) => {
   });
 });
 
-// Global JSON error handler — must come AFTER all routes.
+// Global JSON error handler â€” must come AFTER all routes.
 // Catches express.json() body-parse errors, Prisma exceptions, and anything
 // uncaught downstream. Returns JSON instead of Express's default HTML page
 // so API consumers (browsers, Callified, AdsGPT) always get a parseable body.
@@ -1854,7 +1866,7 @@ app.use("/api", (req, res) => {
 // whole API. The catch-alls below now ALL include `code` so SPA/SDK error
 // handlers can branch on stable identifiers instead of regexing the message.
 // (Per-route handlers that still return { message: ... } for delete-success
-// shapes are tracked under #549 — separate sweep, not blocking this fix.)
+// shapes are tracked under #549 â€” separate sweep, not blocking this fix.)
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   if (
@@ -1904,10 +1916,10 @@ server.listen(PORT, () => {
         stats.rolesCreated + stats.permsCreated + stats.assignmentsCreated;
       if (wrote > 0) {
         console.log(
-          `[rbac-boot] backfilled — roles:${stats.rolesCreated} perms:${stats.permsCreated} assignments:${stats.assignmentsCreated} (skipped users:${stats.usersSkipped})`,
+          `[rbac-boot] backfilled â€” roles:${stats.rolesCreated} perms:${stats.permsCreated} assignments:${stats.assignmentsCreated} (skipped users:${stats.usersSkipped})`,
         );
       } else {
-        console.log("[rbac-boot] RBAC state already compatible — no changes.");
+        console.log("[rbac-boot] RBAC state already compatible â€” no changes.");
       }
     })
     .catch((err) =>
@@ -1921,8 +1933,8 @@ server.listen(PORT, () => {
   // wellness-tenant user. Heals any drift where a user holds a DOCTOR /
   // NURSE / RECEPTIONIST / TELECALLER RBAC role but their wellnessRole
   // column is stale (null, or pointing at a previous role). Without this,
-  // the /api/wellness/doctors/availability picker — which reads
-  // wellnessRole as its source of truth — silently omits the affected
+  // the /api/wellness/doctors/availability picker â€” which reads
+  // wellnessRole as its source of truth â€” silently omits the affected
   // user. Idempotent; users already in sync are no-op reads.
   // Set DISABLE_WELLNESS_ROLE_BOOT_SYNC=1 to opt out.
   if (process.env.DISABLE_WELLNESS_ROLE_BOOT_SYNC !== "1") {
@@ -1939,11 +1951,11 @@ server.listen(PORT, () => {
         if (!stats) return;
         if (stats.changed > 0) {
           console.log(
-            `[wellness-role-boot] forward — reconciled ${stats.changed} user(s) — set:${stats.set} cleared:${stats.cleared} (scanned ${stats.usersScanned} users across ${stats.tenantsScanned} tenant(s))`,
+            `[wellness-role-boot] forward â€” reconciled ${stats.changed} user(s) â€” set:${stats.set} cleared:${stats.cleared} (scanned ${stats.usersScanned} users across ${stats.tenantsScanned} tenant(s))`,
           );
         } else {
           console.log(
-            `[wellness-role-boot] forward — already in sync (scanned ${stats.usersScanned} users across ${stats.tenantsScanned} tenant(s)).`,
+            `[wellness-role-boot] forward â€” already in sync (scanned ${stats.usersScanned} users across ${stats.tenantsScanned} tenant(s)).`,
           );
         }
       })
@@ -1958,17 +1970,17 @@ server.listen(PORT, () => {
     // wellnessRole='doctor'/'nurse'/'telecaller' who are still on USER /
     // CUSTOMER / no role. Heals seeded clinical staff (Harsh / Meena /
     // Vikas) so they have actual DOCTOR permissions, not just the tag.
-    // Won't override ADMIN / MANAGER — those are explicit admin choices.
+    // Won't override ADMIN / MANAGER â€” those are explicit admin choices.
     backfillRbacRolesFromWellnessRolesOnBoot()
       .then((stats) => {
         if (!stats) return;
         if (stats.promoted > 0) {
           console.log(
-            `[wellness-role-boot] reverse — promoted ${stats.promoted} user(s) to matching RBAC role (scanned ${stats.usersScanned} tagged users across ${stats.tenantsScanned} tenant(s))`,
+            `[wellness-role-boot] reverse â€” promoted ${stats.promoted} user(s) to matching RBAC role (scanned ${stats.usersScanned} tagged users across ${stats.tenantsScanned} tenant(s))`,
           );
         } else {
           console.log(
-            `[wellness-role-boot] reverse — already in sync (scanned ${stats.usersScanned} tagged users across ${stats.tenantsScanned} tenant(s)).`,
+            `[wellness-role-boot] reverse â€” already in sync (scanned ${stats.usersScanned} tagged users across ${stats.tenantsScanned} tenant(s)).`,
           );
         }
       })
@@ -1981,7 +1993,7 @@ server.listen(PORT, () => {
   }
 
   // Self-heal the SubscriptionPlan catalog so a fresh install / wiped DB /
-  // partial seed always has the 3 canonical plans on /pricing. Idempotent —
+  // partial seed always has the 3 canonical plans on /pricing. Idempotent â€”
   // existing rows are left alone (Owner edits via Manage Plans persist
   // across restarts). Fire-and-forget; never crash boot on a DB hiccup.
   // Set DISABLE_PLANS_BOOT_SYNC=1 to opt out.
@@ -2024,7 +2036,7 @@ server.listen(PORT, () => {
   }
 });
 
-// Graceful shutdown — required for c8 / V8 line coverage to flush its temp
+// Graceful shutdown â€” required for c8 / V8 line coverage to flush its temp
 // files (V8 only dumps coverage on clean process exit; SIGTERM-without-handler
 // kills before it can flush). Also benefits production: no half-served
 // requests on `pm2 restart`.
@@ -2032,15 +2044,15 @@ let _shuttingDown = false;
 const _gracefulShutdown = (signal) => {
   if (_shuttingDown) return; // SIGINT after SIGTERM (pm2) must not double-run
   _shuttingDown = true;
-  console.log(`[shutdown] ${signal} received — closing server`);
+  console.log(`[shutdown] ${signal} received â€” closing server`);
   // Destroy the WhatsApp Web puppeteer clients FIRST so Chromium flushes its
   // LocalAuth credential store cleanly. Without this, a pm2 restart kills
-  // Chromium mid-write → corrupt session → the CRM shows a fresh QR on the next
+  // Chromium mid-write â†’ corrupt session â†’ the CRM shows a fresh QR on the next
   // boot even though the phone still has the device linked. Best-effort + time-
   // boxed so a hung client can't block the rest of shutdown.
   Promise.resolve()
     .then(() => {
-      // Kill in-flight brochure engine subprocesses FIRST — they're disposable
+      // Kill in-flight brochure engine subprocesses FIRST â€” they're disposable
       // (the operator can re-run), and their Chromes would otherwise survive
       // the restart as orphans reparented to init.
       try {
@@ -2060,24 +2072,24 @@ const _gracefulShutdown = (signal) => {
       });
     });
   setTimeout(() => {
-    console.warn("[shutdown] timeout — forcing exit");
+    console.warn("[shutdown] timeout â€” forcing exit");
     process.exit(0);
   }, 12000).unref();
 };
 process.on("SIGTERM", () => _gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => _gracefulShutdown("SIGINT"));
 // nodemon restarts the dev server on every file save by sending SIGUSR2. Without
-// trapping it the WhatsApp Web puppeteer client is killed mid-write — corrupting
+// trapping it the WhatsApp Web puppeteer client is killed mid-write â€” corrupting
 // / locking its LocalAuth profile so the next boot can't resume the link and the
 // CRM shows a fresh QR ("won't reconnect after restart"). Destroy the clients
 // cleanly first, then re-raise SIGUSR2 (with no listener left) so nodemon's own
-// handler performs the actual restart. POSIX-only — wrapped because Windows Node
+// handler performs the actual restart. POSIX-only â€” wrapped because Windows Node
 // can't register SIGUSR2 (nodemon there hard-kills, which the next boot's
 // stale-lock cleanup recovers from instead).
 try {
   process.once("SIGUSR2", () => {
     console.log(
-      "[shutdown] SIGUSR2 (nodemon restart) — flushing WhatsApp sessions before restart",
+      "[shutdown] SIGUSR2 (nodemon restart) â€” flushing WhatsApp sessions before restart",
     );
     Promise.resolve()
       .then(() => require("./services/whatsappWebClient").shutdown())
@@ -2105,10 +2117,10 @@ try {
 // DISABLE_CRONS=1 lets us boot a side-by-side instance (e.g. for c8 line-
 // coverage runs on a different port) without double-firing reminders, blasts,
 // orchestrator runs, etc. against the shared DB. Set ONLY on the secondary
-// instance — production PM2 should leave it unset.
+// instance â€” production PM2 should leave it unset.
 if (process.env.DISABLE_CRONS === "1") {
   console.log(
-    "[crons] DISABLE_CRONS=1 — skipping all cron init (coverage / sandbox mode)",
+    "[crons] DISABLE_CRONS=1 â€” skipping all cron init (coverage / sandbox mode)",
   );
 } else {
   // Scheduled Report Engine (checks hourly for due report schedules)
@@ -2127,7 +2139,7 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initRecurringInvoiceCron } = require("./cron/recurringInvoiceEngine");
   initRecurringInvoiceCron(io);
 
-  // Marketplace Sync Engine — registers via cronRegistry with
+  // Marketplace Sync Engine â€” registers via cronRegistry with
   // defaultEnabled:false (no tenant has an active MarketplaceConfig today,
   // so it ships OFF by default). Now visible + one-click-enable from the
   // Super Admin Cron Maintenance table instead of being invisible.
@@ -2146,7 +2158,7 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initSentimentCron } = require("./cron/sentimentEngine");
   initSentimentCron();
 
-  // Public status page — health probes every 5 min + daily snapshot at 00:05 UTC.
+  // Public status page â€” health probes every 5 min + daily snapshot at 00:05 UTC.
   const { initStatusSnapshotCron } = require("./cron/statusSnapshot");
   initStatusSnapshotCron();
 
@@ -2180,7 +2192,7 @@ if (process.env.DISABLE_CRONS === "1") {
     initNoShowRiskCron,
   } = require("./cron/appointmentRemindersEngine");
   initAppointmentRemindersCron();
-  // PRD Gap §12 #4e — daily 08:30 IST no-show risk Notification fan-out.
+  // PRD Gap Â§12 #4e â€” daily 08:30 IST no-show risk Notification fan-out.
   initNoShowRiskCron();
 
   // Initialize Wellness Ops Engine (hourly: NPS surveys + junk-lead retention)
@@ -2188,7 +2200,7 @@ if (process.env.DISABLE_CRONS === "1") {
   initWellnessOpsCron();
 
   // Initialize Travel CRM post-trip feedback cron (daily 06:13 IST).
-  // PRD §4.8 + §6.3 — creates a Survey row for TmcTrips whose returnDate
+  // PRD Â§4.8 + Â§6.3 â€” creates a Survey row for TmcTrips whose returnDate
   // is 1-7 days ago. WhatsApp/email dispatch slots in once Wati BSP creds
   // (Q9) land; for now the survey link is just logged.
   const {
@@ -2197,7 +2209,7 @@ if (process.env.DISABLE_CRONS === "1") {
   initTripPostTripFeedbackCron();
 
   // Initialize Travel CRM payment reminders cron (daily 07:13 IST).
-  // PRD §4.4 + §6.3 — creates a Notification row for each
+  // PRD Â§4.4 + Â§6.3 â€” creates a Notification row for each
   // TripInstalmentPayment in pre-due or overdue windows (per
   // TripPaymentPlan.instalmentsJson reminderDays per entry). Dedupes
   // via (entityType, entityId, type). WhatsApp/email dispatch lands
@@ -2207,7 +2219,7 @@ if (process.env.DISABLE_CRONS === "1") {
   } = require("./cron/tripPaymentReminders");
   initTripPaymentRemindersCron();
 
-  // C8 (PRD_TRAVEL_BILLING UC-2.4) — daily 09:13 IST TravelPaymentSchedule
+  // C8 (PRD_TRAVEL_BILLING UC-2.4) â€” daily 09:13 IST TravelPaymentSchedule
   // T-7 / T-3 / T-1 reminder sweep. Fires SMS + email customer reminders
   // (WA leg stub pending Q9 Wati creds) per milestone whose dueDate lands
   // in window; bumps remindersSentCount + lastReminderSentAt on the row.
@@ -2217,7 +2229,7 @@ if (process.env.DISABLE_CRONS === "1") {
   initPaymentScheduleReminderCron();
 
   // Initialize Travel CRM diagnostic-to-advisor escalation (every 5 min).
-  // PRD §6.3 row 6 — diagnostics stalled >30 min without advisor outreach
+  // PRD Â§6.3 row 6 â€” diagnostics stalled >30 min without advisor outreach
   // surface as high-priority Notification rows on the advisor dashboard.
   // Outreach detected via Activity / Task created after the diagnostic.
   const {
@@ -2226,7 +2238,7 @@ if (process.env.DISABLE_CRONS === "1") {
   initTravelDiagnosticAlertsCron();
 
   // Initialize Travel CRM RFU journey reminders (every 30 min).
-  // PRD §4.8 + §6.3 — fires fixed-point milestones (T-7d / T-3d / T-1d /
+  // PRD Â§4.8 + Â§6.3 â€” fires fixed-point milestones (T-7d / T-3d / T-1d /
   // T-0 / T+2d / T+7d) for RFU accepted itineraries. WhatsApp/email
   // dispatch deferred to Wati BSP creds; Notification row is the
   // visible Phase 1 output.
@@ -2235,24 +2247,24 @@ if (process.env.DISABLE_CRONS === "1") {
   } = require("./cron/travelJourneyReminders");
   initTravelJourneyRemindersCron();
 
-  // Pre-trip "countdown" nudge engine (2026-06-16) — emails PAID travel
-  // customers (itinerary status ∈ {advance_paid, fully_paid}) a short creative
-  // reminder daily through the final week (T-30/T-14 then T-7…T-0).
+  // Pre-trip "countdown" nudge engine (2026-06-16) â€” emails PAID travel
+  // customers (itinerary status âˆˆ {advance_paid, fully_paid}) a short creative
+  // reminder daily through the final week (T-30/T-14 then T-7â€¦T-0).
   // LLM-generated copy (task "trip-countdown") with a template fallback; real
   // SendGrid email; idempotent per (itinerary, day-bucket). Accepted-but-unpaid
   // bookings are owned by the payment-deadline engine below instead.
   const { initTripCountdownCron } = require("./cron/tripCountdownEngine");
   initTripCountdownCron();
 
-  // Pay-or-cancel deposit-deadline engine (2026-06-16) — chases an `accepted`
-  // (but unpaid) travel booking for its 50% deposit T-10…T-7 (deadline T-7),
+  // Pay-or-cancel deposit-deadline engine (2026-06-16) â€” chases an `accepted`
+  // (but unpaid) travel booking for its 50% deposit T-10â€¦T-7 (deadline T-7),
   // then at T-6 emails an at-risk notice + raises an advisor "review for
-  // cancellation" flag and stamps Itinerary.paymentOverdueAt. NO auto-cancel —
+  // cancellation" flag and stamps Itinerary.paymentOverdueAt. NO auto-cancel â€”
   // an advisor sets status "expired". All sub-brands except Visa Sure.
   const { initPaymentDeadlineCron } = require("./cron/paymentDeadlineEngine");
   initPaymentDeadlineCron();
 
-  // Web check-in reminder EMAIL engine (2026-06-16) — the customer-facing
+  // Web check-in reminder EMAIL engine (2026-06-16) â€” the customer-facing
   // email layer over the EXISTING WebCheckin rows (the webCheckinScheduler
   // above owns their status lifecycle + WhatsApp + agent fallback). Emails the
   // passenger at T-36h/T-24h/T-12h before the flight's departureAt when the
@@ -2262,7 +2274,7 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initWebCheckinCron } = require("./cron/webCheckinEngine");
   initWebCheckinCron();
 
-  // Post-trip review engine (2026-06-16) — once a committed (accepted/paid),
+  // Post-trip review engine (2026-06-16) â€” once a committed (accepted/paid),
   // non-Visa-Sure trip's endDate passes, emails the customer a fixed-question review (destination
   // woven into the wording) linking to a public review page (/p/review/:token);
   // they can also submit from the portal. Daily 09:07; idempotent (one
@@ -2271,28 +2283,28 @@ if (process.env.DISABLE_CRONS === "1") {
   initTravelReviewCron();
 
   // Initialize Visa Sure risk-flagging engine (every 6 hours, SHELL).
-  // PRD Phase 3 §3 FR-3 (rows V5-V7, cluster B3) — scans VisaApplication
+  // PRD Phase 3 Â§3 FR-3 (rows V5-V7, cluster B3) â€” scans VisaApplication
   // rows in pending/intake/docs-pending/docs-collected status; writes
   // high-priority Notification rows for complex-case / rejection-history /
   // readinessLevel-4 / existing-flag signals. Real rule-set pending
-  // PRD §5 PC-1..PC-5 product calls.
+  // PRD Â§5 PC-1..PC-5 product calls.
   const { initVisaRiskFlagCron } = require("./cron/visaRiskFlagEngine");
   initVisaRiskFlagCron();
-  console.log("✓ Cron engine: visaRiskFlagEngine (every 6 hours)");
+  console.log("âœ“ Cron engine: visaRiskFlagEngine (every 6 hours)");
 
   // Initialize Travel CRM web check-in scheduler (every 15 min).
-  // PRD §4.6 + §6.3 row 1 — flips WebCheckin status pending → reminded
-  // when windowOpenAt arrives, then reminded → fallback-agent if stalled
-  // 30m+. Browser-automation half (P1B) deferred — this scheduler only
+  // PRD Â§4.6 + Â§6.3 row 1 â€” flips WebCheckin status pending â†’ reminded
+  // when windowOpenAt arrives, then reminded â†’ fallback-agent if stalled
+  // 30m+. Browser-automation half (P1B) deferred â€” this scheduler only
   // handles the tracking + reminder side.
   const { initWebCheckinSchedulerCron } = require("./cron/webCheckinScheduler");
   initWebCheckinSchedulerCron();
 
   // Initialize Travel CRM web check-in AUTOMATION engine (every 15 min).
-  // PRD_AIRLINE_WEBCHECKIN_AUTOMATION FR-1 — picks up `reminded`/retry-eligible
+  // PRD_AIRLINE_WEBCHECKIN_AUTOMATION FR-1 â€” picks up `reminded`/retry-eligible
   // rows on PAID, non-Visa-Sure itineraries, resolves the per-airline adapter
-  // (services/airlineAdapters) and performs the check-in: success → done +
-  // boarding pass; captcha/not-implemented → fallback-agent; transient → 3x
+  // (services/airlineAdapters) and performs the check-in: success â†’ done +
+  // boarding pass; captcha/not-implemented â†’ fallback-agent; transient â†’ 3x
   // retry w/ 1/5/15-min backoff then fallback-agent. Adapters are stubbed
   // (return not-implemented) until DC-1/DC-3/DC-5 land, so this is a
   // safe no-op-to-fallback in prod; set WEBCHECKIN_AUTOMATION_STUB=1 to drive
@@ -2301,15 +2313,15 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initWebCheckinAutomationCron } = require("./cron/webCheckinAutomation");
   initWebCheckinAutomationCron();
 
-  // Initialize Travel CRM contact greetings (daily 08:13 IST) — Phase 2.
-  // PRD §4.8 Phase 2 birthday/anniversary greetings. Year-agnostic
+  // Initialize Travel CRM contact greetings (daily 08:13 IST) â€” Phase 2.
+  // PRD Â§4.8 Phase 2 birthday/anniversary greetings. Year-agnostic
   // month+day match on Contact.birthDate + Contact.anniversary; one
   // Notification per occasion per year. Wati dispatch deferred to Q9.
   const { initContactGreetingsCron } = require("./cron/contactGreetingsEngine");
   initContactGreetingsCron();
 
-  // Initialize Travel CRM religious-guidance delivery (daily 09:13 IST) —
-  // PRD §4.8 + §4.10 RFU sub-brand. Scans RFU itineraries in the next
+  // Initialize Travel CRM religious-guidance delivery (daily 09:13 IST) â€”
+  // PRD Â§4.8 + Â§4.10 RFU sub-brand. Scans RFU itineraries in the next
   // 14-day window; for each active ReligiousGuidancePacket whose
   // dayOffset === daysToDeparture, creates one Notification per
   // (packet, itinerary, year) dedup window. WA dispatch deferred to Q9.
@@ -2318,22 +2330,22 @@ if (process.env.DISABLE_CRONS === "1") {
   } = require("./cron/religiousGuidanceEngine");
   initReligiousGuidanceCron();
 
-  // Slice C9 — Travel CRM quote expiry sweep (daily 09:00 IST).
-  // PRD_TRAVEL_QUOTE_BUILDER §3.7 — flips Draft/Sent quotes with validUntil<now
+  // Slice C9 â€” Travel CRM quote expiry sweep (daily 09:00 IST).
+  // PRD_TRAVEL_QUOTE_BUILDER Â§3.7 â€” flips Draft/Sent quotes with validUntil<now
   // to status='Expired' + writes a TravelQuoteSnapshot history row per transition.
   const {
     initCron: initQuoteExpirySweepCron,
   } = require("./cron/quoteExpirySweep");
   initQuoteExpirySweepCron();
 
-  // G018 (PRD_TRAVEL_QUOTE_BUILDER DD-5.4) — hourly FX-rate cache refresh.
+  // G018 (PRD_TRAVEL_QUOTE_BUILDER DD-5.4) â€” hourly FX-rate cache refresh.
   // Polls frankfurter.dev for a fixed (base, quote) pair list and upserts
   // FxRate rows. The /api/fx/latest read endpoint then serves cached rates
   // in O(1). DISABLE_CRONS=1 guard inside the engine.
   const { initCron: initFxRateCron } = require("./cron/fxRateEngine");
   initFxRateCron();
 
-  // #902 GST slice 12 — daily GSTR filing reminder sweep (05:00 UTC = 10:30 IST).
+  // #902 GST slice 12 â€” daily GSTR filing reminder sweep (05:00 UTC = 10:30 IST).
   // Iterates active tenants and emits a tiered reminder (T-7d / T-3d / T-1d / T-0)
   // for each one whose prior-month GSTR filing is approaching its deadline. Notify
   // half is a console-log stub today; real WhatsApp / email dispatch lands when
@@ -2347,7 +2359,7 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initLowStockCron } = require("./cron/lowStockEngine");
   initLowStockCron();
 
-  // Wave 11 Agent HH — Auto-consumption listener. Subscribes to 'visit.completed'
+  // Wave 11 Agent HH â€” Auto-consumption listener. Subscribes to 'visit.completed'
   // events and applies all active AutoConsumptionRule rows for the visit's
   // service: writes ServiceConsumption rows + decrements Product.currentStock.
   // Idempotent boot; failures are logged and never propagate to the visit
@@ -2357,11 +2369,11 @@ if (process.env.DISABLE_CRONS === "1") {
   } = require("./lib/autoConsumptionApplier");
   startAutoConsumption();
 
-  // Initialize SLA Breach Engine (every 5 min — flips Ticket.breached + emits 'sla.breached')
+  // Initialize SLA Breach Engine (every 5 min â€” flips Ticket.breached + emits 'sla.breached')
   const { initSlaBreachCron } = require("./cron/slaBreachEngine");
   initSlaBreachCron();
 
-  // WhatsApp SaaS P3 — async outbound delivery (every 30s) + media download
+  // WhatsApp SaaS P3 â€” async outbound delivery (every 30s) + media download
   // pipeline (every 60s). Both engines no-op gracefully when the underlying
   // WhatsAppConfig is missing or token is unset, so they're safe to enable
   // even before any tenant has completed onboarding. The outbound engine
@@ -2372,7 +2384,7 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initWhatsappMediaCron } = require("./cron/whatsappMediaEngine");
   initWhatsappMediaCron();
 
-  // WhatsApp SaaS P4 — daily token-refresh probe + template-sync safety net.
+  // WhatsApp SaaS P4 â€” daily token-refresh probe + template-sync safety net.
   // Token refresh proactively extends short-lived tokens 7 days before expiry
   // via fb_exchange_token; surfaces unrecoverable expiry via Notification +
   // soft-disconnect. Template sync pulls every approved template from Meta
@@ -2386,23 +2398,23 @@ if (process.env.DISABLE_CRONS === "1") {
   } = require("./cron/whatsappTemplateSyncEngine");
   initWhatsappTemplateSyncCron();
 
-  // #541 (OPS-1): Demo Hygiene — hourly purge of `_QA_PROBE_*` /
+  // #541 (OPS-1): Demo Hygiene â€” hourly purge of `_QA_PROBE_*` /
   // `E2E_FLOW_*` test residue from patient list + admin-config models.
   // Set DEMO_HYGIENE_DISABLED=1 in non-demo environments (CI / local) to
-  // skip — see backend/cron/demoHygieneEngine.js.
+  // skip â€” see backend/cron/demoHygieneEngine.js.
   const { initDemoHygieneCron } = require("./cron/demoHygieneEngine");
   initDemoHygieneCron();
 
-  // Initialize Lead-side SLA Breach Engine (every 2 min — flips Contact.slaBreached
-  // + emits 'lead.sla_breached' for the PRD §6.4 lead first-response SLA)
+  // Initialize Lead-side SLA Breach Engine (every 2 min â€” flips Contact.slaBreached
+  // + emits 'lead.sla_breached' for the PRD Â§6.4 lead first-response SLA)
   const { initLeadSlaCron } = require("./cron/leadSlaEngine");
   initLeadSlaCron();
 
-  // #558 — AuditLog hash-chain integrity sweep (daily 04:00, after retention).
+  // #558 â€” AuditLog hash-chain integrity sweep (daily 04:00, after retention).
   const { initAuditIntegrityCron } = require("./cron/auditIntegrityEngine");
   initAuditIntegrityCron();
 
-  // Wave 8b — POS receipt dispatcher subscribes to sale.completed events
+  // Wave 8b â€” POS receipt dispatcher subscribes to sale.completed events
   // and queues SMS (always) + WhatsApp (if Contact opted-in) receipt rows.
   // Event-driven, no cron tick. Fire-and-forget: a dispatch hiccup never
   // affects the sale itself.
@@ -2411,14 +2423,14 @@ if (process.env.DISABLE_CRONS === "1") {
   } = require("./lib/posReceiptDispatcher");
   startPosReceiptDispatcher();
 
-  // Wave 8b — Leave Policy Engine (daily 02:30 IST). Detects fiscal
+  // Wave 8b â€” Leave Policy Engine (daily 02:30 IST). Detects fiscal
   // year-end per LeavePolicy and applies carry-forward + encashment
   // payouts where the policy specifies them. Idempotent on a
   // per-(tenant,policy,user,year) basis via LeaveBalance lookups.
   const { initLeavePolicyCron } = require("./cron/leavePolicyEngine");
   initLeavePolicyCron();
 
-  // D16 Wallet Top-up — Arc 1 Slice 6 (PRD_WALLET_TOPUP §3.5 Phase 2).
+  // D16 Wallet Top-up â€” Arc 1 Slice 6 (PRD_WALLET_TOPUP Â§3.5 Phase 2).
   // Daily 03:30 IST sweep: flips ACTIVE WalletCreditBatch rows whose
   // expiresAt has passed to EXPIRED, debits Wallet.balance, writes a
   // signed-negative EXPIRY WalletTransaction row, audits WALLET_EXPIRY.
@@ -2426,32 +2438,32 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initWalletExpiryCron } = require("./cron/walletExpiryEngine");
   initWalletExpiryCron();
 
-  // Super Admin Portal / Cron Maintenance — purges CronExecutionLog rows
+  // Super Admin Portal / Cron Maintenance â€” purges CronExecutionLog rows
   // past the configured retention window (daily 03:15, admin-configurable
   // via PUT /api/super-admin/cron/settings/log-retention).
   const { initCronLogRetentionCron } = require("./cron/cronLogRetentionEngine");
   initCronLogRetentionCron();
 
-  // Super Admin Portal / API Analytics — purges LlmCallLog + ApiCallLog
+  // Super Admin Portal / API Analytics â€” purges LlmCallLog + ApiCallLog
   // rows past the configured retention window (daily 03:20, admin-
   // configurable via PUT /api/super-admin/api-analytics/settings/log-retention).
   const { initApiCallLogRetentionCron } = require("./cron/apiCallLogRetentionEngine");
   initApiCallLogRetentionCron();
 
-  // Super Admin Portal / Cron Maintenance — re-register any admin-created
+  // Super Admin Portal / Cron Maintenance â€” re-register any admin-created
   // dynamic crons (isSystem:false) from CronConfig so they survive server
   // restarts without requiring an admin to re-save each one.
   const { loadDynamicCrons } = require("./lib/cronRegistry");
   loadDynamicCrons().catch((e) => console.error("[server] loadDynamicCrons failed:", e.message));
 
-  // Initialize Notification Rules Engine — event-driven notifications for
+  // Initialize Notification Rules Engine â€” event-driven notifications for
   // business events (SLA breaches, approvals, expenses, leave requests).
   // Subscribes to eventBus events and creates notifications via notificationService.
   const notificationRules = require("./lib/notificationRulesEngine");
   notificationRules.init(io);
 } // end DISABLE_CRONS guard
 
-// SPA catch-all — serves index.html for any non-API path that reaches
+// SPA catch-all â€” serves index.html for any non-API path that reaches
 // Express (e.g. direct navigation to /p/quote/:token when the upstream
 // reverse proxy falls through to the backend instead of serving
 // index.html itself). Placed after all API routes so it only fires on

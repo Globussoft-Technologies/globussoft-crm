@@ -55,8 +55,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 6200,
+    "all-js-maxKB": 6600,
     "all-css-maxKB": 300,
-    "comment": "Whole frontend/dist/assets/ JS + CSS. Catches the case where a new chunk pops in without being budgeted explicitly. Bumped 5700→6200 on 2026-07-21: PR #1233 added xlsx for CSV/Excel import; the xlsx chunk is ~419 KB and pushes total JS to ~5853 KB. Bumping by 500 KB restores ~140 KB headroom. Bumped 5200→5700 on 2026-07-06: PR #1199 React landing-page renderer..."
+    "comment": "Whole frontend/dist/assets/ JS + CSS. Catches the case where a new chunk pops in without being budgeted explicitly. Bumped 6200→6600 on 2026-07-23: PR #1249 added lottie-react + Lottie JSON for the GitHub icon on the landing page; the new GitHubCatIcon chunk is ~337 KB and pushes total JS over the 6200 KB cap. Bumping by 400 KB restores headroom. Bumped 5700→6200 on 2026-07-21: PR #1233 added xlsx for CSV/Excel import; the xlsx chunk is ~419 KB and pushes total JS to ~5853 KB. Bumping by 500 KB restores ~140 KB headroom. Bumped 5200→5700 on 2026-07-06: PR #1199 React landing-page renderer..."
   }
 }

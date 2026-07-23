@@ -63,6 +63,10 @@ export default function CsvImportExportToolbar({
 
   const exportUrl = endpoints?.export || `/api/wellness/csv/${entity}/export`;
   const templateUrl = endpoints?.template || `/api/wellness/csv/${entity}/template`;
+  const metaUrl = endpoints?.meta || `/api/wellness/csv/${entity}`;
+  const importUrl = endpoints?.import || `/api/wellness/csv/${entity}/import`;
+  const importAsyncUrl = endpoints?.importAsync || `/api/wellness/csv/${entity}/import/async`;
+  const jobUrl = endpoints?.job || ((jobId) => `/api/wellness/csv/jobs/${jobId}`);
 
   const buildQueryString = (extra = {}) => {
     const parts = [];
@@ -191,10 +195,14 @@ export default function CsvImportExportToolbar({
           label={displayLabel}
           formats={formats}
           templateUrl={templateUrl}
+          metaUrl={metaUrl}
+          importUrl={importUrl}
+          importAsyncUrl={importAsyncUrl}
+          jobUrl={jobUrl}
           onClose={() => setShowImport(false)}
           onImported={(result) => {
             // Only refresh the parent's list if at least one row landed.
-            if (onImported && (result?.inserted || result?.updated)) onImported(result);
+            if (onImported && (result?.inserted || result?.imported || result?.updated)) onImported(result);
           }}
         />
       )}
@@ -204,7 +212,18 @@ export default function CsvImportExportToolbar({
 
 // ── Import modal ──────────────────────────────────────────────────
 
-function ImportModal({ entity, label, onClose, onImported, formats = ["csv"], templateUrl = null }) {
+function ImportModal({
+  entity,
+  label,
+  onClose,
+  onImported,
+  formats = ["csv"],
+  templateUrl = null,
+  metaUrl = null,
+  importUrl = null,
+  importAsyncUrl = null,
+  jobUrl = null,
+}) {
   const notify = useNotify();
   const fileInputRef = useRef(null);
   const [file, setFile] = useState(null);
@@ -220,13 +239,13 @@ function ImportModal({ entity, label, onClose, onImported, formats = ["csv"], te
   // Pull entity meta so we can show the column list pre-upload + know the
   // async thresholds.
   useEffect(() => {
-    fetchApi(`/api/wellness/csv/${entity}`, { silent: true })
+    fetchApi(metaUrl || `/api/wellness/csv/${entity}`, { silent: true })
       .then((meta) => {
         setExpectedHeaders(meta.headers || []);
         if (meta.thresholds) setThresholds(meta.thresholds);
       })
       .catch(() => { /* gate denied — submit will show the real error */ });
-  }, [entity]);
+  }, [entity, metaUrl]);
 
   const downloadTemplate = async (format = "csv") => {
     try {
@@ -297,8 +316,8 @@ function ImportModal({ entity, label, onClose, onImported, formats = ["csv"], te
 
     const useAsync = tooBig || tooLong;
     const endpoint = useAsync
-      ? `/api/wellness/csv/${entity}/import/async`
-      : `/api/wellness/csv/${entity}/import`;
+      ? (importAsyncUrl || `/api/wellness/csv/${entity}/import/async`)
+      : (importUrl || `/api/wellness/csv/${entity}/import`);
 
     try {
       const fd = new FormData();
@@ -340,7 +359,8 @@ function ImportModal({ entity, label, onClose, onImported, formats = ["csv"], te
   useEffect(() => {
     if (!jobId) return undefined;
     const tick = async () => {
-      const j = await fetchApi(`/api/wellness/csv/jobs/${jobId}`, { silent: true })
+      const url = typeof jobUrl === "function" ? jobUrl(jobId) : `/api/wellness/csv/jobs/${jobId}`;
+      const j = await fetchApi(url, { silent: true })
         .catch(() => null);
       if (!j) return;
       if (j.status === "done" || j.status === "failed") {
@@ -352,7 +372,7 @@ function ImportModal({ entity, label, onClose, onImported, formats = ["csv"], te
     const id = setInterval(tick, 1500);
     tick();
     return () => clearInterval(id);
-  }, [jobId, onImported]);
+  }, [jobId, jobUrl, onImported]);
 
   const downloadErrorReport = () => {
     if (!result?.errors?.length) return;
@@ -509,7 +529,7 @@ function ImportModal({ entity, label, onClose, onImported, formats = ["csv"], te
           <div style={{ marginBottom: "1rem" }}>
             <div role="status" style={{ ...alertStyle, background: result.errors?.length ? "rgba(245,158,11,0.15)" : "rgba(16,185,129,0.15)", borderColor: result.errors?.length ? "#f59e0b" : "#10b981" }}>
               <CheckCircle2 size={16} style={{ verticalAlign: "middle", marginRight: 6 }} />
-              Inserted <strong>{result.inserted ?? 0}</strong>, updated <strong>{result.updated ?? 0}</strong>, skipped <strong>{result.skipped ?? 0}</strong>{result.errors?.length ? `, errors ${result.errors.length}` : ""}
+              Inserted <strong>{result.inserted ?? result.imported ?? 0}</strong>, updated <strong>{result.updated ?? 0}</strong>, skipped <strong>{result.skipped ?? 0}</strong>{result.errors?.length ? `, errors ${result.errors.length}` : ""}
             </div>
 
             {result.errors?.length > 0 && (
@@ -712,3 +732,5 @@ const dropdownItemStyle = {
   cursor: "pointer",
   fontSize: "0.85rem",
 };
+
+

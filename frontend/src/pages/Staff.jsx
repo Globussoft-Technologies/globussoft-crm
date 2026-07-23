@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, MailPlus, X, UserPlus, Search, Filter as FilterIcon, ChevronDown } from 'lucide-react';
+import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, MailPlus, X, UserPlus, Search, Filter as FilterIcon, ChevronDown, Eye, EyeOff } from 'lucide-react';
 import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { formatDate } from '../utils/date';
@@ -412,6 +412,7 @@ export default function Staff() {
   // direct password-setting path from the same staff-row action.
   const [resettingPassword, setResettingPassword] = useState(null);
   const [resetPasswordValue, setResetPasswordValue] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
   // Add-Staff modal state. null when closed; the form draft when open.
   // POSTs to /api/staff which creates a user inside the current tenant.
   // The created user lands on the role-aware Dashboard variant on first login.
@@ -771,6 +772,7 @@ export default function Staff() {
   const closeResetPassword = () => {
     setResettingPassword(null);
     setResetPasswordValue('');
+    setShowResetPassword(false);
   };
 
   const sendResetLink = async () => {
@@ -1458,7 +1460,13 @@ export default function Staff() {
                   onChange={(e) => setCreating({ ...creating, password: e.target.value })}
                   placeholder="Share securely with the new staff member"
                   data-testid="staff-create-password"
-                  autoComplete="new-password"
+                  autoComplete="off"
+                  name="staff-manual-reset-password-no-autofill"
+                  inputMode="text"
+                  spellCheck={false}
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-form-type="other"
                   style={{ width: '100%', marginTop: '0.25rem' }}
                 />
               </label>
@@ -1566,16 +1574,38 @@ export default function Staff() {
             </p>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
               Manual password <span style={{ fontWeight: 400 }}>(optional, set a new password immediately)</span>
-              <input
-                type="password"
-                className="input-field"
-                value={resetPasswordValue}
-                onChange={(e) => setResetPasswordValue(e.target.value)}
-                placeholder="Type a new password"
-                data-testid="staff-reset-password-input"
-                autoComplete="new-password"
-                style={{ width: '100%', marginTop: '0.25rem' }}
-              />
+              <div style={{ position: 'relative', marginTop: '0.25rem' }}>
+                <input
+                  type="text"
+                  className="input-field"
+                  value={resetPasswordValue}
+                  onChange={(e) => setResetPasswordValue(e.target.value)}
+                  placeholder="Type a new password"
+                  data-testid="staff-reset-password-input"
+                  autoComplete="off"
+                  name="staff-manual-reset-password-no-autofill"
+                  inputMode="text"
+                  spellCheck={false}
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-form-type="other"
+                  style={{ width: '100%', paddingRight: '2.5rem', WebkitTextSecurity: showResetPassword ? 'none' : 'disc' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowResetPassword((v) => !v)}
+                  aria-label={showResetPassword ? 'Hide manual password' : 'Show manual password'}
+                  title={showResetPassword ? 'Hide password' : 'Show password'}
+                  style={{
+                    position: 'absolute', right: '0.65rem', top: '50%', transform: 'translateY(-50%)',
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 28, height: 28, border: 'none', background: 'transparent',
+                    color: 'var(--text-secondary)', cursor: 'pointer', padding: 0,
+                  }}
+                >
+                  {showResetPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </label>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem', flexWrap: 'wrap' }}>
               <button

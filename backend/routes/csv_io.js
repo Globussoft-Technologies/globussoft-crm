@@ -78,6 +78,115 @@ function writeImportAudit(req, entity, summary) {
   });
 }
 
+// Generic CRM Contacts
+const CONTACT_COLS = [
+  { key: "id", header: "id" },
+  { key: "name", header: "name" },
+  { key: "email", header: "email" },
+  { key: "phone", header: "phone" },
+  { key: "company", header: "company" },
+  { key: "title", header: "title" },
+  { key: "status", header: "status" },
+  { key: "source", header: "source" },
+  { key: "createdAt", header: "createdAt", render: (r) => r.createdAt ? new Date(r.createdAt).toISOString() : "" },
+];
+
+const ALLOWED_CONTACT_STATUSES = new Set(["Lead", "Prospect", "Customer", "Churned", "Junk"]);
+const CONTACT_EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
+const FORMULA_INJECTION_RE = /^[=+\-@\t\r]/;
+
+function sanitizeCellForExport(v) {
+  if (typeof v !== "string" || v.length === 0) return v;
+  return FORMULA_INJECTION_RE.test(v) ? `'${v}` : v;
+}
+
+router.get("/contacts/export.csv", async (req, res) => {
+  try {
+    const contacts = await prisma.contact.findMany({
+      where: tenantWhere(req, { deletedAt: null }),
+      orderBy: { createdAt: "desc" },
+      take: 10000,
+    });
+    const csv = serializeRows(CONTACT_COLS, contacts);
+    setCsvDownloadHeaders(res, "contacts-export.csv");
+    res.send(csv);
+  } catch (e) {
+    console.error("[csv] contacts export error:", e.message);
+    res.status(500).json({ error: "Failed to export contacts" });
+  }
+});
+
+router.post("/contacts/import.csv", upload.single("file"), async (req, res) => {
+  try {
+    const csvText = readUploadedCsv(req);
+    if (!csvText) return res.status(400).json({ error: "No CSV body or file uploaded", code: "NO_CSV" });
+
+    const { rows } = parseCsv(csvText);
+    if (rows.length === 0) return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
+    if (rows.length > MAX_IMPORT_ROWS) {
+      return res.status(413).json({ error: `Too many rows. Max ${MAX_IMPORT_ROWS}`, code: "TOO_MANY_ROWS" });
+    }
+
+    let imported = 0;
+    let updated = 0;
+    let skipped = 0;
+    const errors = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const rowNumber = i + 2;
+      try {
+        const name = String(row.name || row.Name || "").trim();
+        const email = String(row.email || row.Email || "").trim();
+        const status = String(row.status || row.Status || "Lead").trim();
+
+        if (!email) {
+          errors.push({ rowNumber, reason: "missing email" });
+          skipped++;
+          continue;
+        }
+        if (!CONTACT_EMAIL_RE.test(email)) {
+          errors.push({ rowNumber, reason: `invalid email (${email})` });
+          skipped++;
+          continue;
+        }
+        if (!ALLOWED_CONTACT_STATUSES.has(status)) {
+          errors.push({ rowNumber, reason: `invalid status "${status}"` });
+          skipped++;
+          continue;
+        }
+
+        const data = {
+          name: sanitizeCellForExport(name),
+          email,
+          phone: String(row.phone || row.Phone || "").trim(),
+          company: sanitizeCellForExport(String(row.company || row.Company || "").trim()),
+          title: String(row.title || row.Title || "").trim(),
+          status,
+          source: String(row.source || row.Source || "").trim() || null,
+        };
+
+        const existing = await prisma.contact.findFirst({ where: { email, tenantId: req.user.tenantId, deletedAt: null } });
+        if (existing) {
+          await prisma.contact.update({ where: { id: existing.id }, data });
+          updated++;
+        } else {
+          await prisma.contact.create({ data: { ...data, tenantId: req.user.tenantId } });
+          imported++;
+        }
+      } catch (rowErr) {
+        errors.push({ rowNumber, reason: rowErr.message });
+        skipped++;
+      }
+    }
+
+    await writeImportAudit(req, "Contact", { rowCount: rows.length, imported, updated, errorCount: errors.length });
+    res.json({ imported, updated, skipped, errors });
+  } catch (e) {
+    console.error("[csv] contacts import error:", e.message);
+    res.status(500).json({ error: "Failed to import contacts" });
+  }
+});
 // ── Services ───────────────────────────────────────────────────────
 
 const SERVICE_COLS = [
@@ -418,4 +527,107 @@ router.get("/bookings/export.csv", async (req, res) => {
   }
 });
 
+
+const GENERIC_CSV_RESOURCES = {
+  contacts: {
+    columns: CONTACT_COLS,
+    sample: {
+      id: "",
+      name: "Asha Mehra",
+      email: "asha@example.com",
+      phone: "+919876543210",
+      company: "Acme Ltd",
+      title: "Founder",
+      status: "Lead",
+      source: "website",
+      createdAt: "",
+    },
+  },
+  services: {
+    columns: SERVICE_COLS,
+    sample: {
+      id: "",
+      name: "Consultation",
+      category: "General",
+      categoryId: "",
+      ticketTier: "medium",
+      basePrice: "500",
+      durationMin: "30",
+      description: "Introductory service",
+      isActive: "true",
+    },
+  },
+  products: {
+    columns: PRODUCT_COLS,
+    sample: {
+      id: "",
+      name: "Starter Plan",
+      sku: "STARTER-001",
+      description: "Entry product",
+      price: "999",
+      isRecurring: "false",
+      currentStock: "0",
+      threshold: "0",
+    },
+  },
+  "membership-plans": {
+    columns: MEMBERSHIP_PLAN_COLS,
+    sample: {
+      id: "",
+      name: "Gold",
+      description: "Premium plan",
+      durationDays: "365",
+      price: "9999",
+      currency: "INR",
+      entitlements: "[]",
+      isActive: "true",
+    },
+  },
+  bookings: {
+    columns: BOOKING_COLS,
+    sample: {
+      id: "",
+      bookingPageId: "",
+      contactName: "Asha Mehra",
+      contactEmail: "asha@example.com",
+      contactPhone: "+919876543210",
+      scheduledAt: "2026-07-23T10:30:00.000Z",
+      durationMins: "30",
+      meetingUrl: "https://meet.example/abc",
+      notes: "follow-up",
+      status: "BOOKED",
+      createdAt: "",
+    },
+  },
+};
+
+function genericResource(req, res) {
+  const def = GENERIC_CSV_RESOURCES[req.params.entity];
+  if (!def) {
+    res.status(404).json({ error: `Unknown CSV resource '${req.params.entity}'`, code: "UNKNOWN_CSV_RESOURCE" });
+    return null;
+  }
+  return def;
+}
+
+router.get("/:entity/template.csv", (req, res) => {
+  const def = genericResource(req, res);
+  if (!def) return;
+  const csv = serializeRows(def.columns, [def.sample]);
+  setCsvDownloadHeaders(res, `${req.params.entity}-template.csv`);
+  res.send(csv);
+});
+
+router.get("/:entity", (req, res) => {
+  const def = genericResource(req, res);
+  if (!def) return;
+  res.json({
+    entity: req.params.entity,
+    headers: def.columns.map((c) => c.header),
+    sample: def.sample,
+    thresholds: { rows: MAX_IMPORT_ROWS, bytes: 5 * 1024 * 1024 },
+  });
+});
 module.exports = router;
+
+

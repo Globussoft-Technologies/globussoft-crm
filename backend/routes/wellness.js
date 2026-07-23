@@ -775,7 +775,7 @@ async function generateVisitPaymentLink({ visit, tenantId, baseUrl }) {
     select: { name: true },
   });
 
-  return createInvoicePaymentLink({
+  const link = await createInvoicePaymentLink({
     tenantId,
     invoice: {
       id: invoice.id,
@@ -794,6 +794,16 @@ async function generateVisitPaymentLink({ visit, tenantId, baseUrl }) {
     baseUrl,
     description: `Wellness Visit #${visit.id}`,
   });
+
+  if (!link.error && !link.url) {
+    return {
+      error: "Payment gateway did not return a hosted payment link URL",
+      code: "GATEWAY_LINK_URL_MISSING",
+      gateway: link.gateway,
+    };
+  }
+
+  return link;
 }
 
 // Day boundaries in IST (UTC+05:30). Wellness clinics are India-based, so
@@ -6069,9 +6079,9 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
           where: { id },
           data: { status: "expired" },
         });
-        // PRD Gap §13 wave-6a — emit membership.expired only on the actual
-        // active→expired transition (not on every redeem attempt against an
-        // already-expired row). Wrapped: workflow failure ≠ block redeem path.
+        // PRD Gap 13 wave-6a - emit membership.expired only on the actual
+        // active->expired transition (not on every redeem attempt against an
+        // already-expired row). Wrapped: workflow failure does not block the redeem path.
         try {
           require("../lib/eventBus").emitEvent(
             "membership.expired",

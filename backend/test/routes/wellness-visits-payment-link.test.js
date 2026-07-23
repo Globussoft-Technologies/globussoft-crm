@@ -401,6 +401,29 @@ describe('POST /api/wellness/visits/:id/payment-link — regeneration', () => {
     expect(res.body.code).toBe('GATEWAY_ERROR');
   });
 
+  test('returns 502 when the gateway succeeds without a hosted URL', async () => {
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: 1,
+      patientId: 42,
+      status: 'completed',
+      amountCharged: 1500,
+    });
+    mockCreateInvoicePaymentLink.mockResolvedValue({ gateway: 'razorpay', paymentId: 99 });
+
+    const res = await request(makeApp())
+      .post('/api/wellness/visits/1/payment-link')
+      .send();
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('GATEWAY_LINK_URL_MISSING');
+    expect(prisma.visit.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ paymentLinkUrl: undefined }),
+      }),
+    );
+  });
+
   test('returns 400 when the visit is already paid', async () => {
     prisma.visit.findFirst.mockResolvedValue({
       id: 1,

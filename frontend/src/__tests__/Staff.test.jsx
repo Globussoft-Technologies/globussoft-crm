@@ -558,6 +558,29 @@ describe('<Staff /> — Reset password (POST /api/staff/:id/reset-password)', ()
     });
   });
 
+  it('toggles manual reset password visibility', async () => {
+    renderStaff('ADMIN');
+    await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('staff-action-reset-password-2'));
+    await waitFor(() => expect(screen.getByTestId('staff-reset-modal')).toBeInTheDocument());
+
+    const input = screen.getByTestId('staff-reset-password-input');
+    expect(input).toHaveAttribute('type', 'text');
+    expect(input).toHaveAttribute('autocomplete', 'off');
+    expect(input).toHaveAttribute('data-lpignore', 'true');
+    expect(input).toHaveAttribute('data-1p-ignore', 'true');
+    expect(screen.getByRole('button', { name: /show manual password/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /show manual password/i }));
+    expect(input).toHaveAttribute('type', 'text');
+    expect(screen.getByRole('button', { name: /hide manual password/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /hide manual password/i }));
+    expect(input).toHaveAttribute('type', 'text');
+    expect(screen.getByRole('button', { name: /show manual password/i })).toBeInTheDocument();
+  });
+
   it('manual password entry in the reset modal PUTs the new password', async () => {
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());

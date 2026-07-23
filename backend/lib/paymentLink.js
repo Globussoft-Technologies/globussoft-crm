@@ -125,6 +125,17 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
         callback_url: callbackUrl,
         callback_method: "get",
       });
+      if (!link || !link.short_url) {
+        console.error("[paymentLink] Razorpay link response missing short_url:", {
+          id: link && link.id,
+          status: link && link.status,
+        });
+        return {
+          error: "Razorpay created a payment-link response without a hosted URL. Please verify payment-link permissions for this Razorpay account.",
+          code: "GATEWAY_LINK_URL_MISSING",
+          gateway,
+        };
+      }
       const payment = await prisma.payment.create({
         data: {
           // Travel links leave invoiceId NULL so the generic markInvoicePaid()

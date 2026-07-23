@@ -73,6 +73,12 @@ authMw.verifyRole = (roles) => (req, res, next) => {
 };
 
 // Prisma singleton patching — replace lazy delegates with vi.fn() stubs.
+prisma.contact = {
+  findMany: vi.fn(),
+  findFirst: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+};
 prisma.service = {
   findMany: vi.fn(),
   findFirst: vi.fn(),
@@ -128,6 +134,10 @@ function bufferParser(r, cb) {
 }
 
 beforeEach(() => {
+  prisma.contact.findMany.mockReset();
+  prisma.contact.findFirst.mockReset();
+  prisma.contact.create.mockReset();
+  prisma.contact.update.mockReset();
   prisma.service.findMany.mockReset();
   prisma.service.findFirst.mockReset();
   prisma.service.create.mockReset();
@@ -145,6 +155,47 @@ beforeEach(() => {
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
 });
 
+// Contacts export
+
+describe('GET /api/csv/contacts/export.csv', () => {
+  test('generic ADMIN exports tenant-scoped contacts via the generic CSV route', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      {
+        id: 10,
+        name: 'Rajesh Sharma',
+        email: 'rajesh@example.com',
+        phone: '+919876543210',
+        company: 'NovaCrest Technologies',
+        title: 'Owner',
+        status: 'Lead',
+        source: 'website',
+        createdAt: new Date('2026-07-23T08:00:00.000Z'),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/csv/contacts/export.csv')
+      .buffer(true)
+      .parse(bufferParser);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.headers['content-disposition']).toMatch(/contacts-export\.csv/);
+    const body = res.body.toString('utf8');
+    expect(body).toMatch(/id,name,email,phone,company,title,status,source,createdAt/);
+    expect(body).toMatch(/Rajesh Sharma/);
+    expect(body).toMatch(/NovaCrest Technologies/);
+    expect(prisma.contact.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ tenantId: 1, deletedAt: null }) }),
+    );
+  });
+
+  test('generic USER is still rejected by the standard ADMIN/MANAGER CSV gate', async () => {
+    const res = await request(makeApp({ role: 'USER' })).get('/api/csv/contacts/export.csv');
+    expect(res.status).toBe(403);
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+  });
+});
 // ─── Services export ───────────────────────────────────────────────
 
 describe('GET /api/csv/services/export.csv', () => {
@@ -515,3 +566,4 @@ describe('RBAC + errorReport query flag', () => {
     expect(body).toMatch(/missing name/i);
   });
 });
+

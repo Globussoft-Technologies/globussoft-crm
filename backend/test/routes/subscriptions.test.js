@@ -1,33 +1,33 @@
-﻿// @ts-check
+// @ts-check
 /**
- * Unit tests for backend/routes/subscriptions.js â€” pin the contract of the
+ * Unit tests for backend/routes/subscriptions.js — pin the contract of the
  * user-level subscription surface (Razorpay-backed plan selection + payment
  * verification + cancel) that powers the in-app upgrade-from-trial flow.
  *
  * Why this file exists
- * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+ * ────────────────────
  * subscriptions.js was the top-10 under-covered file in the codebase per
- * c8 measurement (10.21% lines) â€” zero vitest coverage, zero playwright
+ * c8 measurement (10.21% lines) — zero vitest coverage, zero playwright
  * coverage. The route handles real money (Razorpay HMAC signature
  * verification + Subscription row creation) so silent contract drift on
  * any of the five endpoints could either accept forged payment signatures
  * or block legitimate paying users. Pin the wire shape now.
  *
  * Endpoints under test
- * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
- *   1. GET /status                â€” current user's subscription + trial
- *   2. GET /plans                 â€” active subscription plans (price asc)
- *   3. POST /create-order         â€” proxy to razorpayService.createOrder
- *   4. POST /verify-payment       â€” HMAC signature verify â†’ Subscription
+ * ────────────────────
+ *   1. GET /status                — current user's subscription + trial
+ *   2. GET /plans                 — active subscription plans (price asc)
+ *   3. POST /create-order         — proxy to razorpayService.createOrder
+ *   4. POST /verify-payment       — HMAC signature verify → Subscription
  *                                   row + flip user.subscriptionStatus
- *   5. PATCH /:id/cancel          â€” cancel subscription, downgrade user
+ *   5. PATCH /:id/cancel          — cancel subscription, downgrade user
  *                                   when no other ACTIVE subs remain
  *
  * Cases (16 total)
- * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+ * ────────────────
  *   GET /status (3): happy 200 with active sub serialized; 200 with
  *     subscription: null when no ACTIVE sub; 404 when user not found;
- *     401 when req.user missing (defensive â€” global verifyToken should
+ *     401 when req.user missing (defensive — global verifyToken should
  *     reject earlier, but the route guards anyway).
  *   GET /plans (2): 200 with formattedPlans (features JSON-parsed,
  *     price coerced to float); empty array fallback.
@@ -42,8 +42,8 @@
  *     ACTIVE when another sub is still active.
  *
  * Test pattern
- * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
- * Mirrors backend/test/routes/payments.test.js â€” prisma singleton
+ * ────────────
+ * Mirrors backend/test/routes/payments.test.js — prisma singleton
  * monkey-patch BEFORE requiring the router (vi.mock doesn't reliably
  * intercept CJS require in this repo's vitest config). razorpayService
  * is monkey-patched at module-singleton level (CJS self-mocking seam) so
@@ -60,11 +60,11 @@ const fs = requireCJS('node:fs');
 const path = requireCJS('node:path');
 const SERVER_JS = path.resolve(process.cwd(), 'server.js');
 
-// â”€â”€ env MUST be set before requiring the route â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── env MUST be set before requiring the route ─────────────────────────
 process.env.RAZORPAY_KEY_ID = 'rzp_test_subs_route';
 process.env.RAZORPAY_KEY_SECRET = 'rzp_secret_subs_route_fixture';
 
-// â”€â”€ prisma singleton patching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── prisma singleton patching ──────────────────────────────────────────
 const prisma = requireCJS('../../lib/prisma');
 
 prisma.user = prisma.user || {};
@@ -75,7 +75,7 @@ prisma.subscription.findFirst = vi.fn();
 prisma.subscription.findUnique = vi.fn();
 prisma.subscription.create = vi.fn();
 prisma.subscription.update = vi.fn();
-// reconcileSubscriptions() expires elapsed periods via updateMany â€” default to
+// reconcileSubscriptions() expires elapsed periods via updateMany — default to
 // a no-op (0 rows touched) so the lazy state machine is inert unless a test
 // opts into the stacking/promotion path.
 prisma.subscription.updateMany = vi.fn();
@@ -83,7 +83,7 @@ prisma.subscriptionPlan = prisma.subscriptionPlan || {};
 prisma.subscriptionPlan.findMany = vi.fn();
 prisma.subscriptionPlan.findUnique = vi.fn();
 prisma.$transaction = vi.fn(async (callback) => callback(prisma));
-// eventBus's best-effort emit walks automationRule.findMany â€” stub so it
+// eventBus's best-effort emit walks automationRule.findMany — stub so it
 // doesn't blow up the unit_tests env (no DATABASE_URL).
 prisma.automationRule = prisma.automationRule || {};
 prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
@@ -91,7 +91,7 @@ prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
 
-// â”€â”€ razorpayService singleton patching (CJS self-mocking seam) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── razorpayService singleton patching (CJS self-mocking seam) ──────────
 // The route does `const razorpayService = require('../services/razorpayService')`
 // at module-load. Replacing properties on the EXPORTED singleton works
 // because the route holds the module.exports object reference, not the
@@ -100,14 +100,14 @@ const razorpayService = requireCJS('../../services/razorpayService');
 razorpayService.createOrder = vi.fn();
 razorpayService.verifySignature = vi.fn();
 
-// â”€â”€ eventBus stubs (best-effort writeAudit / route-side emit) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── eventBus stubs (best-effort writeAudit / route-side emit) ──────────
 const eventBus = requireCJS('../../lib/eventBus');
 eventBus.emitEvent = vi.fn().mockResolvedValue(undefined);
 if (eventBus.safeEmitEvent) {
   eventBus.safeEmitEvent = vi.fn().mockResolvedValue(undefined);
 }
 
-// â”€â”€ posExpense stub (verify-payment logs the subscription spend to the POS
+// ── posExpense stub (verify-payment logs the subscription spend to the POS
 // drawer best-effort). The route lazily `require('../lib/posExpense')` then
 // destructures recordSubscriptionExpense at call time, so patching the
 // exported property here is picked up. Default: not recorded (no open shift).
@@ -124,7 +124,7 @@ const subscriptionsRouter = requireCJS('../../routes/subscriptions');
 
 function signToken({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
   // The user-level subscription surface (status / create-order / verify-payment
-  // / cancel / invoices) is gated by verifyRole(['ADMIN']) â€” see routes/
+  // / cancel / invoices) is gated by verifyRole(['ADMIN']) — see routes/
   // subscriptions.js. Default the token role to ADMIN so the auth gate passes
   // and we exercise the route body. Tests that want to PROBE the role gate
   // override this via the opts argument.
@@ -186,7 +186,7 @@ beforeEach(() => {
   prisma.subscriptionPlan.findUnique.mockResolvedValue(null);
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────
 describe('server paywall renewal bypass', () => {
   test('allows subscription self-serve endpoints before checkSubscription runs', () => {
     const src = fs.readFileSync(SERVER_JS, 'utf8');
@@ -206,10 +206,10 @@ describe('server paywall renewal bypass', () => {
   });
 });
 
-// GET /status â€” current user's subscription + trial state
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// GET /status — current user's subscription + trial state
+// ─────────────────────────────────────────────────────────────────────────
 
-describe('GET /status â€” current user trial + subscription', () => {
+describe('GET /status — current user trial + subscription', () => {
   test('200 with subscription serialized when an ACTIVE subscription exists', async () => {
     const trialEnd = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
     prisma.user.findUnique.mockResolvedValue({
@@ -293,11 +293,11 @@ describe('GET /status â€” current user trial + subscription', () => {
   });
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// GET /plans â€” active subscription plans
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────
+// GET /plans — active subscription plans
+// ─────────────────────────────────────────────────────────────────────────
 
-describe('GET /plans â€” active plans', () => {
+describe('GET /plans — active plans', () => {
   test('200 with features JSON-parsed and price coerced to float, ordered by price asc', async () => {
     prisma.subscriptionPlan.findMany.mockResolvedValue([
       {
@@ -324,7 +324,7 @@ describe('GET /plans â€” active plans', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
-    // `formatPlan` returns a richer envelope than the original spec assumed â€”
+    // `formatPlan` returns a richer envelope than the original spec assumed —
     // it includes `planKey`, `pricing`, `displayOrder`, `popular`, `accentColor`,
     // `cta`, `featuresLabel`, `isActive` in addition to the core 6. Pin the
     // load-bearing fields (price coerced to float, features JSON-parsed) via
@@ -338,8 +338,8 @@ describe('GET /plans â€” active plans', () => {
       features: ['leads', 'contacts'],
       description: 'Starter tier',
     });
-    expect(res.body[1].features).toEqual([]); // null â†’ []
-    // Ordering is `[{ displayOrder: 'asc' }, { price: 'asc' }]` â€” the
+    expect(res.body[1].features).toEqual([]); // null → []
+    // Ordering is `[{ displayOrder: 'asc' }, { price: 'asc' }]` — the
     // owner-controlled `displayOrder` wins, with `price` as the tie-breaker
     // (matches the /pricing page's stable left-to-right card layout).
     expect(prisma.subscriptionPlan.findMany).toHaveBeenCalledWith({
@@ -359,11 +359,11 @@ describe('GET /plans â€” active plans', () => {
   });
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// POST /create-order â€” Razorpay order creation
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────
+// POST /create-order — Razorpay order creation
+// ─────────────────────────────────────────────────────────────────────────
 
-describe('POST /create-order â€” Razorpay order creation', () => {
+describe('POST /create-order — Razorpay order creation', () => {
   test('400 when planId missing from body', async () => {
     const res = await authedPost(makeApp(), '/api/subscriptions/create-order', {});
 
@@ -407,17 +407,17 @@ describe('POST /create-order â€” Razorpay order creation', () => {
       planId: 2,
       planName: 'Pro',
     });
-    // The route passes `(chargeAmount, planId, chargeCurrency)` â€” the
+    // The route passes `(chargeAmount, planId, chargeCurrency)` — the
     // currency argument was added when /pricing gained the USD/INR toggle.
     // When the body doesn't pass `currency` + `billingPeriod`, chargeCurrency
     // falls back to the plan's own `currency` column.
     expect(razorpayService.createOrder).toHaveBeenCalledWith(1999, 2, 'INR');
   });
 
-  test('annual billing period multiplies the per-month rate Ã— 12 before charging Razorpay', async () => {
+  test('annual billing period multiplies the per-month rate × 12 before charging Razorpay', async () => {
     // The pricing JSON stores `annual: 499` (per-month rate for annual plan).
-    // When billingPeriod='annual', the route must charge 499 Ã— 12 = 5988,
-    // not 499 â€” matching the annual total shown on the /pricing card.
+    // When billingPeriod='annual', the route must charge 499 × 12 = 5988,
+    // not 499 — matching the annual total shown on the /pricing card.
     prisma.subscriptionPlan.findUnique.mockResolvedValue({
       id: 1,
       name: 'Starter',
@@ -425,13 +425,13 @@ describe('POST /create-order â€” Razorpay order creation', () => {
       currency: 'INR',
       billingIntervalDays: 365,
       pricing: JSON.stringify({
-        inr: { annual: 499, monthly: 649, yearAnnualLabel: 'â‚¹5,988 /user/year', yearMonthlyLabel: 'â‚¹7,788 /user/year' },
+        inr: { annual: 499, monthly: 649, yearAnnualLabel: '₹5,988 /user/year', yearMonthlyLabel: '₹7,788 /user/year' },
         usd: { annual: 6, monthly: 8, yearAnnualLabel: '$72 /user/year', yearMonthlyLabel: '$96 /user/year' },
       }),
     });
     razorpayService.createOrder.mockResolvedValue({
       id: 'order_annual_inr',
-      amount: 598800, // 5988 Ã— 100 paise
+      amount: 598800, // 5988 × 100 paise
       currency: 'INR',
     });
 
@@ -442,11 +442,11 @@ describe('POST /create-order â€” Razorpay order creation', () => {
     });
 
     expect(res.status).toBe(200);
-    // chargeAmount must be 499 Ã— 12 = 5988, not 499.
+    // chargeAmount must be 499 × 12 = 5988, not 499.
     expect(razorpayService.createOrder).toHaveBeenCalledWith(5988, 1, 'INR');
   });
 
-  test('monthly billing period charges the per-month rate as-is (no Ã—12)', async () => {
+  test('monthly billing period charges the per-month rate as-is (no ×12)', async () => {
     prisma.subscriptionPlan.findUnique.mockResolvedValue({
       id: 1,
       name: 'Starter',
@@ -454,7 +454,7 @@ describe('POST /create-order â€” Razorpay order creation', () => {
       currency: 'INR',
       billingIntervalDays: 30,
       pricing: JSON.stringify({
-        inr: { annual: 499, monthly: 649, yearAnnualLabel: 'â‚¹5,988 /user/year', yearMonthlyLabel: 'â‚¹7,788 /user/year' },
+        inr: { annual: 499, monthly: 649, yearAnnualLabel: '₹5,988 /user/year', yearMonthlyLabel: '₹7,788 /user/year' },
       }),
     });
     razorpayService.createOrder.mockResolvedValue({
@@ -470,16 +470,16 @@ describe('POST /create-order â€” Razorpay order creation', () => {
     });
 
     expect(res.status).toBe(200);
-    // Monthly rate used as-is â€” no multiplication.
+    // Monthly rate used as-is — no multiplication.
     expect(razorpayService.createOrder).toHaveBeenCalledWith(649, 1, 'INR');
   });
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// POST /verify-payment â€” signature verify + subscription create
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────
+// POST /verify-payment — signature verify + subscription create
+// ─────────────────────────────────────────────────────────────────────────
 
-describe('POST /verify-payment â€” HMAC signature verify + subscription create', () => {
+describe('POST /verify-payment — HMAC signature verify + subscription create', () => {
   test('400 when any of razorpayOrderId / razorpayPaymentId / razorpaySignature / planId missing', async () => {
     const res = await authedPost(makeApp(), '/api/subscriptions/verify-payment', {
       razorpayOrderId: 'order_x',
@@ -584,7 +584,7 @@ describe('POST /verify-payment â€” HMAC signature verify + subscription cre
       endDate: expect.any(String),
     });
     // Subscription row written with the user + tenant from the JWT
-    // (NOT the body â€” the route reads req.user.userId / tenantId).
+    // (NOT the body — the route reads req.user.userId / tenantId).
     expect(prisma.subscription.create).toHaveBeenCalledTimes(1);
     const createArg = prisma.subscription.create.mock.calls[0][0].data;
     expect(createArg.userId).toBe(7);
@@ -656,7 +656,7 @@ describe('POST /verify-payment â€” HMAC signature verify + subscription cre
     prisma.subscriptionPlan.findUnique.mockResolvedValue({
       id: 2, name: 'Pro', price: 1999, currency: 'INR', billingIntervalDays: 30, features: '[]',
     });
-    // No existing coverage at all (default findFirst â†’ null).
+    // No existing coverage at all (default findFirst → null).
     prisma.subscription.create.mockImplementation(({ data }) =>
       Promise.resolve({ id: 103, ...data }));
 
@@ -693,11 +693,11 @@ describe('POST /verify-payment â€” HMAC signature verify + subscription cre
     expect(res.status).toBe(200);
     expect(res.body.expenseRecorded).toBe(true);
     expect(res.body.posExpenseRecorded).toBe(true);
-    // Expense Management ledger â€” plan amount + name, scoped to JWT user/tenant.
+    // Expense Management ledger — plan amount + name, scoped to JWT user/tenant.
     expect(posExpense.recordSubscriptionExpenseEntry).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId: 1, userId: 7, amount: 1999, planName: 'Pro' }),
     );
-    // POS drawer â€” "Subscription: <plan>" reason.
+    // POS drawer — "Subscription: <plan>" reason.
     expect(posExpense.recordSubscriptionExpense).toHaveBeenCalledWith(
       expect.objectContaining({
         tenantId: 1, userId: 7, amount: 1999, reason: 'Subscription: Pro',
@@ -770,14 +770,14 @@ describe('POST /verify-payment â€” HMAC signature verify + subscription cre
   });
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// PATCH /:id/cancel â€” cancel + conditional user downgrade
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────
+// PATCH /:id/cancel — cancel + conditional user downgrade
+// ─────────────────────────────────────────────────────────────────────────
 
-describe('PATCH /:id/cancel â€” cancel + conditional user downgrade', () => {
+describe('PATCH /:id/cancel — cancel + conditional user downgrade', () => {
   test('404 when subscription id belongs to a different tenant (cross-tenant isolation)', async () => {
     // findFirst's where includes { userId, tenantId } so a cross-tenant
-    // id resolves to null â€” the route returns 404 without ever calling
+    // id resolves to null — the route returns 404 without ever calling
     // subscription.update.
     prisma.subscription.findFirst.mockResolvedValue(null);
 
@@ -800,7 +800,7 @@ describe('PATCH /:id/cancel â€” cancel + conditional user downgrade', () =>
     prisma.subscription.findFirst.mockImplementation(({ where }) => {
       if (where && where.id !== undefined) return Promise.resolve(target);
       // remaining-coverage check (status: { in: [...] }) or reconcile's
-      // ACTIVE/SCHEDULED probes â€” return whatever live coverage the test set.
+      // ACTIVE/SCHEDULED probes — return whatever live coverage the test set.
       return Promise.resolve(coverage);
     });
   }
@@ -842,17 +842,17 @@ describe('PATCH /:id/cancel â€” cancel + conditional user downgrade', () =>
       where: { id: 50 },
       data: { status: 'CANCELLED' },
     });
-    // User NOT downgraded â€” another ACTIVE sub still covers them.
+    // User NOT downgraded — another ACTIVE sub still covers them.
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Cross-cutting â€” every authenticated endpoint enforces JWT presence
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─────────────────────────────────────────────────────────────────────────
+// Cross-cutting — every authenticated endpoint enforces JWT presence
+// ─────────────────────────────────────────────────────────────────────────
 
-describe('Auth gate â€” verifyToken enforced on every endpoint', () => {
-  test('GET /status without Authorization header â†’ 401', async () => {
+describe('Auth gate — verifyToken enforced on every endpoint', () => {
+  test('GET /status without Authorization header → 401', async () => {
     const res = await request(makeApp()).get('/api/subscriptions/status');
     expect(res.status).toBe(401);
   });

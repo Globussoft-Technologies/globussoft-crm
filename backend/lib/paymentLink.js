@@ -1,9 +1,9 @@
-﻿// Gateway-agnostic hosted payment-link generator.
+// Gateway-agnostic hosted payment-link generator.
 //
 // Produces a single "click and pay" URL the customer can open from an email
-// â€” no app login required â€” backed by either Razorpay Payment Links or Stripe
+// — no app login required — backed by either Razorpay Payment Links or Stripe
 // Checkout Sessions. The MODE (test vs live) is whatever the configured API
-// keys are (rzp_testâ€¦ / sk_liveâ€¦), so this transparently supports both.
+// keys are (rzp_test… / sk_live…), so this transparently supports both.
 //
 // A PENDING Payment row is created with gatewayId set to the gateway's id
 // (Razorpay payment-link id / Stripe session id) so the existing webhooks in
@@ -15,7 +15,7 @@
 const prisma = require("./prisma");
 const { getTenantRazorpayClient } = require("./tenantPaymentGateway");
 
-// â”€â”€ Lazy Stripe loader (platform key â€” Stripe is not BYOK yet) â”€â”€â”€â”€â”€â”€
+// ── Lazy Stripe loader (platform key — Stripe is not BYOK yet) ──────
 let _stripe = null;
 function getStripe() {
   if (!_stripe && process.env.STRIPE_SECRET_KEY) {
@@ -28,14 +28,14 @@ function getStripe() {
   return _stripe;
 }
 
-// Razorpay is BYOK â€” always loaded per-tenant from DB, not cached globally.
+// Razorpay is BYOK — always loaded per-tenant from DB, not cached globally.
 
 function gatewayAvailability() {
   return { stripe: !!getStripe(), razorpay: true }; // razorpay availability checked per-tenant at call time
 }
 
-// Resolve which gateway to use. `pref` âˆˆ {auto, razorpay, stripe}.
-//   auto â†’ INR â†’ razorpay (tenant BYOK); else Stripe.
+// Resolve which gateway to use. `pref` ∈ {auto, razorpay, stripe}.
+//   auto → INR → razorpay (tenant BYOK); else Stripe.
 function resolveGateway(pref, currency) {
   const want = (pref || "auto").toLowerCase();
   if (want === "razorpay") return "razorpay";
@@ -76,14 +76,14 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
   const frontendBase = baseUrl || process.env.FRONTEND_URL || "http://localhost:5173";
   const amountMinor = Math.round(amount * 100);
   const invoiceLabel = invoice.invoiceNum || `Invoice #${invoice.id}`;
-  const label = tenantName ? `${tenantName} â€” ${invoiceLabel}` : invoiceLabel;
+  const label = tenantName ? `${tenantName} — ${invoiceLabel}` : invoiceLabel;
   const paymentDescription = description || label;
 
   try {
     if (gateway === "razorpay") {
       const tenantGateway = await getTenantRazorpayClient(tenantId);
       if (!tenantGateway) {
-        return { error: "Razorpay is not configured for this account. Please add your keys in Settings â†’ Payment.", code: "NO_GATEWAY" };
+        return { error: "Razorpay is not configured for this account. Please add your keys in Settings → Payment.", code: "NO_GATEWAY" };
       }
       const razorpay = tenantGateway.client;
       const callbackUrl = `${frontendBase}/p/payment/success`;
@@ -147,7 +147,7 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId,
           amount,
           currency: cur,
           gateway: "razorpay",
-          gatewayId: link.id, // plink_â€¦ â€” matched by the payment_link.paid webhook
+          gatewayId: link.id, // plink_… — matched by the payment_link.paid webhook
           status: "PENDING",
           tenantId,
           metadata: JSON.stringify(

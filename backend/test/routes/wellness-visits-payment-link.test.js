@@ -1,14 +1,14 @@
-﻿// @ts-check
+// @ts-check
 /**
  * Unit tests for the payment-link hook in PUT /api/wellness/visits/:id and the
  * regeneration endpoint POST /api/wellness/visits/:id/payment-link.
  *
  * Pins the following behaviour:
- *   1. PUT /visits/:id with status â†’ completed and amountCharged > 0 creates
+ *   1. PUT /visits/:id with status → completed and amountCharged > 0 creates
  *      an Invoice for the visit, calls createInvoicePaymentLink, and stores
  *      the returned URL on the visit row.
  *   2. The same PUT with amountCharged = 0 does NOT create an invoice/link.
- *   3. PUT transitions that are NOT status â†’ completed do NOT create a link.
+ *   3. PUT transitions that are NOT status → completed do NOT create a link.
  *   4. POST /visits/:id/payment-link regenerates a link for a completed,
  *      charged visit and persists it on the visit.
  *   5. Gateway failures from createInvoicePaymentLink are logged but do NOT
@@ -168,7 +168,7 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockResolvedValue({ id: 1, name: 'Enhanced Wellness' });
 });
 
-describe('PUT /api/wellness/visits/:id â€” payment link hook', () => {
+describe('PUT /api/wellness/visits/:id — payment link hook', () => {
   test('completing a charged visit creates an invoice + payment link and stores the URL', async () => {
     const res = await request(makeApp())
       .put('/api/wellness/visits/1')
@@ -319,7 +319,7 @@ describe('PUT /api/wellness/visits/:id â€” payment link hook', () => {
   });
 });
 
-describe('POST /api/wellness/visits/:id/payment-link â€” regeneration', () => {
+describe('POST /api/wellness/visits/:id/payment-link — regeneration', () => {
   test('returns a payment link for a completed charged visit and persists it', async () => {
     prisma.visit.findFirst.mockResolvedValue({
       id: 1,

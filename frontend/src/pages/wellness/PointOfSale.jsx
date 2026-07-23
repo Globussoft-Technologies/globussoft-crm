@@ -959,7 +959,7 @@ export default function PointOfSale() {
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
-                  <tr style={{ background: 'var(--surface-2, #f7f7f8)' }}>
+                  <tr style={tableHeaderRowStyle}>
                     <th style={thStyle}>Type</th>
                     <th style={thStyle}>Item</th>
                     <th style={thStyle}>Qty</th>
@@ -1029,7 +1029,7 @@ export default function PointOfSale() {
                     <div style={{ maxHeight: 320, overflow: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead>
-                          <tr style={{ background: 'var(--surface-2, #f7f7f8)' }}>
+                          <tr style={tableHeaderRowStyle}>
                             <th style={thStyle}>Customer</th>
                             <th style={thStyle}>Service</th>
                             <th style={thStyle}>Staff</th>
@@ -1279,7 +1279,7 @@ export default function PointOfSale() {
                 <input
                   type="number"
                   step="any"
-                  style={{ ...inputStyle, background: 'var(--surface-2, #f7f7f8)' }}
+                  style={{ ...inputStyle, background: 'var(--surface-hover, var(--bg-secondary, rgba(255,255,255,0.06)))' }}
                   value={resolvedOrderDiscount}
                   readOnly
                   aria-label="Resolved order discount (read-only)"
@@ -1404,14 +1404,21 @@ export default function PointOfSale() {
   );
 }
 
+const tableHeaderRowStyle = {
+  background: 'var(--surface-hover, var(--bg-secondary, rgba(255,255,255,0.06)))',
+  borderBottom: '1px solid var(--border-color)',
+};
 const thStyle = {
   textAlign: 'left',
   padding: '0.5rem 0.6rem',
   fontSize: '0.85rem',
   color: 'var(--text-secondary)',
-  fontWeight: 600,
+  fontWeight: 700,
 };
 const tdStyle = {
   padding: '0.5rem 0.6rem',
   fontSize: '0.95rem',
+  color: 'var(--text-primary)',
 };
+
+

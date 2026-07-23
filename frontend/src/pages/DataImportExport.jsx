@@ -1,57 +1,84 @@
-// Unified Import / Export hub. Replaces having to hop between Services /
-// Patients / Memberships / Products / Bookings just to push or pull a CSV.
-//
-// Implementation: this page is intentionally thin — it delegates the
-// actual export-download / import-modal / template-download / async-job
-// polling to the existing CsvImportExportToolbar component, exactly the
-// same one each entity page already uses. The dropdown only switches
-// which `entity` prop the toolbar renders against. So there is ONE code
-// path for CSV I/O across the app; the hub is a discovery surface, not
-// a parallel implementation.
-import { useMemo, useState } from 'react';
+// Unified Import / Export hub. The page is a thin discovery surface around the
+// shared CSV toolbar; endpoint config below decides whether a tenant should use
+// generic CRM CSV routes or wellness PHI-gated CSV routes.
+import { useContext, useMemo, useState } from 'react';
 import { Database, Download, Upload, Info } from 'lucide-react';
+import { AuthContext } from '../App';
 import CsvImportExportToolbar from '../components/wellness/CsvImportExportToolbar';
 
-// Mirrors the entities defined by routes/wellnessCsv.js + lib/csvEntities.js.
-// Order matches the dropdown the user sees. The description is rendered
-// inline so the admin knows exactly what each export will include before
-// they click the button.
-const ENTITIES = [
+const genericEndpoint = (entity, slug = entity) => ({
+  meta: `/api/csv/${slug}`,
+  template: `/api/csv/${slug}/template.csv`,
+  export: `/api/csv/${slug}/export.csv`,
+  import: `/api/csv/${slug}/import.csv`,
+});
+
+const GENERIC_ENTITIES = [
   {
-    key: 'customers',
-    label: 'Patients',
-    description: 'Patient master list — name, phone, email, DOB, gender, blood group, source, location, allergies, notes. PHI-gated.',
+    key: 'contacts',
+    label: 'Contacts',
+    description: 'CRM contact directory - name, email, phone, company, title, status, source and created date.',
+    endpoints: genericEndpoint('contacts'),
   },
   {
     key: 'services',
     label: 'Services',
-    description: 'Service catalog rows — name, category, ticket tier, base price, duration, marketing radius, description, image URL.',
+    description: 'Service catalog rows - name, category, ticket tier, base price, duration, description and active status.',
+    endpoints: genericEndpoint('services'),
+  },
+  {
+    key: 'products',
+    label: 'Products',
+    description: 'Product catalog rows - name, SKU, price, recurring flag, current stock and threshold.',
+    endpoints: genericEndpoint('products'),
+  },
+  {
+    key: 'membership-plans',
+    label: 'Membership Plans',
+    description: 'Membership plan rows - name, duration, price, currency, entitlements, description and active status.',
+    endpoints: genericEndpoint('membership-plans'),
+  },
+  {
+    key: 'bookings',
+    label: 'Bookings',
+    description: 'Booking rows - contact details, schedule, duration, meeting URL, notes and status.',
+    endpoints: genericEndpoint('bookings'),
+  },
+];
+
+const WELLNESS_ENTITIES = [
+  {
+    key: 'customers',
+    label: 'Patients',
+    description: 'Patient master list - name, phone, email, DOB, gender, blood group, source, allergies and notes. PHI-gated.',
+  },
+  {
+    key: 'services',
+    label: 'Services',
+    description: 'Service catalog rows - name, category, ticket tier, base price, duration, marketing radius and description.',
   },
   {
     key: 'products',
     label: 'Drugs / Products',
-    description: 'Inventory items — SKU/code, name, category, unit price, stock threshold, manufacturer, tax, barcode.',
+    description: 'Drug catalog rows - name, generic name, dosage form, strength, dosage defaults, notes and active status.',
   },
   {
     key: 'packages',
     label: 'Membership Packages',
-    description: 'Membership plans — name, validity (days), price, currency, entitlements (service × quantity).',
+    description: 'Membership plans - name, validity, price, currency and service entitlements.',
   },
   {
     key: 'bookings',
     label: 'Bookings / Visits',
-    description: 'Appointment ledger — date/time, patient, service, doctor, location, status, amount charged.',
-  },
-  {
-    key: 'invoices',
-    label: 'Invoices',
-    description: 'Billing records — invoice number, contact email, amount, status, due / issued dates, recurrence. Imports are upserts keyed by invoiceNum.',
+    description: 'Appointment ledger - date/time, patient, service, doctor, location, status, amount charged and notes.',
   },
 ];
 
 export default function DataImportExport() {
-  const [entityKey, setEntityKey] = useState(ENTITIES[0].key);
-  const entity = useMemo(() => ENTITIES.find((e) => e.key === entityKey) || ENTITIES[0], [entityKey]);
+  const { tenant } = useContext(AuthContext);
+  const entities = tenant?.vertical === 'wellness' ? WELLNESS_ENTITIES : GENERIC_ENTITIES;
+  const [entityKey, setEntityKey] = useState(entities[0].key);
+  const entity = useMemo(() => entities.find((e) => e.key === entityKey) || entities[0], [entities, entityKey]);
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out', maxWidth: 900 }}>
@@ -74,19 +101,16 @@ export default function DataImportExport() {
             onChange={(e) => setEntityKey(e.target.value)}
             style={{ flex: '1 1 220px', minWidth: 0, padding: '0.55rem 0.75rem', borderRadius: 8, border: '1px solid var(--border-color, rgba(255,255,255,0.15))', background: 'var(--surface-color, rgba(255,255,255,0.04))', color: 'var(--text-primary)', fontSize: '0.95rem' }}
           >
-            {ENTITIES.map((opt) => (
+            {entities.map((opt) => (
               <option key={opt.key} value={opt.key}>{opt.label}</option>
             ))}
           </select>
 
-          {/* Toolbar = the exact same component each entity page uses
-              (Services / Patients / Products / etc.). Re-keyed by entity
-              so its internal modal state resets cleanly when the user
-              switches data types mid-flight. */}
           <CsvImportExportToolbar
             key={entity.key}
             entity={entity.key}
             label={entity.label}
+            endpoints={entity.endpoints}
           />
         </div>
 
@@ -101,14 +125,14 @@ export default function DataImportExport() {
         <ul style={{ paddingLeft: '1.1rem', margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
           <li style={{ marginBottom: '0.3rem' }}>
             <Download size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />
-            <strong style={{ color: 'var(--text-primary)' }}>Export CSV</strong> — streams the full filtered list as a CSV download.
+            <strong style={{ color: 'var(--text-primary)' }}>Export CSV</strong> - streams the full filtered list as a CSV download.
           </li>
           <li style={{ marginBottom: '0.3rem' }}>
             <Upload size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 6 }} />
-            <strong style={{ color: 'var(--text-primary)' }}>Import CSV</strong> — opens the upload modal. Get the template first, fill in the rows, preview parses client-side, then submit. Files over 5MB or 5,000 rows queue in the background and email you on completion.
+            <strong style={{ color: 'var(--text-primary)' }}>Import CSV</strong> - opens the upload modal. Get the template first, fill in the rows, preview parses client-side, then submit.
           </li>
           <li>
-            Imports are <strong style={{ color: 'var(--text-primary)' }}>upserts</strong> — existing rows (matched by name or SKU depending on the entity) get updated, new rows are inserted. Errors surface row-by-row so you can fix and re-upload only the failing rows.
+            Imports are <strong style={{ color: 'var(--text-primary)' }}>upserts</strong> - existing rows get updated, new rows are inserted. Errors surface row-by-row so you can fix and re-upload only the failing rows.
           </li>
         </ul>
       </div>

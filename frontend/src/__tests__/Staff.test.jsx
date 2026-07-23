@@ -1,8 +1,8 @@
-/**
- * Staff.jsx — row action buttons + Inactive badge (#618).
+﻿/**
+ * Staff.jsx â€” row action buttons + Inactive badge (#618).
  *
  * Issue context
- * ─────────────
+ * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  *   Pre-fix the Staff Directory rendered ONLY a Delete button per row.
  *   Admins had no way to edit a row, deactivate without deleting,
  *   force a password reset, or re-send a stale invite. This commit
@@ -11,7 +11,7 @@
  *   whose User.deactivatedAt is non-null.
  *
  * Contracts pinned here
- * ─────────────────────
+ * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  *   1. For an ADMIN viewer, every non-ADMIN row renders 5 action
  *      buttons: Edit, Deactivate, Reset Password, Resend Invite, Delete.
  *   2. For an ADMIN row, Deactivate + Delete are hidden (admins are
@@ -19,7 +19,7 @@
  *      Resend Invite still render.
  *   3. A row whose deactivatedAt is non-null renders the "Inactive"
  *      badge AND the action button toggles to "Reactivate".
- *   4. Non-admin viewers see only "—" in the actions column (no buttons).
+ *   4. Non-admin viewers see only "â€”" in the actions column (no buttons).
  *   5. Clicking Edit opens the edit modal (data-testid="staff-edit-modal").
  */
 import React from 'react';
@@ -33,7 +33,7 @@ vi.mock('../utils/api', () => ({
   getAuthToken: () => 'test-token',
 }));
 
-// Stable notify object — keeping the same identity across renders avoids
+// Stable notify object â€” keeping the same identity across renders avoids
 // useCallback dep-flap that previously caused infinite loops. confirm/prompt
 // impls are restored in a global beforeEach because vitest.setup.js calls
 // vi.restoreAllMocks() between tests which resets vi.fn() implementations.
@@ -130,7 +130,7 @@ function renderStaff(viewerRole = 'ADMIN', overrides = {}) {
   );
 }
 
-describe('<Staff /> — row action buttons (#618)', () => {
+describe('<Staff /> â€” row action buttons (#618)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -139,7 +139,7 @@ describe('<Staff /> — row action buttons (#618)', () => {
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
 
-    // Row id=2 is non-ADMIN → all 5 buttons.
+    // Row id=2 is non-ADMIN â†’ all 5 buttons.
     expect(screen.getByTestId('staff-action-edit-2')).toBeInTheDocument();
     expect(screen.getByTestId('staff-action-deactivate-2')).toBeInTheDocument();
     expect(screen.getByTestId('staff-action-reset-password-2')).toBeInTheDocument();
@@ -154,7 +154,7 @@ describe('<Staff /> — row action buttons (#618)', () => {
     expect(screen.getByTestId('staff-action-edit-1')).toBeInTheDocument();
     expect(screen.getByTestId('staff-action-reset-password-1')).toBeInTheDocument();
     expect(screen.getByTestId('staff-action-resend-invite-1')).toBeInTheDocument();
-    // Admin self-protection — these two must NOT appear on an ADMIN row.
+    // Admin self-protection â€” these two must NOT appear on an ADMIN row.
     expect(screen.queryByTestId('staff-action-deactivate-1')).not.toBeInTheDocument();
     expect(screen.queryByTestId('staff-action-delete-1')).not.toBeInTheDocument();
   });
@@ -173,7 +173,7 @@ describe('<Staff /> — row action buttons (#618)', () => {
     expect(toggle.textContent).toMatch(/Reactivate/i);
   });
 
-  it('non-admin viewer sees no action buttons (— placeholder)', async () => {
+  it('non-admin viewer sees no action buttons (â€” placeholder)', async () => {
     renderStaff('USER');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
 
@@ -192,10 +192,10 @@ describe('<Staff /> — row action buttons (#618)', () => {
 });
 
 // Note: #818 revenue-goal chips in the edit modal are not yet shipped on
-// this page (see TODOS / PRD §1.5). The describe block is intentionally
-// empty until the feature lands; do not delete — re-author against the
+// this page (see TODOS / PRD Â§1.5). The describe block is intentionally
+// empty until the feature lands; do not delete â€” re-author against the
 // real surface when the chips ship.
-describe.skip('<Staff /> — revenue goal chips in edit modal (#818)', () => {
+describe.skip('<Staff /> â€” revenue goal chips in edit modal (#818)', () => {
   it.skip('feature not yet shipped on Staff.jsx', () => {});
 });
 
@@ -205,19 +205,19 @@ describe.skip('<Staff /> — revenue goal chips in edit modal (#818)', () => {
 // + admin row hiding, empty-state, and RBAC-gated invite button visibility.
 //
 // Vitest discipline applied here
-// ──────────────────────────────
-//   1. Stable mock object refs for useNotify (per the 2026-05-23 cron rule) —
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//   1. Stable mock object refs for useNotify (per the 2026-05-23 cron rule) â€”
 //      one notifyObj reused across every render so useCallback dependency
 //      arrays don't re-fire on each render and trigger infinite loops.
 //   2. getAllByText for labels that appear as filter chrome AND row badges
-//      (the role-pill filter test below — "USER" shows up as a pill + as the
+//      (the role-pill filter test below â€” "USER" shows up as a pill + as the
 //      role for 3 rows + as a <select> option).
-//   3. Pure pin: tests target the SUT's contracts only — no SUT edits.
+//   3. Pure pin: tests target the SUT's contracts only â€” no SUT edits.
 //
 // Run from:   frontend/
 // Command:    npx vitest run src/__tests__/Staff.test.jsx
 
-// Stable refs for the notify hook — re-used across the extension describes.
+// Stable refs for the notify hook â€” re-used across the extension describes.
 const notifyExtObj = {
   error: vi.fn(),
   success: vi.fn(),
@@ -226,7 +226,7 @@ const notifyExtObj = {
   prompt: vi.fn(() => Promise.resolve('')),
 };
 
-describe('<Staff /> — list rendering + stats bar', () => {
+describe('<Staff /> â€” list rendering + stats bar', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     Object.values(notifyExtObj).forEach((fn) => { if (typeof fn?.mockReset === 'function') fn.mockReset(); });
@@ -258,7 +258,7 @@ describe('<Staff /> — list rendering + stats bar', () => {
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
 
-    // "USER" appears in MANY surfaces — filter pill, role <select> options,
+    // "USER" appears in MANY surfaces â€” filter pill, role <select> options,
     // visible <RoleBadge> values. getAllByText is the right primitive per
     // the 2026-05-23 standing rule. The filter pill is the first element
     // matching with role="button"-shaped semantics.
@@ -274,7 +274,7 @@ describe('<Staff /> — list rendering + stats bar', () => {
   });
 });
 
-describe('<Staff /> — Invite modal (#891)', () => {
+describe('<Staff /> â€” Invite modal (#891)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -296,7 +296,7 @@ describe('<Staff /> — Invite modal (#891)', () => {
     expect(screen.getByTestId('staff-create-modal')).toBeInTheDocument();
 
     // X (Close) button dismisses. Use getAllByLabelText since the edit modal
-    // also has one Close button — but it isn't mounted here, so take [0].
+    // also has one Close button â€” but it isn't mounted here, so take [0].
     const closeBtns = screen.getAllByLabelText('Close');
     fireEvent.click(closeBtns[0]);
     expect(screen.queryByTestId('staff-create-modal')).not.toBeInTheDocument();
@@ -305,7 +305,7 @@ describe('<Staff /> — Invite modal (#891)', () => {
   it('submitting the Add Staff form POSTs to /api/staff with the form fields', async () => {
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
-    // Wait for the /api/roles fetch to populate availableRoles — without this
+    // Wait for the /api/roles fetch to populate availableRoles â€” without this
     // the RoleSelect popover renders an empty list and the click below would
     // race against the role load.
     await waitFor(() =>
@@ -319,7 +319,7 @@ describe('<Staff /> — Invite modal (#891)', () => {
 
     // Post-e7253919: pick the role via the upward-opening RoleSelect popover
     // (replaces the old 3-way native <select> split). Click the trigger, then
-    // click the "User" option to seed rbacRoleId — saveCreate requires it.
+    // click the "User" option to seed rbacRoleId â€” saveCreate requires it.
     fireEvent.click(screen.getByTestId('staff-create-role'));
     await waitFor(() =>
       expect(screen.getByRole('option', { name: /^User$/i })).toBeInTheDocument()
@@ -334,7 +334,7 @@ describe('<Staff /> — Invite modal (#891)', () => {
       expect(invite).toBeTruthy();
       const body = JSON.parse(invite[1].body);
       // saveCreate derives access tier + wellnessRole from the single Role pick.
-      // 'USER' → access tier USER, wellnessRole null (no catalog match).
+      // 'USER' â†’ access tier USER, wellnessRole null (no catalog match).
       expect(body).toEqual(expect.objectContaining({
         name: 'Asha Newhire',
         email: 'asha@enhancedwellness.in',
@@ -354,11 +354,11 @@ describe('<Staff /> — Invite modal (#891)', () => {
 // PUT /api/staff/:id with the full editable shape (covered by the "Save edit"
 // describe below). Kept skipped (not deleted) so the contract history is
 // visible in the test file.
-describe.skip('<Staff /> — inline role change (PUT /api/staff/:id/role) — removed in e7253919', () => {
+describe.skip('<Staff /> â€” inline role change (PUT /api/staff/:id/role) â€” removed in e7253919', () => {
   it.skip('contract moved to PUT /api/staff/:id via Edit modal', () => {});
 });
 
-describe('<Staff /> — Deactivate flow (PATCH /api/staff/:id)', () => {
+describe('<Staff /> â€” Deactivate flow (PATCH /api/staff/:id)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -393,13 +393,13 @@ describe('<Staff /> — Deactivate flow (PATCH /api/staff/:id)', () => {
         (c) => c[0] === '/api/staff/4' && c[1]?.method === 'PATCH'
       );
       expect(patch).toBeTruthy();
-      // Going from deactivatedAt-non-null → null means active=true.
+      // Going from deactivatedAt-non-null â†’ null means active=true.
       expect(JSON.parse(patch[1].body)).toEqual({ active: true });
     });
   });
 });
 
-describe('<Staff /> — empty list state', () => {
+describe('<Staff /> â€” empty list state', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -413,7 +413,7 @@ describe('<Staff /> — empty list state', () => {
   });
 });
 
-describe('<Staff /> — RBAC: USER viewer is read-only', () => {
+describe('<Staff /> â€” RBAC: USER viewer is read-only', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -422,7 +422,7 @@ describe('<Staff /> — RBAC: USER viewer is read-only', () => {
     renderStaff('USER');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
 
-    // No editable role <select> — for a wellness/non-admin viewer the role
+    // No editable role <select> â€” for a wellness/non-admin viewer the role
     // pill is a read-only <span>, never a <select> (SUT line 449-452).
     // Rishu's role is ADMIN: should appear as a RoleBadge, not a combobox.
     const comboboxes = screen.queryAllByRole('combobox');
@@ -448,11 +448,11 @@ describe('<Staff /> — RBAC: USER viewer is read-only', () => {
 //   - All new cases use existing notify.confirm auto-resolve (top-of-file mock
 //     resolves true), so destructive-action specs trigger their fetchApi POST.
 //   - Each spec asserts on the PUT/POST/DELETE call SHAPE (URL + method +
-//     body), not just on "the request fired" — pins the route contract.
+//     body), not just on "the request fired" â€” pins the route contract.
 //   - getAllByText / queryAllByRole used wherever a label appears in BOTH
 //     filter chrome + row cells (avoids the duplicate-text throw).
 
-describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
+describe('<Staff /> â€” Save edit (PUT /api/staff/:id)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -471,7 +471,7 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
     fireEvent.click(screen.getByTestId('staff-action-edit-2'));
     await waitFor(() => expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument());
 
-    // Click Save changes (no edits — pin the baseline shape).
+    // Click Save changes (no edits â€” pin the baseline shape).
     fireEvent.click(screen.getByTestId('staff-edit-save'));
 
     await waitFor(() => {
@@ -482,7 +482,7 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
       const body = JSON.parse(put[1].body);
       // saveEdit derives access tier + wellnessRole from the pre-populated
       // rbacRoleId (Dr. Harsh's primaryRole.id=200, key='doctor'). Doctor key
-      // → access tier USER (not in ACCESS_TIER_KEYS) + wellnessRole='doctor'
+      // â†’ access tier USER (not in ACCESS_TIER_KEYS) + wellnessRole='doctor'
       // (matches the wellness catalog).
       expect(body).toEqual(expect.objectContaining({
         name: 'Dr. Harsh Kumar',
@@ -491,8 +491,8 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
         wellnessRole: 'doctor',
         rbacRoleId: 200,
       }));
-      // commissionProfileId column is sent (null when unassigned) — pins the
-      // PRD Gap §1.5 shape so backend can clear / set the FK.
+      // commissionProfileId column is sent (null when unassigned) â€” pins the
+      // PRD Gap Â§1.5 shape so backend can clear / set the FK.
       expect(body).toHaveProperty('commissionProfileId');
       expect(body).not.toHaveProperty('password');
     });
@@ -500,7 +500,7 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
 
   it('picking a non-wellness role sends wellnessRole=null (cleared on the wire)', async () => {
     // Post-e7253919: there's no separate wellnessRole <select> in the Edit
-    // modal anymore — the single Role pick drives both access tier and
+    // modal anymore â€” the single Role pick drives both access tier and
     // wellnessRole via deriveWellnessRole. Picking a role whose key isn't in
     // the wellness catalog (e.g. 'User') results in wellnessRole=null on the
     // wire so the backend can clear the column.
@@ -527,7 +527,7 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
       );
       expect(put).toBeTruthy();
       const body = JSON.parse(put[1].body);
-      // 'USER' key doesn't match the wellness catalog → wellnessRole=null.
+      // 'USER' key doesn't match the wellness catalog â†’ wellnessRole=null.
       expect(body.wellnessRole).toBeNull();
       expect(body.role).toBe('USER');
       expect(body.rbacRoleId).toBe(102);
@@ -535,7 +535,7 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
   });
 });
 
-describe('<Staff /> — Reset password (POST /api/staff/:id/reset-password)', () => {
+describe('<Staff /> â€” Reset password (POST /api/staff/:id/reset-password)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -556,6 +556,29 @@ describe('<Staff /> — Reset password (POST /api/staff/:id/reset-password)', ()
       // Body is empty JSON object (SUT:247).
       expect(JSON.parse(post[1].body)).toEqual({});
     });
+  });
+
+  it('toggles manual reset password visibility', async () => {
+    renderStaff('ADMIN');
+    await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('staff-action-reset-password-2'));
+    await waitFor(() => expect(screen.getByTestId('staff-reset-modal')).toBeInTheDocument());
+
+    const input = screen.getByTestId('staff-reset-password-input');
+    expect(input).toHaveAttribute('type', 'text');
+    expect(input).toHaveAttribute('autocomplete', 'off');
+    expect(input).toHaveAttribute('data-lpignore', 'true');
+    expect(input).toHaveAttribute('data-1p-ignore', 'true');
+    expect(screen.getByRole('button', { name: /show manual password/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /show manual password/i }));
+    expect(input).toHaveAttribute('type', 'text');
+    expect(screen.getByRole('button', { name: /hide manual password/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /hide manual password/i }));
+    expect(input).toHaveAttribute('type', 'text');
+    expect(screen.getByRole('button', { name: /show manual password/i })).toBeInTheDocument();
   });
 
   it('manual password entry in the reset modal PUTs the new password', async () => {
@@ -586,7 +609,7 @@ describe('<Staff /> — Reset password (POST /api/staff/:id/reset-password)', ()
   });
 });
 
-describe('<Staff /> — Resend invite (POST /api/staff/:id/resend-invite)', () => {
+describe('<Staff /> â€” Resend invite (POST /api/staff/:id/resend-invite)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -607,7 +630,7 @@ describe('<Staff /> — Resend invite (POST /api/staff/:id/resend-invite)', () =
   });
 });
 
-describe('<Staff /> — Delete user (DELETE /api/staff/:id)', () => {
+describe('<Staff /> â€” Delete user (DELETE /api/staff/:id)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -627,7 +650,7 @@ describe('<Staff /> — Delete user (DELETE /api/staff/:id)', () => {
   });
 });
 
-describe('<Staff /> — wellness row renders read-only badge (not select)', () => {
+describe('<Staff /> â€” wellness row renders read-only badge (not select)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -638,7 +661,7 @@ describe('<Staff /> — wellness row renders read-only badge (not select)', () =
 
     // Post-e7253919: RoleBadge renders primaryRole.name on every row (read-only
     // span). The doctor / professional / helper labels come from each row's
-    // primaryRole.name; there's no per-row inline <select> anymore — role
+    // primaryRole.name; there's no per-row inline <select> anymore â€” role
     // editing happens via the Edit modal's RoleSelect popover (covered in the
     // "Save edit" describe).
     expect(screen.getByText('Doctor')).toBeInTheDocument();
@@ -655,7 +678,7 @@ describe('<Staff /> — wellness row renders read-only badge (not select)', () =
   });
 });
 
-describe('<Staff /> — Empty filter result copy', () => {
+describe('<Staff /> â€” Empty filter result copy', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -664,7 +687,7 @@ describe('<Staff /> — Empty filter result copy', () => {
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
 
-    // Click the Managers filter pill — STAFF_ROWS has 0 managers, so this
+    // Click the Managers filter pill â€” STAFF_ROWS has 0 managers, so this
     // exercises the "filteredStaff.length === 0 && staff.length > 0" branch.
     const managerPill = screen.getByText(/0 Managers/);
     fireEvent.click(managerPill);
@@ -679,24 +702,24 @@ describe('<Staff /> — Empty filter result copy', () => {
   });
 });
 
-// Cashier optgroup (PRD_WELLNESS_RBAC DD-5.1) — currently surfaced via the
+// Cashier optgroup (PRD_WELLNESS_RBAC DD-5.1) â€” currently surfaced via the
 // per-tenant /api/wellness/role-types catalog rather than a hardcoded
 // optgroup. Skipped until the role-type catalog seeding is pinned in the
 // AuthContext.vertical='wellness' test fixture.
-describe.skip('<Staff /> — Edit modal: cashier wellnessRole option (DD-5.1)', () => {
-  it.skip('catalog-driven option list — pinned via /api/wellness/role-types', () => {});
+describe.skip('<Staff /> â€” Edit modal: cashier wellnessRole option (DD-5.1)', () => {
+  it.skip('catalog-driven option list â€” pinned via /api/wellness/role-types', () => {});
 });
 
-describe('<Staff /> — Edit modal: commission profile dropdown population (PRD Gap §1.5)', () => {
+describe('<Staff /> â€” Edit modal: commission profile dropdown population (PRD Gap Â§1.5)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
 
-  it('renders one <option> per active commission profile + "— None —" sentinel', async () => {
+  it('renders one <option> per active commission profile + "â€” None â€”" sentinel', async () => {
     const profiles = [
       { id: 10, name: 'Standard 10%', isActive: true },
       { id: 11, name: 'Stylist Tiered', isActive: true },
-      { id: 12, name: 'Legacy 5%',     isActive: false }, // inactive — filtered out
+      { id: 12, name: 'Legacy 5%',     isActive: false }, // inactive â€” filtered out
     ];
     renderStaff('ADMIN', { '/api/staff/commission-profiles': profiles });
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
@@ -711,13 +734,13 @@ describe('<Staff /> — Edit modal: commission profile dropdown population (PRD 
     expect(screen.getByRole('option', { name: 'Stylist Tiered' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Legacy 5%' })).not.toBeInTheDocument();
 
-    // Sentinel: "— None —" option for unassigned (value="").
+    // Sentinel: "â€” None â€”" option for unassigned (value="").
     const noneOption = screen.getAllByRole('option').find((o) => o.value === '' && /None/.test(o.textContent));
     expect(noneOption).toBeDefined();
   });
 });
 
-describe('<Staff /> — Invite modal: cancel without submit', () => {
+describe('<Staff /> â€” Invite modal: cancel without submit', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -743,7 +766,7 @@ describe('<Staff /> — Invite modal: cancel without submit', () => {
   });
 });
 
-describe('<Staff /> — filter toggle clears the filter when re-clicked', () => {
+describe('<Staff /> â€” filter toggle clears the filter when re-clicked', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -759,7 +782,7 @@ describe('<Staff /> — filter toggle clears the filter when re-clicked', () => 
     await waitFor(() => expect(screen.queryByText('Dr. Harsh Kumar')).not.toBeInTheDocument());
     expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument();
 
-    // Click the SAME pill again — should clear the filter (setFilter(null)).
+    // Click the SAME pill again â€” should clear the filter (setFilter(null)).
     fireEvent.click(adminPill);
 
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());

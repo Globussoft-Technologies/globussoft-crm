@@ -1,15 +1,15 @@
-import React, { useState, useEffect, useContext, useRef } from 'react';
+﻿import React, { useState, useEffect, useContext, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, MailPlus, X, UserPlus, Search, Filter as FilterIcon, ChevronDown } from 'lucide-react';
+import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, MailPlus, X, UserPlus, Search, Filter as FilterIcon, ChevronDown, Eye, EyeOff } from 'lucide-react';
 import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { formatDate } from '../utils/date';
 import { SUB_BRAND_IDS, SUB_BRAND_LABEL } from '../utils/travelSubBrand';
 
 // Parse a stored User.subBrandAccess (JSON string / array / null) into a clean
-// array of known sub-brand ids for the picker. null/empty → [] (= all brands).
+// array of known sub-brand ids for the picker. null/empty â†’ [] (= all brands).
 function parseSubBrandAccess(raw) {
   if (!raw) return [];
   try {
@@ -24,7 +24,7 @@ function parseSubBrandAccess(raw) {
 // admin scope a manager/staff to one or more brands. ADMINs always have all
 // brands, so the picker is replaced with a note for them. An empty selection
 // means "all brands" (the backward-compatible default). Rendered ONLY for
-// travel-vertical tenants — generic/wellness never see it.
+// travel-vertical tenants â€” generic/wellness never see it.
 function SubBrandAccessPicker({ value, onChange, accessTier }) {
   if (accessTier === 'ADMIN') {
     return (
@@ -66,7 +66,7 @@ function SubBrandAccessPicker({ value, onChange, accessTier }) {
       </div>
       <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
         {value.length === 0
-          ? 'No brand selected → access to all sub-brands.'
+          ? 'No brand selected â†’ access to all sub-brands.'
           : `Access limited to: ${value.map((id) => SUB_BRAND_LABEL[id]).join(', ')}.`}
       </div>
     </div>
@@ -74,10 +74,10 @@ function SubBrandAccessPicker({ value, onChange, accessTier }) {
 }
 
 // Geo-tagged attendance (wellness only). Toggle-chip picker for assigning a
-// staff member to one or more clinic Locations — mirrors SubBrandAccessPicker
+// staff member to one or more clinic Locations â€” mirrors SubBrandAccessPicker
 // above. An empty selection means "no geofence" (the staff member can clock
 // in/out from anywhere; see backend/lib/attendanceGeofence.js's "[] = not
-// enforced" rule), unlike sub-brand access where empty means "all brands" —
+// enforced" rule), unlike sub-brand access where empty means "all brands" â€”
 // worth calling out since the two pickers look identical but empty means
 // opposite things.
 function LocationAccessPicker({ value, onChange, locations }) {
@@ -117,7 +117,7 @@ function LocationAccessPicker({ value, onChange, locations }) {
                 boxShadow: on ? '0 0 0 2px rgba(217,164,104,0.35)' : 'none',
               }}
             >
-              {on && <span aria-hidden="true">✓</span>}
+              {on && <span aria-hidden="true">âœ“</span>}
               {loc.name}{loc.city ? ` (${loc.city})` : ''}
             </button>
           );
@@ -125,7 +125,7 @@ function LocationAccessPicker({ value, onChange, locations }) {
       </div>
       <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
         {value.length === 0
-          ? 'No clinic selected → check-in allowed from anywhere.'
+          ? 'No clinic selected â†’ check-in allowed from anywhere.'
           : `Must check in within range of: ${locations.filter((l) => value.includes(l.id)).map((l) => l.name).join(', ')}.`}
       </div>
     </div>
@@ -150,7 +150,7 @@ function deriveAccessTier(rbacRole) {
 }
 
 // If the picked RBAC role's key matches a wellness role catalog entry
-// (case-insensitive — RBAC keys are uppercase, catalog keys are lowercase),
+// (case-insensitive â€” RBAC keys are uppercase, catalog keys are lowercase),
 // auto-assign that wellnessRole so reports/auto-routing keep working without
 // the admin having to pick it separately.
 function deriveWellnessRole(rbacRole, wellnessRoleTypes) {
@@ -172,7 +172,7 @@ function displayRole(member) {
   return member.role;
 }
 
-// #618 — palette for the per-row action buttons. Each kind picks a hue
+// #618 â€” palette for the per-row action buttons. Each kind picks a hue
 // that matches the action's intent (edit=neutral, deactivate=amber,
 // reset=blue, invite=teal, delete=red).
 const ACTION_PALETTE = {
@@ -182,7 +182,7 @@ const ACTION_PALETTE = {
   reset:       { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)', bd: 'rgba(59,130,246,0.25)' },
   invite:      { fg: '#0ea5e9', bg: 'rgba(14,165,233,0.1)', bd: 'rgba(14,165,233,0.25)' },
   delete:      { fg: '#ef4444', bg: 'rgba(239,68,68,0.1)', bd: 'rgba(239,68,68,0.25)' },
-  // RBAC per-row "Permissions" button — matches the ADMIN role badge hue at
+  // RBAC per-row "Permissions" button â€” matches the ADMIN role badge hue at
   // line 9 above (purple #a855f7) so the action visually signals "admin /
   // security tooling" without duplicating any other palette entry.
   permissions: { fg: '#a855f7', bg: 'rgba(168,85,247,0.1)', bd: 'rgba(168,85,247,0.25)' },
@@ -207,10 +207,10 @@ function actionButtonStyle(kind) {
 
 // Unified role badge. Prefers the assigned RBAC role's name (Doctor / Nurse /
 // Receptionist / custom) and falls back to the legacy access tier so every
-// row renders a single, non-stacked badge — keeps the Role column clean even
+// row renders a single, non-stacked badge â€” keeps the Role column clean even
 // for staff whose RBAC backfill hasn't run yet.
 function RoleBadge({ member }) {
-  const name = member.primaryRole?.name || member.role || '—';
+  const name = member.primaryRole?.name || member.role || 'â€”';
   const key = String(member.primaryRole?.key || member.role || '').toUpperCase();
   const tierCfg = ROLE_CONFIG[key];
   // System access tiers keep their distinctive hues; everything else uses the
@@ -233,14 +233,14 @@ function RoleBadge({ member }) {
 
 // Upward-opening role picker for the Add/Edit Staff modals. Replaces the
 // native <select> so the menu always opens ABOVE the trigger (the trigger
-// sits near the bottom of the modal — a native select would open downward
+// sits near the bottom of the modal â€” a native select would open downward
 // and clip off-screen on smaller viewports). max-height + overflow-y:auto
 // give it a built-in scrollbar once the role catalog grows past ~7 items.
 //
 // Intentionally lean: click-outside to close, click-option to pick + close,
-// no keyboard nav / type-ahead — the native select features that go missing
-// are low-traffic for this 5–15 option picker.
-function RoleSelect({ value, onChange, options, testId, placeholder = '— Select a role —' }) {
+// no keyboard nav / type-ahead â€” the native select features that go missing
+// are low-traffic for this 5â€“15 option picker.
+function RoleSelect({ value, onChange, options, testId, placeholder = 'â€” Select a role â€”' }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -255,11 +255,11 @@ function RoleSelect({ value, onChange, options, testId, placeholder = '— Selec
 
   const selected = options.find((o) => String(o.id) === String(value));
   const label = selected
-    ? `${selected.name}${selected.description ? ` — ${selected.description}` : ''}`
+    ? `${selected.name}${selected.description ? ` â€” ${selected.description}` : ''}`
     : placeholder;
 
   // Selected highlight uses the theme's accent token so the colour swap
-  // happens automatically with the rest of the palette — avoids the
+  // happens automatically with the rest of the palette â€” avoids the
   // hardcoded teal-on-light-grey clash that showed up in light mode.
   const selectedBg = 'color-mix(in srgb, var(--accent-color) 14%, transparent)';
   const hoverBg = 'var(--subtle-bg-3)';
@@ -357,7 +357,7 @@ function RoleSelect({ value, onChange, options, testId, placeholder = '— Selec
                 {opt.name}
                 {opt.description && (
                   <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>
-                    {' — '}{opt.description}
+                    {' â€” '}{opt.description}
                   </span>
                 )}
               </button>
@@ -372,7 +372,7 @@ function RoleSelect({ value, onChange, options, testId, placeholder = '— Selec
 export default function Staff() {
   const notify = useNotify();
   // #323: a clinic Manager (role=MANAGER) was seeing Delete buttons on
-  // every staff row — including the Owner and other Admins. The DELETE
+  // every staff row â€” including the Owner and other Admins. The DELETE
   // /api/staff/:id endpoint is already gated by verifyRole(["ADMIN"]),
   // so the click would 403, but the UI shouldn't dangle the button at
   // all. Hide both the Delete control and the inline RBAC role select
@@ -404,7 +404,7 @@ export default function Staff() {
   // the user clicks elsewhere on the page.
   const [filterOpen, setFilterOpen] = useState(false);
   const filterPanelRef = useRef(null);
-  // #618 — edit-modal state. null when closed; { id, name, email, role,
+  // #618 â€” edit-modal state. null when closed; { id, name, email, role,
   // wellnessRole } when an admin clicked Edit on a row.
   const [editing, setEditing] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -412,32 +412,33 @@ export default function Staff() {
   // direct password-setting path from the same staff-row action.
   const [resettingPassword, setResettingPassword] = useState(null);
   const [resetPasswordValue, setResetPasswordValue] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
   // Add-Staff modal state. null when closed; the form draft when open.
   // POSTs to /api/staff which creates a user inside the current tenant.
   // The created user lands on the role-aware Dashboard variant on first login.
   const [creating, setCreating] = useState(null);
   const [savingCreate, setSavingCreate] = useState(false);
-  // PRD Gap §1.5 — commission profiles are listed in the edit modal as a
+  // PRD Gap Â§1.5 â€” commission profiles are listed in the edit modal as a
   // dropdown so admins can assign payroll rules per staff member.
   const [commissionProfiles, setCommissionProfiles] = useState([]);
   // RBAC roles available in the current tenant. Populates the "Job role"
   // dropdown in both Add Staff + Edit Staff modals so admins can assign
-  // any custom role (Doctor / Nurse / Receptionist / Telecaller / …)
+  // any custom role (Doctor / Nurse / Receptionist / Telecaller / â€¦)
   // without going through a separate Roles & Permissions step.
   const [availableRoles, setAvailableRoles] = useState([]);
-  // Per-tenant wellness role catalog (doctor / professional / nurse / …
-  // plus any custom rows the admin added via Settings → Wellness Role
+  // Per-tenant wellness role catalog (doctor / professional / nurse / â€¦
+  // plus any custom rows the admin added via Settings â†’ Wellness Role
   // Types). Populates the "Wellness role" dropdown in both modals so
   // POST /api/staff doesn't reject a hardcoded value that isn't in the
   // tenant's catalog (the cause of the "Unknown wellness role for this
   // tenant" toast on freshly-signed-up wellness tenants).
   const [wellnessRoleTypes, setWellnessRoleTypes] = useState([]);
-  // Geo-tagged attendance (wellness only) — clinic locations for the
+  // Geo-tagged attendance (wellness only) â€” clinic locations for the
   // multi-select assignment picker in the Edit Staff modal, plus a
   // saving/loading flag for that picker's own Save button (kept separate
   // from savingEdit since location assignment is a distinct PUT call, not
-  // part of the staff-fields payload — see PUT /api/wellness/location-assignments/:userId).
-  // (Namespaced under /location-assignments, not /staff — the wellness API
+  // part of the staff-fields payload â€” see PUT /api/wellness/location-assignments/:userId).
+  // (Namespaced under /location-assignments, not /staff â€” the wellness API
   // reserves /wellness/staff/* for a 410 redirect to /api/staff per #348.)
   const [clinicLocations, setClinicLocations] = useState([]);
   const [savingLocations, setSavingLocations] = useState(false);
@@ -482,14 +483,14 @@ export default function Staff() {
       const data = await fetchApi('/api/staff/commission-profiles');
       setCommissionProfiles(Array.isArray(data) ? data.filter((p) => p.isActive !== false) : []);
     } catch {
-      // Non-fatal — the dropdown just shows "(none)" + the assigned profile
+      // Non-fatal â€” the dropdown just shows "(none)" + the assigned profile
       // is preserved on save because we only send commissionProfileId when
       // it actually changed.
       setCommissionProfiles([]);
     }
   };
 
-  // Geo-tagged attendance (wellness only) — clinic locations for the
+  // Geo-tagged attendance (wellness only) â€” clinic locations for the
   // assignment picker. Non-fatal on failure: the picker just shows nothing
   // to select, same degrade-gracefully pattern as commission profiles.
   const loadClinicLocations = async () => {
@@ -504,7 +505,7 @@ export default function Staff() {
   // Fetch the list of roles in the current tenant. Filtered to STAFF (no
   // CUSTOMER, no platform OWNER) since this page only manages staff. The
   // dropdown options populate from /api/roles so a new Custom role becomes
-  // immediately assignable from the Add Staff modal — no code change needed.
+  // immediately assignable from the Add Staff modal â€” no code change needed.
   const loadAvailableRoles = async () => {
     if (!canManageStaff) return;
     try {
@@ -521,7 +522,7 @@ export default function Staff() {
       });
       setAvailableRoles(staffOnly);
     } catch {
-      // Non-fatal — the dropdown just hides if the catalog can't be loaded.
+      // Non-fatal â€” the dropdown just hides if the catalog can't be loaded.
       setAvailableRoles([]);
     }
   };
@@ -536,7 +537,7 @@ export default function Staff() {
       const data = await fetchApi('/api/wellness/role-types?activeOnly=1');
       setWellnessRoleTypes(Array.isArray(data) ? data : []);
     } catch {
-      // Non-fatal — the dropdown collapses to "— None —" if the catalog
+      // Non-fatal â€” the dropdown collapses to "â€” None â€”" if the catalog
       // can't be loaded, and the admin can still pick a non-wellness
       // role for the user.
       setWellnessRoleTypes([]);
@@ -568,7 +569,7 @@ export default function Staff() {
     }
   };
 
-  // #618 — Edit / Deactivate / Reset Password / Resend Invite handlers.
+  // #618 â€” Edit / Deactivate / Reset Password / Resend Invite handlers.
   const openEdit = (member) => {
     const rbacRoleId = member.primaryRole?.id ? String(member.primaryRole.id) : '';
     const rbacRole = availableRoles.find((r) => String(r.id) === String(rbacRoleId));
@@ -576,7 +577,7 @@ export default function Staff() {
       id: member.id,
       name: member.name || '',
       email: member.email || '',
-      // PRD Gap §1.5 — current commission-profile assignment (null = unassigned).
+      // PRD Gap Â§1.5 â€” current commission-profile assignment (null = unassigned).
       commissionProfileId: member.commissionProfileId == null ? '' : String(member.commissionProfileId),
       // Pre-populate the single Role dropdown from the member's current
       // primary RBAC role (surfaced by GET /api/staff). Empty string = unset
@@ -588,7 +589,7 @@ export default function Staff() {
       wellnessRoleTouched: false,
       // Travel-only: pre-fill the sub-brand picker from the member's current scope.
       subBrandAccess: parseSubBrandAccess(member.subBrandAccess),
-      // Geo-tagged attendance (wellness only) — filled in async below once
+      // Geo-tagged attendance (wellness only) â€” filled in async below once
       // GET /staff/:userId/locations returns; empty until then so the
       // picker renders with nothing checked rather than stale data.
       password: '',
@@ -600,11 +601,11 @@ export default function Staff() {
           const ids = Array.isArray(res?.locations) ? res.locations.map((l) => l.id) : [];
           setEditing((prev) => (prev && prev.id === member.id ? { ...prev, locationIds: ids } : prev));
         })
-        .catch(() => { /* picker just stays empty — non-fatal */ });
+        .catch(() => { /* picker just stays empty â€” non-fatal */ });
     }
   };
 
-  // Geo-tagged attendance (wellness only) — saved independently of saveEdit
+  // Geo-tagged attendance (wellness only) â€” saved independently of saveEdit
   // since it's a separate join-table endpoint, not a field on the User row.
   const saveLocations = async () => {
     if (!editing) return;
@@ -630,7 +631,7 @@ export default function Staff() {
       notify.error('Manual password must be at least 6 characters.');
       return;
     }
-    // Same single-pick → 3-field derivation as saveCreate. The backend
+    // Same single-pick â†’ 3-field derivation as saveCreate. The backend
     // contract still accepts role + wellnessRole + rbacRoleId independently;
     // we just stop asking the admin to fill them out separately.
     const rbacRole = availableRoles.find((r) => String(r.id) === String(editing.rbacRoleId));
@@ -648,10 +649,10 @@ export default function Staff() {
           email: editing.email,
           role: accessTier,
           wellnessRole,
-          // PRD Gap §1.5 — number or null. '' becomes null (clear assignment).
+          // PRD Gap Â§1.5 â€” number or null. '' becomes null (clear assignment).
           commissionProfileId: editing.commissionProfileId === '' ? null : Number(editing.commissionProfileId),
           rbacRoleId: parseInt(editing.rbacRoleId, 10),
-          // Travel-only: scope to brands. Admin/empty → null (all brands). The
+          // Travel-only: scope to brands. Admin/empty â†’ null (all brands). The
           // backend ignores this entirely for generic/wellness tenants.
           ...(isTravel
             ? { subBrandAccess: accessTier === 'ADMIN' || !editing.subBrandAccess?.length ? null : editing.subBrandAccess }
@@ -672,7 +673,7 @@ export default function Staff() {
   };
 
   // Open the Add-Staff modal with empty defaults. After the role-consolidation
-  // there's a single rbacRoleId field — saveCreate derives the legacy access
+  // there's a single rbacRoleId field â€” saveCreate derives the legacy access
   // tier (ADMIN/MANAGER/USER) and wellnessRole from the picked role's key.
   const openCreate = () => {
     setCreating({
@@ -694,13 +695,13 @@ export default function Staff() {
     const name = (creating.name || '').trim();
     const email = (creating.email || '').trim();
     const password = creating.password || '';
-    if (!name) { notify.error('Please enter the staff member’s name.'); return; }
+    if (!name) { notify.error('Please enter the staff memberâ€™s name.'); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { notify.error('Please enter a valid work email address.'); return; }
     if (password.length < 6) { notify.error('Password must be at least 6 characters.'); return; }
     if (!creating.rbacRoleId) { notify.error('Please choose a role.'); return; }
     // Derive the legacy access tier from the single Role pick. If the admin
     // has not explicitly touched the wellness-role dropdown, auto-derive it
-    // from the RBAC role key (Doctor → doctor, etc.) so the user lands in the
+    // from the RBAC role key (Doctor â†’ doctor, etc.) so the user lands in the
     // right booking dropdown automatically. The dropdown is still editable for
     // cases where a manager/professional needs a different clinical tag.
     const rbacRole = availableRoles.find((r) => String(r.id) === String(creating.rbacRoleId));
@@ -720,7 +721,7 @@ export default function Staff() {
           role: accessTier,
           wellnessRole,
           rbacRoleId: parseInt(creating.rbacRoleId, 10),
-          // Travel-only: scope to brands. Admin/empty → null (all brands). The
+          // Travel-only: scope to brands. Admin/empty â†’ null (all brands). The
           // backend ignores this entirely for generic/wellness tenants.
           ...(isTravel
             ? { subBrandAccess: accessTier === 'ADMIN' || !creating.subBrandAccess?.length ? null : creating.subBrandAccess }
@@ -771,6 +772,7 @@ export default function Staff() {
   const closeResetPassword = () => {
     setResettingPassword(null);
     setResetPasswordValue('');
+    setShowResetPassword(false);
   };
 
   const sendResetLink = async () => {
@@ -849,7 +851,7 @@ export default function Staff() {
   const adminCount = staff.filter(s => s.role === 'ADMIN').length;
 
   // When the RBAC role changes and the admin hasn't manually picked a
-  // wellness role, auto-derive it from the role key (Doctor → doctor). The
+  // wellness role, auto-derive it from the role key (Doctor â†’ doctor). The
   // dropdown below still lets the admin override.
   const deriveDefaultWellnessRole = (rbacRoleId) => {
     const rbacRole = availableRoles.find((r) => String(r.id) === String(rbacRoleId));
@@ -885,7 +887,7 @@ export default function Staff() {
     }
     return true;
   });
-  // Counts ONLY the filters that live inside the dropdown panel — drives the
+  // Counts ONLY the filters that live inside the dropdown panel â€” drives the
   // numeric badge on the Filter button. Search lives outside the dropdown and
   // role-pill filter lives in the stats bar above, so they're surfaced visibly
   // elsewhere already.
@@ -913,7 +915,7 @@ export default function Staff() {
           </p>
         </div>
         {/* Admin-only Add Staff CTA. Uses the wellness teal token first and
-            falls back to the generic accent color — matches the standing
+            falls back to the generic accent color â€” matches the standing
             rule for primary CTAs (CLAUDE.md). Non-admins never see it. */}
         {canManageStaff && (
           <button
@@ -998,7 +1000,7 @@ export default function Staff() {
                   cursor: 'pointer', transition: 'all 0.2s',
                 }}
               >
-                {showAvailability ? '✓ Availability' : 'Availability'}
+                {showAvailability ? 'âœ“ Availability' : 'Availability'}
               </button>
             </div>
           )}
@@ -1015,7 +1017,7 @@ export default function Staff() {
                 onClick={() => setAvailDate(new Date(availDate.getTime() - 86400000))}
                 style={{ padding: '0.3rem 0.6rem', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--subtle-bg-2)', cursor: 'pointer', fontSize: '0.8rem' }}
               >
-                ← Prev
+                â† Prev
               </button>
               <span style={{ fontSize: '0.85rem', fontWeight: '500', minWidth: '120px', textAlign: 'center' }}>
                 {availDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
@@ -1024,7 +1026,7 @@ export default function Staff() {
                 onClick={() => setAvailDate(new Date(availDate.getTime() + 86400000))}
                 style={{ padding: '0.3rem 0.6rem', borderRadius: '4px', border: '1px solid var(--border-color)', background: 'var(--subtle-bg-2)', cursor: 'pointer', fontSize: '0.8rem' }}
               >
-                Next →
+                Next â†’
               </button>
               <button
                 onClick={() => setAvailDate(new Date())}
@@ -1070,7 +1072,7 @@ export default function Staff() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                     <div>
                       <div style={{ fontWeight: '500', fontSize: '0.85rem', marginBottom: '0.25rem' }}>
-                        {member.name || '—'}
+                        {member.name || 'â€”'}
                       </div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                         {displayRole(member)}
@@ -1087,7 +1089,7 @@ export default function Staff() {
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      {member.available ? '● Available' : '✕ On Leave'}
+                      {member.available ? 'â— Available' : 'âœ• On Leave'}
                     </div>
                   </div>
                   {!member.available && member.leave && (
@@ -1095,7 +1097,7 @@ export default function Staff() {
                       <div>{member.leave.leaveType}</div>
                       <div>
                         {new Date(member.leave.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                        {' – '}
+                        {' â€“ '}
                         {new Date(member.leave.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                       </div>
                     </div>
@@ -1115,7 +1117,7 @@ export default function Staff() {
           </h3>
           {staff.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-              {/* Inline search — name + email, case-insensitive substring match. */}
+              {/* Inline search â€” name + email, case-insensitive substring match. */}
               <div style={{ position: 'relative', width: 260 }}>
                 <Search
                   size={14}
@@ -1125,7 +1127,7 @@ export default function Staff() {
                   type="search"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search by name or email…"
+                  placeholder="Search by name or emailâ€¦"
                   aria-label="Search staff by name or email"
                   data-testid="staff-search-input"
                   className="input-field"
@@ -1299,7 +1301,7 @@ export default function Staff() {
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                   >
                     <td style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>
-                      {member.name || '—'}
+                      {member.name || 'â€”'}
                     </td>
                     <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>
                       {member.email}
@@ -1382,7 +1384,7 @@ export default function Staff() {
                           )}
                         </div>
                       ) : (
-                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>—</span>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>â€”</span>
                       )}
                     </td>
                   </tr>
@@ -1458,11 +1460,17 @@ export default function Staff() {
                   onChange={(e) => setCreating({ ...creating, password: e.target.value })}
                   placeholder="Share securely with the new staff member"
                   data-testid="staff-create-password"
-                  autoComplete="new-password"
+                  autoComplete="off"
+                  name="staff-manual-reset-password-no-autofill"
+                  inputMode="text"
+                  spellCheck={false}
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-form-type="other"
                   style={{ width: '100%', marginTop: '0.25rem' }}
                 />
               </label>
-              {/* Single Role dropdown — replaces the prior 3-way split
+              {/* Single Role dropdown â€” replaces the prior 3-way split
                   (access tier + job role + wellness role). The picked RBAC
                   role's key drives all three values via saveCreate's
                   deriveAccessTier + deriveWellnessRole helpers, so admins
@@ -1487,7 +1495,7 @@ export default function Staff() {
                     data-testid="staff-create-wellness-role"
                     style={{ width: '100%', marginTop: '0.25rem' }}
                   >
-                    <option value="">— None —</option>
+                    <option value="">â€” None â€”</option>
                     {wellnessRoleTypes.map((r) => (
                       <option key={r.id} value={r.key}>{r.label}</option>
                     ))}
@@ -1531,7 +1539,7 @@ export default function Staff() {
                   fontSize: '0.85rem', fontWeight: 600,
                 }}
               >
-                {savingCreate ? 'Adding…' : (<><UserPlus size={14} /> Add staff member</>)}
+                {savingCreate ? 'Addingâ€¦' : (<><UserPlus size={14} /> Add staff member</>)}
               </button>
             </div>
           </div>
@@ -1566,16 +1574,38 @@ export default function Staff() {
             </p>
             <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
               Manual password <span style={{ fontWeight: 400 }}>(optional, set a new password immediately)</span>
-              <input
-                type="password"
-                className="input-field"
-                value={resetPasswordValue}
-                onChange={(e) => setResetPasswordValue(e.target.value)}
-                placeholder="Type a new password"
-                data-testid="staff-reset-password-input"
-                autoComplete="new-password"
-                style={{ width: '100%', marginTop: '0.25rem' }}
-              />
+              <div style={{ position: 'relative', marginTop: '0.25rem' }}>
+                <input
+                  type="text"
+                  className="input-field"
+                  value={resetPasswordValue}
+                  onChange={(e) => setResetPasswordValue(e.target.value)}
+                  placeholder="Type a new password"
+                  data-testid="staff-reset-password-input"
+                  autoComplete="off"
+                  name="staff-manual-reset-password-no-autofill"
+                  inputMode="text"
+                  spellCheck={false}
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-form-type="other"
+                  style={{ width: '100%', paddingRight: '2.5rem', WebkitTextSecurity: showResetPassword ? 'none' : 'disc' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowResetPassword((v) => !v)}
+                  aria-label={showResetPassword ? 'Hide manual password' : 'Show manual password'}
+                  title={showResetPassword ? 'Hide password' : 'Show password'}
+                  style={{
+                    position: 'absolute', right: '0.65rem', top: '50%', transform: 'translateY(-50%)',
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 28, height: 28, border: 'none', background: 'transparent',
+                    color: 'var(--text-secondary)', cursor: 'pointer', padding: 0,
+                  }}
+                >
+                  {showResetPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </label>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem', flexWrap: 'wrap' }}>
               <button
@@ -1608,7 +1638,7 @@ export default function Staff() {
         </div>
       )}
 
-      {/* #618 — edit modal. Opens when an admin clicks Edit on a row. */}
+      {/* #618 â€” edit modal. Opens when an admin clicks Edit on a row. */}
       {editing && (
         <div
           data-testid="staff-edit-modal"
@@ -1651,7 +1681,7 @@ export default function Staff() {
                   style={{ width: '100%', marginTop: '0.25rem' }}
                 />
               </label>
-              {/* Single Role dropdown — replaces Access tier + Job role +
+              {/* Single Role dropdown â€” replaces Access tier + Job role +
                   Wellness role. saveEdit's derivation maps the picked RBAC
                   key onto User.role + wellnessRole so the existing backend
                   contract keeps working. Uses the upward-opening RoleSelect
@@ -1675,7 +1705,7 @@ export default function Staff() {
                     data-testid="staff-edit-wellness-role"
                     style={{ width: '100%', marginTop: '0.25rem' }}
                   >
-                    <option value="">— None —</option>
+                    <option value="">â€” None â€”</option>
                     {wellnessRoleTypes.map((r) => (
                       <option key={r.id} value={r.key}>{r.label}</option>
                     ))}
@@ -1692,7 +1722,7 @@ export default function Staff() {
                   />
                 </label>
               )}
-              {/* PRD Gap §1.5 — assign a commission profile. Hidden when
+              {/* PRD Gap Â§1.5 â€” assign a commission profile. Hidden when
                   the tenant has zero profiles defined so admins aren't
                   prompted to fill an empty dropdown; once they create
                   profiles elsewhere, the field reappears automatically. */}
@@ -1706,7 +1736,7 @@ export default function Staff() {
                     data-testid="staff-edit-commission-profile"
                     style={{ width: '100%', marginTop: '0.25rem' }}
                   >
-                    <option value="">— None —</option>
+                    <option value="">â€” None â€”</option>
                     {commissionProfiles.map((p) => (
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
@@ -1715,7 +1745,7 @@ export default function Staff() {
               )}
               {isWellness && clinicLocations.length > 0 && (
                 <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  Clinic locations <span style={{ fontWeight: 400 }}>(geofenced check-in — leave empty for no location restriction)</span>
+                  Clinic locations <span style={{ fontWeight: 400 }}>(geofenced check-in â€” leave empty for no location restriction)</span>
                   <LocationAccessPicker
                     value={editing.locationIds || []}
                     onChange={(v) => setEditing({ ...editing, locationIds: v })}
@@ -1732,7 +1762,7 @@ export default function Staff() {
                       cursor: savingLocations ? 'not-allowed' : 'pointer',
                     }}
                   >
-                    {savingLocations ? 'Saving…' : 'Save clinic assignments'}
+                    {savingLocations ? 'Savingâ€¦' : 'Save clinic assignments'}
                   </button>
                 </label>
               )}

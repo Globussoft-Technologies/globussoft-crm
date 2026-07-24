@@ -103,6 +103,14 @@ const Profile = () => {
     setLoading(false);
   };
 
+
+  const describeBillingCycle = (days) => {
+    if (days === 365) return 'Annual';
+    if (days === 30) return 'Monthly';
+    if (days === 90) return 'Quarterly';
+    if (days) return `${days}-day cycle`;
+    return 'One-time';
+  };
   const formatDate = (date) => {
     if (!date) return '';
     return new Date(date).toLocaleDateString('en-IN', {
@@ -362,6 +370,9 @@ const Profile = () => {
             <div style={{ fontSize: '16px', fontWeight: 'bold', color: 'var(--text-primary)' }}>
               {subscription.subscription.planName}
             </div>
+            <div style={{ fontSize: '12px', color: '#6b7280', marginTop: 4 }}>
+              {describeBillingCycle(subscription.subscription.billingIntervalDays)} billing
+            </div>
           </div>
           <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: 16 }}>
             <div>
@@ -420,7 +431,7 @@ const Profile = () => {
               >
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    {inv.invoiceNum} · {inv.planName}
+                    {inv.invoiceNum} - {inv.planName} - {describeBillingCycle(inv.billingIntervalDays)}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
                     {formatDate(inv.startDate)}

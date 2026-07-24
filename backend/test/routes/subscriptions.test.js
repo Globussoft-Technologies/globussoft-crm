@@ -550,7 +550,7 @@ describe('POST /verify-payment — HMAC signature verify + subscription create',
     expect(prisma.subscription.create).not.toHaveBeenCalled();
   });
 
-  test('200 creates Subscription + flips user.subscriptionStatus to ACTIVE on valid signature', async () => {
+  test('200 creates an annual Subscription + flips user.subscriptionStatus to ACTIVE on valid signature', async () => {
     razorpayService.verifySignature.mockReturnValue(true);
     prisma.subscription.findUnique.mockResolvedValue(null);
     prisma.subscriptionPlan.findUnique.mockResolvedValue({
@@ -558,7 +558,15 @@ describe('POST /verify-payment — HMAC signature verify + subscription create',
       name: 'Pro',
       price: 1999,
       currency: 'INR',
-      billingIntervalDays: 30,
+      billingIntervalDays: 365,
+      pricing: JSON.stringify({
+        inr: {
+          annual: 499,
+          monthly: 649,
+          yearAnnualLabel: '\u20b95,988 /user/year',
+          yearMonthlyLabel: '\u20b97,788 /user/year',
+        },
+      }),
       features: '["all"]',
     });
     prisma.subscription.create.mockResolvedValue({
@@ -573,6 +581,8 @@ describe('POST /verify-payment — HMAC signature verify + subscription create',
       razorpayPaymentId: 'pay_ok',
       razorpaySignature: 'b'.repeat(64),
       planId: 2,
+      currency: 'inr',
+      billingPeriod: 'annual',
     });
 
     expect(res.status).toBe(200);
@@ -584,7 +594,7 @@ describe('POST /verify-payment — HMAC signature verify + subscription create',
       endDate: expect.any(String),
     });
     // Subscription row written with the user + tenant from the JWT
-    // (NOT the body — the route reads req.user.userId / tenantId).
+    // (NOT the body - the route reads req.user.userId / tenantId).
     expect(prisma.subscription.create).toHaveBeenCalledTimes(1);
     const createArg = prisma.subscription.create.mock.calls[0][0].data;
     expect(createArg.userId).toBe(7);
@@ -592,6 +602,9 @@ describe('POST /verify-payment — HMAC signature verify + subscription create',
     expect(createArg.planId).toBe(2);
     expect(createArg.planName).toBe('Pro');
     expect(createArg.status).toBe('ACTIVE');
+    expect(createArg.amount).toBe(5988);
+    expect(createArg.currency).toBe('INR');
+    expect(createArg.billingIntervalDays).toBe(365);
     expect(createArg.razorpayOrderId).toBe('order_ok');
     expect(createArg.razorpayPaymentId).toBe('pay_ok');
     // User row flipped to ACTIVE + trialEndsAt cleared so the trial banner

@@ -38,6 +38,16 @@ on:
         type: boolean
         default: false
 
+      rbac_backfill:
+        # Manual opt-in only. This backfill is additive and safe, but it
+        # intentionally must not run on every deploy because it can reapply
+        # preset grants to existing roles. Leaving this false keeps already
+        # selected permissions exactly as they are across refreshes,
+        # deploys, and cache clears.
+        description: "Run the additive RBAC backfill after schema sync (manual opt-in)"
+        type: boolean
+        default: false
+
 # One deploy at a time — never cancel an in-flight deploy. A half-finished
 # deploy on prod is worse than the next push waiting in the queue.
 concurrency:
@@ -860,15 +870,14 @@ jobs:
               echo "=== seed-travel (always) ==="
               node prisma/seed-travel.js 2>&1 | tail -20
             fi
-
-            # One-shot RBAC permission backfill. Ensures canonical roles on
-            # existing tenants pick up new preset grants (e.g. the wellness
-            # appointments.assign permission added for the practitioner-
-            # assignment guard). Idempotent/additive only — operator edits are
-            # preserved. Runs automatically on every deploy so DevOps does not
-            # need a separate manual step.
-            echo "=== backfill role-preset permissions ==="
-            node scripts/backfill-role-preset-perms.js --apply 2>&1 | tail -20
+            # Optional RBAC backfill. Keep this OFF for normal deploys so
+            # already-selected permissions remain unchanged across refreshes
+            # and restarts. Operators can opt in only when they are
+            # intentionally adding a newly-wide preset grant.
+            if [ "${{ github.event.inputs.rbac_backfill }}" = "true" ]; then
+              echo "=== backfill role-preset permissions (manual opt-in) ==="
+              node scripts/backfill-role-preset-perms.js --apply 2>&1 | tail -20
+            fi
 
             echo "=== pm2 restart ==="
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
@@ -1254,10 +1263,14 @@ jobs:
               echo "=== seed-travel (always) ==="
               node prisma/seed-travel.js 2>&1 | tail -20
             fi
-
-            # One-shot RBAC permission backfill — see production deploy step.
-            echo "=== backfill role-preset permissions ==="
-            node scripts/backfill-role-preset-perms.js --apply 2>&1 | tail -20
+            # Optional RBAC backfill. Keep this OFF for normal deploys so
+            # already-selected permissions remain unchanged across refreshes
+            # and restarts. Operators can opt in only when they are
+            # intentionally adding a newly-wide preset grant.
+            if [ "${{ github.event.inputs.rbac_backfill }}" = "true" ]; then
+              echo "=== backfill role-preset permissions (manual opt-in) ==="
+              node scripts/backfill-role-preset-perms.js --apply 2>&1 | tail -20
+            fi
 
             echo "=== pm2 restart ==="
             # If the process entry is stale (e.g. host rebooted and the old

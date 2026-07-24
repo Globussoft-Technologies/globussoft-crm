@@ -396,7 +396,7 @@ router.post('/create-order', verifyToken, verifyRole(['ADMIN']), async (req, res
           }
         }
       } catch {
-        // bad JSON Ã¢â€ â€™ silently keep the legacy fallback
+        // bad JSON - silently keep the legacy fallback
       }
     }
 
@@ -489,7 +489,7 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
     // SCHEDULED). If its end is in the future, this purchase is QUEUED to begin
     // the instant that period ends Ã¢â‚¬â€ so buying again mid-cycle (intentionally
     // or by mistake) never overlaps or wastes time; it appends a full period to
-    // the tail. e.g. active 1stÃ¢â€ â€™1st, buy on the 6th Ã¢â€ â€™ new runs 1stÃ¢â€ â€™next-1st.
+    // the tail. e.g. active 1st to 1st, buy on the 6th to new runs 1st to next-1st.
     const latest = await prisma.subscription.findFirst({
       where: { userId, tenantId, status: { in: ['ACTIVE', 'SCHEDULED'] } },
       orderBy: { endDate: 'desc' },
@@ -572,8 +572,8 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
       // True when the purchase was queued behind a still-running period rather
       // than activated immediately Ã¢â‚¬â€ lets the UI say "starts on <startDate>".
       scheduled: subscription.status === 'SCHEDULED',
-      // expenseRecorded Ã¢â€ â€™ shows in Expense Management (/expenses). posExpense-
-      // Recorded Ã¢â€ â€™ also deducted from an open POS drawer (false if no shift).
+      // expenseRecorded shows in Expense Management (/expenses). posExpense-
+      // Recorded also deducted from an open POS drawer (false if no shift).
       expenseRecorded,
       posExpenseRecorded,
     });

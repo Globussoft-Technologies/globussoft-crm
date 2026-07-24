@@ -165,7 +165,67 @@ describe('<Profile /> — practitioner section gating (#641)', () => {
   });
 });
 
-describe('<Profile /> — initial fetch + loading state', () => {
+describe('<Profile /> - subscription display contract', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+  });
+
+  it('renders the current plan billing cycle and invoice history with the stored annual cycle', async () => {
+    const profile = {
+      id: 80,
+      name: 'Annual Buyer',
+      email: 'annual@globus.test',
+      role: 'USER',
+      wellnessRole: null,
+      createdAt: '2026-01-01T00:00:00Z',
+    };
+    const invoices = [
+      {
+        id: 1,
+        invoiceNum: 'SUB-000001',
+        planName: 'Starter',
+        billingIntervalDays: 365,
+        startDate: '2026-07-23T00:00:00Z',
+        endDate: '2027-07-22T00:00:00Z',
+        status: 'ACTIVE',
+        amount: 5988,
+        currency: 'INR',
+      },
+    ];
+
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/auth/me') return Promise.resolve(profile);
+      if (url === '/api/subscriptions/invoices') return Promise.resolve(invoices);
+      return Promise.resolve({});
+    });
+
+    render(
+      <AuthContext.Provider value={{
+        user: { ...profile, userId: profile.id },
+        setUser: vi.fn(),
+        token: 'tk',
+        tenant: { id: 1 },
+        loading: false,
+        subscription: {
+          subscriptionStatus: 'ACTIVE',
+          subscription: {
+            planName: 'Starter',
+            billingIntervalDays: 365,
+            endDate: '2027-07-22T00:00:00Z',
+          },
+        },
+      }}>
+        <Profile />
+      </AuthContext.Provider>
+    );
+
+    await waitFor(() => expect(screen.getByText('Annual Buyer')).toBeInTheDocument());
+    expect(screen.getByText(/Annual billing/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/SUB-000001\s*-\s*Starter\s*-\s*Annual/i)).toBeInTheDocument());
+  });
+});
+
+describe('<Profile /> - initial fetch + loading state', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });

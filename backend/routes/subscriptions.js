@@ -4,13 +4,13 @@ const prisma = require('../lib/prisma');
 const { verifyToken, verifyRole } = require('../middleware/auth');
 const razorpayService = require('../services/razorpayService');
 const { formatMoney } = require('../utils/formatMoney');
-// Shared ₹-glyph fix: registers the embedded Poppins family under the Helvetica
-// names so the rupee sign renders as ₹ instead of "¹" (built-in WinAnsi gap).
+// Shared Ã¢â€šÂ¹-glyph fix: registers the embedded Poppins family under the Helvetica
+// names so the rupee sign renders as Ã¢â€šÂ¹ instead of "Ã‚Â¹" (built-in WinAnsi gap).
 const { applyRupeeCapableFonts } = require('../services/pdfRenderer');
 
 const router = express.Router();
 
-// Catalog editing (POST/PUT/DELETE plans) is platform-level — only the
+// Catalog editing (POST/PUT/DELETE plans) is platform-level Ã¢â‚¬â€ only the
 // Globussoft owner (User.userType === 'OWNER', surfaces as req.user.isOwner)
 // may change prices/features. Tenant ADMINs see /pricing and BUY plans, but
 // cannot edit the catalog.
@@ -25,11 +25,11 @@ const requireOwner = (req, res, next) => {
 };
 
 // Subscription lifecycle states stored in Subscription.status:
-//   ACTIVE    — the period currently being consumed (startDate <= now < endDate)
-//   SCHEDULED — bought while another period was still running; queued to begin
+//   ACTIVE    Ã¢â‚¬â€ the period currently being consumed (startDate <= now < endDate)
+//   SCHEDULED Ã¢â‚¬â€ bought while another period was still running; queued to begin
 //               when the prior period ends (startDate is in the future)
-//   EXPIRED   — period fully elapsed
-//   CANCELLED — cancelled by the admin
+//   EXPIRED   Ã¢â‚¬â€ period fully elapsed
+//   CANCELLED Ã¢â‚¬â€ cancelled by the admin
 //
 // Stacking model: when a user buys again while a paid period is still running
 // (intentionally or by mistake), we DON'T overwrite or run two periods at once.
@@ -67,7 +67,7 @@ async function reconcileSubscriptions(userId, tenantId) {
         break;
       }
 
-      // No active period — promote the earliest queued period that has started.
+      // No active period Ã¢â‚¬â€ promote the earliest queued period that has started.
       const due = await tx.subscription.findFirst({
         where: { userId, tenantId, status: 'SCHEDULED', startDate: { lte: now } },
         orderBy: { startDate: 'asc' },
@@ -75,7 +75,7 @@ async function reconcileSubscriptions(userId, tenantId) {
       if (!due) {
         // Nothing active and nothing due to start yet. If a future-dated queued
         // period exists the user is still effectively ACTIVE (their current paid
-        // period just hasn't been created as a separate row) — but in practice
+        // period just hasn't been created as a separate row) Ã¢â‚¬â€ but in practice
         // the prior period would still be ACTIVE in that case, so falling here
         // means the user has no live coverage.
         resolvedStatus = null;
@@ -93,7 +93,7 @@ async function reconcileSubscriptions(userId, tenantId) {
   });
 }
 
-// Get current user's subscription status. ADMIN-only — the tenant admin is
+// Get current user's subscription status. ADMIN-only Ã¢â‚¬â€ the tenant admin is
 // the one who buys + manages the subscription. Managers/staff don't see
 // billing state.
 router.get('/status', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
@@ -188,7 +188,7 @@ router.get('/status', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
   }
 });
 
-// Helper — formats a SubscriptionPlan row for the public catalog response.
+// Helper Ã¢â‚¬â€ formats a SubscriptionPlan row for the public catalog response.
 // `pricing` is stored as a JSON string in MySQL Text; parse on read so the
 // frontend doesn't have to. Anything missing falls back to the legacy
 // `price`+`currency` columns (one canonical price), so plans seeded before
@@ -217,7 +217,7 @@ function formatPlan(p) {
   };
 }
 
-// Public catalog — anonymous visitors hit this from the /pricing page.
+// Public catalog Ã¢â‚¬â€ anonymous visitors hit this from the /pricing page.
 // Auth is intentionally NOT required here; the server.js global guard
 // has a method-aware exception (GET /subscriptions/plans only).
 // Admin CRUD endpoints below stay gated.
@@ -354,7 +354,7 @@ router.delete('/plans/:id', verifyToken, requireOwner, async (req, res) => {
 //
 // Accepts optional `currency` ('usd'|'inr') + `billingPeriod` ('annual'|'monthly')
 // from the body so the user gets charged the price they actually saw on the
-// /pricing card (currency toggle × annual/monthly toggle). Falls back to the
+// /pricing card (currency toggle Ãƒâ€” annual/monthly toggle). Falls back to the
 // plan's legacy single `price`+`currency` columns when those toggles aren't
 // passed or when the plan has no `pricing` JSON populated yet.
 router.post('/create-order', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
@@ -390,13 +390,13 @@ router.post('/create-order', verifyToken, verifyRole(['ADMIN']), async (req, res
           const parsedAmount = parseFloat(raw);
           if (!Number.isNaN(parsedAmount) && parsedAmount > 0) {
             // For annual billing, the stored value is the per-month rate.
-            // Charge the full annual total (per-month × 12).
+            // Charge the full annual total (per-month Ãƒâ€” 12).
             chargeAmount = per === 'annual' ? parsedAmount * 12 : parsedAmount;
             chargeCurrency = cur === 'usd' ? 'USD' : 'INR';
           }
         }
       } catch {
-        // bad JSON → silently keep the legacy fallback
+        // bad JSON Ã¢â€ â€™ silently keep the legacy fallback
       }
     }
 
@@ -419,12 +419,12 @@ router.post('/create-order', verifyToken, verifyRole(['ADMIN']), async (req, res
   }
 });
 
-// Verify payment and create subscription — ADMIN-only (the tenant admin is
+// Verify payment and create subscription Ã¢â‚¬â€ ADMIN-only (the tenant admin is
 // the buyer). Owner doesn't subscribe; owner is platform staff.
 router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
   try {
     const { userId, tenantId } = req.user;
-    const { razorpayOrderId, razorpayPaymentId, razorpaySignature, planId } = req.body;
+    const { razorpayOrderId, razorpayPaymentId, razorpaySignature, planId, currency: bodyCurrency, billingPeriod } = req.body;
 
     if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature || !planId) {
       return res.status(400).json({ error: 'Missing payment details' });
@@ -462,16 +462,34 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
     }
 
     const now = new Date();
-    const billingDays = plan.billingIntervalDays || 30;
+    let chargeAmount = parseFloat(plan.price);
+    let chargeCurrency = plan.currency;
+    const period = String(billingPeriod || (plan.billingIntervalDays === 365 ? 'annual' : 'monthly')).toLowerCase() === 'annual' ? 'annual' : 'monthly';
+    const rawCurrency = String(bodyCurrency || plan.currency || 'INR').toLowerCase();
+    if (plan.pricing && rawCurrency && period) {
+      try {
+        const parsed = JSON.parse(plan.pricing);
+        const bucket = parsed[rawCurrency];
+        if (bucket && bucket[period] != null) {
+          const raw = String(bucket[period]).replace(/,/g, '').trim();
+          const parsedAmount = parseFloat(raw);
+          if (!Number.isNaN(parsedAmount) && parsedAmount > 0) {
+            chargeAmount = period === 'annual' ? parsedAmount * 12 : parsedAmount;
+            chargeCurrency = rawCurrency === 'usd' ? 'USD' : 'INR';
+          }
+        }
+      } catch {}
+    }
+    const billingDays = period === 'annual' ? 365 : (plan.billingIntervalDays || 30);
 
     // Settle any elapsed/queued periods first so we stack onto the true tail.
     await reconcileSubscriptions(userId, tenantId);
 
     // Find the latest period the user still has coverage for (ACTIVE or already
     // SCHEDULED). If its end is in the future, this purchase is QUEUED to begin
-    // the instant that period ends — so buying again mid-cycle (intentionally
+    // the instant that period ends Ã¢â‚¬â€ so buying again mid-cycle (intentionally
     // or by mistake) never overlaps or wastes time; it appends a full period to
-    // the tail. e.g. active 1st→1st, buy on the 6th → new runs 1st→next-1st.
+    // the tail. e.g. active 1stÃ¢â€ â€™1st, buy on the 6th Ã¢â€ â€™ new runs 1stÃ¢â€ â€™next-1st.
     const latest = await prisma.subscription.findFirst({
       where: { userId, tenantId, status: { in: ['ACTIVE', 'SCHEDULED'] } },
       orderBy: { endDate: 'desc' },
@@ -489,9 +507,9 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
         planId: parseInt(planId),
         planName: plan.name,
         status: newStatus,
-        amount: plan.price,
-        currency: plan.currency,
-        billingIntervalDays: plan.billingIntervalDays,
+        amount: chargeAmount,
+        currency: chargeCurrency,
+        billingIntervalDays: billingDays,
         startDate: startDate,
         endDate: endDate,
         renewalDate: endDate,
@@ -502,7 +520,7 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
       }
     });
 
-    // The admin always has live coverage after a successful purchase — either
+    // The admin always has live coverage after a successful purchase Ã¢â‚¬â€ either
     // the new period started now, or an existing period is still running with
     // this one queued behind it.
     await prisma.user.update({
@@ -515,9 +533,9 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
 
     // Log the subscription spend in two places, both best-effort (never block
     // the purchase):
-    //   1. Expense Management ledger (/expenses) — NOT shift-scoped, so it
+    //   1. Expense Management ledger (/expenses) Ã¢â‚¬â€ NOT shift-scoped, so it
     //      lands reliably in every environment. This is the canonical record.
-    //   2. POS Cash Register Expenses tab — only when a drawer shift is OPEN,
+    //   2. POS Cash Register Expenses tab Ã¢â‚¬â€ only when a drawer shift is OPEN,
     //      so it's deducted from the live cash drawer.
     let expenseRecorded = false;
     let posExpenseRecorded = false;
@@ -552,10 +570,10 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
         endDate: subscription.endDate
       },
       // True when the purchase was queued behind a still-running period rather
-      // than activated immediately — lets the UI say "starts on <startDate>".
+      // than activated immediately Ã¢â‚¬â€ lets the UI say "starts on <startDate>".
       scheduled: subscription.status === 'SCHEDULED',
-      // expenseRecorded → shows in Expense Management (/expenses). posExpense-
-      // Recorded → also deducted from an open POS drawer (false if no shift).
+      // expenseRecorded Ã¢â€ â€™ shows in Expense Management (/expenses). posExpense-
+      // Recorded Ã¢â€ â€™ also deducted from an open POS drawer (false if no shift).
       expenseRecorded,
       posExpenseRecorded,
     });
@@ -565,7 +583,7 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
   }
 });
 
-// Cancel subscription — ADMIN-only (only the admin who bought it can cancel).
+// Cancel subscription Ã¢â‚¬â€ ADMIN-only (only the admin who bought it can cancel).
 router.patch('/:id/cancel', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
   try {
     const { userId, tenantId } = req.user;
@@ -590,7 +608,7 @@ router.patch('/:id/cancel', verifyToken, verifyRole(['ADMIN']), async (req, res)
 
     // Settle the timeline: if the cancelled period was the live one and a queued
     // period is already due to start, promote it. Then decide the user's status
-    // from what coverage remains — a still-running period OR a queued one the
+    // from what coverage remains Ã¢â‚¬â€ a still-running period OR a queued one the
     // admin already paid for both keep the account ACTIVE.
     await reconcileSubscriptions(userId, tenantId);
 
@@ -622,7 +640,7 @@ router.patch('/:id/cancel', verifyToken, verifyRole(['ADMIN']), async (req, res)
   }
 });
 
-// List billing history — every subscription record (paid + cancelled +
+// List billing history Ã¢â‚¬â€ every subscription record (paid + cancelled +
 // expired) the current admin has on this tenant, newest first. Feeds the
 // Profile page's "Download Invoice" picker and any future billing-history
 // UI. ADMIN-only because Subscription rows are owned by the buyer; a
@@ -655,7 +673,7 @@ router.get('/invoices', verifyToken, verifyRole(['ADMIN']), async (req, res) => 
 // Mirrors the billing.js invoice PDF template (same layout / fonts /
 // colors) so customer-facing PDFs feel like one consistent product.
 // Scoped to the current admin's own subscriptions (userId + tenantId in
-// the where clause) — an admin cannot pull another tenant's invoice by
+// the where clause) Ã¢â‚¬â€ an admin cannot pull another tenant's invoice by
 // guessing IDs.
 router.get('/:id/invoice.pdf', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
   try {
@@ -688,7 +706,7 @@ router.get('/:id/invoice.pdf', verifyToken, verifyRole(['ADMIN']), async (req, r
     })();
 
     const doc = new PDFDocument({ size: 'A4', margin: 50 });
-    applyRupeeCapableFonts(doc); // ₹ glyph fix
+    applyRupeeCapableFonts(doc); // Ã¢â€šÂ¹ glyph fix
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${invoiceNum}.pdf`);
     doc.pipe(res);

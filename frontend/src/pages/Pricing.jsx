@@ -185,10 +185,10 @@ export default function Pricing() {
       const orderData = await fetchApi('/api/subscriptions/create-order', {
         method: 'POST',
         body: JSON.stringify({
-          planId: parseInt(planId),
-          currency,
-          billingPeriod: annual ? 'annual' : 'monthly',
-        })
+            planId: parseInt(planId),
+            currency,
+            billingPeriod: annual ? 'annual' : 'monthly',
+          })
       });
 
       const razorpayKeyId = import.meta.env.VITE_RAZORPAY_KEY_ID;
@@ -207,27 +207,30 @@ export default function Pricing() {
         currency: orderData.currency,
         order_id: orderData.orderId,
         name: 'GlobusCRM',
-        description: `${planName} Plan`,
+        description: `${planName} ${annual ? 'Annual' : 'Monthly'} Plan`,
         handler: async (response) => {
           try {
             const verifyData = await fetchApi('/api/subscriptions/verify-payment', {
               method: 'POST',
               body: JSON.stringify({
-                razorpayOrderId: orderData.orderId,
-                razorpayPaymentId: response.razorpay_payment_id,
-                razorpaySignature: response.razorpay_signature,
-                planId: parseInt(planId)
-              })
+                  razorpayOrderId: orderData.orderId,
+                  razorpayPaymentId: response.razorpay_payment_id,
+                  razorpaySignature: response.razorpay_signature,
+                  planId: parseInt(planId),
+                  currency,
+                  billingPeriod: annual ? 'annual' : 'monthly',
+                })
             });
 
             if (verifyData?.success) {
               navigate('/payment-success', {
-                state: {
-                  planName: planName,
-                  endDate: verifyData.subscription?.endDate,
-                  subscriptionId: verifyData.subscription?.id
-                }
-              });
+                  state: {
+                    planName: planName,
+                    billingPeriod: annual ? 'Annual' : 'Monthly',
+                    endDate: verifyData.subscription?.endDate,
+                    subscriptionId: verifyData.subscription?.id
+                  }
+                });
             } else {
               navigate('/payment-failed');
             }

@@ -5,6 +5,7 @@ export default function PaymentSuccess() {
   const navigate = useNavigate();
   const location = useLocation();
   const planName = location.state?.planName || 'Subscription';
+  const billingPeriod = location.state?.billingPeriod;
   const endDate = location.state?.endDate;
 
   useEffect(() => {
@@ -77,6 +78,11 @@ export default function PaymentSuccess() {
           <p style={{ margin: '0 0 8px 0', fontSize: '18px', fontWeight: '600', color: '#1f2937' }}>
             {planName}
           </p>
+          {billingPeriod && (
+            <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#6b7280' }}>
+              Billing cycle: <strong>{billingPeriod}</strong>
+            </p>
+          )}
           {endDate && (
             <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#6b7280' }}>
               Active until: <strong>{new Date(endDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</strong>

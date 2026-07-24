@@ -111,6 +111,14 @@ describe('<PaymentSuccess /> -- post-checkout landing page', () => {
     expect(screen.queryByText(/^Subscription$/)).not.toBeInTheDocument();
   });
 
+  it('renders the billing cycle from location.state.billingPeriod when provided', () => {
+    renderPaymentSuccess({ planName: 'Starter', billingPeriod: 'Annual' });
+    const billingLine = screen.getByText(/Billing cycle:/i).closest('p');
+    expect(billingLine).not.toBeNull();
+    expect(billingLine.textContent).toMatch(/Billing cycle:/i);
+    expect(billingLine.textContent).toMatch(/Annual/i);
+  });
+
   it('falls back to the literal "Subscription" when location.state.planName is absent', () => {
     // No state at all — useLocation() returns state=null/undefined.
     renderPaymentSuccess(undefined);

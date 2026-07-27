@@ -162,8 +162,8 @@ describe('<wellness/PatientDetail /> — page surface', () => {
       }
       if (url === '/api/wellness/services') return Promise.resolve([]);
       if (url === '/api/staff') return Promise.resolve([]);
-      if (url === /api/wellness/patients//wallet) return Promise.resolve(sampleWallet);
-      if (url === /api/wellness/loyalty/) return Promise.resolve(null);
+      if (url === `/api/wellness/patients/${PATIENT_ID}/wallet`) return Promise.resolve(sampleWallet);
+      if (url === '/api/wellness/loyalty/') return Promise.resolve(null);
       return Promise.resolve(null);
     });
 

@@ -692,7 +692,7 @@ export default function LandingPageBuilder() {
               title="Derive slug from current page title"
               style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
             >
-              ->
+              {'->'}
             </button>
           </div>
           <span style={{ fontSize: '0.62rem', color: slugIsValid ? 'var(--text-secondary)' : '#ef4444', opacity: 0.85 }}>
@@ -1128,6 +1128,7 @@ export default function LandingPageBuilder() {
           publishing={publishing}
           onPublish={handlePublish}
           onClose={() => setShowPublishModal(false)}
+          isGenericLandingSites={isGenericLandingSites}
           onJumpToBlock={(blockIndex) => {
             if (typeof blockIndex === 'number') setSelected(blockIndex);
             setShowPublishModal(false);
@@ -1316,7 +1317,7 @@ const iconBtnStyle = { background: 'none', border: 'none', color: '#fff', cursor
 // authoritative; this modal is a UX shell over it. Clicking an issue
 // jumps to the offending block on the canvas (when blockIndex is
 // supplied by the backend) so the operator can fix it inline.
-function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, onJumpToBlock }) {
+function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, onJumpToBlock, isGenericLandingSites }) {
   const ok = verdict?.ok && Array.isArray(verdict.issues) && verdict.issues.length === 0;
   const issues = Array.isArray(verdict?.issues) ? verdict.issues : [];
   return (

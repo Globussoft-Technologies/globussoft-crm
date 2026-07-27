@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
-import { useParams, useSearchParams, Link } from 'react-router-dom';
+import { useParams, useSearchParams, useLocation, Link } from 'react-router-dom';
 import { ArrowLeft, Save, Eye, Monitor, Smartphone, Plus, Trash2, ChevronUp, ChevronDown, Type, AlignLeft, Image, MousePointerClick, FileInput, Minus, Space, Video, Upload, Undo2, Redo2, Columns, MapPin, Building2, Sparkles, ListChecks, CalendarDays, IndianRupee, HelpCircle, MessageSquare, AlertCircle, CheckCircle2, Globe, Film, Shield, FileDown, PhoneCall, History, X, RotateCcw, UserPlus, Search, Copy, Star, ExternalLink } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -177,6 +177,8 @@ function formatVersionTimestamp(iso) {
 export default function LandingPageBuilder() {
   const notify = useNotify();
   const { id } = useParams();
+  const location = useLocation();
+  const isGenericLandingSites = location.pathname.startsWith('/landing-sites');
   // G094: sub-brand preview context. Admin lands at
   //   /landing-pages/<id>/builder?sub_brand=tmc
   // to preview the page chrome under the TMC brand kit; absent param
@@ -401,13 +403,14 @@ export default function LandingPageBuilder() {
         silent: !confirmSlugChange,
       });
       setIsDirty(false);
-      if (confirmSlugChange) notify.success('Saved with new slug — old links to /p/<old-slug> will 404.');
+      if (confirmSlugChange) notify.success(isGenericLandingSites ? 'Saved with new slug. Old links to /landing-sites/<old-slug> will 404.' : 'Saved with new slug. Old links to /p/<old-slug> will 404.');
     } catch (err) {
       if (err.status === 409 && err.code === 'PUBLISHED_SLUG_CHANGE_REQUIRES_CONFIRM') {
         const cur = err.data?.currentSlug || page.slug;
         const next = err.data?.requestedSlug || page.slug;
+        const publicPath = isGenericLandingSites ? `/landing-sites/${cur}` : `/p/${cur}`;
         const ok = await notify.confirm(
-          `This page is PUBLISHED. Changing the slug from "${cur}" to "${next}" will break every inbound link to /p/${cur} (ad campaigns, email links, QR codes, customer bookmarks).\n\nProceed anyway?`
+          `This page is PUBLISHED. Changing the slug from "${cur}" to "${next}" will break every inbound link to ${publicPath} (ad campaigns, email links, QR codes, customer bookmarks).\n\nProceed anyway?`
         );
         if (ok) {
           setSaving(false);
@@ -457,7 +460,7 @@ export default function LandingPageBuilder() {
       setPage({ ...page, status: 'PUBLISHED', publishedAt: new Date().toISOString() });
       setPublishIssues({ ok: true, issues: [] });
       setShowPublishModal(false);
-      notify.success(`Published — public URL is /trips.`);
+      notify.success(isGenericLandingSites ? `Published. Public URL is /landing-sites/${page?.slug || ''}.` : `Published. Public URL is /trips.`);
     } catch (err) {
       if (err?.status === 409 && err?.code === 'PUBLISH_GATE_FAILED') {
         setPublishIssues({ ok: false, issues: err.data?.issues || [] });
@@ -506,8 +509,8 @@ export default function LandingPageBuilder() {
 
   const handleCopyUrl = () => {
     const url = page?.status === 'PUBLISHED'
-      ? `${window.location.origin}/trips`
-      : `${window.location.origin}/p/${page?.slug}`;
+      ? (isGenericLandingSites ? `${window.location.origin}/landing-sites/${page?.slug || ''}` : `${window.location.origin}/trips`)
+      : `${window.location.origin}/p/${page?.slug || ''}`;
     navigator.clipboard.writeText(url).then(() => {
       setUrlCopied(true);
       setTimeout(() => setUrlCopied(false), 2000);
@@ -626,7 +629,7 @@ export default function LandingPageBuilder() {
     const timerKey = `${compId}:${key}`;
     if (propTimers.current[timerKey]) clearTimeout(propTimers.current[timerKey]);
     propTimers.current[timerKey] = setTimeout(() => {
-      // Snapshot the *current* present (not `next`, which is stale) so
+      // Snapshot the current present (not `next`, which is stale) so
       // a debounced commit picks up multi-prop edits within the
       // window.
       dispatch({ type: 'COMMIT', value: nextRef.current });
@@ -660,13 +663,9 @@ export default function LandingPageBuilder() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-      {/* #449: top bar — alignment cleanup. Title + slug are pinned left
-          via flex-grow:0; preview-mode toggle + preview link + undo/redo
-          + save are right-aligned via the spacer. Padding bumped 1.5→1
-          and items use a consistent gap so they no longer crowd the
-          800px canvas's left edge. */}
+      {/* Builder top bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.65rem 1rem', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--surface-color)' }}>
-        <Link to="/landing-pages" title="Back to landing pages list" style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}><ArrowLeft size={18} /></Link>
+        <Link to={isGenericLandingSites ? '/landing-sites' : '/landing-pages'} title={isGenericLandingSites ? 'Back to landing sites list' : 'Back to landing pages list'} style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}><ArrowLeft size={18} /></Link>
         <input className="input-field" value={page.title} onChange={e => { setPage({ ...page, title: e.target.value }); setIsDirty(true); }} style={{ fontWeight: '600', fontSize: '0.95rem', padding: '0.35rem 0.65rem', width: '220px' }} aria-label="Page title" />
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.1rem' }}>
           <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
@@ -693,18 +692,14 @@ export default function LandingPageBuilder() {
               title="Derive slug from current page title"
               style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
             >
-              ↻
+              ->
             </button>
           </div>
           <span style={{ fontSize: '0.62rem', color: slugIsValid ? 'var(--text-secondary)' : '#ef4444', opacity: 0.85 }}>
-            {slugIsValid
-              ? `${(page.slug || '').length}/50 — lowercase, digits, hyphens`
-              : 'Invalid: lowercase / digits / hyphens only'}
+            {slugIsValid ? ((page.slug || '').length + ' of 50 - lowercase, digits, hyphens') : 'Invalid: lowercase / digits / hyphens only'}
           </span>
         </div>
         <div style={{ flex: 1 }} />
-        {/* #450: undo / redo. Disabled state when no history. The Lucide
-            arrow-rotate icons match the platform's icon language. */}
         <div style={{ display: 'flex', gap: '0.2rem' }}>
           <button onClick={onUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" aria-label="Undo last change" style={iconBarBtnStyle(canUndo)}><Undo2 size={14} /></button>
           <button onClick={onRedo} disabled={!canRedo} title="Redo (Ctrl+Y)" aria-label="Redo last undone change" style={iconBarBtnStyle(canRedo)}><Redo2 size={14} /></button>
@@ -714,28 +709,18 @@ export default function LandingPageBuilder() {
           <button onClick={() => setPreviewMode('desktop')} title="Desktop preview" aria-label="Desktop preview" style={{ padding: '0.25rem 0.55rem', borderRadius: '4px', border: 'none', cursor: 'pointer', background: previewMode === 'desktop' ? 'var(--accent-color)' : 'transparent', color: previewMode === 'desktop' ? '#fff' : 'var(--text-secondary)' }}><Monitor size={14} /></button>
           <button onClick={() => setPreviewMode('mobile')} title="Mobile preview" aria-label="Mobile preview" style={{ padding: '0.25rem 0.55rem', borderRadius: '4px', border: 'none', cursor: 'pointer', background: previewMode === 'mobile' ? 'var(--accent-color)' : 'transparent', color: previewMode === 'mobile' ? '#fff' : 'var(--text-secondary)' }}><Smartphone size={14} /></button>
         </div>
-        {/* Draft preview — opens the production renderer for the
-            page's current state (works for DRAFT and PUBLISHED).
-            Mints a short-lived (5-min) single-purpose preview token
-            via POST /preview-token, then opens
-            /preview?previewToken=<jwt> in a new tab. window.open
-            cannot carry an Authorization header, so the token rides
-            in the URL — the 5-min expiry + previewOnly claim keeps
-            the leak window tiny. */}
         <button
           type="button"
           onClick={async () => {
-            // Save first if dirty so the preview reflects the latest
-            // edits rather than a stale row.
             if (isDirty) {
               await handleSave(false);
             }
             try {
-              const { token } = await fetchApi(`/api/landing-pages/${page.id}/preview-token`, { method: 'POST' });
+              const { token } = await fetchApi('/api/landing-pages/' + page.id + '/preview-token', { method: 'POST' });
               if (!token) throw new Error('No token returned');
-              window.open(`/api/landing-pages/${page.id}/preview?previewToken=${encodeURIComponent(token)}`, '_blank', 'noopener');
+              window.open('/api/landing-pages/' + page.id + '/preview?previewToken=' + encodeURIComponent(token), '_blank', 'noopener');
             } catch (_err) {
-              notify.error('Could not open preview — try again or save the page first.');
+              notify.error('Could not open preview - try again or save the page first.');
             }
           }}
           title="Open the production preview in a new tab (auto-saves if needed)"
@@ -744,25 +729,14 @@ export default function LandingPageBuilder() {
           <Eye size={14} /> Preview
         </button>
         {page.status === 'PUBLISHED' && (
-          <>
-            <a href={`${window.location.origin}/trips`} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.35rem 0.7rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-primary)', textDecoration: 'none' }}>
-              <Globe size={14} /> Open live
-            </a>
-          </>
+          <a href={isGenericLandingSites ? (window.location.origin + '/landing-sites/' + (page?.slug || '')) : (window.location.origin + '/trips')} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.35rem 0.7rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-primary)', textDecoration: 'none' }}>
+            <Globe size={14} /> Open live
+          </a>
         )}
-        {/* Link-to-trip picker — only renders when the operator has at
-            least one TMC trip available. Hidden on tenants without
-            travel access. Saves immediately on change via the existing
-            PUT endpoint (tripId field, Phase 11). Linking defaults the
-            registration block to lead mode, so wizard submissions create
-            a Contact + Deal + TripParticipant and show up immediately in
-            the trip participants list. Explicit register.mode =
-            "registration-draft" is required to use the OTP/hybrid draft
-            flow instead. */}
         {tmcTrips.length > 0 && (() => {
-          const selectedTrip = tmcTrips.find(t => t.id === linkingTripId);
+          const selectedTrip = tmcTrips.find((t) => t.id === linkingTripId);
           const filteredTrips = tripSearch.trim()
-            ? tmcTrips.filter(t =>
+            ? tmcTrips.filter((t) =>
                 t.tripCode?.toLowerCase().includes(tripSearch.toLowerCase()) ||
                 t.destination?.toLowerCase().includes(tripSearch.toLowerCase())
               )
@@ -781,34 +755,28 @@ export default function LandingPageBuilder() {
             >
               <button
                 type="button"
-                onClick={() => { setTripPickerOpen(o => !o); setTripSearch(''); }}
-                title="Link this landing page to a TMC trip so wizard submissions enrol participants immediately"
+                onClick={() => { setTripPickerOpen((open) => !open); setTripSearch(''); }}
+                title="Link this landing page to a TMC trip so wizard submissions enroll participants immediately"
                 aria-label="Link landing page to TMC trip"
                 aria-expanded={tripPickerOpen}
                 aria-haspopup="listbox"
                 style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0.3rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.78rem', background: 'var(--surface-color)', color: 'var(--text-primary)', cursor: 'pointer', maxWidth: 200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
               >
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, textAlign: 'left' }}>
-                  {selectedTrip ? `${selectedTrip.tripCode} (${selectedTrip.destination})` : '— Not linked to a trip —'}
+                  {selectedTrip ? (selectedTrip.tripCode + ' (' + selectedTrip.destination + ')') : '- Not linked to a trip -'}
                 </span>
                 <ChevronDown size={12} aria-hidden style={{ flexShrink: 0 }} />
               </button>
-
               {tripPickerOpen && (
-                <div style={{
-                  position: 'absolute', top: 'calc(100% + 4px)', right: 0,
-                  background: 'var(--surface-color)', border: '1px solid var(--border-color)',
-                  borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
-                  zIndex: 300, width: 280, overflow: 'hidden',
-                }}>
+                <div style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,0.18)', zIndex: 300, width: 280, overflow: 'hidden' }}>
                   <div style={{ padding: '8px 8px 6px', borderBottom: '1px solid var(--border-color)', position: 'relative' }}>
                     <Search size={13} aria-hidden style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
                     <input
                       autoFocus
                       type="search"
                       value={tripSearch}
-                      onChange={e => setTripSearch(e.target.value)}
-                      placeholder="Search trips…"
+                      onChange={(e) => setTripSearch(e.target.value)}
+                      placeholder="Search trips..."
                       aria-label="Search trips"
                       style={{ width: '100%', padding: '5px 8px 5px 26px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--input-bg, var(--surface-color))', color: 'var(--text-primary)', fontSize: '0.78rem', boxSizing: 'border-box' }}
                     />
@@ -819,22 +787,22 @@ export default function LandingPageBuilder() {
                       aria-selected={linkingTripId == null}
                       onClick={() => { handleLinkToTrip(''); setTripPickerOpen(false); setTripSearch(''); }}
                       style={{ padding: '7px 12px', fontSize: '0.78rem', cursor: 'pointer', color: 'var(--text-secondary)', background: linkingTripId == null ? 'var(--subtle-bg)' : 'transparent' }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg)'}
-                      onMouseLeave={e => e.currentTarget.style.background = linkingTripId == null ? 'var(--subtle-bg)' : 'transparent'}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--subtle-bg)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = linkingTripId == null ? 'var(--subtle-bg)' : 'transparent'; }}
                     >
-                      — Not linked to a trip —
+                      - Not linked to a trip -
                     </li>
                     {filteredTrips.length === 0 ? (
                       <li style={{ padding: '7px 12px', fontSize: '0.78rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No trips match</li>
-                    ) : filteredTrips.map(t => (
+                    ) : filteredTrips.map((t) => (
                       <li
                         key={t.id}
                         role="option"
                         aria-selected={linkingTripId === t.id}
                         onClick={() => { handleLinkToTrip(String(t.id)); setTripPickerOpen(false); setTripSearch(''); }}
                         style={{ padding: '7px 12px', fontSize: '0.78rem', cursor: 'pointer', background: linkingTripId === t.id ? 'var(--subtle-bg)' : 'transparent', display: 'flex', flexDirection: 'column', gap: 1 }}
-                        onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg)'}
-                        onMouseLeave={e => e.currentTarget.style.background = linkingTripId === t.id ? 'var(--subtle-bg)' : 'transparent'}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--subtle-bg)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = linkingTripId === t.id ? 'var(--subtle-bg)' : 'transparent'; }}
                       >
                         <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{t.tripCode}</span>
                         <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>{t.destination}</span>
@@ -847,15 +815,11 @@ export default function LandingPageBuilder() {
           );
         })()}
         <button className="btn-primary" onClick={() => handleSave(false)} disabled={saving || !slugIsValid} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.35rem 0.9rem', fontSize: '0.85rem' }}>
-          <Save size={14} /> {saving ? 'Saving...' : 'Save'}{isDirty && !saving && <span style={{ marginLeft: '0.3rem', opacity: 0.85 }}>•</span>}
+          <Save size={14} /> {saving ? 'Saving...' : 'Save'}{isDirty && !saving && <span style={{ marginLeft: '0.3rem', opacity: 0.85 }}>*</span>}
         </button>
-        {/* Publish controls — visible for every page. The "Check
-            readiness" button runs the backend gate without mutating
-            status so the user can iterate. Publish runs the gate then
-            flips status to PUBLISHED; Unpublish reverts to DRAFT. */}
         <button
           onClick={handleCheckReadiness}
-          title="Check what's still missing before this page can be published"
+          title="Check what is still missing before this page can be published"
           style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.35rem 0.7rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-primary)' }}
         >
           <CheckCircle2 size={13} /> Check
@@ -869,20 +833,22 @@ export default function LandingPageBuilder() {
             <Globe size={13} /> Unpublish
           </button>
         ) : (() => {
-          const blockedBy = allPages.find(p => p.status === 'PUBLISHED' && p.id !== page.id);
+          const blockedBy = allPages.find((p) => p.status === 'PUBLISHED' && p.id !== page.id);
           const isBlocked = !!blockedBy;
           return (
             <button
               onClick={handlePublish}
               disabled={publishing || !slugIsValid || isBlocked}
               title={
-                !slugIsValid ? 'Fix the slug first'
-                : isBlocked ? `"${blockedBy.title}" is currently live — unpublish it first`
-                : 'Publish — runs the readiness check then makes the page public'
+                !slugIsValid
+                  ? 'Fix the slug first'
+                  : isBlocked
+                    ? ('"' + blockedBy.title + '" is currently live - unpublish it first')
+                    : 'Publish - runs the readiness check then makes the page public'
               }
               style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.35rem 0.95rem', border: 'none', borderRadius: 6, background: (!slugIsValid || isBlocked) ? 'var(--subtle-bg)' : '#10b981', cursor: (publishing || !slugIsValid || isBlocked) ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: '#fff', fontWeight: 600, opacity: (publishing || isBlocked) ? 0.5 : 1 }}
             >
-              <Globe size={13} /> {publishing ? 'Publishing…' : 'Publish'}
+              <Globe size={13} /> {publishing ? 'Publishing...' : 'Publish'}
             </button>
           );
         })()}
@@ -896,12 +862,6 @@ export default function LandingPageBuilder() {
       {isTemplateMode ? (
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            {/* Wanderlux pages use a different config schema than the
-                four family templates (brand.name vs brand.programmeName,
-                hero.titleLines vs hero.headline, etc.). Route them to
-                the schema-matched editor so the form fields actually
-                read + write the right keys. Everything else still uses
-                the legacy editor for back-compat. */}
             {page && page.templateType === 'wanderlux-v1' ? (
               <LandingPageWanderluxEditor
                 content={templateContent}
@@ -917,36 +877,29 @@ export default function LandingPageBuilder() {
             )}
           </div>
           <aside style={{ width: page && page.templateType === 'wanderlux-v1' ? '340px' : '280px', borderLeft: '1px solid var(--border-color)', padding: '1rem', overflowY: 'auto', flexShrink: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-            {/* Wanderlux-only: layout panel pinned at the top of the
-                aside so reorder / show-hide / add-custom-block is the
-                first thing operators see. Mirrors the manual builder's
-                left-rail Components palette, but on the right because
-                the main column is field-form-shaped (not canvas-shaped). */}
-            {page && page.templateType === 'wanderlux-v1' && (
+            {page && page.templateType === 'wanderlux-v1' && !isGenericLandingSites && (
               <WanderluxLayoutPanel
                 cfg={templateContent || {}}
                 onChange={(next) => { setTemplateContent(next); setIsDirty(true); }}
                 isDirty={isDirty}
               />
             )}
-            <h4 style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.35rem' }}>Page</h4>
             <div style={{ lineHeight: 1.6 }}>
               <div><strong>Template:</strong> {page.templateType}</div>
               <div><strong>Title:</strong> {page.title}</div>
-              <div><strong>Slug:</strong> /p/{page.slug || '—'}</div>
+              <div><strong>Slug:</strong> {isGenericLandingSites ? ('/landing-sites/' + (page.slug || '?')) : ('/p/' + (page.slug || '?'))}</div>
               <div><strong>Status:</strong> {page.status}</div>
               {page.status === 'PUBLISHED' && (
                 <div style={{ marginTop: '0.9rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.9rem' }}>
                   <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: 5 }}>
                     <ExternalLink size={11} /> Public Link
                   </div>
-                  {/* Copyable URL row */}
                   <div style={{ display: 'flex', gap: 4, marginBottom: '0.5rem' }}>
                     <input
                       readOnly
-                      value={`${window.location.origin}/trips`}
+                      value={isGenericLandingSites ? (window.location.origin + '/landing-sites/' + (page?.slug || '')) : (window.location.origin + '/trips')}
                       style={{ flex: 1, fontSize: '0.72rem', padding: '5px 7px', borderRadius: 5, border: '1px solid var(--border-color)', background: 'var(--subtle-bg, #f9fafb)', color: 'var(--text-primary)', minWidth: 0, cursor: 'text' }}
-                      onClick={e => e.target.select()}
+                      onClick={(e) => e.target.select()}
                     />
                     <button
                       type="button"
@@ -957,53 +910,46 @@ export default function LandingPageBuilder() {
                       <Copy size={11} /> {urlCopied ? 'Copied!' : 'Copy'}
                     </button>
                   </div>
-                  {/* Open in new tab */}
                   <a
-                    href={`${window.location.origin}/trips`}
+                    href={isGenericLandingSites ? (window.location.origin + '/landing-sites/' + (page?.slug || '')) : (window.location.origin + '/trips')}
                     target="_blank"
                     rel="noreferrer"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.72rem', color: 'var(--accent-color)', textDecoration: 'none', marginBottom: '0.7rem' }}
                   >
                     <ExternalLink size={11} /> Open in new tab
                   </a>
-                  {/* Featured status — informational only (publish = featured) */}
-                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '0.6rem' }}>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                      <span style={{ color: '#f59e0b', fontWeight: 600 }}>★ Live — /trips is pointing here</span>
+                  {!isGenericLandingSites && (
+                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '0.6rem' }}>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        <span style={{ color: '#f59e0b', fontWeight: 600 }}>/trips is pointing here</span>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
             <p style={{ marginTop: '0.85rem', fontSize: '0.72rem', opacity: 0.85 }}>
-              This page renders through the {page.templateType} template. The renderer owns the layout — you only edit content slots on the left.
+              This page renders through the {page.templateType} template. The renderer owns the layout - you only edit content slots on the left.
             </p>
-            {/* PR-E Phase 2.3.5 / 2.3.6 — TEE Decision Panel + Regenerate
-                Strategy. Surfaces the _tee block stamped onto content by
-                teeContentBridge so demos can explain WHY a page chose
-                this family / theme / visualMood / composition. The panel
-                also hosts the Regenerate Strategy modal (R3) — operators
-                can re-classify without rebuilding the page. */}
             <TeeDecisionPanel
               teeBlock={templateContent && templateContent._tee}
               pageId={page && page.id}
               page={page}
               onReclassified={(newTee) => {
-                // Stamp the new TEE block onto content metadata. Content
-                // + images stay; only the decision log updates. The
-                // operator can then click "Generate with TEE" to rebuild
-                // the actual page under the new strategy.
                 if (!templateContent || !newTee) return;
-                const next = { ...templateContent, _tee: {
-                  ...(templateContent._tee || {}),
-                  family: newTee.family,
-                  themeId: newTee.themeId,
-                  visualMood: newTee.traits && newTee.traits.visualMood,
-                  composition: newTee.composition,
-                  traits: newTee.traits,
-                  decisions: newTee.decisionLog,
-                  reclassifiedAt: new Date().toISOString(),
-                }};
+                const next = {
+                  ...templateContent,
+                  _tee: {
+                    ...(templateContent._tee || {}),
+                    family: newTee.family,
+                    themeId: newTee.themeId,
+                    visualMood: newTee.traits && newTee.traits.visualMood,
+                    composition: newTee.composition,
+                    traits: newTee.traits,
+                    decisions: newTee.decisionLog,
+                    reclassifiedAt: new Date().toISOString(),
+                  },
+                };
                 setTemplateContent(next);
                 setIsDirty(true);
               }}
@@ -1011,61 +957,100 @@ export default function LandingPageBuilder() {
           </aside>
         </div>
       ) : (
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* Left: Component Palette — grouped by `group` so travel blocks
-            sit visually distinct from generic ones. Two sections render
-            in declaration order; the palette stays scrollable. */}
-        <div style={{ width: '200px', borderRight: '1px solid var(--border-color)', padding: '1rem', overflowY: 'auto', flexShrink: 0 }}>
-          {[
-            { id: 'generic', label: 'Components' },
-            { id: 'travel', label: 'Travel Destination' },
-          ].map((grp) => {
-            const items = COMPONENT_TYPES.filter((ct) => (ct.group || 'generic') === grp.id);
-            if (items.length === 0) return null;
-            return (
-              <div key={grp.id} style={{ marginBottom: '1rem' }}>
-                <h4 style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
-                  {grp.label}
-                </h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-                  {items.map((ct) => (
-                    <button
-                      key={ct.type}
-                      onClick={() => addComponent(ct.type)}
-                      style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'none', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.85rem', transition: 'all 0.15s', textAlign: 'left' }}
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+          <div style={{ width: '200px', borderRight: '1px solid var(--border-color)', padding: '1rem', overflowY: 'auto', flexShrink: 0 }}>
+            {[
+              { id: 'generic', label: 'Components' },
+              { id: 'travel', label: 'Travel Destination' },
+            ].map((grp) => {
+              const items = COMPONENT_TYPES.filter((ct) => (ct.group || 'generic') === grp.id);
+              if (items.length === 0) return null;
+              return (
+                <div key={grp.id} style={{ marginBottom: '1rem' }}>
+                  <h4 style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
+                    {grp.label}
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                    {items.map((ct) => (
+                      <button
+                        key={ct.type}
+                        onClick={() => addComponent(ct.type)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'none', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.85rem', transition: 'all 0.15s', textAlign: 'left' }}
+                      >
+                        <ct.icon size={14} /> {ct.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', background: 'var(--subtle-bg)', padding: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+            {previewMode === 'mobile' ? (
+              <div style={{ width: '395px', background: '#0f172a', borderRadius: '44px', padding: '18px 10px 14px', boxShadow: '0 30px 60px rgba(0,0,0,0.5), 0 0 0 1px #334155', flexShrink: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '10px' }}>
+                  <div style={{ width: '90px', height: '5px', background: '#334155', borderRadius: '3px' }} />
+                </div>
+                <div style={{ width: '375px', background: 'var(--surface-color)', borderRadius: '24px', overflow: 'hidden', maxHeight: '70vh', overflowY: 'auto' }}>
+                  {(previewLogo || previewBrandKit?.tagline) && (
+                    <div
+                      data-testid="landing-builder-brand-kit-ribbon"
+                      style={{
+                        background: 'var(--surface-color)',
+                        padding: '0.5rem 1rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        borderLeft: '4px solid ' + previewAccent,
+                      }}
                     >
-                      <ct.icon size={14} /> {ct.label}
-                    </button>
-                  ))}
+                      {previewLogo && <img src={previewLogo} alt="Brand logo preview" style={{ maxHeight: 28, maxWidth: 120, objectFit: 'contain' }} />}
+                      {previewBrandKit?.tagline && <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{previewBrandKit.tagline}</span>}
+                      {previewSubBrand && <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Preview: {previewSubBrand}</span>}
+                    </div>
+                  )}
+                  <div style={{ padding: '1rem', minHeight: '400px' }}>
+                    {components.length === 0 && (
+                      <div style={{ textAlign: 'center', padding: '4rem 2rem', color: '#94a3b8' }}>
+                        <Plus size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                        <p>Click components on the left to add them</p>
+                      </div>
+                    )}
+                    {components.map((comp, idx) => (
+                      <div key={comp.id} onClick={() => setSelected(idx)} style={{ position: 'relative', border: selected === idx ? '2px solid #3b82f6' : '2px solid transparent', borderRadius: '4px', padding: '0.25rem', margin: '0.25rem 0', cursor: 'pointer', transition: 'border-color 0.15s' }}>
+                        {selected === idx && (
+                          <div style={{ position: 'absolute', top: '-1px', right: '-1px', display: 'flex', gap: '0.125rem', zIndex: 10, background: '#3b82f6', borderRadius: '0 4px 0 4px', padding: '0.125rem' }}>
+                            <button onClick={(e) => { e.stopPropagation(); moveComponent(idx, -1); }} style={iconBtnStyle}><ChevronUp size={12} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); moveComponent(idx, 1); }} style={iconBtnStyle}><ChevronDown size={12} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); removeComponent(idx); }} style={iconBtnStyle}><Trash2 size={12} /></button>
+                          </div>
+                        )}
+                        <ComponentPreview comp={comp} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
+                  <div style={{ width: '120px', height: '4px', background: '#334155', borderRadius: '2px' }} />
                 </div>
               </div>
-            );
-          })}
-        </div>
-
-        {/* Center: Preview Canvas */}
-        <div style={{ flex: 1, overflowY: 'auto', background: 'var(--subtle-bg)', padding: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-          {previewMode === 'mobile' ? (
-            /* Phone frame — wraps the 375px canvas in a device bezel so the mobile
-               toggle is visually meaningful. Editing (select/move/delete) still works. */
-            <div style={{ width: '395px', background: '#0f172a', borderRadius: '44px', padding: '18px 10px 14px', boxShadow: '0 30px 60px rgba(0,0,0,0.5), 0 0 0 1px #334155', flexShrink: 0 }}>
-              {/* pill notch */}
-              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '10px' }}>
-                <div style={{ width: '90px', height: '5px', background: '#334155', borderRadius: '3px' }} />
-              </div>
-              {/* screen */}
-              <div style={{ width: '375px', background: 'var(--surface-color)', borderRadius: '24px', overflow: 'hidden', maxHeight: '70vh', overflowY: 'auto' }}>
-                {/* G094: BrandKit ribbon inside phone screen */}
+            ) : (
+              <>
                 {(previewLogo || previewBrandKit?.tagline) && (
                   <div
                     data-testid="landing-builder-brand-kit-ribbon"
                     style={{
+                      width: '100%',
+                      maxWidth: '800px',
                       background: 'var(--surface-color)',
+                      borderRadius: '8px',
+                      boxShadow: 'var(--glass-shadow)',
                       padding: '0.5rem 1rem',
                       display: 'flex',
                       alignItems: 'center',
                       gap: '0.75rem',
-                      borderLeft: `4px solid ${previewAccent}`,
+                      borderLeft: '4px solid ' + previewAccent,
                     }}
                   >
                     {previewLogo && <img src={previewLogo} alt="Brand logo preview" style={{ maxHeight: 28, maxWidth: 120, objectFit: 'contain' }} />}
@@ -1073,7 +1058,7 @@ export default function LandingPageBuilder() {
                     {previewSubBrand && <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Preview: {previewSubBrand}</span>}
                   </div>
                 )}
-                <div style={{ padding: '1rem', minHeight: '400px' }}>
+                <div style={{ width: '100%', maxWidth: '800px', background: 'var(--surface-color)', borderRadius: '8px', boxShadow: 'var(--glass-shadow)', padding: '2rem', minHeight: '400px' }}>
                   {components.length === 0 && (
                     <div style={{ textAlign: 'center', padding: '4rem 2rem', color: '#94a3b8' }}>
                       <Plus size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
@@ -1084,123 +1069,52 @@ export default function LandingPageBuilder() {
                     <div key={comp.id} onClick={() => setSelected(idx)} style={{ position: 'relative', border: selected === idx ? '2px solid #3b82f6' : '2px solid transparent', borderRadius: '4px', padding: '0.25rem', margin: '0.25rem 0', cursor: 'pointer', transition: 'border-color 0.15s' }}>
                       {selected === idx && (
                         <div style={{ position: 'absolute', top: '-1px', right: '-1px', display: 'flex', gap: '0.125rem', zIndex: 10, background: '#3b82f6', borderRadius: '0 4px 0 4px', padding: '0.125rem' }}>
-                          <button onClick={e => { e.stopPropagation(); moveComponent(idx, -1); }} style={iconBtnStyle}><ChevronUp size={12} /></button>
-                          <button onClick={e => { e.stopPropagation(); moveComponent(idx, 1); }} style={iconBtnStyle}><ChevronDown size={12} /></button>
-                          <button onClick={e => { e.stopPropagation(); removeComponent(idx); }} style={iconBtnStyle}><Trash2 size={12} /></button>
+                          <button onClick={(e) => { e.stopPropagation(); moveComponent(idx, -1); }} style={iconBtnStyle}><ChevronUp size={12} /></button>
+                          <button onClick={(e) => { e.stopPropagation(); moveComponent(idx, 1); }} style={iconBtnStyle}><ChevronDown size={12} /></button>
+                          <button onClick={(e) => { e.stopPropagation(); removeComponent(idx); }} style={iconBtnStyle}><Trash2 size={12} /></button>
                         </div>
                       )}
                       <ComponentPreview comp={comp} />
                     </div>
                   ))}
                 </div>
-              </div>
-              {/* home indicator bar */}
-              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '10px' }}>
-                <div style={{ width: '120px', height: '4px', background: '#334155', borderRadius: '2px' }} />
-              </div>
-            </div>
-          ) : (
-            /* Desktop canvas */
-            <>
-              {/* G094: BrandKit preview ribbon */}
-              {(previewLogo || previewBrandKit?.tagline) && (
-                <div
-                  data-testid="landing-builder-brand-kit-ribbon"
-                  style={{
-                    width: '100%',
-                    maxWidth: '800px',
-                    background: 'var(--surface-color)',
-                    borderRadius: '8px',
-                    boxShadow: 'var(--glass-shadow)',
-                    padding: '0.5rem 1rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.75rem',
-                    borderLeft: `4px solid ${previewAccent}`,
-                  }}
-                >
-                  {previewLogo && (
-                    <img
-                      src={previewLogo}
-                      alt="Brand logo preview"
-                      style={{ maxHeight: 28, maxWidth: 120, objectFit: 'contain' }}
-                    />
-                  )}
-                  {previewBrandKit?.tagline && (
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                      {previewBrandKit.tagline}
-                    </span>
-                  )}
-                  {previewSubBrand && (
-                    <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                      Preview: {previewSubBrand}
-                    </span>
-                  )}
-                </div>
-              )}
-              <div style={{ width: '100%', maxWidth: '800px', background: 'var(--surface-color)', borderRadius: '8px', boxShadow: 'var(--glass-shadow)', padding: '2rem', minHeight: '400px' }}>
-                {components.length === 0 && (
-                  <div style={{ textAlign: 'center', padding: '4rem 2rem', color: '#94a3b8' }}>
-                    <Plus size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
-                    <p>Click components on the left to add them</p>
-                  </div>
-                )}
-                {components.map((comp, idx) => (
-                  <div key={comp.id} onClick={() => setSelected(idx)} style={{ position: 'relative', border: selected === idx ? '2px solid #3b82f6' : '2px solid transparent', borderRadius: '4px', padding: '0.25rem', margin: '0.25rem 0', cursor: 'pointer', transition: 'border-color 0.15s' }}>
-                    {selected === idx && (
-                      <div style={{ position: 'absolute', top: '-1px', right: '-1px', display: 'flex', gap: '0.125rem', zIndex: 10, background: '#3b82f6', borderRadius: '0 4px 0 4px', padding: '0.125rem' }}>
-                        <button onClick={e => { e.stopPropagation(); moveComponent(idx, -1); }} style={iconBtnStyle}><ChevronUp size={12} /></button>
-                        <button onClick={e => { e.stopPropagation(); moveComponent(idx, 1); }} style={iconBtnStyle}><ChevronDown size={12} /></button>
-                        <button onClick={e => { e.stopPropagation(); removeComponent(idx); }} style={iconBtnStyle}><Trash2 size={12} /></button>
-                      </div>
-                    )}
-                    <ComponentPreview comp={comp} />
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Right: Property Editor — #449 grouped into Component + Page */}
-        <div style={{ width: '300px', borderLeft: '1px solid var(--border-color)', padding: '1rem', overflowY: 'auto', flexShrink: 0 }}>
-          {/* #449 Component section — only visible when a component is selected. */}
-          <section style={{ marginBottom: '1.5rem' }}>
-            <h4 style={{ fontSize: '0.7rem', fontWeight: '700', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.35rem' }}>
-              Component {selectedComp ? `· ${selectedComp.type}` : ''}
-            </h4>
-            {selectedComp ? (
-              <PropertyEditor
-                comp={selectedComp}
-                updateProp={(k, v) => updateProp(selectedComp.id, k, v)}
-                routingRules={routingRules}
-              />
-            ) : (
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', padding: '0.5rem 0', margin: 0 }}>
-                Click a component on the canvas to edit its properties.
-              </p>
+              </>
             )}
-          </section>
-          {/* #449 Page section — page-level properties (title shown read-only;
-              metadata is editable through the existing top bar). Surfacing
-              these under a sub-header gives the user a clearer mental model
-              of "what's component" vs "what's page". */}
-          <section>
-            <h4 style={{ fontSize: '0.7rem', fontWeight: '700', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.35rem' }}>
-              Page
-            </h4>
-            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-              <div><strong>Title:</strong> {page.title}</div>
-              <div><strong>Slug:</strong> /p/{page.slug || '—'}</div>
-              <div><strong>Status:</strong> {page.status}</div>
-              <div><strong>Components:</strong> {components.length}</div>
-              <div style={{ marginTop: '0.5rem', fontSize: '0.7rem', opacity: 0.8 }}>
-                Use the top bar to rename, change the slug, preview, or save.
+          </div>
+
+          <div style={{ width: '300px', borderLeft: '1px solid var(--border-color)', padding: '1rem', overflowY: 'auto', flexShrink: 0 }}>
+            <section style={{ marginBottom: '1.5rem' }}>
+              <h4 style={{ fontSize: '0.7rem', fontWeight: '700', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.35rem' }}>
+                Component {selectedComp ? ('- ' + selectedComp.type) : ''}
+              </h4>
+              {selectedComp ? (
+                <PropertyEditor
+                  comp={selectedComp}
+                  updateProp={(k, v) => updateProp(selectedComp.id, k, v)}
+                  routingRules={routingRules}
+                />
+              ) : (
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', padding: '0.5rem 0', margin: 0 }}>
+                  Click a component on the canvas to edit its properties.
+                </p>
+              )}
+            </section>
+            <section>
+              <h4 style={{ fontSize: '0.7rem', fontWeight: '700', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.35rem' }}>
+                Page
+              </h4>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                <div><strong>Title:</strong> {page.title}</div>
+                <div><strong>Slug:</strong> {isGenericLandingSites ? ('/landing-sites/' + (page.slug || '?')) : ('/p/' + (page.slug || '?'))}</div>
+                <div><strong>Status:</strong> {page.status}</div>
+                <div><strong>Components:</strong> {components.length}</div>
+                <div style={{ marginTop: '0.5rem', fontSize: '0.7rem', opacity: 0.8 }}>
+                  Use the top bar to rename, change the slug, preview, or save.
+                </div>
               </div>
-            </div>
-          </section>
+            </section>
+          </div>
         </div>
-      </div>
       )}
 
       {/* Publish-readiness modal. Surfaces the issues array the backend
@@ -1234,6 +1148,7 @@ export default function LandingPageBuilder() {
           onRestore={handleRestoreVersion}
           onPreview={handlePreviewVersion}
           onRefresh={loadVersions}
+          isGenericLandingSites={isGenericLandingSites}
         />
       )}
     </div>
@@ -1243,7 +1158,7 @@ export default function LandingPageBuilder() {
 // ── Version history modal ─────────────────────────────────────────────
 // Full-screen modal replacing the side drawer, showing all versions in
 // a readable grid with proper spacing and no overlapping text.
-function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, onRestore, onPreview, onRefresh }) {
+function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, onRestore, onPreview, onRefresh, isGenericLandingSites }) {
   return (
     <div
       role="dialog"
@@ -1347,7 +1262,7 @@ function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, o
                       </div>
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>SLUG</div>
                       <div style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: 'var(--text-primary)', wordBreak: 'break-all' }}>
-                        /p/{v.slug || '—'}
+                        {isGenericLandingSites ? ('/landing-sites/' + (v.slug || '?')) : ('/p/' + (v.slug || '?'))}
                       </div>
                     </div>
 
@@ -1411,24 +1326,19 @@ function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, 
       aria-labelledby="publish-readiness-title"
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}
     >
-      {/* className="card" inherits the theme-aware surface + blur from
-          index.css (.card uses var(--surface-color) which adapts to
-          dark / light). Pre-fix this used `var(--card-bg, #fff)` —
-          --card-bg isn't defined anywhere, so the fallback white made
-          the modal render white-on-white in dark mode (text was
-          var(--text-primary) which is white in dark mode → invisible). */}
+      {/* Theme-aware modal shell */}
       <div className="card" style={{ padding: '1.5rem', width: 'min(520px, 92vw)', maxHeight: '85vh', overflowY: 'auto', color: 'var(--text-primary)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
           {ok ? <CheckCircle2 size={20} style={{ color: '#10b981' }} /> : <AlertCircle size={20} style={{ color: '#f59e0b' }} />}
           <h3 id="publish-readiness-title" style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>
-            {ok ? 'Ready to publish' : `${issues.length} issue${issues.length === 1 ? '' : 's'} to fix`}
+            {ok ? 'Ready to publish' : (issues.length + ' issue' + (issues.length === 1 ? '' : 's') + ' to fix')}
           </h3>
-          <button onClick={onClose} aria-label="Close" style={{ marginLeft: 'auto', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '1.1rem', lineHeight: 1 }}>✕</button>
+          <button onClick={onClose} aria-label="Close" style={{ marginLeft: 'auto', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '1.1rem', lineHeight: 1 }}>X</button>
         </div>
         {ok ? (
           <>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1rem' }}>
-              Page passes every readiness check. Click Publish to make <code>/trips</code> public.
+              Page passes every readiness check. Click Publish to make <code>{isGenericLandingSites ? '/landing-sites/:slug' : '/trips'}</code> public.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
               <button onClick={onClose} style={{ padding: '0.5rem 1rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer' }}>Cancel</button>
@@ -1437,7 +1347,7 @@ function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, 
                 disabled={publishing}
                 style={{ padding: '0.5rem 1rem', border: 'none', borderRadius: 6, background: '#10b981', color: '#fff', cursor: publishing ? 'wait' : 'pointer', fontWeight: 600 }}
               >
-                {publishing ? 'Publishing…' : 'Publish'}
+                {publishing ? 'Publishing...' : 'Publish'}
               </button>
             </div>
           </>
@@ -1513,16 +1423,7 @@ function ComponentPreview({ comp }) {
     case 'text': return <p style={{ textAlign: p.align, color: p.color, fontSize: p.fontSize, margin: '0.5rem 0', lineHeight: 1.6 }}>{p.text}</p>;
     case 'image': return (
       <div style={{ textAlign: 'center' }}>
-        {/* #448: broken-image fallback. Pre-fix, a 404 / blocked / bad-MIME
-            src left the <img> with naturalWidth/Height=0, collapsing the
-            row to a 30px strip and silently breaking the page layout.
-            onError swaps the src to a transparent 1x1 SVG that holds the
-            box's intended dimensions, and the alt text reads as a visible
-            caption (CSS `font-style: italic` + dashed border) so the
-            owner notices the problem instead of shipping a broken page.
-            Builder-mode visibility is the priority — this exact pattern
-            also lives in services/landingPageRenderer.js for the public
-            /p/<slug> render path. */}
+        {/* Image preview with fallback */}
         <img
           src={p.src}
           alt={p.alt || 'Image failed to load'}
@@ -1530,7 +1431,7 @@ function ComponentPreview({ comp }) {
           onError={(e) => {
             if (e.target.dataset.fallback === '1') return;
             e.target.dataset.fallback = '1';
-            e.target.alt = p.alt ? `Image failed to load: ${p.alt}` : 'Image failed to load — check the URL';
+            e.target.alt = p.alt ? ('Image failed to load: ' + p.alt) : 'Image failed to load - check the URL';
             e.target.style.minHeight = '120px';
             e.target.style.padding = '2rem';
             e.target.style.border = '2px dashed #ef4444';
@@ -1557,7 +1458,7 @@ function ComponentPreview({ comp }) {
         <button style={{ padding: '0.75rem', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: '600' }}>{p.submitText}</button>
       </div>
     );
-    case 'divider': return <hr style={{ border: 'none', borderTop: `1px solid ${p.color}`, margin: p.margin }} />;
+    case 'divider': return <hr style={{ border: 'none', borderTop: '1px solid ' + p.color, margin: p.margin }} />;
     case 'spacer': return <div style={{ height: p.height }} />;
     case 'video': return <GenericVideoPreview p={p} />;
     case 'columns': return (
@@ -1571,12 +1472,7 @@ function ComponentPreview({ comp }) {
         ))}
       </div>
     );
-    // ── Travel block previews ────────────────────────────────────
-    // The builder canvas can't reach the server-injected
-    // `landingPageRenderer.travel.css`, so each preview ships a small,
-    // theme-faithful inline render — enough for the operator to see
-    // the structure + content while they edit. Public-render fidelity
-    // happens on /p/<slug>.
+    // Travel block previews
     case 'destinationHero': return <DestinationHeroPreview p={p} />;
     case 'cityCards': return <CityCardsPreview p={p} />;
     case 'highlightsGrid': return <HighlightsGridPreview p={p} />;
@@ -1671,11 +1567,11 @@ function ImagePropertyEditor({ p, updateProp, field }) {
       const token = getAuthToken();
       const r = await fetch('/api/landing-pages/upload', {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: token ? { Authorization: 'Bearer ' + token } : {},
         body: fd,
       });
       if (!r.ok) {
-        let msg = `Upload failed (${r.status})`;
+        let msg = 'Upload failed (' + r.status + ')';
         try { const j = await r.json(); if (j.error) msg = j.error; } catch (_e) { /* ignore */ }
         throw new Error(msg);
       }
@@ -1890,11 +1786,11 @@ function TravelImageField({ label, value, onChange, hint }) {
       const token = getAuthToken();
       const r = await fetch('/api/landing-pages/upload', {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: token ? { Authorization: 'Bearer ' + token } : {},
         body: fd,
       });
       if (!r.ok) {
-        let msg = `Upload failed (${r.status})`;
+        let msg = 'Upload failed (' + r.status + ')';
         try { const j = await r.json(); if (j.error) msg = j.error; } catch (_e) { /* ignore */ }
         throw new Error(msg);
       }
@@ -2517,11 +2413,11 @@ function GenericVideoEditor({ p, updateProp, field }) {
       const token = getAuthToken();
       const r = await fetch('/api/landing-pages/upload-video', {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: token ? { Authorization: 'Bearer ' + token } : {},
         body: fd,
       });
       if (!r.ok) {
-        let msg = `Upload failed (${r.status})`;
+        let msg = 'Upload failed (' + r.status + ')';
         try { const j = await r.json(); if (j.error) msg = j.error; } catch (_e) { /* ignore */ }
         throw new Error(msg);
       }
@@ -2633,11 +2529,11 @@ function TravelVideoEditor({ p, updateProp, field }) {
       const token = getAuthToken();
       const r = await fetch('/api/landing-pages/upload-video', {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: token ? { Authorization: 'Bearer ' + token } : {},
         body: fd,
       });
       if (!r.ok) {
-        let msg = `Upload failed (${r.status})`;
+        let msg = 'Upload failed (' + r.status + ')';
         try { const j = await r.json(); if (j.error) msg = j.error; } catch (_e) { /* ignore */ }
         throw new Error(msg);
       }
@@ -2797,11 +2693,11 @@ function BrochureDownloadEditor({ p, updateProp, field }) {
       const token = getAuthToken();
       const r = await fetch('/api/landing-pages/upload', {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: token ? { Authorization: 'Bearer ' + token } : {},
         body: fd,
       });
       if (!r.ok) {
-        let msg = `Upload failed (${r.status})`;
+        let msg = 'Upload failed (' + r.status + ')';
         try { const j = await r.json(); if (j.error) msg = j.error; } catch (_e) { /* ignore */ }
         throw new Error(msg);
       }
@@ -3067,4 +2963,4 @@ function ContactFooterEditor({ p, updateProp, field }) {
       </div>
     </>
   );
-}
+}// Travel block sub-components

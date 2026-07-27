@@ -92,6 +92,8 @@ beforeAll(() => {
   prisma.ticket = { findUnique: vi.fn() };
   prisma.contact = { findUnique: vi.fn() };
   prisma.user = { findMany: vi.fn(), findUnique: vi.fn() };
+  prisma.patient = { findUnique: vi.fn() };
+  prisma.tenant = { findUnique: vi.fn() };
 
   // Stub notificationService.notify on the shared CJS module.exports object.
   notificationService.notify = vi.fn();
@@ -109,6 +111,9 @@ beforeEach(() => {
   prisma.contact.findUnique.mockReset();
   prisma.user.findMany.mockReset();
   prisma.user.findUnique.mockReset();
+  prisma.patient.findUnique.mockReset();
+  prisma.tenant.findUnique.mockReset();
+  prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
   notificationService.notify.mockReset();
   notificationService.notify.mockResolvedValue({ id: 1 });
   FAKE_IO.emit.mockReset();
@@ -136,6 +141,13 @@ describe('listener registration', () => {
       'leave.requested',
       'leave.approved',
       'leave.denied',
+      'visit.scheduled',
+      'visit.assigned',
+      'visit.cancelled',
+      'payment.collected',
+      'membership.enrolled',
+      'membership.renewed',
+      'giftcard.redeemed',
     ];
     for (const eventName of supportedEvents) {
       expect(bus.listenerCount(eventName)).toBeGreaterThanOrEqual(1);
@@ -340,6 +352,128 @@ describe('approval.rejected → notify requester with warning priority', () => {
     expect(args.type).toBe('warning');
     expect(args.priority).toBe('normal');
     expect(args.entityType).toBe('approval');
+  });
+});
+
+
+describe('visit.scheduled / visit.assigned / visit.cancelled', () => {
+  test('visit.scheduled notifies admins/managers and the assigned doctor', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'wellness' });
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 1 }]);
+    bus.emit('visit.scheduled', {
+      payload: { visitId: 501, patientId: 99, doctorId: 77 },
+      tenantId: 42,
+      io: FAKE_IO,
+    });
+    await flushAsync();
+
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 42, role: { in: ['ADMIN', 'MANAGER'] } },
+      select: { id: true },
+    });
+    expect(notificationService.notify).toHaveBeenCalledTimes(2);
+    const recipientIds = notificationService.notify.mock.calls.map((call) => call[0].userId).sort((a, b) => a - b);
+    expect(recipientIds).toEqual([1, 77]);
+  });
+
+  test('visit.assigned notifies the assigned doctor and the patient user', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'wellness' });
+    prisma.patient.findUnique.mockResolvedValueOnce({ userId: 200 });
+    bus.emit('visit.assigned', {
+      payload: { visitId: 502, patientId: 99, doctorId: 77 },
+      tenantId: 42,
+      io: FAKE_IO,
+    });
+    await flushAsync();
+
+    expect(notificationService.notify).toHaveBeenCalledTimes(2);
+    const recipientIds = notificationService.notify.mock.calls.map((call) => call[0].userId).sort((a, b) => a - b);
+    expect(recipientIds).toEqual([77, 200]);
+    expect(notificationService.notify.mock.calls[0][0].link).toBe('/wellness/patients/99');
+  });
+
+  test('visit.cancelled notifies admins/managers, doctor, and patient user', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'wellness' });
+    prisma.patient.findUnique.mockResolvedValueOnce({ userId: 200 });
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 1 }, { id: 2 }]);
+    bus.emit('visit.cancelled', {
+      payload: { visitId: 503, patientId: 99, doctorId: 77 },
+      tenantId: 42,
+      io: FAKE_IO,
+    });
+    await flushAsync();
+
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 42, role: { in: ['ADMIN', 'MANAGER'] } },
+      select: { id: true },
+    });
+    expect(notificationService.notify).toHaveBeenCalledTimes(4);
+    const recipientIds = notificationService.notify.mock.calls.map((call) => call[0].userId).sort((a, b) => a - b);
+    expect(recipientIds).toEqual([1, 2, 77, 200]);
+  });
+});
+
+describe('wellness billing / membership / gift card notifications', () => {
+  test('payment.collected notifies admins and managers on wellness tenants only', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'wellness' });
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 11 }, { id: 12 }]);
+    bus.emit('payment.collected', {
+      payload: { invoiceId: 9001, amount: 2500, paymentId: 44 },
+      tenantId: 42,
+      io: FAKE_IO,
+    });
+    await flushAsync();
+
+    expect(notificationService.notify).toHaveBeenCalledTimes(2);
+    const args = notificationService.notify.mock.calls[0][0];
+    expect(args.category).toBe('billing');
+    expect(args.type).toBe('payment_collected');
+    expect(args.entityId).toBe(9001);
+  });
+
+  test('membership.enrolled and membership.renewed both notify admins/managers', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 21 }, { id: 22 }]);
+    bus.emit('membership.enrolled', {
+      payload: { membershipId: 301, planName: 'Annual Platinum' },
+      tenantId: 42,
+      io: FAKE_IO,
+    });
+    await flushAsync();
+    expect(notificationService.notify).toHaveBeenCalledTimes(2);
+
+    notificationService.notify.mockClear();
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 21 }, { id: 22 }]);
+    bus.emit('membership.renewed', {
+      payload: { membershipId: 302, planName: 'Annual Platinum' },
+      tenantId: 42,
+      io: FAKE_IO,
+    });
+    await flushAsync();
+    expect(notificationService.notify).toHaveBeenCalledTimes(2);
+    expect(notificationService.notify.mock.calls[0][0].type).toBe('membership_renewed');
+  });
+
+  test('giftcard.redeemed only notifies staff when the source is purchase', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 31 }, { id: 32 }]);
+    bus.emit('giftcard.redeemed', {
+      payload: { giftCardId: 401, amount: 5000, source: 'purchase' },
+      tenantId: 42,
+      io: FAKE_IO,
+    });
+    await flushAsync();
+    expect(notificationService.notify).toHaveBeenCalledTimes(2);
+
+    notificationService.notify.mockClear();
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 31 }, { id: 32 }]);
+    bus.emit('giftcard.redeemed', {
+      payload: { giftCardId: 402, amount: 5000 },
+      tenantId: 42,
+      io: FAKE_IO,
+    });
+    await flushAsync();
+    expect(notificationService.notify).not.toHaveBeenCalled();
   });
 });
 

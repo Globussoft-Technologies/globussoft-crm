@@ -1,5 +1,5 @@
 /**
- * wellness/LogVisitTab.test.jsx — vitest + RTL coverage for the Log Visit tab
+ * wellness/LogVisitTab.test.jsx ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â vitest + RTL coverage for the Log Visit tab
  * payment-link surface.
  *
  * Pins the following invariants:
@@ -32,7 +32,7 @@ vi.mock('../../utils/notify', () => ({
 }));
 
 vi.mock('../../utils/date', () => ({
-  formatDate: (d) => (d ? new Date(d).toISOString().slice(0, 10) : '—'),
+  formatDate: (d) => (d ? new Date(d).toISOString().slice(0, 10) : 'ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â'),
 }));
 
 import LogVisitTab from '../../pages/wellness/patientDetail/tabs/LogVisitTab';
@@ -55,7 +55,7 @@ function renderTab(props = {}) {
   };
 }
 
-describe('<wellness/LogVisitTab /> — payment link surface', () => {
+describe('<wellness/LogVisitTab /> ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â payment link surface', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     notifyObj.error.mockReset?.();
@@ -117,8 +117,66 @@ describe('<wellness/LogVisitTab /> — payment link surface', () => {
 
     await waitFor(() => {
       expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://rzp.io/l/visit-10');
-      expect(screen.getByRole('button', { name: /Copied!/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Copied payment link/i })).toBeInTheDocument();
     });
+  });
+
+  it('renders a Regenerate button for a completed visit that already has a payment link', () => {
+    const patient = {
+      id: 1,
+      visits: [
+        {
+          id: 10,
+          status: 'completed',
+          visitDate: '2026-07-20T10:00:00.000Z',
+          serviceId: 1,
+          service: sampleServices[0],
+          doctor: { name: 'Anita Das' },
+          amountCharged: 25000,
+          paymentLinkUrl: 'https://rzp.io/l/visit-10',
+        },
+      ],
+    };
+
+    renderTab({ patient });
+
+    expect(screen.getByRole('button', { name: /Copy/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Regenerate/i })).toBeInTheDocument();
+  });
+
+  it('clicking Regenerate calls the payment-link endpoint and refreshes the patient', async () => {
+    fetchApiMock.mockResolvedValue({ url: 'https://rzp.io/l/visit-10-new', gateway: 'razorpay' });
+
+    const patient = {
+      id: 1,
+      visits: [
+        {
+          id: 10,
+          status: 'completed',
+          visitDate: '2026-07-20T10:00:00.000Z',
+          serviceId: 1,
+          service: sampleServices[0],
+          doctor: { name: 'Anita Das' },
+          amountCharged: 25000,
+          paymentLinkUrl: 'https://rzp.io/l/visit-10',
+        },
+      ],
+    };
+
+    const { onSaved } = renderTab({ patient });
+
+    fireEvent.click(screen.getByRole('button', { name: /Regenerate/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/wellness/visits/10/payment-link',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(onSaved).toHaveBeenCalled();
+      expect(notifyObj.success).toHaveBeenCalledWith('Payment link generated and copied');
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://rzp.io/l/visit-10-new');
+    });
+    expect(screen.getByDisplayValue('https://rzp.io/l/visit-10-new')).toBeInTheDocument();
   });
 
   it('renders a Generate payment link button for a charged completed visit with no link', () => {
@@ -173,14 +231,55 @@ describe('<wellness/LogVisitTab /> — payment link surface', () => {
         expect.objectContaining({ method: 'POST' }),
       );
       expect(onSaved).toHaveBeenCalled();
-      expect(notifyObj.success).toHaveBeenCalledWith('Payment link generated');
+      expect(notifyObj.success).toHaveBeenCalledWith('Payment link generated and copied');
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://rzp.io/l/visit-11');
     });
     // The link surface should render immediately from the POST response,
     // without waiting for the parent re-fetch to complete.
     expect(screen.getByDisplayValue('https://rzp.io/l/visit-11')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Copy/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copied payment link/i })).toBeInTheDocument();
   });
 
+  it('sends the payment link to the patient via the send action and refreshes the link', async () => {
+    fetchApiMock.mockResolvedValue({
+      url: 'https://rzp.io/l/visit-11-send',
+      gateway: 'razorpay',
+      email: 'SENT',
+      whatsapp: 'SENT',
+      channel: 'email+whatsapp',
+    });
+
+    const patient = {
+      id: 1,
+      visits: [
+        {
+          id: 11,
+          status: 'completed',
+          visitDate: '2026-07-19T10:00:00.000Z',
+          serviceId: 1,
+          service: sampleServices[0],
+          doctor: { name: 'Dr. Manose' },
+          amountCharged: 18000,
+          paymentLinkUrl: null,
+        },
+      ],
+    };
+
+    const { onSaved } = renderTab({ patient });
+
+    fireEvent.click(screen.getByRole('button', { name: /Send payment link/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/wellness/visits/11/payment-link/send',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(onSaved).toHaveBeenCalled();
+      expect(notifyObj.success).toHaveBeenCalledWith('Payment link sent via email + WhatsApp');
+    });
+    expect(screen.getByDisplayValue('https://rzp.io/l/visit-11-send')).toBeInTheDocument();
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalledWith('https://rzp.io/l/visit-11-send');
+  });
   it('reflects the payment link returned by mark-as-visited after the patient refreshes', async () => {
     fetchApiMock
       .mockResolvedValueOnce({ id: 10, status: 'completed', paymentLinkUrl: 'https://rzp.io/l/visit-10' })
@@ -202,7 +301,7 @@ describe('<wellness/LogVisitTab /> — payment link surface', () => {
 
     const { onSaved } = renderTab({ patient });
 
-    fireEvent.click(screen.getByText(/2026-07-20 · Botox Treatment/));
+    fireEvent.click(screen.getByText(/2026-07-20 - Botox Treatment/));
     fireEvent.click(screen.getByRole('button', { name: /Mark as visited/i }));
 
     await waitFor(() => {
@@ -285,7 +384,8 @@ describe('<wellness/LogVisitTab /> — payment link surface', () => {
 
     await waitFor(() => {
       expect(onSaved).toHaveBeenCalled();
-      expect(notifyObj.success).toHaveBeenCalledWith('Payment link generated');
+      expect(notifyObj.success).toHaveBeenCalledWith('Payment link generated and copied');
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://rzp.io/l/visit-11-alt');
     });
     expect(screen.getByDisplayValue('https://rzp.io/l/visit-11-alt')).toBeInTheDocument();
   });

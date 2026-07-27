@@ -191,6 +191,23 @@ describe('<Staff /> — row action buttons (#618)', () => {
   });
 });
 
+describe('<Staff /> — role badge contrast', () => {
+  it('renders a readable role badge in dark mode', async () => {
+    const prevTheme = document.documentElement.getAttribute('data-theme');
+    document.documentElement.setAttribute('data-theme', 'dark');
+    try {
+      renderStaff('ADMIN');
+      await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
+
+      const badge = screen.getByText('Doctor');
+      expect(badge.getAttribute('style')).toContain('color: var(--accent-text, #F5F1E8)');
+      expect(badge.getAttribute('style')).toContain('border: 1px solid rgba(245,241,232,0.14)');
+    } finally {
+      if (prevTheme == null) document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', prevTheme);
+    }
+  });
+});
 // Note: #818 revenue-goal chips in the edit modal are not yet shipped on
 // this page (see TODOS / PRD §1.5). The describe block is intentionally
 // empty until the feature lands; do not delete — re-author against the

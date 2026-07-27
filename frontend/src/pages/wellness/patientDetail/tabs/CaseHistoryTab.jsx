@@ -1,4 +1,4 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { Stethoscope, FileText, FileSignature, ChevronDown, ChevronUp } from 'lucide-react';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../../../components/wellness/DateRangeFilter';
 import { RxDetailModal } from '../shared/components';
@@ -23,6 +23,20 @@ const kindIcon = (k) => {
   if (k === 'rx') return <FileText size={size} />;
   if (k === 'consent') return <FileSignature size={size} />;
   return null;
+};
+
+const cancelledVisitBadgeStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '0.16rem 0.5rem',
+  borderRadius: 999,
+  fontSize: '0.68rem',
+  fontWeight: 700,
+  letterSpacing: '0.02em',
+  color: '#b91c1c',
+  background: 'rgba(239, 68, 68, 0.12)',
+  border: '1px solid rgba(239, 68, 68, 0.22)',
+  textTransform: 'uppercase',
 };
 
 // #278 sub-issue 1: previously this only rendered the drug rows and silently
@@ -146,6 +160,7 @@ export default function CaseHistoryTab({ patient }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                   {kindIcon(e.kind)}
                   <strong style={{ textTransform: 'capitalize' }}>{kindLabel(e.kind)}</strong>
+                  {e.kind === 'visit' && e.data.status === 'cancelled' && <span style={cancelledVisitBadgeStyle}>Cancelled visit</span>}
                   {e.kind === 'visit' && e.data.service?.name && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.service.name}</span>}
                   {e.kind === 'consent' && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>— {e.data.templateName}</span>}
                 </div>
@@ -182,3 +197,5 @@ export default function CaseHistoryTab({ patient }) {
     </div>
   );
 }
+
+

@@ -1,8 +1,8 @@
-/**
- * Profile.jsx — Practitioner section conditional render (#641) + form contracts.
+﻿/**
+ * Profile.jsx  Practitioner section conditional render (#641) + form contracts.
  *
  * Issue context
- * ─────────────
+ * 
  *   Wellness Demo User (user@wellness.demo, RBAC role=USER) was rendered
  *   a phantom "Practitioner" badge + section on /profile, even though
  *   they had no clinical privileges. Root cause: the seed had quietly
@@ -12,12 +12,12 @@
  *   render regression breaks the test, not the demo.
  *
  * Contracts pinned here
- * ─────────────────────
+ * 
  *   Practitioner gating (#641):
  *     1. When /api/auth/me returns wellnessRole=null, Profile DOES NOT
  *        render the practitioner section (data-testid="profile-practitioner-section")
  *        AND DOES NOT render the wellnessRole badge (data-testid="profile-wellness-role-badge").
- *     2. Same for wellnessRole='helper' or 'telecaller' — non-clinical
+ *     2. Same for wellnessRole='helper' or 'telecaller'  non-clinical
  *        wellness roles still must NOT see the practitioner block.
  *     3. When wellnessRole='doctor' OR 'professional', Profile renders
  *        both the practitioner section AND the wellness-role badge.
@@ -105,7 +105,7 @@ function renderProfile(meResponse, opts = {}) {
   );
 }
 
-describe('<Profile /> — practitioner section gating (#641)', () => {
+describe('<Profile /> - practitioner section gating (#641)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -131,7 +131,7 @@ describe('<Profile /> — practitioner section gating (#641)', () => {
 
       expect(screen.queryByTestId('profile-practitioner-section')).not.toBeInTheDocument();
       // The wellnessRole badge SHOULD appear (the role is set), but the
-      // practitioner section must NOT — these two render conditions are
+      // practitioner section must NOT  these two render conditions are
       // intentionally different (badge = "is wellnessRole truthy", section
       // = "is wellnessRole clinical").
       expect(screen.getByTestId('profile-wellness-role-badge')).toBeInTheDocument();
@@ -292,12 +292,12 @@ describe('<Profile /> - initial fetch + loading state', () => {
   });
 });
 
-describe('<Profile /> — Edit Profile form', () => {
+describe('<Profile /> - Edit Profile form', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
 
-  it('diff-PATCHes only changed fields on Save (#606 — no-op writes are blocked)', async () => {
+  it('diff-PATCHes only changed fields on Save (#606 - no-op writes are blocked)', async () => {
     const profile = {
       id: 60, name: 'Bob Baseline', email: 'bob@base.test',
       role: 'USER', wellnessRole: null, createdAt: '2026-01-01T00:00:00Z',
@@ -387,7 +387,7 @@ describe('<Profile /> — Edit Profile form', () => {
       expect(screen.getByText(/no changes to save/i)).toBeInTheDocument()
     );
 
-    // No PUT call was made — fetchApiMock should only have the
+    // No PUT call was made  fetchApiMock should only have the
     // initial GET.
     const putCalls = fetchApiMock.mock.calls.filter(
       (c) => c[1]?.method === 'PUT'
@@ -437,7 +437,7 @@ describe('<Profile /> — Edit Profile form', () => {
   });
 });
 
-describe('<Profile /> — Change Password form', () => {
+describe('<Profile /> - Change Password form', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
   });
@@ -523,7 +523,7 @@ describe('<Profile /> — Change Password form', () => {
     await waitFor(() => expect(screen.getByText('Frank Fail')).toBeInTheDocument());
 
     fireEvent.change(screen.getByPlaceholderText('Enter current password'), { target: { value: 'old-pw-12' } });
-    fireEvent.change(screen.getByPlaceholderText('Enter new password'), { target: { value: 'new-pw-AAA' } });
+    fireEvent.change(screen.getByPlaceholderText('Enter new password'), { target: { value: 'new-pw--' } });
     fireEvent.change(screen.getByPlaceholderText('Confirm new password'), { target: { value: 'new-pw-BBB' } });
 
     fireEvent.click(screen.getByRole('button', { name: /change password/i }));
@@ -575,3 +575,4 @@ describe('<Profile /> — Change Password form', () => {
     expect(putCalls).toHaveLength(0);
   });
 });
+

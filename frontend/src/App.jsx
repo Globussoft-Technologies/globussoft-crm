@@ -67,6 +67,7 @@ const PublicTripMicrosite = lazy(() => import("./pages/travel/PublicTripMicrosit
 // Public itinerary share page (no auth) — the advisor's "Share link" opens
 // /p/itinerary/:shareToken here. Backed by GET /api/travel/itineraries/public/:shareToken.
 const TripBooking = lazy(() => import("./pages/public/TripBooking"));
+const LandingSiteResolver = lazy(() => import("./pages/public/LandingSiteResolver"));
 const TravelKycCallback = lazy(() => import("./pages/travel/TravelKycCallback"));
 // PRD §3.1 / slice T9 — public no-auth TMC readiness diagnostic.
 const TmcReadiness = lazy(() => import("./pages/public/TmcReadiness"));
@@ -114,6 +115,7 @@ const Pricing = lazy(() => import("./pages/Pricing"));
 const ManagePlans = lazy(() => import("./pages/ManagePlans"));
 const Channels = lazy(() => import("./pages/Channels"));
 const LandingPages = lazy(() => import("./pages/LandingPages"));
+const LandingSites = lazy(() => import("./pages/LandingSites"));
 const LandingPageBuilder = lazy(() => import("./pages/LandingPageBuilder"));
 const LegalPage = lazy(() => import("./pages/LegalPage"));
 const AuditLog = lazy(() => import("./pages/AuditLog"));
@@ -1194,6 +1196,7 @@ export default function App() {
                       hardcoded Japan TripsLanding if no page is featured
                       yet (lazy-imported by the resolver). */}
                   <Route path="/trips" element={<TripsResolver />} />
+                  <Route path="/landing-sites/:slug" element={<LandingSiteResolver />} />
                   {/* React landing page renderer test — accessible during migration
                       for QA to validate React output against HTML renderer.
                       Usage: /test/react-landing-page?id=123 or ?slug=my-slug
@@ -1328,6 +1331,11 @@ export default function App() {
                       }
                     />
                     <Route path="landing-pages" element={<TravelOnly><LandingPages /></TravelOnly>} />
+                    <Route path="landing-sites" element={<GenericOnly><LandingSites /></GenericOnly>} />
+                    <Route
+                      path="landing-sites/builder/:id"
+                      element={<GenericOnly><LandingPageBuilder /></GenericOnly>}
+                    />
                     <Route
                       path="landing-pages/builder/:id"
                       element={<TravelOnly><LandingPageBuilder /></TravelOnly>}

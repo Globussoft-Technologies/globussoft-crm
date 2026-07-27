@@ -1,16 +1,16 @@
-name: Deploy to demo server (crm.globusdemos.com)
+﻿name: Deploy to demo server (crm.globusdemos.com)
 
 on:
   push:
     branches: [main, staging_crm]
     paths-ignore:
       # Skip the entire workflow when only docs / operator scripts change.
-      # (paths-ignore does NOT support !negation — keep this as a flat list.)
+      # (paths-ignore does NOT support !negation  keep this as a flat list.)
       - "**/*.md"
       - "docs/**"
       - "backend/scripts/**"
       - ".gitignore"
-      # NOTE: e2e/** is intentionally NOT ignored anymore — changes to specs
+      # NOTE: e2e/** is intentionally NOT ignored anymore  changes to specs
       # should trigger the api_tests job so we know the new spec passes
       # before deploying. The deploy job itself doesn't depend on any e2e
       # file at runtime; the api_tests job runs them.
@@ -26,13 +26,13 @@ on:
         default: false
       seed_wellness:
         # Re-runs prisma/seed-wellness.js on the demo box AFTER the schema
-        # sync step succeeds. Defaults false on regular pushes — only set
+        # sync step succeeds. Defaults false on regular pushes  only set
         # this when a release adds new seeded models / rows that the
         # additive `prisma db push` cannot create on its own (e.g. v3.6.0
         # added the Drug model + 16 drug rows; the model landed via
         # `db push` but the rows required a manual seed-on-demo run, and
         # drugs-api e2e-full specs went red until someone noticed).
-        # Idempotent — every upsert keys on (tenantId, name).
+        # Idempotent  every upsert keys on (tenantId, name).
         # Alternative trigger: scripts/seed-drugs-on-demo.py.
         description: "Re-run seed-wellness.js after schema sync (use after adding new seeded models)"
         type: boolean
@@ -48,16 +48,16 @@ on:
         type: boolean
         default: false
 
-# One deploy at a time — never cancel an in-flight deploy. A half-finished
+# One deploy at a time  never cancel an in-flight deploy. A half-finished
 # deploy on prod is worse than the next push waiting in the queue.
 concurrency:
   group: deploy-prod
   cancel-in-progress: false
 
 jobs:
-  # ── 1. BUILD: backend syntax-check + frontend vite build ────────────
+  #  1. BUILD: backend syntax-check + frontend vite build 
   # Catches JSX errors, import typos, missing modules, npm install failures.
-  # No DB, no server boot — pure static validation. ~3 min.
+  # No DB, no server boot  pure static validation. ~3 min.
   build:
     if: ${{ inputs.skip_tests != true }}
     runs-on: ubuntu-latest
@@ -74,13 +74,13 @@ jobs:
             backend/package-lock.json
             frontend/package-lock.json
 
-      - name: Backend — npm ci + prisma generate + syntax check
+      - name: Backend - npm ci + prisma generate + syntax check
         working-directory: backend
         run: |
           set -euo pipefail
           npm ci --no-audit --no-fund
           npx prisma generate
-          # Parse-check every backend .js — catches the kind of class of
+          # Parse-check every backend .js  catches the kind of class of
           # bugs the cleanup-script Python-docstring header had on first
           # write (lesson from a 2026-04-27 dev cycle).
           fails=0
@@ -96,19 +96,19 @@ jobs:
           fi
           echo "::notice::All backend .js files parse cleanly"
 
-      - name: Frontend — npm ci + vite build
+      - name: Frontend - npm ci + vite build
         working-directory: frontend
         run: |
           set -euo pipefail
           npm ci --no-audit --no-fund
           # Vite build catches JSX / import errors AND ensures the bundle
           # actually compiles. Output goes to dist/ which we just
-          # discard — the deploy job rebuilds on the server.
+          # discard  the deploy job rebuilds on the server.
           npx vite build --logLevel=error
           du -sh dist
           echo "::notice::Frontend bundle builds cleanly"
 
-      - name: Frontend — bundle-size budget gate (CI-6)
+      - name: Frontend - bundle-size budget gate (CI-6)
         working-directory: frontend
         # Compare per-chunk + total sizes against
         # frontend/.bundle-size-budget.json. Fails if any chunk exceeds
@@ -120,7 +120,7 @@ jobs:
           npm run check:bundle-size
           echo "::notice::Bundle-size budget OK"
 
-  # ── 2. API_TESTS: run our pure-API specs against a CI-local backend ──
+  #  2. API_TESTS: run our pure-API specs against a CI-local backend 
   # Spins up MySQL 8 service container, seeds, boots backend on :5000,
   # runs ci-smoke.spec.js (4 tests). Promoted from informational to
   # MANDATORY on a7962b3 after a green run confirmed the fixture-init
@@ -162,7 +162,7 @@ jobs:
       # patient (seed-wellness.js:333-355). routes/wellness.js:4287-4299 gates
       # the bypass on three conditions: WELLNESS_DEMO_OTP env-var set,
       # NODE_ENV !== 'production' (we set 'test' above), AND the phone in
-      # WELLNESS_DEMO_OTP_PHONES (defaults to "9876500001" — matches the
+      # WELLNESS_DEMO_OTP_PHONES (defaults to "9876500001"  matches the
       # seeded patient, no override needed). Without this env-var the
       # spec's beforeAll blocks at verify-otp 401 and every test in the
       # file fails. Demo box has the same env-var per the v3.4.9 release
@@ -182,7 +182,7 @@ jobs:
 
       - name: Install mysql-client (for G-15 backup-engine-api.spec.js)
         # ubuntu-latest ships mysqladmin (used by the wait loop below)
-        # but NOT mysqldump — mysqldump lives in the mysql-client
+        # but NOT mysqldump  mysqldump lives in the mysql-client
         # package. cron/backupEngine.js shells `mysqldump` from PATH;
         # without this step the G-15 spec would skip its file-creation
         # tests with a "mysqldump unreachable" warning. Adds ~5s install.
@@ -217,7 +217,7 @@ jobs:
             sleep 1
           done
 
-      - name: Backend — install + prisma db push + seed
+      - name: Backend - install + prisma db push + seed
         working-directory: backend
         run: |
           set -euo pipefail
@@ -255,13 +255,13 @@ jobs:
           tail -50 /tmp/backend.log
           exit 1
 
-      - name: E2E install (no browser binary — gated specs are request-only)
+      - name: E2E install (no browser binary - gated specs are request-only)
         working-directory: e2e
         run: |
           set -euo pipefail
           npm ci --no-audit --no-fund
           # DELIBERATELY no `playwright install chromium`. Every spec in the
-          # gate list below uses Playwright's `request` (HTTP) fixture — none
+          # gate list below uses Playwright's `request` (HTTP) fixture  none
           # launch a browser. The one UI test (forgot-password.spec.js) skips
           # at COLLECTION time under IS_LOCAL_STACK, so its `page` fixture is
           # never resolved and no browser launch is attempted. Skipping the
@@ -307,39 +307,39 @@ jobs:
           #   - contacts-api.spec.js         (77 tests: routes/contacts.js)
           #   - deals-api.spec.js            (73 tests: routes/deals.js)
           #   - surveys-api.spec.js          (54 tests: routes/surveys.js + public endpoints)
-          #   - external-api.spec.js         (53 tests: routes/external.js — X-API-Key partner endpoints)
+          #   - external-api.spec.js         (53 tests: routes/external.js  X-API-Key partner endpoints)
           #   - wellness-clinical-api.spec.js (~154 tests: routes/wellness.js patient/visit/Rx/consent/service/location)
           #   - social-api.spec.js           (62 tests: routes/social.js)
-          #   - workflows-api.spec.js        (48 tests: routes/workflows.js — G-2)
-          #   - integrations-api.spec.js     (30 tests: routes/integrations.js + Callified SSO — G-3)
-          #   - audit-api.spec.js            (27 tests: routes/audit.js compliance + #558 /verify hash-chain — G-5)
-          #   - appointment-reminders-api.spec.js (16 tests: cron/appointmentRemindersEngine.js — G-6)
-          #   - security-headers.spec.js     ( 3 tests: helmet/CSP regression detection — G-25)
-          #   - ab-tests-api.spec.js         (38 tests: routes/ab_tests.js — R-1)
-          #   - deal-insights-engine-api.spec.js (14 tests: cron/dealInsightsEngine.js + POST /run — G-13)
-          #   - accounting-api.spec.js       (37 tests: routes/accounting.js — R-1)
-          #   - canned-responses-api.spec.js (23 tests: routes/canned_responses.js — R-1)
-          #   - document-templates-api.spec.js (42 tests: routes/document_templates.js — R-4)
-          #   - booking-pages-api.spec.js    (43 tests: routes/booking_pages.js — R-4)
-          #   - email-threading-api.spec.js  (33 tests: routes/email_threading.js — R-4)
-          #   - field-permissions-enforcement-api.spec.js (9 tests: middleware/fieldFilter.js wired into routes/deals.js + routes/contacts.js — #464)
-          #   - api-docs.spec.js             ( 5 tests: /api-docs Swagger UI + /api-docs/swagger.json OpenAPI raw spec — #542)
-          #   - wellness-rbac-regression-api.spec.js (21 tests: companion to wellness-rbac-api covering #259/#280/#323/#324/#325/#326/#348 + #527/#533 PHI gates — P0 from regression-coverage-backlog)
-          #   - auth-security-regression-api.spec.js (21 tests: companion to auth-security-api covering #186/#191/#192/#254/#269/#292/#295/#300/#342 + #343/#344 storage-policy file-grep — P1 from regression-coverage-backlog)
-          #   - audit-coverage-api.spec.js   (30 tests: AuditLog emission per mutating endpoint across Contact/Deal/Patient/Invoice/Estimate/Task/Pipeline/Notification — closes #134/#167/#179/#180 from regression-coverage-backlog item #5)
-          #   - public-booking-api.spec.js   (24 tests: regression pin for #208/#218/#219/#279/#283/#291/#297/#378 — public booking + embed widget gate, P1 from regression-coverage-backlog item #14)
-          #   - services-api.spec.js         (33 tests: regression pin for #115/#161/#209/#274/#364 — wellness service catalog validation + RBAC + structured-error contract, P2 from regression-coverage-backlog item #13)
-          #   - deals_documents.spec.js      (10 tests: routes/deals_documents.js — upload + list + #585 binary-PDF generate-quote contract)
-          #   - knowledge-base-api.spec.js   (15 tests: routes/knowledge_base.js public + authed CRUD — orphan-wave 2026-05-17)
-          #   - landing-pages-api.spec.js    (41 tests: routes/landing_pages.js admin CRUD + duplicate + analytics — G-1 orphan-wave 2026-05-17)
-          #   - portal-api.spec.js           (16 tests: routes/portal.js public + auth gates + #238 verify-otp — orphan-wave 2026-05-17)
-          #   - tenant-switch-disabled-api.spec.js (5 tests: #555 lock-per-session policy contract — orphan-wave 2026-05-17)
-          #   - voice-transcription-api.spec.js (19 tests: routes/voice_transcription.js coverage push — orphan-wave 2026-05-17)
-          #   - channels-credentials-api.spec.js (10 tests: #651 SMS/WhatsApp/telephony credential masking + rotation + RBAC — orphan-wave 2026-05-18)
-          #   - wellness-consent-archive-api.spec.js (10 tests: #564 consent captureMethod allowlist + BLOB archive idempotence + RBAC — orphan-wave 2026-05-18)
-          #   - voyagr-lead-capture-api.spec.js (15 tests: routes/voyagr.js + middleware/voyagrAuth.js — cluster F1 voyagr/OJR CMS lead capture, locked 2026-05-23)
-          #   - wellness-patient-timeline-api.spec.js (13 tests: routes/wellness.js patient timeline JSON + CSV — ticks #198/#200)
-          #   - security-headers-api.spec.js ( 8 tests: #921 slice S4 FR-3.6 iframe-isolation — X-Frame-Options: DENY + CSP frame-ancestors 'none' + SRI build tags)
+          #   - workflows-api.spec.js        (48 tests: routes/workflows.js  G-2)
+          #   - integrations-api.spec.js     (30 tests: routes/integrations.js + Callified SSO  G-3)
+          #   - audit-api.spec.js            (27 tests: routes/audit.js compliance + #558 /verify hash-chain  G-5)
+          #   - appointment-reminders-api.spec.js (16 tests: cron/appointmentRemindersEngine.js  G-6)
+          #   - security-headers.spec.js     ( 3 tests: helmet/CSP regression detection  G-25)
+          #   - ab-tests-api.spec.js         (38 tests: routes/ab_tests.js  R-1)
+          #   - deal-insights-engine-api.spec.js (14 tests: cron/dealInsightsEngine.js + POST /run  G-13)
+          #   - accounting-api.spec.js       (37 tests: routes/accounting.js  R-1)
+          #   - canned-responses-api.spec.js (23 tests: routes/canned_responses.js  R-1)
+          #   - document-templates-api.spec.js (42 tests: routes/document_templates.js  R-4)
+          #   - booking-pages-api.spec.js    (43 tests: routes/booking_pages.js  R-4)
+          #   - email-threading-api.spec.js  (33 tests: routes/email_threading.js  R-4)
+          #   - field-permissions-enforcement-api.spec.js (9 tests: middleware/fieldFilter.js wired into routes/deals.js + routes/contacts.js  #464)
+          #   - api-docs.spec.js             ( 5 tests: /api-docs Swagger UI + /api-docs/swagger.json OpenAPI raw spec  #542)
+          #   - wellness-rbac-regression-api.spec.js (21 tests: companion to wellness-rbac-api covering #259/#280/#323/#324/#325/#326/#348 + #527/#533 PHI gates  P0 from regression-coverage-backlog)
+          #   - auth-security-regression-api.spec.js (21 tests: companion to auth-security-api covering #186/#191/#192/#254/#269/#292/#295/#300/#342 + #343/#344 storage-policy file-grep  P1 from regression-coverage-backlog)
+          #   - audit-coverage-api.spec.js   (30 tests: AuditLog emission per mutating endpoint across Contact/Deal/Patient/Invoice/Estimate/Task/Pipeline/Notification  closes #134/#167/#179/#180 from regression-coverage-backlog item #5)
+          #   - public-booking-api.spec.js   (24 tests: regression pin for #208/#218/#219/#279/#283/#291/#297/#378  public booking + embed widget gate, P1 from regression-coverage-backlog item #14)
+          #   - services-api.spec.js         (33 tests: regression pin for #115/#161/#209/#274/#364  wellness service catalog validation + RBAC + structured-error contract, P2 from regression-coverage-backlog item #13)
+          #   - deals_documents.spec.js      (10 tests: routes/deals_documents.js  upload + list + #585 binary-PDF generate-quote contract)
+          #   - knowledge-base-api.spec.js   (15 tests: routes/knowledge_base.js public + authed CRUD  orphan-wave 2026-05-17)
+          #   - landing-pages-api.spec.js    (41 tests: routes/landing_pages.js admin CRUD + duplicate + analytics  G-1 orphan-wave 2026-05-17)
+          #   - portal-api.spec.js           (16 tests: routes/portal.js public + auth gates + #238 verify-otp  orphan-wave 2026-05-17)
+          #   - tenant-switch-disabled-api.spec.js (5 tests: #555 lock-per-session policy contract  orphan-wave 2026-05-17)
+          #   - voice-transcription-api.spec.js (19 tests: routes/voice_transcription.js coverage push  orphan-wave 2026-05-17)
+          #   - channels-credentials-api.spec.js (10 tests: #651 SMS/WhatsApp/telephony credential masking + rotation + RBAC  orphan-wave 2026-05-18)
+          #   - wellness-consent-archive-api.spec.js (10 tests: #564 consent captureMethod allowlist + BLOB archive idempotence + RBAC  orphan-wave 2026-05-18)
+          #   - voyagr-lead-capture-api.spec.js (15 tests: routes/voyagr.js + middleware/voyagrAuth.js  cluster F1 voyagr/OJR CMS lead capture, locked 2026-05-23)
+          #   - wellness-patient-timeline-api.spec.js (13 tests: routes/wellness.js patient timeline JSON + CSV  ticks #198/#200)
+          #   - security-headers-api.spec.js ( 8 tests: #921 slice S4 FR-3.6 iframe-isolation  X-Frame-Options: DENY + CSP frame-ancestors 'none' + SRI build tags)
           # Total: ~1733 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
@@ -557,7 +557,7 @@ jobs:
         run: |
           kill $(cat /tmp/backend.pid) 2>/dev/null || true
 
-  # ── 3. LINT: ESLint over backend/ + frontend/, plus npm audit gate on
+  #  3. LINT: ESLint over backend/ + frontend/, plus npm audit gate on
   # backend deps. Gates on errors only (warnings allowed on legacy code;
   # fix incrementally). Project-specific rules block bare `req.user.id`
   # references on backend (JWT payload key is `userId`) and `no-undef` /
@@ -580,7 +580,7 @@ jobs:
             backend/package-lock.json
             frontend/package-lock.json
 
-      - name: Backend — npm ci
+      - name: Backend - npm ci
         working-directory: backend
         run: |
           set -euo pipefail
@@ -602,7 +602,7 @@ jobs:
           npm run audit:check
           echo "::notice::npm audit gate passed (no NEW high/critical vulnerabilities outside allowlist)"
 
-      - name: Frontend — npm ci
+      - name: Frontend - npm ci
         working-directory: frontend
         run: |
           set -euo pipefail
@@ -615,9 +615,9 @@ jobs:
           npm run lint
           echo "::notice::Frontend ESLint passed (errors=0; warnings allowed on legacy code)"
 
-  # ── 4. UNIT_TESTS: vitest unit tests for backend/lib + middleware + ──
+  #  4. UNIT_TESTS: vitest unit tests for backend/lib + middleware + 
   # services + utils. Runs in parallel with api_tests; no MySQL, no
-  # server boot, no Playwright — pure-fn assertions with prisma + fetch +
+  # server boot, no Playwright  pure-fn assertions with prisma + fetch +
   # web-push mocks. ~1-2s of test runtime; the install step dominates.
   # Promoted to mandatory same as api_tests on the deploy gate below.
   unit_tests:
@@ -634,12 +634,12 @@ jobs:
           cache: "npm"
           cache-dependency-path: backend/package-lock.json
 
-      - name: Backend — npm ci + prisma generate
+      - name: Backend - npm ci + prisma generate
         working-directory: backend
         run: |
           set -euo pipefail
           npm ci --no-audit --no-fund
-          # Match the build + api_tests gates — generate the Linux Prisma
+          # Match the build + api_tests gates  generate the Linux Prisma
           # query engine for the GHA runner so any test that lazy-loads
           # PrismaClient (even from teardown) finds the right .so binary.
           # Without this, developer.test.js exits 1 with an unhandled
@@ -660,8 +660,8 @@ jobs:
           npm run test:integration
           echo "::notice::Integration tests passed"
 
-  # ── 5. FRONTEND_UNIT_TESTS: vitest + RTL over frontend/src components + ─
-  # utils. G-21 — first wave of frontend unit-test infra. Mirrors backend's
+  #  5. FRONTEND_UNIT_TESTS: vitest + RTL over frontend/src components + 
+  # utils. G-21  first wave of frontend unit-test infra. Mirrors backend's
   # unit_tests gate but in jsdom; no DB, no server boot, no Playwright. The
   # config lives inline in frontend/vite.config.js's `test:` block plus the
   # frontend/vitest.setup.js bootstrap (jest-dom matchers + jsdom polyfills
@@ -670,7 +670,7 @@ jobs:
   #
   # Standing rule: every new frontend page/component/util gets a partner
   # test under frontend/src/__tests__/. Mocks fetchApi + socket.io-client +
-  # third-party SDKs only — never React itself.
+  # third-party SDKs only  never React itself.
   frontend_unit_tests:
     if: ${{ inputs.skip_tests != true }}
     runs-on: ubuntu-latest
@@ -685,7 +685,7 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Frontend — npm ci
+      - name: Frontend - npm ci
         working-directory: frontend
         run: |
           set -euo pipefail
@@ -698,7 +698,7 @@ jobs:
           npm test
           echo "::notice::Frontend unit tests passed"
 
-  # ── 6. MIGRATION_CHECK: dry-run prisma migrate diff between HEAD~1 and ──
+  #  6. MIGRATION_CHECK: dry-run prisma migrate diff between HEAD~1 and 
   # the proposed schema, flag prod-outage risk patterns (G-23). The
   # standalone .github/workflows/migration-check.yml runs on PRs (so
   # reviewers see the risk count comment); this in-workflow job is the
@@ -724,7 +724,7 @@ jobs:
           cache: "npm"
           cache-dependency-path: backend/package-lock.json
 
-      - name: Backend — npm ci (for prisma binary)
+      - name: Backend - npm ci (for prisma binary)
         working-directory: backend
         run: |
           set -euo pipefail
@@ -737,7 +737,7 @@ jobs:
           if git show HEAD~1:backend/prisma/schema.prisma > "$BASELINE_FILE" 2>/dev/null; then
             echo "Baseline: HEAD~1 ($(git rev-parse --short HEAD~1))"
             # --allow-unique / --allow-drop: bless the intentional schema
-            # changes already on this branch — Patient.tags drop (superseded
+            # changes already on this branch  Patient.tags drop (superseded
             # by the PatientTag relation + tagsJson) and the
             # WhatsAppConfig.phoneNumberId / Patient(tenantId,userId) /
             # SubscriptionPlan.planKey uniques. Flag-blessed (not commit-msg)
@@ -749,27 +749,27 @@ jobs:
               --allow-unique \
               --allow-drop
           else
-            echo "::warning::No HEAD~1 schema available (first commit?) — skipping diff"
+            echo "::warning::No HEAD~1 schema available (first commit?) - skipping diff"
           fi
           echo "::notice::Migration safety check passed"
 
-  # ── 7. DEPLOY: only runs if every upstream gate passes. ────────────────
+  #  7. DEPLOY: only runs if every upstream gate passes. 
   deploy:
     needs:
       [build, api_tests, unit_tests, lint, frontend_unit_tests, migration_check, deploy_staging]
     # All six gates mandatory:
     #   - build               (vite + node syntax)
     #   - api_tests           (Playwright API specs against ephemeral MySQL + seeded backend)
-    #   - unit_tests          (backend vitest — lib + middleware + services + utils)
-    #   - lint                (ESLint — semantic checks + project-specific req.user.id rule)
-    #   - frontend_unit_tests (G-21 — vitest + RTL over frontend/src/__tests__/)
-    #   - migration_check     (G-23 — dry-run prisma migrate diff vs HEAD~1)
+    #   - unit_tests          (backend vitest  lib + middleware + services + utils)
+    #   - lint                (ESLint  semantic checks + project-specific req.user.id rule)
+    #   - frontend_unit_tests (G-21  vitest + RTL over frontend/src/__tests__/)
+    #   - migration_check     (G-23  dry-run prisma migrate diff vs HEAD~1)
     #   - deploy_staging      (serializes staging before prod so the two jobs
     #                          don't race on prisma db push against the same DB)
     # Any failure blocks deploy.
     # The 'skipped' branch covers the workflow_dispatch.skip_tests=true
     # bypass for emergency hotfixes (still requires manual workflow_dispatch
-    # — a regular push can never bypass).
+    #  a regular push can never bypass).
     if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && (needs.api_tests.result == 'success' || needs.api_tests.result == 'skipped') && (needs.unit_tests.result == 'success' || needs.unit_tests.result == 'skipped') && (needs.lint.result == 'success' || needs.lint.result == 'skipped') && (needs.frontend_unit_tests.result == 'success' || needs.frontend_unit_tests.result == 'skipped') && (needs.migration_check.result == 'success' || needs.migration_check.result == 'skipped') && (needs.deploy_staging.result == 'success' || needs.deploy_staging.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -788,7 +788,7 @@ jobs:
           printf 'Message: %s\n' "$COMMIT_MSG" | head -3
           echo "Tests:   build=${{ needs.build.result }} api_tests=${{ needs.api_tests.result }} unit_tests=${{ needs.unit_tests.result }} lint=${{ needs.lint.result }} frontend_unit_tests=${{ needs.frontend_unit_tests.result }} migration_check=${{ needs.migration_check.result }}"
 
-      # ── Backend deploy ──────────────────────────────────────────────
+      #  Backend deploy 
       # git pull -> npm install -> prisma generate -> pm2 restart -> health.
       # On health failure, the next step rolls back to HEAD~1.
       - name: Deploy backend
@@ -836,7 +836,7 @@ jobs:
             # POST /external/leads (and any other writer of those columns)
             # 500'd until someone noticed. --skip-generate avoids re-running
             # the generator; --accept-data-loss allows additive changes
-            # only — drops are still gated on schema.prisma.
+            # only  drops are still gated on schema.prisma.
             # Schema-hardening guard: if User.name was made non-nullable, any
             # existing NULL values block `prisma db push`. Self-heal with raw SQL
             # via prisma db execute (loads .env automatically, no client init needed).
@@ -857,7 +857,7 @@ jobs:
               node prisma/seed-wellness.js 2>&1 | tail -20
             fi
 
-            # Travel vertical seed — runs UNCONDITIONALLY on every push to
+            # Travel vertical seed  runs UNCONDITIONALLY on every push to
             # main because seed-travel.js is fully idempotent (upserts for
             # Tenant + Users; .catch(() => null) on the other ~22
             # cost-master / season / markup rows for safe re-runs). Unlike
@@ -896,7 +896,7 @@ jobs:
             exit 1
 
       # If the backend deploy failed (most likely the health check), roll back
-      # to HEAD~1 and restart. Don't try anything fancier — keep the rollback
+      # to HEAD~1 and restart. Don't try anything fancier  keep the rollback
       # path identical to a manual `git reset --hard HEAD~1 && pm2 restart`.
       - name: Rollback backend on failure
         if: failure() && steps.backend.conclusion == 'failure'
@@ -919,9 +919,9 @@ jobs:
             npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -3
             npx prisma generate 2>&1 | tail -2
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
-            echo "[rollback] complete — health verification skipped (manual check needed)"
+            echo "[rollback] complete - health verification skipped (manual check needed)"
 
-      # ── Frontend deploy ─────────────────────────────────────────────
+      #  Frontend deploy 
       # vite build on the server, rsync dist -> /var/www, then sudo chown to
       # www-data so nginx can read it. The chown is the lesson from today's
       # 2026-04-27 incident: sudo rsync alone strips ownership and the site
@@ -956,7 +956,7 @@ jobs:
             echo '${{ secrets.SSH_PASSWORD }}' | sudo -S find /var/www/crm.globusdemos.com/ -type f -exec chmod 644 {} +
             echo "ok"
 
-      # ── Smoke check ─────────────────────────────────────────────────
+      #  Smoke check 
       # If we get here without a rollback, the backend was healthy. Now
       # confirm the public surface is also alive.
       - name: Smoke check public surface
@@ -996,13 +996,13 @@ jobs:
         run: |
           echo "::notice title=Deploy complete::commit ${{ github.sha }} live on https://crm.globusdemos.com (build + api_tests passed)"
 
-      # ── Telegram deploy alert ────────────────────────────────────────
+      #  Telegram deploy alert 
       # Runs regardless of outcome (always()) so a failed/rolled-back deploy
       # notifies the channel too, not just a healthy one. Captures a live PM2
       # memory + recent-error snapshot over SSH so a leak (e.g. the WhatsApp/
-      # Puppeteer RSS blowout — PR #1217) would show up here immediately after
+      # Puppeteer RSS blowout  PR #1217) would show up here immediately after
       # every deploy, not just when someone thinks to SSH in and check.
-      # Never fails the workflow itself (all curl/ssh calls best-effort) —
+      # Never fails the workflow itself (all curl/ssh calls best-effort) 
       # a broken Telegram notify must not block/red a real deploy.
       - name: Capture PM2 snapshot
         id: pm2_snapshot
@@ -1015,7 +1015,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           command_timeout: 1m
-          # Required for steps.pm2_snapshot.outputs.stdout to populate below —
+          # Required for steps.pm2_snapshot.outputs.stdout to populate below 
           # ssh-action only captures/exposes stdout as an action output when
           # this is explicitly set (verified against appleboy/ssh-action's
           # action.yml; default is false and the output silently stays empty).
@@ -1025,7 +1025,7 @@ jobs:
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
 
             # Every diagnostic below explicitly prints WHY it came up empty
-            # instead of silently falling through — the prior version's bare
+            # instead of silently falling through  the prior version's bare
             # "(pm2 jlist unavailable)" gave no signal on whether pm2 itself
             # was missing from PATH, jlist returned empty, or the JSON parse
             # threw. Without that, a broken snapshot step is indistinguishable
@@ -1098,7 +1098,7 @@ jobs:
       # Looks up every PR associated with the deployed commit so the alert
       # links back to the actual change(s) that shipped, not just the SHA.
       # Uses the GitHub REST "commit pulls" endpoint (returns ALL PRs the
-      # commit is part of — handles both a single squash-merge and a push
+      # commit is part of  handles both a single squash-merge and a push
       # that bundles multiple already-merged PRs) rather than parsing the
       # commit message for "(#1234)", which only catches the one PR GitHub's
       # own merge-commit template mentions and misses everything else.
@@ -1142,7 +1142,7 @@ jobs:
             STATUS="Healthy"
           elif [ "${{ steps.backend.outcome }}" = "failure" ]; then
             ICON="🔴"
-            STATUS="FAILED — rolled back to HEAD~1"
+            STATUS="FAILED - rolled back to HEAD~1"
           else
             ICON="⚠️"
             STATUS="Unknown (backend step: ${{ steps.backend.outcome }})"
@@ -1150,20 +1150,20 @@ jobs:
 
           SHORT_SHA="${GITHUB_SHA:0:8}"
           FIRST_MSG_LINE=$(printf '%s' "$COMMIT_MSG" | head -1)
-          # The prior "(snapshot unavailable)" fallback gave no signal on WHY
-          # — was the SSH step skipped, did it time out, did it auth-fail?
+          # The prior "(snapshot unavailable)" fallback gave no signal on why the SSH step was skipped.
+          # Did it time out, or did auth fail?
           # steps.<id>.outcome/conclusion distinguish those cases even when
           # outputs.stdout came back empty, so surface that instead of a bare
           # placeholder.
           if [ -n "${SNAPSHOT}" ]; then
             SNAPSHOT_TEXT="${SNAPSHOT}"
           else
-            SNAPSHOT_TEXT="(snapshot unavailable — pm2_snapshot step outcome: ${{ steps.pm2_snapshot.outcome }}, conclusion: ${{ steps.pm2_snapshot.conclusion }}. Check the 'Capture PM2 snapshot' step log for the actual SSH/pm2 error.)"
+            SNAPSHOT_TEXT="(snapshot unavailable - pm2_snapshot step outcome: ${{ steps.pm2_snapshot.outcome }}, conclusion: ${{ steps.pm2_snapshot.conclusion }}. Check the 'Capture PM2 snapshot' step log for the actual SSH/pm2 error.)"
           fi
           if [ -n "${PR_URLS}" ]; then
             PR_LINE="PR: ${PR_URLS}"
           else
-            PR_LINE="PR: (none found — pr_links step outcome: ${{ steps.pr_links.outcome }}. Check the 'Find associated PR(s)' step log.)"
+            PR_LINE="PR: (none found - pr_links step outcome: ${{ steps.pr_links.outcome }}. Check the 'Find associated PR(s)' step log.)"
           fi
           if [ -n "${DEPLOY_LOG}" ]; then
             # On failure the full deploy log is the most useful artifact; on
@@ -1174,19 +1174,19 @@ jobs:
               DEPLOY_LOG_TAIL=$(printf '%s' "$DEPLOY_LOG" | tail -n 25)
             fi
           else
-            DEPLOY_LOG_TAIL="(deploy log unavailable — backend step outcome: ${{ steps.backend.outcome }}, conclusion: ${{ steps.backend.conclusion }}. Check the 'Deploy backend' step log.)"
+            DEPLOY_LOG_TAIL="(deploy log unavailable - backend step outcome: ${{ steps.backend.outcome }}, conclusion: ${{ steps.backend.conclusion }}. Check the 'Deploy backend' step log.)"
           fi
 
           # Plain text, no parse_mode: Telegram's Markdown parser 400s the
           # whole request on a single stray _ / * / ` / [ character, and both
           # the commit message and PM2 error-log lines are untrusted free text
           # we don't want to escape defensively. Plain text always sends.
-          # Built via printf (not a heredoc) — a heredoc's closing marker
+          # Built via printf (not a heredoc)  a heredoc's closing marker
           # can't tolerate the leading indentation this block scalar forces
           # on every line, so string-concatenation is the robust choice here.
           GATES_LINE="Gates: build=${{ needs.build.result }} api_tests=${{ needs.api_tests.result }} unit_tests=${{ needs.unit_tests.result }} lint=${{ needs.lint.result }} frontend_tests=${{ needs.frontend_unit_tests.result }} migration=${{ needs.migration_check.result }}"
           TEXT=$(printf '%s\n' \
-            "${ICON} Deploy — crm.globusdemos.com" \
+            "${ICON} Deploy - crm.globusdemos.com" \
             "Commit: ${SHORT_SHA} ${FIRST_MSG_LINE}" \
             "Pushed by: ${GITHUB_ACTOR}" \
             "${PR_LINE}" \
@@ -1209,9 +1209,9 @@ jobs:
           cat /tmp/telegram_response.json
           echo
 
-  # ── 8. DEPLOY_STAGING: mirrors deploy job but targets crm-staging ──────
+  #  8. DEPLOY_STAGING: mirrors deploy job but targets crm-staging 
   # Runs in parallel with the production deploy. Uses the same SSH secrets
-  # (same server, different user home + vhost). No rollback on staging —
+  # (same server, different user home + vhost). No rollback on staging 
   # a broken staging is not a prod incident.
   deploy_staging:
     needs:
@@ -1335,3 +1335,7 @@ jobs:
       - name: Staging deploy summary
         run: |
           echo "::notice title=Staging deploy complete::commit ${{ github.sha }} live on https://crm-staging.globusdemos.com"
+
+
+
+

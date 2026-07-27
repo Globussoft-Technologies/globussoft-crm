@@ -5,6 +5,7 @@ migrated_prefixes:
   - prefix: /api/audit
   - prefix: /api/contacts
   - prefix: /api/tasks
+  - prefix: /api/marketplace-leads
 open_paths_on_go:
   - /api/health
   - /api/status

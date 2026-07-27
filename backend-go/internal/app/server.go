@@ -155,6 +155,32 @@ func (s *Server) registerRoutes() {
 	tasksAdmin.DELETE("/:id", th.Delete)
 	tasksAdmin.POST("/:id/restore", th.Restore)
 
+	// Marketplace leads routes.
+	marketplaceRepo := repository.NewMarketplaceRepository(s.db)
+	marketplaceSvc := services.NewMarketplaceService(marketplaceRepo, contactRepo, s.db)
+	mh := handlers.NewMarketplaceHandler(marketplaceSvc)
+
+	marketplaceRead := s.e.Group("/api/marketplace-leads", middleware.RequirePermissionOrRole("marketplace_leads", "read", "ADMIN", "MANAGER", "OWNER"))
+	marketplaceRead.GET("", mh.List)
+	marketplaceRead.GET("/stats", mh.Stats)
+
+	marketplaceWrite := s.e.Group("/api/marketplace-leads", middleware.RequirePermissionOrRole("marketplace_leads", "write", "ADMIN", "MANAGER", "OWNER"))
+	marketplaceWrite.POST("/import/:id", mh.Import)
+	marketplaceWrite.POST("/import-bulk", mh.ImportBulk)
+	marketplaceWrite.PUT("/dismiss/:id", mh.Dismiss)
+
+	marketplaceAdmin := s.e.Group("/api/marketplace-leads", middleware.RequireRole("ADMIN"))
+	marketplaceAdmin.GET("/config", mh.ListConfigs)
+	marketplaceAdmin.PUT("/config/:provider", mh.UpsertConfig)
+	marketplaceAdmin.POST("/sync/:provider", mh.Sync)
+
+	// Webhook routes are currently protected by the global auth middleware.
+	// TODO: make these public by adding the paths to open_paths_on_go in config/routes.yaml.
+	marketplaceWebhooks := s.e.Group("/api/marketplace-leads")
+	marketplaceWebhooks.POST("/webhook/indiamart", mh.WebhookIndiamart)
+	marketplaceWebhooks.POST("/webhook/justdial", mh.WebhookJustdial)
+	marketplaceWebhooks.POST("/webhook/tradeindia", mh.WebhookTradeindia)
+
 	// JSON 404 for unmatched /api/* paths.
 	s.e.Any("/api/*", func(c echo.Context) error {
 		return shared.ErrNotFound(c)

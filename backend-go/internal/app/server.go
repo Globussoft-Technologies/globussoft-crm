@@ -136,6 +136,25 @@ func (s *Server) registerRoutes() {
 	contactsWrite.DELETE("/:id", ch.Delete)
 	contactsWrite.POST("/:id/restore", ch.Restore)
 
+	// Tasks routes.
+	taskRepo := repository.NewTaskRepository(s.db)
+	taskSvc := services.NewTaskService(taskRepo, s.db)
+	th := handlers.NewTaskHandler(taskSvc)
+	tasksRead := s.e.Group("/api/tasks", middleware.RequirePermissionOrRole("tasks", "read", "ADMIN", "MANAGER", "OWNER"))
+	tasksRead.GET("", th.List)
+
+	tasksWrite := s.e.Group("/api/tasks", middleware.RequirePermissionOrRole("tasks", "write", "ADMIN", "MANAGER", "OWNER"))
+	tasksWrite.POST("", th.Create)
+	tasksWrite.PUT("/:id/complete", th.Complete)
+	tasksWrite.PUT("/:id", th.Update)
+
+	tasksAdmin := s.e.Group("/api/tasks",
+		middleware.RequirePermissionOrRole("tasks", "write", "ADMIN", "MANAGER", "OWNER"),
+		middleware.RequireRole("ADMIN"),
+	)
+	tasksAdmin.DELETE("/:id", th.Delete)
+	tasksAdmin.POST("/:id/restore", th.Restore)
+
 	// JSON 404 for unmatched /api/* paths.
 	s.e.Any("/api/*", func(c echo.Context) error {
 		return shared.ErrNotFound(c)

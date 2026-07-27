@@ -12,6 +12,8 @@ const {
   BASIC_BLOCK_TYPES,
   buildGenericLandingSitePrompt,
   buildGenericFallback,
+  buildWellnessRegistrationBlocks,
+  isWellnessSector,
   normalizeSectorKey,
 } = require('./landingSitePrompts');
 
@@ -84,17 +86,38 @@ function ensureBlockArray(blocks) {
     .filter(Boolean);
 }
 
+function collectBlocksByType(blocks, type) {
+  const found = [];
+  const visit = (items) => {
+    if (!Array.isArray(items)) return;
+    items.forEach((block) => {
+      if (!block || typeof block !== 'object') return;
+      if (block.type === type) found.push(block);
+      const columns = block.props && Array.isArray(block.props.columns) ? block.props.columns : [];
+      columns.forEach((column) => visit(column.components));
+    });
+  };
+  visit(blocks);
+  return found;
+}
+
 async function enrichWithImages(payload, input, options = {}) {
   const blocks = ensureBlockArray(payload.blocks);
   if (!blocks.length) return payload;
 
-  const imageBlocks = blocks.filter((block) => block.type === 'image');
+  const imageBlocks = collectBlocksByType(blocks, 'image');
   if (!imageBlocks.length) return { ...payload, blocks };
 
-  const queries = [
-    `${input.sectorLabel || input.sectorKey || 'business'} landing page`,
-    `${input.campaignName || input.businessName || input.sectorLabel || 'campaign'} marketing`,
-  ];
+  const wellnessPhotoQuery = [input.campaignName, input.campaignGoal, input.audience, input.location, input.sectorLabel || input.sectorKey, 'wellness healthcare community event'].filter(Boolean).join(' ');
+  const queries = isWellnessSector(input.sectorKey)
+    ? [
+        wellnessPhotoQuery,
+        [input.businessName, input.sectorLabel || input.sectorKey, 'wellness event registration'].filter(Boolean).join(' '),
+      ]
+    : [
+        `${input.sectorLabel || input.sectorKey || 'business'} landing page`,
+        `${input.campaignName || input.businessName || input.sectorLabel || 'campaign'} marketing`,
+      ];
 
   const fetched = [];
   for (const query of queries) {
@@ -177,6 +200,9 @@ async function generateLandingSiteContent(input = {}, options = {}) {
   if (!payload.blocks.length) payload = fallback;
 
   payload.blocks = ensureBlockArray(payload.blocks);
+  if (isWellnessSector(sectorKey)) {
+    payload.blocks = buildWellnessRegistrationBlocks({ ...input, sectorKey }, payload);
+  }
   payload = await enrichWithImages(payload, { ...input, sectorKey }, options);
   payload.blocks = ensureBlockArray(payload.blocks);
 

@@ -97,6 +97,46 @@ describe("<App /> — auth-sync on mount", () => {
       headers: { Authorization: `Bearer ${token}` },
     });
   });
+  it("allows a wellness tenant to stay on /landing-sites", async () => {
+    const token = "wellness-token";
+    sessionStorage.setItem("token", token);
+    window.history.pushState({}, "landing-sites", "/landing-sites");
+
+    setupFetch((url) => {
+      if (url === "/api/auth/me") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              id: 31,
+              name: "Rishu (Owner)",
+              email: "rishu@enhancedwellness.in",
+              role: "ADMIN",
+              tenant: {
+                id: 2,
+                name: "Enhanced Wellness",
+                slug: "enhanced-wellness",
+                vertical: "wellness",
+              },
+            }),
+        });
+      }
+      if (url === "/api/subscriptions/status") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ daysRemaining: 30, status: "active" }),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("lazy-route")).toBeInTheDocument());
+    expect(window.location.pathname).toBe("/landing-sites");
+  });
+
 
   it("overwrites stale localStorage user/tenant with the server identity", async () => {
     const token = "travel-token";

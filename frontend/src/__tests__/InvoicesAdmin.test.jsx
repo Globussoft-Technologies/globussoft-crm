@@ -303,6 +303,55 @@ describe('<InvoicesAdmin /> — page chrome', () => {
   });
 });
 
+describe('<InvoicesAdmin /> - Excel Software reconciliation', () => {
+  let originalFetch;
+  let fetchSpy;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    fetchSpy = vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({
+        totalRows: 1,
+        scannedInvoices: 1,
+        matchedRows: 1,
+        mismatchedRows: 0,
+        missingRows: 0,
+        discrepancyCount: 0,
+        discrepancies: [],
+        workbookAmount: 100,
+        matchedAmount: 100,
+      }),
+    }));
+    globalThis.fetch = fetchSpy;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('uploads a workbook as multipart/form-data and renders the summary', async () => {
+    renderPage();
+    await screen.findByText(/Travel Invoices/i);
+    const file = new File(['Invoice Number,Invoice Total\nTINV-2026-0001,100'], 'travel-accounting.csv', { type: 'text/csv' });
+    fireEvent.change(screen.getByLabelText(/Excel Software reconciliation file/i), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Run reconciliation/i }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled();
+    });
+    const [url, opts] = fetchSpy.mock.calls[0];
+    expect(url).toBe('/api/travel/invoices/reconcile/excel-software');
+    expect(opts?.method).toBe('POST');
+    expect(opts?.headers?.Authorization).toBe('Bearer test-token');
+    expect(opts?.body).toBeInstanceOf(FormData);
+    expect(await screen.findByTestId('excel-reconciliation-result')).toBeInTheDocument();
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Matched 1 invoices/i));
+  });
+});
+
 describe('<InvoicesAdmin /> — list fetch + filter chrome', () => {
   it('GETs /api/travel/invoices on mount (no querystring) + renders invoice rows', async () => {
     renderPage();

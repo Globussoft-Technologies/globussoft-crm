@@ -72,15 +72,24 @@ export default function TripDetail() {
   const [tab, setTab] = useState("overview");
   const [trip, setTrip] = useState(null);
   const [loading, setLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
 
   const load = useCallback(() => {
-    setLoading(true);
+    // Keep the current trip visible on refreshes so tab-local state
+    // (like the participants bulk-import summary) survives the refetch.
+    if (!hasLoadedRef.current) setLoading(true);
     fetchApi(`/api/travel/trips/${id}`)
       .then(setTrip)
       .catch((e) => notify.error(e?.body?.error || "Failed to load trip"))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        hasLoadedRef.current = true;
+        setLoading(false);
+      });
   }, [id, notify]);
 
+  useEffect(() => {
+    hasLoadedRef.current = false;
+  }, [id]);
   useEffect(load, [load]);
 
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;
@@ -562,6 +571,10 @@ function ParticipantsTab({ trip, onChange, notify }) {
   // an autoincrement keyspace.
   const [pendingRegs, setPendingRegs] = useState([]);
   const [decidingRegId, setDecidingRegId] = useState(null);
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkImportResult, setBulkImportResult] = useState(null);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const importInputRef = useRef(null);
 
   const loadPendingRegs = useCallback(async () => {
     try {
@@ -576,6 +589,37 @@ function ParticipantsTab({ trip, onChange, notify }) {
   useEffect(() => {
     loadPendingRegs();
   }, [loadPendingRegs]);
+
+  const bulkImport = async () => {
+    if (!bulkFile) {
+      notify.error("Choose a CSV or XLSX file first");
+      return;
+    }
+    const fd = new FormData();
+    fd.append("file", bulkFile);
+    setBulkImporting(true);
+    try {
+      const token = getAuthToken();
+      const resp = await fetch(`/api/travel/trips/${trip.id}/participants/import`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        throw Object.assign(new Error(data?.error || "Failed to import participants"), { body: data, status: resp.status });
+      }
+      setBulkImportResult(data || null);
+      setBulkFile(null);
+      if (importInputRef.current) importInputRef.current.value = "";
+      notify.success(`Imported ${data?.inserted || 0}, updated ${data?.updated || 0}`);
+      onChange();
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || "Failed to import participants");
+    } finally {
+      setBulkImporting(false);
+    }
+  };
 
   const add = async () => {
     if (!form.fullName.trim()) {
@@ -751,6 +795,42 @@ function ParticipantsTab({ trip, onChange, notify }) {
           <button type="button" onClick={() => setAdding(true)} style={addBtn}>
             <Plus size={14} /> Add participant
           </button>
+        )}
+      </div>
+
+      <div className="glass" data-testid="participant-bulk-import" style={{ padding: 14, marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Bulk import participants</div>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Upload a CSV or XLSX file. Existing rows are updated additively, and blank cells never clear data already stored in CRM.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={(e) => setBulkFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
+              style={{ maxWidth: 240 }}
+              aria-label="Bulk import participants file"
+            />
+            <button type="button" onClick={bulkImport} disabled={bulkImporting} style={{ ...secondaryBtn, opacity: bulkImporting ? 0.7 : 1, cursor: bulkImporting ? "wait" : "pointer" }}>
+              <Upload size={14} /> {bulkImporting ? "Importing..." : "Import file"}
+            </button>
+          </div>
+        </div>
+        {bulkImportResult && (
+          <div style={{ marginTop: 10, display: "grid", gap: 6 }} data-testid="participant-bulk-import-result">
+            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Imported {bulkImportResult.inserted || 0}, updated {bulkImportResult.updated || 0}, skipped {bulkImportResult.skipped || 0}, errors {bulkImportResult.errors?.length || 0}.
+            </div>
+            {Array.isArray(bulkImportResult.errors) && bulkImportResult.errors.length > 0 && (
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                First issue: row {bulkImportResult.errors[0].row || "?"} - {bulkImportResult.errors[0].reason || "Unknown error"}
+              </div>
+            )}
+          </div>
         )}
       </div>
 

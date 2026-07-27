@@ -125,24 +125,38 @@ function renderComponent(component, slug) {
       const level = props.level || "h1";
       const align = props.align || "left";
       const color = props.color || "#1a1a1a";
-      return `<${level} style="color:${color};text-align:${align};margin:0 0 16px;">${escapeHtml(props.text || "")}</${level}>`;
+      const variant = props.variant || "";
+      let extra = "";
+      if (variant === "wellness-logo") extra = "font-size:0.92rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:700;margin:0;";
+      else if (variant === "wellness-display") extra = "font-size:clamp(2rem,5vw,3.4rem);line-height:1.05;font-weight:800;margin:0 0 16px;";
+      else if (variant === "wellness-section-title" || variant === "wellness-card-title") extra = `font-size:${variant === "wellness-card-title" ? "1.25rem" : "1.35rem"};font-weight:800;margin:0 0 10px;`;
+      return `<${level} style="color:${color};text-align:${align};margin:0 0 16px;${extra}">${escapeHtml(props.text || "")}</${level}>`;
     }
 
     case "text": {
       const align = props.align || "left";
       const color = props.color || "#444";
       const fontSize = props.fontSize || "16px";
-      return `<p style="color:${color};text-align:${align};font-size:${fontSize};line-height:1.6;margin:0 0 16px;">${escapeHtml(props.text || "")}</p>`;
+      const variant = props.variant || "";
+      let extra = "";
+      let finalColor = color;
+      if (variant === "wellness-nav") extra = "text-transform:uppercase;letter-spacing:0.16em;font-weight:700;margin:10px 0 0;";
+      else if (variant === "wellness-eyebrow") extra = "text-transform:uppercase;letter-spacing:0.14em;font-weight:700;margin:0 0 14px;";
+      else if (variant === "wellness-detail") extra = "margin:0 0 10px;line-height:1.45;";
+      else if (variant === "wellness-footer") { extra = "margin:0;padding:22px 24px;background:#202a27;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;"; finalColor = "#ffffff"; }
+      return `<p style="color:${finalColor};text-align:${align};font-size:${fontSize};line-height:1.6;margin:0 0 16px;${extra}">${escapeHtml(props.text || "")}</p>`;
     }
 
     case "image": {
       const width = props.width || "100%";
       const maxWidth = props.maxWidth || "100%";
       const alt = escapeHtml(props.alt || "");
-      // #447: scheme-allowlist via safeUrl before escapeHtml. Modern browsers
-      // don't execute javascript: on <img> but sanitization here is
-      // defense-in-depth — same string can flow into other sinks.
-      return `<div style="text-align:center;margin:0 0 16px;"><img src="${escapeHtml(safeUrl(props.src, 'image-src'))}" alt="${alt}" style="width:${width};max-width:${maxWidth};height:auto;border-radius:8px;" /></div>`;
+      const isWellnessEventImage = props.variant === "wellness-event-image";
+      const wrapperMargin = isWellnessEventImage ? "0" : "0 0 16px";
+      const height = isWellnessEventImage ? "height:330px;object-fit:cover;" : "height:auto;";
+      const radius = isWellnessEventImage ? "18px" : "8px";
+      const border = isWellnessEventImage ? "border:1px solid #d8d2c3;background:#f4f1e8;box-shadow:0 18px 45px rgba(31,47,44,0.12);" : "";
+      return `<div style="text-align:center;margin:${wrapperMargin};"><img src="${escapeHtml(safeUrl(props.src, 'image-src'))}" alt="${alt}" style="width:${width};max-width:${maxWidth};${height}border-radius:${radius};${border}" /></div>`;
     }
 
     case "button": {
@@ -162,31 +176,40 @@ function renderComponent(component, slug) {
       const submitText = escapeHtml(props.submitText || "Submit");
       const thankYouMessage = escapeHtml(props.thankYouMessage || "Thank you for your submission!");
       const formId = "form_" + Math.random().toString(36).substr(2, 8);
+      const isWellnessForm = props.variant === "wellness-consultation";
+      const controlStyle = isWellnessForm
+        ? "width:100%;padding:14px 16px;border:1px solid #c9c3b4;border-radius:8px;font-size:15px;box-sizing:border-box;background:#fffdf7;background-color:#fffdf7;color:#1f2937;opacity:1;color-scheme:light;-webkit-text-fill-color:#1f2937;"
+        : "width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:15px;box-sizing:border-box;background:#ffffff;background-color:#ffffff;color:#1f2937;opacity:1;color-scheme:light;-webkit-text-fill-color:#1f2937;";
+      const labelStyle = isWellnessForm
+        ? "display:block;margin-bottom:8px;font-weight:600;color:#5e675f;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;"
+        : "display:block;margin-bottom:4px;font-weight:500;color:#333;font-size:14px;";
       let fieldsHtml = fields
         .map((f) => {
           const req = f.required ? "required" : "";
           const inputType = f.type || "text";
-          return `<div style="margin-bottom:12px;">
-            <label style="display:block;margin-bottom:4px;font-weight:500;color:#333;font-size:14px;">${escapeHtml(f.label || f.name)}</label>
-            <input type="${inputType}" name="${escapeHtml(f.name)}" ${req} style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:15px;box-sizing:border-box;" />
-          </div>`;
+          const label = escapeHtml(f.label || f.name);
+          const requiredMark = f.required && isWellnessForm ? " *" : "";
+          const name = escapeHtml(f.name);
+          const placeholder = escapeHtml(f.placeholder || "");
+          const fieldShellStyle = isWellnessForm
+            ? `margin-bottom:18px;flex:${fields.indexOf(f) < 2 ? "1 1 calc(50% - 8px)" : "1 1 100%"};min-width:${fields.indexOf(f) < 2 ? "0" : "100%"};box-sizing:border-box;`
+            : "margin-bottom:12px;";
+          if (inputType === "textarea") {
+            return `<div style="${fieldShellStyle}"><label style="${labelStyle}">${label}${requiredMark}</label><textarea name="${name}" ${req} placeholder="${placeholder}" rows="4" style="${controlStyle}resize:vertical;min-height:98px;"></textarea></div>`;
+          }
+          if (inputType === "select") {
+            const options = (f.options || []).map((option) => `<option value="${escapeHtml(String(option))}">${escapeHtml(String(option))}</option>`).join("");
+            return `<div style="${fieldShellStyle}"><label style="${labelStyle}">${label}${requiredMark}</label><select name="${name}" ${req} style="${controlStyle}">${options}</select></div>`;
+          }
+          return `<div style="${fieldShellStyle}"><label style="${labelStyle}">${label}${requiredMark}</label><input type="${escapeHtml(inputType) }" name="${name}" ${req} placeholder="${placeholder}" style="${controlStyle}" /></div>`;
         })
         .join("\n");
 
-      // ── #451 — CAPTCHA / spam protection (Cloudflare Turnstile) ───
-      // Embedded only when props.enableCaptcha === true. We use Cloudflare
-      // Turnstile (free, no Google reCAPTCHA — Cloudflare already fronts
-      // crm.globusdemos.com so adding it is one extra SDK call).
-      // The site-key is read from props.turnstileSiteKey if provided
-      // (per-form override) and falls back to the env-var default; if
-      // neither is set we render the widget with a "test" site-key so
-      // dev environments don't 500. The submit handler verifies the
-      // token server-side.
       const enableCaptcha = !!props.enableCaptcha;
       const turnstileSiteKey =
         props.turnstileSiteKey ||
         process.env.TURNSTILE_SITE_KEY ||
-        "1x00000000000000000000AA"; // Cloudflare's "always-passes" test site-key.
+        "1x00000000000000000000AA";
       const captchaScript = enableCaptcha
         ? `<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>`
         : "";
@@ -194,39 +217,35 @@ function renderComponent(component, slug) {
         ? `<div class="cf-turnstile" data-sitekey="${escapeHtml(turnstileSiteKey)}" data-callback="${formId}_onTurnstile" style="margin:0 0 12px;"></div>`
         : "";
 
-      // ── #451 — successRedirectUrl ─────────────────────────────────
-      // If set, the submit-success handler redirects the visitor to this
-      // URL instead of revealing the static thank-you panel. Validation:
-      // accept http:// or https:// only (no javascript:, mailto:, file:,
-      // etc.). Falls back to thank-you-panel mode on invalid URL or any
-      // missing prop. The validation happens at render-time so a bad URL
-      // never reaches the browser's location.assign.
       let successRedirectUrl = "";
       if (typeof props.successRedirectUrl === "string" && props.successRedirectUrl.length > 0) {
         try {
           const u = new URL(props.successRedirectUrl);
-          if (u.protocol === "http:" || u.protocol === "https:") {
-            successRedirectUrl = props.successRedirectUrl;
-          }
+          if (u.protocol === "http:" || u.protocol === "https:") successRedirectUrl = props.successRedirectUrl;
         } catch (_e) {
           successRedirectUrl = "";
         }
       }
 
-      // The browser-side success branch: redirect if a valid
-      // successRedirectUrl is configured, otherwise reveal the
-      // thank-you panel.
       const successJs = successRedirectUrl
         ? `window.location.assign(${JSON.stringify(successRedirectUrl)});`
         : `form.querySelector("button[type=submit]").style.display = "none";
-            var fields = form.querySelectorAll("div > label, div > input");
+            var fields = form.querySelectorAll("div > label, div > input, div > textarea, div > select");
             fields.forEach(function(el){ el.parentElement.style.display = "none"; });
             document.getElementById("${formId}_thanks").style.display = "block";`;
+      const formTitle = props.title ? `<h2 style="margin:0 0 28px;color:#1f2f2c;font-family:Georgia,'Times New Roman',serif;font-size:1.75rem;font-weight:500;">${escapeHtml(props.title)}</h2>` : "";
+      const formStyle = isWellnessForm
+        ? "width:100%;max-width:520px;margin:0 auto 16px;padding:36px;background:#fbfaf4;border-radius:18px;border:1px solid #d8d2c3;border-top:2px solid #7c6f45;box-shadow:0 18px 55px rgba(31,47,44,0.08);box-sizing:border-box;"
+        : "max-width:480px;margin:0 auto 16px;padding:24px;background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;";
+      const buttonStyle = isWellnessForm
+        ? "width:100%;padding:16px;background:linear-gradient(90deg,#b7ad8c,#d1a083);color:#fff;border:none;border-radius:999px;font-size:15px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;"
+        : "width:100%;padding:12px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;";
 
-      return `${captchaScript}<form id="${formId}" style="max-width:480px;margin:0 auto 16px;padding:24px;background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;" onsubmit="return false;">
-        ${fieldsHtml}
+      return `${captchaScript}<form id="${formId}" style="${formStyle}" onsubmit="return false;">
+        ${formTitle}
+        <div style="${isWellnessForm ? 'display:flex;flex-wrap:wrap;gap:0 16px;' : ''}">${fieldsHtml}</div>
         ${captchaHtml}
-        <button type="submit" style="width:100%;padding:12px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;">${submitText}</button>
+        <button type="submit" style="${buttonStyle}">${submitText}</button>
         <div id="${formId}_thanks" style="display:none;text-align:center;padding:16px;color:#16a34a;font-weight:500;">${thankYouMessage}</div>
       </form>
       <script>
@@ -236,12 +255,12 @@ function renderComponent(component, slug) {
         form.addEventListener("submit", function(e){
           e.preventDefault();
           var data = {};
-          var inputs = form.querySelectorAll("input");
+          var inputs = form.querySelectorAll("input, textarea, select");
           inputs.forEach(function(inp){ data[inp.name] = inp.value; });
           var phoneInp = form.querySelector('input[type="tel"]');
           if(phoneInp && phoneInp.value.trim()){
             var digits = phoneInp.value.replace(/\\D/g,'');
-            if(digits.length < 10 || digits.length > 15){ alert('Please enter a valid phone number (10–15 digits).'); phoneInp.focus(); return; }
+            if(digits.length < 10 || digits.length > 15){ alert('Please enter a valid phone number (10-15 digits).'); phoneInp.focus(); return; }
           }
           ${enableCaptcha ? `data.cfTurnstileToken = turnstileToken; if (!turnstileToken) { alert("Please complete the CAPTCHA challenge."); return; }` : ""}
           fetch("/p/${escapeHtml(slug)}/submit", {
@@ -293,14 +312,35 @@ function renderComponent(component, slug) {
     case "columns": {
       const columns = props.columns || [];
       const gap = props.gap || "24px";
-      const _colWidth = columns.length > 0 ? `calc(${100 / columns.length}% - ${gap})` : "100%";
+      const variant = props.variant || "";
+      const isWellnessCampaignPage = variant === "wellness-campaign-page";
+      const isWellnessHeaderRow = variant === "wellness-header-row";
+      const isWellnessHeroRow = variant === "wellness-hero-row";
+      const isWellnessRegistrationRow = variant === "wellness-registration-row";
+      const isWellnessBenefitCards = variant === "wellness-benefit-cards";
+      const isWellnessConsultation = variant === "wellness-consultation";
+      const looksLikeWellnessSupporting = columns.some((col) => (col.components || []).some((child) => ["why-title", "after-title"].includes(child.id)));
+      const isWellnessSupporting = variant === "wellness-supporting" || looksLikeWellnessSupporting;
+      const isWellnessSection = isWellnessCampaignPage || isWellnessHeaderRow || isWellnessHeroRow || isWellnessRegistrationRow || isWellnessBenefitCards || isWellnessConsultation || isWellnessSupporting;
+      const isWellnessInnerRow = isWellnessHeaderRow || isWellnessHeroRow || isWellnessRegistrationRow || isWellnessBenefitCards;
+      const hasFullWidthSupport = isWellnessConsultation && columns.some((col) => col.fullWidth);
+      const containerStyle = isWellnessCampaignPage
+        ? `display:flex;flex-wrap:wrap;gap:${gap};align-items:stretch;width:1040px;max-width:1040px;min-width:960px;margin:0 auto 36px;padding:0;background:#fbfaf4;color:#1f2f2c;border-radius:18px;border:1px solid #d8d2c3;box-shadow:0 28px 80px rgba(31,47,44,0.14);box-sizing:border-box;overflow:hidden;`
+        : `display:flex;flex-wrap:wrap;gap:${gap};align-items:stretch;width:100%;max-width:${isWellnessSection ? "100%" : "none"};margin:${isWellnessInnerRow ? "0" : (isWellnessConsultation && !hasFullWidthSupport ? "0 auto 0" : (isWellnessSection ? "0 auto 36px" : "0 0 16px"))};padding:${isWellnessHeaderRow ? "26px 64px 20px" : isWellnessHeroRow ? "44px 64px 30px" : isWellnessRegistrationRow ? "20px 64px 54px" : isWellnessBenefitCards ? "0" : (isWellnessSection ? (isWellnessConsultation ? "36px" : "0 48px 40px") : "0")};background:${isWellnessInnerRow || isWellnessConsultation || isWellnessSupporting ? "#fbfaf4" : "transparent"};color:${isWellnessSection ? "#1f2f2c" : "inherit"};border-radius:${isWellnessConsultation ? (hasFullWidthSupport ? "18px" : "18px 18px 0 0") : (isWellnessSupporting ? "0 0 18px 18px" : "0")};box-sizing:border-box;overflow:hidden;`;
       const colsHtml = columns
-        .map((col) => {
+        .map((col, idx) => {
+          let flex = col.fullWidth ? "1 1 100%" : "1 1 0";
+          if (isWellnessHeroRow) flex = idx === 1 ? "0 1 420px" : "1 1 430px";
+          if (isWellnessRegistrationRow) flex = idx === 0 ? "0 1 500px" : "1 1 390px";
+          if (isWellnessBenefitCards) flex = "1 1 100%";
+          if (isWellnessConsultation && idx === 1) flex = "0 1 480px";
+          const cardStyle = isWellnessBenefitCards ? "padding:28px;background:#fffdf7;border:1px solid #d8d2c3;border-radius:18px;box-shadow:0 14px 35px rgba(31,47,44,0.06);justify-content:center;" : "padding:0;background:transparent;border:none;border-radius:0;box-shadow:none;";
+          const minWidth = col.fullWidth ? "100%" : (isWellnessHeroRow ? (idx === 1 ? "360px" : "430px") : isWellnessRegistrationRow ? (idx === 0 ? "500px" : "360px") : isWellnessSection ? "280px" : "250px");
           const innerHtml = (col.components || []).map((c) => renderComponent(c, slug)).join("\n");
-          return `<div style="flex:1;min-width:250px;">${innerHtml}</div>`;
+          return `<div style="flex:${flex};min-width:${minWidth};max-width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:${isWellnessBenefitCards ? "10px" : "16px"};${cardStyle}">${innerHtml}</div>`;
         })
         .join("\n");
-      return `<div style="display:flex;flex-wrap:wrap;gap:${gap};margin:0 0 16px;">${colsHtml}</div>`;
+      return `<div style="${containerStyle}">${colsHtml}</div>`;
     }
 
     // ── Travel destination blocks ────────────────────────────────────

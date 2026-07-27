@@ -592,6 +592,14 @@ function GenericOnly({ children }) {
   return children;
 }
 
+function GenericOrWellnessOnly({ children }) {
+  const { tenant, user } = useContext(AuthContext);
+  if (tenant?.vertical === 'travel') {
+    return <Navigate to={landingFor(user, tenant)} replace />;
+  }
+  return children;
+}
+
 // #207/#214: doctor/telecaller landing on /wellness directly (e.g. clicking
 // the sidebar logo, typing the URL, or refreshing) would still see the Owner
 // Dashboard with org-wide P&L. Gate the Owner Dashboard route to ADMIN/MANAGER
@@ -1333,10 +1341,10 @@ export default function App() {
                       }
                     />
                     <Route path="landing-pages" element={<TravelOnly><LandingPages /></TravelOnly>} />
-                    <Route path="landing-sites" element={<GenericOnly><LandingSites /></GenericOnly>} />
+                    <Route path="landing-sites" element={<GenericOrWellnessOnly><LandingSites /></GenericOrWellnessOnly>} />
                     <Route
                       path="landing-sites/builder/:id"
-                      element={<GenericOnly><LandingPageBuilder /></GenericOnly>}
+                      element={<GenericOrWellnessOnly><LandingPageBuilder /></GenericOrWellnessOnly>}
                     />
                     <Route
                       path="landing-pages/builder/:id"

@@ -85,11 +85,17 @@
  */
 
 const express = require("express");
+const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { sanitizeText } = require("../lib/sanitizeJson");
+const {
+  parseSpreadsheetBuffer,
+  parseCatalogueImportRow,
+  buildTemplateBuffer,
+} = require("../lib/travelTmcCatalogueImport");
 
 // PRD §3.2 + schema default — every catalogue row is created archived; only
 // /promote-to-active (senior-role) flips it to active.
@@ -97,6 +103,11 @@ const STATUS_ACTIVE = "active";
 const STATUS_ARCHIVED = "archived";
 const VALID_STATUSES = new Set([STATUS_ACTIVE, STATUS_ARCHIVED]);
 const VALID_STATUS_FILTERS = new Set([STATUS_ACTIVE, STATUS_ARCHIVED, "all"]);
+
+const catalogueImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
 
 // JSON-string columns (Prisma `String @db.Text` storing JSON arrays).
 const JSON_ARRAY_FIELDS = [
@@ -344,6 +355,141 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-tmc-catalogue] create error:", e.message);
       res.status(500).json({ error: "Failed to create catalogue entry" });
+    }
+  },
+);
+
+// ?????????????????????????????????????????????????????????????????????
+// GET /api/travel-tmc-catalogue/import-template
+//
+// Downloadable master template for the bulk import flow. The import route
+// expects the same field order as TEMPLATE_HEADERS, with the server forcing
+// review status on ingest so the file does not need a status column.
+// ?????????????????????????????????????????????????????????????????????
+router.get(
+  "/import-template",
+  verifyToken,
+  requirePermission("tmc_catalogue", "read"),
+  async (req, res) => {
+    try {
+      const format = (req.query.format || "csv").toString().toLowerCase();
+      if (format !== "csv" && format !== "xlsx") {
+        return res.status(400).json({ error: "format must be csv or xlsx", code: "INVALID_FORMAT" });
+      }
+      if (format === "xlsx") {
+        const buf = buildTemplateBuffer("xlsx");
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", 'attachment; filename="tmc-catalogue-template.xlsx"');
+        return res.end(buf);
+      }
+      const csv = buildTemplateBuffer("csv");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="tmc-catalogue-template.csv"');
+      return res.end(csv);
+    } catch (e) {
+      console.error("[travel-tmc-catalogue] template error:", e.message);
+      res.status(500).json({ error: "Failed to build import template" });
+    }
+  },
+);
+
+// ?????????????????????????????????????????????????????????????????????
+// POST /api/travel-tmc-catalogue/import
+//
+// Bulk upload via CSV/XLSX. New rows land archived (review-pending) and
+// the response labels them as AI-classified so the UI can surface the
+// review queue immediately after ingest.
+// ?????????????????????????????????????????????????????????????????????
+const MAX_IMPORT_ROWS = 5000;
+router.post(
+  "/import",
+  verifyToken,
+  requirePermission("tmc_catalogue", "write"),
+  catalogueImportUpload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+        return res.status(400).json({ error: "No CSV/Excel file uploaded", code: "NO_FILE" });
+      }
+      const parsed = parseSpreadsheetBuffer(req.file.buffer, req.file);
+      const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "Spreadsheet is empty", code: "EMPTY_FILE" });
+      }
+      if (rows.length > MAX_IMPORT_ROWS) {
+        return res.status(413).json({ error: `Too many rows. Max ${MAX_IMPORT_ROWS}`, code: "TOO_MANY_ROWS" });
+      }
+
+      const errors = [];
+      const createdTripIds = [];
+      const updatedTripIds = [];
+      let imported = 0;
+      let updated = 0;
+      let skipped = 0;
+
+      for (let i = 0; i < rows.length; i += 1) {
+        const rowNumber = i + 2;
+        try {
+          const parsedRow = parseCatalogueImportRow(rows[i], rowNumber);
+          if (parsedRow.errors && parsedRow.errors.length > 0) {
+            errors.push(...parsedRow.errors);
+            skipped += 1;
+            continue;
+          }
+          const data = parsedRow.data || {};
+          const tripId = String(data.tripId || "").trim();
+          if (!tripId) {
+            errors.push({ rowNumber, reason: "tripId is required" });
+            skipped += 1;
+            continue;
+          }
+
+          const existing = await prisma.tmcTripCatalogue.findFirst({
+            where: { tenantId: req.user.tenantId, tripId },
+          });
+
+          if (existing) {
+            await prisma.tmcTripCatalogue.update({
+              where: { id: existing.id },
+              data: {
+                ...data,
+                status: existing.status || STATUS_ARCHIVED,
+              },
+            });
+            updated += 1;
+            updatedTripIds.push(tripId);
+          } else {
+            await prisma.tmcTripCatalogue.create({
+              data: {
+                ...data,
+                tenantId: req.user.tenantId,
+                status: STATUS_ARCHIVED,
+              },
+            });
+            imported += 1;
+            createdTripIds.push(tripId);
+          }
+        } catch (rowErr) {
+          skipped += 1;
+          errors.push({ rowNumber, reason: rowErr.message });
+        }
+      }
+
+      const reviewLabel = createdTripIds.length > 0 ? "AI-classified, pending review" : "Imported";
+      res.json({
+        imported,
+        updated,
+        skipped,
+        total: rows.length,
+        createdTripIds,
+        updatedTripIds,
+        reviewLabel,
+        errors,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-tmc-catalogue] import error:", e.message);
+      res.status(500).json({ error: "Failed to import catalogue" });
     }
   },
 );

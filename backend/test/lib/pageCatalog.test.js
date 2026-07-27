@@ -271,6 +271,7 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
       expect(p.startsWith('/wellness')).toBe(false);
       expect(p.startsWith('/travel')).toBe(false);
     }
+    expect(paths).toContain('/landing-sites');
     expect(paths).not.toContain('/landing-pages');
   });
 
@@ -301,7 +302,7 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     expect(generic).not.toContain('/revenue-goals');
   });
 
-  it('Landing Pages is travel-only and stays out of generic/wellness catalogs', () => {
+  it('Landing Pages stays travel-only while Landing Sites is shared across generic + wellness', () => {
     const travel = getCatalogForVertical('travel').map((p) => p.path);
     const wellness = getCatalogForVertical('wellness').map((p) => p.path);
     const generic = getCatalogForVertical('generic').map((p) => p.path);
@@ -309,6 +310,10 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     expect(travel).toContain('/landing-pages');
     expect(wellness).not.toContain('/landing-pages');
     expect(generic).not.toContain('/landing-pages');
+
+    expect(travel).not.toContain('/landing-sites');
+    expect(wellness).toContain('/landing-sites');
+    expect(generic).toContain('/landing-sites');
   });
 
   it('unknown / null vertical falls back to the cross-vertical core only', () => {

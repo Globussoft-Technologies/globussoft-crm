@@ -49,5 +49,5 @@ export default function LandingSiteResolver() {
     ? page.content
     : (() => { try { return JSON.parse(page.content || '[]'); } catch { return []; } })();
 
-  return <BlockRenderer landingPage={{ ...page, content }} />;
+  return <BlockRenderer landingPage={{ ...page, content, publicSubmit: true }} />;
 }

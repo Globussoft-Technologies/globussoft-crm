@@ -35,7 +35,7 @@ import {
  * @param {number} pageId - Landing page ID for API submissions
  * @param {Function} renderBlockFn - Recursive render function for nested blocks
  */
-function renderBlock(block, slug, pageId, renderBlockFn) {
+function renderBlock(block, slug, pageId, renderBlockFn, submitEndpoint = '') {
   if (!block || !block.type) return null;
 
   const { type, props = {} } = block;
@@ -51,7 +51,7 @@ function renderBlock(block, slug, pageId, renderBlockFn) {
     case 'button':
       return <ButtonBlock key={block.id || Math.random()} props={props} />;
     case 'form':
-      return <FormBlock key={block.id || Math.random()} props={props} slug={slug} pageId={pageId} />;
+      return <FormBlock key={block.id || Math.random()} props={props} slug={slug} pageId={pageId} submitEndpoint={submitEndpoint} />;
     case 'divider':
       return <DividerBlock key={block.id || Math.random()} props={props} />;
     case 'spacer':
@@ -97,13 +97,103 @@ function renderBlock(block, slug, pageId, renderBlockFn) {
  * BlockRenderer — Renders a page from a block array.
  * The block array is stored in landingPage.content and parsed as JSON.
  */
+function cloneBlocks(blocks) {
+  try {
+    return JSON.parse(JSON.stringify(blocks));
+  } catch (_err) {
+    return Array.isArray(blocks) ? blocks : [];
+  }
+}
+
+function isCardishWellnessBlock(block) {
+  if (!block || block.type !== 'columns') return false;
+  const variant = block.props?.variant;
+  if (variant === 'wellness-benefit-cards' || variant === 'wellness-supporting') return true;
+  const ids = (block.props?.columns || [])
+    .flatMap((col) => (col.components || []).map((child) => child.id));
+  return ids.some((id) => ['contact-title', 'why-title', 'after-title'].includes(id));
+}
+
+function cardFromComponents(components) {
+  const title = components.find((child) => child.type === 'heading');
+  const copy = components.find((child) => child.type === 'text');
+  if (!title && !copy) return null;
+  return { components: [title, copy].filter(Boolean) };
+}
+
+function extractWellnessCards(block) {
+  if (!block || block.type !== 'columns') return [];
+  const cards = [];
+  (block.props?.columns || []).forEach((col) => {
+    const components = col.components || [];
+    const nested = components.find((child) => isCardishWellnessBlock(child));
+    if (nested) cards.push(...extractWellnessCards(nested));
+    const ownCard = cardFromComponents(components.filter((child) => !isCardishWellnessBlock(child)));
+    if (ownCard) cards.push(ownCard);
+  });
+  return cards;
+}
+
+function normalizeWellnessCampaignBlocks(blocks) {
+  const next = cloneBlocks(blocks);
+  const page = next.find((block) => block?.type === 'columns' && block.props?.variant === 'wellness-campaign-page');
+  if (!page) return next;
+  const extractedCards = [];
+  const pageColumns = page.props?.columns || [];
+  page.props.columns = pageColumns.filter((col) => {
+    const components = col.components || [];
+    const isRegistrationHolder = components.some((child) => child?.type === 'columns' && child.props?.variant === 'wellness-registration-row');
+    if (isRegistrationHolder) return true;
+    const cardBlocks = components.filter(isCardishWellnessBlock);
+    cardBlocks.forEach((block) => extractedCards.push(...extractWellnessCards(block)));
+    return cardBlocks.length === 0;
+  });
+
+  const registration = (page.props.columns || [])
+    .flatMap((col) => col.components || [])
+    .find((child) => child?.type === 'columns' && child.props?.variant === 'wellness-registration-row');
+  if (!registration) return next;
+
+  const regColumns = registration.props.columns || [];
+  const rightColumn = regColumns[1] || { components: [] };
+  const rightComponents = rightColumn.components || [];
+  const existingCardBlock = rightComponents.find(isCardishWellnessBlock);
+  const existingCards = existingCardBlock ? extractWellnessCards(existingCardBlock) : [];
+  const looseCard = cardFromComponents(rightComponents.filter((child) => !isCardishWellnessBlock(child)));
+  const cards = [...(looseCard ? [looseCard] : []), ...existingCards, ...extractedCards]
+    .filter((card, index, all) => {
+      const title = card.components?.[0]?.props?.text || '';
+      return title && all.findIndex((candidate) => candidate.components?.[0]?.props?.text === title) === index;
+    })
+    .slice(0, 3);
+
+  if (cards.length) {
+    registration.props.columns = [
+      regColumns[0] || { components: [] },
+      {
+        components: [
+          {
+            id: 'wellness-benefit-cards',
+            type: 'columns',
+            props: { gap: '18px', variant: 'wellness-benefit-cards', columns: cards },
+          },
+        ],
+      },
+    ];
+  }
+  return next;
+}
+
 export default function BlockRenderer({ landingPage = {} }) {
-  const blocks = Array.isArray(landingPage.content)
+  const rawBlocks = Array.isArray(landingPage.content)
     ? landingPage.content
     : [];
+  const blocks = normalizeWellnessCampaignBlocks(rawBlocks);
 
   const slug = landingPage.slug || '';
-  const pageId = landingPage.id || null;
+  const publicSubmit = !!landingPage.publicSubmit;
+  const pageId = publicSubmit ? null : (landingPage.id || null);
+  const submitEndpoint = publicSubmit && slug ? `/api/pages/${slug}/submit` : '';
 
   // Track analytics (page view)
   React.useEffect(() => {
@@ -112,7 +202,7 @@ export default function BlockRenderer({ landingPage = {} }) {
     }
   }, [slug]);
 
-  const renderBlockWithContext = (block) => renderBlock(block, slug, pageId, renderBlockWithContext);
+  const renderBlockWithContext = (block) => renderBlock(block, slug, pageId, renderBlockWithContext, submitEndpoint);
 
   return (
     <main className="landing-page block-renderer">
@@ -120,14 +210,47 @@ export default function BlockRenderer({ landingPage = {} }) {
         .landing-page {
           margin: 0;
           padding: 0;
+          min-height: 100vh;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
-          color: #333;
+          color: #243244;
           line-height: 1.6;
+          background:
+            radial-gradient(circle at top left, rgba(184, 137, 59, 0.08), transparent 34%),
+            linear-gradient(180deg, #fbf8f1 0%, #f8f5ed 28%, #ffffff 100%);
+        }
+
+
+        .landing-page .wellness-form-control,
+        .landing-page .wellness-form-control:disabled,
+        .landing-page .wellness-form-control:-webkit-autofill,
+        .landing-page .wellness-form-control:-webkit-autofill:hover,
+        .landing-page .wellness-form-control:-webkit-autofill:focus {
+          background: #fffdf7 !important;
+          background-color: #fffdf7 !important;
+          background-image: none !important;
+          color: #1f2937 !important;
+          -webkit-text-fill-color: #1f2937 !important;
+          opacity: 1 !important;
+          color-scheme: light !important;
+          box-shadow: inset 0 0 0 9999px #fffdf7 !important;
+        }
+
+        .landing-page .wellness-form-control::placeholder {
+          color: #7b807a !important;
+          opacity: 1 !important;
+        }
+
+        .landing-page .landing-page-content {
+          max-width: 1160px;
+          margin: 0 auto;
+          padding: 48px 20px 72px;
+          display: grid;
+          gap: 28px;
         }
 
         .landing-page section {
           margin: 0;
-          padding: 40px 20px;
+          padding: 0;
         }
 
         .landing-page h1,
@@ -135,11 +258,14 @@ export default function BlockRenderer({ landingPage = {} }) {
         .landing-page h3,
         .landing-page h4 {
           margin: 0 0 16px 0;
+          font-family: Georgia, 'Times New Roman', serif;
           font-weight: 600;
+          letter-spacing: -0.02em;
+          color: #1f2937;
         }
 
         .landing-page a {
-          color: #2563eb;
+          color: #8a6428;
           text-decoration: none;
         }
 

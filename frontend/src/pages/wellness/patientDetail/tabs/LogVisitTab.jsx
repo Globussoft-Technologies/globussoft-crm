@@ -195,12 +195,13 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
     if (submitting) return;
     setSubmitting(true);
     try {
+      const chargeAmount = Number(amountCharged) || 0;
       const result = await fetchApi(`/api/wellness/visits/${selectedVisit.id}`, {
         method: 'PUT',
         body: JSON.stringify({
           status: 'completed',
           notes,
-          amountCharged: amountCharged,
+          amountCharged: chargeAmount,
           couponCode: appliedCoupon ? appliedCoupon.code : couponCode.trim() || undefined,
         }),
       });
@@ -217,7 +218,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
         notify.success(`Coupon ${result.billingBreakdown.couponCode} applied. Total due is now ₹${result.billingBreakdown.balance}.`);
       } else if (result?.paymentLinkUrl) {
         notify.success('Appointment marked as visited. Payment link generated.');
-      } else if (Number(amountCharged) > 0) {
+      } else if (chargeAmount > 0) {
         notify.success('Appointment marked as visited. A payment link could not be generated; check the payment gateway configuration.');
       } else {
         notify.success('Appointment marked as visited & auto-consumption triggered.');

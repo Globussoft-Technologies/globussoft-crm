@@ -64,6 +64,31 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 import PublicBooking from '../pages/wellness/PublicBooking';
 
+// Mock the Razorpay SDK loader so the payment step can be exercised in
+// jsdom without loading the external script. The mock constructor invokes
+// the success handler immediately, which then triggers the confirm POST.
+vi.mock('../pages/wellness/memberships/RazorpayCheckout', () => {
+  class FakeRazorpay {
+    constructor(options) {
+      this.options = options;
+      this._fail = null;
+    }
+    on(event, handler) {
+      if (event === 'payment.failed') this._fail = handler;
+    }
+    open() {
+      if (this.options && typeof this.options.handler === 'function') {
+        this.options.handler({
+          razorpay_order_id: 'order_test',
+          razorpay_payment_id: 'pay_test',
+          razorpay_signature: 'sig_test',
+        });
+      }
+    }
+  }
+  return { loadRazorpaySdk: vi.fn(() => Promise.resolve(FakeRazorpay)) };
+});
+
 const sampleProfile = {
   tenant: { id: 1, name: 'Enhanced Wellness', slug: 'enhanced-wellness' },
   services: [
@@ -116,6 +141,50 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  // Helpers for the post-locking-fee payment flow.
+  // The form submit now lands on a payment review step; clicking the pay button
+  // creates a Razorpay order, opens the (mocked) checkout, and on success POSTs
+  // the payment verification to /api/wellness/public/book/confirm.
+  function queueOrderResponse(overrides = {}) {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        orderId: 'order_test',
+        paymentId: 777,
+        key: 'rzp_test_key',
+        amount: 20000,
+        currency: 'INR',
+        receiptDescription: 'Appointment booking fee',
+        ...overrides,
+      }),
+    });
+  }
+
+  function queueConfirmResponse(overrides = {}) {
+    global.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        patient: { id: 901, name: 'Rashmi Iyer' },
+        visit: { id: 5501 },
+        receiptUrl: '/api/wellness/public/book/receipt?paymentId=777',
+        ...overrides,
+      }),
+    });
+  }
+
+  async function proceedToPayment() {
+    fireEvent.click(await screen.findByRole('button', { name: /Proceed to payment/i }));
+    await screen.findByRole('button', { name: /Pay ₹200 & confirm/i });
+  }
+
+  async function payAndConfirm() {
+    fireEvent.click(screen.getByRole('button', { name: /Pay ₹200 & confirm/i }));
+    await waitFor(() => {
+      const confirmCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book/confirm');
+      expect(confirmCall).toBeDefined();
+    });
+  }
 
   it('renders the Loading… chrome while the tenant catalog fetch is in flight', async () => {
     // Return a never-resolving promise so the loading state stays put.
@@ -184,10 +253,10 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
     expect(screen.getByLabelText(/Preferred slot/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Notes/i)).toBeInTheDocument();
     // The chosen service + clinic appear in the summary banner.
-    expect(screen.getByRole('button', { name: /Confirm booking/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Proceed to payment/i })).toBeInTheDocument();
   });
 
-  it('submits POST /api/wellness/public/book with tenant slug + service + location + contact + CLINIC_VISIT default', async () => {
+  it('submits POST /api/wellness/public/book/order with tenant slug + service + location + contact + CLINIC_VISIT default, then verifies payment', async () => {
     global.fetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(sampleProfile) });
     renderPage();
 
@@ -199,24 +268,18 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
     fireEvent.change(screen.getByLabelText(/Phone number/i), { target: { value: '9876543210' } });
     fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'rashmi@example.com' } });
 
-    // Queue the POST response BEFORE clicking submit.
-    global.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ patient: { id: 901, name: 'Rashmi Iyer' }, visit: { id: 5501 } }),
-    });
+    queueOrderResponse();
+    queueConfirmResponse();
 
-    fireEvent.click(screen.getByRole('button', { name: /Confirm booking/i }));
+    await proceedToPayment();
+    await payAndConfirm();
 
-    await waitFor(() => {
-      const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-      expect(postCall).toBeDefined();
-    });
-
-    const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-    expect(postCall[1].method).toBe('POST');
-    expect(postCall[1].headers['Content-Type']).toBe('application/json');
-    const body = JSON.parse(postCall[1].body);
-    expect(body).toMatchObject({
+    const orderCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book/order');
+    expect(orderCall).toBeDefined();
+    expect(orderCall[1].method).toBe('POST');
+    expect(orderCall[1].headers['Content-Type']).toBe('application/json');
+    const orderBody = JSON.parse(orderCall[1].body);
+    expect(orderBody).toMatchObject({
       tenantSlug: 'enhanced-wellness',
       serviceId: 11,
       locationId: 21,
@@ -224,6 +287,17 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
       phone: '9876543210',
       email: 'rashmi@example.com',
       bookingType: 'CLINIC_VISIT',
+    });
+
+    const confirmCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book/confirm');
+    expect(confirmCall).toBeDefined();
+    expect(confirmCall[1].method).toBe('POST');
+    const confirmBody = JSON.parse(confirmCall[1].body);
+    expect(confirmBody).toMatchObject({
+      paymentId: 777,
+      razorpay_order_id: 'order_test',
+      razorpay_payment_id: 'pay_test',
+      razorpay_signature: 'sig_test',
     });
   });
 
@@ -237,12 +311,11 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
     fireEvent.change(await screen.findByLabelText(/Your name/i), { target: { value: 'Rashmi Iyer' } });
     fireEvent.change(screen.getByLabelText(/Phone number/i), { target: { value: '9876543210' } });
 
-    global.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ patient: { id: 901, name: 'Rashmi Iyer' }, visit: { id: 5501 } }),
-    });
+    queueOrderResponse();
+    queueConfirmResponse();
 
-    fireEvent.click(screen.getByRole('button', { name: /Confirm booking/i }));
+    await proceedToPayment();
+    await payAndConfirm();
 
     expect(await screen.findByText(/Booking confirmed/i)).toBeInTheDocument();
     // The visit id is surfaced as the reference.
@@ -251,7 +324,7 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
     expect(screen.getByText(/Hi Rashmi Iyer/)).toBeInTheDocument();
   });
 
-  it('surfaces the server-supplied error message when POST /public/book returns non-ok', async () => {
+  it('surfaces the server-supplied error message when order creation returns non-ok', async () => {
     global.fetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(sampleProfile) });
     renderPage();
 
@@ -260,6 +333,8 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
     fireEvent.click(await screen.findByText('Greater Kailash Clinic'));
     fireEvent.change(await screen.findByLabelText(/Your name/i), { target: { value: 'Rashmi Iyer' } });
     fireEvent.change(screen.getByLabelText(/Phone number/i), { target: { value: '9876543210' } });
+
+    await proceedToPayment();
 
     global.fetch.mockResolvedValueOnce({
       ok: false,
@@ -267,14 +342,14 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
       json: () => Promise.resolve({ error: 'Phone already booked for this slot' }),
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Confirm booking/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Pay ₹200 & confirm/i }));
 
     expect(await screen.findByText(/Phone already booked for this slot/i)).toBeInTheDocument();
     // Confirmation chrome must NOT render on failure.
     expect(screen.queryByText(/Booking confirmed/i)).not.toBeInTheDocument();
   });
 
-  it('renders the friendly "Network error." banner when the POST fetch throws', async () => {
+  it('surfaces the fetch error message when the order request throws', async () => {
     global.fetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(sampleProfile) });
     renderPage();
 
@@ -284,11 +359,13 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
     fireEvent.change(await screen.findByLabelText(/Your name/i), { target: { value: 'Rashmi Iyer' } });
     fireEvent.change(screen.getByLabelText(/Phone number/i), { target: { value: '9876543210' } });
 
+    await proceedToPayment();
+
     global.fetch.mockRejectedValueOnce(new Error('socket hang up'));
 
-    fireEvent.click(screen.getByRole('button', { name: /Confirm booking/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Pay ₹200 & confirm/i }));
 
-    expect(await screen.findByText(/Network error/i)).toBeInTheDocument();
+    expect(await screen.findByText(/socket hang up/i)).toBeInTheDocument();
     expect(screen.queryByText(/Booking confirmed/i)).not.toBeInTheDocument();
   });
 
@@ -437,15 +514,14 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
       json: () => Promise.resolve({ patient: { id: 902, name: 'Anita Rao' }, visit: { id: 5502 } }),
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Confirm booking/i }));
+    queueOrderResponse();
+    queueConfirmResponse({ patient: { id: 902, name: 'Anita Rao' }, visit: { id: 5502 } });
 
-    await waitFor(() => {
-      const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-      expect(postCall).toBeDefined();
-    });
+    await proceedToPayment();
+    await payAndConfirm();
 
-    const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-    const body = JSON.parse(postCall[1].body);
+    const orderCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book/order');
+    const body = JSON.parse(orderCall[1].body);
     expect(body).toMatchObject({
       bookingType: 'IN_HOME',
       atHomeAddress: 'B-12, Mayur Vihar Ph-1',
@@ -510,15 +586,14 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
       json: () => Promise.resolve({ patient: { id: 903 }, visit: { id: 5503 } }),
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Confirm booking/i }));
+    queueOrderResponse();
+    queueConfirmResponse({ patient: { id: 903 }, visit: { id: 5503 } });
 
-    await waitFor(() => {
-      const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-      expect(postCall).toBeDefined();
-    });
+    await proceedToPayment();
+    await payAndConfirm();
 
-    const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-    const body = JSON.parse(postCall[1].body);
+    const orderCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book/order');
+    const body = JSON.parse(orderCall[1].body);
     // SUT line 116 parses the value with parseInt(value, 10) — number, not string.
     expect(body.resourceId).toBe(401);
     expect(typeof body.resourceId).toBe('number');
@@ -546,15 +621,14 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
       json: () => Promise.resolve({ patient: { id: 904 }, visit: { id: 5504 } }),
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Confirm booking/i }));
+    queueOrderResponse();
+    queueConfirmResponse({ patient: { id: 904 }, visit: { id: 5504 } });
 
-    await waitFor(() => {
-      const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-      expect(postCall).toBeDefined();
-    });
+    await proceedToPayment();
+    await payAndConfirm();
 
-    const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-    const body = JSON.parse(postCall[1].body);
+    const orderCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book/order');
+    const body = JSON.parse(orderCall[1].body);
     expect(body).not.toHaveProperty('resourceId');
   });
 
@@ -594,15 +668,21 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
         json: () => Promise.resolve({ patient: { id: 905 }, visit: { id: 5505 } }),
       });
 
-      fireEvent.click(screen.getByRole('button', { name: /Confirm booking/i }));
+      queueOrderResponse();
+      queueConfirmResponse({ patient: { id: 905 }, visit: { id: 5505 } });
 
-      await waitFor(() => {
-        const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-        expect(postCall).toBeDefined();
+      await proceedToPayment();
+      await payAndConfirm();
+
+      const orderCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book/order');
+      const body = JSON.parse(orderCall[1].body);
+      expect(body.utm).toMatchObject({
+        utmSource: 'fb',
+        utmMedium: 'cpc',
+        utmCampaign: 'spring2026',
+        utmTerm: 'prp',
+        utmContent: 'hero',
       });
-
-      const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-      const body = JSON.parse(postCall[1].body);
       expect(body.utm).toMatchObject({
         utmSource: 'fb',
         utmMedium: 'cpc',
@@ -632,15 +712,14 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
       json: () => Promise.resolve({ patient: { id: 906 }, visit: { id: 5506 } }),
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Confirm booking/i }));
+    queueOrderResponse();
+    queueConfirmResponse({ patient: { id: 906 }, visit: { id: 5506 } });
 
-    await waitFor(() => {
-      const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-      expect(postCall).toBeDefined();
-    });
+    await proceedToPayment();
+    await payAndConfirm();
 
-    const postCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book');
-    const body = JSON.parse(postCall[1].body);
+    const orderCall = global.fetch.mock.calls.find((c) => c[0] === '/api/wellness/public/book/order');
+    const body = JSON.parse(orderCall[1].body);
     expect(body).not.toHaveProperty('utm');
   });
 
@@ -668,7 +747,11 @@ describe('PublicBooking (/book/:slug) — public unauthed wellness booking flow'
       json: () => Promise.resolve({ patient: { id: 907, name: 'Draft Tester' }, visit: { id: 5507 } }),
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Confirm booking/i }));
+    queueOrderResponse();
+    queueConfirmResponse({ patient: { id: 907, name: 'Draft Tester' }, visit: { id: 5507 } });
+
+    await proceedToPayment();
+    await payAndConfirm();
 
     // After successful submit, the draft must be cleared.
     await screen.findByText(/Booking confirmed/i);

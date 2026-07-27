@@ -18,19 +18,19 @@ const (
 // UserContext is the authenticated user attached to the request.
 // It mirrors the JWT payload used by the Node.js backend.
 type UserContext struct {
-	Owner             bool   `json:"isOwner"`
-	UserID            int    `json:"userId"`
-	TenantID          int    `json:"tenantId"`
-	Role              string `json:"role"`
-	UserType          string `json:"userType"`
-	Email             string `json:"email"`
-	Name              string `json:"name"`
-	JTI               string `json:"jti,omitempty"`
-	Awaiting2FA       bool   `json:"awaiting2FA"`
-	ActiveTenantID    int    `json:"activeTenantId,omitempty"`
-	WellnessRole      string `json:"wellnessRole,omitempty"`
-	SubBrandAccess    []int  `json:"subBrandAccess,omitempty"`
-	PermissionsCache  string `json:"-"`
+	Owner            bool   `json:"isOwner"`
+	UserID           int    `json:"userId"`
+	TenantID         int    `json:"tenantId"`
+	Role             string `json:"role"`
+	UserType         string `json:"userType"`
+	Email            string `json:"email"`
+	Name             string `json:"name"`
+	JTI              string `json:"jti,omitempty"`
+	Awaiting2FA      bool   `json:"awaiting2FA"`
+	ActiveTenantID   int    `json:"activeTenantId,omitempty"`
+	WellnessRole     string `json:"wellnessRole,omitempty"`
+	SubBrandAccess   []int  `json:"subBrandAccess,omitempty"`
+	PermissionsCache string `json:"-"`
 }
 
 // TenantContext holds tenant-level settings resolved for the request.
@@ -66,7 +66,8 @@ func UserFromEcho(c echo.Context) *UserContext {
 func RequireUser(c echo.Context) (*UserContext, error) {
 	u := UserFromEcho(c)
 	if u == nil {
-		return nil, ErrResponse(c, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication required")
+		_ = ErrResponse(c, http.StatusUnauthorized, CodeUnauthorized, "Authentication required")
+		return nil, NewHTTPError(http.StatusUnauthorized, CodeUnauthorized, "Authentication required")
 	}
 	return u, nil
 }

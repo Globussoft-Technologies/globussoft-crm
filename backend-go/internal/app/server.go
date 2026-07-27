@@ -123,6 +123,19 @@ func (s *Server) registerRoutes() {
 	auditGroup.GET("", ah.List)
 	auditGroup.GET("/verify", ah.Verify)
 
+	// Contacts routes.
+	contactRepo := repository.NewContactRepository(s.db)
+	contactSvc := services.NewContactService(contactRepo, s.db)
+	ch := handlers.NewContactHandler(contactSvc)
+	contactsRead := s.e.Group("/api/contacts", middleware.RequirePermissionOrRole("contacts", "read", "ADMIN", "MANAGER", "OWNER"))
+	contactsRead.GET("", ch.List)
+	contactsRead.GET("/:id", ch.Get)
+	contactsWrite := s.e.Group("/api/contacts", middleware.RequirePermissionOrRole("contacts", "write", "ADMIN", "MANAGER", "OWNER"))
+	contactsWrite.POST("", ch.Create)
+	contactsWrite.PUT("/:id", ch.Update)
+	contactsWrite.DELETE("/:id", ch.Delete)
+	contactsWrite.POST("/:id/restore", ch.Restore)
+
 	// JSON 404 for unmatched /api/* paths.
 	s.e.Any("/api/*", func(c echo.Context) error {
 		return shared.ErrNotFound(c)

@@ -1,12 +1,34 @@
 package shared
 
 import (
+	"context"
 	"crypto/sha256"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 )
+
+// SQLExecer is the minimal database/sql interface needed by WriteAudit.
+type SQLExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// WriteAudit inserts a best-effort audit row. Errors are logged and returned
+// so callers can choose whether to fail the operation; mutations should still
+// succeed even when audit logging is unavailable.
+func WriteAudit(ctx context.Context, db SQLExecer, entity, action string, entityID, userID, tenantID int, details string) error {
+	if db == nil {
+		return nil
+	}
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO AuditLog (action, entity, entityId, details, createdAt, tenantId, userId)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		action, entity, entityID, details, time.Now(), tenantID, userID,
+	)
+	return err
+}
 
 // GenesisFor returns the canonical chain-head sentinel for a tenant.
 // It mirrors backend/lib/audit.js genesisFor(tenantId).

@@ -3,6 +3,7 @@ migrated_prefixes:
   - exact: /api/health
   - exact: /api/status
   - prefix: /api/audit
+  - prefix: /api/contacts
 open_paths_on_go:
   - /api/health
   - /api/status

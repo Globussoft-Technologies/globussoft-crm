@@ -1,15 +1,15 @@
-﻿/**
- * Page catalog â€” single source of truth for "what pages exist in the SPA
+/**
+ * Page catalog  single source of truth for "what pages exist in the SPA
  * and which permission(s) grant access to each".
  *
  * Used in four places:
- *   1. /api/pages/catalog â†’ frontend gets the full list (for the admin
+ *   1. /api/pages/catalog  frontend gets the full list (for the admin
  *      Roles & Permissions UI to know what's pickable).
- *   2. /api/roles/:id/accessible-pages â†’ returns only the subset the
+ *   2. /api/roles/:id/accessible-pages  returns only the subset the
  *      named role has permissions for (drives the landingPath dropdown).
- *   3. /api/pages/me â†’ returns the subset the signed-in user can access
+ *   3. /api/pages/me  returns the subset the signed-in user can access
  *      (powers the QuickLinks /home widget AND the wellness sidebar
- *      section rendering â€” every visible link there is intersected with
+ *      section rendering  every visible link there is intersected with
  *      this list so there is ZERO hardcoded role-string gating in the UI).
  *   4. The wellness sidebar (Sidebar.jsx) reads this list and renders one
  *      labelled section per `category` in catalog order. Add a row here +
@@ -19,44 +19,44 @@
  *      adminOnly / managerOnly / wellnessRoles strings anywhere.
  *
  * Each entry:
- *   path                â€” the SPA route (must start with '/'; must match
+ *   path                 the SPA route (must start with '/'; must match
  *                         a Route in App.jsx).
- *   label               â€” display name in the picker + the quick-link card
+ *   label                display name in the picker + the quick-link card
  *                         + the sidebar nav entry.
- *   description         â€” one-line subtitle (optional but recommended)
- *   category            â€” grouping in the UI ("Clinical" / "Finance" / â€¦).
+ *   description          one-line subtitle (optional but recommended)
+ *   category             grouping in the UI ("Clinical" / "Finance" / ).
  *                         The wellness sidebar renders one section per
  *                         category in catalog order.
- *   requiredPermissions â€” array of {module, action}; the user needs ALL
+ *   requiredPermissions  array of {module, action}; the user needs ALL
  *                         to access this page (multi-permission AND semantics
  *                         via the .every() filter below). Empty array means
  *                         everyone with a session can see it (e.g. /home
  *                         itself, which is the always-available fallback).
- *   hideForAdminTier    â€” (optional, default false) if true, the wellness
+ *   hideForAdminTier     (optional, default false) if true, the wellness
  *                         sidebar hides this page from users who already see
  *                         the Admin category (admin-equivalent users). The
- *                         page stays accessible via direct URL â€” this is a
+ *                         page stays accessible via direct URL  this is a
  *                         sidebar-only UX rule for de-cluttering admin nav
  *                         from clinical / operational day-to-day pages they
  *                         don't typically use. Strictly UX; no access change.
- *   customerOnly        â€” (optional, default false) if true, the wellness
+ *   customerOnly         (optional, default false) if true, the wellness
  *                         sidebar surfaces this page ONLY to customer-tier
  *                         roles (role === 'USER' || role === 'CUSTOMER').
  *                         Admin / manager / staff (any other role) don't see
  *                         it in their nav. Used for customer-facing storefront
  *                         surfaces (e.g. Buy Gift Cards). Strictly a sidebar-
- *                         only UX rule â€” the page stays accessible by direct
+ *                         only UX rule  the page stays accessible by direct
  *                         URL and the backend route's own auth is unchanged.
  *
  * Adding a new page = add one row here + one entry to PAGE_ICON_BY_PATH
  * in Sidebar.jsx. No other code change anywhere. Removing a page row is
  * safe: any role whose landingPath pointed at the removed path will
- * auto-fallback through the smart-fallback in Login.jsx â†’ first accessible
- * page â†’ /home.
+ * auto-fallback through the smart-fallback in Login.jsx  first accessible
+ * page  /home.
  */
 
 const PAGE_CATALOG = [
-  // â”€â”€ Always-available landing pages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Always-available landing pages 
   {
     path: '/home',
     label: 'Home',
@@ -70,7 +70,7 @@ const PAGE_CATALOG = [
     hideForAdminTier: true,
   },
 
-  // â”€â”€ Manager surfaces (top of wellness sidebar, no section header) â”€
+  //  Manager surfaces (top of wellness sidebar, no section header) 
   {
     path: '/wellness',
     label: 'Owner Dashboard',
@@ -86,13 +86,13 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'reports', action: 'read' }],
   },
 
-  // â”€â”€ Clinical (Wellness vertical) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Clinical (Wellness vertical) 
   {
     path: '/wellness/calendar',
     label: 'Calendar',
     description: 'Day-grid view of appointments + bookings',
     category: 'Clinical',
-    // .read on the dedicated `calendar` module â€” separated from
+    // .read on the dedicated `calendar` module  separated from
     // `appointments` so admins can grant view-only Calendar access
     // without also exposing the Appointments list, Book Appointment
     // form, and My Appointments page. Slot-click-to-book and
@@ -112,7 +112,7 @@ const PAGE_CATALOG = [
     label: 'My appointments',
     description: 'Appointments where you are the assigned practitioner',
     category: 'Clinical',
-    // Dedicated `my_appointments` module â€” split out from `appointments`
+    // Dedicated `my_appointments` module  split out from `appointments`
     // so a doctor can be granted their own-slot view without also seeing
     // the tenant-wide Appointments list, and an admin can be granted the
     // tenant-wide list without polluting their nav with a "My Appointments"
@@ -131,7 +131,7 @@ const PAGE_CATALOG = [
     label: 'Waitlist',
     description: 'Patients waiting for an open slot',
     category: 'Clinical',
-    // Dedicated `waitlist` module â€” split out from `appointments` so a
+    // Dedicated `waitlist` module  split out from `appointments` so a
     // telecaller can be granted waitlist management without also getting
     // the tenant-wide Appointments list. `waitlist.read` views the queue;
     // promoting / dispositioning gates on `waitlist.write` at the page
@@ -150,7 +150,7 @@ const PAGE_CATALOG = [
     label: 'My Prescriptions',
     description: 'Your own prescriptions (linked Patient profile)',
     category: 'Clinical',
-    // Separate `my_prescriptions` module â€” granted to roles whose users
+    // Separate `my_prescriptions` module  granted to roles whose users
     // may also be patients at this clinic (CUSTOMER, and optionally USER
     // when staff-as-patient flows are in play). Backend scopes to
     // req.user.userId's linked Patient row; cross-patient access is
@@ -172,7 +172,7 @@ const PAGE_CATALOG = [
     // Path doesn't start with `/wellness/`, so the path-prefix
     // filter in getCatalogForVertical would let this leak into the
     // travel + generic catalogs. Explicit `vertical: 'wellness'`
-    // tag keeps it confined to wellness â€” the page renders a
+    // tag keeps it confined to wellness  the page renders a
     // consent-signature queue tied to the wellness clinical flow.
     vertical: 'wellness',
     requiredPermissions: [{ module: 'consents', action: 'read' }],
@@ -189,7 +189,7 @@ const PAGE_CATALOG = [
     hideForAdminTier: true,
   },
 
-  // â”€â”€ Catalog (services / drugs / memberships) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Catalog (services / drugs / memberships) 
   {
     path: '/wellness/services',
     label: 'Service Catalog',
@@ -202,7 +202,7 @@ const PAGE_CATALOG = [
     label: 'Service Categories',
     description: 'Hierarchical taxonomy of services',
     category: 'Catalog',
-    // .read â€” viewing the taxonomy is a read action. Adding/editing
+    // .read  viewing the taxonomy is a read action. Adding/editing
     // categories is gated separately at the action level on services.write.
     requiredPermissions: [{ module: 'services', action: 'read' }],
   },
@@ -211,7 +211,7 @@ const PAGE_CATALOG = [
     label: 'Drug Catalogue',
     description: 'Drugs available for prescription',
     category: 'Catalog',
-    // .read â€” clinical staff with prescriptions.read need to browse the
+    // .read  clinical staff with prescriptions.read need to browse the
     // drug catalogue when writing prescriptions. The add/edit drug actions
     // inside the page are gated on prescriptions.write separately.
     requiredPermissions: [{ module: 'prescriptions', action: 'read' }],
@@ -224,7 +224,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'services', action: 'read' }],
   },
 
-  // â”€â”€ Scheduling (resources / holidays / working hours) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Scheduling (resources / holidays / working hours) 
   {
     path: '/wellness/resources',
     label: 'Resources',
@@ -247,7 +247,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'settings', action: 'read' }],
   },
 
-  // â”€â”€ Staff self-service (attendance / leave) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Staff self-service (attendance / leave) 
   // Gated on dedicated `attendance` / `leave` modules so non-staff roles
   // (e.g. CUSTOMER) are excluded from the sidebar even if the wellness
   // sidebar ever renders for them. Read-tier gates the sidebar entry;
@@ -261,7 +261,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'attendance', action: 'read' }],
   },
   {
-    // Admin/Manager all-staff dashboard â€” KPI tiles + attendance list.
+    // Admin/Manager all-staff dashboard  KPI tiles + attendance list.
     // The backend /api/attendance/summary + /list endpoints are role-gated
     // (ADMIN/MANAGER), so non-managers wouldn't get useful data here. The
     // page itself renders a friendly read-only fallback for plain users.
@@ -281,7 +281,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'leave', action: 'read' }],
   },
 
-  // â”€â”€ Leads & Revenue (inbox / WhatsApp / leads / tasks) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Leads & Revenue (inbox / WhatsApp / leads / tasks) 
   {
     path: '/inbox',
     label: 'Unified Inbox',
@@ -320,7 +320,7 @@ const PAGE_CATALOG = [
   {
     path: '/converted-leads',
     label: 'Converted Leads',
-    // Cross-vertical â€” description was wellness-flavored ("converted to
+    // Cross-vertical  description was wellness-flavored ("converted to
     // patients / customers"). Travel converts leads to bookings; generic
     // CRM converts to deals. Use neutral wording.
     description: 'Leads that converted to customers',
@@ -346,13 +346,13 @@ const PAGE_CATALOG = [
     label: 'Routing Rules',
     description: 'Rules that auto-assign incoming leads',
     category: 'Leads & Revenue',
-    // .read â€” viewing routing rules is reasonable for any role with
+    // .read  viewing routing rules is reasonable for any role with
     // leads.read (helps them understand who handles incoming leads).
     // Editing rules is gated on leads.write at the action level.
     requiredPermissions: [{ module: 'leads', action: 'read' }],
   },
 
-  // â”€â”€ Sales (generic CRM only â€” not surfaced in wellness sidebar) â”€â”€
+  //  Sales (generic CRM only  not surfaced in wellness sidebar) 
   {
     path: '/dashboard',
     label: 'Sales dashboard',
@@ -375,7 +375,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'pipeline', action: 'read' }],
   },
 
-  // â”€â”€ Finance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Finance 
   {
     path: '/wellness/pos',
     label: 'Point of Sale',
@@ -386,7 +386,7 @@ const PAGE_CATALOG = [
   {
     path: '/estimates',
     label: 'Estimates',
-    // Cross-vertical â€” description was wellness-flavored ("pre-treatment").
+    // Cross-vertical  description was wellness-flavored ("pre-treatment").
     // Travel uses estimates for trip quotes pre-confirmation; generic CRM
     // for proposals. Drop the wellness-only "pre-treatment" qualifier.
     description: 'Quotes + estimates sent to customers',
@@ -403,7 +403,7 @@ const PAGE_CATALOG = [
   {
     path: '/payments',
     label: 'Payments',
-    // Cross-vertical generic payment surface. Vertical-agnostic copy â€”
+    // Cross-vertical generic payment surface. Vertical-agnostic copy 
     // wellness flavours its own surfaces via the patient-wallet / POS
     // sub-pages; travel flavours via /travel/milestones + payable batches.
     description: 'Payment history + gateway transactions',
@@ -434,16 +434,16 @@ const PAGE_CATALOG = [
   {
     path: '/wellness/buy-giftcards',
     label: 'Buy Gift Cards',
-    description: 'Customer-facing gift card storefront â€” purchase via Razorpay, value lands on the chosen patient\'s wallet',
+    description: 'Customer-facing gift card storefront  purchase via Razorpay, value lands on the chosen patient\'s wallet',
     category: 'Finance',
-    // No required permissions â€” any authenticated tenant user can browse
+    // No required permissions  any authenticated tenant user can browse
     // + buy. Backend route is auth-only too. Mirrors the open-to-all-users
     // shape used by /home + other low-privilege storefront surfaces.
     requiredPermissions: [],
     // This is a CUSTOMER-facing storefront, so the sidebar entry is only
     // surfaced to customer-tier roles (USER / CUSTOMER). Admin / manager /
     // staff roles don't see it in their nav. Strictly a sidebar-only UX
-    // rule â€” the page stays reachable by direct URL and the backend route
+    // rule  the page stays reachable by direct URL and the backend route
     // remains auth-only (so any logged-in user can still buy). See the
     // customerOnly flag doc in the catalog header above.
     customerOnly: true,
@@ -451,7 +451,7 @@ const PAGE_CATALOG = [
   {
     path: '/wellness/my-transactions',
     label: 'My Transactions',
-    description: 'Your own payment history â€” purchases, treatments, gift cards, wallet + subscriptions',
+    description: 'Your own payment history  purchases, treatments, gift cards, wallet + subscriptions',
     category: 'Finance',
     // Open to any authenticated user; the backend endpoint scopes the data
     // to the caller's own Patient. customerOnly keeps the sidebar entry to
@@ -474,7 +474,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
 
-  // â”€â”€ Marketing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Marketing 
   {
     path: '/marketing',
     label: 'SMS / Email Blasts',
@@ -509,7 +509,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
 
-  // â”€â”€ Reports + analytics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Reports + analytics 
   {
     path: '/wellness/reports',
     label: 'P&L + Attribution',
@@ -557,13 +557,13 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'dashboards', action: 'read' }],
   },
 
-  // â”€â”€ Appointments (booking-on-behalf surface) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Appointments (booking-on-behalf surface) 
   {
     path: '/wellness/book-appointment',
     label: 'Book Appointment',
     description: 'Staff/patient appointment booking form',
     category: 'Appointments',
-    // Dedicated `book_appointment` module â€” split out from `appointments`
+    // Dedicated `book_appointment` module  split out from `appointments`
     // so the booking surface is independently grantable. Telecallers /
     // receptionists who book on behalf of patients get this; doctors
     // (slots already assigned to them) and admins (don't book themselves)
@@ -571,7 +571,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'book_appointment', action: 'write' }],
   },
 
-  // â”€â”€ Patient portal (CUSTOMER role â€” not in wellness sidebar) â”€â”€â”€â”€â”€
+  //  Patient portal (CUSTOMER role  not in wellness sidebar) 
   // Wellness-only surface served at a cross-vertical path. The path-prefix
   // filter in getCatalogForVertical can't infer wellness from `/portal`,
   // so it carries an explicit `vertical: 'wellness'` tag instead.
@@ -586,16 +586,16 @@ const PAGE_CATALOG = [
   {
     path: '/wellness/my-bookings',
     label: 'My bookings',
-    description: 'Patient appointment management â€” upcoming, pending, completed, cancelled',
+    description: 'Patient appointment management  upcoming, pending, completed, cancelled',
     // Category is `Appointments` (not `Patient`) because the wellness
     // sidebar's WELLNESS_CATEGORY_ORDER (frontend/src/components/Sidebar.jsx)
-    // only renders sections whose name appears in that list â€” `Patient`
+    // only renders sections whose name appears in that list  `Patient`
     // is a catalog-only tag used by `/portal` (which is a separate,
     // public, non-sidebar route). Slotting under Appointments keeps the
     // patient's bookings page next to Book Appointment so the cluster
     // reads as one coherent group.
     category: 'Appointments',
-    // Dedicated `my_bookings` module â€” split from the staff-facing
+    // Dedicated `my_bookings` module  split from the staff-facing
     // `my_appointments` (practitioner's own schedule) so a patient can
     // be granted appointment management without seeing the practitioner
     // view, and vice versa. CUSTOMER system role grants this; ADMIN /
@@ -603,13 +603,13 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'my_bookings', action: 'read' }],
   },
 
-  // â”€â”€ Admin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Admin 
   {
     path: '/wellness/locations',
     label: 'Locations',
     description: 'Multi-clinic location admin',
     category: 'Admin',
-    // .read â€” viewing the location list is fine for any role with
+    // .read  viewing the location list is fine for any role with
     // settings.read. The create/edit/delete actions inside are gated
     // separately on settings.manage.
     requiredPermissions: [{ module: 'settings', action: 'read' }],
@@ -620,7 +620,7 @@ const PAGE_CATALOG = [
     description: 'Team management',
     category: 'Admin',
     // .manage (not .read) because /staff handles user CRUD + role
-    // assignment â€” admin work, not just viewing a directory. Matches the
+    // assignment  admin work, not just viewing a directory. Matches the
     // admin-only RoleGuard on this route in App.jsx.
     requiredPermissions: [{ module: 'staff', action: 'manage' }],
   },
@@ -655,11 +655,11 @@ const PAGE_CATALOG = [
     label: 'Channels',
     description: 'SMS / WhatsApp / call channel config',
     category: 'Admin',
-    // .manage â€” channels is provider-keys config (SMS/WhatsApp/Telephony),
+    // .manage  channels is provider-keys config (SMS/WhatsApp/Telephony),
     // not just a comms view. Matches the admin-only RoleGuard on this
     // route in App.jsx. Manager has communications.read but not
     // integrations.manage, so Manager won't see this in the sidebar OR
-    // be able to access the page â€” consistent both directions.
+    // be able to access the page  consistent both directions.
     requiredPermissions: [{ module: 'integrations', action: 'manage' }],
   },
   {
@@ -667,7 +667,7 @@ const PAGE_CATALOG = [
     label: 'Approvals',
     description: 'Pending approvals queue',
     category: 'Admin',
-    // .manage â€” approvals queue is admin sign-off, not staff viewing.
+    // .manage  approvals queue is admin sign-off, not staff viewing.
     requiredPermissions: [{ module: 'staff', action: 'manage' }],
   },
   {
@@ -692,17 +692,17 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'settings', action: 'read' }],
   },
 
-  // â”€â”€ Inventory Admin (config + ops ledger) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Inventory Admin (config + ops ledger) 
   // Sidebar gating for both the Products (master/config) and Inventory
-  // Admin (operational ledger) clusters is .read â€” any role with
+  // Admin (operational ledger) clusters is .read  any role with
   // inventory.read can browse them. The create / edit / delete actions
   // inside each page are gated separately at the action level (.write /
   // .update / .delete / .manage) via the backend route guards in
-  // routes/inventory.js. The two categories are a UI split only â€” the
+  // routes/inventory.js. The two categories are a UI split only  the
   // underlying permission module stays `inventory` (a Product is an
   // inventory item, a Receipt records inventory movement).
 
-  // â”€â”€ Products (master catalog / config) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Products (master catalog / config) 
   // Gated on the dedicated `products` permission module so admins can
   // grant catalog access without exposing the stock ledger and vice
   // versa. Backend routes in routes/inventory.js use the matching
@@ -723,7 +723,7 @@ const PAGE_CATALOG = [
   },
   {
     // Auto-consumption rules are admin-tier configuration (which products
-    // auto-deduct when a service is completed) â€” not a browse surface.
+    // auto-deduct when a service is completed)  not a browse surface.
     // Gating on products.manage hides this from CUSTOMER sidebars
     // (CUSTOMER gets products.read for the catalogue, not .manage) while
     // keeping ADMIN/NURSE access intact. The route handler's READ gate
@@ -736,7 +736,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'products', action: 'manage' }],
   },
 
-  // â”€â”€ Inventory Admin (operational ledger) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Inventory Admin (operational ledger) 
   {
     path: '/wellness/vendors',
     label: 'Vendors',
@@ -759,11 +759,11 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'inventory', action: 'read' }],
   },
 
-  // â”€â”€ Travel vertical â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Travel vertical 
   // Travel-vertical landing-page candidates. Mirrors renderTravelNav in
   // Sidebar.jsx and the travel permission catalogue in
   // backend/lib/permissionCatalog.js TRAVEL_MODULES. Path-prefix `/travel`
-  // is what getCatalogForVertical filters on â€” a wellness tenant never
+  // is what getCatalogForVertical filters on  a wellness tenant never
   // sees these in its dropdown, a travel tenant never sees `/wellness/*`.
   // Phase 1: pages list lets a travel admin pick the role's landingPath;
   // backend routes don't yet decorate with requirePermission, so the
@@ -994,7 +994,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
 
-  // â”€â”€ Sales & Pipeline (missing generic CRM routes) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Sales & Pipeline (missing generic CRM routes) 
   {
     path: '/cpq',
     label: 'Configure Price Quote',
@@ -1066,7 +1066,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'analytics', action: 'read' }],
   },
 
-  // â”€â”€ Contracts & Agreements â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Contracts & Agreements 
   {
     path: '/contracts',
     label: 'Contracts',
@@ -1076,7 +1076,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'contracts', action: 'read' }],
   },
 
-  // â”€â”€ Communications (missing routes) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Communications (missing routes) 
   {
     path: '/chatbots',
     label: 'Chatbots',
@@ -1106,7 +1106,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'communications', action: 'read' }],
   },
 
-  // â”€â”€ Support & Tickets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Support & Tickets 
   {
     path: '/support',
     label: 'Support',
@@ -1129,7 +1129,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'sla', action: 'read' }],
   },
 
-  // â”€â”€ Finance (missing routes) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Finance (missing routes) 
   {
     path: '/commission-data',
     label: 'Commission Analytics',
@@ -1146,7 +1146,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'settings', action: 'write' }],
   },
 
-  // â”€â”€ Marketing & Analytics (missing routes) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Marketing & Analytics (missing routes) 
   {
     path: '/industry-templates',
     label: 'Industry Templates',
@@ -1171,7 +1171,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'analytics', action: 'read' }],
   },
 
-  // â”€â”€ Automation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Automation 
   {
     path: '/workflows',
     label: 'Automation',
@@ -1180,7 +1180,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'workflows', action: 'read' }],
   },
 
-  // â”€â”€ Admin & Developer (missing routes) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Admin & Developer (missing routes) 
   {
     path: '/developer',
     label: 'Developer',
@@ -1268,7 +1268,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'calendar', action: 'read' }],
   },
 
-  // â”€â”€ Travel-specific missing routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Travel-specific missing routes 
   {
     path: '/travel-stall',
     label: 'Travel Stall Dashboard',
@@ -1342,7 +1342,7 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'reports', action: 'read' }],
   },
 
-  // â”€â”€ Additional Admin Routes (Travel-only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Additional Admin Routes (Travel-only) 
   {
     path: '/admin/brand-kits',
     label: 'Brand Kits',
@@ -1365,7 +1365,7 @@ const PAGE_CATALOG = [
     category: 'Security',
     requiredPermissions: [{ module: 'settings', action: 'write' }],
   },
-  // â”€â”€ Additional Generic Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  //  Additional Generic Routes 
   {
     path: '/ab-tests',
     label: 'A/B Tests',
@@ -1389,8 +1389,8 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'booking_pages', action: 'read' }],
   },
 
-  // â”€â”€ User self-service (notification preferences) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  // Empty requiredPermissions â€” every logged-in user (including CUSTOMER)
+  //  User self-service (notification preferences) 
+  // Empty requiredPermissions  every logged-in user (including CUSTOMER)
   // can manage their own notification preferences.
   {
     path: '/notification-settings',
@@ -1433,28 +1433,28 @@ function getCatalog() {
  * landingPath dropdown on a travel tenant doesn't show wellness routes
  * (and vice-versa) before the role's permissions are saved.
  *
- * Two-layer filtering â€” path-prefix inference for the bulk of entries,
+ * Two-layer filtering  path-prefix inference for the bulk of entries,
  * explicit `vertical:` override for the exceptions where a wellness-
  * or travel-only surface lives at a cross-vertical path:
  *
  *   1. Explicit `vertical:` field on the entry (highest priority).
  *      Catches wellness-only surfaces at cross-vertical paths like
  *      `/portal` (Patient portal) or `/revenue-goals` (per-practitioner
- *      revenue targets) â€” neither path matches `/wellness/*` but both
+ *      revenue targets)  neither path matches `/wellness/*` but both
  *      pages are semantically wellness.
  *
  *   2. Path-prefix inference (fallback):
- *      â€¢ `/wellness` + `/wellness/*` â†’ wellness-only
- *      â€¢ `/travel`   + `/travel/*`   â†’ travel-only
- *      â€¢ everything else â†’ cross-vertical, always included
+ *       `/wellness` + `/wellness/*`  wellness-only
+ *       `/travel`   + `/travel/*`    travel-only
+ *       everything else  cross-vertical, always included
  *
  * Path-prefix beats blanket per-row tagging because the wellness
- * catalog predates the vertical split with 50+ entries â€” a blanket
+ * catalog predates the vertical split with 50+ entries  a blanket
  * inference avoids touching every row. New travel entries land under
  * `/travel/*` so the inference catches them automatically.
  *
  * Unknown vertical (null / "generic" / unrecognised) returns only the
- * cross-vertical core â€” neither wellness nor travel pages leak.
+ * cross-vertical core  neither wellness nor travel pages leak.
  */
 function getCatalogForVertical(vertical) {
   return PAGE_CATALOG.filter((p) => {
@@ -1490,11 +1490,11 @@ function isKnownPage(path) {
  * Vertical filtering (added 2026-06-17): when `opts.vertical` is
  * supplied, the entries are first filtered through the same
  * vertical-aware rules getCatalogForVertical uses (explicit
- * `vertical:` tag â†’ path-prefix â†’ cross-vertical fallback). This
+ * `vertical:` tag  path-prefix  cross-vertical fallback). This
  * prevents wellness pages from leaking into the Travel Edit-role
  * landing-page dropdown when a role happens to hold a wellness
  * permission (e.g. a legacy or migrated grant). When `opts.vertical`
- * is omitted the behavior is unchanged â€” back-compat for callers
+ * is omitted the behavior is unchanged  back-compat for callers
  * that don't need vertical scoping.
  *
  * @param {Set<string>} permissionSet

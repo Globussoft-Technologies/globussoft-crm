@@ -4,7 +4,7 @@ import { fetchApi } from '../../../../utils/api';
 import { useNotify } from '../../../../utils/notify';
 import { formatDate } from '../../../../utils/date';
 
-// â”€â”€ Log visit tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  Log visit tab 
 // Shows booked appointments; clicking one lets you mark it as visited (completed)
 // and optionally add notes/amount. Marking as visited triggers auto-consumption.
 // When a visit is completed with a charge, a Razorpay payment link is generated
@@ -414,7 +414,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                   </div>
                   <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                     Doctor: {visit.doctor?.name || '-'}
-                    {visit.amountCharged > 0 && <> - Amount: ₹ {visit.amountCharged.toLocaleString('en-IN')}</>}
+                    {visit.amountCharged > 0 && <> - Amount:  {visit.amountCharged.toLocaleString('en-IN')}</>}
                   </div>
                   {renderPaymentLinkBlock(visit)}
                 </div>
@@ -434,7 +434,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.9rem' }}>
               <div>
                 <span style={{ color: 'var(--text-secondary)' }}>Amount: </span>
-                <strong>₹{selectedService?.basePrice || 0}</strong>
+                <strong>{selectedService?.basePrice || 0}</strong>
               </div>
               <div>
                 <span style={{ color: 'var(--text-secondary)' }}>Duration: </span>
@@ -497,7 +497,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
               fontWeight: 500,
             }}
           >
-            {submitting ? 'Marking as visitedâ€¦' : 'âœ“ Mark as visited & consume products'}
+            {submitting ? 'Marking as visited' : ' Mark as visited & consume products'}
           </button>
         </form>
       )}

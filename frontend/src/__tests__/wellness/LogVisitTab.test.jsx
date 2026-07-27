@@ -1,5 +1,5 @@
 /**
- * wellness/LogVisitTab.test.jsx ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â vitest + RTL coverage for the Log Visit tab
+ * wellness/LogVisitTab.test.jsx  vitest + RTL coverage for the Log Visit tab
  * payment-link surface.
  *
  * Pins the following invariants:
@@ -32,7 +32,7 @@ vi.mock('../../utils/notify', () => ({
 }));
 
 vi.mock('../../utils/date', () => ({
-  formatDate: (d) => (d ? new Date(d).toISOString().slice(0, 10) : 'ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â'),
+  formatDate: (d) => (d ? new Date(d).toISOString().slice(0, 10) : '-'),
 }));
 
 import LogVisitTab from '../../pages/wellness/patientDetail/tabs/LogVisitTab';
@@ -55,7 +55,7 @@ function renderTab(props = {}) {
   };
 }
 
-describe('<wellness/LogVisitTab /> ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â payment link surface', () => {
+describe('<wellness/LogVisitTab />  payment link surface', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     notifyObj.error.mockReset?.();

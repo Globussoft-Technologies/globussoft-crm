@@ -54,11 +54,13 @@ const mocks = vi.hoisted(() => {
     user: { findFirst: vi.fn() },
   };
   const auditMock = { writeAudit: vi.fn().mockResolvedValue(undefined) };
+  const eventBusMock = { emitEvent: vi.fn().mockResolvedValue(undefined) };
 
   const Module = require('node:module');
   const requireFromCwd = Module.createRequire(process.cwd() + '/');
   const prismaLibPath = requireFromCwd.resolve('./lib/prisma');
   const auditLibPath = requireFromCwd.resolve('./lib/audit');
+  const eventBusLibPath = requireFromCwd.resolve('./lib/eventBus');
   Module._cache[prismaLibPath] = {
     id: prismaLibPath, filename: prismaLibPath, loaded: true,
     exports: prismaMock, children: [], paths: [],
@@ -67,7 +69,11 @@ const mocks = vi.hoisted(() => {
     id: auditLibPath, filename: auditLibPath, loaded: true,
     exports: auditMock, children: [], paths: [],
   };
-  return { prisma: prismaMock, audit: auditMock };
+  Module._cache[eventBusLibPath] = {
+    id: eventBusLibPath, filename: eventBusLibPath, loaded: true,
+    exports: eventBusMock, children: [], paths: [],
+  };
+  return { prisma: prismaMock, audit: auditMock, eventBus: eventBusMock };
 });
 
 let svc;
@@ -79,6 +85,7 @@ beforeEach(() => {
   // Sensible defaults — most tests don't need a doctor on leave, no membership, etc.
   mocks.prisma.leaveRequest.findFirst.mockResolvedValue(null);
   mocks.prisma.membership.findFirst.mockResolvedValue(null);
+  mocks.eventBus.emitEvent.mockReset();
   mocks.prisma.visit.findFirst.mockResolvedValue(null);
   mocks.audit.writeAudit.mockResolvedValue(undefined);
 });
@@ -182,7 +189,7 @@ describe('appointmentService.cancelAppointment', () => {
       id: 555, tenantId: 1, patientId: 100, status: 'booked',
     });
     mocks.prisma.visit.update.mockResolvedValue({
-      id: 555, status: 'cancelled',
+      id: 555, patientId: 100, doctorId: null, status: 'cancelled',
       patient: { id: 100, name: 'Alice' }, doctor: null, service: null,
     });
 
@@ -202,6 +209,16 @@ describe('appointmentService.cancelAppointment', () => {
     // Patient actor → userId arg is null; opts carries actorType.
     expect(mocks.audit.writeAudit.mock.calls[0][2]).toBe(null);
     expect(mocks.audit.writeAudit.mock.calls[0][6]).toMatchObject({ actorType: 'patient' });
+    expect(mocks.eventBus.emitEvent).toHaveBeenCalledWith(
+      'visit.cancelled',
+      expect.objectContaining({
+        visitId: 555,
+        patientId: 100,
+        doctorId: null,
+        status: 'cancelled',
+      }),
+      1,
+    );
   });
 
   test('wrong-tenant visit → 404 NOT_FOUND', async () => {
@@ -442,7 +459,7 @@ describe('appointmentService.assignDoctor', () => {
     });
     mocks.prisma.user.findFirst.mockResolvedValue(validDoctor);
     mocks.prisma.visit.update.mockResolvedValue({
-      id: 555, doctorId: 50, status: 'booked',
+      id: 555, patientId: 100, doctorId: 50, status: 'booked',
       visitDate: new Date('2099-06-15T04:30:00.000Z'),
       patient: { id: 100, name: 'Alice' }, doctor: validDoctor, service: null,
     });
@@ -462,6 +479,15 @@ describe('appointmentService.assignDoctor', () => {
     expect(mocks.audit.writeAudit.mock.calls[0][1]).toBe('ASSIGN_DOCTOR');
     const details = mocks.audit.writeAudit.mock.calls[0][5];
     expect(details.assignedDoctorId).toBe(50);
+    expect(mocks.eventBus.emitEvent).toHaveBeenCalledWith(
+      'visit.assigned',
+      expect.objectContaining({
+        visitId: 555,
+        patientId: 100,
+        doctorId: 50,
+      }),
+      1,
+    );
   });
 
   test('visit with doctor already assigned → 409 ALREADY_ASSIGNED', async () => {

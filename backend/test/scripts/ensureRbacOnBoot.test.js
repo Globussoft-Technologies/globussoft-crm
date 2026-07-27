@@ -1,28 +1,28 @@
-/**
- * Regression tests for backend/scripts/ensureRbacOnBoot.js — pins the
+﻿/**
+ * Regression tests for backend/scripts/ensureRbacOnBoot.js  pins the
  * vertical-aware role provisioning contract.
  *
  * Critical guarantee: wellness clinical roles (DOCTOR, NURSE,
  * RECEPTIONIST, TELECALLER) must NEVER be auto-created on a travel
  * or generic tenant. The seeder gates these on
- * `if (vertical === 'wellness')` — without this test, a refactor
+ * `if (vertical === 'wellness')`  without this test, a refactor
  * could silently drop the gate and start polluting non-wellness
  * tenants with empty clinical-role rows (the exact bug the user
  * found on tenant id=11 / Travel Stall).
  *
  * What we mock:
- *   - prisma — all role / rolePermission / userRole / tenant / user
+ *   - prisma  all role / rolePermission / userRole / tenant / user
  *     ops are mocked. The test never touches a real DB.
  *
  * What we assert:
- *   - vertical = 'travel'   → only ADMIN, MANAGER, USER, CUSTOMER created
- *   - vertical = 'generic'  → same
- *   - vertical = 'wellness' → ADMIN + MANAGER + USER + CUSTOMER +
+ *   - vertical = 'travel'    only ADMIN, MANAGER, USER, CUSTOMER created
+ *   - vertical = 'generic'   same
+ *   - vertical = 'wellness'  ADMIN + MANAGER + USER + CUSTOMER +
  *                             DOCTOR + NURSE + RECEPTIONIST + TELECALLER
  *
  * Why it's a regression test, not an integration test:
  *   - The bug we're guarding against is structural (gate accidentally
- *     removed). A mock-prisma unit test is enough — we just need to
+ *     removed). A mock-prisma unit test is enough  we just need to
  *     observe which Role.key values reach prisma.role.create.
  *   - Avoids spinning up a MySQL container per CI run.
  */
@@ -95,7 +95,7 @@ beforeEach(() => {
   // rolePermission.create + userRole.create succeed silently
   mockPrisma.rolePermission.create.mockResolvedValue({});
   mockPrisma.userRole.create.mockResolvedValue({});
-  // roleWidget might be absent (RoleWidget table optional) — the seeder
+  // roleWidget might be absent (RoleWidget table optional)  the seeder
   // wraps in try/catch so an error here doesn't crash; return a stub.
   mockPrisma.roleWidget.create.mockResolvedValue({});
 });
@@ -104,7 +104,7 @@ function createdRoleKeys() {
   return mockPrisma.role.create.mock.calls.map((call) => call[0].data.key);
 }
 
-describe('provisionTenantRbac — vertical-aware role provisioning', () => {
+describe('provisionTenantRbac - vertical-aware role provisioning', () => {
   test('travel vertical does NOT create wellness clinical roles', async () => {
     await provisionTenantRbac(1, { vertical: 'travel' });
 
@@ -143,7 +143,7 @@ describe('provisionTenantRbac — vertical-aware role provisioning', () => {
 
   test('unknown vertical does NOT create wellness clinical roles', async () => {
     // Defensive: an unrecognised vertical string (typo, future drift)
-    // should fail closed — no wellness leakage, just the four baseline
+    // should fail closed  no wellness leakage, just the four baseline
     // roles + the COMMON catalog perms for ADMIN.
     await provisionTenantRbac(3, { vertical: 'made-up-vertical' });
 
@@ -154,8 +154,8 @@ describe('provisionTenantRbac — vertical-aware role provisioning', () => {
   });
 
   test('null vertical (no opts) defaults to generic and skips wellness clinical roles', async () => {
-    // Caller doesn't pass opts — provisioner falls back to looking up
-    // tenant.vertical in the DB. Mock returns null vertical → treated as
+    // Caller doesn't pass opts  provisioner falls back to looking up
+    // tenant.vertical in the DB. Mock returns null vertical  treated as
     // generic. No wellness clinical role pollution.
     mockPrisma.tenant.findUnique.mockResolvedValue({ vertical: null });
     await provisionTenantRbac(4);
@@ -183,7 +183,7 @@ describe('provisionTenantRbac — vertical-aware role provisioning', () => {
 
   test('legacy opts.isWellness === true behaves like vertical = wellness', async () => {
     // Back-compat: the older auth.js signup path passes `{ isWellness }`.
-    // provisionTenantRbac maps true → 'wellness'. The clinical roles
+    // provisionTenantRbac maps true  'wellness'. The clinical roles
     // should still get created so a wellness-vertical signup keeps
     // working unchanged.
     await provisionTenantRbac(6, { isWellness: true });
@@ -211,7 +211,7 @@ describe('provisionTenantRbac — vertical-aware role provisioning', () => {
 
 describe('regression: per-key landingPath shape', () => {
   // Sanity: confirm the four wellness clinical roles land users at /home
-  // (the role-aware widget dashboard) — preserves the existing wellness
+  // (the role-aware widget dashboard)  preserves the existing wellness
   // staff UX. Without this, a future landingPath refactor could silently
   // change DOCTOR.landingPath to e.g. /wellness, breaking practitioner
   // launch flow.
@@ -229,7 +229,7 @@ describe('regression: per-key landingPath shape', () => {
   });
 });
 
-describe('ADMIN permission backfill — seed-on-creation only', () => {
+describe('ADMIN permission backfill - seed-on-creation only', () => {
   // PRINCIPLE: grantAllPermissions is now called ONLY when ADMIN is first
   // created. ensureRolePermission is still additive/idempotent, but it is only
   // invoked on first provision. This means:
@@ -300,7 +300,7 @@ describe('ADMIN permission backfill — seed-on-creation only', () => {
     );
     expect(
       adminPermCreates,
-      'No new creates when all permissions already exist — boot is idempotent',
+      'No new creates when all permissions already exist - boot is idempotent',
     ).toHaveLength(0);
   });
 
@@ -330,7 +330,7 @@ describe('ADMIN permission backfill — seed-on-creation only', () => {
   });
 
   test('FRESH ADMIN (first-creation) receives the vertical-filtered catalog', async () => {
-    // Default mocks (beforeEach): findFirst returns null → ADMIN takes the create branch.
+    // Default mocks (beforeEach): findFirst returns null  ADMIN takes the create branch.
     await provisionTenantRbac(102, { vertical: 'travel' });
 
     const adminIndex = mockPrisma.role.create.mock.calls.findIndex(
@@ -349,11 +349,11 @@ describe('ADMIN permission backfill — seed-on-creation only', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
-// MANAGER permission persistence — same seed-on-creation-only contract
-// ─────────────────────────────────────────────────────────────────────────
+// 
+// MANAGER permission persistence  same seed-on-creation-only contract
+// 
 
-describe('MANAGER permission backfill — seed-on-creation only', () => {
+describe('MANAGER permission backfill - seed-on-creation only', () => {
   function managerIdFromCalls() {
     const call = mockPrisma.role.create.mock.calls.find(
       (c) => c[0].data.key === 'MANAGER',
@@ -403,3 +403,4 @@ describe('MANAGER permission backfill — seed-on-creation only', () => {
     ).toHaveLength(0);
   });
 });
+

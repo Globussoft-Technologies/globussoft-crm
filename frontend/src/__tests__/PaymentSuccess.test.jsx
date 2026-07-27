@@ -1,4 +1,4 @@
-/**
+﻿/**
  * PaymentSuccess.test.jsx -- vitest + RTL coverage for the post-checkout
  * payment-success landing page at frontend/src/pages/PaymentSuccess.jsx.
  *
@@ -14,7 +14,7 @@
  *   3. End-date source: reads `location.state?.endDate` and, when present,
  *      formats it via `new Date(endDate).toLocaleDateString('en-US', {
  *      year: 'numeric', month: 'long', day: 'numeric' })`. When absent the
- *      "Active until: …" line is omitted entirely.
+ *      "Active until: ..." line is omitted entirely.
  *   4. Auto-redirect: useEffect installs a 3000ms setTimeout that fires
  *      navigate('/dashboard'). Cleanup clears the timer on unmount.
  *   5. Manual redirect: the "Continue to Dashboard" button onClick calls
@@ -24,15 +24,15 @@
  * ------------------------------------
  *   - Prompt anticipated URL-param parsing for `session_id` /
  *     `razorpay_payment_id` (Stripe / Razorpay redirect target). REALITY:
- *     the SUT consumes ONLY useLocation().state (planName + endDate) — no
+ *     the SUT consumes ONLY useLocation().state (planName + endDate)  no
  *     useSearchParams, no useParams, no query-string reads. The current
  *     checkout flow passes plan metadata via navigate(..., { state })
  *     after a successful payment, not via URL params. Pinning ACTUAL
- *     contract — if the page is later changed to also read URL params
+ *     contract  if the page is later changed to also read URL params
  *     (e.g. for resume-after-OAuth flows), the new param tests live in a
  *     follow-up commit.
  *   - Prompt mentioned "error states if any". REALITY: there are no error
- *     surfaces — the page is reached only AFTER a successful payment in
+ *     surfaces  the page is reached only AFTER a successful payment in
  *     the upstream flow. No error branch to pin.
  *
  * Mocking strategy
@@ -41,7 +41,7 @@
  *     resolves from `initialEntries`. useNavigate is mocked via
  *     vi.mock('react-router-dom', async () => { ... }) so the test can
  *     assert exact navigate('/dashboard') calls without needing a Routes
- *     tree. The mock preserves MemoryRouter via importOriginal — that's
+ *     tree. The mock preserves MemoryRouter via importOriginal  that's
  *     the canonical pattern from the existing test suite.
  *   - Fake timers: vi.useFakeTimers() drives the 3000ms auto-redirect
  *     deterministically. vi.advanceTimersByTime(3000) fires it; the
@@ -53,7 +53,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
-// Stable navigate mock — one identity across the whole test run, so
+// Stable navigate mock  one identity across the whole test run, so
 // useEffect dependencies don't re-fire on mock-object identity changes
 // (per CLAUDE.md standing rule on stable mock object refs for hooks used
 // in useCallback/useEffect dependency arrays).
@@ -120,7 +120,7 @@ describe('<PaymentSuccess /> -- post-checkout landing page', () => {
   });
 
   it('falls back to the literal "Subscription" when location.state.planName is absent', () => {
-    // No state at all — useLocation() returns state=null/undefined.
+    // No state at all  useLocation() returns state=null/undefined.
     renderPaymentSuccess(undefined);
     expect(screen.getByText('Subscription')).toBeInTheDocument();
   });
@@ -138,7 +138,7 @@ describe('<PaymentSuccess /> -- post-checkout landing page', () => {
     // following inside a <strong>. Match on the label + the year token
     // to stay robust against TZ-shift of the day boundary across runners
     // (the en-US format is deterministic for month + year; day may slip
-    // by one across UTC↔local boundaries on some CI runners).
+    // by one across UTClocal boundaries on some CI runners).
     expect(screen.getByText(/Active until:/i)).toBeInTheDocument();
     // The formatted date contains "June" + "2026" regardless of which
     // day the local TZ resolves the UTC midnight into.
@@ -157,7 +157,7 @@ describe('<PaymentSuccess /> -- post-checkout landing page', () => {
     renderPaymentSuccess({ planName: 'Pro Annual' });
     // Before the timer fires, navigate has not been called.
     expect(navigateMock).not.toHaveBeenCalled();
-    // Advance fake timers by exactly 3000ms — the useEffect's setTimeout
+    // Advance fake timers by exactly 3000ms  the useEffect's setTimeout
     // payload fires synchronously under fake timers, scheduling a React
     // state update inside act().
     act(() => {
@@ -171,7 +171,7 @@ describe('<PaymentSuccess /> -- post-checkout landing page', () => {
     const { unmount } = renderPaymentSuccess({ planName: 'Pro Annual' });
     // Unmount BEFORE the 3000ms timer fires.
     unmount();
-    // Advance well past the timer — if the cleanup didn't run, navigate
+    // Advance well past the timer  if the cleanup didn't run, navigate
     // would have been called. The SUT's useEffect returns
     // `() => clearTimeout(timer)`, so this MUST stay at 0 calls.
     act(() => {
@@ -181,7 +181,7 @@ describe('<PaymentSuccess /> -- post-checkout landing page', () => {
   });
 
   it('the "Continue to Dashboard" button navigates immediately on click (no wait for the 3s timer)', () => {
-    // fireEvent is the synchronous primitive — userEvent's pointer
+    // fireEvent is the synchronous primitive  userEvent's pointer
     // simulation routes through setTimeout under the hood, which deadlocks
     // against fake timers. The button's onClick handler is a single
     // navigate('/dashboard') call, so fireEvent.click is sufficient to
@@ -189,10 +189,11 @@ describe('<PaymentSuccess /> -- post-checkout landing page', () => {
     renderPaymentSuccess({ planName: 'Pro Annual' });
     const cta = screen.getByRole('button', { name: /Continue to Dashboard/i });
     fireEvent.click(cta);
-    // The click handler fires navigate('/dashboard') directly — the 3s
+    // The click handler fires navigate('/dashboard') directly  the 3s
     // timer hasn't been advanced, so the only navigate call is the
     // click-driven one.
     expect(navigateMock).toHaveBeenCalledTimes(1);
     expect(navigateMock).toHaveBeenCalledWith('/dashboard');
   });
 });
+

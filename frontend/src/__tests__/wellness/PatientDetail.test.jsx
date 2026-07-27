@@ -1,4 +1,4 @@
-/**
+﻿/**
  * wellness/PatientDetail.test.jsx — vitest + RTL coverage for the wellness
  * Patient detail page (loads patient core + tab strip + Wallet tab).
  *
@@ -144,6 +144,36 @@ describe('<wellness/PatientDetail /> — page surface', () => {
     expect(await screen.findByText(/Wallet balance/i)).toBeInTheDocument();
   });
 
+
+  it('labels cancelled visits in case history', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === `/api/wellness/patients/${PATIENT_ID}`) {
+        return Promise.resolve({
+          ...samplePatient,
+          visits: [
+            {
+              id: 501,
+              visitDate: '2026-07-20T10:00:00.000Z',
+              status: 'cancelled',
+              service: { name: 'HydraFacial Elite' },
+            },
+          ],
+        });
+      }
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      if (url === '/api/staff') return Promise.resolve([]);
+      if (url === `/api/wellness/patients/${PATIENT_ID}/wallet`) return Promise.resolve(sampleWallet);
+      if (url === '/api/wellness/loyalty/') return Promise.resolve(null);
+      return Promise.resolve(null);
+    });
+
+    renderPatientDetail();
+    await screen.findByRole('heading', { name: /Anita Sharma/i });
+
+    expect(screen.getByText(/Cancelled visit/i)).toBeInTheDocument();
+    expect(screen.getByText(/HydraFacial Elite/i)).toBeInTheDocument();
+  });
+
   it('exposes Case history (default), Treatment plans, Photos, and Inventory tabs', async () => {
     renderPatientDetail();
     await screen.findByRole('heading', { name: /Anita Sharma/i });
@@ -154,3 +184,5 @@ describe('<wellness/PatientDetail /> — page surface', () => {
     expect(screen.getByRole('button', { name: /Inventory used/i })).toBeInTheDocument();
   });
 });
+
+

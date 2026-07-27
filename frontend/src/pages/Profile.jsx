@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useRef } from 'react';
+﻿import React, { useState, useEffect, useContext, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { User, Mail, Key, Save, Stethoscope, Download, FileText, Camera, Trash2, AlertTriangle } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
@@ -7,7 +7,7 @@ import { useNotify } from '../utils/notify';
 import { formatDateLong } from '../utils/date';
 import PasswordInput from '../components/PasswordInput';
 
-// #641 — practitioner-specific profile sections (specialty, license, etc.)
+// #641  practitioner-specific profile sections (specialty, license, etc.)
 // must ONLY render for users whose wellnessRole identifies them as a
 // clinical practitioner. Pre-fix the Wellness Demo User saw a phantom
 // "Practitioner" profile row because the seed had quietly assigned
@@ -35,7 +35,7 @@ const Profile = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
-  // Billing history — paid subscriptions tied to this admin. ADMIN-only on
+  // Billing history  paid subscriptions tied to this admin. ADMIN-only on
   // the backend; we still call it from any role's Profile page and just
   // render nothing on 403 so the page itself doesn't error.
   const [invoices, setInvoices] = useState([]);
@@ -43,7 +43,7 @@ const Profile = () => {
   const [downloadingId, setDownloadingId] = useState(null);
   const [uploadingPicture, setUploadingPicture] = useState(false);
   const fileInputRef = useRef(null);
-  // Danger zone — two-stage: "Delete account" arms the confirm area
+  // Danger zone  two-stage: "Delete account" arms the confirm area
   // (password / TOTP inputs), then a destructive modal is the final gate.
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [deletePassword, setDeletePassword] = useState('');
@@ -60,7 +60,7 @@ const Profile = () => {
       const data = await fetchApi('/api/subscriptions/invoices', { silent: true });
       setInvoices(Array.isArray(data) ? data : []);
     } catch {
-      // Non-admin role gets 403 → just leave invoices empty, hide the
+      // Non-admin role gets 403  just leave invoices empty, hide the
       // section. Network errors also silently no-op.
       setInvoices([]);
     } finally {
@@ -72,7 +72,7 @@ const Profile = () => {
     setDownloadingId(subId);
     try {
       const token = getAuthToken();
-      // Relative path → same-origin via Vite's /api proxy. A VITE_API_URL
+      // Relative path  same-origin via Vite's /api proxy. A VITE_API_URL
       // prefix would make this cross-origin (CORS preflight 401 + mixed-content
       // over HTTPS). See Invoices.jsx downloadPdf for the canonical note.
       const url = `/api/subscriptions/${subId}/invoice.pdf`;
@@ -126,7 +126,7 @@ const Profile = () => {
 
     // #606: skip the PATCH when nothing changed. Pre-fix every Save click
     // sent {name, email} unconditionally and the success toast fired even
-    // when the user didn't touch the form — trains users to ignore toasts
+    // when the user didn't touch the form  trains users to ignore toasts
     // and pollutes audit logs with no-op rows.
     const trimmedName = (name || '').trim();
     const trimmedEmail = (email || '').trim();
@@ -181,8 +181,8 @@ const Profile = () => {
       form.append('file', file);
       const token = getAuthToken();
       // Relative path keeps the request same-origin (see downloadInvoicePdf
-      // above for the full rationale — VITE_API_URL prefix → cross-origin →
-      // preflight 401 → CORS error).
+      // above for the full rationale  VITE_API_URL prefix  cross-origin 
+      // preflight 401  CORS error).
       const res = await fetch(`/api/auth/me/profile-picture`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -287,7 +287,7 @@ const Profile = () => {
         }),
       });
       // The server already revoked the session jti and dropped the auth
-      // cookie — mirror Layout's handleLogout local cleanup, minus the
+      // cookie  mirror Layout's handleLogout local cleanup, minus the
       // POST /logout call (the token is dead and the user row is gone).
       notify.success('Your account has been permanently deleted.');
       if (setAuthUser) setAuthUser(null);
@@ -300,7 +300,7 @@ const Profile = () => {
       navigate('/login', { replace: true });
     } catch {
       // fetchApi already surfaced the server error as a toast (wrong
-      // password, last admin, etc.) — just unfreeze the button.
+      // password, last admin, etc.)  just unfreeze the button.
       setDeleting(false);
     }
   };
@@ -401,14 +401,14 @@ const Profile = () => {
                 }}
               >
                 <Download size={14} />
-                {downloadingId === invoices[0].id ? 'Generating…' : 'Invoice PDF'}
+                {downloadingId === invoices[0].id ? 'Generating...' : 'Invoice PDF'}
               </button>
             )}
           </div>
         </div>
       ) : null}
 
-      {/* Billing history — full list of past subscription payments, each
+      {/* Billing history - full list of past subscription payments, each
           with its own PDF download. Hidden when invoices list is empty
           (anonymous + non-admin roles + brand-new users on TRIAL). */}
       {invoicesLoaded && invoices.length > 0 && (
@@ -457,7 +457,7 @@ const Profile = () => {
                     }}
                   >
                     <Download size={12} />
-                    {downloadingId === inv.id ? 'Generating…' : 'PDF'}
+                    {downloadingId === inv.id ? 'Generating...' : 'PDF'}
                   </button>
                 </div>
               </div>
@@ -550,7 +550,7 @@ const Profile = () => {
               </span>
               {/* #641: only show the wellnessRole pill when one is actually
                   set. Demo User has wellnessRole=null and previously the
-                  seed had this as 'professional' — the badge would
+                  seed had this as 'professional' - the badge would
                   mislabel them as a practitioner. Now hidden when null/empty. */}
               {profile?.wellnessRole && (
                 <span
@@ -592,7 +592,7 @@ const Profile = () => {
             Your clinical role: <strong style={{ color: 'var(--text-primary)', textTransform: 'capitalize' }}>{profile.wellnessRole}</strong>
           </p>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: 0 }}>
-            Practitioner-specific fields (specialty, license number, signature image) are managed by your clinic admin under Settings → Staff.
+            Practitioner-specific fields (specialty, license number, signature image) are managed by your clinic admin under Settings ? Staff.
           </p>
         </div>
       )}
@@ -720,7 +720,7 @@ const Profile = () => {
         </form>
       </div>
 
-      {/* Danger Zone — self-service account deletion (privacy policy §10.1).
+      {/* Danger Zone - self-service account deletion (privacy policy section 10.1).
           Renders identically for all three verticals (generic / wellness /
           travel); --danger-color is themed per vertical in CSS. */}
       <div
@@ -732,7 +732,7 @@ const Profile = () => {
           <AlertTriangle size={18} /> Danger Zone
         </h3>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-          Permanently delete your account. This action is irreversible — your account and all data
+          Permanently delete your account. This action is irreversible - your account and all data
           associated with it will be deleted, and you will be signed out immediately.
         </p>
 
@@ -786,7 +786,7 @@ const Profile = () => {
                 disabled={deleting}
                 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
               >
-                <Trash2 size={16} /> {deleting ? 'Deleting…' : 'Permanently delete my account'}
+                <Trash2 size={16} /> {deleting ? 'Deleting...' : 'Permanently delete my account'}
               </button>
               <button
                 type="button"
@@ -810,3 +810,6 @@ const Profile = () => {
 };
 
 export default Profile;
+
+
+

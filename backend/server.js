@@ -650,6 +650,7 @@ const {
   router: landingPagesRoutes,
   publicRouter: landingPagesPublic,
 } = require("./routes/landing_pages");
+const landingSitesRoutes = require("./routes/landing_sites");
 const { renderPage } = require("./services/landingPageRenderer");
 const tenantsRoutes = require("./routes/tenants");
 const tenantSettingsRoutes = require("./routes/tenant_settings");
@@ -1198,6 +1199,7 @@ app.use("/internal/whatsapp", require("./routes/whatsapp_gateway_webhook"));
 app.use("/api/telephony", telephonyRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);
+app.use("/api/landing-sites", landingSitesRoutes);
 app.use("/api/tenants", tenantsRoutes);
 // /api/tenant-settings — operator-writable cap-override surface backing the
 // per-tenant cap pattern (helper at backend/lib/tenantSettings.js). Mounted
@@ -2478,3 +2480,4 @@ if (require("fs").existsSync(FRONTEND_DIST)) {
 }
 
 // nodemon restart trigger
+

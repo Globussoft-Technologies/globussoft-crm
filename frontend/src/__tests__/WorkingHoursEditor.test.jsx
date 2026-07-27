@@ -149,6 +149,7 @@ describe('<WorkingHoursEditor /> — page chrome (admin viewer)', () => {
 });
 
 describe('<WorkingHoursEditor /> — left-pane staff list (admin)', () => {
+
   it('lists every staff row grouped by role; first doctor auto-selected; schedule GET fires', async () => {
     installFetchMock();
     renderPage();

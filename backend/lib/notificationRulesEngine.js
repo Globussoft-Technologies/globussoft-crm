@@ -1,6 +1,47 @@
 const { bus } = require('./eventBus');
 const notificationService = require('./notificationService');
 const prisma = require('./prisma');
+const WELLNESS_ADMIN_ROLES = ['ADMIN', 'MANAGER'];
+
+async function isWellnessTenant(tenantId) {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true }
+    });
+    return tenant?.vertical === 'wellness';
+  } catch (err) {
+    console.error('[notificationRulesEngine] tenant lookup error:', err.message);
+    return false;
+  }
+}
+
+async function getTenantAdminIds(tenantId) {
+  const admins = await prisma.user.findMany({
+    where: { tenantId, role: { in: WELLNESS_ADMIN_ROLES } },
+    select: { id: true }
+  });
+  return admins.map((admin) => admin.id);
+}
+
+async function getPatientUserId(patientId) {
+  if (!patientId) return null;
+  const patient = await prisma.patient.findUnique({
+    where: { id: patientId },
+    select: { userId: true }
+  });
+  return patient?.userId ?? null;
+}
+
+async function notifyUserIds(userIds, baseNotification) {
+  const uniqueIds = [...new Set(userIds.filter(Boolean))];
+  for (const userId of uniqueIds) {
+    await notificationService.notify({
+      ...baseNotification,
+      userId
+    });
+  }
+}
 
 async function init(io) {
   // SLA Breach - Ticket
@@ -155,6 +196,183 @@ async function init(io) {
     }
   });
 
+  // Wellness appointment + finance notifications are routed by role so the
+  // bell stays scoped to the right staff users. Generic tenants ignore
+  // these events entirely.
+  bus.on('visit.scheduled', async ({ payload, tenantId, io }) => {
+    try {
+      if (!(await isWellnessTenant(tenantId))) return;
+      const { visitId, doctorId, patientId } = payload;
+      const adminIds = await getTenantAdminIds(tenantId);
+      const notifyIds = new Set(adminIds);
+      if (doctorId) notifyIds.add(doctorId);
+
+      // Booking notifications are staff-visible: admins/managers need to see
+      // every new appointment, even when no doctor is assigned yet.
+      await notifyUserIds([...notifyIds], {
+        tenantId,
+        category: 'appointment',
+        type: 'appointment_booked',
+        title: '📅 New Appointment Booked',
+        message: 'A new appointment has been booked',
+        priority: 'normal',
+        link: `/wellness/patients/${patientId}`,
+        entityType: 'visit',
+        entityId: visitId,
+        io
+      });
+    } catch (err) {
+      console.error('[notificationRulesEngine] visit.scheduled error:', err.message);
+    }
+  });
+
+  bus.on('visit.assigned', async ({ payload, tenantId, io }) => {
+    try {
+      if (!(await isWellnessTenant(tenantId))) return;
+      const { visitId, doctorId, patientId } = payload;
+      const patientUserId = await getPatientUserId(patientId);
+      const notifyIds = new Set();
+      if (doctorId) notifyIds.add(doctorId);
+      if (patientUserId) notifyIds.add(patientUserId);
+
+      await notifyUserIds([...notifyIds], {
+        tenantId,
+        category: 'appointment',
+        type: 'doctor_assigned',
+        title: '🩺 Doctor Assigned',
+        message: 'A doctor has been assigned to your appointment',
+        priority: 'normal',
+        link: `/wellness/patients/${patientId}`,
+        entityType: 'visit',
+        entityId: visitId,
+        io
+      });
+    } catch (err) {
+      console.error('[notificationRulesEngine] visit.assigned error:', err.message);
+    }
+  });
+
+  bus.on('visit.cancelled', async ({ payload, tenantId, io }) => {
+    try {
+      if (!(await isWellnessTenant(tenantId))) return;
+      const { visitId, doctorId, patientId } = payload;
+      const patientUserId = await getPatientUserId(patientId);
+      const notifyIds = new Set(await getTenantAdminIds(tenantId));
+      if (doctorId) notifyIds.add(doctorId);
+      if (patientUserId) notifyIds.add(patientUserId);
+
+      await notifyUserIds([...notifyIds], {
+        tenantId,
+        category: 'appointment',
+        type: 'appointment_cancelled',
+        title: '❌ Appointment Cancelled',
+        message: `Appointment #${visitId} has been cancelled`,
+        priority: 'normal',
+        link: `/wellness/patients/${patientId}`,
+        entityType: 'visit',
+        entityId: visitId,
+        io
+      });
+    } catch (err) {
+      console.error('[notificationRulesEngine] visit.cancelled error:', err.message);
+    }
+  });
+
+  bus.on('payment.collected', async ({ payload, tenantId, io }) => {
+    try {
+      if (!(await isWellnessTenant(tenantId))) return;
+      const adminIds = await getTenantAdminIds(tenantId);
+      if (!adminIds.length) return;
+
+      const amount = payload?.amount ?? null;
+      const entityId = payload?.invoiceId ?? payload?.paymentId ?? null;
+
+      await notifyUserIds(adminIds, {
+        tenantId,
+        category: 'billing',
+        type: 'payment_collected',
+        title: '💸 Payment Received',
+        message: amount != null ? `Payment of ₹${amount} has been collected` : 'A payment has been collected',
+        priority: 'normal',
+        link: '/wellness/billing',
+        entityType: 'payment',
+        entityId,
+        io
+      });
+    } catch (err) {
+      console.error('[notificationRulesEngine] payment.collected error:', err.message);
+    }
+  });
+
+  bus.on('membership.enrolled', async ({ payload, tenantId, io }) => {
+    try {
+      if (!(await isWellnessTenant(tenantId))) return;
+      const adminIds = await getTenantAdminIds(tenantId);
+      if (!adminIds.length) return;
+
+      await notifyUserIds(adminIds, {
+        tenantId,
+        category: 'membership',
+        type: 'membership_purchased',
+        title: '🪪 Membership Purchased',
+        message: `Membership plan "${payload.planName}" was purchased`,
+        priority: 'normal',
+        link: '/wellness/memberships',
+        entityType: 'membership',
+        entityId: payload.membershipId,
+        io
+      });
+    } catch (err) {
+      console.error('[notificationRulesEngine] membership.enrolled error:', err.message);
+    }
+  });
+
+  bus.on('membership.renewed', async ({ payload, tenantId, io }) => {
+    try {
+      if (!(await isWellnessTenant(tenantId))) return;
+      const adminIds = await getTenantAdminIds(tenantId);
+      if (!adminIds.length) return;
+
+      await notifyUserIds(adminIds, {
+        tenantId,
+        category: 'membership',
+        type: 'membership_renewed',
+        title: '🔁 Membership Renewed',
+        message: `Membership plan "${payload.planName}" was renewed`,
+        priority: 'normal',
+        link: '/wellness/memberships',
+        entityType: 'membership',
+        entityId: payload.membershipId,
+        io
+      });
+    } catch (err) {
+      console.error('[notificationRulesEngine] membership.renewed error:', err.message);
+    }
+  });
+
+  bus.on('giftcard.redeemed', async ({ payload, tenantId, io }) => {
+    try {
+      if (!(await isWellnessTenant(tenantId))) return;
+      if (payload?.source !== 'purchase') return;
+      const adminIds = await getTenantAdminIds(tenantId);
+      if (!adminIds.length) return;
+
+      await notifyUserIds(adminIds, {
+        tenantId,
+        category: 'giftcard',
+        type: 'giftcard_purchased',
+        title: '🎁 Gift Card Purchased',
+        message: `Gift card purchase of ₹${payload.amount ?? '0'} was completed`,
+        priority: 'normal',
+        link: '/wellness/giftcards',
+        entityType: 'giftcard',
+        entityId: payload.giftCardId,
+        io
+      });
+    } catch (err) {
+      console.error('[notificationRulesEngine] giftcard.redeemed error:', err.message);
+    }
+  });
   // Expense Created → notify all ADMIN/MANAGER roles for approval
   bus.on('expense.created', async ({ payload, tenantId, io }) => {
     try {

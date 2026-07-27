@@ -85,7 +85,7 @@ const ParityVerificationTool = () => {
 
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: '20px', maxWidth: '1400px', margin: '0 auto' }}>
-      <h1>🔍 Parity Verification Tool</h1>
+      <h1>Parity Verification Tool</h1>
       <p style={{ color: '#666', marginBottom: '30px' }}>
         Automated comparison between HTML and React landing page renderers
       </p>

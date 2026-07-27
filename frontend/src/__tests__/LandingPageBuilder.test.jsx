@@ -205,8 +205,8 @@ describe("<LandingPageBuilder /> — page surface", () => {
     const slugInput = screen.getByLabelText("Page URL slug");
     expect(slugInput.value).toBe("spring-launch");
 
-    // Slug counter: "13/50 — lowercase, digits, hyphens"
-    expect(screen.getByText(/13\/50/)).toBeInTheDocument();
+    // Slug counter: 13 of 50 - lowercase, digits, hyphens.
+    expect(screen.getByText(/13 of 50/i)).toBeInTheDocument();
   });
 
   it("renders all 9 component-palette buttons in the left rail", async () => {
@@ -490,9 +490,9 @@ describe("<LandingPageBuilder /> — page surface", () => {
     const canvasHeading = await screen.findByText("Your Headline Here");
     await user.click(canvasHeading);
 
-    // Right rail header reads "Component · heading" once selected.
+    // Right rail header reads "Component - heading" once selected.
     await waitFor(() =>
-      expect(screen.getByText(/Component · heading/i)).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: /Component\s*-\s*heading/i })).toBeInTheDocument(),
     );
 
     // Heading property editor surfaces "Text" + "Level" + "Align" + "Color"
@@ -718,9 +718,9 @@ describe("<LandingPageBuilder /> — page surface", () => {
     // Click the form block (closest container) to select it.
     await user.click(canvasSubmit);
 
-    // Right rail header reads "Component · form".
+    // Right rail header reads "Component - form".
     await waitFor(() =>
-      expect(screen.getByText(/Component · form/i)).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: /Component\s*-\s*form/i })).toBeInTheDocument(),
     );
 
     // Two rule names from sampleRules appear in the dropdown options.
@@ -776,25 +776,25 @@ describe("<LandingPageBuilder /> — page surface", () => {
     });
   });
 
-  it("typing in the title input flips the Save button into the dirty state (• marker)", async () => {
+  it("typing in the title input flips the Save button into the dirty state (* marker)", async () => {
     const user = userEvent.setup();
     renderBuilder();
     await waitFor(() =>
       expect(screen.getByLabelText("Page title")).toBeInTheDocument(),
     );
 
-    // Initially the save button has no • marker — its text is just "Save".
+    // Initially the save button has no * marker - its text is just "Save".
     const saveBtnInitial = screen.getByRole("button", { name: /^Save$/ });
-    expect(saveBtnInitial.textContent).not.toMatch(/•/);
+    expect(saveBtnInitial.textContent).not.toMatch(/\*/);
 
     // Type a change into the title.
     const titleInput = screen.getByLabelText("Page title");
     await user.type(titleInput, " (Edited)");
 
-    // The • marker now appears.
+    // The * marker now appears.
     await waitFor(() => {
       const saveBtnDirty = screen.getByRole("button", { name: /Save/ });
-      expect(saveBtnDirty.textContent).toMatch(/•/);
+      expect(saveBtnDirty.textContent).toMatch(/\*/);
     });
   });
 
@@ -808,7 +808,7 @@ describe("<LandingPageBuilder /> — page surface", () => {
     const desktop = screen.getByLabelText("Desktop preview");
     const mobile = screen.getByLabelText("Mobile preview");
 
-    // Desktop starts with accent background — the SUT sets background:
+    // Desktop starts with accent background - the SUT sets background:
     // 'var(--accent-color)' when previewMode === 'desktop'. We can't read
     // resolved CSS reliably, but we can read inline style.
     expect(desktop.getAttribute("style")).toMatch(/var\(--accent-color\)/);
@@ -816,7 +816,7 @@ describe("<LandingPageBuilder /> — page surface", () => {
 
     await user.click(mobile);
 
-    // After click — mobile is the accented one.
+    // After click - mobile is the accented one.
     await waitFor(() => {
       expect(mobile.getAttribute("style")).toMatch(/var\(--accent-color\)/);
       expect(desktop.getAttribute("style")).not.toMatch(

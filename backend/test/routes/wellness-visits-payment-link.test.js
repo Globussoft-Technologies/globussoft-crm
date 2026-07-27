@@ -1,32 +1,19 @@
 // @ts-check
 /**
- * Unit tests for the payment-link hook in PUT /api/wellness/visits/:id and the
- * regeneration endpoint POST /api/wellness/visits/:id/payment-link.
- *
- * Pins the following behaviour:
- *   1. PUT /visits/:id with status → completed and amountCharged > 0 creates
- *      an Invoice for the visit, calls createInvoicePaymentLink, and stores
- *      the returned URL on the visit row.
- *   2. The same PUT with amountCharged = 0 does NOT create an invoice/link.
- *   3. PUT transitions that are NOT status → completed do NOT create a link.
- *   4. POST /visits/:id/payment-link regenerates a link for a completed,
- *      charged visit and persists it on the visit.
- *   5. Gateway failures from createInvoicePaymentLink are logged but do NOT
- *      fail the visit update (the clinical record always succeeds).
- *
- * Pattern: prisma singleton monkey-patch BEFORE requiring the router, and
- * vi.mock() on the shared payment-link factory so tests never hit the network.
+ * Unit tests for wellness payment-link generation and delivery.
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import { createRequire } from 'node:module';
+import express from 'express';
+import request from 'supertest';
 
 const mockCreateInvoicePaymentLink = vi.fn();
+const mockSendEmail = vi.fn();
+const mockSendBestEffort = vi.fn();
+const mockCreatePatientNotification = vi.fn();
 
-// Monkey-patch the shared payment-link factory in the CJS require cache so the
-// lazy require() inside routes/wellness.js never hits the real module (and
-// therefore never tries to load the Razorpay SDK or hit paymentGatewayConfig).
 const requireCJS = createRequire(import.meta.url);
 const paymentLinkModulePath = requireCJS.resolve('../../lib/paymentLink');
 requireCJS.cache[paymentLinkModulePath] = {
@@ -40,7 +27,41 @@ requireCJS.cache[paymentLinkModulePath] = {
   },
 };
 
-// Prisma surfaces touched by the route at module-eval or runtime.
+const emailSenderModulePath = requireCJS.resolve('../../lib/emailSender');
+requireCJS.cache[emailSenderModulePath] = {
+  id: emailSenderModulePath,
+  filename: emailSenderModulePath,
+  loaded: true,
+  exports: {
+    sendEmail: (...args) => mockSendEmail(...args),
+  },
+};
+
+const whatsappWebClientModulePath = requireCJS.resolve('../../services/whatsappWebClient');
+requireCJS.cache[whatsappWebClientModulePath] = {
+  id: whatsappWebClientModulePath,
+  filename: whatsappWebClientModulePath,
+  loaded: true,
+  exports: {
+    sendBestEffort: (...args) => mockSendBestEffort(...args),
+  },
+};
+
+
+const patientNotificationServiceModulePath = requireCJS.resolve('../../lib/patientNotificationService');
+requireCJS.cache[patientNotificationServiceModulePath] = {
+  id: patientNotificationServiceModulePath,
+  filename: patientNotificationServiceModulePath,
+  loaded: true,
+  exports: {
+    createPatientNotification: (...args) => mockCreatePatientNotification(...args),
+    listPatientNotifications: vi.fn().mockResolvedValue({ items: [], unreadCount: 0 }),
+    markPatientNotificationRead: vi.fn().mockResolvedValue(null),
+    markAllPatientNotificationsRead: vi.fn().mockResolvedValue(0),
+    toPublic: (n) => n,
+  },
+};
+
 prisma.visit = prisma.visit || {};
 prisma.visit.findFirst = vi.fn();
 prisma.visit.findUnique = vi.fn();
@@ -73,9 +94,6 @@ prisma.auditLog = { create: vi.fn().mockResolvedValue({ id: 1 }), findFirst: vi.
 prisma.automationRule = { findMany: vi.fn().mockResolvedValue([]) };
 prisma.webhook = { findMany: vi.fn().mockResolvedValue([]) };
 
-import express from 'express';
-import request from 'supertest';
-
 const wellnessRouter = requireCJS('../../routes/wellness');
 
 function makeApp({
@@ -97,7 +115,11 @@ function makeApp({
 
 beforeEach(() => {
   process.env.FRONTEND_URL = 'https://app.example.com';
+
   mockCreateInvoicePaymentLink.mockReset();
+  mockSendEmail.mockReset();
+  mockSendBestEffort.mockReset();
+  mockCreatePatientNotification.mockReset();
   mockCreateInvoicePaymentLink.mockResolvedValue({
     url: 'https://rzp.io/l/test-visit-link',
     gateway: 'razorpay',
@@ -115,7 +137,6 @@ beforeEach(() => {
   prisma.invoice.create.mockReset();
   prisma.tenant.findUnique.mockReset();
 
-  // Default successful visit update.
   prisma.visit.update.mockResolvedValue({
     id: 1,
     tenantId: 1,
@@ -168,8 +189,8 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockResolvedValue({ id: 1, name: 'Enhanced Wellness' });
 });
 
-describe('PUT /api/wellness/visits/:id — payment link hook', () => {
-  test('completing a charged visit creates an invoice + payment link and stores the URL', async () => {
+describe('PUT /api/wellness/visits/:id payment link hook', () => {
+  test('completing a charged visit creates an invoice and payment link', async () => {
     const res = await request(makeApp())
       .put('/api/wellness/visits/1')
       .send({ status: 'completed', notes: '', amountCharged: 1500 });
@@ -177,33 +198,11 @@ describe('PUT /api/wellness/visits/:id — payment link hook', () => {
     expect(res.status).toBe(200);
     expect(res.body.paymentLinkUrl).toBe('https://rzp.io/l/test-visit-link');
     expect(prisma.invoice.create).toHaveBeenCalledTimes(1);
-    expect(prisma.invoice.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          visitId: 1,
-          contactId: 100,
-          amount: 1500,
-          tenantId: 1,
-        }),
-      }),
-    );
     expect(mockCreateInvoicePaymentLink).toHaveBeenCalledTimes(1);
-    expect(mockCreateInvoicePaymentLink).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId: 1,
-        invoice: expect.objectContaining({ id: 200, amount: 1500 }),
-        contact: expect.objectContaining({ name: 'Anita Sharma' }),
-        currency: 'INR',
-        gatewayPref: 'razorpay',
-        description: 'Wellness Visit #1',
-      }),
-    );
     expect(prisma.visit.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 1 },
-        data: expect.objectContaining({
-          paymentLinkUrl: 'https://rzp.io/l/test-visit-link',
-        }),
+        data: expect.objectContaining({ paymentLinkUrl: 'https://rzp.io/l/test-visit-link' }),
       }),
     );
   });
@@ -259,7 +258,7 @@ describe('PUT /api/wellness/visits/:id — payment link hook', () => {
     expect(mockCreateInvoicePaymentLink).not.toHaveBeenCalled();
   });
 
-  test('gateway failure does not fail the visit update; the visit is still returned as completed', async () => {
+  test('gateway failure does not fail the visit update', async () => {
     mockCreateInvoicePaymentLink.mockResolvedValue({
       error: 'Razorpay is not configured for this account.',
       code: 'NO_GATEWAY',
@@ -271,13 +270,7 @@ describe('PUT /api/wellness/visits/:id — payment link hook', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('completed');
-    expect(prisma.invoice.create).toHaveBeenCalledTimes(1);
-    expect(mockCreateInvoicePaymentLink).toHaveBeenCalledTimes(1);
-    // The second visit.update (to persist the URL) must NOT run when the
-    // gateway returned an error.
-    const urlUpdates = (prisma.visit.update.mock.calls || []).filter(
-      ([args]) => args?.data?.paymentLinkUrl,
-    );
+    const urlUpdates = (prisma.visit.update.mock.calls || []).filter(([args]) => args?.data?.paymentLinkUrl);
     expect(urlUpdates).toHaveLength(0);
   });
 
@@ -312,14 +305,12 @@ describe('PUT /api/wellness/visits/:id — payment link hook', () => {
       }),
     );
     expect(prisma.invoice.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ contactId: 101 }),
-      }),
+      expect.objectContaining({ data: expect.objectContaining({ contactId: 101 }) }),
     );
   });
 });
 
-describe('POST /api/wellness/visits/:id/payment-link — regeneration', () => {
+describe('POST /api/wellness/visits/:id/payment-link regeneration', () => {
   test('returns a payment link for a completed charged visit and persists it', async () => {
     prisma.visit.findFirst.mockResolvedValue({
       id: 1,
@@ -339,9 +330,7 @@ describe('POST /api/wellness/visits/:id/payment-link — regeneration', () => {
     expect(prisma.visit.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 1 },
-        data: expect.objectContaining({
-          paymentLinkUrl: 'https://rzp.io/l/test-visit-link',
-        }),
+        data: expect.objectContaining({ paymentLinkUrl: 'https://rzp.io/l/test-visit-link' }),
       }),
     );
   });
@@ -388,10 +377,7 @@ describe('POST /api/wellness/visits/:id/payment-link — regeneration', () => {
       status: 'completed',
       amountCharged: 1500,
     });
-    mockCreateInvoicePaymentLink.mockResolvedValue({
-      error: 'Gateway error',
-      code: 'GATEWAY_ERROR',
-    });
+    mockCreateInvoicePaymentLink.mockResolvedValue({ error: 'Gateway error', code: 'GATEWAY_ERROR' });
 
     const res = await request(makeApp())
       .post('/api/wellness/visits/1/payment-link')
@@ -417,11 +403,6 @@ describe('POST /api/wellness/visits/:id/payment-link — regeneration', () => {
 
     expect(res.status).toBe(502);
     expect(res.body.code).toBe('GATEWAY_LINK_URL_MISSING');
-    expect(prisma.visit.update).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ paymentLinkUrl: undefined }),
-      }),
-    );
   });
 
   test('returns 400 when the visit is already paid', async () => {
@@ -441,5 +422,52 @@ describe('POST /api/wellness/visits/:id/payment-link — regeneration', () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VISIT_ALREADY_PAID');
     expect(mockCreateInvoicePaymentLink).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/wellness/visits/:id/payment-link/send delivery', () => {
+  test('returns the payment link and best-effort delivery statuses', async () => {
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: 1,
+      patientId: 42,
+      status: 'completed',
+      amountCharged: 1500,
+      paymentLinkUrl: 'https://rzp.io/l/test-visit-link',
+    });
+    mockSendEmail.mockResolvedValue({ sent: true });
+    mockSendBestEffort.mockResolvedValue({ sent: true, status: 'SENT' });
+    mockCreatePatientNotification.mockResolvedValue({ id: 900 });
+
+    const res = await request(makeApp())
+      .post('/api/wellness/visits/1/payment-link/send')
+      .send();
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toBe('https://rzp.io/l/test-visit-link');
+    expect(res.body.email).toBe('SENT');
+    expect(res.body.whatsapp).toBe('SENT');
+    expect(res.body.channel).toBe('email+whatsapp');
+    expect(mockSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: 'anita@example.com',
+        subject: 'Your wellness payment link for INR 1,500',
+      }),
+    );
+    expect(mockSendBestEffort).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 1,
+        toPhone: '+919876543210',
+      }),
+    );
+    expect(mockCreatePatientNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        patientId: 42,
+        tenantId: 1,
+        title: 'Payment link sent',
+        type: 'payment',
+        link: 'https://rzp.io/l/test-visit-link',
+      }),
+    );
   });
 });

@@ -1,21 +1,21 @@
-// Appointment service — centralized business logic for patient-facing
+// Appointment service  centralized business logic for patient-facing
 // booking, cancellation, and rescheduling.
 //
 // Both the legacy /api/wellness/appointments/* routes (CUSTOMER session
 // token) and the new /api/wellness/portal/appointments/* routes (phone+OTP
 // portal token OR CUSTOMER session via verifyPatientToken Path B) converge
 // on this service so business rules stay in one place. Routes are auth +
-// patient-resolution + envelope-shape adapters only — they MUST NOT add
+// patient-resolution + envelope-shape adapters only  they MUST NOT add
 // validation here.
 //
-// PATIENT DETECTION (Phase 1 — no dedicated PATIENT role)
+// PATIENT DETECTION (Phase 1  no dedicated PATIENT role)
 //
 // The service is auth-agnostic: it takes a tenant-scoped patientId that
 // the caller has already resolved at the route boundary. The `actor`
 // argument distinguishes who is performing the action so the audit row
 // records actorType + the right id:
-//   • { type: 'user', id }    — staff or CUSTOMER session
-//   • { type: 'patient', id } — phone+OTP portal session
+//    { type: 'user', id }     staff or CUSTOMER session
+//    { type: 'patient', id }  phone+OTP portal session
 //
 // MIGRATION NOTE: if a dedicated PATIENT role lands later, only the
 // routes change (the actor mapping above is updated to read the new
@@ -24,7 +24,7 @@
 const prisma = require('../lib/prisma');
 const { writeAudit } = require('../lib/audit');
 
-// Visit statuses considered "active" — these block slot conflicts and
+// Visit statuses considered "active"  these block slot conflicts and
 // cannot be cancelled (except 'booked' which IS cancellable + reschedulable).
 const ACTIVE_VISIT_STATUSES = ['booked', 'confirmed', 'arrived', 'in-treatment'];
 const TERMINAL_VISIT_STATUSES = ['completed', 'cancelled', 'no-show'];
@@ -61,7 +61,7 @@ function visitInclude() {
   };
 }
 
-// Audit helpers — patient-actor audits set actorType=patient + patientId.
+// Audit helpers  patient-actor audits set actorType=patient + patientId.
 function auditUserId(actor) {
   return actor && actor.type === 'user' ? actor.id : null;
 }
@@ -74,7 +74,7 @@ function auditOpts(actor) {
 
 // Map a Visit row (with patient/doctor/service relations) into the
 // patient-facing appointment envelope. `canCancel` / `canReschedule` are
-// computed server-side so the UI doesn't re-derive them — single source
+// computed server-side so the UI doesn't re-derive them  single source
 // of truth for which actions are eligible. The flags MUST mirror the
 // policies enforced in cancelAppointment / rescheduleAppointment so
 // the UI never surfaces a button that the service would 409 on.
@@ -103,7 +103,7 @@ function mapVisitToAppointment(v) {
   };
 }
 
-// Slot-conflict probe — returns the colliding visit (if any) for the
+// Slot-conflict probe  returns the colliding visit (if any) for the
 // given (doctorId, hour) window. Used by book + reschedule to enforce
 // the "one doctor, one patient per hour" guard.
 async function findSlotConflict({ tenantId, doctorId, visitDate, excludeVisitId = null }) {
@@ -152,7 +152,7 @@ async function findApprovedLeave({ tenantId, doctorId, visitDate }) {
 }
 
 // Book an appointment. Patient resolution happens at the route layer
-// (the service does NOT auto-create patients — callers must pass an
+// (the service does NOT auto-create patients  callers must pass an
 // already-known patientId scoped to tenantId).
 async function bookAppointment({
   tenantId,
@@ -243,7 +243,7 @@ async function cancelAppointment({ tenantId, patientId, visitId, actor }) {
     throw new AppointmentError({ status: 403, code: 'FORBIDDEN', message: 'Can only cancel your own appointments' });
   }
   if (visit.status === 'cancelled') {
-    // Idempotent — already cancelled, return current state without audit churn.
+    // Idempotent  already cancelled, return current state without audit churn.
     const refreshed = await prisma.visit.findUnique({ where: { id }, include: visitInclude() });
     return { visit: refreshed };
   }
@@ -261,6 +261,23 @@ async function cancelAppointment({ tenantId, patientId, visitId, actor }) {
     action: actor && actor.type === 'patient' ? 'Patient cancelled appointment' : 'User cancelled appointment',
     status: 'cancelled',
   }, auditOpts(actor));
+
+  try {
+    const { emitEvent } = require('../lib/eventBus');
+    await emitEvent(
+      'visit.cancelled', 
+      {
+        visitId: updated.id,
+        patientId: updated.patientId,
+        doctorId: updated.doctorId,
+        status: updated.status,
+        cancelledBy: auditUserId(actor),
+      },
+      tenantId,
+    );
+  } catch (_e) {
+    /* event bus optional */
+  }
 
   return { visit: updated };
 }
@@ -328,16 +345,16 @@ async function rescheduleAppointment({ tenantId, patientId, visitId, newAppointm
 // Assign a doctor to a pending appointment (one with `doctorId: null`).
 //
 // Used by the staff Calendar + Appointments page when a portal booking
-// arrived with "No preference — admin will assign". The admin picks a
+// arrived with "No preference  admin will assign". The admin picks a
 // doctor from the availability dropdown, this service runs the same
 // availability guards as bookAppointment, and the visit flips from
 // the patient's "Pending Assignment" bucket into the "Upcoming" bucket
 // on their next fetch (visibility-change refresh keeps it live).
 //
 // Reassignment (changing an existing doctor) intentionally goes through
-// PUT /visits/:id instead of this endpoint — that path already exists
+// PUT /visits/:id instead of this endpoint  that path already exists
 // and has its own audit trail. This endpoint is specifically for the
-// pending → assigned transition.
+// pending transition from queued to assigned.
 async function assignDoctor({ tenantId, visitId, doctorId, actor }) {
   const id = parseInt(visitId, 10);
   if (Number.isNaN(id)) {
@@ -356,7 +373,7 @@ async function assignDoctor({ tenantId, visitId, doctorId, actor }) {
     throw new AppointmentError({ status: 409, code: 'STATUS_NOT_ASSIGNABLE', message: 'Only booked appointments can be assigned a doctor' });
   }
   if (visit.doctorId) {
-    // Prevent silent overwrite of an existing doctor — reassignment goes
+    // Prevent silent overwrite of an existing doctor  reassignment goes
     // through PUT /visits/:id which has the same guards plus a different
     // audit-action code (UPDATE vs ASSIGN_DOCTOR) for the audit log.
     throw new AppointmentError({ status: 409, code: 'ALREADY_ASSIGNED', message: 'Appointment already has a doctor assigned; use update to reassign' });
@@ -395,11 +412,28 @@ async function assignDoctor({ tenantId, visitId, doctorId, actor }) {
     action: 'Staff assigned doctor to pending appointment',
   }, auditOpts(actor));
 
+  try {
+    const { emitEvent } = require('../lib/eventBus');
+    await emitEvent(
+      'visit.assigned', 
+      {
+        visitId: updated.id,
+        patientId: updated.patientId,
+        doctorId: updated.doctorId,
+        visitDate: updated.visitDate,
+        assignedBy: auditUserId(actor),
+      },
+      tenantId,
+    );
+  } catch (_e) {
+    /* event bus optional */
+  }
+
   return { visit: updated };
 }
 
 // Bucket the patient's visits into the four MyBookings sections. Returns
-// an array of Visit rows (with relations) — the route layer maps each
+// an array of Visit rows (with relations)  the route layer maps each
 // row through `mapVisitToAppointment` for the response envelope.
 async function listPatientAppointments({ tenantId, patientId, bucket = 'upcoming' }) {
   const where = { tenantId, patientId };
@@ -413,7 +447,7 @@ async function listPatientAppointments({ tenantId, patientId, bucket = 'upcoming
     // We intentionally do NOT filter on `visitDate >= now` here. When
     // admin assigns a doctor to a portal booking for a past slot
     // (patient self-booked yesterday, admin assigns today), the visit
-    // must surface somewhere — otherwise it falls out of the patient's
+    // must surface somewhere  otherwise it falls out of the patient's
     // view entirely between leaving "Pending Assignment" and being
     // marked completed / no-show by staff. The status enum is the
     // authoritative "still live work" signal; date is incidental.

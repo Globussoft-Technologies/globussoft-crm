@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+﻿import React, { useState, useEffect, useContext } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Check, ArrowRight, X, Plus, Loader } from 'lucide-react';
 import { AuthContext } from '../App';
@@ -122,7 +122,7 @@ export default function Pricing() {
   const navigate = useNavigate();
   const notify = useNotify();
   const { token, user } = useContext(AuthContext);
-  // Only tenant ADMINs can BUY a subscription — managers / staff (and the
+  // Only tenant ADMINs can BUY a subscription  managers / staff (and the
   // platform OWNER too, who never subscribes) see the page but get pushed
   // through signup instead of the Razorpay popup.
   const canPurchase = user?.role === 'ADMIN';
@@ -143,7 +143,7 @@ export default function Pricing() {
   const [loadingPayment, setLoadingPayment] = useState(null);
 
   // Fetch the subscription catalog from the public endpoint. Runs for
-  // anonymous visitors AND authed users — same data either way. While the
+  // anonymous visitors AND authed users  same data either way. While the
   // request is in flight or if it fails, the DEFAULT_PLANS fallback above
   // keeps the page rendered.
   useEffect(() => {
@@ -284,7 +284,7 @@ export default function Pricing() {
       if (annual) {
         // Strip the " /user/year" suffix and return just the number/amount string
         const label = bucket.yearAnnualLabel || '';
-        // yearAnnualLabel looks like "₹5,988 /user/year" or "$72 /user/year"
+        // yearAnnualLabel looks like "5,988 /user/year" or "$72 /user/year"
         // Extract the numeric part after the currency symbol
         const match = label.match(/[\d,]+/);
         return match ? match[0] : bucket.annual;
@@ -413,12 +413,12 @@ export default function Pricing() {
               </div>
 
               {!token ? (
-                // Anonymous visitor: drive them through signup → trial.
+                // Anonymous visitor: drive them through signup  trial.
                 <Link to="/signup" style={getCtaStyle(plan)}>
                   {plan.cta || 'Start Free Trial'} <ArrowRight size={14} />
                 </Link>
               ) : !canPurchase ? (
-                // Logged-in but not an ADMIN — only the tenant admin buys
+                // Logged-in but not an ADMIN  only the tenant admin buys
                 // the subscription. Managers / staff see a disabled CTA.
                 <button
                   disabled
@@ -450,7 +450,7 @@ export default function Pricing() {
                 </button>
               ) : (
                 // Logged-in but the API catalog hasn't arrived yet (or errored).
-                // Render the fallback card with a disabled CTA — never fall back
+                // Render the fallback card with a disabled CTA  never fall back
                 // to <Link to="/signup">, that route redirects logged-in users
                 // to /dashboard and silently swallowed the subscribe action.
                 <button
@@ -460,7 +460,7 @@ export default function Pricing() {
                   {plansError ? 'Unable to load plans' : (
                     <>
                       <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                      Loading…
+                      Loading...
                     </>
                   )}
                 </button>
@@ -502,7 +502,7 @@ export default function Pricing() {
                   // [starter, pro, ent] tuple position, so the header reads
                   // those three plan slots by planKey. New plans created in
                   // the admin UI won't appear in this table until the
-                  // comparison data gets a similar refactor — out of scope
+                  // comparison data gets a similar refactor  out of scope
                   // for the editable-prices feature.
                   const byKey = (k) => plans.find((p) => p.planKey === k);
                   const starter = byKey('starter');
@@ -581,3 +581,4 @@ export default function Pricing() {
     </div>
   );
 }
+

@@ -213,8 +213,7 @@ function RoleBadge({ member }) {
   const name = member.primaryRole?.name || member.role || '—';
   const key = String(member.primaryRole?.key || member.role || '').toUpperCase();
   const tierCfg = ROLE_CONFIG[key];
-  // System access tiers keep their distinctive hues; everything else uses the
-  // wellness teal palette so custom roles read as a single visual family.
+  const isDarkMode = typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark';
   const cfg = tierCfg || {
     color: 'var(--primary-color, #265855)',
     bg: 'rgba(38,88,85,0.1)',
@@ -222,8 +221,10 @@ function RoleBadge({ member }) {
   return (
     <span style={{
       padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem',
-      fontWeight: 'bold', backgroundColor: cfg.bg, color: cfg.color,
-      border: `1px solid ${cfg.color}33`, whiteSpace: 'nowrap',
+      fontWeight: 'bold', backgroundColor: cfg.bg,
+      color: isDarkMode ? 'var(--accent-text, #F5F1E8)' : cfg.color,
+      border: isDarkMode ? '1px solid rgba(245,241,232,0.14)' : `1px solid ${cfg.color}33`,
+      whiteSpace: 'nowrap',
       textTransform: tierCfg ? 'uppercase' : 'capitalize',
     }}>
       {name}
@@ -231,15 +232,6 @@ function RoleBadge({ member }) {
   );
 }
 
-// Upward-opening role picker for the Add/Edit Staff modals. Replaces the
-// native <select> so the menu always opens ABOVE the trigger (the trigger
-// sits near the bottom of the modal — a native select would open downward
-// and clip off-screen on smaller viewports). max-height + overflow-y:auto
-// give it a built-in scrollbar once the role catalog grows past ~7 items.
-//
-// Intentionally lean: click-outside to close, click-option to pick + close,
-// no keyboard nav / type-ahead — the native select features that go missing
-// are low-traffic for this 5–15 option picker.
 function RoleSelect({ value, onChange, options, testId, placeholder = '— Select a role —' }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);

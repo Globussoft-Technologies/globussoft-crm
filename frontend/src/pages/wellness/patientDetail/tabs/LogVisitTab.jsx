@@ -1,9 +1,10 @@
 import { useState } from 'react';
+import { Check, Copy, Loader2, RotateCcw, Send } from 'lucide-react';
 import { fetchApi } from '../../../../utils/api';
 import { useNotify } from '../../../../utils/notify';
 import { formatDate } from '../../../../utils/date';
 
-// ── Log visit tab ──────────────────────────────────────────────────
+//  Log visit tab 
 // Shows booked appointments; clicking one lets you mark it as visited (completed)
 // and optionally add notes/amount. Marking as visited triggers auto-consumption.
 // When a visit is completed with a charge, a Razorpay payment link is generated
@@ -15,6 +16,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
   const [consumptionRules, setConsumptionRules] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [generatingLinkId, setGeneratingLinkId] = useState(null);
+  const [paymentLinkAction, setPaymentLinkAction] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
   // Live deployments sometimes reload the patient before the DB replica has
   // caught up with the payment-link write, so the button re-appears even
@@ -48,14 +50,18 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
       await navigator.clipboard.writeText(text);
       setCopiedId(id);
       setTimeout(() => setCopiedId(null), 2000);
+      return true;
     } catch (_err) {
       notify.error('Failed to copy link');
+      return false;
     }
   };
 
-  const generatePaymentLink = async (visit) => {
+  const generatePaymentLink = async (visit, options = {}) => {
     if (generatingLinkId) return;
+    const isRegenerate = Boolean(options.regenerate);
     setGeneratingLinkId(visit.id);
+    setPaymentLinkAction({ id: visit.id, type: isRegenerate ? 'regenerate' : 'generate' });
     try {
       const result = await fetchApi(`/api/wellness/visits/${visit.id}/payment-link`, {
         method: 'POST',
@@ -64,7 +70,8 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
       if (linkUrl) {
         setGeneratedLinks((prev) => ({ ...prev, [visit.id]: linkUrl }));
         onSaved();
-        notify.success('Payment link generated');
+        const copied = await copyToClipboard(linkUrl, visit.id);
+        notify.success(copied ? 'Payment link generated and copied' : (isRegenerate ? 'Payment link regenerated' : 'Payment link generated'));
       } else {
         notify.error('Payment link could not be generated. Please check the gateway configuration.');
       }
@@ -72,6 +79,37 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
       // fetchApi already toasted
     } finally {
       setGeneratingLinkId(null);
+      setPaymentLinkAction(null);
+    }
+  };
+
+  const sendPaymentLink = async (visit) => {
+    if (generatingLinkId) return;
+    setGeneratingLinkId(visit.id);
+    setPaymentLinkAction({ id: visit.id, type: 'send' });
+    try {
+      const result = await fetchApi(`/api/wellness/visits/${visit.id}/payment-link/send`, {
+        method: 'POST',
+      });
+      const linkUrl = result?.url || result?.paymentLinkUrl;
+      if (linkUrl) {
+        setGeneratedLinks((prev) => ({ ...prev, [visit.id]: linkUrl }));
+      }
+      onSaved();
+      const channel = String(result?.channel || 'none').toLowerCase();
+      if (channel === 'none') {
+        notify.info('Payment link prepared. Send it manually.');
+        return;
+      }
+      const channels = [];
+      if (channel.includes('email')) channels.push('email');
+      if (channel.includes('whatsapp')) channels.push('WhatsApp');
+      notify.success(`Payment link sent via ${channels.join(' + ')}`);
+    } catch (_err) {
+      // fetchApi already toasted
+    } finally {
+      setGeneratingLinkId(null);
+      setPaymentLinkAction(null);
     }
   };
 
@@ -111,10 +149,49 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
   const renderPaymentLinkBlock = (visit) => {
     if (!visit.amountCharged || visit.amountCharged <= 0) return null;
 
-    const linkUrl = visit.paymentLinkUrl || generatedLinks[visit.id];
+    const linkUrl = generatedLinks[visit.id] || visit.paymentLinkUrl;
+    const isLinkBusy = generatingLinkId === visit.id;
+    const linkActionType = paymentLinkAction?.id === visit.id ? paymentLinkAction.type : null;
     const isPaid =
       String(visit.paymentStatus || '').toLowerCase() === 'paid' ||
       String(visit.invoice?.status || '').toUpperCase() === 'PAID';
+
+    const actionRowStyle = {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '0.35rem',
+      flexWrap: 'wrap',
+      justifyContent: 'flex-end',
+    };
+
+    const actionButtonStyle = (tone = 'default', busy = false) => ({
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: 36,
+      height: 36,
+      padding: 0,
+      borderRadius: 10,
+      border: '1px solid rgba(16, 185, 129, 0.28)',
+      cursor: busy ? 'not-allowed' : 'pointer',
+      background:
+        tone === 'active'
+          ? 'rgba(16, 185, 129, 0.2)'
+          : tone === 'muted'
+            ? 'rgba(16, 185, 129, 0.06)'
+            : 'rgba(16, 185, 129, 0.1)',
+      color: 'var(--success-color)',
+      opacity: busy ? 0.72 : 1,
+      boxShadow: busy ? 'none' : '0 1px 0 rgba(16, 185, 129, 0.08)',
+      transition: 'background 0.18s ease, border-color 0.18s ease, transform 0.18s ease',
+    });
+
+    const iconStyle = (busy = false) => ({
+      width: 15,
+      height: 15,
+      flexShrink: 0,
+      animation: busy ? 'spin 1s linear infinite' : 'none',
+    });
 
     if (isPaid) {
       return (
@@ -134,7 +211,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                 gap: '0.3rem',
               }}
             >
-              ✓ Paid
+              Paid
             </span>
             {linkUrl && (
               <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
@@ -143,7 +220,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
             )}
           </div>
           {linkUrl && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
               <input
                 readOnly
                 disabled
@@ -151,37 +228,30 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                 aria-label="Payment link"
                 style={{
                   flex: 1,
+                  minWidth: 260,
                   fontSize: '0.8rem',
-                  padding: '0.4rem 0.6rem',
+                  padding: '0.45rem 0.65rem',
                   background: 'rgba(16, 185, 129, 0.08)',
                   border: '1px solid rgba(16, 185, 129, 0.3)',
-                  borderRadius: 6,
+                  borderRadius: 8,
                   color: 'var(--success-color)',
                   outline: 'none',
-                  opacity: 0.7,
+                  opacity: 0.72,
                   cursor: 'not-allowed',
                 }}
               />
-              <button
-                type="button"
-                disabled
-                aria-disabled="true"
-                title="Payment already collected"
-                style={{
-                  fontSize: '0.8rem',
-                  padding: '0.4rem 0.75rem',
-                  background: 'rgba(16, 185, 129, 0.1)',
-                  color: 'var(--success-color)',
-                  border: '1px solid rgba(16, 185, 129, 0.3)',
-                  borderRadius: 6,
-                  cursor: 'not-allowed',
-                  whiteSpace: 'nowrap',
-                  fontWeight: 500,
-                  opacity: 0.45,
-                }}
-              >
-                Copy
-              </button>
+              <div style={actionRowStyle}>
+                <button
+                  type="button"
+                  disabled
+                  aria-disabled="true"
+                  aria-label="Copy payment link"
+                  title="Copy payment link"
+                  style={actionButtonStyle('muted', true)}
+                >
+                  <Copy size={15} aria-hidden style={iconStyle(true)} />
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -190,7 +260,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
 
     if (linkUrl) {
       return (
-        <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <input
             readOnly
             value={linkUrl}
@@ -198,55 +268,88 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
             aria-label="Payment link"
             style={{
               flex: 1,
+              minWidth: 260,
               fontSize: '0.8rem',
-              padding: '0.4rem 0.6rem',
+              padding: '0.45rem 0.65rem',
               background: 'rgba(0,0,0,0.2)',
               border: '1px solid rgba(16, 185, 129, 0.3)',
-              borderRadius: 6,
+              borderRadius: 8,
               color: 'var(--text-primary)',
               outline: 'none',
             }}
           />
-          <button
-            type="button"
-            onClick={() => copyToClipboard(linkUrl, visit.id)}
-            style={{
-              fontSize: '0.8rem',
-              padding: '0.4rem 0.75rem',
-              background: copiedId === visit.id ? 'rgba(16, 185, 129, 0.25)' : 'rgba(16, 185, 129, 0.1)',
-              color: 'var(--success-color)',
-              border: '1px solid rgba(16, 185, 129, 0.3)',
-              borderRadius: 6,
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-              fontWeight: 500,
-            }}
-          >
-            {copiedId === visit.id ? 'Copied!' : 'Copy'}
-          </button>
+          <div style={actionRowStyle}>
+            <button
+              type="button"
+              onClick={() => copyToClipboard(linkUrl, visit.id)}
+              aria-label={copiedId === visit.id ? 'Copied payment link' : 'Copy payment link'}
+              title={copiedId === visit.id ? 'Copied' : 'Copy payment link'}
+              style={actionButtonStyle(copiedId === visit.id ? 'active' : 'default')}
+            >
+              {copiedId === visit.id ? <Check size={15} aria-hidden style={iconStyle()} /> : <Copy size={15} aria-hidden style={iconStyle()} />}
+            </button>
+            <button
+              type="button"
+              onClick={() => sendPaymentLink(visit)}
+              disabled={isLinkBusy}
+              aria-label={isLinkBusy && linkActionType === 'send' ? 'Sending payment link' : 'Send payment link'}
+              title={isLinkBusy && linkActionType === 'send' ? 'Sending...' : 'Send payment link'}
+              style={actionButtonStyle(isLinkBusy && linkActionType === 'send' ? 'active' : 'default', isLinkBusy)}
+            >
+              {isLinkBusy && linkActionType === 'send' ? (
+                <Loader2 size={15} aria-hidden style={iconStyle(true)} />
+              ) : (
+                <Send size={15} aria-hidden style={iconStyle()} />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => generatePaymentLink(visit, { regenerate: true })}
+              disabled={isLinkBusy}
+              aria-label={isLinkBusy && linkActionType === 'regenerate' ? 'Regenerating payment link' : 'Regenerate payment link'}
+              title={isLinkBusy && linkActionType === 'regenerate' ? 'Regenerating...' : 'Regenerate payment link'}
+              style={actionButtonStyle(isLinkBusy && linkActionType === 'regenerate' ? 'active' : 'default', isLinkBusy)}
+            >
+              {isLinkBusy && linkActionType === 'regenerate' ? (
+                <Loader2 size={15} aria-hidden style={iconStyle(true)} />
+              ) : (
+                <RotateCcw size={15} aria-hidden style={iconStyle()} />
+              )}
+            </button>
+          </div>
         </div>
       );
     }
 
     return (
-      <div style={{ marginTop: '0.5rem' }}>
+      <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
         <button
           type="button"
           onClick={() => generatePaymentLink(visit)}
           disabled={generatingLinkId === visit.id}
-          style={{
-            fontSize: '0.8rem',
-            padding: '0.4rem 0.75rem',
-            background: generatingLinkId === visit.id ? 'rgba(107,114,128,0.15)' : 'rgba(16, 185, 129, 0.1)',
-            color: 'var(--success-color)',
-            border: '1px solid rgba(16, 185, 129, 0.3)',
-            borderRadius: 6,
-            cursor: generatingLinkId === visit.id ? 'not-allowed' : 'pointer',
-            opacity: generatingLinkId === visit.id ? 0.7 : 1,
-            fontWeight: 500,
-          }}
+          aria-label={generatingLinkId === visit.id && paymentLinkAction?.type === 'generate' ? 'Generating payment link' : 'Generate payment link'}
+          title={generatingLinkId === visit.id && paymentLinkAction?.type === 'generate' ? 'Generating...' : 'Generate payment link'}
+          style={actionButtonStyle(generatingLinkId === visit.id && paymentLinkAction?.type === 'generate' ? 'active' : 'default', generatingLinkId === visit.id)}
         >
-          {generatingLinkId === visit.id ? 'Generating…' : 'Generate payment link'}
+          {generatingLinkId === visit.id && paymentLinkAction?.type === 'generate' ? (
+            <Loader2 size={15} aria-hidden style={iconStyle(true)} />
+          ) : (
+            <RotateCcw size={15} aria-hidden style={iconStyle()} />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => sendPaymentLink(visit)}
+          disabled={generatingLinkId === visit.id}
+          aria-label={generatingLinkId === visit.id && paymentLinkAction?.type === 'send' ? 'Sending payment link' : 'Send payment link'}
+          title={generatingLinkId === visit.id && paymentLinkAction?.type === 'send' ? 'Sending...' : 'Send payment link'}
+          style={actionButtonStyle(generatingLinkId === visit.id && paymentLinkAction?.type === 'send' ? 'active' : 'default', generatingLinkId === visit.id)}
+        >
+          {generatingLinkId === visit.id && paymentLinkAction?.type === 'send' ? (
+            <Loader2 size={15} aria-hidden style={iconStyle(true)} />
+          ) : (
+            <Send size={15} aria-hidden style={iconStyle()} />
+          )}
         </button>
       </div>
     );
@@ -257,7 +360,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
       <div className="glass" style={{ flex: 1, padding: '1.5rem', overflow: 'auto', maxHeight: '600px' }}>
         <div style={{ marginBottom: '1.5rem' }}>
           <h3 style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            📅 Pending Appointments
+            Pending Appointments
             {bookedAppointments.length > 0 && <span style={{ fontSize: '0.85rem', color: 'var(--accent-color)', fontWeight: 400 }}>({bookedAppointments.length})</span>}
           </h3>
           {bookedAppointments.length === 0 ? (
@@ -278,10 +381,10 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                   }}
                 >
                   <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>
-                    {formatDate(apt.visitDate)} · {apt.service?.name || 'Consultation'}
+                    {formatDate(apt.visitDate)} - {apt.service?.name || 'Consultation'}
                   </div>
                   <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                    Doctor: {apt.doctor?.name || '—'} · Status: <span style={{ textTransform: 'capitalize', color: 'var(--accent-color)' }}>{apt.status}</span>
+                    Doctor: {apt.doctor?.name || '-'} - Status: <span style={{ textTransform: 'capitalize', color: 'var(--accent-color)' }}>{apt.status}</span>
                   </div>
                 </div>
               ))}
@@ -292,7 +395,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
         {completedVisits.length > 0 && (
           <div style={{ paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
             <h3 style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              ✓ Completed Visits
+              Completed Visits
               <span style={{ fontSize: '0.85rem', color: 'var(--success-color)', fontWeight: 400 }}>({completedVisits.length})</span>
             </h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -307,11 +410,11 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                   }}
                 >
                   <div style={{ fontWeight: 500, marginBottom: '0.25rem', color: 'var(--text-primary)' }}>
-                    {formatDate(visit.visitDate)} · {visit.service?.name || 'Consultation'}
+                    {formatDate(visit.visitDate)} - {visit.service?.name || 'Consultation'}
                   </div>
                   <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                    Doctor: {visit.doctor?.name || '—'}
-                    {visit.amountCharged > 0 && <> · Amount: ₹{visit.amountCharged.toLocaleString('en-IN')}</>}
+                    Doctor: {visit.doctor?.name || '-'}
+                    {visit.amountCharged > 0 && <> - Amount:  {visit.amountCharged.toLocaleString('en-IN')}</>}
                   </div>
                   {renderPaymentLinkBlock(visit)}
                 </div>
@@ -331,7 +434,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.9rem' }}>
               <div>
                 <span style={{ color: 'var(--text-secondary)' }}>Amount: </span>
-                <strong>₹{selectedService?.basePrice || 0}</strong>
+                <strong>{selectedService?.basePrice || 0}</strong>
               </div>
               <div>
                 <span style={{ color: 'var(--text-secondary)' }}>Duration: </span>
@@ -343,7 +446,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
           {consumptionRules.length > 0 && (
             <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: 8, border: '1px solid rgba(16, 185, 129, 0.2)' }}>
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>
-                ✓ Auto-Consumption Preview
+                Auto-Consumption Preview
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                 {consumptionRules.map((rule) => (
@@ -351,7 +454,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                     <div style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{rule.product?.name}</div>
                     <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
                       Will deduct: {rule.quantityPerVisit} {rule.product?.unit || 'units'}
-                      {rule.product?.volume && ` (÷ ${rule.product.volume}ml = ${(rule.quantityPerVisit / rule.product.volume).toFixed(2)} units)`}
+                      {rule.product?.volume && ` (x ${rule.product.volume}ml = ${(rule.quantityPerVisit / rule.product.volume).toFixed(2)} units)`}
                     </div>
                     <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
                       Current stock: {rule.product?.currentStock || 0} units
@@ -394,10 +497,14 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
               fontWeight: 500,
             }}
           >
-            {submitting ? 'Marking as visited…' : '✓ Mark as visited & consume products'}
+            {submitting ? 'Marking as visited' : ' Mark as visited & consume products'}
           </button>
         </form>
       )}
     </div>
   );
 }
+
+
+
+

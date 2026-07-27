@@ -72,6 +72,7 @@ prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 // per-call to return null.
 prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn().mockResolvedValue({ id: 99, tenantId: 1 });
+prisma.contact.findMany = vi.fn().mockResolvedValue([{ id: 99, name: 'Acme School' }]);
 
 import express from 'express';
 import request from 'supertest';
@@ -121,6 +122,7 @@ beforeEach(() => {
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 99, tenantId: 1 });
+  prisma.contact.findMany.mockReset().mockResolvedValue([{ id: 99, name: 'Acme School' }]);
 });
 
 describe('POST /api/travel/invoices', () => {
@@ -248,6 +250,72 @@ describe('POST /api/travel/invoices', () => {
       });
     expect(r2.status).toBe(201);
     expect(r2.body.invoiceNum).toBe(`TINV-${CURRENT_YEAR}-0002`);
+  });
+
+  test('POST /invoices/reconcile/excel-software returns mismatch summary without mutating DB', async () => {
+    prisma.travelInvoice.findMany.mockResolvedValue([
+      {
+        id: 1,
+        invoiceNum: `TINV-${CURRENT_YEAR}-0001`,
+        totalAmount: '100.00',
+        status: 'Issued',
+        subBrand: 'tmc',
+        contactId: 99,
+        createdAt: new Date('2026-05-20T00:00:00.000Z'),
+      },
+      {
+        id: 2,
+        invoiceNum: `TINV-${CURRENT_YEAR}-0002`,
+        totalAmount: '200.00',
+        status: 'Paid',
+        subBrand: 'tmc',
+        contactId: 99,
+        createdAt: new Date('2026-05-20T00:00:00.000Z'),
+      },
+    ]);
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 99, name: 'Acme School' },
+    ]);
+
+    const csv = [
+      'Invoice Number,Invoice Date,Customer,Customer GSTIN,Sub-Brand,Legal Entity,Status,Taxable Value,CGST,SGST,IGST,TCS,Invoice Total',
+      `TINV-${CURRENT_YEAR}-0001,2026-05-20,Acme School,,tmc,tmc_nexus,Issued,100,0,0,0,0,100`,
+      `TINV-${CURRENT_YEAR}-0002,2026-05-20,Acme School,,tmc,tmc_nexus,Issued,200,0,0,0,0,250`,
+      'TOTAL,,,,,,,',
+    ].join('
+');
+
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/reconcile/excel-software')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from(csv, 'utf8'), 'travel-accounting.csv');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      totalRows: 2,
+      scannedInvoices: 2,
+      matchedRows: 2,
+      mismatchedRows: 1,
+      missingRows: 0,
+      discrepancyCount: 1,
+    });
+    expect(res.body.discrepancies[0]).toMatchObject({
+      invoiceNum: `TINV-${CURRENT_YEAR}-0002`,
+      issue: 'MISMATCH',
+    });
+    expect(prisma.travelInvoice.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.contact.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.travelInvoice.update).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.delete).not.toHaveBeenCalled();
+  });
+
+  test('POST /invoices/reconcile/excel-software without file returns FILE_REQUIRED', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/reconcile/excel-software')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'FILE_REQUIRED' });
   });
 
   // #996 — Contact existence + draft-dedup guards.

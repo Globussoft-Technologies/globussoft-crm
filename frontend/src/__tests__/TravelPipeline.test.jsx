@@ -102,7 +102,12 @@ function mockFetch(itins = DEFAULT_ITINS, contacts = []) {
   });
 }
 
-function renderPage(user = ADMIN_USER) {
+function setTheme(theme = "light") {
+  document.documentElement.setAttribute("data-theme", theme);
+}
+
+function renderPage(user = ADMIN_USER, theme = "light") {
+  setTheme(theme);
   return render(
     <AuthContext.Provider value={{ user }}>
       <MemoryRouter>
@@ -119,6 +124,7 @@ describe("TravelPipeline", () => {
     vi.clearAllMocks();
     notifyObj.confirm.mockResolvedValue(true);
     mockFetch();
+    setTheme("light");
   });
 
   // 1. Page chrome
@@ -367,6 +373,48 @@ describe("TravelPipeline", () => {
     // TravelStall badge
     const tsLabel = screen.getAllByText("TravelStall");
     expect(tsLabel.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("uses softer tones in light mode", async () => {
+    renderPage(ADMIN_USER, "light");
+    await screen.findByText("Bali Honeymoon Special");
+
+    const tmcBadge = screen.getAllByText("TMC").find((el) => el.getAttribute("style"));
+    expect(tmcBadge).toBeTruthy();
+    expect(tmcBadge.getAttribute("style")).toContain("rgba(18, 38, 71, 0.06)");
+    expect(tmcBadge.getAttribute("style")).toContain("rgba(18, 38, 71, 0.12)");
+
+    const statusSelectLight = screen.getAllByLabelText("Change status")[0];
+    expect(statusSelectLight.getAttribute("style")).toContain("rgba(47, 122, 77, 0.12)");
+    expect(statusSelectLight.getAttribute("style")).toContain("rgba(47, 122, 77, 0.18)");
+  });
+
+  it("keeps richer tones in dark mode", async () => {
+    renderPage(ADMIN_USER, "dark");
+    await screen.findByText("Bali Honeymoon Special");
+
+    const darkTmcBadge = screen.getAllByText("TMC").find((el) => el.getAttribute("style"));
+    expect(darkTmcBadge).toBeTruthy();
+    expect(darkTmcBadge.getAttribute("style")).toContain("rgba(18, 38, 71, 0.72)");
+    expect(darkTmcBadge.getAttribute("style")).toContain("rgba(157, 183, 230, 0.18)");
+
+    const statusSelectDark = screen.getAllByLabelText("Change status")[0];
+    expect(statusSelectDark.getAttribute("style")).toContain("rgba(47, 122, 77, 0.22)");
+    expect(statusSelectDark.getAttribute("style")).toContain("rgba(47, 122, 77, 0.3)");
+  });
+
+  it("updates status styling immediately when the app theme toggles", async () => {
+    renderPage(ADMIN_USER, "light");
+    await screen.findByText("Bali Honeymoon Special");
+
+    const statusSelect = screen.getAllByLabelText("Change status")[0];
+    expect(statusSelect.getAttribute("style")).toContain("rgba(47, 122, 77, 0.12)");
+
+    setTheme("dark");
+    await waitFor(() => {
+      const updated = screen.getAllByLabelText("Change status")[0];
+      expect(updated.getAttribute("style")).toContain("rgba(47, 122, 77, 0.22)");
+    });
   });
 
   // Refresh button re-fetches

@@ -2683,6 +2683,33 @@ async function applyLeadRouting(formProps, tenantId, contactId) {
   }
   return null;
 }
+function extractLeadFieldsFromSubmission(req, page) {
+  const formFields = (req.body && typeof req.body.fields === "object" && req.body.fields) ? req.body.fields : {};
+  const pick = (key) => {
+    const value = formFields[key] !== undefined ? formFields[key] : req.body[key];
+    if (value === undefined || value === null) return null;
+    return typeof value === "string" ? value.trim() : value;
+  };
+
+  const email = pick("email") || pick("parentEmail") || pick("parent_email");
+  const firstName = pick("first_name") || pick("firstName");
+  const lastName = pick("last_name") || pick("lastName");
+  const splitName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const name = pick("name") || pick("parentName") || pick("parent_name") || pick("full_name") || pick("fullName") || splitName;
+  const phone = pick("phone") || pick("phone_number") || pick("phoneNumber") || pick("mobile") || pick("parentPhone") || pick("parent_phone");
+  const company = pick("company") || pick("companyName") || pick("company_name") || pick("studentSchool") || pick("student_school") || pick("school");
+  const serviceInterest = pick("service_interest") || pick("serviceInterest") || pick("service") || pick("treatmentOfInterest");
+
+  return {
+    formFields,
+    email,
+    phone,
+    company,
+    serviceInterest,
+    contactEmail: email || `lp-${page.slug}-${Date.now()}@anonymous.local`,
+    contactName: name || pick("studentName") || pick("student_name") || "Landing Page Lead",
+  };
+}
 
 // Resolves the registration-mode marker for the form block being
 // submitted. Two sources:
@@ -2975,23 +3002,12 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
       }
     }
 
-    // Extract form fields (supports both nested and flat structures)
-    const formFields = (req.body && typeof req.body.fields === "object" && req.body.fields) ? req.body.fields : {};
-    const pick = (key) => formFields[key] || req.body[key] || null;
-
-    const email = pick("email") || pick("parentEmail") || pick("parent_email");
-    const name = pick("name") || pick("parentName") || pick("parent_name") || pick("full_name") || pick("fullName");
-    const full_name = pick("full_name") || pick("fullName");
-    const phone = pick("phone") || pick("parentPhone") || pick("parent_phone");
-    const company = pick("company") || pick("companyName") || pick("company_name") || pick("studentSchool") || pick("student_school") || pick("school");
-    const company_name = pick("company_name") || pick("companyName");
-
+    // Extract form fields (supports nested `fields` and flat payloads).
+    const { formFields, phone, company, serviceInterest, contactEmail, contactName } = extractLeadFieldsFromSubmission(req, page);
     if (!isValidPhoneOrEmpty(phone)) {
       return res.status(400).json({ error: "Please enter a valid phone number (digits only, 10–15 digits)", code: "INVALID_PHONE" });
     }
 
-    const contactEmail = email || `lp-${page.slug}-${Date.now()}@anonymous.local`;
-    const contactName = name || full_name || pick("studentName") || pick("student_name") || "Landing Page Lead";
     const sourceSuffix = submittedAudience ? ` (${submittedAudience})` : "";
     const attributionLabel = `Landing Page: ${page.title}${sourceSuffix}`;
 
@@ -3006,17 +3022,22 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
       where: { email_tenantId: { email: contactEmail, tenantId } },
       update: {
         source: contactSource,
+        name: contactName,
+        phone: phone || null,
+        company: company || null,
+        treatmentOfInterest: serviceInterest || null,
         deletedAt: null,
       },
       create: {
         name: contactName,
         email: contactEmail,
         phone: phone || null,
-        company: company || company_name || null,
+        company: company || null,
         status: "Lead",
         source: contactSource,
         firstTouchSource: attributionLabel,
         subBrand: page.subBrand || (typeof req.body.subBrand === "string" ? req.body.subBrand : null),
+        treatmentOfInterest: serviceInterest || null,
         aiScore: 30,
         tenantId,
       },
@@ -3103,30 +3124,13 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
       }
     }
 
-    // The Wanderlux template sends form values nested under `fields`
-    // (multi-step form aggregates all step inputs there); the older
-    // single-block form types post flat. Read from `fields` first so
-    // Wanderlux submissions land with real contact info instead of
-    // the anonymous `lp-{slug}-{ts}@anonymous.local` fallback. Falls
-    // back to the flat shape for back-compat with the older types.
-    const formFields = (req.body && typeof req.body.fields === "object" && req.body.fields) ? req.body.fields : {};
-    const pick = (key) => formFields[key] || req.body[key] || null;
-    // Student programmes capture the PARENT as the lead contact (the
-    // person we'll actually call back); student details land in the
-    // contact's notes / source so the sales team has the full picture.
-    const email = pick("email") || pick("parentEmail") || pick("parent_email");
-    const name = pick("name") || pick("parentName") || pick("parent_name") || pick("full_name") || pick("fullName");
-    const full_name = pick("full_name") || pick("fullName");
-    const phone = pick("phone") || pick("parentPhone") || pick("parent_phone");
-    const company = pick("company") || pick("companyName") || pick("company_name") || pick("studentSchool") || pick("student_school") || pick("school");
-    const company_name = pick("company_name") || pick("companyName");
-
+    // The generated wellness form posts first_name / last_name / service_interest;
+    // travel templates may post nested `fields` or parent/student aliases.
+    const { formFields, phone, company, serviceInterest, contactEmail, contactName } = extractLeadFieldsFromSubmission(req, page);
     if (!isValidPhoneOrEmpty(phone)) {
       return res.status(400).json({ error: "Please enter a valid phone number (digits only, 10–15 digits)", code: "INVALID_PHONE" });
     }
 
-    const contactEmail = email || `lp-${page.slug}-${Date.now()}@anonymous.local`;
-    const contactName = name || full_name || pick("studentName") || pick("student_name") || "Landing Page Lead";
     // Append the audience tag to the descriptive attribution so lead-routing
     // rules + manual triage can branch on it (e.g. "Landing Page: Bali
     // (tmc)" vs "Landing Page: Bali (rfu)"). Only appends when the body
@@ -3162,17 +3166,22 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
         // new deal visible in leads lists. Without this, a visitor who registers,
         // gets deleted, then re-registers with the same email would match the
         // tombstoned row and the lead would stay hidden.
+        name: contactName,
+        phone: phone || null,
+        company: company || null,
+        treatmentOfInterest: serviceInterest || null,
         deletedAt: null,
       },
       create: {
         name: contactName,
         email: contactEmail,
         phone: phone || null,
-        company: company || company_name || null,
+        company: company || null,
         status: "Lead",
         source: contactSource,
         firstTouchSource: attributionLabel,
         subBrand: page.subBrand || (typeof req.body.subBrand === "string" ? req.body.subBrand : null),
+        treatmentOfInterest: serviceInterest || null,
         aiScore: 30,
         tenantId,
       },

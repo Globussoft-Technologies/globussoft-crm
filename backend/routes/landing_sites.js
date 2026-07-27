@@ -66,7 +66,7 @@ router.get('/sectors', verifyToken, async (_req, res) => {
 
 router.post('/generate', verifyToken, async (req, res) => {
   try {
-    const { sectorKey, sectorLabel, campaignName, campaignGoal, businessName, audience, location, tone, ctaText, imageMode, autoCreate = true } = req.body || {};
+    const { sectorKey, sectorLabel, campaignName, campaignGoal, businessName, audience, location, eventDate, eventTime, eventLocation, tone, ctaText, imageMode, autoCreate = true } = req.body || {};
     const normalizedSector = normalizeSectorKey(sectorKey);
     const result = await generateLandingSiteContent({
       tenantId: req.user.tenantId,
@@ -77,6 +77,9 @@ router.post('/generate', verifyToken, async (req, res) => {
       businessName,
       audience,
       location,
+      eventDate,
+      eventTime,
+      eventLocation,
       tone,
       ctaText,
       imageMode,

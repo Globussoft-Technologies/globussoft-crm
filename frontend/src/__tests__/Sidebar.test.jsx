@@ -170,6 +170,7 @@ const SAMPLE_WELLNESS_PAGES = [
   { category: 'Leads & Revenue', path: '/wellness/telecaller-queue', label: 'Telecaller Queue' },
   { category: 'Finance', path: '/wellness/pos', label: 'Point of Sale' },
   { category: 'Finance', path: '/wellness/invoices', label: 'Invoices' },
+  { category: 'Marketing', path: '/landing-sites', label: 'Landing Sites' },
   { category: 'Products', path: '/wellness/products', label: 'Products' },
   { category: 'Products', path: '/wellness/product-categories', label: 'Categories' },
   { category: 'Products', path: '/wellness/auto-consumption', label: 'Auto-consumption' },
@@ -298,6 +299,18 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Attendance')).toBeTruthy();
       expect(screen.getByText('Unified Inbox')).toBeTruthy();
       expect(screen.getByText('Point of Sale')).toBeTruthy();
+    });
+
+    it('renders Landing Sites in the Marketing section for wellness tenants', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        accessiblePages: [
+          { category: 'Marketing', path: '/landing-sites', label: 'Landing Sites' },
+        ],
+      });
+      await screen.findByText('Landing Sites');
+      expect(document.querySelector('a[href="/landing-sites"]')).toBeTruthy();
     });
 
     it('shows wellness submodules only while their module is hovered', async () => {

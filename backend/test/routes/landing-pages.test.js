@@ -1108,6 +1108,45 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
     );
   });
 
+  test('wellness-style public registration stores first/last name and service interest on the lead contact', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 52,
+      slug: 'blood-donation-bangalore-enhance-wellness',
+      status: 'PUBLISHED',
+      title: 'Enhance Wellness Blood Donation Drive',
+      content: JSON.stringify([{ type: 'form', props: {} }]),
+      tenantId: 2,
+      templateType: 'generic-site:wellness-registration-v1',
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 1200, email: 'asha@example.com', tenantId: 2 });
+    prisma.landingPage.update.mockResolvedValue({ id: 52, submissions: 1 });
+
+    const res = await request(makeApp())
+      .post('/p/blood-donation-bangalore-enhance-wellness/submit')
+      .send({
+        first_name: 'Asha',
+        last_name: 'Donor',
+        email: 'asha@example.com',
+        phone: '+919876543210',
+        service_interest: 'Event Registration',
+        message: 'I can donate in the morning.',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const upsertArgs = prisma.contact.upsert.mock.calls[0][0];
+    expect(upsertArgs.where.email_tenantId).toEqual({ email: 'asha@example.com', tenantId: 2 });
+    expect(upsertArgs.create).toMatchObject({
+      name: 'Asha Donor',
+      email: 'asha@example.com',
+      phone: '+919876543210',
+      status: 'Lead',
+      source: 'inbound:webform',
+      firstTouchSource: 'Landing Page: Enhance Wellness Blood Donation Drive',
+      treatmentOfInterest: 'Event Registration',
+      tenantId: 2,
+    });
+  });
   test('unknown slug → 404 (no contact/deal/analytics writes)', async () => {
     prisma.landingPage.findFirst.mockResolvedValue(null);
     const res = await request(makeApp())

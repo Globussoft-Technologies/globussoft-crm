@@ -66,32 +66,6 @@ const EDITABLE_STATUSES = [
   { value: "expired", label: "Expired" },
 ];
 
-// Status → visual style (matched to reference: won=green, lost=red, achieved=blue, negotiation=amber, draft/new=gray)
-const STATUS_STYLE = {
-  draft:        { bg: "#20202a", color: "#9a9aa5" },
-  sent:         { bg: "#332a12", color: "#e8b34a" },
-  revised:      { bg: "#1a2033", color: "#5b6ef8" },
-  accepted:     { bg: "#123324", color: "#4fd48a" },
-  advance_paid: { bg: "#123324", color: "#4fd48a" },
-  fully_paid:   { bg: "#0d2a1a", color: "#2ecc71" },
-  rejected:     { bg: "#331515", color: "#f06a6a" },
-  expired:      { bg: "#20202a", color: "#9a9aa5" },
-  // legacy aliases used in some tenants
-  won:          { bg: "#123324", color: "#4fd48a" },
-  lost:         { bg: "#331515", color: "#f06a6a" },
-  achieved:     { bg: "#1a2033", color: "#fff",    solidBg: "#5b6ef8" },
-  negotiation:  { bg: "#332a12", color: "#e8b34a" },
-  new:          { bg: "#20202a", color: "#9a9aa5" },
-};
-
-// Sub-brand tag colors (reference: TMC=dark navy, TravelStall=amber/gold, RFU=gray)
-const SUB_BRAND_STYLE = {
-  tmc:         { bg: "#0f1a2e", color: "#6b8ecf",  label: "TMC" },
-  rfu:         { bg: "#1a1f1a", color: "#8aaa8a",  label: "RFU" },
-  travelstall: { bg: "#2a1f10", color: "#d9a552",  label: "TravelStall" },
-  visasure:    { bg: "#1a1228", color: "#a78bfa",  label: "Visa Sure" },
-};
-
 // "Won" = itineraries where money is committed (accepted or paid). Used
 // for the KPI tile labelled "Won / Accepted".
 const WON_STATUSES = new Set(["accepted", "advance_paid", "fully_paid"]);
@@ -100,7 +74,81 @@ const NEGOTIATION_STATUSES = new Set(["sent", "revised"]);
 // "Lost" = closed-negative.
 const LOST_STATUSES = new Set(["rejected", "expired"]);
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
+const LIGHT_THEME = "light";
+const DARK_THEME = "dark";
+
+const STATUS_STYLE = {
+  light: {
+    neutral: { bg: "rgba(18, 38, 71, 0.06)", color: "#4F5569", border: "rgba(18, 38, 71, 0.12)" },
+    info: { bg: "rgba(91, 110, 248, 0.12)", color: "#3F54D0", border: "rgba(91, 110, 248, 0.18)" },
+    success: { bg: "rgba(47, 122, 77, 0.12)", color: "#2F7A4D", border: "rgba(47, 122, 77, 0.18)" },
+    warning: { bg: "rgba(200, 154, 78, 0.14)", color: "#8B5E20", border: "rgba(200, 154, 78, 0.22)" },
+    danger: { bg: "rgba(168, 50, 63, 0.12)", color: "#A8323F", border: "rgba(168, 50, 63, 0.18)" },
+  },
+  dark: {
+    neutral: { bg: "rgba(244, 239, 223, 0.08)", color: "#D7D1C3", border: "rgba(244, 239, 223, 0.14)" },
+    info: { bg: "rgba(91, 110, 248, 0.20)", color: "#C6CCFF", border: "rgba(91, 110, 248, 0.26)" },
+    success: { bg: "rgba(47, 122, 77, 0.22)", color: "#A8D8B9", border: "rgba(47, 122, 77, 0.30)" },
+    warning: { bg: "rgba(200, 154, 78, 0.20)", color: "#F0D7A4", border: "rgba(200, 154, 78, 0.28)" },
+    danger: { bg: "rgba(168, 50, 63, 0.20)", color: "#F7B0B7", border: "rgba(168, 50, 63, 0.28)" },
+  },
+};
+
+const SUB_BRAND_STYLE = {
+  light: {
+    tmc: { bg: "rgba(18, 38, 71, 0.06)", color: "#122647", border: "rgba(18, 38, 71, 0.12)", label: "TMC" },
+    rfu: { bg: "rgba(47, 122, 77, 0.08)", color: "#2F7A4D", border: "rgba(47, 122, 77, 0.14)", label: "RFU" },
+    travelstall: { bg: "rgba(200, 154, 78, 0.12)", color: "#8B5E20", border: "rgba(200, 154, 78, 0.20)", label: "TravelStall" },
+    visasure: { bg: "rgba(91, 110, 248, 0.12)", color: "#5B6EF8", border: "rgba(91, 110, 248, 0.20)", label: "Visa Sure" },
+  },
+  dark: {
+    tmc: { bg: "rgba(18, 38, 71, 0.72)", color: "#9DB7E6", border: "rgba(157, 183, 230, 0.18)", label: "TMC" },
+    rfu: { bg: "rgba(26, 31, 26, 0.82)", color: "#B6D3B6", border: "rgba(182, 211, 182, 0.16)", label: "RFU" },
+    travelstall: { bg: "rgba(42, 31, 16, 0.84)", color: "#F0D7A4", border: "rgba(240, 215, 164, 0.18)", label: "TravelStall" },
+    visasure: { bg: "rgba(26, 18, 40, 0.84)", color: "#D1C4FF", border: "rgba(209, 196, 255, 0.18)", label: "Visa Sure" },
+  },
+};
+
+function getThemeName() {
+  if (typeof document === "undefined") return LIGHT_THEME;
+  return document.documentElement.getAttribute("data-theme") === DARK_THEME ? DARK_THEME : LIGHT_THEME;
+}
+
+function useTravelTheme() {
+  const [theme, setTheme] = useState(() => getThemeName());
+
+  useEffect(() => {
+    if (typeof document === "undefined" || typeof MutationObserver === "undefined") return () => {};
+
+    const root = document.documentElement;
+    const syncTheme = () => {
+      setTheme(root.getAttribute("data-theme") === DARK_THEME ? DARK_THEME : LIGHT_THEME);
+    };
+
+    syncTheme();
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+
+  return theme;
+}
+
+function getStatusTone(theme, current) {
+  const palette = STATUS_STYLE[theme] || STATUS_STYLE.light;
+  if (["accepted", "advance_paid", "fully_paid", "won"].includes(current)) return palette.success;
+  if (["sent", "negotiation"].includes(current)) return palette.warning;
+  if (["revised", "achieved"].includes(current)) return palette.info;
+  if (["rejected", "lost"].includes(current)) return palette.danger;
+  return palette.neutral;
+}
+
+function getSubBrandTone(theme, value) {
+  const palette = SUB_BRAND_STYLE[theme] || SUB_BRAND_STYLE.light;
+  return palette[value] || { ...palette.tmc, label: value };
+}
+
+// ??? Helpers ??????????????????????????????????????????????????????????????
 
 function fmtMoney(amt, currency = "INR") {
   const n = Number(amt);
@@ -161,6 +209,7 @@ export default function TravelPipeline() {
   const { user } = useContext(AuthContext);
   const notify = useNotify();
   const navigate = useNavigate();
+  const theme = useTravelTheme();
 
   // Data
   const [itineraries, setItineraries] = useState([]);
@@ -362,13 +411,13 @@ export default function TravelPipeline() {
 
   // ── Sub-brand badge ─────────────────────────────────────────────────
   function SubBrandBadge({ value }) {
-    const style = SUB_BRAND_STYLE[value] || { bg: "#20202a", color: "#9a9aa5", label: value };
+    const style = getSubBrandTone(theme, value);
     const displayLabel = style.label || subBrandShortLabel(value) || value || "—";
     return (
       <span style={{
         display: "inline-block", padding: "3px 9px", borderRadius: 6,
         fontSize: 11.5, fontWeight: 700,
-        background: style.bg, color: style.color,
+        background: style.bg, color: style.color, border: `1px solid ${style.border}`,
         letterSpacing: "0.02em",
       }}>
         {displayLabel}
@@ -604,10 +653,12 @@ export default function TravelPipeline() {
                     {/* Status — inline editable dropdown */}
                     <td style={tdStyle}>
                       <StatusDropdown
+                        key={`${row.id}-${theme}`}
                         id={row.id}
                         current={row.status}
                         disabled={updatingId === row.id}
                         onChange={(newStatus) => updateStatus(row.id, newStatus)}
+                        theme={theme}
                       />
                     </td>
 
@@ -802,9 +853,8 @@ export default function TravelPipeline() {
 // Renders a styled <select> that matches the current status's colour pill.
 // When `disabled` is true (update in flight) it shows a spinner-like faded
 // state.
-function StatusDropdown({ id: _id, current, disabled, onChange }) {
-  const s = STATUS_STYLE[current] || { bg: "#20202a", color: "#9a9aa5" };
-  const bgColor = s.solidBg || s.bg;
+function StatusDropdown({ id: _id, current, disabled, onChange, theme }) {
+  const s = getStatusTone(theme, current);
   return (
     <select
       value={current || ""}
@@ -812,9 +862,9 @@ function StatusDropdown({ id: _id, current, disabled, onChange }) {
       onChange={(e) => onChange(e.target.value)}
       aria-label="Change status"
       style={{
-        background: bgColor,
+        background: s.bg,
         color: s.color,
-        border: `1px solid ${s.color}40`,
+        border: `1px solid ${s.border}`,
         borderRadius: 20,
         padding: "5px 28px 5px 10px",
         fontSize: 12,
@@ -823,15 +873,21 @@ function StatusDropdown({ id: _id, current, disabled, onChange }) {
         opacity: disabled ? 0.6 : 1,
         appearance: "none",
         WebkitAppearance: "none",
-        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='${encodeURIComponent(s.color)}'/%3E%3C/svg%3E")`,
+        backgroundImage: `linear-gradient(45deg, transparent 50%, ${s.color} 50%), linear-gradient(135deg, ${s.color} 50%, transparent 50%)`,
         backgroundRepeat: "no-repeat",
-        backgroundPosition: "right 8px center",
+        backgroundPosition: "calc(100% - 14px) calc(50% - 1px), calc(100% - 10px) calc(50% - 1px)",
+        backgroundSize: "4px 4px, 4px 4px",
         minWidth: 120,
       }}
     >
       {EDITABLE_STATUSES.map((o) => (
-        <option key={o.value} value={o.value}
-          style={{ background: "#16161d", color: "#f3f3f5" }}
+        <option
+          key={o.value}
+          value={o.value}
+          style={{
+            background: theme === DARK_THEME ? "#16161d" : "#FFFFFF",
+            color: theme === DARK_THEME ? "#F4EFDF" : "#1F1B14",
+          }}
         >
           {o.label}
         </option>

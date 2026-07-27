@@ -30,7 +30,7 @@
 // isAdmin gates so non-write users see read-only chrome (no Create /
 // Edit / Delete / Promote buttons) but still browse the catalogue.
 
-import React, { useCallback, useContext, useEffect, useState } from "react";
+import React, { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   Edit2,
   Plus,
@@ -41,7 +41,7 @@ import {
   Calendar,
   Settings,
 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 
@@ -139,6 +139,11 @@ export default function TmcCatalogueAdmin() {
   const [saving, setSaving] = useState(false);
   const [promotingId, setPromotingId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkImportResult, setBulkImportResult] = useState(null);
+  const [pendingReviewTripIds, setPendingReviewTripIds] = useState(() => new Set());
+  const bulkFileInputRef = useRef(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -353,12 +358,120 @@ export default function TmcCatalogueAdmin() {
       // Drop the promoted row from this tab's view; the user can flip to
       // Active to see it in its new home.
       setRows((prev) => prev.filter((r) => r.id !== row.id));
+      setPendingReviewTripIds((prev) => {
+        const next = new Set(prev);
+        next.delete(row.tripId);
+        return next;
+      });
     } catch (err) {
       notify.error(
         err?.body?.error || err?.message || "Failed to promote entry",
       );
     } finally {
       setPromotingId(null);
+    }
+  };
+
+  const handleBulkFileChange = (e) => {
+    const nextFile = e.target.files?.[0] || null;
+    setBulkFile(nextFile);
+  };
+
+  const downloadTemplate = async (format) => {
+    try {
+      const token = getAuthToken();
+      const response = await fetch(
+        `/api/travel-tmc-catalogue/import-template?format=${format}`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        },
+      );
+      if (!response.ok) {
+        let message = "Failed to download template";
+        try {
+          const payload = await response.json();
+          message = payload?.error || message;
+        } catch {
+          // keep default copy
+        }
+        throw new Error(message);
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download =
+        format === "xlsx" ? "tmc-catalogue-template.xlsx" : "tmc-catalogue-template.csv";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+      notify.success(`Downloaded ${format.toUpperCase()} template`);
+    } catch (err) {
+      notify.error(err?.message || "Failed to download template");
+    }
+  };
+
+  const handleBulkImport = async () => {
+    if (!canWrite) {
+      notify.error("Bulk import requires ADMIN or MANAGER role.");
+      return;
+    }
+    if (!bulkFile) {
+      notify.error("Choose a CSV or Excel file first.");
+      return;
+    }
+
+    setBulkImporting(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", bulkFile);
+      const token = getAuthToken();
+      const response = await fetch("/api/travel-tmc-catalogue/import", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: formData,
+      });
+      if (!response.ok) {
+        let message = "Failed to import catalogue";
+        try {
+          const payload = await response.json();
+          message = payload?.error || message;
+        } catch {
+          // keep default copy
+        }
+        throw new Error(message);
+      }
+
+      const result = await response.json();
+      setBulkImportResult(result);
+      const createdTripIds = Array.isArray(result?.createdTripIds) ? result.createdTripIds : [];
+      if (createdTripIds.length > 0) {
+        setPendingReviewTripIds((prev) => {
+          const next = new Set(prev);
+          for (const tripId of createdTripIds) next.add(tripId);
+          return next;
+        });
+      }
+      if (bulkFileInputRef.current) {
+        bulkFileInputRef.current.value = "";
+      }
+      setBulkFile(null);
+      notify.success(
+        result?.reviewLabel
+          ? `${result.reviewLabel}: ${result.imported || 0} new, ${result.updated || 0} updated`
+          : `Imported ${result?.imported || 0} new and ${result?.updated || 0} updated rows`,
+      );
+      if (createdTripIds.length > 0 && tab !== STATUS_ARCHIVED) {
+        setTab(STATUS_ARCHIVED);
+      } else {
+        load();
+      }
+    } catch (err) {
+      notify.error(err?.message || "Failed to import catalogue");
+    } finally {
+      setBulkImporting(false);
     }
   };
 
@@ -420,6 +533,101 @@ export default function TmcCatalogueAdmin() {
           (ADMIN+MANAGER for the standing-facts override; ADMIN-only for
           the booking-link save per backend gate). */}
       {canWrite && <TmcConfigPanel notify={notify} isAdmin={isAdmin} />}
+
+      {canWrite && (
+        <section
+          data-testid="tmc-catalogue-bulk-import"
+          style={{
+            background: "var(--surface-color)",
+            border: "1px solid var(--border-color)",
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 16,
+            display: "grid",
+            gap: 12,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>
+              Bulk import catalogue
+            </div>
+            <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+              Download the master template, fill it in, then upload CSV or XLSX.
+              New rows are ingested as <strong>AI-classified, pending review</strong>
+              and stay archived until an admin promotes them.
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => downloadTemplate("csv")}
+              style={secondaryBtn}
+            >
+              Download CSV template
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadTemplate("xlsx")}
+              style={secondaryBtn}
+            >
+              Download XLSX template
+            </button>
+            <label
+              style={{
+                ...secondaryBtn,
+                cursor: "pointer",
+                margin: 0,
+              }}
+            >
+              <input
+                ref={bulkFileInputRef}
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                onChange={handleBulkFileChange}
+                aria-label="Bulk import file"
+                style={{ display: "none" }}
+              />
+              {bulkFile ? bulkFile.name : "Choose file"}
+            </label>
+            <button
+              type="button"
+              onClick={handleBulkImport}
+              disabled={bulkImporting || !bulkFile}
+              style={bulkImporting || !bulkFile ? primaryBtnDisabled : primaryBtn}
+            >
+              {bulkImporting ? "Importing..." : "Upload & classify"}
+            </button>
+          </div>
+
+          {bulkImportResult && (
+            <div
+              data-testid="tmc-catalogue-bulk-import-result"
+              style={{
+                display: "grid",
+                gap: 6,
+                padding: 12,
+                borderRadius: 8,
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-color)",
+                color: "var(--text-primary)",
+                fontSize: 13,
+              }}
+            >
+              <div style={{ fontWeight: 700 }}>{bulkImportResult.reviewLabel}</div>
+              <div>
+                Imported {bulkImportResult.imported || 0} new, updated {bulkImportResult.updated || 0},
+                skipped {bulkImportResult.skipped || 0} of {bulkImportResult.total || 0}
+              </div>
+              {(bulkImportResult.errors || []).length > 0 && (
+                <div style={{ color: "var(--text-secondary)" }}>
+                  {bulkImportResult.errors.length} row(s) need review.
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Tabs */}
       <div role="tablist" aria-label="Catalogue status tabs" style={tabRow}>
@@ -818,8 +1026,28 @@ export default function TmcCatalogueAdmin() {
               }}
             >
               <div>
-                <div style={{ fontWeight: 600, fontSize: 15 }}>
-                  {row.title || row.tripId}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 600, fontSize: 15 }}>
+                    {row.title || row.tripId}
+                  </div>
+                  {pendingReviewTripIds.has(row.tripId) && (
+                    <span
+                      data-testid={`tmc-pending-review-${row.tripId}`}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        background: "rgba(245, 158, 11, 0.12)",
+                        color: "var(--warning-color)",
+                        border: "1px solid rgba(245, 158, 11, 0.3)",
+                      }}
+                    >
+                      AI-classified, pending review
+                    </span>
+                  )}
                 </div>
                 <div
                   style={{

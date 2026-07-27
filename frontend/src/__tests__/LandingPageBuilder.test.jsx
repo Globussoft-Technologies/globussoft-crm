@@ -70,6 +70,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { AuthContext } from "../App";
 
 const fetchApiMock = vi.fn();
 vi.mock("../utils/api", () => ({
@@ -130,13 +131,20 @@ function defaultFetch(url, opts) {
   return Promise.resolve([]);
 }
 
-function renderBuilder(initialPath = "/landing-pages/42") {
+function renderBuilder(initialPath = "/landing-pages/42", tenantVertical = "travel") {
+  const authValue = {
+    user: { tenant: { vertical: tenantVertical } },
+    tenant: { vertical: tenantVertical },
+    loading: false,
+  };
   return render(
-    <MemoryRouter initialEntries={[initialPath]}>
-      <Routes>
-        <Route path="/landing-pages/:id" element={<LandingPageBuilder />} />
-      </Routes>
-    </MemoryRouter>,
+    <AuthContext.Provider value={authValue}>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <Routes>
+          <Route path="/landing-pages/:id" element={<LandingPageBuilder />} />
+        </Routes>
+      </MemoryRouter>
+    </AuthContext.Provider>,
   );
 }
 
@@ -191,6 +199,24 @@ describe("<LandingPageBuilder /> — page surface", () => {
         (!opts || !opts.method || opts.method === "GET"),
     );
     expect(routingFetch).toBe(true);
+  });
+
+  it("generic tenants do not fetch /api/travel/trips or render the trip picker", async () => {
+    renderBuilder("/landing-pages/42", "generic");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Page title")).toBeInTheDocument();
+    });
+
+    expect(
+      fetchApiMock.mock.calls.some(
+        ([url, opts]) =>
+          url === "/api/travel/trips?limit=200" &&
+          (!opts || !opts.method || opts.method === "GET"),
+      ),
+    ).toBe(false);
+    expect(
+      screen.queryByLabelText(/Link landing page to TMC trip/i),
+    ).not.toBeInTheDocument();
   });
 
   it("renders the top bar with title input + slug input + counter after load", async () => {
@@ -434,6 +460,36 @@ describe("<LandingPageBuilder /> — page surface", () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────
+  it("wellness tenants can publish even when another page is already live", async () => {
+    const livePage = {
+      ...samplePagePublished,
+      id: 44,
+      title: "Community Wellness Camp",
+      slug: "community-wellness-camp",
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || "GET";
+      if (url === "/api/landing-pages/42" && method === "GET") return Promise.resolve(samplePageDraft);
+      if (url === "/api/landing-pages" && method === "GET") return Promise.resolve([livePage, samplePageDraft]);
+      if (url === "/api/lead-routing" && method === "GET") return Promise.resolve(sampleRules);
+      if (url === "/api/landing-pages/42/publish" && method === "POST") {
+        return Promise.resolve({ ...samplePageDraft, status: "PUBLISHED", publishedAt: new Date().toISOString() });
+      }
+      return Promise.resolve([]);
+    });
+
+    const user = userEvent.setup();
+    renderBuilder("/landing-pages/42", "wellness");
+    await waitFor(() => expect(screen.getByLabelText("Page title")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /^Publish/ }));
+
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url, opts]) => url === "/api/landing-pages/42/publish" && opts?.method === "POST")).toBe(true));
+    expect(notifyInfo).toHaveBeenCalledWith(expect.stringContaining("Community Wellness Camp"));
+    await waitFor(() => expect(notifySuccess).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /Unpublish/i })).toBeInTheDocument());
+  });
+
   // EXTENSION cases — added 2026-05-26 to cover block library variety,
   // property-editor mutation, remove / reorder block controls, save-state
   // transitions, body-shape edge cases, and form-block routing rules.

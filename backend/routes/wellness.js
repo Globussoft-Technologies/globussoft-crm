@@ -36,6 +36,7 @@ const {
   applyRupeeCapableFonts,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
+const { sanitizeText } = require("../lib/sanitizeJson");
 const { sendEmail } = require("../lib/emailSender");
 const waWebClient = require("../services/whatsappWebClient");
 // #920 slice S42  wellness PHI list-endpoint slim projections.
@@ -106,6 +107,7 @@ const {
   requirePermission,
   userHasPermission,
 } = require("../middleware/requirePermission");
+const { findDuplicateContactFull } = require("../utils/deduplication");
 // #920 slice S59  canonical PHI-read gate factory. The original inline
 // declaration of `phiReadGate` (which lived just below the `phiReadGate`
 // JSDoc block ~line 365) has been replaced with this factory call so the
@@ -10969,6 +10971,117 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
 // renders an explanatory empty state ("Your patient profile isn't
 // linked yet  ask your clinic to link it") rather than treating
 // missing-link as an error.
+const _publicEnquiryIpMax = process.env.NODE_ENV === "test" ? 5000 : 20;
+const publicEnquiryLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: _publicEnquiryIpMax,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  message: {
+    error: "Too many enquiry requests from this network. Please try again in a minute.",
+    code: "RATE_LIMITED",
+  },
+});
+
+const cleanPublicLeadText = (value, maxLen = 191) => {
+  if (value == null) return "";
+  return sanitizeText(String(value)).trim().slice(0, maxLen);
+};
+
+const buildPublicLeadNote = ({ service, message }) => {
+  const parts = [
+    "Website enquiry",
+    service ? `Service: ${service}` : null,
+    message ? `Message: ${message}` : null,
+  ].filter(Boolean);
+  return parts.join(" | ");
+};
+
+router.post("/public/enquiry", publicEnquiryLimiter, async (req, res) => {
+  try {
+    const tenantSlug = cleanPublicLeadText(req.body?.tenantSlug, 80);
+    const firstName = cleanPublicLeadText(req.body?.firstName, 80);
+    const lastName = cleanPublicLeadText(req.body?.lastName, 80);
+    const bodyName = cleanPublicLeadText(req.body?.name, 160);
+    const name = bodyName || [firstName, lastName].filter(Boolean).join(" ").trim();
+    const email = cleanPublicLeadText(req.body?.email, 191);
+    const phone = cleanPublicLeadText(req.body?.phone, 24);
+    const service = cleanPublicLeadText(req.body?.service, 120);
+    const message = cleanPublicLeadText(req.body?.message, 2000);
+
+    if (!tenantSlug) {
+      return res.status(400).json({ error: "tenantSlug is required", code: "MISSING_TENANT" });
+    }
+    if (!name) {
+      return res.status(400).json({ error: "name is required", code: "MISSING_NAME" });
+    }
+    if (!email && !phone) {
+      return res.status(400).json({ error: "email or phone is required", code: "INSUFFICIENT_IDENTITY" });
+    }
+    if (phone && !/^(?:\+?91)?[6-9]\d{9}$/.test(phone.replace(/[\s-]/g, ""))) {
+      return res.status(400).json({ error: "phone must be a 10-digit Indian mobile number", code: "INVALID_PHONE" });
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "email is not a valid format", code: "INVALID_EMAIL" });
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      select: { id: true, slug: true, vertical: true, name: true },
+    });
+    if (!tenant || tenant.vertical !== "wellness") {
+      return res.status(404).json({ error: "Clinic not found", code: "TENANT_NOT_FOUND" });
+    }
+
+    const syntheticEmail = email || `wellness-enquiry-${tenant.slug}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@inbound.local`;
+    const note = buildPublicLeadNote({ service, message });
+
+    const duplicate = await findDuplicateContactFull({
+      email: email || null,
+      phone: phone || null,
+      tenantId: tenant.id,
+    });
+
+    if (duplicate) {
+      const existing = duplicate.contact;
+      const nextDescription = [existing.description, note].filter(Boolean).join("\n\n") || note;
+      await prisma.contact.update({
+        where: { id: existing.id },
+        data: {
+          status: "Lead",
+          name: existing.name || name,
+          email: existing.email || syntheticEmail,
+          phone: existing.phone || phone || null,
+          firstTouchSource: existing.firstTouchSource || "Dr. Enhance Wellness website enquiry",
+          description: nextDescription,
+        },
+      });
+      return res.json({ created: false, duplicate: true, contactId: existing.id, message: "Thanks - we'll be in touch shortly." });
+    }
+
+    const contact = await prisma.contact.create({
+      data: {
+        tenantId: tenant.id,
+        name,
+        email: syntheticEmail,
+        phone: phone || null,
+        status: "Lead",
+        source: "website",
+        firstTouchSource: "Dr. Enhance Wellness website enquiry",
+        description: note,
+        aiScore: 30,
+        aiScoreLastComputedAt: new Date(),
+      },
+    });
+
+    return res.status(201).json({ created: true, contactId: contact.id, message: "Thanks - we'll be in touch shortly." });
+  } catch (e) {
+    console.error("[wellness] public enquiry error:", e.message);
+    res.status(500).json({ error: "Failed to submit enquiry" });
+  }
+});
+
 router.get(
   "/my-prescriptions",
   requirePermission("my_prescriptions", "read"),

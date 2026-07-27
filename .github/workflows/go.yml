@@ -1,0 +1,58 @@
+name: Go backend CI
+
+on:
+  push:
+    branches: [golang-2]
+    paths:
+      - "backend-go/**"
+      - "backend/prisma/schema.prisma"
+      - ".github/workflows/go.yml"
+  pull_request:
+    branches: [golang-2, main]
+    paths:
+      - "backend-go/**"
+      - "backend/prisma/schema.prisma"
+      - ".github/workflows/go.yml"
+
+jobs:
+  go_build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Build Go backend
+        working-directory: backend-go
+        run: |
+          set -euo pipefail
+          go build ./...
+          go vet ./...
+
+  go_test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Run Go unit tests
+        working-directory: backend-go
+        run: go test ./...
+
+  go_lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: backend-go
+          args: --timeout 5m

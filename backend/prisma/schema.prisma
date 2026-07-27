@@ -50,6 +50,14 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Go backend generator — used by the strangler-fig migration in backend-go/.
+// This generator is additive and does not affect the Node.js build.
+generator goclient {
+  provider = "go run github.com/steebchen/prisma-client-go"
+  output   = "../backend-go/internal/repository/prisma/db"
+  package  = "db"
+}
+
 datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")

@@ -1,0 +1,31 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - gosec
+    - noctx
+    - rowserrcheck
+    - sqlclosecheck
+
+linters-settings:
+  gosec:
+    excludes:
+      - G104
+  errcheck:
+    exclude-functions:
+      - (*github.com/labstack/echo/v4.Context).JSON
+      - (*github.com/labstack/echo/v4.Context).NoContent
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 50
+  max-same-issues: 10

@@ -31,6 +31,12 @@ const express = require("express");
 const prisma = require("../lib/prisma");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { verifyWellnessRole } = require("../middleware/wellnessRole");
+const { computeCouponDiscount } = require("../lib/walletCodes");
+const { loadCouponForApply } = require("../lib/couponApply");
+const {
+  getOrCreateWallet,
+  writeWalletTransaction,
+} = require("../lib/wellnessWallet");
 
 const router = express.Router();
 
@@ -1001,6 +1007,7 @@ router.post("/sales", cashierGate, async (req, res) => {
       paymentBreakdownJson,
       managerOverride,
       notes,
+      couponCode,
     } = req.body;
 
     // Validate shift
@@ -1360,6 +1367,52 @@ router.post("/sales", cashierGate, async (req, res) => {
     // loyalty hiccup can never roll back the sale itself. Anonymous sales
     // (no patientId) and non-COMPLETED states are no-ops.
     await maybeAutoCreditLoyaltyForSale(sale, req.user.tenantId);
+
+    // Wave 11 Agent FF — FLAT coupon excess lands in the patient's wallet.
+    // The coupon code was previewed by the UI (discount is already baked into
+    // discountTotal). If the FLAT face value exceeds the net basket, credit
+    // the leftover amount. Errors are logged but do NOT fail the sale.
+    if (couponCode && resolvedPatientId) {
+      try {
+        const lookup = await loadCouponForApply(
+          req.user.tenantId,
+          couponCode,
+        );
+        if (!lookup.error && lookup.coupon) {
+          const couponBase = Math.max(0, subtotal - lineDiscounts);
+          const couponResult = computeCouponDiscount(
+            lookup.coupon,
+            couponBase,
+          );
+          if (couponResult.applied) {
+            await prisma.coupon.update({
+              where: { id: lookup.coupon.id },
+              data: { redemptionCount: { increment: 1 } },
+            });
+          }
+          if (couponResult.excess > 0) {
+            const wallet = await getOrCreateWallet(
+              req,
+              resolvedPatientId,
+            );
+            await writeWalletTransaction({
+              tenantId: req.user.tenantId,
+              walletId: wallet.id,
+              type: "CREDIT_COUPON_EXCESS",
+              absAmount: couponResult.excess,
+              performedBy: req.user.userId,
+              reason: `Coupon ${lookup.coupon.code} excess credited`,
+              couponId: lookup.coupon.id,
+            });
+          }
+        }
+      } catch (couponErr) {
+        console.error(
+          "[pos] coupon post-sale handling failed:",
+          couponErr.message,
+        );
+      }
+    }
 
     // Wave 8b — emit sale.completed so the POS receipt dispatcher
     // (lib/posReceiptDispatcher.js) can queue an SMS (always) +

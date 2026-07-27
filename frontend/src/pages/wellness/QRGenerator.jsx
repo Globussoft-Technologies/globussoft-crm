@@ -1,10 +1,9 @@
-// Wellness QR Generator — Marketing sidebar entry.
+// Wellness QR Generator — Events Management sidebar entry.
 //
 // Generates downloadable PNG QR codes client-side using the MIT `qrcode`
-// library. Supports custom URLs/text plus quick presets for the authenticated
-// wellness booking page and gift-card storefront. History is kept in
-// localStorage per tenant so generated QR configurations persist across
-// refreshes.
+// library. QR codes are organised by event; each event holds one or more
+// named QR configurations. Events and their QRs are persisted via the
+// /api/wellness/qr-events backend API so they survive refreshes.
 import {
   useCallback,
   useContext,
@@ -17,104 +16,115 @@ import {
   QrCode,
   Download,
   ExternalLink,
-  Type,
-  Gift,
-  CalendarDays,
   Palette,
   RotateCcw,
   Check,
   Clock,
   Trash2,
+  Plus,
+  Search,
+  ChevronDown,
+  Pencil,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import { useNotify } from '../../utils/notify';
+import { fetchApi } from '../../utils/api';
 import PageHeader from '../../components/PageHeader';
 import { AuthContext } from '../../App';
 
-const SOURCE_TYPES = [
-  {
-    key: 'custom',
-    label: 'Custom URL / Text',
-    icon: Type,
-    tooltip: 'Link to any website, form, or text you want.',
-  },
-  {
-    key: 'booking',
-    label: 'Public Booking Page',
-    icon: CalendarDays,
-    tooltip: 'Link to your authenticated appointment booking page.',
-  },
-  {
-    key: 'giftcards',
-    label: 'Buy Gift Cards',
-    icon: Gift,
-    tooltip: 'Link to the gift card purchase page.',
-  },
-];
-
 const ERROR_LEVELS = ['L', 'M', 'Q', 'H'];
 
-function historyKey(tenantId) {
-  return `wellness-qr-history-${tenantId || 'default'}`;
+/* eslint-disable react-refresh/only-export-components */
+const QR_EVENTS_API = '/api/wellness/qr-events';
+
+export async function loadEvents() {
+  const data = await fetchApi(QR_EVENTS_API);
+  return data || { events: [] };
 }
 
-function loadHistory(tenantId) {
-  try {
-    const raw = localStorage.getItem(historyKey(tenantId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+export async function createEvent(name) {
+  return fetchApi(QR_EVENTS_API, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
 }
 
-function saveHistory(tenantId, history) {
-  try {
-    localStorage.setItem(historyKey(tenantId), JSON.stringify(history));
-  } catch {
-    // Ignore storage quota / private-mode errors.
-  }
+export async function deleteEvent(eventId) {
+  return fetchApi(`${QR_EVENTS_API}/${eventId}`, { method: 'DELETE' });
 }
+
+export async function createQr(eventId, fields) {
+  return fetchApi(`${QR_EVENTS_API}/${eventId}/qrs`, {
+    method: 'POST',
+    body: JSON.stringify(fields),
+  });
+}
+
+export async function updateQr(eventId, qrId, fields) {
+  return fetchApi(`${QR_EVENTS_API}/${eventId}/qrs/${qrId}`, {
+    method: 'PUT',
+    body: JSON.stringify(fields),
+  });
+}
+
+export async function deleteQr(eventId, qrId) {
+  return fetchApi(`${QR_EVENTS_API}/${eventId}/qrs/${qrId}`, { method: 'DELETE' });
+}
+/* eslint-enable react-refresh/only-export-components */
 
 export default function QRGenerator() {
   const notify = useNotify();
   const { tenant } = useContext(AuthContext) || {};
-  const origin = typeof window !== 'undefined' ? window.location.origin : '';
 
-  const [sourceType, setSourceType] = useState('custom');
+  const [events, setEvents] = useState([]);
+  const [selectedEventId, setSelectedEventId] = useState('');
+  const [qrName, setQrName] = useState('');
   const [text, setText] = useState('');
   const [size, setSize] = useState(256);
   const [fgColor, setFgColor] = useState('#000000');
   const [bgColor, setBgColor] = useState('#ffffff');
   const [errorLevel, setErrorLevel] = useState('M');
+  const [editingQrId, setEditingQrId] = useState(null);
   const [dataUrl, setDataUrl] = useState('');
   const [generating, setGenerating] = useState(false);
-  const [history, setHistory] = useState(() => loadHistory(tenant?.id));
 
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [creatingInline, setCreatingInline] = useState(false);
+  const [newEventName, setNewEventName] = useState('');
+
+  const dropdownRef = useRef(null);
   const canvasRef = useRef(null);
+  const selectedEvent = useMemo(
+    () => events.find((e) => e.id === selectedEventId) || null,
+    [events, selectedEventId],
+  );
 
-  // Build the canonical URL from the current source selection.
-  const computedUrl = useMemo(() => {
-    if (sourceType === 'custom') return text;
-    if (sourceType === 'booking') return `${origin}/wellness/book-appointment`;
-    if (sourceType === 'giftcards') return `${origin}/wellness/buy-giftcards`;
-    return '';
-  }, [sourceType, text, origin]);
-
-  // Sync the editable text when a preset changes so the user sees the target URL.
+  // Close the dropdown when clicking outside.
   useEffect(() => {
-    if (sourceType !== 'custom') {
-      setText(computedUrl);
+    if (!dropdownOpen) return undefined;
+    const onDocClick = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [dropdownOpen]);
+
+  // Auto-select the first event when data loads and nothing is selected.
+  useEffect(() => {
+    if (!selectedEventId && events.length > 0) {
+      setSelectedEventId(events[0].id);
     }
-  }, [computedUrl, sourceType]);
+  }, [events, selectedEventId]);
 
   // Generate the live QR preview whenever the text or design options change.
   useEffect(() => {
     let cancelled = false;
     if (!text.trim()) {
       setDataUrl('');
-      return;
+      return undefined;
     }
     setGenerating(true);
     QRCode.toDataURL(text, {
@@ -155,70 +165,156 @@ export default function QRGenerator() {
     }).catch(() => {});
   }, [text, size, fgColor, bgColor, errorLevel]);
 
+  const refreshEvents = useCallback(async () => {
+    try {
+      const data = await loadEvents();
+      setEvents(data?.events || []);
+    } catch {
+      // fetchApi already surfaces user-facing errors.
+    }
+  }, []);
+
+  // Load events from the backend on mount / tenant change.
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchEvents() {
+      try {
+        const data = await loadEvents();
+        if (!cancelled) setEvents(data?.events || []);
+      } catch {
+        if (!cancelled) setEvents([]);
+      }
+    }
+    fetchEvents();
+    return () => {
+      cancelled = true;
+    };
+  }, [tenant?.id]);
+
+  const resetForm = useCallback(() => {
+    setQrName('');
+    setText('');
+    setSize(256);
+    setFgColor('#000000');
+    setBgColor('#ffffff');
+    setErrorLevel('M');
+    setEditingQrId(null);
+  }, []);
+
+  const handleCreateEvent = async () => {
+    const trimmed = newEventName.trim();
+    if (!trimmed) {
+      notify.error('Enter an event name.');
+      return;
+    }
+    try {
+      const created = await createEvent(trimmed);
+      await refreshEvents();
+      setSelectedEventId(created.id);
+      setNewEventName('');
+      setCreatingInline(false);
+      setDropdownOpen(false);
+      setSearchTerm('');
+      notify.success(`Event "${created.name}" created`);
+    } catch {
+      // fetchApi already surfaces user-facing errors.
+    }
+  };
+
+  const handleEventSelect = (value) => {
+    setSelectedEventId(value);
+    setDropdownOpen(false);
+    setSearchTerm('');
+  };
+
+  const handleGenerate = useCallback(async () => {
+    if (!text.trim()) {
+      notify.error('Enter a URL before generating.');
+      return;
+    }
+    if (!selectedEventId) {
+      notify.error('Select or create an event first.');
+      return;
+    }
+    const qrFields = { name: qrName, text, size, fgColor, bgColor, errorLevel };
+    try {
+      if (editingQrId) {
+        await updateQr(selectedEventId, editingQrId, qrFields);
+        notify.success('QR updated');
+      } else {
+        await createQr(selectedEventId, qrFields);
+        notify.success('QR added to event');
+      }
+      await refreshEvents();
+      resetForm();
+    } catch {
+      // fetchApi already surfaces user-facing errors.
+    }
+  }, [
+    text,
+    selectedEventId,
+    qrName,
+    size,
+    fgColor,
+    bgColor,
+    errorLevel,
+    editingQrId,
+    refreshEvents,
+    resetForm,
+    notify,
+  ]);
+
+  const handleEditQr = (qr) => {
+    setEditingQrId(qr.id);
+    setQrName(qr.name || '');
+    setText(qr.text || '');
+    setSize(qr.size ?? 256);
+    setFgColor(qr.fgColor || '#000000');
+    setBgColor(qr.bgColor || '#ffffff');
+    setErrorLevel(qr.errorLevel || 'M');
+  };
+
+  const handleDeleteQr = async (qrId) => {
+    try {
+      await deleteQr(selectedEventId, qrId);
+      await refreshEvents();
+      if (editingQrId === qrId) resetForm();
+    } catch {
+      // fetchApi already surfaces user-facing errors.
+    }
+  };
+
   const handleDownload = () => {
     if (!dataUrl) return;
+    const fileName = editingQrId
+      ? `qr-${(qrName || 'untitled').replace(/\s+/g, '-').toLowerCase()}-${Date.now()}.png`
+      : `qr-${Date.now()}.png`;
     const a = document.createElement('a');
     a.href = dataUrl;
-    a.download = `qr-${sourceType}-${Date.now()}.png`;
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     notify.success('QR code downloaded');
   };
 
-  const handleGenerate = useCallback(() => {
-    if (!text.trim()) {
-      notify.error('Enter a URL or text before generating.');
-      return;
-    }
-    const entry = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      sourceType,
-      text,
-      size,
-      fgColor,
-      bgColor,
-      errorLevel,
-      createdAt: new Date().toISOString(),
-    };
-    const next = [entry, ...history].slice(0, 50);
-    setHistory(next);
-    saveHistory(tenant?.id, next);
-    notify.success('QR saved to history');
-  }, [text, sourceType, size, fgColor, bgColor, errorLevel, history, tenant?.id, notify]);
-
-  const restoreHistoryItem = (item) => {
-    setSourceType(item.sourceType);
-    setText(item.text);
-    setSize(item.size);
-    setFgColor(item.fgColor);
-    setBgColor(item.bgColor);
-    setErrorLevel(item.errorLevel);
-  };
-
-  const deleteHistoryItem = (id) => {
-    const next = history.filter((h) => h.id !== id);
-    setHistory(next);
-    saveHistory(tenant?.id, next);
-  };
-
-  const downloadHistoryItem = async (item) => {
+  const handleDownloadQr = async (qr) => {
     try {
-      const url = await QRCode.toDataURL(item.text, {
-        width: Math.max(64, Math.min(1024, Number(item.size) || 256)),
+      const url = await QRCode.toDataURL(qr.text, {
+        width: Math.max(64, Math.min(1024, Number(qr.size) || 256)),
         margin: 2,
-        color: { dark: item.fgColor, light: item.bgColor },
-        errorCorrectionLevel: item.errorLevel,
+        color: { dark: qr.fgColor, light: qr.bgColor },
+        errorCorrectionLevel: qr.errorLevel,
       });
       const a = document.createElement('a');
       a.href = url;
-      a.download = `qr-${item.sourceType}-${Date.now()}.png`;
+      a.download = `qr-${(qr.name || 'untitled').replace(/\s+/g, '-').toLowerCase()}-${Date.now()}.png`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       notify.success('QR code downloaded');
     } catch (err) {
-      console.error('[QRGenerator] Download from history failed:', err);
+      console.error('[QRGenerator] Download QR failed:', err);
       notify.error('Could not regenerate QR for download.');
     }
   };
@@ -228,16 +324,161 @@ export default function QRGenerator() {
     window.open(text, '_blank', 'noopener,noreferrer');
   };
 
-  const selectedSource = SOURCE_TYPES.find((s) => s.key === sourceType);
-  const SourceIcon = selectedSource?.icon || QrCode;
+  const filteredEvents = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return events;
+    return events.filter((e) => e.name.toLowerCase().includes(term));
+  }, [events, searchTerm]);
+
+  const dropdownDisplay = selectedEvent ? selectedEvent.name : 'Select an event';
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <PageHeader
         icon={QrCode}
         title="QR Generator"
-        description="Create downloadable QR codes for your clinic's booking page, gift cards, or any custom link."
+        description="Create downloadable QR codes for your clinic events."
       />
+
+      {/* Event selector */}
+      <div className="glass" style={{ ...cardStyle, marginBottom: '1.5rem', overflow: 'visible', position: 'relative', zIndex: 5 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+          <Palette size={18} />
+          <h3 style={{ margin: 0, fontSize: '1rem' }}>Event</h3>
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div ref={dropdownRef} style={{ position: 'relative', flex: 1, minWidth: 220, maxWidth: 420 }}>
+            <button
+              type="button"
+              onClick={() => setDropdownOpen((open) => !open)}
+              data-testid="event-dropdown-trigger"
+              aria-haspopup="listbox"
+              aria-expanded={dropdownOpen}
+              style={{
+                ...inputStyle,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                textAlign: 'left',
+                cursor: 'pointer',
+              }}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {dropdownDisplay}
+              </span>
+              <ChevronDown size={16} style={{ flexShrink: 0, marginLeft: '0.5rem' }} />
+            </button>
+
+            {dropdownOpen && (
+              <div
+                role="listbox"
+                data-testid="event-dropdown-panel"
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 4px)',
+                  left: 0,
+                  right: 0,
+                  maxHeight: 320,
+                  overflowY: 'auto',
+                  background: 'var(--surface-color, #fff)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 8,
+                  zIndex: 100,
+                  boxShadow: 'var(--shadow-md, 0 4px 12px rgba(0,0,0,0.12))',
+                }}
+              >
+                <div style={{ padding: '0.5rem', borderBottom: '1px solid var(--border-color)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <Search size={14} style={{ opacity: 0.6 }} />
+                    <input
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      placeholder="Search events"
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        outline: 'none',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.9rem',
+                        width: '100%',
+                      }}
+                    />
+                  </div>
+                </div>
+                {filteredEvents.length === 0 && (
+                  <div style={{ padding: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                    No events found. Use <strong>+ New event</strong> to create one.
+                  </div>
+                )}
+                {filteredEvents.map((event) => (
+                  <button
+                    key={event.id}
+                    type="button"
+                    role="option"
+                    aria-selected={event.id === selectedEventId}
+                    onClick={() => handleEventSelect(event.id)}
+                    style={{
+                      ...dropdownItem,
+                      background: event.id === selectedEventId ? 'var(--subtle-bg-3, rgba(201,160,99,0.12))' : 'transparent',
+                    }}
+                  >
+                    {event.id === selectedEventId && <Check size={14} />}
+                    <span>{event.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            data-testid="new-event-button"
+            onClick={() => {
+              setDropdownOpen(false);
+              setCreatingInline(true);
+            }}
+            style={btnPrimary}
+            title="Create a new event"
+          >
+            <Plus size={16} /> New event
+          </button>
+        </div>
+
+        {creatingInline && (
+          <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>New event name</label>
+              <input
+                value={newEventName}
+                onChange={(e) => setNewEventName(e.target.value)}
+                placeholder="e.g. Summer Camp 2026"
+                autoFocus
+                style={{ ...inputStyle, marginTop: '0.35rem' }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleCreateEvent();
+                  if (e.key === 'Escape') {
+                    setCreatingInline(false);
+                    setNewEventName('');
+                  }
+                }}
+              />
+            </div>
+            <button type="button" onClick={handleCreateEvent} style={btnPrimary}>
+              Create
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCreatingInline(false);
+                setNewEventName('');
+              }}
+              style={btnSecondary}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
 
       <div
         style={{
@@ -247,65 +488,27 @@ export default function QRGenerator() {
           alignItems: 'start',
         }}
       >
-        {/* Left column — source + options */}
+        {/* Left column — inputs + design */}
         <div className="glass" style={cardStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem' }}>
-            <SourceIcon size={20} />
-            <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Source</h3>
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>QR name</label>
+            <input
+              value={qrName}
+              onChange={(e) => setQrName(e.target.value)}
+              placeholder="e.g. Registration desk"
+              style={{ ...inputStyle, marginTop: '0.35rem' }}
+              title="A friendly name for this QR code."
+            />
           </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.5rem', marginBottom: '1.25rem' }}>
-            {SOURCE_TYPES.map((source) => {
-              const Icon = source.icon;
-              const active = source.key === sourceType;
-              return (
-                <button
-                  key={source.key}
-                  type="button"
-                  title={source.tooltip}
-                  onClick={() => setSourceType(source.key)}
-                  style={{
-                    ...sourceChip,
-                    background: active ? 'var(--primary-color, var(--accent-color))' : 'transparent',
-                    color: active ? '#fff' : 'var(--text-primary)',
-                    borderColor: active ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)',
-                  }}
-                  aria-pressed={active}
-                >
-                  <Icon size={16} />
-                  <span>{source.label}</span>
-                  {active && <Check size={14} />}
-                </button>
-              );
-            })}
-          </div>
-
-          {sourceType === 'booking' && (
-            <div style={{ ...helperBox, marginBottom: '1rem' }}>
-              <CalendarDays size={16} />
-              <span>
-                QR will link to <strong>{origin}/wellness/book-appointment</strong>. Scanner must be logged in to book.
-              </span>
-            </div>
-          )}
-
-          {sourceType === 'giftcards' && (
-            <div style={{ ...helperBox, marginBottom: '1rem' }}>
-              <Gift size={16} />
-              <span>
-                QR will link to <strong>{origin}/wellness/buy-giftcards</strong>. Scanner must be logged in to purchase.
-              </span>
-            </div>
-          )}
 
           <div style={{ marginBottom: '0.75rem' }}>
+            <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>URL</label>
             <input
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder={sourceType === 'custom' ? '' : 'Generated link'}
-              disabled={sourceType !== 'custom'}
-              style={{ ...inputStyle, fontFamily: sourceType === 'custom' ? 'inherit' : 'monospace', fontSize: '0.9rem' }}
-              title="The URL or text encoded in the QR code."
+              placeholder="Enter URL here"
+              style={{ ...inputStyle, marginTop: '0.35rem', fontSize: '0.9rem' }}
+              title="The URL encoded in the QR code."
             />
           </div>
 
@@ -323,10 +526,20 @@ export default function QRGenerator() {
               type="button"
               onClick={handleGenerate}
               style={btnPrimary}
-              title="Generate the QR code and save it to history."
+              title={editingQrId ? 'Save changes to this QR code.' : 'Generate the QR code and add it to the selected event.'}
             >
-              <QrCode size={14} /> Generate QR
+              <QrCode size={14} /> {editingQrId ? 'Update QR' : 'Generate QR'}
             </button>
+            {editingQrId && (
+              <button
+                type="button"
+                onClick={resetForm}
+                style={btnSecondary}
+                title="Cancel editing and clear the form."
+              >
+                Cancel
+              </button>
+            )}
           </div>
 
           <hr style={{ border: 'none', borderTop: '1px solid var(--border-color)', margin: '1.25rem 0' }} />
@@ -441,7 +654,7 @@ export default function QRGenerator() {
           </div>
         </div>
 
-        {/* Right column — preview + history */}
+        {/* Right column — preview + event QR list */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           <div className="glass" style={{ ...cardStyle, textAlign: 'center' }}>
             <h3 style={{ margin: '0 0 1rem', fontSize: '1.1rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
@@ -472,14 +685,14 @@ export default function QRGenerator() {
                 />
               ) : (
                 <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                  {generating ? 'Generating…' : 'Enter a URL or choose a source to preview the QR code.'}
+                  {generating ? 'Generating…' : 'Enter a URL to preview the QR code.'}
                 </div>
               )}
               <canvas ref={canvasRef} style={{ display: 'none' }} />
             </div>
 
             <div style={{ marginTop: '1rem', color: 'var(--text-secondary)', fontSize: '0.85rem', wordBreak: 'break-all' }}>
-              {text || 'No content selected'}
+              {text || 'No URL entered'}
             </div>
 
             <button
@@ -493,56 +706,60 @@ export default function QRGenerator() {
             </button>
           </div>
 
-          {history.length > 0 && (
+          {selectedEvent && selectedEvent.qrs.length > 0 && (
             <div className="glass" style={cardStyle}>
               <h3 style={{ margin: '0 0 1rem', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Clock size={18} /> History
+                <Clock size={18} /> {selectedEvent.name} — Generated QRs
               </h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {history.map((item) => (
+                {selectedEvent.qrs.map((qr) => (
                   <div
-                    key={item.id}
+                    key={qr.id}
                     style={{
                       padding: '0.75rem',
                       border: '1px solid var(--border-color)',
                       borderRadius: 8,
-                      background: 'rgba(255,255,255,0.03)',
+                      background: editingQrId === qr.id ? 'var(--subtle-bg-3, rgba(201,160,99,0.12))' : 'rgba(255,255,255,0.03)',
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
                       <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
+                          {qr.name}
+                        </div>
                         <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
-                          {new Date(item.createdAt).toLocaleString()}
+                          {new Date(qr.createdAt).toLocaleString()}
+                          {qr.updatedAt && qr.updatedAt !== qr.createdAt && ` · edited`}
                         </div>
                         <div style={{ fontSize: '0.85rem', wordBreak: 'break-all', fontFamily: 'monospace' }}>
-                          {item.text}
+                          {qr.text}
                         </div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                          {SOURCE_TYPES.find((s) => s.key === item.sourceType)?.label} · {item.size}px · {item.errorLevel}
+                          {qr.size}px · {qr.errorLevel}
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: '0.35rem', flexShrink: 0 }}>
                         <button
                           type="button"
-                          onClick={() => restoreHistoryItem(item)}
+                          onClick={() => handleEditQr(qr)}
                           style={{ ...btnSecondary, padding: '0.35rem 0.6rem', fontSize: '0.75rem' }}
-                          title="Restore this configuration"
+                          title="Edit this QR code"
                         >
-                          Restore
+                          <Pencil size={14} />
                         </button>
                         <button
                           type="button"
-                          onClick={() => downloadHistoryItem(item)}
+                          onClick={() => handleDownloadQr(qr)}
                           style={{ ...btnSecondary, padding: '0.35rem 0.6rem', fontSize: '0.75rem' }}
-                          title="Download this QR again"
+                          title="Download this QR"
                         >
                           <Download size={14} />
                         </button>
                         <button
                           type="button"
-                          onClick={() => deleteHistoryItem(item.id)}
+                          onClick={() => handleDeleteQr(qr.id)}
                           style={{ ...btnSecondary, padding: '0.35rem 0.6rem', fontSize: '0.75rem' }}
-                          title="Delete from history"
+                          title="Delete from event"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -575,22 +792,6 @@ const cardStyle = {
   border: '1px solid var(--border-color)',
 };
 
-const sourceChip = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: '0.4rem',
-  padding: '0.5rem 0.6rem',
-  border: '1px solid var(--border-color)',
-  borderRadius: 8,
-  background: 'transparent',
-  color: 'var(--text-primary)',
-  cursor: 'pointer',
-  fontSize: '0.8rem',
-  fontWeight: 500,
-  transition: 'all 0.15s ease',
-};
-
 const inputStyle = {
   width: '100%',
   padding: '0.55rem 0.75rem',
@@ -599,7 +800,6 @@ const inputStyle = {
   background: 'transparent',
   color: 'var(--text-primary)',
   fontSize: '0.9rem',
-  marginTop: '0.35rem',
   boxSizing: 'border-box',
 };
 
@@ -640,13 +840,17 @@ const btnSecondary = {
   fontSize: '0.9rem',
 };
 
-const helperBox = {
+const dropdownItem = {
+  width: '100%',
+  padding: '0.6rem 0.75rem',
+  background: 'transparent',
+  border: 'none',
+  borderBottom: '1px solid var(--border-color)',
+  color: 'var(--text-primary)',
+  cursor: 'pointer',
   display: 'flex',
-  alignItems: 'flex-start',
-  gap: '0.5rem',
-  padding: '0.75rem',
-  borderRadius: 8,
-  background: 'rgba(255,255,255,0.05)',
-  color: 'var(--text-secondary)',
-  fontSize: '0.85rem',
+  alignItems: 'center',
+  gap: '0.4rem',
+  fontSize: '0.9rem',
+  textAlign: 'left',
 };

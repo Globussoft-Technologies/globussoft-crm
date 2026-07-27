@@ -3981,6 +3981,11 @@ model Visit {
   photosBefore  String?  @db.Text // JSON array of URLs
   photosAfter   String?  @db.Text // JSON array of URLs
   amountCharged Float?
+  // Coupon / locking-fee billing breakdown stored when a visit is completed
+  // with a coupon applied. JSON: { baseAmount, discount, lockingFee, balance,
+  // couponCode, excess }. Persisted so the Completed Visits UI can show the
+  // adjusted balance and so regenerating the payment link uses the same amount.
+  couponBreakdown String? @db.Text
 
   // Payment link generated when a visit is completed with a charge. Stored on
   // the visit so the front-end can render a "copy link" action without joining
@@ -9076,4 +9081,39 @@ model StatusDailySnapshot {
 
   @@unique([componentId, date])
   @@index([componentId, date])
+}
+
+// Wellness QR Generator — events and their generated QR configurations.
+// Both tables are tenant-scoped and record the creating user. QrCode rows
+// cascade-delete with their parent QrEvent.
+model QrEvent {
+  id        Int      @id @default(autoincrement())
+  name      String
+  tenantId  Int      @default(1)
+  createdBy Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  qrs QrCode[]
+
+  @@index([tenantId, createdAt])
+}
+
+model QrCode {
+  id         Int     @id @default(autoincrement())
+  eventId    Int
+  event      QrEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name       String
+  text       String
+  size       Int
+  fgColor    String
+  bgColor    String
+  errorLevel String
+  tenantId   Int     @default(1)
+  createdBy  Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([eventId])
+  @@index([tenantId])
 }

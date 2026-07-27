@@ -125,19 +125,21 @@ function lastFour(plaintext) {
  *     supplied AND not in the allowlist, the discount is zero. Empty / null
  *     allowlist = no restriction.
  *
- * Returns { discount, finalAmount, applied } so the call site can render
- * "₹50 off, you pay ₹950" without re-deriving math.
+ * Returns { discount, finalAmount, applied, excess } so the call site can render
+ * "₹50 off, you pay ₹950" without re-deriving math. For FLAT coupons whose
+ * value exceeds the bill, `excess` is the leftover amount that should be
+ * credited to the customer's wallet; PERCENT coupons never produce excess.
  *
  * @param {{ discountType: 'PERCENT'|'FLAT', discountValue: number, serviceIds?: string|null }} coupon
  * @param {number} baseAmount
  * @param {number|null} [serviceId]
- * @returns {{ discount: number, finalAmount: number, applied: boolean }}
+ * @returns {{ discount: number, finalAmount: number, applied: boolean, excess: number }}
  */
 function computeCouponDiscount(coupon, baseAmount, serviceId = null) {
   const base = Number.isFinite(Number(baseAmount)) ? Math.max(0, Number(baseAmount)) : 0;
   const valueRaw = Number.isFinite(Number(coupon?.discountValue)) ? Number(coupon.discountValue) : 0;
   if (base <= 0 || valueRaw <= 0) {
-    return { discount: 0, finalAmount: base, applied: false };
+    return { discount: 0, finalAmount: base, applied: false, excess: 0 };
   }
 
   // Service allowlist — null/empty = applies to all. If a non-empty allowlist
@@ -148,31 +150,33 @@ function computeCouponDiscount(coupon, baseAmount, serviceId = null) {
   const allowlist = parseJsonArray(coupon?.serviceIds);
   if (allowlist.length > 0) {
     if (serviceId == null) {
-      return { discount: 0, finalAmount: base, applied: false };
+      return { discount: 0, finalAmount: base, applied: false, excess: 0 };
     }
     const sid = parseInt(serviceId, 10);
     if (!allowlist.includes(sid)) {
-      return { discount: 0, finalAmount: base, applied: false };
+      return { discount: 0, finalAmount: base, applied: false, excess: 0 };
     }
   }
 
   let discount = 0;
+  let excess = 0;
   if (coupon.discountType === 'PERCENT') {
     const pct = Math.min(100, valueRaw);
     discount = (base * pct) / 100;
   } else if (coupon.discountType === 'FLAT') {
     discount = Math.min(valueRaw, base);
+    excess = round2(Math.max(0, valueRaw - discount));
   } else {
     // Unknown discountType — refuse to compute (zero discount). Route
     // handler returns 400 INVALID_DISCOUNT_TYPE before we get here, so
     // this is purely defensive.
-    return { discount: 0, finalAmount: base, applied: false };
+    return { discount: 0, finalAmount: base, applied: false, excess: 0 };
   }
 
   // Round to 2 decimal places to avoid floating-point dust like 199.99999.
   discount = round2(discount);
   const finalAmount = round2(Math.max(0, base - discount));
-  return { discount, finalAmount, applied: discount > 0 };
+  return { discount, finalAmount, applied: discount > 0, excess };
 }
 
 // ── Cashback earn computer ──────────────────────────────────────────

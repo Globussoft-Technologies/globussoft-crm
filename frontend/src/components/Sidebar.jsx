@@ -67,6 +67,7 @@ import {
   HeartPulse,
   Bell,
   Clock,
+  History,
   Crown,
   Wallet as WalletIcon,
   Gift,
@@ -1120,11 +1121,13 @@ const PAGE_ICON_BY_PATH = {
   "/wellness/my-transactions": Receipt,
   "/wellness/coupons": TicketPercent,
   "/wellness/cashback-rules": Coins,
+  // Events Management
+  "/wellness/qr-generator": QrCode,
+  "/wellness/events-history": History,
   // Marketing
   "/marketing": Send,
   "/sequences": Network,
   "/landing-pages": PanelTop,
-  "/wellness/qr-generator": QrCode,
   // Reports
   "/wellness/reports": BarChart3,
   "/wellness/per-location": Building2,
@@ -1175,6 +1178,7 @@ const WELLNESS_CATEGORY_ORDER = [
   "Staff",
   "Leads & Revenue",
   "Finance",
+  "Events Management",
   "Marketing",
   "Reports",
   "Appointments",
@@ -1205,6 +1209,7 @@ const WELLNESS_CATEGORY_ICON = {
   Staff: UsersRound,
   "Leads & Revenue": Target,
   Finance: IndianRupee,
+  "Events Management": Calendar,
   Marketing: Megaphone,
   Reports: BarChart3,
   Appointments: Calendar,

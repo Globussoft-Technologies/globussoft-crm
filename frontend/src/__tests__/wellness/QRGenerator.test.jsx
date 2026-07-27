@@ -1,19 +1,17 @@
 /**
- * QRGenerator.test.jsx — vitest + RTL coverage for the simplified wellness
- * marketing QR Generator page.
+ * QRGenerator.test.jsx — vitest + RTL coverage for the wellness
+ * Events Management QR Generator page.
  *
  * Scope:
- *   1. Renders the page header and source options.
- *   2. Generates a live QR preview via qrcode.toDataURL when the user types.
- *   3. Presets build correct URLs:
- *        - Public Booking Page -> /wellness/book-appointment
- *        - Buy Gift Cards     -> /wellness/buy-giftcards
- *   4. Generate QR button saves the current configuration to history.
- *   5. History items can be restored and deleted.
- *   6. Download button works once a QR preview exists.
+ *   1. Renders the page header and event selector.
+ *   2. Creates an event and auto-selects it.
+ *   3. Enters a URL + QR name and generates a QR under the selected event.
+ *   4. Editing a QR loads it back into the form and updates it.
+ *   5. Download buttons work once a QR preview exists.
+ *   6. Events and QRs persist across reloads (re-fetched from the API).
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -38,11 +36,28 @@ vi.mock('../../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
+vi.mock('../../utils/api', () => ({
+  fetchApi: vi.fn(),
+}));
+
 import QRGenerator from '../../pages/wellness/QRGenerator';
 import { AuthContext } from '../../App';
+import { fetchApi } from '../../utils/api';
 
-const TEST_ORIGIN = 'https://crm.example.com';
 const TEST_TENANT_ID = 42;
+const QR_EVENTS_API = '/api/wellness/qr-events';
+
+let mockEvents = [];
+let nextId = 1;
+
+function parseBody(options = {}) {
+  if (!options.body) return {};
+  try {
+    return JSON.parse(options.body);
+  } catch {
+    return {};
+  }
+}
 
 function renderPage() {
   return render(
@@ -54,173 +69,197 @@ function renderPage() {
   );
 }
 
+function openEventDropdown() {
+  fireEvent.click(screen.getByTestId('event-dropdown-trigger'));
+}
+
+function createEvent(name) {
+  fireEvent.click(screen.getByTestId('new-event-button'));
+  fireEvent.change(screen.getByPlaceholderText('e.g. Summer Camp 2026'), { target: { value: name } });
+  fireEvent.click(screen.getByRole('button', { name: /^Create$/i }));
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   toDataURLMock.mockResolvedValue('data:image/png;base64,MOCK');
   toCanvasMock.mockResolvedValue(undefined);
   notifySuccess.mockReset();
   notifyError.mockReset();
-  localStorage.clear();
-  if (typeof window !== 'undefined') {
-    Object.defineProperty(window, 'location', {
-      writable: true,
-      value: { origin: TEST_ORIGIN },
-    });
-  }
-});
+  mockEvents = [];
+  nextId = 1;
 
-afterEach(() => {
-  localStorage.clear();
+  fetchApi.mockImplementation(async (url, options = {}) => {
+    const method = options.method || 'GET';
+
+    if (url === QR_EVENTS_API && method === 'GET') {
+      return { events: mockEvents };
+    }
+
+    if (url === QR_EVENTS_API && method === 'POST') {
+      const body = parseBody(options);
+      const created = {
+        id: nextId++,
+        name: body.name,
+        createdAt: new Date().toISOString(),
+        qrs: [],
+      };
+      mockEvents = [created, ...mockEvents];
+      return created;
+    }
+
+    const qrCreateMatch = url.match(new RegExp(`^${QR_EVENTS_API}/(\\d+)/qrs$`));
+    if (qrCreateMatch && method === 'POST') {
+      const eventId = parseInt(qrCreateMatch[1], 10);
+      const body = parseBody(options);
+      const qr = {
+        id: nextId++,
+        eventId,
+        ...body,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      const event = mockEvents.find((e) => e.id === eventId);
+      if (event) event.qrs = [qr, ...event.qrs];
+      return qr;
+    }
+
+    const qrUpdateMatch = url.match(new RegExp(`^${QR_EVENTS_API}/(\\d+)/qrs/(\\d+)$`));
+    if (qrUpdateMatch && method === 'PUT') {
+      const eventId = parseInt(qrUpdateMatch[1], 10);
+      const qrId = parseInt(qrUpdateMatch[2], 10);
+      const body = parseBody(options);
+      const event = mockEvents.find((e) => e.id === eventId);
+      if (event) {
+        const idx = event.qrs.findIndex((q) => q.id === qrId);
+        if (idx !== -1) {
+          event.qrs[idx] = { ...event.qrs[idx], ...body, updatedAt: new Date().toISOString() };
+          return event.qrs[idx];
+        }
+      }
+      return { id: qrId, ...body };
+    }
+
+    const qrDeleteMatch = url.match(new RegExp(`^${QR_EVENTS_API}/(\\d+)/qrs/(\\d+)$`));
+    if (qrDeleteMatch && method === 'DELETE') {
+      const eventId = parseInt(qrDeleteMatch[1], 10);
+      const qrId = parseInt(qrDeleteMatch[2], 10);
+      const event = mockEvents.find((e) => e.id === eventId);
+      if (event) event.qrs = event.qrs.filter((q) => q.id !== qrId);
+      return true;
+    }
+
+    return {};
+  });
 });
 
 describe('QRGenerator', () => {
-  it('renders the page header and source options', () => {
+  it('renders the page header and event selector', async () => {
     renderPage();
     expect(screen.getByText('QR Generator')).toBeInTheDocument();
-    expect(screen.getByText('Custom URL / Text')).toBeInTheDocument();
-    expect(screen.getByText('Public Booking Page')).toBeInTheDocument();
-    expect(screen.getByText('Buy Gift Cards')).toBeInTheDocument();
+    expect(screen.getByTestId('event-dropdown-trigger')).toBeInTheDocument();
+    expect(screen.getByTestId('new-event-button')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Enter URL here')).toBeInTheDocument();
   });
 
-  it('generates a QR preview when the user enters custom text', async () => {
+  it('creates an event and auto-selects it', async () => {
     renderPage();
-    const input = screen.getByTitle('The URL or text encoded in the QR code.');
-    fireEvent.change(input, { target: { value: 'https://example.com/offer' } });
+    createEvent('Health Camp 2026');
 
     await waitFor(() => {
-      expect(toDataURLMock).toHaveBeenCalledWith(
-        'https://example.com/offer',
-        expect.objectContaining({
-          width: 256,
-          margin: 2,
-          color: { dark: '#000000', light: '#ffffff' },
-          errorCorrectionLevel: 'M',
-        })
-      );
+      expect(screen.getByRole('button', { name: /Health Camp 2026/i })).toBeInTheDocument();
     });
 
-    expect(screen.getByAltText('QR code preview')).toBeInTheDocument();
+    expect(notifySuccess).toHaveBeenCalledWith('Event "Health Camp 2026" created');
   });
 
-  it('uses the authenticated booking page URL for the Public Booking Page preset', async () => {
+  it('selects an existing event from the dropdown', async () => {
+    mockEvents = [
+      { id: 1, name: 'Existing Event', createdAt: new Date().toISOString(), qrs: [] },
+    ];
     renderPage();
-    fireEvent.click(screen.getByText('Public Booking Page'));
 
     await waitFor(() => {
-      expect(toDataURLMock).toHaveBeenCalledWith(
-        `${TEST_ORIGIN}/wellness/book-appointment`,
-        expect.any(Object)
-      );
+      expect(screen.getByRole('button', { name: /Existing Event/i })).toBeInTheDocument();
     });
 
-    const input = screen.getByTitle('The URL or text encoded in the QR code.');
-    expect(input.value).toBe(`${TEST_ORIGIN}/wellness/book-appointment`);
-  });
-
-  it('uses the gift-card storefront URL for the Buy Gift Cards preset', async () => {
-    renderPage();
-    fireEvent.click(screen.getByText('Buy Gift Cards'));
+    openEventDropdown();
+    fireEvent.click(screen.getByRole('option', { name: /Existing Event/i }));
 
     await waitFor(() => {
-      expect(toDataURLMock).toHaveBeenCalledWith(
-        `${TEST_ORIGIN}/wellness/buy-giftcards`,
-        expect.any(Object)
-      );
+      expect(screen.getByRole('button', { name: /Existing Event/i })).toBeInTheDocument();
     });
-
-    const input = screen.getByTitle('The URL or text encoded in the QR code.');
-    expect(input.value).toBe(`${TEST_ORIGIN}/wellness/buy-giftcards`);
   });
 
-  it('saves the current configuration to history when Generate QR is clicked', async () => {
+  it('adds a generated QR to the selected event', async () => {
     renderPage();
-    const input = screen.getByTitle('The URL or text encoded in the QR code.');
-    fireEvent.change(input, { target: { value: 'https://example.com/offer' } });
+    createEvent('Membership Drive');
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Membership Drive/i })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('e.g. Registration desk'), { target: { value: 'Sign-up QR' } });
+    fireEvent.change(screen.getByPlaceholderText('Enter URL here'), { target: { value: 'https://example.com/signup' } });
 
     await waitFor(() => expect(screen.getByRole('button', { name: /Generate QR/i })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: /Generate QR/i }));
 
     await waitFor(() => {
-      expect(notifySuccess).toHaveBeenCalledWith('QR saved to history');
+      expect(notifySuccess).toHaveBeenCalledWith('QR added to event');
     });
 
-    expect(screen.getByText('History')).toBeInTheDocument();
-    const historySection = screen.getByText('History').closest('div').parentElement;
-    expect(historySection).toBeTruthy();
-    const historyUrl = historySection.querySelector('[style*="font-family: monospace"]');
-    expect(historyUrl.textContent).toBe('https://example.com/offer');
+    expect(screen.getByText('Membership Drive — Generated QRs')).toBeInTheDocument();
+    expect(screen.getByText('Sign-up QR')).toBeInTheDocument();
+    expect(screen.getByText('https://example.com/signup')).toBeInTheDocument();
   });
 
-  it('restores a history item when Restore is clicked', async () => {
+  it('edits an existing QR and updates it', async () => {
     renderPage();
-    const input = screen.getByTitle('The URL or text encoded in the QR code.');
-    fireEvent.change(input, { target: { value: 'https://first.com' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /Generate QR/i })).not.toBeDisabled());
-    fireEvent.click(screen.getByRole('button', { name: /Generate QR/i }));
-    await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith('QR saved to history'));
+    createEvent('Yoga Workshop');
 
-    // Switch to a different source/text.
-    fireEvent.click(screen.getByText('Public Booking Page'));
     await waitFor(() => {
-      expect(input.value).toBe(`${TEST_ORIGIN}/wellness/book-appointment`);
+      expect(screen.getByRole('button', { name: /Yoga Workshop/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Restore/i }));
-    expect(input.value).toBe('https://first.com');
-  });
-
-  it('deletes a history item when the trash button is clicked', async () => {
-    renderPage();
-    const input = screen.getByTitle('The URL or text encoded in the QR code.');
-    fireEvent.change(input, { target: { value: 'https://delete.me' } });
+    fireEvent.change(screen.getByPlaceholderText('e.g. Registration desk'), { target: { value: 'Initial QR' } });
+    fireEvent.change(screen.getByPlaceholderText('Enter URL here'), { target: { value: 'https://example.com/initial' } });
     await waitFor(() => expect(screen.getByRole('button', { name: /Generate QR/i })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: /Generate QR/i }));
-    await waitFor(() => expect(screen.getByText('History')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /Delete from history/i }));
-    expect(screen.queryByText('History')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Initial QR')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTitle('Edit this QR code'));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Initial QR')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('https://example.com/initial')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('e.g. Registration desk'), { target: { value: 'Updated QR' } });
+    fireEvent.change(screen.getByPlaceholderText('Enter URL here'), { target: { value: 'https://example.com/updated' } });
+    fireEvent.click(screen.getByRole('button', { name: /Update QR/i }));
+
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith('QR updated');
+    });
+
+    expect(screen.getByText('Updated QR')).toBeInTheDocument();
+    expect(screen.getByText('https://example.com/updated')).toBeInTheDocument();
+    expect(screen.queryByText('Initial QR')).not.toBeInTheDocument();
   });
 
-  it('downloads a QR from history with the saved design settings', async () => {
+  it('downloads the preview QR code and shows a success toast', async () => {
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click');
     renderPage();
-    const input = screen.getByTitle('The URL or text encoded in the QR code.');
-    fireEvent.change(input, { target: { value: 'https://history.com' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /Generate QR/i })).not.toBeDisabled());
-
-    fireEvent.change(screen.getByLabelText('Size (256px)'), { target: { value: '512' } });
-    fireEvent.change(screen.getByLabelText('QR foreground color'), { target: { value: '#123456' } });
-    fireEvent.change(screen.getByLabelText('QR background color'), { target: { value: '#abcdef' } });
-
-    fireEvent.click(screen.getByRole('button', { name: /Generate QR/i }));
-    await waitFor(() => expect(screen.getByText('History')).toBeInTheDocument());
-
-    toDataURLMock.mockClear();
-    fireEvent.click(screen.getByTitle('Download this QR again'));
+    createEvent('Download Event');
 
     await waitFor(() => {
-      expect(toDataURLMock).toHaveBeenCalledWith(
-        'https://history.com',
-        expect.objectContaining({
-          width: 512,
-          color: { dark: '#123456', light: '#abcdef' },
-        })
-      );
+      expect(screen.getByRole('button', { name: /Download Event/i })).toBeInTheDocument();
     });
-    await waitFor(() => {
-      expect(notifySuccess).toHaveBeenCalledWith('QR code downloaded');
-    });
-    expect(clickSpy).toHaveBeenCalled();
-    clickSpy.mockRestore();
-  });
 
-  it('downloads the QR code and shows a success toast', async () => {
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click');
-    renderPage();
-    const input = screen.getByTitle('The URL or text encoded in the QR code.');
-    fireEvent.change(input, { target: { value: 'https://example.com/offer' } });
-
+    fireEvent.change(screen.getByPlaceholderText('Enter URL here'), { target: { value: 'https://example.com/offer' } });
     await waitFor(() => expect(screen.getByRole('button', { name: /Download PNG/i })).not.toBeDisabled());
+
     fireEvent.click(screen.getByRole('button', { name: /Download PNG/i }));
 
     await waitFor(() => {
@@ -230,45 +269,71 @@ describe('QRGenerator', () => {
     clickSpy.mockRestore();
   });
 
-  it('updates the QR when design options change', async () => {
+  it('downloads a QR from the event list', async () => {
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click');
     renderPage();
-    const input = screen.getByTitle('The URL or text encoded in the QR code.');
-    fireEvent.change(input, { target: { value: 'https://example.com/offer' } });
-
-    await waitFor(() => expect(toDataURLMock).toHaveBeenCalled());
-    toDataURLMock.mockClear();
-
-    fireEvent.change(screen.getByLabelText('Size (256px)'), { target: { value: '512' } });
+    createEvent('List Download Event');
 
     await waitFor(() => {
-      expect(toDataURLMock).toHaveBeenCalledWith(
-        'https://example.com/offer',
-        expect.objectContaining({ width: 512 })
-      );
+      expect(screen.getByRole('button', { name: /List Download Event/i })).toBeInTheDocument();
     });
-  });
 
-  it('shows an error toast when Generate QR is clicked with empty text', async () => {
-    renderPage();
-    fireEvent.click(screen.getByRole('button', { name: /Generate QR/i }));
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('Enter a URL or text before generating.');
-    });
-  });
-
-  it('persists history in localStorage across renders', async () => {
-    renderPage();
-    const input = screen.getByTitle('The URL or text encoded in the QR code.');
-    fireEvent.change(input, { target: { value: 'https://persist.com' } });
+    fireEvent.change(screen.getByPlaceholderText('e.g. Registration desk'), { target: { value: 'List QR' } });
+    fireEvent.change(screen.getByPlaceholderText('Enter URL here'), { target: { value: 'https://example.com/list' } });
     await waitFor(() => expect(screen.getByRole('button', { name: /Generate QR/i })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: /Generate QR/i }));
-    await waitFor(() => expect(screen.getByText('History')).toBeInTheDocument());
 
-    // Re-render simulating a page reload.
+    await waitFor(() => expect(screen.getByText('List QR')).toBeInTheDocument());
+
+    toDataURLMock.mockClear();
+    fireEvent.click(screen.getByTitle('Download this QR'));
+
+    await waitFor(() => {
+      expect(toDataURLMock).toHaveBeenCalledWith('https://example.com/list', expect.any(Object));
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith('QR code downloaded');
+    });
+    expect(clickSpy).toHaveBeenCalled();
+    clickSpy.mockRestore();
+  });
+
+  it('shows an error toast when Generate QR is clicked without a URL', async () => {
     renderPage();
-    const historyItem = screen.getAllByText('https://persist.com').find((el) =>
-      el.closest('[style*="font-family: monospace"]')
-    );
-    expect(historyItem).toBeTruthy();
+    createEvent('Empty Event');
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Empty Event/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Generate QR/i }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Enter a URL before generating.');
+    });
+  });
+
+  it('persists events and QRs across renders via the API', async () => {
+    const { unmount } = renderPage();
+    createEvent('Persistent Event');
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Persistent Event/i })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('e.g. Registration desk'), { target: { value: 'Persistent QR' } });
+    fireEvent.change(screen.getByPlaceholderText('Enter URL here'), { target: { value: 'https://persist.com' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate QR/i })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: /Generate QR/i }));
+
+    await waitFor(() => expect(screen.getByText('Persistent QR')).toBeInTheDocument());
+
+    // Re-render simulating a page reload; the component re-fetches from the API.
+    unmount();
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Persistent Event/i })).toBeInTheDocument();
+    });
+    expect(screen.getByText('Persistent QR')).toBeInTheDocument();
   });
 });

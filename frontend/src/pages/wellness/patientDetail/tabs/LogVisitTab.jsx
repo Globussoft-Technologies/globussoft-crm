@@ -525,15 +525,31 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                     {visit.amountCharged > 0 && (
                       <>
                         {' - '}
-                        {visit.invoice?.amount > 0 && visit.invoice.amount !== visit.amountCharged ? (
-                          <>
-                            <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{visit.amountCharged.toLocaleString('en-IN')}</span>
-                            {' → Balance due: '}
-                            <strong style={{ color: 'var(--success-color)' }}>₹{visit.invoice.amount.toLocaleString('en-IN')}</strong>
-                          </>
-                        ) : (
-                          <>Amount: <strong>₹{visit.amountCharged.toLocaleString('en-IN')}</strong></>
-                        )}
+                        {(() => {
+                          const breakdown = typeof visit.couponBreakdown === 'string'
+                            ? (() => { try { return JSON.parse(visit.couponBreakdown); } catch (_e) { return null; } })()
+                            : visit.couponBreakdown;
+                          if (breakdown && typeof breakdown === 'object' && Number.isFinite(Number(breakdown.balance))) {
+                            return (
+                              <>
+                                <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{Number(breakdown.baseAmount).toLocaleString('en-IN')}</span>
+                                {' — Coupon '}{breakdown.couponCode}{' — ₹'}{Number(breakdown.discount).toLocaleString('en-IN')}{' deducted — '}
+                                <span>Balance due: </span>
+                                <strong style={{ color: 'var(--success-color)' }}>₹{Number(breakdown.balance).toLocaleString('en-IN')}</strong>
+                              </>
+                            );
+                          }
+                          if (visit.invoice?.amount > 0 && visit.invoice.amount !== visit.amountCharged) {
+                            return (
+                              <>
+                                <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{visit.amountCharged.toLocaleString('en-IN')}</span>
+                                {' → Balance due: '}
+                                <strong style={{ color: 'var(--success-color)' }}>₹{visit.invoice.amount.toLocaleString('en-IN')}</strong>
+                              </>
+                            );
+                          }
+                          return <>Amount: <strong>₹{visit.amountCharged.toLocaleString('en-IN')}</strong></>;
+                        })()}
                       </>
                     )}
                   </div>

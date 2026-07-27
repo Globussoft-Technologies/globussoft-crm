@@ -13,6 +13,9 @@ const mockCreateInvoicePaymentLink = vi.fn();
 const mockSendEmail = vi.fn();
 const mockSendBestEffort = vi.fn();
 const mockCreatePatientNotification = vi.fn();
+const mockLoadCouponForApply = vi.fn();
+const mockGetOrCreateWallet = vi.fn();
+const mockWriteWalletTransaction = vi.fn();
 
 const requireCJS = createRequire(import.meta.url);
 const paymentLinkModulePath = requireCJS.resolve('../../lib/paymentLink');
@@ -62,6 +65,27 @@ requireCJS.cache[patientNotificationServiceModulePath] = {
   },
 };
 
+const couponApplyModulePath = requireCJS.resolve('../../lib/couponApply');
+requireCJS.cache[couponApplyModulePath] = {
+  id: couponApplyModulePath,
+  filename: couponApplyModulePath,
+  loaded: true,
+  exports: {
+    loadCouponForApply: (...args) => mockLoadCouponForApply(...args),
+  },
+};
+
+const wellnessWalletModulePath = requireCJS.resolve('../../lib/wellnessWallet');
+requireCJS.cache[wellnessWalletModulePath] = {
+  id: wellnessWalletModulePath,
+  filename: wellnessWalletModulePath,
+  loaded: true,
+  exports: {
+    getOrCreateWallet: (...args) => mockGetOrCreateWallet(...args),
+    writeWalletTransaction: (...args) => mockWriteWalletTransaction(...args),
+  },
+};
+
 prisma.visit = prisma.visit || {};
 prisma.visit.findFirst = vi.fn();
 prisma.visit.findUnique = vi.fn();
@@ -87,6 +111,9 @@ prisma.payment.update = vi.fn().mockResolvedValue({ id: 1 });
 
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+
+prisma.coupon = prisma.coupon || {};
+prisma.coupon.update = vi.fn();
 
 prisma.loyaltyConfig = prisma.loyaltyConfig || {};
 prisma.loyaltyConfig.findUnique = vi.fn().mockResolvedValue(null);
@@ -125,11 +152,17 @@ beforeEach(() => {
   mockSendEmail.mockReset();
   mockSendBestEffort.mockReset();
   mockCreatePatientNotification.mockReset();
+  mockLoadCouponForApply.mockReset();
+  mockGetOrCreateWallet.mockReset();
+  mockWriteWalletTransaction.mockReset();
   mockCreateInvoicePaymentLink.mockResolvedValue({
     url: 'https://rzp.io/l/test-visit-link',
     gateway: 'razorpay',
     paymentId: 99,
   });
+  mockLoadCouponForApply.mockResolvedValue({ error: { status: 404, code: 'COUPON_NOT_FOUND', message: 'Coupon not found' } });
+  mockGetOrCreateWallet.mockResolvedValue({ id: 5 });
+  mockWriteWalletTransaction.mockResolvedValue({ id: 6 });
 
   prisma.visit.findFirst.mockReset();
   prisma.visit.update.mockReset();
@@ -144,6 +177,7 @@ beforeEach(() => {
   prisma.payment.findFirst.mockReset();
   prisma.payment.update.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.coupon.update.mockReset();
 
   prisma.visit.update.mockResolvedValue({
     id: 1,
@@ -185,13 +219,16 @@ beforeEach(() => {
   });
 
   prisma.invoice.findFirst.mockResolvedValue(null);
-  prisma.invoice.create.mockResolvedValue({
-    id: 200,
-    tenantId: 1,
-    invoiceNum: 'WLV-1-1234567890123',
-    amount: 1500,
-    contactId: 100,
-    visitId: 1,
+  prisma.invoice.create.mockImplementation((args) => {
+    const amount = args?.data?.amount != null ? Number(args.data.amount) : 1500;
+    return Promise.resolve({
+      id: 200,
+      tenantId: 1,
+      invoiceNum: 'WLV-1-1234567890123',
+      amount,
+      contactId: args?.data?.contactId || 100,
+      visitId: args?.data?.visitId || 1,
+    });
   });
   prisma.payment.findMany.mockResolvedValue([]);
   prisma.payment.findFirst.mockResolvedValue(null);
@@ -319,6 +356,153 @@ describe('PUT /api/wellness/visits/:id payment link hook', () => {
       expect.objectContaining({ data: expect.objectContaining({ contactId: 101 }) }),
     );
   });
+
+  test('completing a visit with a coupon stores couponBreakdown and generates link for the adjusted balance', async () => {
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: 1,
+      patientId: 42,
+      serviceId: 10,
+      doctorId: 5,
+      status: 'booked',
+      amountCharged: 7500,
+    });
+    prisma.visit.update.mockResolvedValue({
+      id: 1,
+      tenantId: 1,
+      patientId: 42,
+      serviceId: 10,
+      doctorId: 5,
+      status: 'completed',
+      amountCharged: 7500,
+      paymentLinkUrl: 'https://rzp.io/l/test-visit-link',
+      paymentLinkGeneratedAt: new Date('2026-07-21T07:00:00.000Z'),
+      couponBreakdown: JSON.stringify({
+        baseAmount: 7500,
+        discount: 2500,
+        excess: 0,
+        lockingFee: 0,
+        balance: 5000,
+        couponCode: 'FLAT2500',
+      }),
+    });
+    mockLoadCouponForApply.mockResolvedValue({
+      coupon: {
+        id: 77,
+        code: 'FLAT2500',
+        discountType: 'FLAT',
+        discountValue: 2500,
+        serviceIds: null,
+      },
+    });
+
+    const res = await request(makeApp())
+      .put('/api/wellness/visits/1')
+      .send({ status: 'completed', notes: '', amountCharged: 7500, couponCode: 'FLAT2500' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.couponBreakdown).toEqual({
+      baseAmount: 7500,
+      discount: 2500,
+      excess: 0,
+      lockingFee: 0,
+      balance: 5000,
+      couponCode: 'FLAT2500',
+    });
+    expect(prisma.visit.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 1 },
+        data: expect.objectContaining({
+          couponBreakdown: JSON.stringify({
+            baseAmount: 7500,
+            discount: 2500,
+            excess: 0,
+            lockingFee: 0,
+            balance: 5000,
+            couponCode: 'FLAT2500',
+          }),
+        }),
+      }),
+    );
+    expect(mockCreateInvoicePaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invoice: expect.objectContaining({ amount: 5000 }),
+      }),
+    );
+  });
+
+  test('completing a visit with a fully-covering coupon stores couponBreakdown and marks paid with no link', async () => {
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: 1,
+      patientId: 42,
+      serviceId: 10,
+      doctorId: 5,
+      status: 'booked',
+      amountCharged: 5500,
+    });
+    prisma.visit.update.mockResolvedValue({
+      id: 1,
+      tenantId: 1,
+      patientId: 42,
+      serviceId: 10,
+      doctorId: 5,
+      status: 'completed',
+      amountCharged: 5500,
+      paymentLinkUrl: null,
+      paymentLinkGeneratedAt: null,
+      paymentStatus: 'paid',
+      couponBreakdown: JSON.stringify({
+        baseAmount: 5500,
+        discount: 5500,
+        excess: 4500,
+        lockingFee: 0,
+        balance: 0,
+        couponCode: 'TATA',
+      }),
+    });
+    mockLoadCouponForApply.mockResolvedValue({
+      coupon: {
+        id: 88,
+        code: 'TATA',
+        discountType: 'FLAT',
+        discountValue: 10000,
+        serviceIds: null,
+      },
+    });
+
+    const res = await request(makeApp())
+      .put('/api/wellness/visits/1')
+      .send({ status: 'completed', notes: '', amountCharged: 5500, couponCode: 'TATA' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.couponBreakdown).toEqual({
+      baseAmount: 5500,
+      discount: 5500,
+      excess: 4500,
+      lockingFee: 0,
+      balance: 0,
+      couponCode: 'TATA',
+    });
+    expect(res.body.paymentStatus).toBe('paid');
+    expect(mockCreateInvoicePaymentLink).not.toHaveBeenCalled();
+    expect(prisma.visit.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 1 },
+        data: expect.objectContaining({
+          paymentStatus: 'paid',
+          couponBreakdown: JSON.stringify({
+            baseAmount: 5500,
+            discount: 5500,
+            excess: 4500,
+            lockingFee: 0,
+            balance: 0,
+            couponCode: 'TATA',
+          }),
+        }),
+      }),
+    );
+  });
 });
 
 describe('POST /api/wellness/visits/:id/payment-link regeneration', () => {
@@ -433,6 +617,36 @@ describe('POST /api/wellness/visits/:id/payment-link regeneration', () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VISIT_ALREADY_PAID');
     expect(mockCreateInvoicePaymentLink).not.toHaveBeenCalled();
+  });
+
+  test('regenerating a payment link uses the coupon-adjusted balance from couponBreakdown', async () => {
+    prisma.visit.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: 1,
+      patientId: 42,
+      status: 'completed',
+      amountCharged: 7500,
+      paymentStatus: 'unpaid',
+      couponBreakdown: JSON.stringify({
+        baseAmount: 7500,
+        discount: 2500,
+        excess: 0,
+        lockingFee: 0,
+        balance: 5000,
+        couponCode: 'FLAT2500',
+      }),
+    });
+
+    const res = await request(makeApp())
+      .post('/api/wellness/visits/1/payment-link')
+      .send();
+
+    expect(res.status).toBe(200);
+    expect(mockCreateInvoicePaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invoice: expect.objectContaining({ amount: 5000 }),
+      }),
+    );
   });
 });
 

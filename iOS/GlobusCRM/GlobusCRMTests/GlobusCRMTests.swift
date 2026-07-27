@@ -10,6 +10,7 @@ import SwiftUI
 import Testing
 @testable import GlobusCRM
 
+@MainActor
 struct DeepLinkHandlerTests {
     @Test func resolvesKnownRouteWithIdentifier() {
         let url = URL(string: "wellnesspatient://screen/prescription?id=42")!
@@ -30,6 +31,15 @@ struct DeepLinkHandlerTests {
         } else {
             #expect(Bool(false), "Expected treatment analysis route")
         }
+    }
+
+    @Test func resolvesAndroidSchemeAndSnakeCaseAliases() {
+        #expect(DeepLinkHandler.resolve(url: URL(string: "globuscrm://screen/treatment_plans")!) == .treatmentPlans)
+        #expect(DeepLinkHandler.resolve(url: URL(string: "globuscrm://screen/consent_forms")!) == .consentForms)
+        #expect(DeepLinkHandler.resolve(url: URL(string: "globuscrm://screen/gift_cards")!) == .giftCards)
+        #expect(DeepLinkHandler.resolve(url: URL(string: "globuscrm://screen/visit_history")!) == .visitHistory)
+        #expect(DeepLinkHandler.resolve(url: URL(string: "globuscrm://screen/profile")!) == .profile)
+        #expect(DeepLinkHandler.resolve(url: URL(string: "globuscrm://screen/wallet/transactions")!) == .wallet)
     }
 
     @Test func rejectsUnknownSchemeAndScreen() {
@@ -143,6 +153,38 @@ struct ThemePreferenceTests {
     }
 }
 
+@MainActor
+struct NotificationMappingTests {
+    @Test func decodesLiveBackendMessageAndLinkShape() throws {
+        let json = """
+        {
+          "notifications": [
+            {
+              "id": 12,
+              "type": "billing",
+              "title": "Payment received",
+              "message": "Your receipt is ready.",
+              "link": "/wallet/transactions",
+              "entityId": 9,
+              "isRead": false,
+              "createdAt": "2026-07-27T10:30:00Z"
+            }
+          ],
+          "unreadCount": 1,
+          "count": 1
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(NotificationListResponseDTO.self, from: json)
+        let item = try #require(response.notifications?.first)
+        #expect(response.total == 1)
+        #expect(response.unreadCount == 1)
+        #expect(item.body == "Your receipt is ready.")
+        #expect(NotificationRouteMapper.canonicalScreen(from: item.screen) == "wallet")
+        #expect(NotificationRouteMapper.canonicalScreen(from: "wallet/transactions") == "wallet")
+    }
+}
+
 struct NotificationDAOTests {
     @Test func persistsAndUpdatesNotifications() throws {
         let fileURL = FileManager.default.temporaryDirectory
@@ -185,5 +227,44 @@ struct NotificationDAOTests {
         dao.save(notification: notification)
         dao.deleteAll()
         #expect(dao.getAll().isEmpty)
+    }
+
+    @Test func replacesExistingNotificationWithServerState() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("json")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let dao = NotificationDAO(fileURL: fileURL)
+        let unread = AppNotification(
+            id: "notification-1",
+            type: .general,
+            title: "Old title",
+            body: "Old body",
+            screen: nil,
+            entityId: nil,
+            isRead: false,
+            receivedAt: Date(timeIntervalSince1970: 1)
+        )
+        let read = AppNotification(
+            id: "notification-1",
+            type: .billing,
+            title: "Updated title",
+            body: "Updated body",
+            screen: "wallet",
+            entityId: "9",
+            isRead: true,
+            receivedAt: Date(timeIntervalSince1970: 2)
+        )
+
+        dao.save(notification: unread)
+        dao.save(notification: read)
+
+        let saved = try #require(dao.getAll().first)
+        #expect(dao.getAll().count == 1)
+        #expect(saved.title == "Updated title")
+        #expect(saved.isRead)
+        #expect(saved.screen == "wallet")
+        #expect(dao.unreadCount() == 0)
     }
 }

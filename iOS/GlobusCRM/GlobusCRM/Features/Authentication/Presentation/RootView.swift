@@ -35,6 +35,11 @@ struct RootView: View {
                     }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .handleDeepLink)) { notification in
+            guard let url = notification.object as? URL,
+                  let route = DeepLinkHandler.resolve(url: url) else { return }
+            router.navigate(to: route)
+        }
         .environment(\.wellnessTheme, WellnessThemeEnvironment(
             primaryColor: appState.brandColor,
             isDarkMode: appState.resolvedIsDark(systemColorScheme: systemColorScheme)

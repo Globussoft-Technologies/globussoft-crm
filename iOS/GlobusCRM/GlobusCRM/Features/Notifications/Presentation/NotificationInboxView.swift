@@ -68,7 +68,7 @@ struct NotificationInboxView: View {
 
     private func handleNavigation(_ notification: AppNotification) {
         selectedNotification = nil
-        guard let screen = notification.screen else { return }
+        guard let screen = NotificationRouteMapper.canonicalScreen(from: notification.screen) else { return }
         switch screen {
         case "appointments":    router.navigate(to: .myAppointments)
         case "prescriptions":   router.navigate(to: .prescriptions)
@@ -77,6 +77,7 @@ struct NotificationInboxView: View {
         case "wallet":          router.navigate(to: .wallet)
         case "giftCards":       router.navigate(to: .giftCards)
         case "memberships":     router.navigate(to: .memberships)
+        case "profile":         router.navigate(to: .profile)
         case "loyalty":         router.navigate(to: .loyalty)
         case "finance":         router.navigate(to: .finance)
         case "catalog":         router.navigate(to: .catalog)

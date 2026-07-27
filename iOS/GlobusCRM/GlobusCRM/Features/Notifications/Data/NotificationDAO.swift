@@ -24,8 +24,12 @@ final class NotificationDAO {
 
     func save(notification: AppNotification) {
         var all = getAll()
-        guard !all.contains(where: { $0.id == notification.id }) else { return }
-        all.insert(notification, at: 0)
+        if let index = all.firstIndex(where: { $0.id == notification.id }) {
+            all[index] = notification
+        } else {
+            all.insert(notification, at: 0)
+        }
+        all.sort { $0.receivedAt > $1.receivedAt }
         if all.count > 100 { all = Array(all.prefix(100)) }
         persist(all)
     }

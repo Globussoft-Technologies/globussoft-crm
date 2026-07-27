@@ -7,7 +7,6 @@ final class NotificationRepositoryImpl: NotificationRepository {
         self.apiClient = apiClient
     }
 
-    // Endpoint /wellness/portal/me/notifications not yet implemented in backend
     func getNotifications(page: Int, limit: Int) async -> Result<[AppNotification], AppError> {
         let result: Result<NotificationListResponseDTO, AppError> = await apiClient.request(
             endpoint: .getNotifications(page: page, limit: limit)
@@ -21,23 +20,11 @@ final class NotificationRepositoryImpl: NotificationRepository {
     }
 
     func markRead(id: String) async -> Result<Void, AppError> {
-        let result: Result<MarkReadResponseDTO, AppError> = await apiClient.request(
-            endpoint: .markNotificationRead(id: id)
-        )
-        switch result {
-        case .success: return .success(())
-        case .failure(let e): return .failure(e)
-        }
+        await apiClient.resultVoid(.markNotificationRead(id: id))
     }
 
     func markAllRead() async -> Result<Void, AppError> {
-        let result: Result<MarkReadResponseDTO, AppError> = await apiClient.request(
-            endpoint: .markAllNotificationsRead
-        )
-        switch result {
-        case .success: return .success(())
-        case .failure(let e): return .failure(e)
-        }
+        await apiClient.resultVoid(.markAllNotificationsRead)
     }
 }
 
@@ -48,7 +35,7 @@ private extension NotificationItemDTO {
             type: AppNotification.NotificationType(rawValue: type ?? "") ?? .general,
             title: title ?? "",
             body: body ?? "",
-            screen: screen,
+            screen: NotificationRouteMapper.canonicalScreen(from: screen),
             entityId: entityId.map { String($0) },
             isRead: isRead ?? false,
             receivedAt: ISO8601DateFormatter().date(from: createdAt ?? "") ?? Date()

@@ -16,11 +16,10 @@ final class PushNotificationHandler: NSObject, UNUserNotificationCenterDelegate 
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let userInfo = response.notification.request.content.userInfo
-        if let screen = userInfo["screen"] as? String {
-            let entityId = userInfo["entityId"] as? String
-            var urlString = "wellnesspatient://screen/\(screen)"
-            if let id = entityId { urlString += "?id=\(id)" }
-            if let url = URL(string: urlString) {
+        let rawDestination = userInfo["screen"] as? String ?? userInfo["link"] as? String
+        if let rawDestination {
+            let entityId = stringify(userInfo["entityId"] ?? userInfo["id"])
+            if let url = DeepLinkHandler.url(screenOrLink: rawDestination, entityId: entityId) {
                 NotificationCenter.default.post(name: .handleDeepLink, object: url)
             }
         }
@@ -39,6 +38,15 @@ final class PushNotificationHandler: NSObject, UNUserNotificationCenterDelegate 
             return "wellness_offers"
         default:
             return "wellness_health"
+        }
+    }
+
+    private func stringify(_ value: Any?) -> String? {
+        switch value {
+        case let value as String: return value
+        case let value as Int: return String(value)
+        case let value as NSNumber: return value.stringValue
+        default: return nil
         }
     }
 }

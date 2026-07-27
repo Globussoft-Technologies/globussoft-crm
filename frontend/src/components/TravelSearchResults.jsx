@@ -126,17 +126,20 @@ export function FlightResultsBoard({ results, currency = "INR", onAdd, addLabel 
 // src is absent or fails. Using a component (vs. inline onError style hack)
 // because React state is the only reliable way to swap rendered output after
 // a network error fires — DOM-style display:none leaves the parent transparent.
-function HotelCardPhoto({ src, alt, fallbackBg, iconSize = 22 }) {
+function HotelCardPhoto({ src, alt, fallbackBg, iconSize = 22, fallbackLabel = "Photo unavailable" }) {
   const [failed, setFailed] = useState(false);
   if (!src || failed) {
     return (
-      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: fallbackBg }}>
+      <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", gap: 8, alignItems: "center", justifyContent: "center", background: fallbackBg, padding: 12, textAlign: "center" }}>
         <HotelIcon size={iconSize} aria-hidden style={{ color: "rgba(255,255,255,0.85)" }} />
+        <span style={{ color: "rgba(255,255,255,0.92)", fontSize: 11, lineHeight: 1.35, maxWidth: "100%" }}>
+          {fallbackLabel}
+        </span>
       </div>
     );
   }
   return (
-    <img src={src} alt={alt} loading="lazy"
+    <img src={src} alt={alt} loading="lazy" referrerPolicy="no-referrer"
       onError={() => setFailed(true)}
       style={{ width: "100%", height: "100%", objectFit: "cover" }} />
   );
@@ -160,7 +163,7 @@ export function HotelResultsGrid({ results, currency = "INR", city, onAdd, addLa
         return (
           <div key={i} style={hotelCard}>
             <div style={hotelPhotoWrap}>
-              <HotelCardPhoto src={photo} alt={h.name || "Hotel"} fallbackBg={theme.gradient} iconSize={28} />
+              <HotelCardPhoto src={photo} alt={h.name || "Hotel"} fallbackBg={theme.gradient} iconSize={28} fallbackLabel={city ? `${city} hotel photo unavailable` : "Hotel photo unavailable"} />
               <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, rgba(10,16,30,0.62), transparent 58%)" }} />
               {stars > 0 && (
                 <div style={hotelStarBadge}>
@@ -315,7 +318,7 @@ function SuggestedStay({ stay, currency, onSelect }) {
       </div>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         <div style={{ width: 138, height: 100, borderRadius: 10, overflow: "hidden", flexShrink: 0, position: "relative" }}>
-          <HotelCardPhoto src={photoFor(sel, stay.selectedIdx)} alt={sel.name || "Hotel"} fallbackBg={theme.gradient} iconSize={24} />
+          <HotelCardPhoto src={photoFor(sel, stay.selectedIdx)} alt={sel.name || "Hotel"} fallbackBg={theme.gradient} iconSize={24} fallbackLabel={stay.city ? `${stay.city} hotel photo unavailable` : "Hotel photo unavailable"} />
         </div>
         <div style={{ flex: 1, minWidth: 170 }}>
           <div style={{ fontWeight: 700, fontSize: 13.5 }}>
@@ -332,7 +335,7 @@ function SuggestedStay({ stay, currency, onSelect }) {
           {stay.options.map((h, i) => (i === stay.selectedIdx ? null : (
             <div key={i} style={hotelCard}>
               <div style={{ position: "relative", height: 88 }}>
-                <HotelCardPhoto src={photoFor(h, i)} alt={h.name || "Hotel"} fallbackBg={theme.gradient} iconSize={20} />
+                <HotelCardPhoto src={photoFor(h, i)} alt={h.name || "Hotel"} fallbackBg={theme.gradient} iconSize={20} fallbackLabel={stay.city ? `${stay.city} hotel photo unavailable` : "Hotel photo unavailable"} />
               </div>
               <div style={{ padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
                 <strong style={{ fontSize: 12.5, lineHeight: 1.25 }}>{h.name}</strong>

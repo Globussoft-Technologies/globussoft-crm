@@ -92,12 +92,17 @@ function statusClass(s) {
 
 export default function Attendance() {
   const notify = useNotify();
-  const { user } = useContext(AuthContext) || {};
+  const { user, tenant } = useContext(AuthContext) || {};
   const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  const isWellnessTenant = tenant?.vertical === 'wellness';
 
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [geofenceLoading, setGeofenceLoading] = useState(isWellnessTenant);
+  const [geofenceEnabled, setGeofenceEnabled] = useState(false);
+  const [locationPermission, setLocationPermission] = useState('unknown');
+  const [permissionLoading, setPermissionLoading] = useState(false);
   // Attendance requires a window — opt out of "All time" and default to last30
   // (matches the prior 30-day default).
   const [dateFilter, setDateFilter] = useState({ preset: 'last30', start: '', end: '' });
@@ -118,6 +123,83 @@ export default function Attendance() {
       .finally(() => setLoading(false));
   };
   useEffect(load, [from, to]);
+
+  useEffect(() => {
+    if (!isWellnessTenant) {
+      setGeofenceEnabled(false);
+      setGeofenceLoading(false);
+      return undefined;
+    }
+
+    let active = true;
+    setGeofenceLoading(true);
+    fetchApi('/api/attendance/context')
+      .then((data) => {
+        if (!active) return;
+        setGeofenceEnabled(Boolean(data?.geofence?.enabled));
+      })
+      .catch(() => {
+        if (active) setGeofenceEnabled(false);
+      })
+      .finally(() => {
+        if (active) setGeofenceLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [isWellnessTenant]);
+
+  useEffect(() => {
+    if (!isWellnessTenant || !geofenceEnabled) {
+      setLocationPermission('unknown');
+      setPermissionLoading(false);
+      return undefined;
+    }
+    if (!('geolocation' in navigator)) {
+      setLocationPermission('unsupported');
+      setPermissionLoading(false);
+      return undefined;
+    }
+    if (!navigator.permissions?.query) {
+      setLocationPermission('unknown');
+      setPermissionLoading(false);
+      return undefined;
+    }
+
+    let active = true;
+    let permissionStatusRef = null;
+    setPermissionLoading(true);
+    const syncPermission = () => {
+      if (active && permissionStatusRef) {
+        setLocationPermission(permissionStatusRef.state || 'unknown');
+        setPermissionLoading(false);
+      }
+    };
+
+    navigator.permissions.query({ name: 'geolocation' })
+      .then((permissionStatus) => {
+        if (!active) return;
+        permissionStatusRef = permissionStatus;
+        syncPermission();
+        permissionStatus.onchange = syncPermission;
+      })
+      .catch(() => {
+        if (active) {
+          setLocationPermission('unknown');
+          setPermissionLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+      if (permissionStatusRef) permissionStatusRef.onchange = null;
+    };
+  }, [isWellnessTenant, geofenceEnabled]);
+
+  const showLocationStatus = isWellnessTenant && (geofenceLoading || (geofenceEnabled && permissionLoading));
+  const locationDenied = geofenceEnabled && locationPermission === 'denied';
+  const showLocationWarning = geofenceEnabled && (locationPermission === 'denied' || locationPermission === 'prompt');
 
   const onClockIn = async () => {
     setBusy(true);
@@ -178,17 +260,40 @@ export default function Attendance() {
             <div style={{ fontSize: 16, fontWeight: 600 }}>{todayRow?.status || 'Not clocked in'}</div>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
+        <div style={{ display: 'flex', gap: 12, marginTop: 20, flexWrap: 'wrap' }}>
+          {showLocationStatus && (
+            <div style={{ width: '100%', fontSize: 13, color: 'var(--text-secondary, #666)' }}>Checking attendance location requirements...</div>
+          )}
+          {showLocationWarning && (
+            <div
+              role="alert"
+              style={{
+                width: '100%',
+                padding: '12px 14px',
+                borderRadius: 8,
+                background: locationDenied ? '#fde7e7' : '#fff5dc',
+                color: locationDenied ? '#a01a1a' : '#7a5600',
+                border: `1px solid ${locationDenied ? '#f3b8b8' : '#f0d18a'}`,
+              }}
+            >
+              {locationDenied ? (
+                <>
+                  <div>Location access is turned off. Enable location permission to mark attendance for wellness geofencing.</div>
+                  <div style={{ fontSize: 12, marginTop: 6 }}>To re-enable it, open your browser or device site settings and turn Location back on for this app.</div>
+                </>
+              ) : 'Location access will be requested when you mark attendance. Please allow it so wellness geofencing can verify your location.'}
+            </div>
+          )}
           <button
             type="button"
             onClick={onClockIn}
-            disabled={busy || isClockedIn || isClockedOut}
+            disabled={busy || isClockedIn || isClockedOut || locationDenied}
             aria-label="Punch In"
             style={{
               padding: '14px 28px', fontSize: 16, fontWeight: 600,
-              background: isClockedIn || isClockedOut ? '#ccc' : 'var(--primary-color, var(--accent-color))',
+              background: isClockedIn || isClockedOut || locationDenied ? '#ccc' : 'var(--primary-color, var(--accent-color))',
               color: '#fff', border: 'none', borderRadius: 8,
-              cursor: (busy || isClockedIn || isClockedOut) ? 'not-allowed' : 'pointer',
+              cursor: (busy || isClockedIn || isClockedOut || locationDenied) ? 'not-allowed' : 'pointer',
               display: 'flex', alignItems: 'center', gap: 8,
             }}
           >
@@ -197,13 +302,13 @@ export default function Attendance() {
           <button
             type="button"
             onClick={onClockOut}
-            disabled={busy || !isClockedIn}
+            disabled={busy || !isClockedIn || locationDenied}
             aria-label="Punch Out"
             style={{
               padding: '14px 28px', fontSize: 16, fontWeight: 600,
-              background: !isClockedIn ? '#ccc' : '#a01a1a',
+              background: !isClockedIn || locationDenied ? '#ccc' : '#a01a1a',
               color: '#fff', border: 'none', borderRadius: 8,
-              cursor: (busy || !isClockedIn) ? 'not-allowed' : 'pointer',
+              cursor: (busy || !isClockedIn || locationDenied) ? 'not-allowed' : 'pointer',
               display: 'flex', alignItems: 'center', gap: 8,
             }}
           >

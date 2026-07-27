@@ -56,6 +56,18 @@ function fmtConfidence(c) {
   return `${Math.round(c * 100)}%`;
 }
 
+function candidateLabel(candidate) {
+  if (!candidate) return "Existing passport record";
+  const name = candidate.fullName || candidate.contact?.name || "Existing passport record";
+  const source = candidate.sourceType ? ` (${candidate.sourceType})` : "";
+  return `${name}${source}`;
+}
+
+function matchLabel(candidate) {
+  if (candidate?.matchedBy === "name_dob_phone") return "name + DOB + phone";
+  return "passport number";
+}
+
 // Rows come from two tables (TripParticipant vs CustomerTraveller) whose ids
 // can collide, so identity + endpoint routing key on (kind, id).
 function rowKey(row) {
@@ -345,6 +357,31 @@ export default function PassportVerificationQueue() {
                 display: "flex", alignItems: "center", gap: 8,
               }}>
                 <ShieldAlert size={14} aria-hidden /> {row.note}
+              </div>
+            )}
+
+            {Array.isArray(row.identityCandidates) && row.identityCandidates.length > 0 && (
+              <div style={{
+                marginTop: 12,
+                padding: "10px 12px",
+                borderRadius: 6,
+                fontSize: 13,
+                background: "rgba(200,154,78,0.12)",
+                border: "1px solid rgba(200,154,78,0.35)",
+                color: "#8A5F1D",
+              }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                  Possible existing master/client match
+                </div>
+                {row.identityCandidates.slice(0, 3).map((candidate) => (
+                  <div key={`${candidate.sourceType}:${candidate.sourceId}`}>
+                    {candidateLabel(candidate)} matched by {matchLabel(candidate)}
+                    {candidate.contact?.id ? ` - Contact #${candidate.contact.id}` : ""}
+                  </div>
+                ))}
+                <div style={{ marginTop: 4, color: "var(--text-secondary)" }}>
+                  Check before approving so we do not create or keep duplicate passport records.
+                </div>
               </div>
             )}
 

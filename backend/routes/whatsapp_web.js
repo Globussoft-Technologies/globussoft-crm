@@ -93,6 +93,7 @@ async function persistOutboundMedia({ tenantId, buffer, filename, mimeType }) {
 // ─── Connection lifecycle ──────────────────────────────────────────
 router.get("/status", verifyToken, async (req, res) => {
   const st = waClient.getState(req.user.tenantId);
+  console.log(`[whatsapp-web route] /status tenant=${req.user.tenantId} state=${st.state} connected=${st.connected} phone=${st.phone || "none"} lastError=${st.lastError || "none"}`);
   res.json({
     enabled: st.connected,
     state: st.state,
@@ -130,10 +131,12 @@ router.get("/qr", verifyToken, async (req, res) => {
 
 router.post("/import", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
+    const st = waClient.getState(req.user.tenantId);
+    console.log(`[whatsapp-web route] /import tenant=${req.user.tenantId} state=${st.state} connected=${st.connected} phone=${st.phone || "none"} lastError=${st.lastError || "none"}`);
     if (!waClient.isEnabled(req.user.tenantId)) {
       return res.status(409).json({ error: "WhatsApp is not connected — scan the QR first.", code: "WA_NOT_CONNECTED" });
     }
-    res.json(await waClient.importAllChats(req.user.tenantId));
+    res.json(await waClient.importAllChats(req.user.tenantId, { source: "manual-api" }));
   } catch (e) {
     console.error("[whatsapp-web] import error:", e.message);
     res.status(500).json({ error: "Failed to import chats", code: "WA_IMPORT_FAILED" });

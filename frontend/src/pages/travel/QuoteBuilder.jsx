@@ -397,6 +397,7 @@ export default function QuoteBuilder() {
           supplierId: r.supplierId == null ? "" : String(r.supplierId),
           notes: r.notes || "",
           currency: r.currency || null,
+          taxPercent: r.taxPercent == null ? 0 : Number(r.taxPercent) || 0,
           sortOrder: r.sortOrder || 0,
         })),
       );
@@ -541,7 +542,7 @@ export default function QuoteBuilder() {
     }
     let cancelled = false;
     setSuppliersLoading(true);
-    fetchApi(`/api/travel/suppliers?subBrand=${encodeURIComponent(subBrand)}`)
+    fetchApi(`/api/travel/suppliers?fields=summary&subBrand=${encodeURIComponent(subBrand)}`)
       .then((resp) => {
         if (cancelled) return;
         const rows = Array.isArray(resp?.suppliers) ? resp.suppliers : [];
@@ -611,6 +612,27 @@ export default function QuoteBuilder() {
   const taxable = subtotal - discountAmount;
   const taxAmount = taxable * (Number(taxPct) || 0) / 100;
   const grandTotal = taxable + taxAmount;
+  const selectedSubBrandLabel = SUB_BRAND_LABELS[subBrand] || subBrand;
+  const customerLabel = selectedCustomer?.name || contactsById[contactId]?.name || (contactId ? `Contact #${contactId}` : "Not selected");
+  const internalMarkupDelta = pricingPreview ? Math.max(0, Number(pricingPreview.total || 0) - Number(pricingPreview.subtotal || 0)) : 0;
+  const quoteComposition = LINE_TYPES
+    .map((type) => ({
+      type,
+      count: visibleLines.filter((line) => (line.lineType || "other") === type).length,
+    }))
+    .filter((item) => item.count > 0);
+  const customerActionState = status === "Accepted"
+    ? "Customer accepted"
+    : status === "Rejected"
+      ? "Customer rejected"
+      : shareInfo?.shareUrl
+        ? "Awaiting customer action"
+        : "Ready to share";
+  const customerActionTone = status === "Accepted"
+    ? { fg: "var(--success-color, #22c55e)", bg: "rgba(34, 197, 94, 0.12)" }
+    : status === "Rejected"
+      ? { fg: "var(--danger-color, #f43f5e)", bg: "rgba(244, 63, 94, 0.12)" }
+      : { fg: "var(--primary-color, var(--accent-color))", bg: "rgba(59, 130, 246, 0.12)" };
 
   const addLine = () => setDraftLines([...draftLines, EMPTY_DRAFT()]);
 
@@ -920,21 +942,17 @@ export default function QuoteBuilder() {
     }
     setBusyLineKey(draft.key);
     try {
-      const body = {
-        lineType: draft.lineType || "other",
-        description: draft.description.trim(),
-        quantity: Math.max(1, parseInt(draft.quantity, 10) || 1),
-        unitPrice: unit,
-      };
-      if (draft.supplierId !== "" && draft.supplierId != null) {
-        body.supplierId = parseInt(draft.supplierId, 10);
+      const body = buildLinePayload(draft);
+      if (!body) {
+        notify.error("Line is missing required pricing details");
+        return;
       }
-      if (draft.notes) body.notes = String(draft.notes);
       await fetchApi(`/api/travel/quotes/${quoteId}/lines`, {
         method: "POST",
         body: JSON.stringify(body),
       });
-      // Server recomputed totals; re-pull both lines and parent.
+      // Server recomputed totals; restore the customer-facing total and re-pull both lines and parent.
+      await syncQuoteTotals(quoteId);
       await refreshLines(quoteId);
       await refreshParentQuote(quoteId);
       // Drop the draft now that it's persisted.
@@ -952,10 +970,12 @@ export default function QuoteBuilder() {
     if (!quoteId || !row.id) return;
     setBusyLineKey(row.key);
     try {
+      const taxPercent = currentQuoteTaxPercent();
       await fetchApi(`/api/travel/quotes/${quoteId}/lines/${row.id}`, {
         method: "PUT",
-        body: JSON.stringify(patch),
+        body: JSON.stringify({ ...patch, taxPercent }),
       });
+      await syncQuoteTotals(quoteId);
       await refreshLines(quoteId);
       await refreshParentQuote(quoteId);
       notify.success(`Line #${row.id} updated`);
@@ -978,6 +998,7 @@ export default function QuoteBuilder() {
       await fetchApi(`/api/travel/quotes/${quoteId}/lines/${row.id}`, {
         method: "DELETE",
       });
+      await syncQuoteTotals(quoteId);
       await refreshLines(quoteId);
       await refreshParentQuote(quoteId);
       notify.success(`Line #${row.id} deleted`);
@@ -1005,6 +1026,38 @@ export default function QuoteBuilder() {
     };
   };
 
+  const currentQuoteTaxPercent = () => {
+    const n = Number(taxPct);
+    return Number.isFinite(n) && n > 0 ? Number(n.toFixed(2)) : 0;
+  };
+
+  const buildLinePayload = (row) => {
+    const unit = Number(row?.unitPrice);
+    if (!Number.isFinite(unit) || unit < 0) return null;
+    const body = {
+      lineType: row?.lineType || "other",
+      description: String(row?.description || "").trim(),
+      quantity: Math.max(1, parseInt(row?.quantity, 10) || 1),
+      unitPrice: unit,
+      taxPercent: currentQuoteTaxPercent(),
+    };
+    if (!body.description) return null;
+    if (row?.supplierId !== "" && row?.supplierId != null) {
+      body.supplierId = parseInt(row.supplierId, 10);
+    }
+    if (row?.notes) body.notes = String(row.notes);
+    return body;
+  };
+
+  const syncQuoteTotals = async (id) => {
+    const payload = buildPayload();
+    if (!id || !payload) return;
+    await fetchApi(`/api/travel/quotes/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  };
+
   const handleSaveDraft = async () => {
     const payload = buildPayload();
     if (!payload) return;
@@ -1029,26 +1082,32 @@ export default function QuoteBuilder() {
       const pending = draftLines.filter((d) => d.description && d.description.trim());
       let committed = 0;
       for (const d of pending) {
-        const unit = Number(d.unitPrice);
-        if (!Number.isFinite(unit) || unit < 0) continue;
+        const body = buildLinePayload(d);
+        if (!body) continue;
         try {
-          const body = {
-            lineType: d.lineType || "other",
-            description: d.description.trim(),
-            quantity: Math.max(1, parseInt(d.quantity, 10) || 1),
-            unitPrice: unit,
-          };
-          if (d.supplierId !== "" && d.supplierId != null) body.supplierId = parseInt(d.supplierId, 10);
-          if (d.notes) body.notes = String(d.notes);
           await fetchApi(`/api/travel/quotes/${id}/lines`, { method: "POST", body: JSON.stringify(body) });
           committed += 1;
         } catch { /* skip a bad line, keep going */ }
       }
+      const latestLines = await fetchApi(`/api/travel/quotes/${id}/lines`);
+      const rows = Array.isArray(latestLines?.lines) ? latestLines.lines : [];
+      const targetTaxPercent = currentQuoteTaxPercent();
+      for (const row of rows) {
+        const savedTaxPercent = row?.taxPercent == null ? 0 : Number(row.taxPercent) || 0;
+        if (savedTaxPercent == targetTaxPercent) continue;
+        try {
+          await fetchApi(`/api/travel/quotes/${id}/lines/${row.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ taxPercent: targetTaxPercent }),
+          });
+        } catch { /* keep saving the quote even if one line tax sync fails */ }
+      }
+      await syncQuoteTotals(id);
       if (committed > 0) {
         setDraftLines((prev) => prev.filter((d) => !pending.includes(d)));
-        await refreshLines(id);
-        await refreshParentQuote(id);
       }
+      await refreshLines(id);
+      await refreshParentQuote(id);
       notify.success(
         wasNew
           ? `Quote created (#${id})${committed ? ` with ${committed} line${committed === 1 ? "" : "s"}` : ""}`
@@ -1618,27 +1677,91 @@ export default function QuoteBuilder() {
         )}
       </header>
 
+      <section style={heroPanel} aria-label="Quote builder summary">
+        <div>
+          <div style={eyebrowStyle}>Travel quote workspace</div>
+          <h2 style={{ margin: "6px 0 8px", fontSize: "1.5rem", lineHeight: 1.2 }}>
+            Build a branded quote that looks customer-ready and keeps pricing controls internal.
+          </h2>
+          <p style={{ margin: 0, color: "var(--text-secondary)", maxWidth: 760, fontSize: 14, lineHeight: 1.6 }}>
+            Flights, hotels, transfers, GST/TCS visibility, and customer actions are all managed from one screen. The customer sees a polished travel quote while your markup decisions stay internal.
+          </p>
+          <div style={summaryGrid}>
+            <div style={summaryCard}>
+              <div style={summaryLabel}>Customer</div>
+              <div style={summaryValue}>{customerLabel}</div>
+              <div style={summaryHint}>{contactId ? selectedSubBrandLabel : "Choose a traveler before sending"}</div>
+            </div>
+            <div style={summaryCard}>
+              <div style={summaryLabel}>Quote mix</div>
+              <div style={summaryValue}>{visibleLines.length} line{visibleLines.length === 1 ? "" : "s"}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                {quoteComposition.length > 0 ? quoteComposition.map((item) => (
+                  <span key={item.type} style={chipPill}>{item.type} x{item.count}</span>
+                )) : <span style={{ ...summaryHintStyle, marginTop: 0 }}>No services added yet</span>}
+              </div>
+            </div>
+            <div style={summaryCard}>
+              <div style={summaryLabel}>Commercials</div>
+              <div style={summaryValue}>{currency} {fmt(grandTotal)}</div>
+              <div style={summaryHint}>Live total with discount and GST/TCS style tax breakdown</div>
+            </div>
+          </div>
+        </div>
+        <div style={heroAside}>
+          <div style={heroAsideCard}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+              <span style={summaryLabel}>Customer action</span>
+              <span style={{ ...statusChip, color: customerActionTone.fg, background: customerActionTone.bg, borderColor: customerActionTone.bg }}>{customerActionState}</span>
+            </div>
+            <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+              <div style={timelineRow}><span style={timelineDot} /> Share from this quote on email/WhatsApp</div>
+              <div style={timelineRow}><span style={timelineDot} /> Customer can accept, reject, or request changes</div>
+              <div style={timelineRow}><span style={timelineDot} /> Agent sees status updates and payment progress here</div>
+            </div>
+          </div>
+          <div style={heroAsideCardMuted}>
+            <div style={summaryLabel}>Brand & compliance</div>
+            <div style={{ fontSize: 14, fontWeight: 700, marginTop: 4 }}>Present on brand domain styling</div>
+            <div style={{ marginTop: 8, color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
+              Match the brand-led quote feel with clearer taxes, optional compliance notes, and a cleaner customer-facing summary.
+            </div>
+          </div>
+        </div>
+      </section>
+
       {shareInfo?.shareUrl && (
         <section
           className="glass"
           aria-label="Customer share link"
-          style={{ padding: 12, marginBottom: 16, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
+          style={{ padding: 16, marginBottom: 16, border: "1px solid rgba(59,130,246,0.18)", background: "linear-gradient(135deg, rgba(59,130,246,0.12), rgba(255,255,255,0.02))" }}
         >
-          <Send size={14} aria-hidden style={{ color: "var(--primary-color, var(--accent-color))" }} />
-          <span style={{ fontSize: 13, fontWeight: 600 }}>Customer link:</span>
-          <code style={{ fontSize: 12, wordBreak: "break-all", flex: 1, minWidth: 0 }}>{shareInfo.shareUrl}</code>
-          <button
-            type="button"
-            onClick={() => { navigator.clipboard?.writeText(shareInfo.shareUrl).then(() => notify.success("Link copied")).catch(() => notify.error("Copy failed — select the link")); }}
-            style={secondaryBtn}
-          >
-            <Copy size={14} /> Copy
-          </button>
-          <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
-            {shareInfo.channel && shareInfo.channel !== "none"
-              ? `Sent via ${shareInfo.channel.replace("+", " + ")}`
-              : "Not delivered — share the link manually"}
-          </span>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+            <div style={{ flex: "1 1 480px", minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <Send size={15} aria-hidden style={{ color: "var(--primary-color, var(--accent-color))" }} />
+                <span style={{ fontSize: 13, fontWeight: 700 }}>Customer share link ready</span>
+                <span style={chipPill}>{shareInfo.channel && shareInfo.channel !== "none" ? `Sent via ${shareInfo.channel.replace("+", " + ")}` : "Manual share"}</span>
+              </div>
+              <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 10 }}>
+                Share this branded quote link with the customer. Their actions and follow-up status will map back to this quote.
+              </div>
+              <code style={{ ...shareLinkBox, wordBreak: "break-all" }}>{shareInfo.shareUrl}</code>
+            </div>
+            <div style={{ display: "grid", gap: 8, minWidth: 220, flex: "0 1 240px" }}>
+              <div style={miniInfoCard}>
+                <div style={summaryLabel}>Interaction status</div>
+                <div style={{ fontWeight: 700, marginTop: 4 }}>{customerActionState}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { navigator.clipboard?.writeText(shareInfo.shareUrl).then(() => notify.success("Link copied")).catch(() => notify.error("Copy failed - select the link")); }}
+                style={secondaryBtn}
+              >
+                <Copy size={14} /> Copy link
+              </button>
+            </div>
+          </div>
         </section>
       )}
 
@@ -2271,90 +2394,103 @@ export default function QuoteBuilder() {
         className="glass"
         aria-label="Totals"
         style={{
-          padding: 16,
+          padding: 18,
           marginBottom: 16,
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))",
-          gap: 16,
-          alignItems: "center",
+          gridTemplateColumns: "minmax(280px, 1.05fr) minmax(320px, 1fr)",
+          gap: 18,
+          alignItems: "stretch",
         }}
       >
-        <div>
-          <label style={fieldLabel}>
-            Discount %
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step="0.01"
-              value={discountPct}
-              onChange={(e) => setDiscountPct(e.target.value)}
-              style={inputStyle}
-              aria-label="Discount percent"
-            />
-          </label>
+        <div style={controlPanelCard}>
+          <div style={eyebrowStyle}>Internal pricing controls</div>
+          <h2 style={{ margin: "4px 0 6px", fontSize: "1.05rem" }}>Profit and compliance setup</h2>
+          <p style={{ margin: "0 0 14px", color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
+            Keep margin and markup decisions internal while giving the customer a cleaner tax and total summary.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+            <label style={fieldLabel}>
+              Discount %
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step="0.01"
+                value={discountPct}
+                onChange={(e) => setDiscountPct(e.target.value)}
+                style={inputStyle}
+                aria-label="Discount percent"
+              />
+            </label>
+            <label style={fieldLabel}>
+              GST / TCS %
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step="0.01"
+                value={taxPct}
+                onChange={(e) => setTaxPct(e.target.value)}
+                style={inputStyle}
+                aria-label="Tax percent"
+              />
+            </label>
+          </div>
+          <div style={complianceNoteCard}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Customer-facing note</div>
+            <div style={{ color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
+              Show GST/TCS clearly in the final quote or add a compliance note at the bottom. Profit and markup stay on the operator side and are not shown to the customer.
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+            <div style={miniInfoCard}>
+              <div style={summaryLabel}>Internal margin preview</div>
+              <div style={{ fontWeight: 700, marginTop: 4 }}>{currency} {fmt(internalMarkupDelta)}</div>
+              <div style={summaryHint}>Shown only when markup preview is calculated</div>
+            </div>
+            <div style={miniInfoCard}>
+              <div style={summaryLabel}>Customer actions</div>
+              <div style={{ fontWeight: 700, marginTop: 4 }}>{customerActionState}</div>
+              <div style={summaryHint}>Accept, reject, or recommend changes</div>
+            </div>
+          </div>
         </div>
-        <div>
-          <label style={fieldLabel}>
-            Tax %
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step="0.01"
-              value={taxPct}
-              onChange={(e) => setTaxPct(e.target.value)}
-              style={inputStyle}
-              aria-label="Tax percent"
-            />
-          </label>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={totalsRow}>
-            <span style={totalsLabel}>Subtotal</span>
-            <span style={totalsValue} aria-label="Subtotal">
-              {currency} {fmt(subtotal)}
-            </span>
+        <div style={totalPanelCard}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+            <div>
+              <div style={eyebrowStyle}>Customer-facing summary</div>
+              <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>Ready-to-share total</div>
+            </div>
+            <span style={chipPill}>{selectedSubBrandLabel}</span>
           </div>
-          <div style={totalsRow}>
-            <span style={totalsLabel}>Discount</span>
-            <span style={totalsValue} aria-label="Discount amount">
-              -{currency} {fmt(discountAmount)}
-            </span>
+          <div style={totalsGrid}>
+            <div style={totalStatCard}>
+              <span style={totalsLabel}>Subtotal</span>
+              <span style={totalsValue} aria-label="Subtotal">{currency} {fmt(subtotal)}</span>
+            </div>
+            <div style={totalStatCard}>
+              <span style={totalsLabel}>Discount</span>
+              <span style={totalsValue} aria-label="Discount amount">-{currency} {fmt(discountAmount)}</span>
+            </div>
+            <div style={totalStatCard}>
+              <span style={totalsLabel}>GST / TCS</span>
+              <span style={totalsValue} aria-label="Tax amount">{currency} {fmt(taxAmount)}</span>
+            </div>
+            <div style={{ ...totalStatCard, background: "linear-gradient(135deg, rgba(59,130,246,0.14), rgba(255,255,255,0.02))", borderColor: "rgba(59,130,246,0.18)" }}>
+              <span style={totalsLabel}>Grand Total</span>
+              <span style={{ ...totalsValue, color: "var(--primary-color, var(--accent-color))" }} aria-label="Grand total">{currency} {fmt(grandTotal)}</span>
+            </div>
           </div>
-          <div style={totalsRow}>
-            <span style={totalsLabel}>Tax</span>
-            <span style={totalsValue} aria-label="Tax amount">
-              {currency} {fmt(taxAmount)}
-            </span>
-          </div>
-          <div
-            style={{
-              ...totalsRow,
-              borderTop: "1px solid var(--border-color)",
-              paddingTop: 6,
-              marginTop: 6,
-              fontWeight: 700,
-            }}
-          >
-            <span style={totalsLabel}>Grand Total</span>
-            <span
-              style={{ ...totalsValue, color: "var(--primary-color, var(--accent-color))" }}
-              aria-label="Grand total"
-            >
-              {currency} {fmt(grandTotal)}
-            </span>
-          </div>
-
           {fxRate && (
             <div
               aria-label="FX conversion reference"
               style={{
-                marginTop: 10,
-                paddingTop: 10,
+                marginTop: 14,
+                paddingTop: 14,
                 borderTop: "1px dashed var(--border-color, rgba(148, 163, 184, 0.4))",
                 fontSize: 12,
                 color: "var(--text-secondary)",
+                lineHeight: 1.6,
               }}
             >
               1 {fxRate.base} = {Number(fxRate.rate).toFixed(4)} {fxRate.quote}
@@ -2364,7 +2500,7 @@ export default function QuoteBuilder() {
                 </span>
               )}
               <span style={{ marginLeft: 6 }}>
-                ≈ {fxRate.quote} {fmt(Number(grandTotal) * Number(fxRate.rate))}
+                ? {fxRate.quote} {fmt(Number(grandTotal) * Number(fxRate.rate))}
               </span>
             </div>
           )}
@@ -2938,45 +3074,201 @@ const empty = {
   fontSize: 14,
 };
 const inputStyle = {
-  padding: "8px 10px",
-  borderRadius: 6,
+  padding: "10px 12px",
+  borderRadius: 10,
   border: "1px solid var(--border-color)",
   background: "var(--bg-color, rgba(255,255,255,0.05))",
   color: "var(--text-primary)",
   fontSize: 13,
   outline: "none",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
 };
 const fieldLabel = {
   display: "flex",
   flexDirection: "column",
-  gap: 4,
+  gap: 6,
   fontSize: 12,
   color: "var(--text-secondary)",
+};
+const eyebrowStyle = {
+  fontSize: 11,
+  textTransform: "uppercase",
+  letterSpacing: "0.12em",
+  color: "var(--text-secondary)",
+  fontWeight: 700,
+};
+const heroPanel = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1.4fr) minmax(280px, 0.9fr)",
+  gap: 16,
+  padding: 20,
+  marginBottom: 16,
+  borderRadius: 18,
+  border: "1px solid rgba(96, 165, 250, 0.16)",
+  background: "linear-gradient(135deg, rgba(250,204,21,0.08), rgba(59,130,246,0.10) 48%, rgba(15,23,42,0.62))",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+};
+const summaryGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: 12,
+  marginTop: 16,
+};
+const summaryCard = {
+  padding: 14,
+  borderRadius: 14,
+  background: "linear-gradient(180deg, rgba(15,23,42,0.74), rgba(30,41,59,0.82))",
+  border: "1px solid rgba(148,163,184,0.18)",
+  backdropFilter: "blur(10px)",
+  WebkitBackdropFilter: "blur(10px)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+};
+const summaryLabel = {
+  fontSize: 11,
+  textTransform: "uppercase",
+  letterSpacing: "0.1em",
+  color: "var(--text-secondary)",
+  fontWeight: 700,
+};
+const summaryValue = {
+  marginTop: 6,
+  fontSize: 18,
+  fontWeight: 700,
+  color: "var(--text-primary)",
+};
+const summaryHintStyle = {
+  marginTop: 6,
+  color: "var(--text-secondary)",
+  fontSize: 12,
+  lineHeight: 1.5,
+};
+const summaryHint = summaryHintStyle;
+const heroAside = {
+  display: "grid",
+  gap: 12,
+};
+const heroAsideCard = {
+  padding: 16,
+  borderRadius: 16,
+  background: "linear-gradient(180deg, rgba(15,23,42,0.80), rgba(30,41,59,0.88))",
+  border: "1px solid rgba(96,165,250,0.16)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+};
+const heroAsideCardMuted = {
+  padding: 16,
+  borderRadius: 16,
+  background: "rgba(15, 23, 42, 0.36)",
+  border: "1px solid rgba(148,163,184,0.10)",
+};
+const chipPill = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "4px 10px",
+  borderRadius: 999,
+  background: "rgba(59,130,246,0.14)",
+  border: "1px solid rgba(96,165,250,0.18)",
+  fontSize: 11,
+  fontWeight: 700,
+  color: "#c7d2fe",
+  textTransform: "capitalize",
+};
+const statusChip = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "5px 10px",
+  borderRadius: 999,
+  border: "1px solid transparent",
+  fontSize: 11,
+  fontWeight: 700,
+};
+const timelineRow = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  fontSize: 13,
+};
+const timelineDot = {
+  width: 8,
+  height: 8,
+  borderRadius: 999,
+  background: "var(--primary-color, var(--accent-color))",
+  flexShrink: 0,
+};
+const shareLinkBox = {
+  display: "block",
+  padding: "12px 14px",
+  borderRadius: 12,
+  background: "rgba(15, 23, 42, 0.72)",
+  border: "1px solid rgba(96,165,250,0.16)",
+  fontSize: 12,
+  color: "#e2e8f0",
+};
+const miniInfoCard = {
+  padding: 12,
+  borderRadius: 12,
+  background: "rgba(15,23,42,0.58)",
+  border: "1px solid rgba(148,163,184,0.14)",
+};
+const controlPanelCard = {
+  padding: 16,
+  borderRadius: 16,
+  background: "linear-gradient(180deg, rgba(15,23,42,0.52), rgba(15,23,42,0.34))",
+  border: "1px solid rgba(148,163,184,0.12)",
+  display: "grid",
+  gap: 14,
+};
+const complianceNoteCard = {
+  padding: 14,
+  borderRadius: 14,
+  background: "rgba(120, 53, 15, 0.28)",
+  border: "1px solid rgba(251,191,36,0.24)",
+};
+const totalPanelCard = {
+  padding: 16,
+  borderRadius: 16,
+  background: "linear-gradient(180deg, rgba(15,23,42,0.86), rgba(30,41,59,0.92))",
+  border: "1px solid rgba(96,165,250,0.14)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+};
+const totalsGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 10,
+};
+const totalStatCard = {
+  display: "grid",
+  gap: 6,
+  padding: 14,
+  borderRadius: 14,
+  background: "rgba(255,255,255,0.03)",
+  border: "1px solid rgba(148,163,184,0.14)",
 };
 const primaryBtn = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
-  padding: "8px 14px",
-  borderRadius: 6,
-  fontWeight: 600,
+  padding: "10px 16px",
+  borderRadius: 10,
+  fontWeight: 700,
   fontSize: 13,
-  background: "var(--primary-color, var(--accent-color))",
+  background: "linear-gradient(135deg, var(--primary-color, var(--accent-color)), #0f766e)",
   color: "#fff",
   border: "none",
   cursor: "pointer",
+  boxShadow: "0 8px 20px rgba(15, 118, 110, 0.18)",
 };
 const secondaryBtn = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
-  padding: "8px 14px",
-  borderRadius: 6,
-  fontWeight: 600,
+  padding: "10px 16px",
+  borderRadius: 10,
+  fontWeight: 700,
   fontSize: 13,
-  background: "var(--surface-color)",
+  background: "rgba(255,255,255,0.08)",
   color: "var(--text-primary)",
-  border: "1px solid var(--border-color)",
+  border: "1px solid rgba(148,163,184,0.20)",
   cursor: "pointer",
 };
 const iconBtn = {

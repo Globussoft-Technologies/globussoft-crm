@@ -28,9 +28,11 @@ const path = require("path");
 const { parseMrz, computeCheckDigit } = require("../lib/mrzParser");
 const { parseViz } = require("../lib/passportVizParser");
 const passportImagePipeline = require("../lib/passportImagePipeline");
+const { runPaddleOcr } = require("../lib/paddleOcrRunner");
 
 const INTEGRATION = "passport-ocr";
 const PROVIDER = "local-mrz-v1";
+const PADDLE_PROVIDER = "local-paddleocr-v1";
 // Hard cap so a pathological image / cold traineddata fetch can't hang the
 // request thread indefinitely (review: OCR runs inline in the HTTP request).
 const OCR_TIMEOUT_MS = Number(process.env.PASSPORT_OCR_TIMEOUT_MS || 30000);
@@ -144,6 +146,13 @@ async function preprocessForViz(buffer) {
 //   3. VIZ pass: no whitelist + PSM 3 over the deskewed full page for printed
 //      labels ("Date of Birth", mixed case, slashes).
 async function runOcr(imageBuffer, opts = {}) {
+  const partialResult = opts.partialResult;
+  const updatePartial = (patch) => {
+    if (partialResult && typeof partialResult === "object") {
+      partialResult.current = { ...(partialResult.current || {}), ...patch };
+    }
+  };
+
   if (typeof opts.ocr === "function") {
     const r = (await opts.ocr(imageBuffer)) || {};
     return {
@@ -151,6 +160,18 @@ async function runOcr(imageBuffer, opts = {}) {
       vizText: r.vizText ?? r.text ?? "",
       confidence: r.confidence ?? null,
     };
+  }
+
+  if (process.env.PASSPORT_OCR_ENGINE === "paddle") {
+    try {
+      const paddle = typeof opts.paddleOcr === "function"
+        ? await opts.paddleOcr(imageBuffer)
+        : await runPaddleOcr(imageBuffer, { timeoutMs: OCR_TIMEOUT_MS });
+      if (paddle.mrzText || paddle.vizText) return paddle;
+      console.warn("[passportOcrClient] PaddleOCR returned no text; falling back to tesseract.");
+    } catch (e) {
+      console.warn("[passportOcrClient] PaddleOCR failed; falling back to tesseract:", e?.message || e);
+    }
   }
 
   const { createWorker } = await import("tesseract.js");
@@ -248,6 +269,11 @@ async function runOcr(imageBuffer, opts = {}) {
         console.log("[passportOcrClient] MRZ parse:", { found: !!parsed, valid: parsed?.valid, checksPassed: parsed?.checksPassed });
         mrzCandidates.push({ parsed, text, confidence });
         if (Number.isFinite(confidence)) bestConfidence = Math.max(bestConfidence ?? 0, confidence);
+        updatePartial({
+          mrzText: mrzCandidates.map((c) => c.text).join("\n"),
+          confidence: bestConfidence,
+          engine: "tesseract",
+        });
       }
     }
 
@@ -259,6 +285,7 @@ async function runOcr(imageBuffer, opts = {}) {
         return score(b) - score(a);
       });
       bestMrzText = mrzCandidates[0].text;
+      updatePartial({ mrzText: bestMrzText, confidence: bestConfidence, engine: "tesseract" });
     }
 
     // ── 3. VIZ pass (English, no whitelist, full-page segmentation) ──
@@ -268,10 +295,11 @@ async function runOcr(imageBuffer, opts = {}) {
       await worker.setParameters({ tessedit_char_whitelist: "", tessedit_pageseg_mode: "3" });
       const { text } = await recognize(vizFull || full || orientedBuffer);
       vizText = text;
+      updatePartial({ vizText, mrzText: bestMrzText || mrzCandidates.map((c) => c.text).join("\n"), confidence: bestConfidence, engine: "tesseract" });
       console.log(`[passportOcrClient] VIZ text (${text.length} chars):`, text.slice(0, 200).replace(/\n/g, "|"));
     } catch (_e) { /* VIZ is best-effort */ }
 
-    return { mrzText: bestMrzText || mrzCandidates.map((c) => c.text).join("\n"), vizText, confidence: bestConfidence };
+    return { mrzText: bestMrzText || mrzCandidates.map((c) => c.text).join("\n"), vizText, confidence: bestConfidence, engine: "tesseract" };
   } catch (runErr) {
     console.error("[passportOcrClient] runOcr failed:", runErr?.message || runErr, runErr?.stack || "");
     return { mrzText: "", vizText: "", confidence: null };
@@ -464,16 +492,43 @@ function manualEnvelope(extractedAt, note) {
   };
 }
 
+function buildEnvelopeFromOcrText({ mrzText = "", vizText = "", ocrConfidence = null, ocrEngine = null, extractedAt, timeoutSalvaged = false } = {}) {
+  const mrz = parseMrz(mrzText, { nowYearLast2: new Date().getFullYear() % 100 });
+  const viz = parseViz(vizText);
+
+  // Debug aid: when the MRZ is missing but VIZ is present, log the raw OCR
+  // text so we can see why the MRZ lines were not detected.
+  if (process.env.PASSPORT_OCR_DEBUG === "1" || (!mrz && viz)) {
+    console.log("[passportOcrClient] mrzFound:", Boolean(mrz), "vizFound:", Boolean(viz), "mrzText preview:", mrzText.slice(0, 200).replace(/\n/g, "|"), "vizText preview:", vizText.slice(0, 200).replace(/\n/g, "|"));
+  }
+
+  if (!mrz && !viz) return null;
+
+  const envelope = {
+    ...mergeExtraction(mrz, viz, ocrConfidence),
+    provider: ocrEngine === "paddle" ? PADDLE_PROVIDER : PROVIDER,
+    extractedAt,
+  };
+
+  if (timeoutSalvaged) {
+    envelope.note = envelope.note
+      ? "OCR timed out after reading partial text. " + envelope.note
+      : "OCR timed out after reading partial text; please double-check before approving.";
+  }
+
+  return envelope;
+}
+
 /**
  * Extract passport fields from an uploaded image.
  *
  * Options: tenantId (required), filePath | fileBuffer (the image), fileName,
- * mimeType (preferred for PDF detection), ocr (test/vendor seam).
+ * mimeType (preferred for PDF detection), ocr/paddleOcr (test/provider seams).
  * Returns the extraction envelope; throws PASSPORT_OCR_NOT_YET_ENABLED only
  * when disabled / no tenant. All other failure modes degrade to a manual
  * envelope so the upload still lands.
  */
-async function extractPassport({ tenantId, filePath, fileBuffer, fileName, mimeType, ocr } = {}) {
+async function extractPassport({ tenantId, filePath, fileBuffer, fileName, mimeType, ocr, paddleOcr } = {}) {
   if (!isEnabledForTenant(tenantId)) {
     const err = new Error("Passport OCR not enabled for this tenant (PASSPORT_OCR_DISABLED).");
     err.code = "PASSPORT_OCR_NOT_YET_ENABLED";
@@ -499,38 +554,29 @@ async function extractPassport({ tenantId, filePath, fileBuffer, fileName, mimeT
     return manualEnvelope(extractedAt, "No readable image was provided.");
   }
 
-  let mrzText = "";
-  let vizText = "";
-  let ocrConfidence = null;
+  let ocrResult = null;
+  const partialResult = { current: null };
   try {
     const workerRef = { current: null };
-    const result = await withOcrSlot(() => withTimeout(runOcr(buffer, { ocr, workerRef }), OCR_TIMEOUT_MS, workerRef));
-    mrzText = result?.mrzText || "";
-    vizText = result?.vizText || "";
-    ocrConfidence = result?.confidence ?? null;
+    ocrResult = await withOcrSlot(() => withTimeout(runOcr(buffer, { ocr, paddleOcr, workerRef, partialResult }), OCR_TIMEOUT_MS, workerRef));
   } catch (e) {
     console.error(`[passportOcrClient] OCR error (${e.code || "engine"}): ${e.message}`);
-    return manualEnvelope(extractedAt, "Automatic extraction failed — please verify the fields manually.");
+    if (e.code === "OCR_TIMEOUT" && partialResult.current) {
+      const salvaged = buildEnvelopeFromOcrText({ ...partialResult.current, extractedAt, timeoutSalvaged: true });
+      if (salvaged) return salvaged;
+    }
+    return manualEnvelope(extractedAt, "Automatic extraction failed - please verify the fields manually.");
   }
 
-  const mrz = parseMrz(mrzText, { nowYearLast2: new Date().getFullYear() % 100 });
-  const viz = parseViz(vizText);
-
-  // Debug aid: when the MRZ is missing but VIZ is present, log the raw OCR
-  // text so we can see why the MRZ lines were not detected.
-  if (process.env.PASSPORT_OCR_DEBUG === "1" || (!mrz && viz)) {
-    console.log("[passportOcrClient] mrzFound:", Boolean(mrz), "vizFound:", Boolean(viz), "mrzText preview:", mrzText.slice(0, 200).replace(/\n/g, "|"), "vizText preview:", vizText.slice(0, 200).replace(/\n/g, "|"));
-  }
-
-  if (!mrz && !viz) {
-    return manualEnvelope(extractedAt, "Couldn't read the passport's machine-readable zone or printed fields — please verify the fields manually.");
-  }
-
-  return {
-    ...mergeExtraction(mrz, viz, ocrConfidence),
-    provider: PROVIDER,
+  const envelope = buildEnvelopeFromOcrText({
+    mrzText: ocrResult?.mrzText || "",
+    vizText: ocrResult?.vizText || "",
+    ocrConfidence: ocrResult?.confidence ?? null,
+    ocrEngine: ocrResult?.engine || null,
     extractedAt,
-  };
+  });
+
+  return envelope || manualEnvelope(extractedAt, "Couldn't read the passport's machine-readable zone or printed fields - please verify the fields manually.");
 }
 
 // Merge MRZ + VIZ into the extraction envelope. For the three check-protected

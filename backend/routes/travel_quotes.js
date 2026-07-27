@@ -173,6 +173,34 @@ async function recomputeQuoteTotal(quoteId, tenantId) {
   });
 }
 
+function hydrateQuotePdfPricing(quote) {
+  if (!quote || !Array.isArray(quote.lines)) return quote;
+  const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+  let subtotal = 0;
+  let gstAmount = 0;
+  quote.lines = quote.lines.map((line) => {
+    const amount = Number(line.amount || 0);
+    const quantity = Number(line.quantity || 0) || 1;
+    const unitPrice = Number(line.unitPrice || 0);
+    const taxPercent = line.taxPercent == null ? 0 : Number(line.taxPercent) || 0;
+    subtotal += amount;
+    gstAmount += round2((amount * taxPercent) / 100);
+    return {
+      ...line,
+      qty: quantity,
+      totalPrice: amount,
+      taxableValue: amount,
+      gstPercent: taxPercent,
+      unitPrice,
+    };
+  });
+  quote.subtotal = round2(subtotal);
+  quote.gstAmount = round2(gstAmount);
+  quote.taxTreatment = "exclusive";
+  quote.totalAmount = round2(quote.subtotal + quote.gstAmount);
+  return quote;
+}
+
 function assertValidStatus(s) {
   if (s == null) return;
   if (!VALID_QUOTE_STATUSES.includes(s)) {
@@ -2671,6 +2699,7 @@ router.get(
         where: { quoteId: quote.id, tenantId: req.travelTenant.id },
         orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       });
+      hydrateQuotePdfPricing(quote);
 
       // Destination photos (keyless Wikipedia, same as the itinerary PDF) — a
       // hero banner (first city) + a faint full-page watermark (a SECOND city

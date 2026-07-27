@@ -20,6 +20,7 @@ extension PrescriptionDTO {
         }
         return Prescription(
             id: String(id),
+            visitId: visitId.map(String.init) ?? visit?.id.map(String.init),
             visitDate: visit?.visitDate ?? createdAt ?? "",
             serviceName: visit?.service?.name ?? "",
             doctorName: doctor?.name ?? "",

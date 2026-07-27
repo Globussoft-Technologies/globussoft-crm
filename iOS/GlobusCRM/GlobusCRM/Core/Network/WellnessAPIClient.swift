@@ -130,12 +130,22 @@ final class WellnessAPIClient {
         catch { return .failure(.unknown(error.localizedDescription)) }
     }
 
-    func uploadMultipart(endpoint: WellnessEndpoint, data: Data, fieldName: String, fileName: String, mimeType: String) async -> Result<Data, AppError> {
+    func uploadMultipart(endpoint: WellnessEndpoint,
+                         data: Data,
+                         fieldName: String,
+                         fileName: String,
+                         mimeType: String,
+                         fields: [String: String] = [:]) async -> Result<Data, AppError> {
         do {
             var urlRequest = try buildRequest(for: endpoint)
             let boundary = UUID().uuidString
             urlRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
             var body = Data()
+            for (name, value) in fields {
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
+                body.append("\(value)\r\n".data(using: .utf8)!)
+            }
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
             body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)

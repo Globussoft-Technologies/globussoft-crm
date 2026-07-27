@@ -38,6 +38,7 @@ enum WellnessEndpoint {
     // Health (Int patientId — legacy)
     case prescriptions
     case prescriptionPdf(id: Int)
+    case uploadVisitTreatmentPhoto(visitId: String)
     case treatmentPlans(patientId: Int)
     case consents(patientId: Int)
     case consentPdf(id: Int)
@@ -119,6 +120,7 @@ enum WellnessEndpoint {
         case .serviceCategories:                  return "wellness/service-categories"
         case .prescriptions:                      return "wellness/portal/prescriptions"
         case .prescriptionPdf(let id):            return "wellness/portal/prescriptions/\(id)/pdf"
+        case .uploadVisitTreatmentPhoto(let id):  return "wellness/visits/\(id)/photos"
         case .treatmentPlans(let pid):            return "wellness/patients/\(pid)/treatment-plans"
         case .consents(let pid):                  return "wellness/patients/\(pid)/consents"
         case .consentPdf(let id):                 return "wellness/consents/\(id)/pdf"
@@ -169,7 +171,7 @@ enum WellnessEndpoint {
              .cancelAppointment, .addWaitlist, .purchaseGiftCardOrder,
              .purchaseGiftCardConfirm, .refundPayment, .uploadProfilePicture,
              .uploadAvatar, .changePassword, .joinMembership, .redeemGiftCard,
-             .requestDataExport, .markAllNotificationsRead:
+             .requestDataExport, .markAllNotificationsRead, .uploadVisitTreatmentPhoto:
             return .POST
         case .markNotificationRead:
             return .PUT

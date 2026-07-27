@@ -103,7 +103,8 @@ final class HealthFeatureContainer {
         getPrescriptionsUseCase: GetPrescriptionsUseCase(repository: healthRepository),
         getPrescriptionPdfUseCase: GetPrescriptionPdfUseCase(repository: healthRepository),
         keychain: c.keychainManager,
-        appState: c.appState
+        appState: c.appState,
+        reminderScheduler: MedicationReminderScheduler()
     )
 
     lazy var treatmentPlansViewModel: TreatmentPlansViewModel = TreatmentPlansViewModel(
@@ -115,6 +116,29 @@ final class HealthFeatureContainer {
         getConsentFormsUseCase: GetConsentFormsUseCase(repository: healthRepository),
         keychain: c.keychainManager
     )
+}
+
+// MARK: - Treatment Analysis
+
+final class TreatmentAnalysisFeatureContainer {
+    private unowned let c: AppContainer
+
+    init(container: AppContainer) { self.c = container }
+
+    lazy var treatmentAnalysisRepository: TreatmentAnalysisRepository = TreatmentAnalysisRepositoryImpl(
+        apiClient: c.apiClient
+    )
+
+    func makeViewModel(prescriptionId: String, visitId: String?) -> TreatmentAnalysisViewModel {
+        TreatmentAnalysisViewModel(
+            prescriptionId: prescriptionId,
+            visitId: visitId,
+            getDraftUseCase: GetTreatmentAnalysisDraftUseCase(repository: treatmentAnalysisRepository),
+            saveCaptureUseCase: SaveTreatmentCaptureUseCase(repository: treatmentAnalysisRepository),
+            uploadCaptureUseCase: UploadTreatmentCaptureUseCase(repository: treatmentAnalysisRepository),
+            qualityChecker: TreatmentImageQualityChecker()
+        )
+    }
 }
 
 // MARK: - Membership

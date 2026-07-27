@@ -2,6 +2,7 @@ import Foundation
 
 struct Prescription: Identifiable, Equatable {
     let id: String
+    let visitId: String?
     let visitDate: String
     let serviceName: String
     let doctorName: String

@@ -7,6 +7,7 @@ struct DeepLinkHandler {
         let screen = url.lastPathComponent
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let idString = components?.queryItems?.first(where: { $0.name == "id" })?.value
+        let visitIdString = components?.queryItems?.first(where: { $0.name == "visitId" })?.value
         let id = idString.flatMap { Int($0) }
 
         switch screen {
@@ -17,6 +18,8 @@ struct DeepLinkHandler {
         case "waitlist":             return .waitlist
         case "prescriptions":        return .prescriptions
         case "prescription":         return id.map { .prescriptionPdf(prescriptionId: $0) }
+        case "prescription_analysis":
+            return idString.map { .treatmentAnalysis(prescriptionId: $0, visitId: visitIdString) }
         case "treatmentPlans":       return .treatmentPlans
         case "consentForms":         return .consentForms
         case "wallet":               return .wallet

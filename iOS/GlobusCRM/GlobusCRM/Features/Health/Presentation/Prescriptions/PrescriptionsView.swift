@@ -4,6 +4,7 @@ import Combine
 struct PrescriptionsView: View {
     @StateObject var viewModel: PrescriptionsViewModel
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var router: AppRouter
     @State private var pdfData: Data? = nil
     @State private var showPdf = false
 
@@ -25,9 +26,18 @@ struct PrescriptionsView: View {
                 List(viewModel.uiState.prescriptions) { prescription in
                     PrescriptionRowView(
                         prescription: prescription,
-                        isLoadingPdf: viewModel.uiState.loadingPdfId == prescription.id
+                        isLoadingPdf: viewModel.uiState.loadingPdfId == prescription.id,
+                        reminderEnabled: viewModel.uiState.reminderEnabledIds.contains(prescription.id),
+                        reminderInProgress: viewModel.uiState.reminderActionInProgressId == prescription.id
                     ) {
                         viewModel.onEvent(.requestViewPdf(prescription))
+                    } onTreatmentScan: {
+                        router.navigate(to: .treatmentAnalysis(
+                            prescriptionId: prescription.id,
+                            visitId: prescription.visitId
+                        ))
+                    } onReminderChange: { enabled in
+                        viewModel.onEvent(.toggleReminder(prescription, enabled))
                     }
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
@@ -58,6 +68,14 @@ struct PrescriptionsView: View {
         } message: {
             Text("This will download the document to view it in the app.")
         }
+        .alert("Medication reminders", isPresented: Binding(
+            get: { viewModel.uiState.reminderMessage != nil },
+            set: { if !$0 { viewModel.onEvent(.dismissReminderMessage) } }
+        )) {
+            Button("OK", role: .cancel) { viewModel.onEvent(.dismissReminderMessage) }
+        } message: {
+            Text(viewModel.uiState.reminderMessage ?? "")
+        }
         .onReceive(viewModel.navSignal) { signal in
             switch signal {
             case .showPdf(let data):
@@ -71,7 +89,11 @@ struct PrescriptionsView: View {
 struct PrescriptionRowView: View {
     let prescription: Prescription
     var isLoadingPdf: Bool = false
+    var reminderEnabled: Bool = false
+    var reminderInProgress: Bool = false
     let onViewPdf: () -> Void
+    let onTreatmentScan: () -> Void
+    let onReminderChange: (Bool) -> Void
 
     var body: some View {
         WellnessCard {
@@ -92,29 +114,57 @@ struct PrescriptionRowView: View {
                 }
 
                 if !prescription.drugs.isEmpty {
-                    Text("\(prescription.drugs.count) medication\(prescription.drugs.count == 1 ? "" : "s")")
+                    HStack(spacing: WellnessSpacing.sm) {
+                        Text("\(prescription.drugs.count) medication\(prescription.drugs.count == 1 ? "" : "s")")
+                            .font(.wellnessCaption)
+                            .foregroundColor(.wellnessMuted)
+
+                        Spacer(minLength: 0)
+
+                        Toggle("Reminder", isOn: Binding(
+                            get: { reminderEnabled },
+                            set: { onReminderChange($0) }
+                        ))
                         .font(.wellnessCaption)
-                        .foregroundColor(.wellnessMuted)
+                        .toggleStyle(SwitchToggleStyle(tint: .wellnessTeal))
+                        .disabled(reminderInProgress)
+                    }
                 }
 
-                Button(action: onViewPdf) {
-                    HStack(spacing: WellnessSpacing.xs) {
-                        if isLoadingPdf {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                                .tint(.wellnessTeal)
-                        } else {
-                            Image(systemName: "doc.richtext")
+                HStack(spacing: WellnessSpacing.sm) {
+                    Button(action: onViewPdf) {
+                        HStack(spacing: WellnessSpacing.xs) {
+                            if isLoadingPdf {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .tint(.wellnessTeal)
+                            } else {
+                                Image(systemName: "doc.richtext")
+                                    .font(.system(size: IconSize.small))
+                                    .accessibilityHidden(true)
+                            }
+                            Text(isLoadingPdf ? "Loading..." : "View PDF")
+                                .font(.wellnessCallout)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .foregroundColor(.wellnessTeal)
+                    }
+                    .disabled(isLoadingPdf)
+                    .accessibilityLabel(isLoadingPdf ? "Loading prescription PDF" : "View prescription PDF")
+
+                    Button(action: onTreatmentScan) {
+                        HStack(spacing: WellnessSpacing.xs) {
+                            Image(systemName: "camera.fill")
                                 .font(.system(size: IconSize.small))
                                 .accessibilityHidden(true)
+                            Text("Before/After")
+                                .font(.wellnessCallout)
                         }
-                        Text(isLoadingPdf ? "Loading…" : "View PDF")
-                            .font(.wellnessCallout)
+                        .frame(maxWidth: .infinity)
+                        .foregroundColor(.wellnessBlush)
                     }
-                    .foregroundColor(.wellnessTeal)
+                    .accessibilityLabel("Before and after scan")
                 }
-                .disabled(isLoadingPdf)
-                .accessibilityLabel(isLoadingPdf ? "Loading prescription PDF" : "View prescription PDF")
             }
             .padding(Layout.cardPadding)
         }

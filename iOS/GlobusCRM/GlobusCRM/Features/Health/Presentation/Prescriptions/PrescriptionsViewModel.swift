@@ -11,15 +11,18 @@ final class PrescriptionsViewModel: ObservableObject {
     private let getPrescriptionPdfUseCase: GetPrescriptionPdfUseCase
     private let keychain: KeychainManager
     private let appState: AppState
+    private let reminderScheduler: MedicationReminderScheduler
 
     init(getPrescriptionsUseCase: GetPrescriptionsUseCase,
          getPrescriptionPdfUseCase: GetPrescriptionPdfUseCase,
          keychain: KeychainManager,
-         appState: AppState) {
+         appState: AppState,
+         reminderScheduler: MedicationReminderScheduler) {
         self.getPrescriptionsUseCase = getPrescriptionsUseCase
         self.getPrescriptionPdfUseCase = getPrescriptionPdfUseCase
         self.keychain = keychain
         self.appState = appState
+        self.reminderScheduler = reminderScheduler
     }
 
     func onEvent(_ event: PrescriptionsUiEvent) {
@@ -43,6 +46,10 @@ final class PrescriptionsViewModel: ObservableObject {
             Task { await loadPdf(prescription: p) }
         case .dismissPdf:
             uiState.selectedPrescription = nil
+        case .toggleReminder(let prescription, let enabled):
+            Task { await toggleReminder(prescription: prescription, enabled: enabled) }
+        case .dismissReminderMessage:
+            uiState.reminderMessage = nil
         }
     }
 
@@ -59,6 +66,7 @@ final class PrescriptionsViewModel: ObservableObject {
         }
         uiState.isLoading = true
         uiState.error = nil
+        uiState.reminderEnabledIds = reminderScheduler.enabledReminderIds()
         let result = await getPrescriptionsUseCase(patientId: patientId)
         uiState.isLoading = false
         uiState.hasLoaded = true
@@ -82,5 +90,18 @@ final class PrescriptionsViewModel: ObservableObject {
         case .failure(let error):
             uiState.error = error.localizedDescription
         }
+    }
+
+    private func toggleReminder(prescription: Prescription, enabled: Bool) async {
+        uiState.reminderActionInProgressId = prescription.id
+        uiState.reminderMessage = nil
+
+        let result = enabled
+            ? await reminderScheduler.enable(prescription: prescription)
+            : reminderScheduler.disable(prescriptionId: prescription.id)
+
+        uiState.reminderActionInProgressId = nil
+        uiState.reminderEnabledIds = reminderScheduler.enabledReminderIds()
+        uiState.reminderMessage = result.message
     }
 }

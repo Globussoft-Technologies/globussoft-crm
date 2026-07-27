@@ -5,6 +5,9 @@ struct PrescriptionsUiState {
     var hasLoaded: Bool = false
     var prescriptions: [Prescription] = []
     var error: String? = nil
+    var reminderEnabledIds: Set<String> = []
+    var reminderActionInProgressId: String? = nil
+    var reminderMessage: String? = nil
     var selectedPrescription: Prescription? = nil
     var isLoadingPdf: Bool = false
     var loadingPdfId: String? = nil
@@ -20,6 +23,8 @@ enum PrescriptionsUiEvent {
     case dismissPdfConfirm
     case viewPdf(Prescription)
     case dismissPdf
+    case toggleReminder(Prescription, Bool)
+    case dismissReminderMessage
 }
 
 enum PrescriptionsNavSignal {

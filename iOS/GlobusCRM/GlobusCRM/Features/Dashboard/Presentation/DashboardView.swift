@@ -217,6 +217,9 @@ struct DashboardView: View {
                 MenuTile(icon: "pills.fill", title: "Prescriptions", subtitle: "View & download", color: .wellnessBlush) {
                     router.navigate(to: .prescriptions)
                 }
+                MenuTile(icon: "camera.metering.center.weighted", title: "Before/After", subtitle: "Treatment photos", color: .wellnessBlush) {
+                    router.navigate(to: .prescriptions)
+                }
                 MenuTile(icon: "list.clipboard.fill", title: "Treatment Plans", subtitle: "Care programs", color: .wellnessBlush) {
                     router.navigate(to: .treatmentPlans)
                 }

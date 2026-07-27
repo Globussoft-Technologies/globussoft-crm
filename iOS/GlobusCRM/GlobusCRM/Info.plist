@@ -4,5 +4,9 @@
 <dict>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>GlobusCRM uses the camera to capture before and after treatment photos for clinic review.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>GlobusCRM lets you choose treatment photos from your photo library for clinic review.</string>
 </dict>
 </plist>

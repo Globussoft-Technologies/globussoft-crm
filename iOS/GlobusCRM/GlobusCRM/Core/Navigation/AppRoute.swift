@@ -11,6 +11,7 @@ enum AppRoute: Hashable {
     case waitlist
     case prescriptions
     case prescriptionPdf(prescriptionId: Int)
+    case treatmentAnalysis(prescriptionId: String, visitId: String?)
     case treatmentPlans
     case consentForms
     case memberships

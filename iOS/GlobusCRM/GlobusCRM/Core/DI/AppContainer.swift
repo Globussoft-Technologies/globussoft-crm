@@ -18,6 +18,7 @@ final class AppContainer: ObservableObject {
     lazy var dashboardContainer = DashboardFeatureContainer(container: self)
     lazy var bookingContainer  = BookingFeatureContainer(container: self)
     lazy var healthContainer   = HealthFeatureContainer(container: self)
+    lazy var treatmentAnalysisContainer = TreatmentAnalysisFeatureContainer(container: self)
     lazy var membershipContainer = MembershipFeatureContainer(container: self)
     lazy var walletContainer   = WalletFeatureContainer(container: self)
     lazy var financeContainer  = FinanceFeatureContainer(container: self)

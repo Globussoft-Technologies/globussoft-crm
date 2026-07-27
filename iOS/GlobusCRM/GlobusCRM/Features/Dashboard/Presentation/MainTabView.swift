@@ -66,6 +66,13 @@ struct HomeTab: View {
         switch route {
         case .prescriptions:
             PrescriptionsView(viewModel: container.healthContainer.prescriptionsViewModel)
+        case .treatmentAnalysis(let prescriptionId, let visitId):
+            TreatmentAnalysisView(
+                viewModel: container.treatmentAnalysisContainer.makeViewModel(
+                    prescriptionId: prescriptionId,
+                    visitId: visitId
+                )
+            )
         case .treatmentPlans:
             TreatmentPlansView(viewModel: container.healthContainer.treatmentPlansViewModel)
         case .consentForms:

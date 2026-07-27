@@ -5,6 +5,7 @@ struct RootView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var router: AppRouter
     @EnvironmentObject var container: AppContainer
+    @Environment(\.colorScheme) private var systemColorScheme
 
     var body: some View {
         Group {
@@ -36,8 +37,8 @@ struct RootView: View {
         }
         .environment(\.wellnessTheme, WellnessThemeEnvironment(
             primaryColor: appState.brandColor,
-            isDarkMode: appState.isDarkTheme
+            isDarkMode: appState.resolvedIsDark(systemColorScheme: systemColorScheme)
         ))
-        .preferredColorScheme(appState.isDarkTheme ? .dark : .light)
+        .preferredColorScheme(appState.preferredColorScheme)
     }
 }

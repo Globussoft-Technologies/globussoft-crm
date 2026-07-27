@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import SwiftUI
 import Testing
 @testable import GlobusCRM
 
@@ -100,6 +101,45 @@ struct MedicationReminderParserTests {
         #expect("2 weeks".medicationDurationDays() == 14)
         #expect("1 month".medicationDurationDays() == 30)
         #expect("ten days".medicationDurationDays() == 10)
+    }
+}
+
+@MainActor
+struct ThemePreferenceTests {
+    @Test func systemPreferenceFollowsDeviceColorSchemeUntilOverridden() {
+        let themeKey = "wellness.themePreference"
+        let legacyDarkKey = "wellness.isDarkTheme"
+        let previousTheme = UserDefaults.standard.string(forKey: themeKey)
+        let previousLegacyDark = UserDefaults.standard.object(forKey: legacyDarkKey)
+        defer {
+            if let previousTheme {
+                UserDefaults.standard.set(previousTheme, forKey: themeKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: themeKey)
+            }
+            if let previousLegacyDark {
+                UserDefaults.standard.set(previousLegacyDark, forKey: legacyDarkKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: legacyDarkKey)
+            }
+        }
+
+        UserDefaults.standard.removeObject(forKey: themeKey)
+        UserDefaults.standard.removeObject(forKey: legacyDarkKey)
+
+        let appState = AppState(userDefaultsManager: UserDefaultsManager())
+        #expect(appState.themePreference == .system)
+        #expect(appState.preferredColorScheme == nil)
+        #expect(appState.resolvedIsDark(systemColorScheme: .dark))
+        #expect(!appState.resolvedIsDark(systemColorScheme: .light))
+
+        appState.setThemePreference(.light)
+        #expect(appState.preferredColorScheme == .light)
+        #expect(!appState.resolvedIsDark(systemColorScheme: .dark))
+
+        appState.setThemePreference(.dark)
+        #expect(appState.preferredColorScheme == .dark)
+        #expect(appState.resolvedIsDark(systemColorScheme: .light))
     }
 }
 

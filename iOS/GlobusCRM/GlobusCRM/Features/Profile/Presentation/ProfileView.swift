@@ -4,6 +4,7 @@ import PhotosUI
 struct ProfileView: View {
     @StateObject var viewModel: ProfileViewModel
     @EnvironmentObject var router: AppRouter
+    @EnvironmentObject var appState: AppState
 
     @State private var exportRequested = false
     @State private var showSuccessToast = false
@@ -25,6 +26,8 @@ struct ProfileView: View {
                 ChangePasswordCard(viewModel: viewModel)
 
                 notificationRow
+
+                appearanceCard
 
                 privacyCard
 
@@ -280,6 +283,49 @@ struct ProfileView: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: - Appearance Card
+
+    private var appearanceCard: some View {
+        VStack(alignment: .leading, spacing: WellnessSpacing.md) {
+            HStack(spacing: WellnessSpacing.md) {
+                RoundedRectangle(cornerRadius: WellnessRadius.small)
+                    .fill(Color.wellnessGold.opacity(0.16))
+                    .frame(width: 36, height: 36)
+                    .overlay(
+                        Image(systemName: appState.themePreference.icon)
+                            .font(.system(size: IconSize.badge))
+                            .foregroundColor(.wellnessGold)
+                    )
+
+                VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
+                    Text("Appearance")
+                        .font(.wellnessBody)
+                        .foregroundColor(.wellnessOnSurface)
+                    Text("Use system by default, or choose a mode.")
+                        .font(.wellnessCaption)
+                        .foregroundColor(.wellnessMuted)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: WellnessSpacing.sm) {
+                ForEach(AppThemePreference.allCases) { preference in
+                    AppearanceButton(
+                        preference: preference,
+                        isSelected: appState.themePreference == preference
+                    ) {
+                        appState.setThemePreference(preference)
+                    }
+                }
+            }
+        }
+        .padding(Layout.cardPadding)
+        .background(Color.wellnessSurface)
+        .clipShape(RoundedRectangle(cornerRadius: WellnessRadius.large))
+        .shadow(color: .black.opacity(0.04), radius: 8, x: 0, y: 2)
+    }
+
     // MARK: - Privacy Card
 
     private var privacyCard: some View {
@@ -506,6 +552,38 @@ private struct ProfileDetailRow: View {
         .padding(.vertical, WellnessSpacing.md)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(label): \(value)")
+    }
+}
+
+private struct AppearanceButton: View {
+    let preference: AppThemePreference
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: WellnessSpacing.xs) {
+                Image(systemName: preference.icon)
+                    .font(.system(size: IconSize.small, weight: .semibold))
+                Text(preference.title)
+                    .font(.wellnessCaption)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 58)
+            .foregroundColor(isSelected ? .white : .wellnessOnSurface)
+            .background(isSelected ? Color.wellnessTeal : Color.wellnessBackground)
+            .clipShape(RoundedRectangle(cornerRadius: WellnessRadius.medium))
+            .overlay(
+                RoundedRectangle(cornerRadius: WellnessRadius.medium)
+                    .stroke(isSelected ? Color.clear : Color.wellnessStroke, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(preference.title) appearance")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

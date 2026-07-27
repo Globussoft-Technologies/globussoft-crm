@@ -1,9 +1,33 @@
 import SwiftUI
 import Combine
 
+enum AppThemePreference: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: return "System"
+        case .light:  return "Light"
+        case .dark:   return "Dark"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .system: return "circle.lefthalf.filled"
+        case .light:  return "sun.max.fill"
+        case .dark:   return "moon.fill"
+        }
+    }
+}
+
 @MainActor
 final class AppState: ObservableObject {
-    @Published var isDarkTheme: Bool
+    @Published var themePreference: AppThemePreference
     @Published var clinicName: String
     @Published var brandColor: Color
     @Published var logoUrl: String?
@@ -14,15 +38,35 @@ final class AppState: ObservableObject {
 
     init(userDefaultsManager: UserDefaultsManager) {
         self.userDefaultsManager = userDefaultsManager
-        self.isDarkTheme = userDefaultsManager.isDarkTheme
+        self.themePreference = userDefaultsManager.themePreference
         self.clinicName = userDefaultsManager.clinicName
         self.brandColor = BrandColorResolver.parse(hex: userDefaultsManager.brandColor)
         self.logoUrl = userDefaultsManager.logoUrl
     }
 
+    var preferredColorScheme: ColorScheme? {
+        switch themePreference {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+
+    func resolvedIsDark(systemColorScheme: ColorScheme) -> Bool {
+        switch themePreference {
+        case .system: return systemColorScheme == .dark
+        case .light:  return false
+        case .dark:   return true
+        }
+    }
+
+    func setThemePreference(_ preference: AppThemePreference) {
+        themePreference = preference
+        userDefaultsManager.themePreference = preference
+    }
+
     func toggleDarkTheme() {
-        isDarkTheme.toggle()
-        userDefaultsManager.isDarkTheme = isDarkTheme
+        setThemePreference(themePreference == .dark ? .light : .dark)
     }
 
     func updateBranding(name: String, colorHex: String?, logoUrl: String?) {

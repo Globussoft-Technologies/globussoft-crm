@@ -3,9 +3,24 @@ import Foundation
 final class UserDefaultsManager {
     private enum Keys {
         static let isDarkTheme = "wellness.isDarkTheme"
+        static let themePreference = "wellness.themePreference"
         static let clinicName = "wellness.clinicName"
         static let brandColor = "wellness.brandColor"
         static let logoUrl = "wellness.logoUrl"
+    }
+
+    var themePreference: AppThemePreference {
+        get {
+            if let raw = UserDefaults.standard.string(forKey: Keys.themePreference),
+               let preference = AppThemePreference(rawValue: raw) {
+                return preference
+            }
+            if UserDefaults.standard.object(forKey: Keys.isDarkTheme) != nil {
+                return UserDefaults.standard.bool(forKey: Keys.isDarkTheme) ? .dark : .light
+            }
+            return .system
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Keys.themePreference) }
     }
 
     var isDarkTheme: Bool {

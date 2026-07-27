@@ -20,6 +20,10 @@ final class AppRouter: ObservableObject {
 
     func navigate(to route: AppRoute) {
         switch route {
+        // Auth flow — push onto the unauthenticated stack, not a tab stack
+        case .register:
+            authPath.append(route)
+
         // Bookings-tab routes
         case .visitHistory, .waitlist:
             selectedTab = .bookings
@@ -67,6 +71,11 @@ final class AppRouter: ObservableObject {
     // MARK: - Back navigation
 
     func pop() {
+        // Auth flow: pop from the unauthenticated stack if it has entries
+        if !authPath.isEmpty {
+            authPath.removeLast()
+            return
+        }
         switch selectedTab {
         case .home:     homePath.removeLast(homePath.isEmpty ? 0 : 1)
         case .bookings: bookingsPath.removeLast(bookingsPath.isEmpty ? 0 : 1)

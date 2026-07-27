@@ -1,6 +1,9 @@
 # Build stage
 FROM golang:1.24-alpine AS builder
 
+ARG APP_VERSION=3.9.3
+ENV APP_VERSION=${APP_VERSION}
+
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src

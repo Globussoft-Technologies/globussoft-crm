@@ -21,6 +21,7 @@ type Server struct {
 	e      *echo.Echo
 	db     *repository.DB
 	logger *logrus.Logger
+	rbac   services.RBACService
 }
 
 // NewServer creates a configured Server.
@@ -36,6 +37,8 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("database init failed: %w", err)
 	}
+
+	rbacSvc := services.NewRBACService(db.DB)
 
 	e := echo.New()
 	e.HideBanner = true
@@ -59,13 +62,22 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		Logger:           logger,
 	}))
 	e.Use(middleware.StripDangerous())
+	e.Use(middleware.SanitizeBody())
 	e.Use(middleware.ScrubResponseMiddleware())
+	// Expose RBAC service to middleware via Echo context.
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			middleware.SetRBAC(c, rbacSvc)
+			return next(c)
+		}
+	})
 
 	s := &Server{
 		cfg:    cfg,
 		e:      e,
 		db:     db,
 		logger: logger,
+		rbac:   rbacSvc,
 	}
 	s.registerRoutes()
 	return s, nil
@@ -107,7 +119,7 @@ func (s *Server) registerRoutes() {
 	auditRepo := repository.NewAuditRepository(s.db)
 	auditSvc := services.NewAuditService(auditRepo)
 	ah := handlers.NewAuditHandler(auditSvc)
-	auditGroup := s.e.Group("/api/audit", middleware.RequireRole("ADMIN", "OWNER"))
+	auditGroup := s.e.Group("/api/audit", middleware.RequirePermissionOrRole("audit", "read", "ADMIN", "OWNER"))
 	auditGroup.GET("", ah.List)
 	auditGroup.GET("/verify", ah.Verify)
 

@@ -57,10 +57,12 @@ func (c *Config) ParseCorsOrigins() []string {
 }
 
 // AppVersion returns the backend version.
-// It reads from the Node.js backend package.json when running from the repo root
-// or from backend-go/ so the Go health endpoint reports the same version during migration.
+// Order of resolution: APP_VERSION env var, Node.js backend package.json, default fallback.
 func AppVersion() string {
 	const defaultVersion = "3.9.3"
+	if v := os.Getenv("APP_VERSION"); v != "" {
+		return v
+	}
 	candidates := []string{
 		"backend/package.json",
 		"../backend/package.json",

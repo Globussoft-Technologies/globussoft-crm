@@ -204,24 +204,6 @@ func defaultString(s, fallback string) string {
 	return s
 }
 
-// RequireRole returns middleware that requires one of the given roles.
-func RequireRole(roles ...string) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			u := shared.UserFromEcho(c)
-			if u == nil {
-				return shared.ErrUnauthorized(c, "Authentication required")
-			}
-			for _, r := range roles {
-				if u.Role == r || (r == "ADMIN" && u.IsAdmin()) || (r == "OWNER" && u.IsOwner()) {
-					return next(c)
-				}
-			}
-			return shared.ErrForbidden(c)
-		}
-	}
-}
-
 // RequireStaff rejects portal/customer tokens.
 func RequireStaff() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {

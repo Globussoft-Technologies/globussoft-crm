@@ -826,8 +826,7 @@ describe('Participants', () => {
       'fullName,parentName,parentPhone,parentEmail,applicationStatus,consentCapturedAt,reviewNotes',
       'Anaya Sharma,Riya Sharma,9876543210,parent@example.com,approved,2026-05-01T00:00:00.000Z,Imported row',
       'Ravi Mehta,,,,waitlisted,,',
-    ].join('
-');
+    ].join('\n');
 
     const res = await request(makeApp())
       .post('/api/travel/trips/100/participants/import')
@@ -1719,3 +1718,5 @@ describe('POST /api/travel/trips/:id/registrations/:rid/reject', () => {
     expect(res.body).toMatchObject({ code: 'REGISTRATION_NOT_FOUND' });
   });
 });
+
+

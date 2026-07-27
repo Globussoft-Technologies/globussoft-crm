@@ -72,15 +72,24 @@ export default function TripDetail() {
   const [tab, setTab] = useState("overview");
   const [trip, setTrip] = useState(null);
   const [loading, setLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
 
   const load = useCallback(() => {
-    setLoading(true);
+    // Keep the current trip visible on refreshes so tab-local state
+    // (like the participants bulk-import summary) survives the refetch.
+    if (!hasLoadedRef.current) setLoading(true);
     fetchApi(`/api/travel/trips/${id}`)
       .then(setTrip)
       .catch((e) => notify.error(e?.body?.error || "Failed to load trip"))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        hasLoadedRef.current = true;
+        setLoading(false);
+      });
   }, [id, notify]);
 
+  useEffect(() => {
+    hasLoadedRef.current = false;
+  }, [id]);
   useEffect(load, [load]);
 
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;

@@ -282,8 +282,7 @@ describe('POST /api/travel/invoices', () => {
       `TINV-${CURRENT_YEAR}-0001,2026-05-20,Acme School,,tmc,tmc_nexus,Issued,100,0,0,0,0,100`,
       `TINV-${CURRENT_YEAR}-0002,2026-05-20,Acme School,,tmc,tmc_nexus,Issued,200,0,0,0,0,250`,
       'TOTAL,,,,,,,',
-    ].join('
-');
+    ].join('\n');
 
     const res = await request(makeApp())
       .post('/api/travel/invoices/reconcile/excel-software')
@@ -553,3 +552,5 @@ describe('GET /api/travel/invoices/:id (cross-tenant isolation)', () => {
     );
   });
 });
+
+

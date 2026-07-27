@@ -54,3 +54,27 @@ struct RemotePlaceholderImageView: View {
         }
     }
 }
+
+struct ServiceImageFrameView: View {
+    let imageUrl: String?
+    var height: CGFloat
+    var placeholderSystemImage: String = Symbols.serviceDefault
+    var accent: Color = .wellnessTeal
+
+    var body: some View {
+        RemotePlaceholderImageView(
+            imageUrl: imageUrl,
+            placeholderSystemImage: placeholderSystemImage,
+            accent: accent,
+            cornerRadius: WellnessRadius.small
+        )
+        .frame(maxWidth: .infinity)
+        .frame(height: height)
+        .background(Color.wellnessBackground)
+        .clipShape(RoundedRectangle(cornerRadius: WellnessRadius.small))
+        .overlay(
+            RoundedRectangle(cornerRadius: WellnessRadius.small)
+                .stroke(Color.wellnessMuted.opacity(0.22), lineWidth: 1)
+        )
+    }
+}

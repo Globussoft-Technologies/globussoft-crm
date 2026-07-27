@@ -123,20 +123,18 @@ struct ServiceGridCard: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 0) {
-                RemotePlaceholderImageView(
+            VStack(alignment: .leading, spacing: WellnessSpacing.md) {
+                ServiceImageFrameView(
                     imageUrl: service.imageUrl,
+                    height: 116,
                     placeholderSystemImage: Symbols.serviceDefault,
-                    accent: .wellnessTeal,
-                    cornerRadius: WellnessRadius.medium
+                    accent: .wellnessTeal
                 )
-                .frame(maxWidth: .infinity)
-                .frame(height: 96)
 
-                VStack(alignment: .leading, spacing: WellnessSpacing.sm) {
+                VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
                     Text(service.name)
                         .font(.wellnessSubheadline)
-                        .fontWeight(.medium)
+                        .fontWeight(.semibold)
                         .foregroundColor(.wellnessOnSurface)
                         .lineLimit(2)
 
@@ -151,20 +149,23 @@ struct ServiceGridCard: View {
                             .lineLimit(1)
                     }
 
+                    Spacer(minLength: WellnessSpacing.xs)
+
                     if let discounted = service.discountedPrice, discounted < service.price {
-                        VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
+                        HStack(alignment: .lastTextBaseline, spacing: WellnessSpacing.sm) {
+                            Text(CurrencyUtil.formatAmount(discounted, currency: service.currency))
+                                .font(.wellnessCaption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.wellnessTeal)
                             Text(CurrencyUtil.formatAmount(service.price, currency: service.currency))
                                 .font(.wellnessCaption2)
                                 .foregroundColor(.wellnessMuted)
                                 .strikethrough(true, color: .wellnessMuted)
-                            Text(CurrencyUtil.formatAmount(discounted, currency: service.currency))
-                                .font(.wellnessCaption2)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.wellnessTeal)
                         }
                     } else {
                         Text(CurrencyUtil.formatAmount(service.price, currency: service.currency))
-                            .font(.wellnessCaption2)
+                            .font(.wellnessCaption)
+                            .fontWeight(.semibold)
                             .foregroundColor(.wellnessTeal)
                     }
 
@@ -174,9 +175,10 @@ struct ServiceGridCard: View {
                             .foregroundColor(.wellnessMuted)
                     }
                 }
-                .padding(Layout.cardPaddingCompact)
+                .frame(maxWidth: .infinity, minHeight: 106, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, minHeight: 184, alignment: .topLeading)
+            .padding(WellnessSpacing.sm)
+            .frame(maxWidth: .infinity, minHeight: 248, alignment: .topLeading)
             .background(Color.wellnessSurface)
             .clipShape(RoundedRectangle(cornerRadius: WellnessRadius.medium))
             .shadow(color: .black.opacity(0.05), radius: 4, x: 0, y: 2)
@@ -241,14 +243,12 @@ struct ServiceDetailSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: WellnessSpacing.xl) {
-                    RemotePlaceholderImageView(
+                    ServiceImageFrameView(
                         imageUrl: service.imageUrl,
+                        height: 200,
                         placeholderSystemImage: Symbols.serviceDefault,
-                        accent: .wellnessTeal,
-                        cornerRadius: WellnessRadius.medium
+                        accent: .wellnessTeal
                     )
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 190)
 
                     // Title + category + severity pill
                     VStack(alignment: .leading, spacing: WellnessSpacing.sm) {

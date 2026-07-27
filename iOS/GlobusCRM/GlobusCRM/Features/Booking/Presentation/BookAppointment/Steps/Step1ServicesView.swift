@@ -72,17 +72,15 @@ struct BookingServiceCard: View {
     var body: some View {
         Button(action: action) {
             WellnessCard {
-                VStack(alignment: .leading, spacing: 0) {
-                    RemotePlaceholderImageView(
+                VStack(alignment: .leading, spacing: WellnessSpacing.md) {
+                    ServiceImageFrameView(
                         imageUrl: service.imageUrl,
+                        height: 108,
                         placeholderSystemImage: Symbols.serviceDefault,
-                        accent: .wellnessTeal,
-                        cornerRadius: WellnessRadius.medium
+                        accent: .wellnessTeal
                     )
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 88)
 
-                    VStack(alignment: .leading, spacing: WellnessSpacing.sm) {
+                    VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
                         Text(service.name)
                             .font(.wellnessCallout)
                             .fontWeight(.semibold)
@@ -96,21 +94,41 @@ struct BookingServiceCard: View {
                                 .lineLimit(1)
                         }
 
-                        if let price = service.discountedPrice ?? service.basePrice {
-                            Text(CurrencyUtil.formatINR(price))
-                                .font(.wellnessCaption)
-                                .foregroundColor(.wellnessTeal)
-                        }
+                        Spacer(minLength: WellnessSpacing.xs)
 
-                        if let dur = service.durationMin {
-                            Text("\(dur) min")
-                                .font(.wellnessCaption)
-                                .foregroundColor(.wellnessMuted)
+                        HStack(alignment: .lastTextBaseline, spacing: WellnessSpacing.sm) {
+                            if let discounted = service.discountedPrice,
+                               let base = service.basePrice,
+                               discounted < base {
+                                Text(CurrencyUtil.formatINR(discounted))
+                                    .font(.wellnessCaption)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.wellnessTeal)
+                                Text(CurrencyUtil.formatINR(base))
+                                    .font(.wellnessCaption2)
+                                    .foregroundColor(.wellnessMuted)
+                                    .strikethrough(true, color: .wellnessMuted)
+                            } else if let price = service.discountedPrice ?? service.basePrice {
+                                Text(CurrencyUtil.formatINR(price))
+                                    .font(.wellnessCaption)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.wellnessTeal)
+                            }
+
+                            Spacer(minLength: 0)
+
+                            if let dur = service.durationMin {
+                                Label("\(dur) min", systemImage: Symbols.clock)
+                                    .font(.wellnessCaption2)
+                                    .foregroundColor(.wellnessMuted)
+                                    .labelStyle(.titleAndIcon)
+                            }
                         }
                     }
-                    .padding(Layout.cardPadding)
+                    .frame(maxWidth: .infinity, minHeight: 90, alignment: .topLeading)
                 }
-                .frame(maxWidth: .infinity, minHeight: 184, alignment: .topLeading)
+                .padding(WellnessSpacing.sm)
+                .frame(maxWidth: .infinity, minHeight: 226, alignment: .topLeading)
             }
         }
         .buttonStyle(.plain)

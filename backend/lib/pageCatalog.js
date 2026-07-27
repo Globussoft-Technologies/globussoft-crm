@@ -508,6 +508,14 @@ const PAGE_CATALOG = [
     vertical: 'generic',
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
+  {
+    path: '/wellness/qr-generator',
+    label: 'QR Generator',
+    description: 'Create downloadable QR codes for clinic public pages, services, and offers',
+    category: 'Marketing',
+    vertical: 'wellness',
+    requiredPermissions: [{ module: 'marketing', action: 'read' }],
+  },
 
   //  Reports + analytics 
   {

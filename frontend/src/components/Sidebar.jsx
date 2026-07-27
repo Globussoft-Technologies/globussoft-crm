@@ -72,6 +72,7 @@ import {
   Gift,
   TicketPercent,
   Coins,
+  QrCode,
   Loader2,
   // Wave 11 Agent HH — Inventory backbone admin entries
   Layers,
@@ -1123,6 +1124,7 @@ const PAGE_ICON_BY_PATH = {
   "/marketing": Send,
   "/sequences": Network,
   "/landing-pages": PanelTop,
+  "/wellness/qr-generator": QrCode,
   // Reports
   "/wellness/reports": BarChart3,
   "/wellness/per-location": Building2,

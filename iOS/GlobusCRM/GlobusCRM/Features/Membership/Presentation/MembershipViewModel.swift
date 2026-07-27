@@ -7,16 +7,13 @@ final class MembershipViewModel: ObservableObject {
 
     private let getAvailablePlansUseCase: GetAvailablePlansUseCase
     private let getMyMembershipsUseCase: GetMyMembershipsUseCase
-    private let joinMembershipUseCase: JoinMembershipUseCase
     private let keychain: KeychainManager
 
     init(getAvailablePlansUseCase: GetAvailablePlansUseCase,
          getMyMembershipsUseCase: GetMyMembershipsUseCase,
-         joinMembershipUseCase: JoinMembershipUseCase,
          keychain: KeychainManager) {
         self.getAvailablePlansUseCase = getAvailablePlansUseCase
         self.getMyMembershipsUseCase = getMyMembershipsUseCase
-        self.joinMembershipUseCase = joinMembershipUseCase
         self.keychain = keychain
     }
 
@@ -36,20 +33,8 @@ final class MembershipViewModel: ObservableObject {
         if case .failure(let e) = plansResult { uiState.error = e.localizedDescription }
     }
 
-    func confirmJoin() async {
-        guard let plan = uiState.planToJoin,
-              let patientId = keychain.getPatientIdString() else { return }
-        uiState.isJoining = true
-        let result = await joinMembershipUseCase(planId: plan.id, patientId: patientId)
-        uiState.isJoining = false
+    func confirmJoin() {
         uiState.planToJoin = nil
-        switch result {
-        case .success(let membership):
-            uiState.myMemberships.insert(membership, at: 0)
-            uiState.joinSuccess = true
-        case .failure(let error):
-            uiState.error = error.localizedDescription
-        }
     }
 
     func selectTab(_ tab: MembershipTab) {

@@ -268,3 +268,51 @@ struct NotificationDAOTests {
         #expect(dao.unreadCount() == 0)
     }
 }
+
+@MainActor
+struct MembershipViewModelTests {
+    @Test func confirmingJoinPromptOnlyDismissesClinicContactAlert() {
+        let repository = StubMembershipRepository()
+        let viewModel = MembershipViewModel(
+            getAvailablePlansUseCase: GetAvailablePlansUseCase(repository: repository),
+            getMyMembershipsUseCase: GetMyMembershipsUseCase(repository: repository),
+            keychain: KeychainManager()
+        )
+        let plan = MembershipPlan(
+            id: "7",
+            name: "Gold Plan",
+            description: "Annual wellness membership",
+            price: 9999,
+            currency: "INR",
+            durationDays: 365,
+            benefits: [],
+            entitlements: ["Priority booking"],
+            tier: .gold
+        )
+
+        viewModel.initiateJoin(plan: plan)
+        viewModel.confirmJoin()
+
+        #expect(viewModel.uiState.planToJoin == nil)
+        #expect(viewModel.uiState.error == nil)
+        #expect(viewModel.uiState.myMemberships.isEmpty)
+        #expect(!repository.didAttemptJoin)
+    }
+}
+
+private final class StubMembershipRepository: MembershipRepository {
+    private(set) var didAttemptJoin = false
+
+    func getAvailablePlans() async -> Result<[MembershipPlan], AppError> {
+        .success([])
+    }
+
+    func getMyMemberships(patientId: String) async -> Result<[UserMembership], AppError> {
+        .success([])
+    }
+
+    func joinMembership(planId: String, patientId: String) async -> Result<UserMembership, AppError> {
+        didAttemptJoin = true
+        return .failure(.network("Unexpected join attempt"))
+    }
+}

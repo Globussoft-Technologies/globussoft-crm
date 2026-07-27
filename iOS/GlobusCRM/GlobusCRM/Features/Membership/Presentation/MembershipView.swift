@@ -39,25 +39,18 @@ struct MembershipView: View {
         .navigationTitle("Memberships")
         .navigationBarTitleDisplayMode(.large)
         .task { await viewModel.load() }
-        .confirmationDialog(
-            "Join \(viewModel.uiState.planToJoin?.name ?? "")?",
+        .alert(
+            "Join membership?",
             isPresented: Binding(
                 get: { viewModel.uiState.planToJoin != nil },
                 set: { if !$0 { viewModel.cancelJoin() } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
-            Button("Join Plan", role: .none) { Task { await viewModel.confirmJoin() } }
+            Button("OK") { viewModel.confirmJoin() }
             Button("Cancel", role: .cancel) { viewModel.cancelJoin() }
         } message: {
             if let plan = viewModel.uiState.planToJoin {
-                Text("You will be enrolled in the \(plan.name) plan for \(CurrencyUtil.formatAmount(plan.price, currency: plan.currency)).")
-            }
-        }
-        .overlay {
-            if viewModel.uiState.isJoining {
-                Color.black.opacity(0.3).ignoresSafeArea()
-                    .overlay(ProgressView().tint(.white))
+                Text("Contact the clinic to purchase \(plan.name).")
             }
         }
     }

@@ -7,8 +7,6 @@ struct MembershipUiState {
     var error: String? = nil
     var selectedTab: MembershipTab = .available
     var planToJoin: MembershipPlan? = nil
-    var isJoining: Bool = false
-    var joinSuccess: Bool = false
 }
 
 enum MembershipTab: String, CaseIterable {

@@ -155,7 +155,6 @@ final class MembershipFeatureContainer {
     lazy var membershipViewModel: MembershipViewModel = MembershipViewModel(
         getAvailablePlansUseCase: GetAvailablePlansUseCase(repository: membershipRepository),
         getMyMembershipsUseCase: GetMyMembershipsUseCase(repository: membershipRepository),
-        joinMembershipUseCase: JoinMembershipUseCase(repository: membershipRepository),
         keychain: c.keychainManager
     )
 }

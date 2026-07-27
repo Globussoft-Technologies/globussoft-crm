@@ -1227,7 +1227,7 @@ router.get("/patients.csv", phiReadGate, async (req, res) => {
       `attachment; filename="patients${mustMask ? "-masked" : ""}-${new Date().toISOString().slice(0, 10)}.csv"`,
     );
     // BOM so Excel auto-detects UTF-8.
-    res.write("");
+    res.write("\ufeff");
     res.write(headers.map(csvEscape).join(",") + "\r\n");
     for (const p of rows) {
       const row = [
@@ -1694,7 +1694,8 @@ router.get("/patients/export", phiReadGate, async (req, res) => {
       "Content-Disposition",
       `attachment; filename="${baseName}.csv"`,
     );
-    res.write("");
+    // BOM so Excel auto-detects UTF-8.
+    res.write("\ufeff");
     res.end(csv);
   } catch (e) {
     console.error("[wellness] patient export error:", e.message);
@@ -1757,7 +1758,8 @@ router.get("/patients/import-template", phiReadGate, async (req, res) => {
       "Content-Disposition",
       'attachment; filename="patients-template.csv"',
     );
-    res.write("");
+    // BOM so Excel auto-detects UTF-8.
+    res.write("\ufeff");
     res.end(csv);
   } catch (e) {
     console.error("[wellness] patient template error:", e.message);
@@ -8409,7 +8411,7 @@ function sendCsv(res, baseName, window, csvText) {
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   // BOM so Excel auto-detects UTF-8 ( glyph, accented patient names, etc).
-  res.write("");
+  res.write("\ufeff");
   res.end(csvText);
 }
 

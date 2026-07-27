@@ -191,6 +191,132 @@
       "reason": "Install-time dependency of canvas used to fetch prebuilt binaries. The underlying tar advisories are allowlisted above; runtime exposure is zero.",
       "addedOn": "2026-06-16",
       "sunsetBy": "2026-09-16"
+    },
+    {
+      "ghsa": "GHSA-mh99-v99m-4gvg",
+      "package": "brace-expansion",
+      "severity": "high",
+      "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+      "reason": "Transitive dependency used by minimatch/glob for file-system pattern expansion in archiver, yamljs, gaxios, and googleapis-common chains. These paths are only exercised by internal utilities (WhatsApp backup export, YAML config parsing, Google API HTTP client cleanup) and never process attacker-controlled glob patterns. Long-term: upgrade transitive minimatch/brace-expansion via dependency refreshes.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": "GHSA-r28c-9q8g-f849",
+      "package": "postcss",
+      "severity": "high",
+      "title": "PostCSS: Path Traversal in Previous Source Map Auto-Loading leads to Arbitrary .map File Disclosure",
+      "reason": "Transitive via sanitize-html. The vulnerable source-map auto-loading path is not used by sanitize-html at runtime; it only parses inline CSS to strip tags. Our two sanitize-html callsites build their config from literals and process request body strings, not files. Underlying sanitize-html issue already tracked separately (GHSA-rpr9-rxv7-x643). Long-term: upgrade sanitize-html to 3.x.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": "GHSA-r292-9mhp-454m",
+      "package": "tar",
+      "severity": "high",
+      "title": "node-tar: Uncontrolled recursion in mapHas/filesFilter allows stack-overflow DoS via crafted long-path tar with member selection",
+      "reason": "Transitive via @mapbox/node-pre-gyp which only extracts prebuilt canvas binaries during npm install. The tar surface is install-time only and the tarballs come from trusted upstream registries, so runtime exposure is zero.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-21"
+    },
+    {
+      "ghsa": null,
+      "package": "archiver",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable archiver-utils / readdir-glob / zip-stream",
+      "reason": "Transitive dependency of whatsapp-web.js used for WhatsApp chat backup export. Only exercised by authenticated WhatsApp backup flows on server-controlled data; not exposed to attacker input. Long-term: upgrade whatsapp-web.js to a release that pins a clean archiver chain.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": null,
+      "package": "archiver-utils",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable glob → minimatch → brace-expansion",
+      "reason": "Part of the archiver chain under whatsapp-web.js. Same mitigation as archiver above; runtime exposure is zero.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": null,
+      "package": "gaxios",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable rimraf → glob → minimatch → brace-expansion",
+      "reason": "Transitive dependency of googleapis and @google/generative-ai used for outbound Google API HTTP requests. The vulnerable rimraf/glob path is only used for local cleanup utilities, not on attacker input. Long-term: refresh googleapis dependencies to non-vulnerable rimraf/glob versions.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": null,
+      "package": "glob",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable minimatch → brace-expansion",
+      "reason": "Transitive dependency of archiver-utils, yamljs, and rimraf. Used only for internal file-system pattern matching, not on attacker-controlled input. Long-term: refresh parent dependencies to clean glob/minimatch versions.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": null,
+      "package": "googleapis-common",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable gaxios → rimraf → glob → minimatch → brace-expansion",
+      "reason": "Transitive dependency of googleapis and @google/generative-ai. Same mitigation as gaxios; runtime exposure is zero.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": null,
+      "package": "minimatch",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable brace-expansion",
+      "reason": "Transitive dependency of glob. Used only for internal file-system pattern matching, not on attacker-controlled input. Long-term: refresh parent dependencies to clean minimatch versions.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": null,
+      "package": "readdir-glob",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable minimatch → brace-expansion",
+      "reason": "Part of the archiver chain under whatsapp-web.js. Same mitigation as archiver above; runtime exposure is zero.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": null,
+      "package": "rimraf",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable glob → minimatch → brace-expansion",
+      "reason": "Transitive dependency of gaxios used for local cleanup utilities. Not exposed to attacker-controlled input. Long-term: refresh gaxios/googleapis dependencies to rimraf v4+ which removes the glob dependency.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": null,
+      "package": "whatsapp-web.js",
+      "severity": "high",
+      "title": "Direct dependency: depends on vulnerable archiver chain",
+      "reason": "Direct dependency used for WhatsApp Web integration. The vulnerable archiver chain is only used for server-side chat backup export triggered by authenticated users on server-controlled data. Not exposed to attacker input. Long-term: upgrade whatsapp-web.js to a release without the vulnerable archiver chain.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": null,
+      "package": "yamljs",
+      "severity": "high",
+      "title": "Direct dependency: depends on vulnerable glob → minimatch → brace-expansion",
+      "reason": "Direct dependency used for YAML parsing (Swagger/OpenAPI spec loading). The vulnerable glob path is only used for internal file-system globbing during module load, not on attacker-controlled input. Long-term: replace yamljs with a maintained YAML parser or upgrade to a clean glob chain.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": null,
+      "package": "zip-stream",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable archiver-utils → glob → minimatch → brace-expansion",
+      "reason": "Part of the archiver chain under whatsapp-web.js. Same mitigation as archiver above; runtime exposure is zero.",
+      "addedOn": "2026-07-27",
+      "sunsetBy": "2026-10-27"
     }
   ]
 }

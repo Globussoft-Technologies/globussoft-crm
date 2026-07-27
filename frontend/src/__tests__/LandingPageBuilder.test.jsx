@@ -1,4 +1,4 @@
-/**
+﻿/**
  * LandingPageBuilder.test.jsx — vitest + RTL coverage of the WYSIWYG
  * landing-page builder surface.
  *
@@ -492,7 +492,7 @@ describe("<LandingPageBuilder /> — page surface", () => {
 
     // Right rail header reads "Component - heading" once selected.
     await waitFor(() =>
-      expect(screen.getByText((_, element) => /Component\s*-\s*heading/i.test(element?.textContent || ""))).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: /Component\s*-\s*heading/i })).toBeInTheDocument(),
     );
 
     // Heading property editor surfaces "Text" + "Level" + "Align" + "Color"
@@ -720,7 +720,7 @@ describe("<LandingPageBuilder /> — page surface", () => {
 
     // Right rail header reads "Component - form".
     await waitFor(() =>
-      expect(screen.getByText((_, element) => /Component\s*-\s*form/i.test(element?.textContent || ""))).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: /Component\s*-\s*form/i })).toBeInTheDocument(),
     );
 
     // Two rule names from sampleRules appear in the dropdown options.

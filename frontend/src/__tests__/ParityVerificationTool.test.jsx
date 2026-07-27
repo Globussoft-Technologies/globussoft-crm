@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -28,7 +28,7 @@ describe('ParityVerificationTool', () => {
     });
 
     renderWithRouter(<ParityVerificationTool />);
-    expect(screen.getByText('🔍 Parity Verification Tool')).toBeInTheDocument();
+    expect(screen.getByText(/Parity Verification Tool/i)).toBeInTheDocument();
   });
 
   it('loads landing page by ID', async () => {

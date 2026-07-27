@@ -4,11 +4,11 @@ struct SplashScreenView: View {
     @State private var logoOpacity: Double = 0
     @State private var logoScale: Double = 0.85
 
-    // Brand background color matches the system launch screen
+    // Brand background color mirrors the Android launch screen.
     private let brandBackground = Color(
-        red: 244.0 / 255.0,
-        green: 246.0 / 255.0,
-        blue: 251.0 / 255.0
+        red: 248.0 / 255.0,
+        green: 248.0 / 255.0,
+        blue: 248.0 / 255.0
     )
 
     var body: some View {
@@ -16,11 +16,11 @@ struct SplashScreenView: View {
             brandBackground.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                Image("SplashLogo")
+                Image("WellnessLogo")
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 220, height: 220)
-                    .clipShape(RoundedRectangle(cornerRadius: WellnessRadius.large))
+                    .frame(maxWidth: 340)
+                    .padding(.horizontal, WellnessSpacing.xl)
                     .opacity(logoOpacity)
                     .scaleEffect(logoScale)
             }

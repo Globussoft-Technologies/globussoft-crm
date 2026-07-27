@@ -32,15 +32,9 @@ struct LoginView: View {
 
     private var headerSection: some View {
         VStack(spacing: WellnessSpacing.md) {
-            AsyncImage(url: URL(string: appState.logoUrl ?? "")) { image in
-                image.resizable().scaledToFit()
-            } placeholder: {
-                Image(systemName: Symbols.clinic)
-                    .font(.system(size: IconSize.hero))
-                    .foregroundColor(appState.brandColor)
-            }
-            .frame(height: 72)
-            .padding(.top, WellnessSpacing.xxl)
+            logoView
+                .frame(maxWidth: 260, minHeight: 88, maxHeight: 112)
+                .padding(.top, WellnessSpacing.xxl)
 
             Text(appState.clinicName)
                 .font(.wellnessLargeTitle)
@@ -51,6 +45,27 @@ struct LoginView: View {
                 .font(.wellnessBody)
                 .foregroundColor(.wellnessMuted)
         }
+    }
+
+    @ViewBuilder
+    private var logoView: some View {
+        AsyncImage(url: remoteLogoURL) { phase in
+            switch phase {
+            case .success(let image):
+                image
+                    .resizable()
+                    .scaledToFit()
+            default:
+                Image("WellnessLogo")
+                    .resizable()
+                    .scaledToFit()
+            }
+        }
+    }
+
+    private var remoteLogoURL: URL? {
+        guard let logoUrl = appState.logoUrl, !logoUrl.isEmpty else { return nil }
+        return URL(string: logoUrl)
     }
 
     // MARK: Form

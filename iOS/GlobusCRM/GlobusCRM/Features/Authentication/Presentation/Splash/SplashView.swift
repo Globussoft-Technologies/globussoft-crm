@@ -6,9 +6,9 @@ struct SplashView: View {
     @EnvironmentObject var sessionManager: SessionManager
     @EnvironmentObject var appState: AppState
     private let brandBackground = Color(
-        red: 244.0 / 255.0,
-        green: 246.0 / 255.0,
-        blue: 251.0 / 255.0
+        red: 248.0 / 255.0,
+        green: 248.0 / 255.0,
+        blue: 248.0 / 255.0
     )
     
     var body: some View {
@@ -16,14 +16,13 @@ struct SplashView: View {
             brandBackground.ignoresSafeArea()
 
             VStack(spacing: WellnessSpacing.lg) {
-                Image("SplashLogo")
+                Image("WellnessLogo")
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 220, height: 220)
-                    .clipShape(RoundedRectangle(cornerRadius: WellnessRadius.large))
+                    .frame(maxWidth: 340)
 
                 ProgressView()
-                    .tint(.white)
+                    .tint(appState.brandColor)
                     .padding(.top, WellnessSpacing.xl)
             }
             .padding(Layout.pagePadding)

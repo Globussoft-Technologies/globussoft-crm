@@ -29,6 +29,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import React from 'react';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -56,6 +58,14 @@ vi.mock('../utils/money', () => ({
 
 // SUT imported AFTER the mocks above.
 import BuyGiftCardsPage from '../pages/wellness/BuyGiftCards';
+
+function renderPage(search = '') {
+  return render(
+    <MemoryRouter initialEntries={[{ pathname: '/wellness/buy-giftcards', search }]}>
+      <BuyGiftCardsPage />
+    </MemoryRouter>,
+  );
+}
 
 // ── Fixtures ──────────────────────────────────────────────────────────
 const storefrontCards = [
@@ -131,7 +141,7 @@ afterEach(() => {
 describe('BuyGiftCards — page chrome', () => {
   it('renders heading + intro copy', async () => {
     fetchApiMock.mockImplementation(defaultMock());
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     expect(screen.getByRole('heading', { name: /Buy Gift Cards/i })).toBeInTheDocument();
     expect(
@@ -143,7 +153,7 @@ describe('BuyGiftCards — page chrome', () => {
 
   it('calls GET /api/wellness/giftcards/storefront on mount', async () => {
     fetchApiMock.mockImplementation(defaultMock());
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(
@@ -163,7 +173,7 @@ describe('BuyGiftCards — page chrome', () => {
       }
       return Promise.resolve({});
     });
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     expect(screen.getByTestId('buy-giftcard-loading')).toBeInTheDocument();
     resolveFn({ giftCards: [] });
@@ -184,7 +194,7 @@ describe('BuyGiftCards — empty + grid', () => {
       }
       return Promise.resolve({});
     });
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-empty')).toBeInTheDocument());
     // No grid rendered alongside the empty state.
@@ -193,7 +203,7 @@ describe('BuyGiftCards — empty + grid', () => {
 
   it('renders a tile per gift card with name, credit amount, sale price, and a Buy CTA', async () => {
     fetchApiMock.mockImplementation(defaultMock());
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-card-11')).toBeInTheDocument());
     expect(screen.getByTestId('buy-giftcard-card-12')).toBeInTheDocument();
@@ -221,7 +231,7 @@ describe('BuyGiftCards — empty + grid', () => {
     // directly). Pin so a future server-side regression that adds the
     // field to the projection doesn't silently leak through the UI.
     fetchApiMock.mockImplementation(defaultMock());
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-card-11')).toBeInTheDocument());
     expect(screen.queryByText(/codeHash/i)).toBeNull();
@@ -238,7 +248,7 @@ describe('BuyGiftCards — empty + grid', () => {
 describe('BuyGiftCards — purchase modal (self default + gift toggle)', () => {
   it('clicking Buy opens the dialog in "for myself" mode — self chip shown, no picker', async () => {
     fetchApiMock.mockImplementation(defaultMock());
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
@@ -256,7 +266,7 @@ describe('BuyGiftCards — purchase modal (self default + gift toggle)', () => {
 
   it('Pay is ENABLED by default in self mode (no recipient selection needed)', async () => {
     fetchApiMock.mockImplementation(defaultMock());
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
@@ -266,7 +276,7 @@ describe('BuyGiftCards — purchase modal (self default + gift toggle)', () => {
 
   it('switching to "Gift to someone else" reveals the picker and disables Pay until a patient is chosen', async () => {
     fetchApiMock.mockImplementation(defaultMock());
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
@@ -279,7 +289,7 @@ describe('BuyGiftCards — purchase modal (self default + gift toggle)', () => {
 
   it('gift mode: typing triggers a patient lookup and renders results', async () => {
     fetchApiMock.mockImplementation(defaultMock());
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
@@ -306,7 +316,7 @@ describe('BuyGiftCards — purchase modal (self default + gift toggle)', () => {
 
   it('gift mode: selecting a patient enables Pay and renders the recipient chip', async () => {
     fetchApiMock.mockImplementation(defaultMock());
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
@@ -328,7 +338,7 @@ describe('BuyGiftCards — purchase modal (self default + gift toggle)', () => {
 
   it('toggling back to "For myself" hides the picker and re-enables Pay', async () => {
     fetchApiMock.mockImplementation(defaultMock());
-    render(<BuyGiftCardsPage />);
+    renderPage();
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
@@ -362,7 +372,7 @@ describe('BuyGiftCards — Razorpay handshake', () => {
     fetchApiMock.mockImplementation(defaultMock());
     const { ctor, open } = stubRazorpay();
 
-    render(<BuyGiftCardsPage />);
+    renderPage();
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
     // Self mode is the default — pay directly, no picker interaction.
@@ -389,7 +399,7 @@ describe('BuyGiftCards — Razorpay handshake', () => {
     fetchApiMock.mockImplementation(defaultMock());
     const { ctor, open } = stubRazorpay();
 
-    render(<BuyGiftCardsPage />);
+    renderPage();
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
     fireEvent.click(screen.getByTestId('buy-giftcard-recipient-gift'));
@@ -448,7 +458,7 @@ describe('BuyGiftCards — Razorpay handshake', () => {
     let capturedHandler = null;
     stubRazorpay((opts) => { capturedHandler = opts.handler; });
 
-    render(<BuyGiftCardsPage />);
+    renderPage();
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
     fireEvent.click(screen.getByTestId('buy-giftcard-pay-now'));
@@ -508,7 +518,7 @@ describe('BuyGiftCards — Razorpay handshake', () => {
     let capturedHandler = null;
     stubRazorpay((opts) => { capturedHandler = opts.handler; });
 
-    render(<BuyGiftCardsPage />);
+    renderPage();
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
     fireEvent.click(screen.getByTestId('buy-giftcard-recipient-gift'));
@@ -543,7 +553,7 @@ describe('BuyGiftCards — Razorpay handshake', () => {
     let capturedOnDismiss = null;
     stubRazorpay((opts) => { capturedOnDismiss = opts.modal && opts.modal.ondismiss; });
 
-    render(<BuyGiftCardsPage />);
+    renderPage();
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
     fireEvent.click(screen.getByTestId('buy-giftcard-pay-now'));
@@ -556,5 +566,26 @@ describe('BuyGiftCards — Razorpay handshake', () => {
       const pay = screen.getByTestId('buy-giftcard-pay-now');
       expect(pay).not.toHaveTextContent(/Opening Razorpay/i);
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// 5. Deep-link via QR / shared link (giftCardId query param)
+// ─────────────────────────────────────────────────────────────────────
+describe('BuyGiftCards — deep link auto-selection', () => {
+  it('opens the purchase modal automatically when giftCardId matches an available card', async () => {
+    fetchApiMock.mockImplementation(defaultMock());
+    renderPage('?giftCardId=12');
+
+    await waitFor(() => expect(screen.getByTestId('buy-giftcard-modal')).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: /Buy Birthday Bonus/i })).toBeInTheDocument();
+  });
+
+  it('ignores an invalid or unavailable giftCardId and leaves the grid visible', async () => {
+    fetchApiMock.mockImplementation(defaultMock());
+    renderPage('?giftCardId=999');
+
+    await waitFor(() => expect(screen.getByTestId('buy-giftcard-grid')).toBeInTheDocument());
+    expect(screen.queryByTestId('buy-giftcard-modal')).toBeNull();
   });
 });

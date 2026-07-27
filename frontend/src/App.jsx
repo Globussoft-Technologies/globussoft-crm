@@ -418,6 +418,8 @@ const WellnessBuyGiftCards = lazy(() => import("./pages/wellness/BuyGiftCards"))
 const WellnessMyTransactions = lazy(() => import("./pages/wellness/MyTransactions"));
 const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
 const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
+// Marketing QR Generator — create downloadable QR codes for clinic public pages/offers.
+const WellnessQRGenerator = lazy(() => import("./pages/wellness/QRGenerator"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
 const WellnessBookAppointment = lazy(() => import("./pages/wellness/BookAppointment"));
 const WellnessAppointments = lazy(() => import("./pages/wellness/Appointments"));
@@ -2062,6 +2064,18 @@ export default function App() {
                     lockedInPlace
                   >
                     <WellnessCashbackRules />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              {/* QR Generator — marketing tool for downloadable QR codes. */}
+              <Route path="wellness/qr-generator" element={
+                <WellnessOnly>
+                  <RoleGuard
+                    requiredPermission={{ module: 'marketing', action: 'read' }}
+                    feature="QR Generator"
+                    lockedInPlace
+                  >
+                    <WellnessQRGenerator />
                   </RoleGuard>
                 </WellnessOnly>
               } />

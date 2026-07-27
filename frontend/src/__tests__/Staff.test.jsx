@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Staff.jsx — row action buttons + Inactive badge (#618).
  *
  * Issue context
@@ -201,7 +201,7 @@ describe('<Staff /> — role badge contrast', () => {
 
       const badge = screen.getByText('Doctor');
       expect(badge.getAttribute('style')).toContain('color: var(--accent-text, #F5F1E8)');
-      expect(badge.getAttribute('style')).toContain('border: 1px solid rgba(245,241,232,0.14)');
+      expect(badge.getAttribute('style')).toContain('border: 1px solid rgba(245, 241, 232, 0.14)');
     } finally {
       if (prevTheme == null) document.documentElement.removeAttribute('data-theme');
       else document.documentElement.setAttribute('data-theme', prevTheme);

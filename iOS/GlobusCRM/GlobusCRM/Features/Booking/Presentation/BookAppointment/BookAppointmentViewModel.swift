@@ -20,9 +20,9 @@ final class BookAppointmentViewModel: ObservableObject {
         case .searchChanged(let q):   uiState.serviceSearchQuery = q
         case .loadDoctors:            loadDoctors()
         case .selectDoctor(let opt):  uiState.selectedDoctorId = opt.id; uiState.selectedDoctorName = opt.name; uiState.step = 3
-        case .nextStep:               uiState.step += 1
-        case .dateChanged(let d):     uiState.selectedDate = d
-        case .timeChanged(let t):     uiState.selectedTime = t
+        case .nextStep:               advanceStep()
+        case .dateChanged(let d):     uiState.selectedDate = d; uiState.error = nil
+        case .timeChanged(let t):     uiState.selectedTime = t; uiState.error = nil
         case .reasonChanged(let r):   uiState.reason = r
         case .membershipChanged(let m): uiState.membershipId = m
         case .confirm:                confirmBooking()
@@ -57,7 +57,21 @@ final class BookAppointmentViewModel: ObservableObject {
         }
     }
 
+    private func advanceStep() {
+        if uiState.step == 3,
+           let error = DateUtil.bookingValidationError(date: uiState.selectedDate, time: uiState.selectedTime) {
+            uiState.error = error
+            return
+        }
+        uiState.error = nil
+        uiState.step += 1
+    }
+
     private func confirmBooking() {
+        if let error = DateUtil.bookingValidationError(date: uiState.selectedDate, time: uiState.selectedTime) {
+            uiState.error = error
+            return
+        }
         guard !uiState.reason.isEmpty else { uiState.error = "Please enter a reason."; return }
         let request = BookAppointmentRequest(
             appointmentDate: DateUtil.toApiDate(uiState.selectedDate),

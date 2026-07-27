@@ -114,6 +114,44 @@ struct MedicationReminderParserTests {
     }
 }
 
+struct BookingDateValidationTests {
+    @Test func rejectsPastOrTooNearBookingTimes() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let now = try #require(calendar.date(from: DateComponents(
+            timeZone: calendar.timeZone,
+            year: 2026,
+            month: 7,
+            day: 27,
+            hour: 10,
+            minute: 0
+        )))
+        let yesterday = try #require(calendar.date(byAdding: .day, value: -1, to: now))
+        let tomorrow = try #require(calendar.date(byAdding: .day, value: 1, to: now))
+
+        #expect(DateUtil.bookingValidationError(date: yesterday,
+                                                time: "16:00",
+                                                now: now,
+                                                calendar: calendar) == "Please select a future date")
+        #expect(DateUtil.bookingValidationError(date: now,
+                                                time: "10:15",
+                                                now: now,
+                                                calendar: calendar) == "Please select a future time slot")
+        #expect(DateUtil.bookingValidationError(date: now,
+                                                time: "10:30",
+                                                now: now,
+                                                calendar: calendar) == "Please select a future time slot")
+        #expect(DateUtil.bookingValidationError(date: now,
+                                                time: "10:31",
+                                                now: now,
+                                                calendar: calendar) == nil)
+        #expect(DateUtil.bookingValidationError(date: tomorrow,
+                                                time: "09:00",
+                                                now: now,
+                                                calendar: calendar) == nil)
+    }
+}
+
 @MainActor
 struct ThemePreferenceTests {
     @Test func systemPreferenceFollowsDeviceColorSchemeUntilOverridden() {

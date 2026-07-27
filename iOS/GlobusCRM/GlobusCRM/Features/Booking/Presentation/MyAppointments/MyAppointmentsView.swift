@@ -570,6 +570,13 @@ struct RescheduleSheet: View {
                     .frame(height: 120)
                     .clipped()
 
+                if let error = viewModel.uiState.rescheduleError {
+                    Label(error, systemImage: Symbols.errorTriangle)
+                        .font(.wellnessCaption)
+                        .foregroundColor(.wellnessError)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 Spacer()
 
                 WellnessButton("Confirm Reschedule") {
@@ -591,7 +598,10 @@ struct RescheduleSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { viewModel.uiState.activeSheet = nil }
+                    Button("Cancel") {
+                        viewModel.uiState.rescheduleError = nil
+                        viewModel.uiState.activeSheet = nil
+                    }
                 }
             }
         }
@@ -602,6 +612,7 @@ struct RescheduleSheet: View {
                 date = parsed
                 time = parsed
             }
+            viewModel.uiState.rescheduleError = nil
         }
     }
 }

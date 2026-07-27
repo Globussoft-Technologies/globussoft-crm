@@ -26,8 +26,8 @@ final class MyAppointmentsViewModel: ObservableObject {
             if uiState.appointments[b.rawValue] == nil {
                 loadBucket(b)
             }
-        case .tapAppointment(let a):      uiState.selectedAppointment = a; uiState.activeSheet = .actions
-        case .dismissActionSheet:         uiState.activeSheet = nil
+        case .tapAppointment(let a):      uiState.selectedAppointment = a; uiState.activeSheet = .actions; uiState.rescheduleError = nil
+        case .dismissActionSheet:         uiState.activeSheet = nil; uiState.rescheduleError = nil
         case .viewDetails:                uiState.activeSheet = .detail
         case .reschedule(let id, let d, let t): reschedule(id: id, date: d, time: t)
         case .cancelAppointment(let id):  cancel(id: id)
@@ -74,7 +74,12 @@ final class MyAppointmentsViewModel: ObservableObject {
     }
 
     private func reschedule(id: Int, date: String, time: String) {
+        if let error = DateUtil.bookingValidationError(apiDate: date, time: time) {
+            uiState.rescheduleError = error
+            return
+        }
         Task {
+            uiState.rescheduleError = nil
             _ = await rescheduleUseCase(id: id, date: date, time: time)
             uiState.activeSheet = nil
             loadAllBuckets()

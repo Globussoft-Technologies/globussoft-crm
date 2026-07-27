@@ -7,6 +7,7 @@ struct MyAppointmentsUiState {
     var appointments: [String: [Appointment]] = [:]
     var selectedAppointment: Appointment? = nil
     var activeSheet: AppointmentActiveSheet? = nil
+    var rescheduleError: String? = nil
     var rescheduleDate: Date = Date()
     var rescheduleTime: String = "09:00"
 }

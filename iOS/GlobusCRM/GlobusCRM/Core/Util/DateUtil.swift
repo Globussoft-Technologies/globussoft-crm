@@ -39,6 +39,10 @@ enum DateUtil {
         apiFormatter.string(from: date)
     }
 
+    static func fromApiDate(_ value: String) -> Date? {
+        apiFormatter.date(from: value)
+    }
+
     static func formatDisplay(iso: String) -> String {
         guard let date = parseISO(iso) else { return iso }
         return displayFormatter.string(from: date)
@@ -82,6 +86,63 @@ enum DateUtil {
     static func isToday(iso: String) -> Bool {
         guard let date = parseISO(iso) else { return false }
         return Calendar.current.isDateInToday(date)
+    }
+
+    static func bookingValidationError(date: Date,
+                                       time: String,
+                                       now: Date = Date(),
+                                       bufferMinutes: Int = 30,
+                                       calendar: Calendar = .current) -> String? {
+        let selectedDay = calendar.startOfDay(for: date)
+        let today = calendar.startOfDay(for: now)
+        guard selectedDay >= today else { return "Please select a future date" }
+        guard isFutureAppointmentDateTime(date: date,
+                                          time: time,
+                                          now: now,
+                                          bufferMinutes: bufferMinutes,
+                                          calendar: calendar) else {
+            return "Please select a future time slot"
+        }
+        return nil
+    }
+
+    static func bookingValidationError(apiDate: String,
+                                       time: String,
+                                       now: Date = Date(),
+                                       bufferMinutes: Int = 30,
+                                       calendar: Calendar = .current) -> String? {
+        guard let date = fromApiDate(apiDate) else { return "Please select a future date" }
+        return bookingValidationError(date: date,
+                                      time: time,
+                                      now: now,
+                                      bufferMinutes: bufferMinutes,
+                                      calendar: calendar)
+    }
+
+    static func isFutureAppointmentDateTime(date: Date,
+                                            time: String,
+                                            now: Date = Date(),
+                                            bufferMinutes: Int = 30,
+                                            calendar: Calendar = .current) -> Bool {
+        guard let appointmentDate = appointmentDateTime(date: date, time: time, calendar: calendar) else {
+            return false
+        }
+        let minimumDate = calendar.date(byAdding: .minute, value: bufferMinutes, to: now)
+            ?? now.addingTimeInterval(TimeInterval(bufferMinutes * 60))
+        return appointmentDate > minimumDate
+    }
+
+    private static func appointmentDateTime(date: Date, time: String, calendar: Calendar) -> Date? {
+        let parts = time.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2,
+              (0...23).contains(parts[0]),
+              (0...59).contains(parts[1]) else { return nil }
+        var components = calendar.dateComponents([.year, .month, .day], from: date)
+        components.hour = parts[0]
+        components.minute = parts[1]
+        components.second = 0
+        components.nanosecond = 0
+        return calendar.date(from: components)
     }
 
     static func tomorrow() -> Date {

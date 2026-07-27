@@ -23,6 +23,16 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
   // though the POST succeeded. Cache generated URLs locally so the UI reflects
   // the successful creation immediately.
   const [generatedLinks, setGeneratedLinks] = useState({});
+  // Billing controls for the post-treatment payment link: staff can override the
+  // total bill and apply a coupon. The locking fee already paid during booking is
+  // deducted automatically by the backend.
+  const [amountCharged, setAmountCharged] = useState('');
+  const [couponCode, setCouponCode] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState(null);
+  const [previewBreakdown, setPreviewBreakdown] = useState(null);
+  const [billingBreakdown, setBillingBreakdown] = useState(null);
+  const [couponError, setCouponError] = useState('');
+  const [applyingCoupon, setApplyingCoupon] = useState(false);
 
   const visits = patient.visits || [];
   const bookedAppointments = visits.filter((v) =>
@@ -36,6 +46,18 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
   const handleSelectVisit = async (apt) => {
     setSelectedVisitId(apt.id);
     setNotes(apt.notes || '');
+    setCouponCode('');
+    setAppliedCoupon(null);
+    setPreviewBreakdown(null);
+    setBillingBreakdown(null);
+    setCouponError('');
+    // Default the bill to the service price; staff can override it before marking
+    // the visit completed. Use the visit's existing amountCharged if already set.
+    setAmountCharged(
+      apt.amountCharged != null && apt.amountCharged !== ''
+        ? String(apt.amountCharged)
+        : String(services.find((s) => s.id === apt.serviceId)?.basePrice || ''),
+    );
     try {
       const rules = await fetchApi('/api/wellness/auto-consumption-rules');
       const serviceRules = Array.isArray(rules) ? rules.filter((r) => r.serviceId === apt.serviceId) : [];
@@ -113,6 +135,57 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
     }
   };
 
+  const previewCoupon = async () => {
+    if (!selectedVisit || !selectedService) return;
+    const code = couponCode.trim();
+    if (!code) {
+      setCouponError('Enter a coupon code');
+      setAppliedCoupon(null);
+      setPreviewBreakdown(null);
+      return;
+    }
+    const base = Number(amountCharged);
+    if (!Number.isFinite(base) || base <= 0) {
+      setCouponError('Enter a valid bill amount before applying a coupon');
+      return;
+    }
+    setApplyingCoupon(true);
+    setCouponError('');
+    try {
+      const result = await fetchApi('/api/wellness/coupons/preview', {
+        method: 'POST',
+        body: JSON.stringify({ code, baseAmount: base, serviceId: selectedService.id, visitId: selectedVisit.id }),
+      });
+      if (result?.error) {
+        setCouponError(result.error || 'Could not apply coupon');
+        setAppliedCoupon(null);
+        setPreviewBreakdown(null);
+        return;
+      }
+      if (!result?.applied) {
+        setCouponError('Coupon does not apply to this service or cart');
+        setAppliedCoupon(null);
+        setPreviewBreakdown(null);
+        return;
+      }
+      setAppliedCoupon({ code: result.code, discountType: result.discountType, discountValue: result.discountValue });
+      setPreviewBreakdown({
+        baseAmount: result.baseAmount,
+        discount: result.discount,
+        finalAmount: result.finalAmount,
+        lockingFee: result.lockingFee || 0,
+        balance: result.balance != null ? result.balance : result.finalAmount,
+      });
+      notify.success(`Coupon ${result.code} applied — discount ₹${result.discount}`);
+    } catch (_err) {
+      // fetchApi already toasted
+      setAppliedCoupon(null);
+      setPreviewBreakdown(null);
+    } finally {
+      setApplyingCoupon(false);
+    }
+  };
+
   const markAsVisited = async (e) => {
     e.preventDefault();
     if (!selectedVisit || !selectedService) {
@@ -127,16 +200,24 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
         body: JSON.stringify({
           status: 'completed',
           notes,
-          amountCharged: selectedService.basePrice || 0,
+          amountCharged: amountCharged,
+          couponCode: appliedCoupon ? appliedCoupon.code : couponCode.trim() || undefined,
         }),
       });
       setSelectedVisitId(null);
       setNotes('');
       setConsumptionRules([]);
+      setAmountCharged('');
+      setCouponCode('');
+      setAppliedCoupon(null);
+      setPreviewBreakdown(null);
+      setBillingBreakdown(result?.billingBreakdown || null);
       onSaved();
-      if (result?.paymentLinkUrl) {
+      if (result?.billingBreakdown?.couponCode) {
+        notify.success(`Coupon ${result.billingBreakdown.couponCode} applied. Total due is now ₹${result.billingBreakdown.balance}.`);
+      } else if (result?.paymentLinkUrl) {
         notify.success('Appointment marked as visited. Payment link generated.');
-      } else if (Number(selectedService.basePrice) > 0) {
+      } else if (Number(amountCharged) > 0) {
         notify.success('Appointment marked as visited. A payment link could not be generated; check the payment gateway configuration.');
       } else {
         notify.success('Appointment marked as visited & auto-consumption triggered.');
@@ -356,7 +437,33 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
   };
 
   return (
-    <div style={{ display: 'flex', gap: '1.5rem' }}>
+    <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+      {billingBreakdown && (
+        <div style={{ width: '100%', padding: '0.85rem 1rem', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+            <div>
+              {billingBreakdown.couponCode ? (
+                <>
+                  Coupon <strong>{billingBreakdown.couponCode}</strong> applied. Total due is now{' '}
+                  <strong>₹{billingBreakdown.balance.toLocaleString('en-IN')}</strong>.
+                </>
+              ) : (
+                <>
+                  Payment link generated for balance{' '}
+                  <strong>₹{billingBreakdown.balance.toLocaleString('en-IN')}</strong>.
+                </>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setBillingBreakdown(null)}
+              style={{ padding: '0.3rem 0.6rem', background: 'transparent', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: 6, color: 'var(--success-color)', fontSize: '0.8rem', cursor: 'pointer' }}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
       <div className="glass" style={{ flex: 1, padding: '1.5rem', overflow: 'auto', maxHeight: '600px' }}>
         <div style={{ marginBottom: '1.5rem' }}>
           <h3 style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -414,7 +521,20 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                   </div>
                   <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                     Doctor: {visit.doctor?.name || '-'}
-                    {visit.amountCharged > 0 && <> - Amount:  {visit.amountCharged.toLocaleString('en-IN')}</>}
+                    {visit.amountCharged > 0 && (
+                      <>
+                        {' - '}
+                        {visit.invoice?.amount > 0 && visit.invoice.amount !== visit.amountCharged ? (
+                          <>
+                            <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{visit.amountCharged.toLocaleString('en-IN')}</span>
+                            {' → Balance due: '}
+                            <strong style={{ color: 'var(--success-color)' }}>₹{visit.invoice.amount.toLocaleString('en-IN')}</strong>
+                          </>
+                        ) : (
+                          <>Amount: <strong>₹{visit.amountCharged.toLocaleString('en-IN')}</strong></>
+                        )}
+                      </>
+                    )}
                   </div>
                   {renderPaymentLinkBlock(visit)}
                 </div>
@@ -442,6 +562,116 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
               </div>
             </div>
           </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Total bill (₹)
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={amountCharged}
+              onChange={(e) => {
+                setAmountCharged(e.target.value);
+                setAppliedCoupon(null);
+                setPreviewBreakdown(null);
+                setCouponError('');
+                setBillingBreakdown(null);
+              }}
+              placeholder="Enter total treatment bill..."
+              style={{ width: '100%', padding: '0.55rem 0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' }}
+            />
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
+              Edit the final bill (add medicines, extra services, etc.). Defaults to the service price.
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Coupon code
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input
+                type="text"
+                value={couponCode}
+                onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                placeholder="Enter coupon code (optional)"
+                disabled={applyingCoupon}
+                style={{ flex: 1, padding: '0.55rem 0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none', textTransform: 'uppercase' }}
+              />
+              <button
+                type="button"
+                onClick={previewCoupon}
+                disabled={applyingCoupon || !couponCode.trim()}
+                style={{
+                  padding: '0.55rem 1rem',
+                  background: applyingCoupon ? 'rgba(107,114,128,0.3)' : 'var(--primary-color, var(--accent-color))',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  cursor: applyingCoupon || !couponCode.trim() ? 'not-allowed' : 'pointer',
+                  opacity: applyingCoupon || !couponCode.trim() ? 0.6 : 1,
+                  fontWeight: 500,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {applyingCoupon ? 'Applying...' : 'Apply'}
+              </button>
+            </div>
+            {couponError && <div style={{ color: 'var(--danger-color)', fontSize: '0.8rem', marginTop: '0.35rem' }}>{couponError}</div>}
+            {appliedCoupon && (
+              <div style={{ color: 'var(--success-color)', fontSize: '0.8rem', marginTop: '0.35rem' }}>
+                Coupon <strong>{appliedCoupon.code}</strong> applied
+                {previewBreakdown && ` — discount ₹${previewBreakdown.discount.toLocaleString('en-IN')}`}
+              </div>
+            )}
+          </div>
+
+          {(previewBreakdown || billingBreakdown) && (
+            <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)', fontSize: '0.85rem' }}>
+              <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Billing breakdown</div>
+              {(previewBreakdown || billingBreakdown)?.baseAmount != null && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Base amount</span>
+                  <span>₹{((previewBreakdown || billingBreakdown).baseAmount).toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              {(previewBreakdown || billingBreakdown)?.discount > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem', color: 'var(--success-color)' }}>
+                  <span>Coupon discount</span>
+                  <span>-₹{((previewBreakdown || billingBreakdown).discount).toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              {billingBreakdown?.lockingFee > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>
+                  <span>Booking locking fee already paid</span>
+                  <span>-₹{billingBreakdown.lockingFee.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              {previewBreakdown?.lockingFee > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>
+                  <span>Booking locking fee already paid</span>
+                  <span>-₹{previewBreakdown.lockingFee.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.08)', fontWeight: 600 }}>
+                <span>{billingBreakdown ? 'Balance due' : 'Balance due (after locking fee)'}</span>
+                <span>
+                  ₹{(() => {
+                    if (billingBreakdown) return billingBreakdown.balance;
+                    const pd = previewBreakdown || {};
+                    return pd.balance != null ? pd.balance : pd.finalAmount;
+                  })().toLocaleString('en-IN')}
+                </span>
+              </div>
+              {!billingBreakdown && previewBreakdown?.lockingFee === 0 && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                  No ₹200 booking locking fee has been paid for this appointment yet.
+                </div>
+              )}
+            </div>
+          )}
 
           {consumptionRules.length > 0 && (
             <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: 8, border: '1px solid rgba(16, 185, 129, 0.2)' }}>

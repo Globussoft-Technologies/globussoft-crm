@@ -80,6 +80,11 @@ prisma.invoice = prisma.invoice || {};
 prisma.invoice.findFirst = vi.fn();
 prisma.invoice.create = vi.fn();
 
+prisma.payment = prisma.payment || {};
+prisma.payment.findMany = vi.fn().mockResolvedValue([]);
+prisma.payment.findFirst = vi.fn().mockResolvedValue(null);
+prisma.payment.update = vi.fn().mockResolvedValue({ id: 1 });
+
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 
@@ -135,6 +140,9 @@ beforeEach(() => {
   prisma.contact.create.mockReset();
   prisma.invoice.findFirst.mockReset();
   prisma.invoice.create.mockReset();
+  prisma.payment.findMany.mockReset();
+  prisma.payment.findFirst.mockReset();
+  prisma.payment.update.mockReset();
   prisma.tenant.findUnique.mockReset();
 
   prisma.visit.update.mockResolvedValue({
@@ -185,6 +193,9 @@ beforeEach(() => {
     contactId: 100,
     visitId: 1,
   });
+  prisma.payment.findMany.mockResolvedValue([]);
+  prisma.payment.findFirst.mockResolvedValue(null);
+  prisma.payment.update.mockResolvedValue({ id: 1 });
 
   prisma.tenant.findUnique.mockResolvedValue({ id: 1, name: 'Enhanced Wellness' });
 });

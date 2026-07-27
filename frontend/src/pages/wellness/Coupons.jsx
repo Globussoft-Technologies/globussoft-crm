@@ -6,7 +6,7 @@
 //     redeem; safe for demo). Mirrors how the checkout would call the same
 //     endpoint pre-/api/wellness/coupons/apply.
 import { useEffect, useState } from 'react';
-import { TicketPercent, Plus, Pencil, Trash2 } from 'lucide-react';
+import { TicketPercent, Plus, Pencil, Trash2, Copy } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
@@ -51,6 +51,15 @@ export default function CouponsPage() {
     }
   };
 
+  const copyCouponCode = async (code) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      notify.success('Coupon code copied');
+    } catch {
+      notify.error('Could not copy to clipboard');
+    }
+  };
+
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
       <PageHeader
@@ -82,7 +91,20 @@ export default function CouponsPage() {
           <tbody>
             {coupons.map((c) => (
               <tr key={c.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                <td style={td}><code>{c.code}</code></td>
+                <td style={td}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <code>{c.code}</code>
+                    <button
+                      type="button"
+                      onClick={() => copyCouponCode(c.code)}
+                      title="Copy coupon code"
+                      aria-label={`Copy coupon code ${c.code}`}
+                      style={btnIconGhost}
+                    >
+                      <Copy size={12} />
+                    </button>
+                  </div>
+                </td>
                 <td style={td}>{c.discountType === 'PERCENT' ? `${c.discountValue}%` : formatMoney(c.discountValue)}</td>
                 <td style={td}>{c.redemptionCount}{c.maxRedemptions ? ` / ${c.maxRedemptions}` : ''}</td>
                 <td style={td}>{validityLabel(c)}</td>
@@ -264,6 +286,17 @@ const td = { padding: '0.5rem', fontSize: '0.9rem' };
 const btnPrimary = { padding: '0.6rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' };
 const btnSecondary = { padding: '0.6rem 1rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: 'pointer' };
 const iconBtn = { background: 'transparent', border: '1px solid var(--border-color)', padding: '0.3rem 0.5rem', borderRadius: 6, cursor: 'pointer', marginRight: '0.25rem' };
+const btnIconGhost = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: '0.2rem',
+  background: 'transparent',
+  border: '1px solid var(--border-color)',
+  borderRadius: 4,
+  cursor: 'pointer',
+  color: 'var(--text-secondary)',
+};
 const modalOverlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 };
 const modalCard = { background: 'var(--bg-color, #fff)', padding: '1.5rem', borderRadius: 12, minWidth: 360, maxWidth: 500 };
 const lbl = { display: 'block', marginBottom: '0.75rem', fontSize: '0.9rem' };

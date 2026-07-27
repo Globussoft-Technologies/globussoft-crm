@@ -192,6 +192,9 @@ backend/.wwebjs_cache/
 .wwebjs_cache/
 backend/uploads/wa-web/
 
+# Local development runtime state (PID files, sockets, logs from local-stack scripts)
+.local-runtime/
+
 # Voyagr — separate Next.js landing-site project living in its own
 # github.com/Globussoft-Technologies/voyagr repo. Cloned here for local
 # co-development convenience but never pushed to this repo.

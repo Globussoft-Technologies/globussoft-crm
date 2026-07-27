@@ -72,25 +72,45 @@ struct BookingServiceCard: View {
     var body: some View {
         Button(action: action) {
             WellnessCard {
-                VStack(alignment: .leading, spacing: WellnessSpacing.sm) {
-                    Text(service.name)
-                        .font(.wellnessCallout)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.wellnessOnSurface)
-                        .lineLimit(2)
-                    if let price = service.discountedPrice ?? service.basePrice {
-                        Text(CurrencyUtil.formatINR(price))
-                            .font(.wellnessCaption)
-                            .foregroundColor(.wellnessTeal)
+                VStack(alignment: .leading, spacing: 0) {
+                    RemotePlaceholderImageView(
+                        imageUrl: service.imageUrl,
+                        placeholderSystemImage: Symbols.serviceDefault,
+                        accent: .wellnessTeal,
+                        cornerRadius: WellnessRadius.medium
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 88)
+
+                    VStack(alignment: .leading, spacing: WellnessSpacing.sm) {
+                        Text(service.name)
+                            .font(.wellnessCallout)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.wellnessOnSurface)
+                            .lineLimit(2)
+
+                        if let category = service.category, !category.isEmpty {
+                            Text(category)
+                                .font(.wellnessCaption2)
+                                .foregroundColor(.wellnessMuted)
+                                .lineLimit(1)
+                        }
+
+                        if let price = service.discountedPrice ?? service.basePrice {
+                            Text(CurrencyUtil.formatINR(price))
+                                .font(.wellnessCaption)
+                                .foregroundColor(.wellnessTeal)
+                        }
+
+                        if let dur = service.durationMin {
+                            Text("\(dur) min")
+                                .font(.wellnessCaption)
+                                .foregroundColor(.wellnessMuted)
+                        }
                     }
-                    if let dur = service.durationMin {
-                        Text("\(dur) min")
-                            .font(.wellnessCaption)
-                            .foregroundColor(.wellnessMuted)
-                    }
+                    .padding(Layout.cardPadding)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(Layout.cardPadding)
+                .frame(maxWidth: .infinity, minHeight: 184, alignment: .topLeading)
             }
         }
         .buttonStyle(.plain)

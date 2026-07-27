@@ -62,8 +62,9 @@ final class AppRouter: ObservableObject {
             default:        push(route, to: &homePath)
             }
 
-        // Home-tab routes (prescriptions, treatmentPlans, consentForms, memberships, loyalty…)
+        // Home-tab routes (prescriptions, treatmentPlans, consentForms, memberships, loyalty...)
         default:
+            selectedTab = .home
             push(route, to: &homePath)
         }
     }

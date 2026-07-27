@@ -8,18 +8,15 @@ final class PrescriptionsViewModel: ObservableObject {
     let navSignal = PassthroughSubject<PrescriptionsNavSignal, Never>()
 
     private let getPrescriptionsUseCase: GetPrescriptionsUseCase
-    private let getPrescriptionPdfUseCase: GetPrescriptionPdfUseCase
     private let keychain: KeychainManager
     private let appState: AppState
     private let reminderScheduler: MedicationReminderScheduler
 
     init(getPrescriptionsUseCase: GetPrescriptionsUseCase,
-         getPrescriptionPdfUseCase: GetPrescriptionPdfUseCase,
          keychain: KeychainManager,
          appState: AppState,
          reminderScheduler: MedicationReminderScheduler) {
         self.getPrescriptionsUseCase = getPrescriptionsUseCase
-        self.getPrescriptionPdfUseCase = getPrescriptionPdfUseCase
         self.keychain = keychain
         self.appState = appState
         self.reminderScheduler = reminderScheduler
@@ -36,14 +33,15 @@ final class PrescriptionsViewModel: ObservableObject {
             uiState.showPdfConfirm = true
         case .confirmViewPdf:
             uiState.showPdfConfirm = false
-            if let p = uiState.pendingPdfPrescription {
-                Task { await loadPdf(prescription: p) }
+            if let prescription = uiState.pendingPdfPrescription {
+                openPdf(prescription: prescription)
             }
+            uiState.pendingPdfPrescription = nil
         case .dismissPdfConfirm:
             uiState.showPdfConfirm = false
             uiState.pendingPdfPrescription = nil
         case .viewPdf(let p):
-            Task { await loadPdf(prescription: p) }
+            openPdf(prescription: p)
         case .dismissPdf:
             uiState.selectedPrescription = nil
         case .toggleReminder(let prescription, let enabled):
@@ -78,18 +76,12 @@ final class PrescriptionsViewModel: ObservableObject {
         }
     }
 
-    private func loadPdf(prescription: Prescription) async {
-        uiState.isLoadingPdf = true
-        uiState.loadingPdfId = prescription.id
-        let result = await getPrescriptionPdfUseCase(prescriptionId: prescription.id)
-        uiState.isLoadingPdf = false
-        uiState.loadingPdfId = nil
-        switch result {
-        case .success(let data):
-            navSignal.send(.showPdf(data))
-        case .failure(let error):
-            uiState.error = error.localizedDescription
+    private func openPdf(prescription: Prescription) {
+        guard let id = Int(prescription.id) else {
+            uiState.error = "Prescription PDF could not be opened."
+            return
         }
+        navSignal.send(.openPdf(prescriptionId: id))
     }
 
     private func toggleReminder(prescription: Prescription, enabled: Bool) async {

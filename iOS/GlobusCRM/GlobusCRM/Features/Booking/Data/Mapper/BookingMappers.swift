@@ -52,6 +52,7 @@ extension ProductDTO {
         Product(
             id: id, name: name, description: description,
             basePrice: basePrice, discountedPrice: discountedPrice,
+            imageUrl: ImageURLParser.firstURL(single: imageUrl, list: imageUrls),
             categoryId: categoryId, category: category,
             durationMin: durationMin, isActive: isActive ?? true
         )

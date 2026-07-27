@@ -99,9 +99,10 @@ final class HealthFeatureContainer {
         keychain: c.keychainManager
     )
 
+    lazy var getPrescriptionPdfUseCase = GetPrescriptionPdfUseCase(repository: healthRepository)
+
     lazy var prescriptionsViewModel: PrescriptionsViewModel = PrescriptionsViewModel(
         getPrescriptionsUseCase: GetPrescriptionsUseCase(repository: healthRepository),
-        getPrescriptionPdfUseCase: GetPrescriptionPdfUseCase(repository: healthRepository),
         keychain: c.keychainManager,
         appState: c.appState,
         reminderScheduler: MedicationReminderScheduler()

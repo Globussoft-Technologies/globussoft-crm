@@ -5,8 +5,6 @@ struct PrescriptionsView: View {
     @StateObject var viewModel: PrescriptionsViewModel
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var router: AppRouter
-    @State private var pdfData: Data? = nil
-    @State private var showPdf = false
 
     var body: some View {
         Group {
@@ -26,7 +24,6 @@ struct PrescriptionsView: View {
                 List(viewModel.uiState.prescriptions) { prescription in
                     PrescriptionRowView(
                         prescription: prescription,
-                        isLoadingPdf: viewModel.uiState.loadingPdfId == prescription.id,
                         reminderEnabled: viewModel.uiState.reminderEnabledIds.contains(prescription.id),
                         reminderInProgress: viewModel.uiState.reminderActionInProgressId == prescription.id
                     ) {
@@ -57,11 +54,6 @@ struct PrescriptionsView: View {
         .navigationTitle("Prescriptions")
         .navigationBarTitleDisplayMode(.large)
         .task { viewModel.onEvent(.load) }
-        .sheet(isPresented: $showPdf) {
-            if let data = pdfData {
-                PrescriptionPDFView(pdfData: data)
-            }
-        }
         .alert("Open prescription PDF?", isPresented: $viewModel.uiState.showPdfConfirm) {
             Button("Open") { viewModel.onEvent(.confirmViewPdf) }
             Button("Cancel", role: .cancel) { viewModel.onEvent(.dismissPdfConfirm) }
@@ -78,9 +70,8 @@ struct PrescriptionsView: View {
         }
         .onReceive(viewModel.navSignal) { signal in
             switch signal {
-            case .showPdf(let data):
-                pdfData = data
-                showPdf = true
+            case .openPdf(let prescriptionId):
+                router.navigate(to: .prescriptionPdf(prescriptionId: prescriptionId))
             }
         }
     }
@@ -88,24 +79,41 @@ struct PrescriptionsView: View {
 
 struct PrescriptionRowView: View {
     let prescription: Prescription
-    var isLoadingPdf: Bool = false
     var reminderEnabled: Bool = false
     var reminderInProgress: Bool = false
     let onViewPdf: () -> Void
     let onTreatmentScan: () -> Void
     let onReminderChange: (Bool) -> Void
 
+    private var serviceTitle: String {
+        prescription.serviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Prescription"
+            : prescription.serviceName
+    }
+
+    private var doctorLabel: String? {
+        let value = prescription.doctorName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        return value.lowercased().hasPrefix("dr.") ? value : "Dr. \(value)"
+    }
+
+    private var instructionsText: String? {
+        prescription.instructions?.strippingHTML.nonBlank
+    }
+
     var body: some View {
         WellnessCard {
             VStack(alignment: .leading, spacing: WellnessSpacing.sm) {
                 HStack {
                     VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
-                        Text(prescription.serviceName)
+                        Text(serviceTitle)
                             .font(.wellnessSubheadline)
                             .foregroundColor(.wellnessOnSurface)
-                        Text("Dr. \(prescription.doctorName)")
-                            .font(.wellnessCaption)
-                            .foregroundColor(.wellnessMuted)
+                        if let doctorLabel {
+                            Text(doctorLabel)
+                                .font(.wellnessCaption)
+                                .foregroundColor(.wellnessMuted)
+                        }
                     }
                     Spacer()
                     Text(DateUtil.formatDate(iso: prescription.visitDate))
@@ -113,44 +121,32 @@ struct PrescriptionRowView: View {
                         .foregroundColor(.wellnessMuted)
                 }
 
+                if let instructionsText {
+                    PrescriptionInstructionsView(instructions: instructionsText)
+                }
+
                 if !prescription.drugs.isEmpty {
-                    HStack(spacing: WellnessSpacing.sm) {
-                        Text("\(prescription.drugs.count) medication\(prescription.drugs.count == 1 ? "" : "s")")
-                            .font(.wellnessCaption)
-                            .foregroundColor(.wellnessMuted)
-
-                        Spacer(minLength: 0)
-
-                        Toggle("Reminder", isOn: Binding(
-                            get: { reminderEnabled },
-                            set: { onReminderChange($0) }
-                        ))
-                        .font(.wellnessCaption)
-                        .toggleStyle(SwitchToggleStyle(tint: .wellnessTeal))
-                        .disabled(reminderInProgress)
-                    }
+                    PrescriptionMedicationSummaryView(
+                        drugs: prescription.drugs,
+                        reminderEnabled: reminderEnabled,
+                        reminderInProgress: reminderInProgress,
+                        onReminderChange: onReminderChange
+                    )
                 }
 
                 HStack(spacing: WellnessSpacing.sm) {
                     Button(action: onViewPdf) {
                         HStack(spacing: WellnessSpacing.xs) {
-                            if isLoadingPdf {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                                    .tint(.wellnessTeal)
-                            } else {
-                                Image(systemName: "doc.richtext")
-                                    .font(.system(size: IconSize.small))
-                                    .accessibilityHidden(true)
-                            }
-                            Text(isLoadingPdf ? "Loading..." : "View PDF")
+                            Image(systemName: "doc.richtext")
+                                .font(.system(size: IconSize.small))
+                                .accessibilityHidden(true)
+                            Text("View PDF")
                                 .font(.wellnessCallout)
                         }
                         .frame(maxWidth: .infinity)
                         .foregroundColor(.wellnessTeal)
                     }
-                    .disabled(isLoadingPdf)
-                    .accessibilityLabel(isLoadingPdf ? "Loading prescription PDF" : "View prescription PDF")
+                    .accessibilityLabel("View prescription PDF")
 
                     Button(action: onTreatmentScan) {
                         HStack(spacing: WellnessSpacing.xs) {
@@ -168,5 +164,96 @@ struct PrescriptionRowView: View {
             }
             .padding(Layout.cardPadding)
         }
+    }
+}
+
+private struct PrescriptionInstructionsView: View {
+    let instructions: String
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
+            Text("Instructions")
+                .font(.wellnessCaption2)
+                .fontWeight(.semibold)
+                .foregroundColor(.wellnessMuted)
+            Text(instructions)
+                .font(.wellnessCaption)
+                .foregroundColor(.wellnessOnSurface)
+                .lineLimit(isExpanded ? nil : 2)
+
+            if instructions.count > 90 {
+                Button(isExpanded ? "Show less" : "Show more") {
+                    withAnimation(AppAnimation.easeOut) { isExpanded.toggle() }
+                }
+                .font(.wellnessCaption2)
+                .foregroundColor(.wellnessTeal)
+            }
+        }
+        .padding(WellnessSpacing.sm)
+        .background(Color.wellnessTeal.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: WellnessRadius.small))
+    }
+}
+
+private struct PrescriptionMedicationSummaryView: View {
+    let drugs: [Drug]
+    let reminderEnabled: Bool
+    let reminderInProgress: Bool
+    let onReminderChange: (Bool) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
+            HStack(spacing: WellnessSpacing.sm) {
+                Text("\(drugs.count) medication\(drugs.count == 1 ? "" : "s")")
+                    .font(.wellnessCaption)
+                    .foregroundColor(.wellnessMuted)
+
+                Spacer(minLength: 0)
+
+                Toggle("Reminder", isOn: Binding(
+                    get: { reminderEnabled },
+                    set: { onReminderChange($0) }
+                ))
+                .font(.wellnessCaption)
+                .toggleStyle(SwitchToggleStyle(tint: .wellnessTeal))
+                .disabled(reminderInProgress)
+            }
+
+            ForEach(drugs.prefix(2)) { drug in
+                PrescriptionDrugLineView(drug: drug)
+            }
+        }
+    }
+}
+
+private struct PrescriptionDrugLineView: View {
+    let drug: Drug
+
+    var body: some View {
+        let detail = [drug.dosage, drug.frequency, drug.duration]
+            .compactMap { $0?.nonBlank }
+            .joined(separator: " • ")
+
+        VStack(alignment: .leading, spacing: 2) {
+            Text(drug.name)
+                .font(.wellnessCaption)
+                .fontWeight(.medium)
+                .foregroundColor(.wellnessOnSurface)
+                .lineLimit(1)
+            if !detail.isEmpty {
+                Text(detail)
+                    .font(.wellnessCaption2)
+                    .foregroundColor(.wellnessMuted)
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
+private extension String {
+    var nonBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed.lowercased() == "null" ? nil : trimmed
     }
 }

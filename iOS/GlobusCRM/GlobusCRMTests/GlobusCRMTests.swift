@@ -22,6 +22,16 @@ struct DeepLinkHandlerTests {
         }
     }
 
+    @Test func resolvesAndroidPrescriptionPdfAlias() {
+        let url = URL(string: "globuscrm://screen/prescription_pdf?id=42")!
+
+        if case .prescriptionPdf(let id) = DeepLinkHandler.resolve(url: url) {
+            #expect(id == 42)
+        } else {
+            #expect(Bool(false), "Expected prescription PDF route")
+        }
+    }
+
     @Test func resolvesTreatmentAnalysisRouteWithVisitIdentifier() {
         let url = URL(string: "wellnesspatient://screen/prescription_analysis?id=42&visitId=9")!
 
@@ -45,6 +55,19 @@ struct DeepLinkHandlerTests {
     @Test func rejectsUnknownSchemeAndScreen() {
         #expect(DeepLinkHandler.resolve(url: URL(string: "https://screen/wallet")!) == nil)
         #expect(DeepLinkHandler.resolve(url: URL(string: "wellnesspatient://screen/unknown")!) == nil)
+    }
+}
+
+@MainActor
+struct AppRouterTests {
+    @Test func homeRoutesSwitchToHomeTabForDeepLinks() {
+        let router = AppRouter()
+        router.selectedTab = .finance
+
+        router.navigate(to: .prescriptionPdf(prescriptionId: 42))
+
+        #expect(router.selectedTab == .home)
+        #expect(router.homePath == [.prescriptionPdf(prescriptionId: 42)])
     }
 }
 
@@ -111,6 +134,141 @@ struct MedicationReminderParserTests {
         #expect("2 weeks".medicationDurationDays() == 14)
         #expect("1 month".medicationDurationDays() == 30)
         #expect("ten days".medicationDurationDays() == 10)
+    }
+}
+
+@MainActor
+struct PrescriptionMappingTests {
+    @Test func decodesArrayBackedDrugsAndMapsMedicationDetails() throws {
+        let json = """
+        {
+          "id": 41,
+          "visitId": 9,
+          "drugs": [
+            {
+              "medicine": {
+                "name": "Amoxicillin",
+                "strengthValue": "500",
+                "strengthUnit": "mg"
+              },
+              "frequencyPerDay": "BD",
+              "durationDays": "5 days",
+              "instruction": "After food"
+            }
+          ],
+          "instructions": "<p>Complete the course</p>",
+          "visit": {
+            "id": 9,
+            "visitDate": "2026-07-27T10:00:00Z",
+            "service": { "name": "Skin Treatment" }
+          },
+          "doctor": { "id": 3, "name": "Dr. Harsh" },
+          "createdAt": "2026-07-27T09:00:00Z"
+        }
+        """.data(using: .utf8)!
+
+        let dto = try JSONDecoder().decode(PrescriptionDTO.self, from: json)
+        let prescription = dto.toDomain()
+        let drug = try #require(prescription.drugs.first)
+
+        #expect(prescription.id == "41")
+        #expect(prescription.visitId == "9")
+        #expect(prescription.serviceName == "Skin Treatment")
+        #expect(prescription.doctorName == "Dr. Harsh")
+        #expect(drug.name == "Amoxicillin")
+        #expect(drug.dosage == "500 mg")
+        #expect(drug.frequency == "BD")
+        #expect(drug.duration == "5 days")
+        #expect(drug.instructions == "After food")
+    }
+
+    @Test func decodesWrappedDrugObjectsAndUsesPrescriptionFallbackTitle() throws {
+        let json = """
+        {
+          "id": 42,
+          "visitId": null,
+          "drugs": {
+            "medications": [
+              {
+                "medicineName": "Vitamin C",
+                "dose": "1 tablet",
+                "timesPerDay": "OD",
+                "noOfDays": 10
+              }
+            ]
+          },
+          "visit": { "id": 12, "visitDate": "2026-07-28T10:00:00Z", "service": { "name": "" } },
+          "doctor": { "name": "  " },
+          "createdAt": "2026-07-27T09:00:00Z"
+        }
+        """.data(using: .utf8)!
+
+        let dto = try JSONDecoder().decode(PrescriptionDTO.self, from: json)
+        let prescription = dto.toDomain()
+        let drug = try #require(prescription.drugs.first)
+
+        #expect(prescription.visitId == "12")
+        #expect(prescription.serviceName == "Prescription")
+        #expect(prescription.doctorName == "")
+        #expect(drug.name == "Vitamin C")
+        #expect(drug.dosage == "1 tablet")
+        #expect(drug.frequency == "OD")
+        #expect(drug.duration == "10")
+    }
+}
+
+@MainActor
+struct ServiceImageMappingTests {
+    @Test func bookingProductMapsImageUrl() throws {
+        let json = """
+        {
+          "id": 7,
+          "name": "Hydra Facial",
+          "description": "Deep cleanse",
+          "basePrice": 2500,
+          "discountedPrice": 1999,
+          "imageUrl": "/uploads/services/hydra.jpg",
+          "categoryId": 2,
+          "category": "Facials",
+          "durationMin": 45,
+          "isActive": true
+        }
+        """.data(using: .utf8)!
+
+        let dto = try JSONDecoder().decode(ProductDTO.self, from: json)
+        let product = dto.toDomain()
+
+        #expect(product.imageUrl == "/uploads/services/hydra.jpg")
+        #expect(product.category == "Facials")
+    }
+
+    @Test func catalogServiceExtractsFirstImageFromJsonList() throws {
+        let json = """
+        {
+          "id": 8,
+          "name": "Laser Treatment",
+          "description": "Hair reduction",
+          "basePrice": 6000,
+          "discountedPrice": null,
+          "currency": "INR",
+          "durationMin": 60,
+          "categoryId": 3,
+          "category": "Laser",
+          "imageUrls": "[\\"https://cdn.example.test/laser.jpg\\",\\"https://cdn.example.test/alt.jpg\\"]",
+          "isActive": true
+        }
+        """.data(using: .utf8)!
+
+        let dto = try JSONDecoder().decode(ServiceDTO.self, from: json)
+        let service = dto.toDomain()
+
+        #expect(service.imageUrl == "https://cdn.example.test/laser.jpg")
+    }
+
+    @Test func imageUrlParserAcceptsPlainAndWrappedValues() {
+        #expect(ImageURLParser.firstURL(list: "/uploads/service.jpg") == "/uploads/service.jpg")
+        #expect(ImageURLParser.firstURL(list: #"{"images":[{"url":"/uploads/first.jpg"}]}"#) == "/uploads/first.jpg")
+        #expect(ImageURLParser.firstURL(list: #"["","/uploads/second.jpg"]"#) == "/uploads/second.jpg")
     }
 }
 

@@ -123,49 +123,60 @@ struct ServiceGridCard: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: WellnessSpacing.sm) {
-                Text(service.name)
-                    .font(.wellnessSubheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.wellnessOnSurface)
-                    .lineLimit(2)
+            VStack(alignment: .leading, spacing: 0) {
+                RemotePlaceholderImageView(
+                    imageUrl: service.imageUrl,
+                    placeholderSystemImage: Symbols.serviceDefault,
+                    accent: .wellnessTeal,
+                    cornerRadius: WellnessRadius.medium
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: 96)
 
-                if let cat = service.categoryName, !cat.isEmpty {
-                    Text(cat)
-                        .font(.wellnessCaption2)
-                        .foregroundColor(.wellnessMuted)
-                        .padding(.horizontal, WellnessSpacing.sm)
-                        .padding(.vertical, WellnessSpacing.xs)
-                        .background(Color.wellnessTeal.opacity(0.1))
-                        .clipShape(Capsule())
-                        .lineLimit(1)
-                }
+                VStack(alignment: .leading, spacing: WellnessSpacing.sm) {
+                    Text(service.name)
+                        .font(.wellnessSubheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.wellnessOnSurface)
+                        .lineLimit(2)
 
-                if let discounted = service.discountedPrice, discounted < service.price {
-                    VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
-                        Text(CurrencyUtil.formatAmount(service.price, currency: service.currency))
+                    if let cat = service.categoryName, !cat.isEmpty {
+                        Text(cat)
                             .font(.wellnessCaption2)
                             .foregroundColor(.wellnessMuted)
-                            .strikethrough(true, color: .wellnessMuted)
-                        Text(CurrencyUtil.formatAmount(discounted, currency: service.currency))
+                            .padding(.horizontal, WellnessSpacing.sm)
+                            .padding(.vertical, WellnessSpacing.xs)
+                            .background(Color.wellnessTeal.opacity(0.1))
+                            .clipShape(Capsule())
+                            .lineLimit(1)
+                    }
+
+                    if let discounted = service.discountedPrice, discounted < service.price {
+                        VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
+                            Text(CurrencyUtil.formatAmount(service.price, currency: service.currency))
+                                .font(.wellnessCaption2)
+                                .foregroundColor(.wellnessMuted)
+                                .strikethrough(true, color: .wellnessMuted)
+                            Text(CurrencyUtil.formatAmount(discounted, currency: service.currency))
+                                .font(.wellnessCaption2)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.wellnessTeal)
+                        }
+                    } else {
+                        Text(CurrencyUtil.formatAmount(service.price, currency: service.currency))
                             .font(.wellnessCaption2)
-                            .fontWeight(.semibold)
                             .foregroundColor(.wellnessTeal)
                     }
-                } else {
-                    Text(CurrencyUtil.formatAmount(service.price, currency: service.currency))
-                        .font(.wellnessCaption2)
-                        .foregroundColor(.wellnessTeal)
-                }
 
-                if let dur = service.durationMinutes {
-                    Text("\(dur) min")
-                        .font(.wellnessCaption2)
-                        .foregroundColor(.wellnessMuted)
+                    if let dur = service.durationMinutes {
+                        Text("\(dur) min")
+                            .font(.wellnessCaption2)
+                            .foregroundColor(.wellnessMuted)
+                    }
                 }
+                .padding(Layout.cardPaddingCompact)
             }
-            .padding(Layout.cardPaddingCompact)
-            .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 184, alignment: .topLeading)
             .background(Color.wellnessSurface)
             .clipShape(RoundedRectangle(cornerRadius: WellnessRadius.medium))
             .shadow(color: .black.opacity(0.05), radius: 4, x: 0, y: 2)
@@ -230,6 +241,15 @@ struct ServiceDetailSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: WellnessSpacing.xl) {
+                    RemotePlaceholderImageView(
+                        imageUrl: service.imageUrl,
+                        placeholderSystemImage: Symbols.serviceDefault,
+                        accent: .wellnessTeal,
+                        cornerRadius: WellnessRadius.medium
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 190)
+
                     // Title + category + severity pill
                     VStack(alignment: .leading, spacing: WellnessSpacing.sm) {
                         HStack(alignment: .top) {
@@ -383,51 +403,19 @@ private struct SearchBar: View {
     }
 }
 
-// MARK: - Catalog image helpers
-
-/// Resolves a raw imageUrl string to a URL, handling relative paths.
-private func catalogURL(_ raw: String?) -> URL? {
-    guard let raw, !raw.isEmpty else { return nil }
-    if raw.hasPrefix("http://") || raw.hasPrefix("https://") {
-        return URL(string: raw)
-    }
-    let base = AppConstants.API.baseURL
-    let slash = raw.hasPrefix("/") ? "" : "/"
-    return URL(string: "\(base)\(slash)\(raw)")
-}
-
 /// 36×36 category icon: shows image thumbnail if available, falls back to accent-tinted grid icon.
 private struct CategoryIconView: View {
     let imageUrl: String?
     let accent: Color
 
     var body: some View {
-        Group {
-            if let url = catalogURL(imageUrl) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFill()
-                    default:
-                        fallbackIcon
-                    }
-                }
-            } else {
-                fallbackIcon
-            }
-        }
+        RemotePlaceholderImageView(
+            imageUrl: imageUrl,
+            placeholderSystemImage: Symbols.categories,
+            accent: accent,
+            cornerRadius: WellnessRadius.small
+        )
         .frame(width: 36, height: 36)
-        .clipShape(RoundedRectangle(cornerRadius: WellnessRadius.small))
-    }
-
-    private var fallbackIcon: some View {
-        RoundedRectangle(cornerRadius: WellnessRadius.small)
-            .fill(accent.opacity(0.15))
-            .overlay(
-                Image(systemName: "square.grid.2x2")
-                    .font(.system(size: IconSize.badge))
-                    .foregroundColor(accent)
-            )
     }
 }
 

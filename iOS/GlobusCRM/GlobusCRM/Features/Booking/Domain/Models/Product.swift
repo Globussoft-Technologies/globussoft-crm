@@ -6,6 +6,7 @@ struct Product: Identifiable {
     let description: String?
     let basePrice: Double?
     let discountedPrice: Double?
+    let imageUrl: String?
     let categoryId: Int?
     let category: String?
     let durationMin: Int?

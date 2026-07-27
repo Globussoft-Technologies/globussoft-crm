@@ -83,6 +83,8 @@ struct ProductDTO: Decodable {
     let description: String?
     let basePrice: Double?
     let discountedPrice: Double?
+    let imageUrl: String?
+    let imageUrls: String?
     let categoryId: Int?
     let category: String?
     let durationMin: Int?

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * LandingPageBuilder.test.jsx — vitest + RTL coverage of the WYSIWYG
  * landing-page builder surface.
  *
@@ -205,8 +205,8 @@ describe("<LandingPageBuilder /> — page surface", () => {
     const slugInput = screen.getByLabelText("Page URL slug");
     expect(slugInput.value).toBe("spring-launch");
 
-    // Slug counter: 13/50 - lowercase, digits, hyphens.
-    expect(screen.getByText((_, element) => element?.textContent?.includes("13/50"))).toBeInTheDocument();
+    // Slug counter: 13 of 50 - lowercase, digits, hyphens.
+    expect(screen.getByText(/13 of 50/i)).toBeInTheDocument();
   });
 
   it("renders all 9 component-palette buttons in the left rail", async () => {

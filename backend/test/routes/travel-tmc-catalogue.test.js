@@ -478,7 +478,7 @@ describe('GET /api/travel-tmc-catalogue/import-template', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     expect(res.headers['content-disposition']).toContain('tmc-catalogue-template.xlsx');
-    expect(Buffer.isBuffer(res.body) || res.body?.length > 0).toBe(true);
+    expect(Number(res.headers['content-length'])).toBeGreaterThan(0);
   });
 });
 

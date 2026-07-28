@@ -218,5 +218,6 @@ module.exports = {
   parseSpreadsheetBuffer,
   reconcileRows,
   normalizeHeader,
+  normalizeText,
   parseMoney,
 };

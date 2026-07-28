@@ -206,6 +206,40 @@ router.get(
 );
 
 // ──────────────────────────────────────────────────────────────────────
+// GET /api/travel-tmc-catalogue/import-template
+//
+// Downloadable master template for the bulk import flow. The import route
+// expects the same field order as TEMPLATE_HEADERS, with the server forcing
+// review status on ingest so the file does not need a status column.
+// ──────────────────────────────────────────────────────────────────────
+router.get(
+  "/import-template",
+  verifyToken,
+  requirePermission("tmc_catalogue", "read"),
+  async (req, res) => {
+    try {
+      const format = (req.query.format || "csv").toString().toLowerCase();
+      if (format !== "csv" && format !== "xlsx") {
+        return res.status(400).json({ error: "format must be csv or xlsx", code: "INVALID_FORMAT" });
+      }
+      if (format === "xlsx") {
+        const buf = buildTemplateBuffer("xlsx");
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", 'attachment; filename="tmc-catalogue-template.xlsx"');
+        return res.end(buf);
+      }
+      const csv = buildTemplateBuffer("csv");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="tmc-catalogue-template.csv"');
+      return res.end(csv);
+    } catch (e) {
+      console.error("[travel-tmc-catalogue] template error:", e.message);
+      res.status(500).json({ error: "Failed to build import template" });
+    }
+  },
+);
+
+// ──────────────────────────────────────────────────────────────────────
 // GET /api/travel-tmc-catalogue/:id — single fetch (tenant-scoped, 404 on miss)
 // ──────────────────────────────────────────────────────────────────────
 router.get(
@@ -359,47 +393,13 @@ router.post(
   },
 );
 
-// ?????????????????????????????????????????????????????????????????????
-// GET /api/travel-tmc-catalogue/import-template
-//
-// Downloadable master template for the bulk import flow. The import route
-// expects the same field order as TEMPLATE_HEADERS, with the server forcing
-// review status on ingest so the file does not need a status column.
-// ?????????????????????????????????????????????????????????????????????
-router.get(
-  "/import-template",
-  verifyToken,
-  requirePermission("tmc_catalogue", "read"),
-  async (req, res) => {
-    try {
-      const format = (req.query.format || "csv").toString().toLowerCase();
-      if (format !== "csv" && format !== "xlsx") {
-        return res.status(400).json({ error: "format must be csv or xlsx", code: "INVALID_FORMAT" });
-      }
-      if (format === "xlsx") {
-        const buf = buildTemplateBuffer("xlsx");
-        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        res.setHeader("Content-Disposition", 'attachment; filename="tmc-catalogue-template.xlsx"');
-        return res.end(buf);
-      }
-      const csv = buildTemplateBuffer("csv");
-      res.setHeader("Content-Type", "text/csv; charset=utf-8");
-      res.setHeader("Content-Disposition", 'attachment; filename="tmc-catalogue-template.csv"');
-      return res.end(csv);
-    } catch (e) {
-      console.error("[travel-tmc-catalogue] template error:", e.message);
-      res.status(500).json({ error: "Failed to build import template" });
-    }
-  },
-);
-
-// ?????????????????????????????????????????????????????????????????????
+// ──────────────────────────────────────────────────────────────────────
 // POST /api/travel-tmc-catalogue/import
 //
 // Bulk upload via CSV/XLSX. New rows land archived (review-pending) and
 // the response labels them as AI-classified so the UI can surface the
 // review queue immediately after ingest.
-// ?????????????????????????????????????????????????????????????????????
+// ──────────────────────────────────────────────────────────────────────
 const MAX_IMPORT_ROWS = 5000;
 router.post(
   "/import",

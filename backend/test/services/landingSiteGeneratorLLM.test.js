@@ -4,10 +4,18 @@
  */
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createRequire } from 'node:module';
+import prisma from '../../lib/prisma.js';
+
+// Patch the shared prisma singleton so the budget-cap check in
+// landingSiteGeneratorLLM.js does not trip the prisma-surface guard.
+prisma.tenantSetting = {
+  findUnique: vi.fn().mockResolvedValue(null),
+};
 
 const requireCjs = createRequire(import.meta.url);
 const MODULE_PATH = '../../services/landingSiteGeneratorLLM.js';
 const llmRouter = requireCjs('../../lib/llmRouter');
+const destinationImageProvider = requireCjs('../../services/destinationImageProvider');
 let previousOpenAiModel;
 let previousGroqModel;
 
@@ -35,7 +43,13 @@ beforeEach(() => {
   previousOpenAiModel = process.env.LLM_MODEL_OPENAI_LANDING;
   previousGroqModel = process.env.GROQ_MODEL;
   delete requireCjs.cache[requireCjs.resolve(MODULE_PATH)];
+  destinationImageProvider._resetForTests();
   vi.restoreAllMocks();
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  vi.spyOn(destinationImageProvider, 'fetchOne').mockResolvedValue({
+    url: 'https://example.com/landing-stock.jpg',
+    attribution: { photographer: 'Test', providerId: 'test' },
+  });
 });
 
 afterEach(() => {

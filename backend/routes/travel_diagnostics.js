@@ -309,9 +309,9 @@ router.post(
       const subject = `[Diagnostic change request] ${bank.subBrand} bank v${bank.version}: ${subjectSummary}`;
       const requester = `user #${req.user.userId}${req.user.email ? ` (${req.user.email})` : ""}`;
       const descLines = [
-        "Diagnostic scoring is view-only in Phase 1 (PRD 4.2)  change request routed to GS.",
+        "Diagnostic scoring is view-only in Phase 1 (PRD 4.2) — change request routed to GS.",
         `Requested by: ${requester}`,
-        `Question bank: #${bank.id}  ${bank.subBrand} v${bank.version}`,
+        `Question bank: #${bank.id} — ${bank.subBrand} v${bank.version}`,
         `Summary: ${cleanSummary}`,
       ];
       if (cleanDetails) descLines.push(`Details: ${cleanDetails}`);

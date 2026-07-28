@@ -257,7 +257,7 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     expect(img).toBeInTheDocument();
     expect(img.style.width).toBe('100%');
     expect(img.style.maxWidth).toBe('100%');
-    expect(img.style.height).toBe('310px');
+    expect(img.style.height).toBe('360px');
   });
   test('renders button block with link', () => {
     const pageWithButton = {
@@ -286,6 +286,60 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     const link = screen.getByRole('link', { name: /Click me/i });
     expect(link).toBeInTheDocument();
     expect(link.href).toBe('https://example.com/');
+  });
+
+  test('routes wellness CTA buttons to the lead capture form', () => {
+    const pageWithButton = {
+      id: 223,
+      slug: 'wellness-button-page',
+      title: 'Wellness Button Page',
+      content: [
+        {
+          id: 'btn-wellness',
+          type: 'button',
+          props: {
+            text: 'Get Started',
+            url: '#event-details',
+            bgColor: '#b31d15',
+          },
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={pageWithButton} />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole('link', { name: /Get Started/i })).toHaveAttribute('href', '#lead-form');
+  });
+
+  test('renders wellness consultation form with the lead-form anchor target', () => {
+    const pageWithForm = {
+      id: 224,
+      slug: 'wellness-form-page',
+      title: 'Wellness Form Page',
+      content: [
+        {
+          id: 'lead-form',
+          type: 'form',
+          props: {
+            variant: 'wellness-consultation',
+            title: 'Register',
+            fields: [],
+          },
+        },
+      ],
+    };
+
+    render(
+      <MemoryRouter>
+        <BlockRenderer landingPage={pageWithForm} />
+      </MemoryRouter>
+    );
+
+    expect(document.getElementById('lead-form')).toBeInTheDocument();
   });
 
   test('renders video block with iframe for embed URL', () => {
@@ -578,3 +632,4 @@ describe('<BlockRenderer /> — block rendering and pageId passing', () => {
     expect(mainElement).toBeInTheDocument();
   });
 });
+

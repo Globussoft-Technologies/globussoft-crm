@@ -757,24 +757,37 @@ describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
 });
 
 describe('GET /api/landing-pages/public/featured (no auth, /trips resolver)', () => {
-  test('200 returns featured PUBLISHED row when one exists', async () => {
+  test('200 returns the travel featured PUBLISHED row by default', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'japan-2026', title: 'Japan 2026', destination: 'Japan',
       subBrand: 'tmc', featuredAt: new Date('2026-06-22T10:00:00Z'),
     });
-    // Public route — no Bearer header.
+    // Public route - no Bearer header.
     const res = await request(makeApp()).get('/api/landing-pages/public/featured');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       id: 50, slug: 'japan-2026', title: 'Japan 2026',
       destination: 'Japan', subBrand: 'tmc',
     });
-    // Filter must include isFeatured: true AND status: PUBLISHED.
+    // Default lookup must stay on the travel bucket.
     const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
     expect(findArgs.where.isFeatured).toBe(true);
     expect(findArgs.where.status).toBe('PUBLISHED');
+    expect(findArgs.where.subBrand).toBe('tmc');
     // Recency-ordered.
     expect(findArgs.orderBy).toEqual({ featuredAt: 'desc' });
+  });
+
+  test('default lookup ignores a featured wellness row when travel is featured too', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'japan-2026', title: 'Japan 2026', destination: 'Japan',
+      subBrand: 'tmc', featuredAt: new Date('2026-06-22T10:00:00Z'),
+    });
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured');
+    expect(res.status).toBe(200);
+    expect(res.body.subBrand).toBe('tmc');
+    const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
+    expect(findArgs.where.subBrand).toBe('tmc');
   });
 
   test('404 NO_FEATURED_PAGE when no row matches', async () => {
@@ -804,7 +817,6 @@ describe('GET /api/landing-pages/public/featured (no auth, /trips resolver)', ()
     expect(findArgs.where.subBrand).toBeNull();
   });
 });
-
 // ─── GET /:id/analytics ──────────────────────────────────────────────
 
 describe('GET /api/landing-pages/:id/analytics', () => {

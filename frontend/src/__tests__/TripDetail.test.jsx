@@ -482,7 +482,7 @@ describe('<TripDetail /> — Participants tab', () => {
     expect(posts.length).toBe(0);
   });
 
-  it('bulk import panel posts multipart file and shows the summary', async () => {
+  it('bulk import panel opens a modal, posts multipart file, and shows the summary', async () => {
     rawFetchMock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -492,11 +492,19 @@ describe('<TripDetail /> — Participants tab', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Anaya Sharma');
-    const file = new File(['fullName,parentPhone\nKabir Mehta,9876543210'], 'participants.csv', { type: 'text/csv' });
+
+    expect(screen.queryByTestId('participant-bulk-import-modal')).toBeNull();
+    expect(screen.queryByLabelText(/Bulk import participants file/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Import file/i }));
+    expect(await screen.findByTestId('participant-bulk-import-modal')).toBeInTheDocument();
+
+    const file = new File(['fullName,parentPhone
+Kabir Mehta,9876543210'], 'participants.csv', { type: 'text/csv' });
     fireEvent.change(screen.getByLabelText(/Bulk import participants file/i), {
       target: { files: [file] },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Import file/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Confirm import/i }));
     await waitFor(() => {
       expect(rawFetchMock).toHaveBeenCalled();
     });

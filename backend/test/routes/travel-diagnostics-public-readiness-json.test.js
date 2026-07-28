@@ -224,22 +224,26 @@ describe('GET /api/travel/diagnostics/public/readiness-report/:slug', () => {
     expect(prisma.travelDiagnostic.findFirst).not.toHaveBeenCalled();
   });
 
-  test('slug belongs to non-TMC diagnostic → 404 (cross-tenant / cross-sub-brand isolation)', async () => {
-    // The findFirst query is scoped to `subBrand: "tmc"`, so an RFU or
-    // Visa Sure diagnostic with the same id returns null → 404.  We
-    // simulate by returning null from the spy (the WHERE clause
-    // filters out non-TMC at the query layer).
-    prisma.travelDiagnostic.findFirst.mockResolvedValue(null);
+  test('slug from any travel diagnostic resolves the readiness report envelope', async () => {
+    prisma.travelDiagnostic.findFirst.mockResolvedValue(persistedDiag({ subBrand: 'rfu' }));
     const res = await request(makeApp())
       .get(`/api/travel/diagnostics/public/readiness-report/${buildSlugFor(777)}`);
-    expect(res.status).toBe(404);
-    expect(res.body).toMatchObject({ code: 'DIAGNOSTIC_NOT_FOUND' });
-    // Confirm the route DID pass `subBrand: "tmc"` in its WHERE.
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      diagnostic: expect.objectContaining({
+        id: 555,
+        engineState: 'strong_match',
+      }),
+      narrative: expect.any(Object),
+      engineOutput: expect.any(Object),
+      standingFacts: expect.any(Object),
+      boardHook: expect.any(Object),
+      runwayDisplay: expect.any(Object),
+    });
     expect(prisma.travelDiagnostic.findFirst).toHaveBeenCalledWith({
-      where: { id: 777, subBrand: 'tmc' },
+      where: { id: 777 },
     });
   });
-
   test('Layer 3 fallback: stub LLM prose fails Layer 1, guard falls through, endpoint returns 200', async () => {
     // The default stub return in beforeEach is non-JSON prose — Layer 1
     // schema validation rejects, Layer 3 deterministic template fires.

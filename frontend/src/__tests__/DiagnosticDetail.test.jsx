@@ -1,5 +1,5 @@
 /**
- * DiagnosticDetail.jsx — Travel CRM advisor-brief surface (PRD §4.1 + §4.2 + §7).
+ * DiagnosticDetail.jsx  Travel CRM advisor-brief surface (PRD 4.1 + 4.2 + 7).
  *
  * Pins the frontend contract for the page at /travel/diagnostics/:id that
  * lights up two LLM-router consumer endpoints:
@@ -14,7 +14,7 @@
  *   - "Generate brief" / "Regenerate" button POSTs to the regen endpoint
  *   - Compare button is disabled until the operator pastes a transcript
  *   - Form-vs-call POSTs callTranscript and renders perFieldDiff with
- *     ✓ / ✗ + classification badge colour matches the class
+ *      /  + classification badge colour matches the class
  *   - Regenerate button is hidden for USER role (only ADMIN/MANAGER may
  *     spend an LLM token)
  *   - 404 error renders "Diagnostic not found" copy + Retry button
@@ -138,7 +138,7 @@ beforeEach(() => {
   notifyObj.info.mockReset();
 });
 
-function makeFetchImpl(diagnostic, { compareResponse } = {}) {
+function makeFetchImpl(diagnostic, { compareResponse, shareResponse } = {}) {
   return (url, opts) => {
     if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined || opts.method === 'GET')) {
       return Promise.resolve(diagnostic);
@@ -150,7 +150,16 @@ function makeFetchImpl(diagnostic, { compareResponse } = {}) {
     if (url === '/api/travel/diagnostics/42/form-vs-call/compare' && opts?.method === 'POST') {
       return Promise.resolve(compareResponse || COMPARE_RESPONSE_MATCH);
     }
-    return Promise.resolve(null);
+    if (url === '/api/travel/diagnostics/42/share' && opts?.method === 'POST') {
+      return Promise.resolve(shareResponse || {
+        diagnosticId: 42,
+        reportSlug: '42-share-slug',
+        shareUrl: new URL('/p/tmc/report/42-share-slug', window.location.origin).toString(),
+        email: 'SENT',
+        whatsapp: 'SENT',
+        channel: 'email+whatsapp',
+      });
+    }
   };
 }
 
@@ -174,7 +183,7 @@ function renderPage({ role = 'ADMIN' } = {}) {
   );
 }
 
-describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
+describe('DiagnosticDetail  advisor brief UI (PRD 4.1 + 4.2)', () => {
   it('report PDF button POSTs to report-pdf/regen and opens the result', async () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     fetchApiMock.mockImplementation((url, opts) => {
@@ -195,8 +204,40 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
       );
       expect(post).toBeTruthy();
     });
-    expect(openSpy).toHaveBeenCalledWith('/api/uploads/diagnostics/diag-42-new.pdf', '_blank', 'noopener,noreferrer');
+    expect(openSpy).toHaveBeenCalledWith('/uploads/diagnostics/diag-42-new.pdf', '_blank', 'noopener,noreferrer');
     openSpy.mockRestore();
+  });
+
+  it('share panel opens and posts the public share payload', async () => {
+    const enriched = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      contactId: 100,
+      contact: { id: 100, name: 'Asha Verma', email: 'asha@example.com', phone: '+91 99999 00000' },
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(enriched));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+
+    fireEvent.click(screen.getByRole('button', { name: /Share report/i }));
+    const sendBtn = await screen.findByRole('button', { name: /Send share/i });
+    fireEvent.click(sendBtn);
+
+    await waitFor(() => {
+      const shareCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/diagnostics/42/share' && o?.method === 'POST',
+      );
+      expect(shareCall).toBeTruthy();
+      const body = JSON.parse(shareCall[1].body);
+      expect(body).toMatchObject({
+        channel: 'auto',
+        frontendBase: window.location.origin,
+        email: 'asha@example.com',
+        phone: '+91 99999 00000',
+      });
+    });
+
+    expect(await screen.findByText(/Public link/i)).toBeTruthy();
+    expect(screen.getByText(/42-share-slug/i)).toBeTruthy();
   });
 
   it('renders the page header with the diagnostic id', async () => {
@@ -279,7 +320,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     });
   });
 
-  it('renders perFieldDiff table with ✓ / ✗ indicators after Compare', async () => {
+  it('renders perFieldDiff table with  /  indicators after Compare', async () => {
     fetchApiMock.mockImplementation(
       makeFetchImpl(DIAGNOSTIC_NO_BRIEF, { compareResponse: COMPARE_RESPONSE_MISMATCH }),
     );
@@ -310,7 +351,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
 
     const badge = await screen.findByTestId('comparison-classification-badge');
     expect(badge.textContent.toLowerCase()).toBe('match');
-    // Green palette for "match" — colour token #2F7A4D normalises to
+    // Green palette for "match"  colour token #2F7A4D normalises to
     // rgb(47, 122, 77) when the DOM renders the inline style. Either
     // form is acceptable depending on the renderer.
     const style = badge.getAttribute('style') || '';
@@ -340,11 +381,11 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     expect(screen.getByRole('button', { name: /Retry/i })).toBeTruthy();
   });
 
-  // ── New cases extending coverage of the answers / scoring / recommendation
+  //  New cases extending coverage of the answers / scoring / recommendation
   //    / comparison-table surfaces. Adapted from the dispatch's suggested
   //    case-list to match the page's actual surface (the SUT does not
   //    expose "convert to lead" / "send email" / "mark as contacted" /
-  //    "filter by score" — those PRD ideas live on Lead detail, not on
+  //    "filter by score"  those PRD ideas live on Lead detail, not on
   //    the diagnostic-detail brief).
 
   it('renders the answers table with question text + answer values joined from the bank snapshot', async () => {
@@ -374,7 +415,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     expect(screen.getByText('premium')).toBeTruthy();
     // PDF link points at the diagnostic's reportPdfUrl.
     const pdfLink = screen.getByRole('link', { name: /Download report PDF/i });
-    expect(pdfLink.getAttribute('href')).toBe('/api/uploads/diagnostics/diag-42-abc.pdf');
+    expect(pdfLink.getAttribute('href')).toBe('/uploads/diagnostics/diag-42-abc.pdf');
   });
 
   it('renders the sub-brand label and classification chip in the header', async () => {
@@ -415,7 +456,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     expect(screen.getByLabelText(/Customer/i).textContent).toMatch(/Contact #100/i);
   });
 
-  it('falls back to the empty-state when questionsJson is missing — shows answers-map dump', async () => {
+  it('falls back to the empty-state when questionsJson is missing  shows answers-map dump', async () => {
     const noQuestions = {
       ...DIAGNOSTIC_NO_BRIEF,
       questionsJson: null,
@@ -468,7 +509,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     await screen.findByRole('heading', { name: /Diagnostic #42/i });
 
     const transcript = screen.getByLabelText(/Call transcript/i);
-    // Pure whitespace — disabled gate stays engaged.
+    // Pure whitespace  disabled gate stays engaged.
     fireEvent.change(transcript, { target: { value: '     \n  \t  ' } });
     const compareBtn = screen.getByRole('button', { name: /Compare form vs call/i });
     expect(compareBtn.disabled).toBe(true);
@@ -488,7 +529,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
       () => new Promise((resolve) => { resolveDiag = resolve; }),
     );
     renderPage();
-    // Pre-resolution: the "Loading…" placeholder is visible.
+    // Pre-resolution: the "Loading" placeholder is visible.
     expect(screen.getByText(/Loading/i)).toBeTruthy();
     // Back link is always visible (top of the layout).
     expect(screen.getByRole('link', { name: /Back to diagnostics/i })).toBeTruthy();
@@ -540,10 +581,10 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
 
     await screen.findByTestId('comparison-table');
     // Both "Question" headers coexist (the answers table at the top has
-    // one too — getAllByText is the right pattern per CLAUDE.md feedback).
+    // one too  getAllByText is the right pattern per CLAUDE.md feedback).
     expect(screen.getAllByText(/Question/i).length).toBeGreaterThanOrEqual(2);
     // "form answer" appears in the intro paragraph prose AND as a table
-    // header — `getAllByText` is the right pattern. Same for "call answer"
+    // header  `getAllByText` is the right pattern. Same for "call answer"
     // and "match" (badge text + column header collisions).
     expect(screen.getAllByText(/Form answer/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/Call answer/i).length).toBeGreaterThanOrEqual(1);
@@ -580,7 +621,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     expect(screen.queryByTestId('comparison-result')).toBeNull();
   });
 
-  // ── EXTENSION wave: SUT branches not yet exercised by the cases above.
+  //  EXTENSION wave: SUT branches not yet exercised by the cases above.
   //    Targets parser-helper edge cases (formatAnswer arrays/objects/empty,
   //    parseQuestionList direct-array shape, talkingPointsJson-as-object,
   //    answersJson-as-object), MANAGER-role regen gate, "review" palette
@@ -605,7 +646,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     expect(screen.getByText('Mecca, Medina, Jeddah')).toBeTruthy();
   });
 
-  it('formatAnswer JSON.stringifies object answers and renders "—" for empty strings', async () => {
+  it('formatAnswer JSON.stringifies object answers and renders "" for empty strings', async () => {
     const diagWithObjectAnswer = {
       ...DIAGNOSTIC_NO_BRIEF,
       answersJson: JSON.stringify({
@@ -619,9 +660,9 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     await screen.findByRole('heading', { name: /Diagnostic #42/i });
     // Object value is JSON.stringified verbatim.
     expect(screen.getByText('{"adults":2,"kids":2}')).toBeTruthy();
-    // Empty-string answer renders the "—" placeholder. There may be other
-    // "—" cells (e.g. recommended tier or score nulls), so accept ≥1.
-    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+    // Empty-string answer renders the "" placeholder. There may be other
+    // "" cells (e.g. recommended tier or score nulls), so accept 1.
+    expect(screen.getAllByText('').length).toBeGreaterThanOrEqual(1);
   });
 
   it('parseQuestionList accepts the direct-array snapshot shape (no inner questionsJson)', async () => {
@@ -641,7 +682,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     fetchApiMock.mockImplementation(makeFetchImpl(diagDirectArray));
     renderPage();
     await screen.findByRole('heading', { name: /Diagnostic #42/i });
-    // Both question texts render — `text` AND `label` are both accepted.
+    // Both question texts render  `text` AND `label` are both accepted.
     expect(screen.getByText(/Visa type\?/i)).toBeTruthy();
     expect(screen.getByText(/Travel month\?/i)).toBeTruthy();
     expect(screen.getByText('Tourist')).toBeTruthy();
@@ -670,7 +711,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     fetchApiMock.mockImplementation(makeFetchImpl(diagWithObjectAnswers));
     renderPage();
     await screen.findByRole('heading', { name: /Diagnostic #42/i });
-    // Answers still render — the parser tolerated the object input shape.
+    // Answers still render  the parser tolerated the object input shape.
     expect(screen.getByText('4')).toBeTruthy();
     expect(screen.getByText('October')).toBeTruthy();
     expect(screen.getByText('85000')).toBeTruthy();
@@ -764,7 +805,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
   });
 
   it('envelope.text="" falls back to "(no brief content returned)" empty state', async () => {
-    // G104 — when envelope.text is empty the parseBriefSections helper returns
+    // G104  when envelope.text is empty the parseBriefSections helper returns
     // [], so the SUT renders the empty-state status box rather than an
     // empty <details> body. Match the new copy.
     const emptyTextEnvelope = { ...TALKING_POINTS_ENVELOPE, text: '' };
@@ -778,7 +819,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     expect(await screen.findByText(/\(no brief content returned\)/i)).toBeTruthy();
   });
 
-  it('regen in-flight button copy flips to "Working…" while POST is pending', async () => {
+  it('regen in-flight button copy flips to "Working" while POST is pending', async () => {
     let resolveRegen;
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
@@ -801,7 +842,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     await screen.findByTestId('brief-body-advisor_brief');
   });
 
-  it('compare in-flight button copy flips to "Comparing…" while the POST is pending', async () => {
+  it('compare in-flight button copy flips to "Comparing" while the POST is pending', async () => {
     let resolveCompare;
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
@@ -871,7 +912,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
         return Promise.resolve(getCalls === 1 ? DIAGNOSTIC_NO_BRIEF : DIAGNOSTIC_WITH_BRIEF);
       }
       if (url === '/api/travel/diagnostics/42/talking-points/regen' && opts?.method === 'POST') {
-        // Response omits `diagnostic` — the SUT must fall back to load().
+        // Response omits `diagnostic`  the SUT must fall back to load().
         return Promise.resolve({ talkingPoints: TALKING_POINTS_ENVELOPE });
       }
       return Promise.resolve(null);
@@ -882,14 +923,14 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Generate talking points/i }));
 
     await waitFor(() => {
-      // load() re-fires the GET — expect a SECOND /api/travel/diagnostics/42 call.
+      // load() re-fires the GET  expect a SECOND /api/travel/diagnostics/42 call.
       expect(getCalls).toBe(2);
     });
     await screen.findByTestId('brief-body-advisor_brief');
   });
 
-  // ─── T11 — human_pick recorder (DD-5.7) + collapsible engine output ─
-  // Pins PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.3.7 contract:
+  //  T11  human_pick recorder (DD-5.7) + collapsible engine output 
+  // Pins PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE 3.3.7 contract:
   //   - human_pick dropdown shows 5 catalogue tripIds + "other" + "no_rec"
   //   - ADMIN can edit; MANAGER/USER see read-only display only
   //   - Engine output COLLAPSED until pick recorded (DD-5.7); REVEALS
@@ -942,7 +983,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     humanPick: 'golden-triangle',
   };
 
-  // Mock catalogue list (5 starter trips per PRD §3.2 / T4 seed).
+  // Mock catalogue list (5 starter trips per PRD 3.2 / T4 seed).
   const TMC_CATALOGUE_ACTIVE = [
     { id: 11, tripId: 'golden-triangle',     title: 'Golden Triangle',         status: 'active' },
     { id: 12, tripId: 'madhya-pradesh',      title: 'Madhya Pradesh Heritage', status: 'active' },
@@ -975,7 +1016,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     expect(screen.getByText(/Engine output hidden/i)).toBeTruthy();
     // Expanded block is NOT in the DOM.
     expect(screen.queryByTestId('engine-output-expanded')).toBeNull();
-    // Reveal button is also absent (no pick recorded → no reveal CTA).
+    // Reveal button is also absent (no pick recorded  no reveal CTA).
     expect(screen.queryByTestId('engine-output-reveal')).toBeNull();
   });
 
@@ -1090,14 +1131,14 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
   });
 
   it('T11: human_pick recorder section is NOT rendered for non-TMC diagnostics', async () => {
-    // DIAGNOSTIC_NO_BRIEF uses subBrand=rfu — recorder must stay hidden.
+    // DIAGNOSTIC_NO_BRIEF uses subBrand=rfu  recorder must stay hidden.
     fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_NO_BRIEF));
     renderPage();
     await screen.findByRole('heading', { name: /Diagnostic #42/i });
     expect(screen.queryByTestId('human-pick-select')).toBeNull();
     expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
     expect(screen.queryByTestId('engine-output-expanded')).toBeNull();
-    expect(screen.queryByText(/Senior reviewer — human pick/i)).toBeNull();
+    expect(screen.queryByText(/Senior reviewer  human pick/i)).toBeNull();
   });
 
   it('T11: Save with no selection surfaces a "pick first" notify + does NOT PATCH', async () => {
@@ -1120,7 +1161,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Save human pick/i })).toBeTruthy();
     });
-    // The button is disabled when no value selected — clicking is a no-op,
+    // The button is disabled when no value selected  clicking is a no-op,
     // but the test asserts the disabled-state contract + the lack of PATCH.
     const saveBtn = screen.getByRole('button', { name: /Save human pick/i });
     expect(saveBtn.disabled).toBe(true);
@@ -1137,14 +1178,14 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
       expect(screen.getByTestId('engine-output-expanded')).toBeTruthy();
     });
     fireEvent.click(screen.getByRole('button', { name: /Collapse engine output/i }));
-    // Once collapsed by user, the Reveal CTA appears (NOT the "record your pick" sentinel —
+    // Once collapsed by user, the Reveal CTA appears (NOT the "record your pick" sentinel 
     // because a pick already exists).
     await waitFor(() => {
       expect(screen.getByTestId('engine-output-reveal')).toBeTruthy();
     });
     expect(screen.queryByTestId('engine-output-expanded')).toBeNull();
     expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
-    // Click reveal → expands again.
+    // Click reveal  expands again.
     fireEvent.click(screen.getByTestId('engine-output-reveal'));
     await waitFor(() => {
       expect(screen.getByTestId('engine-output-expanded')).toBeTruthy();

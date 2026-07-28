@@ -119,6 +119,45 @@ function pdfContainsHexColor(buf, hex) {
   const haystack = inflated || str;
   return haystack.includes(r) && haystack.includes(g) && haystack.includes(b);
 }
+/** Extract readable text from a pdfkit PDF buffer for order assertions. */
+function extractPdfText(buf) {
+  const zlib = require('node:zlib');
+  const str = buf.toString('latin1');
+  let allOps = '';
+  const lenRe = /\/Length\s+(\d+)\b[^>]*>>\s*stream\r?\n/g;
+  let m;
+  while ((m = lenRe.exec(str)) !== null) {
+    const len = parseInt(m[1], 10);
+    const start = lenRe.lastIndex;
+    const raw = buf.subarray(start, start + len);
+    try {
+      allOps += zlib.inflateSync(raw).toString('latin1');
+    } catch (_e) {
+      allOps += raw.toString('latin1');
+    }
+  }
+  if (!allOps) return '';
+  let out = '';
+  const tjArrayRe = /\[([^\]]*)\]\s*TJ/g;
+  let s;
+  while ((s = tjArrayRe.exec(allOps)) !== null) {
+    const inner = s[1];
+    const hexRe = /<([0-9a-fA-F\s]+)>/g;
+    let h;
+    while ((h = hexRe.exec(inner)) !== null) {
+      const hex = h[1].replace(/\s+/g, '');
+      for (let i = 0; i + 1 < hex.length; i += 2) {
+        out += String.fromCharCode(parseInt(hex.substr(i, 2), 16));
+      }
+    }
+    out += ' ';
+  }
+  const tjLiteralRe = /\(((?:[^()\\]|\\.)*)\)\s*Tj/g;
+  while ((s = tjLiteralRe.exec(allOps)) !== null) {
+    out += s[1].replace(/\\(.)/g, '$1') + ' ';
+  }
+  return out;
+}
 
 // ── Fixtures ───────────────────────────────────────────────────────────
 
@@ -514,6 +553,16 @@ describe('renderTmcReadinessReport — S52 brand-kit selector', () => {
     expect(buf.length).toBeGreaterThan(2000);
   });
 
+
+  test('closing CTA renders as plain text without the old teal card box', async () => {
+    const buf = await renderTmcReadinessReport(tmcReadinessPayloadFixture());
+    const text = extractPdfText(buf);
+    expect(text).toContain('How TMC works');
+    expect(text).toContain('Your students are ready.');
+    expect(text).toContain('Book your slot: https://meet.google.com/abc-defg-hij');
+    expect(text.indexOf('How TMC works')).toBeLessThan(text.indexOf('Your students are ready.'));
+    expect(pdfContainsHexColor(buf, '#E8F2EE')).toBe(false);
+  });
   test('malformed subBrandConfigJson on tenant → silent fall-through (no throw)', async () => {
     const tenant = { subBrandConfigJson: '{this-is-not-json' };
     const buf = await renderTmcReadinessReport({

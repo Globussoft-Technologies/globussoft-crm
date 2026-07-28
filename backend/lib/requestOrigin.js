@@ -10,12 +10,12 @@
 // Priority order:
 //   1. FRONTEND_URL env var (explicit override)
 //   2. req.protocol + req.hostname (respects proxy headers when trust proxy is set)
-//   3. Fallback to localhost:5173 (development default)
+//   3. PUBLIC_BASE_URL env var when the request does not carry a host
 
 function getFrontendUrlFromRequest(req) {
   // Explicit env override takes priority
   if (process.env.FRONTEND_URL) {
-    return process.env.FRONTEND_URL;
+    return process.env.FRONTEND_URL.replace(/\/+$/, "");
   }
 
   // When trust proxy: 1 is set, these will use forwarded headers if available
@@ -23,8 +23,7 @@ function getFrontendUrlFromRequest(req) {
   const hostname = req.hostname || req.get("host");
 
   if (!hostname) {
-    // Fallback for local development
-    return "http://localhost:5173";
+    return (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
   }
 
   // Handle port in hostname (X-Forwarded-Host might include port)

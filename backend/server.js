@@ -1501,7 +1501,7 @@ app.get("/trips", async (req, res, next) => {
   try {
     const prismaClient = require("./lib/prisma");
     const page = await prismaClient.landingPage.findFirst({
-      where: { status: "PUBLISHED", isFeatured: true },
+      where: { status: "PUBLISHED", isFeatured: true, subBrand: "tmc" },
       orderBy: { featuredAt: "desc" },
     });
     if (!page) {

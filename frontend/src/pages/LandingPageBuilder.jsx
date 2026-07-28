@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useReducer, useRef, useCallback, useContext } from 'react';
 import { useParams, useSearchParams, useLocation, Link } from 'react-router-dom';
 import { ArrowLeft, Save, Eye, Monitor, Smartphone, Plus, Trash2, ChevronUp, ChevronDown, Type, AlignLeft, Image, MousePointerClick, FileInput, Minus, Space, Video, Upload, Undo2, Redo2, Columns, MapPin, Building2, Sparkles, ListChecks, CalendarDays, IndianRupee, HelpCircle, MessageSquare, AlertCircle, CheckCircle2, Globe, Film, Shield, FileDown, PhoneCall, History, X, RotateCcw, UserPlus, Search, Copy, Star, ExternalLink } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
@@ -9,6 +9,7 @@ import { PRESETS as REG_FORM_PRESETS, listPresets as listRegFormPresets, default
 import LandingPageTemplateEditor from './LandingPageTemplateEditor';
 import LandingPageWanderluxEditor, { LayoutPanel as WanderluxLayoutPanel } from './LandingPageWanderluxEditor';
 import { TeeDecisionPanel } from '../components/TeeDecisionPanel';
+import { AuthContext } from '../App';
 
 // Phase D1 — registered travel-page template ids. When a page's
 // templateType matches one of these, the builder mounts the
@@ -176,8 +177,10 @@ function formatVersionTimestamp(iso) {
 
 export default function LandingPageBuilder() {
   const notify = useNotify();
+  const auth = useContext(AuthContext) || {};
   const { id } = useParams();
   const location = useLocation();
+  const isTravelTenant = auth?.user?.tenant?.vertical === 'travel' || auth?.tenant?.vertical === 'travel';
   const isGenericLandingSites = location.pathname.startsWith('/landing-sites');
   // G094: sub-brand preview context. Admin lands at
   //   /landing-pages/<id>/builder?sub_brand=tmc
@@ -232,7 +235,7 @@ export default function LandingPageBuilder() {
   const [selectedVersion, setSelectedVersion] = useState(null);
   const [urlCopied, setUrlCopied] = useState(false);
   const [featuringPage, setFeaturingPage] = useState(false);
-  // Hard-block publish: track all pages so we can detect another live page.
+  // Track all pages so we can warn when another live page exists.
   const [allPages, setAllPages] = useState([]);
 
   // #449: hide the global app sidebar while the builder is mounted. The
@@ -277,7 +280,7 @@ export default function LandingPageBuilder() {
       .catch(() => setRoutingRules([]));
   }, []);
 
-  // Fetch all pages so we can hard-block publish when another page is live.
+  // Fetch all pages so we can warn when another page is live.
   useEffect(() => {
     fetchApi('/api/landing-pages')
       .then(res => setAllPages(Array.isArray(res) ? res : (res?.pages || [])))
@@ -289,10 +292,14 @@ export default function LandingPageBuilder() {
   // leave the picker empty so the toolbar renders without the dropdown
   // for generic users.
   useEffect(() => {
+    if (!isTravelTenant) {
+      setTmcTrips([]);
+      return;
+    }
     fetchApi('/api/travel/trips?limit=200')
       .then(res => Array.isArray(res?.trips) ? setTmcTrips(res.trips) : setTmcTrips([]))
       .catch(() => setTmcTrips([]));
-  }, []);
+  }, [isTravelTenant]);
   // Sync linking state with the page's persisted tripId so the
   // dropdown reflects "Linked to trip X" on load.
   useEffect(() => {
@@ -447,11 +454,12 @@ export default function LandingPageBuilder() {
 
   const handlePublish = async () => {
     if (!page?.id || publishing) return;
-    // Hard-block: only one page can be live at a time.
+    // We rely on the backend publish transaction to swap the featured/live
+    // page, so don't block wellness or generic pages here if another draft
+    // or live page already exists.
     const currentLive = allPages.find(p => p.status === 'PUBLISHED' && p.id !== page.id);
     if (currentLive) {
-      notify.error(`"${currentLive.title}" is currently live. Unpublish it before publishing this page. You can save this as a draft in the meantime.`);
-      return;
+      notify.info(`"${currentLive.title}" is currently live. Publishing this page will replace it.`);
     }
     setPublishing(true);
     try {
@@ -733,7 +741,7 @@ export default function LandingPageBuilder() {
             <Globe size={14} /> Open live
           </a>
         )}
-        {tmcTrips.length > 0 && (() => {
+        {isTravelTenant && tmcTrips.length > 0 && (() => {
           const selectedTrip = tmcTrips.find((t) => t.id === linkingTripId);
           const filteredTrips = tripSearch.trim()
             ? tmcTrips.filter((t) =>
@@ -834,19 +842,18 @@ export default function LandingPageBuilder() {
           </button>
         ) : (() => {
           const blockedBy = allPages.find((p) => p.status === 'PUBLISHED' && p.id !== page.id);
-          const isBlocked = !!blockedBy;
           return (
             <button
               onClick={handlePublish}
-              disabled={publishing || !slugIsValid || isBlocked}
+              disabled={publishing || !slugIsValid}
               title={
                 !slugIsValid
                   ? 'Fix the slug first'
-                  : isBlocked
-                    ? ('"' + blockedBy.title + '" is currently live - unpublish it first')
+                    : blockedBy
+                    ? ('"' + blockedBy.title + '" is currently live - publishing will replace it')
                     : 'Publish - runs the readiness check then makes the page public'
               }
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.35rem 0.95rem', border: 'none', borderRadius: 6, background: (!slugIsValid || isBlocked) ? 'var(--subtle-bg)' : '#10b981', cursor: (publishing || !slugIsValid || isBlocked) ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: '#fff', fontWeight: 600, opacity: (publishing || isBlocked) ? 0.5 : 1 }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.35rem 0.95rem', border: 'none', borderRadius: 6, background: !slugIsValid ? 'var(--subtle-bg)' : '#10b981', cursor: (publishing || !slugIsValid) ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: '#fff', fontWeight: 600, opacity: publishing ? 0.5 : 1 }}
             >
               <Globe size={13} /> {publishing ? 'Publishing...' : 'Publish'}
             </button>
@@ -1420,15 +1427,36 @@ const iconBarBtnStyle = (enabled) => ({
 function ComponentPreview({ comp }) {
   const p = comp.props;
   switch (comp.type) {
-    case 'heading': { const Tag = p.level || 'h2'; return <Tag style={{ textAlign: p.align, color: p.color, margin: '0.5rem 0' }}>{p.text}</Tag>; }
-    case 'text': return <p style={{ textAlign: p.align, color: p.color, fontSize: p.fontSize, margin: '0.5rem 0', lineHeight: 1.6 }}>{p.text}</p>;
+    case 'heading': {
+      const Tag = p.level || 'h2';
+      const variantStyle = p.variant === 'wellness-logo'
+        ? { fontSize: '0.92rem', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, margin: 0 }
+        : p.variant === 'wellness-display'
+          ? { fontSize: 'clamp(2rem, 5vw, 3.2rem)', lineHeight: 1.05, fontWeight: 800, margin: '0 0 1rem' }
+          : p.variant === 'wellness-section-title' || p.variant === 'wellness-card-title'
+            ? { fontSize: p.variant === 'wellness-card-title' ? '1.2rem' : '1.35rem', fontWeight: 800, margin: '0 0 0.6rem' }
+            : {};
+      return <Tag style={{ textAlign: p.align, color: p.color, margin: '0.5rem 0', ...variantStyle }}>{p.text}</Tag>;
+    }
+    case 'text': {
+      const variantStyle = p.variant === 'wellness-nav'
+        ? { textTransform: 'uppercase', letterSpacing: '0.16em', fontWeight: 700, margin: '0.7rem 0 0' }
+        : p.variant === 'wellness-eyebrow'
+          ? { textTransform: 'uppercase', letterSpacing: '0.14em', fontWeight: 700, margin: '0 0 0.8rem' }
+          : p.variant === 'wellness-detail'
+            ? { margin: '0 0 0.5rem', lineHeight: 1.45 }
+            : p.variant === 'wellness-footer'
+              ? { margin: 0, padding: '1.1rem', background: '#202a27', color: '#fff', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700 }
+              : {};
+      return <p style={{ textAlign: p.align, color: p.color, fontSize: p.fontSize, margin: '0.5rem 0', lineHeight: 1.6, ...variantStyle }}>{p.text}</p>;
+    }
     case 'image': return (
       <div style={{ textAlign: 'center' }}>
         {/* Image preview with fallback */}
         <img
           src={p.src}
           alt={p.alt || 'Image failed to load'}
-          style={{ maxWidth: p.maxWidth || '100%', borderRadius: '6px', height: 'auto', minHeight: 80 }}
+          style={{ maxWidth: p.maxWidth || '100%', width: p.width || '100%', borderRadius: p.variant === 'wellness-event-image' ? '18px' : '6px', height: p.variant === 'wellness-event-image' ? 300 : 'auto', objectFit: p.variant === 'wellness-event-image' ? 'cover' : undefined, minHeight: 80, border: p.variant === 'wellness-event-image' ? '1px solid #d8d2c3' : undefined, background: '#f4f1e8' }}
           onError={(e) => {
             if (e.target.dataset.fallback === '1') return;
             e.target.dataset.fallback = '1';
@@ -1446,33 +1474,75 @@ function ComponentPreview({ comp }) {
     );
     case 'button': return <div style={{ textAlign: p.align }}><button style={{ padding: p.size === 'large' ? '1rem 2.5rem' : '0.75rem 1.5rem', background: p.bgColor, color: p.color, border: 'none', borderRadius: '6px', fontWeight: '600', fontSize: p.size === 'large' ? '1.1rem' : '1rem', cursor: 'pointer' }}>{p.text}</button></div>;
     case 'form': return (
-      <div style={{ maxWidth: '400px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {(p.fields || []).map((f, i) => (
-          <div key={i}><label style={{ display: 'block', fontSize: '0.85rem', fontWeight: '500', marginBottom: '0.25rem', color: '#475569' }}>{f.label}{f.required && ' *'}</label>
-          <input type={f.type} style={{ width: '100%', padding: '0.6rem', border: '1px solid #cbd5e1', borderRadius: '6px' }} disabled /></div>
-        ))}
+      <div style={{ width: '100%', maxWidth: p.variant === 'wellness-consultation' ? '520px' : '400px', margin: '0 auto', padding: p.variant === 'wellness-consultation' ? '1.5rem' : 0, background: p.variant === 'wellness-consultation' ? '#fbfaf4' : 'transparent', border: p.variant === 'wellness-consultation' ? '1px solid #d8d2c3' : 'none', borderTop: p.variant === 'wellness-consultation' ? '2px solid #7c6f45' : 'none', borderRadius: p.variant === 'wellness-consultation' ? 14 : 0, display: 'flex', flexDirection: 'column', gap: '0.75rem', boxSizing: 'border-box', overflow: 'hidden' }}>
+        {p.title && <h2 style={{ margin: '0 0 0.8rem', color: '#1f2f2c', fontFamily: "Georgia, 'Times New Roman', serif", fontWeight: 500 }}>{p.title}</h2>}
+        <div style={{ display: p.variant === 'wellness-consultation' ? 'flex' : 'block', flexWrap: 'wrap', gap: p.variant === 'wellness-consultation' ? '0 0.9rem' : 0 }}>
+        {(p.fields || []).map((f, i) => {
+          const inputStyle = { width: '100%', padding: p.variant === 'wellness-consultation' ? '0.8rem 0.9rem' : '0.6rem', border: '1px solid #c9c3b4', borderRadius: '6px', background: '#fffdf7', backgroundColor: '#fffdf7', color: '#1f2937', boxSizing: 'border-box', opacity: 1, colorScheme: 'light', WebkitTextFillColor: '#1f2937' };
+          return (
+            <div key={i} style={{ flex: p.variant === 'wellness-consultation' && i < 2 ? '1 1 calc(50% - 0.45rem)' : '1 1 100%', minWidth: p.variant === 'wellness-consultation' && i < 2 ? 0 : '100%' }}>
+              <label style={{ display: 'block', fontSize: p.variant === 'wellness-consultation' ? '0.7rem' : '0.85rem', fontWeight: '600', marginBottom: '0.35rem', color: '#5e675f', letterSpacing: p.variant === 'wellness-consultation' ? '0.12em' : 0, textTransform: p.variant === 'wellness-consultation' ? 'uppercase' : 'none' }}>{f.label}{f.required && ' *'}</label>
+              {f.type === 'textarea' ? (
+                <textarea rows={4} style={{ ...inputStyle, resize: 'vertical' }} disabled />
+              ) : f.type === 'select' ? (
+                <select style={inputStyle} disabled>
+                  {(f.options || []).map((option) => <option key={String(option)}>{String(option)}</option>)}
+                </select>
+              ) : (
+                <input type={f.type || 'text'} style={inputStyle} disabled />
+              )}
+            </div>
+          );
+        })}
+        </div>
         {p.enableCaptcha && (
           <div style={{ padding: '0.6rem 0.8rem', background: 'rgba(59,130,246,0.08)', border: '1px dashed #3b82f6', borderRadius: '6px', fontSize: '0.8rem', color: '#2563eb', textAlign: 'center' }}>
             CAPTCHA: Cloudflare Turnstile (rendered live on the public page)
           </div>
         )}
-        <button style={{ padding: '0.75rem', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: '600' }}>{p.submitText}</button>
+        <button style={{ padding: p.variant === 'wellness-consultation' ? '0.9rem' : '0.75rem', background: p.variant === 'wellness-consultation' ? 'linear-gradient(90deg, #b7ad8c, #d1a083)' : '#3b82f6', color: '#fff', border: 'none', borderRadius: p.variant === 'wellness-consultation' ? 999 : 6, fontWeight: '700', letterSpacing: p.variant === 'wellness-consultation' ? '0.08em' : 0, textTransform: p.variant === 'wellness-consultation' ? 'uppercase' : 'none' }}>{p.submitText}</button>
       </div>
     );
     case 'divider': return <hr style={{ border: 'none', borderTop: '1px solid ' + p.color, margin: p.margin }} />;
     case 'spacer': return <div style={{ height: p.height }} />;
     case 'video': return <GenericVideoPreview p={p} />;
-    case 'columns': return (
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: p.gap || '2rem' }}>
-        {(p.columns || []).map((col, i) => (
-          <div key={i} style={{ flex: 1, minWidth: '200px' }}>
-            {(col.components || []).map((child, j) => (
-              <ComponentPreview key={j} comp={child} />
-            ))}
-          </div>
-        ))}
-      </div>
-    );
+    case 'columns': {
+      const variant = p.variant || '';
+      const isWellnessCampaignPage = variant === 'wellness-campaign-page';
+      const isWellnessHeaderRow = variant === 'wellness-header-row';
+      const isWellnessHeroRow = variant === 'wellness-hero-row';
+      const isWellnessRegistrationRow = variant === 'wellness-registration-row';
+      const isWellnessBenefitCards = variant === 'wellness-benefit-cards';
+      const isWellnessConsultation = variant === 'wellness-consultation';
+      const looksLikeWellnessSupporting = (p.columns || []).some((col) => (col.components || []).some((child) => ['why-title', 'after-title'].includes(child.id)));
+      const isWellnessSupporting = variant === 'wellness-supporting' || looksLikeWellnessSupporting;
+      const isWellnessSection = isWellnessCampaignPage || isWellnessHeaderRow || isWellnessHeroRow || isWellnessRegistrationRow || isWellnessBenefitCards || isWellnessConsultation || isWellnessSupporting;
+      const isWellnessInnerRow = isWellnessHeaderRow || isWellnessHeroRow || isWellnessRegistrationRow || isWellnessBenefitCards;
+      const hasFullWidthSupport = isWellnessConsultation && (p.columns || []).some((col) => col.fullWidth);
+      const containerStyle = isWellnessCampaignPage ? {
+        display: 'flex', flexWrap: 'wrap', gap: p.gap || '0', width: '1040px', maxWidth: '1040px', minWidth: '960px', margin: '0 auto 1.5rem', padding: 0, background: '#fbfaf4', color: '#1f2f2c', border: '1px solid #d8d2c3', borderRadius: 16, boxSizing: 'border-box', overflow: 'hidden'
+      } : {
+        display: 'flex', flexWrap: 'wrap', gap: isWellnessSection ? (p.gap || (isWellnessBenefitCards ? '1rem' : '2rem')) : (p.gap || '2rem'), width: '100%', maxWidth: '100%', margin: isWellnessInnerRow ? 0 : (isWellnessConsultation && !hasFullWidthSupport ? '0 auto 0' : (isWellnessSection ? '0 auto 1.5rem' : 0)), padding: isWellnessHeaderRow ? '1.5rem 4rem 1.1rem' : isWellnessHeroRow ? '2.6rem 4rem 1.75rem' : isWellnessRegistrationRow ? '1.25rem 4rem 3.25rem' : isWellnessBenefitCards ? 0 : (isWellnessSection ? (isWellnessConsultation ? '1.5rem' : '0 1.75rem 1.5rem') : 0), background: isWellnessInnerRow || isWellnessConsultation || isWellnessSupporting ? '#fbfaf4' : 'transparent', color: isWellnessSection ? '#1f2f2c' : undefined, borderRadius: isWellnessConsultation ? (hasFullWidthSupport ? 14 : '14px 14px 0 0') : (isWellnessSupporting ? '0 0 14px 14px' : 0), boxSizing: 'border-box', overflow: 'hidden'
+      };
+      return (
+        <div style={containerStyle}>
+          {(p.columns || []).map((col, i) => {
+            let flex = col.fullWidth ? '1 1 100%' : '1 1 0';
+            if (isWellnessHeroRow) flex = i === 1 ? '0 1 420px' : '1 1 430px';
+            if (isWellnessRegistrationRow) flex = i === 0 ? '0 1 500px' : '1 1 390px';
+            if (isWellnessBenefitCards) flex = '1 1 100%';
+            if (isWellnessConsultation && i === 1) flex = '0 1 440px';
+            return (
+              <div key={i} style={{ flex, minWidth: col.fullWidth ? '100%' : (isWellnessHeroRow ? (i === 1 ? '360px' : '430px') : isWellnessRegistrationRow ? (i === 0 ? '500px' : '360px') : isWellnessSection ? '280px' : '200px'), maxWidth: '100%', boxSizing: 'border-box', padding: isWellnessBenefitCards ? '1.25rem' : 0, background: isWellnessBenefitCards ? '#fffdf7' : 'transparent', border: isWellnessBenefitCards ? '1px solid #d8d2c3' : 'none', borderRadius: isWellnessBenefitCards ? 14 : 0, display: isWellnessBenefitCards ? 'flex' : undefined, flexDirection: isWellnessBenefitCards ? 'column' : undefined, justifyContent: isWellnessBenefitCards ? 'center' : undefined }}>
+                {(col.components || []).map((child, j) => (
+                  <ComponentPreview key={j} comp={child} />
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
     // Travel block previews
     case 'destinationHero': return <DestinationHeroPreview p={p} />;
     case 'cityCards': return <CityCardsPreview p={p} />;
@@ -2964,4 +3034,6 @@ function ContactFooterEditor({ p, updateProp, field }) {
       </div>
     </>
   );
-}// Travel block sub-components
+}
+// Travel block sub-components
+

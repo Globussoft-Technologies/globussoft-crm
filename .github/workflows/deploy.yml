@@ -426,6 +426,7 @@ jobs:
             tests/auth-security-regression-api.spec.js \
             tests/audit-coverage-api.spec.js \
             tests/public-booking-api.spec.js \
+            tests/wellness-public-enquiry-api.spec.js \
             tests/services-api.spec.js \
             tests/sequences-authoring-api.spec.js \
             tests/orchestrator-api.spec.js \
@@ -870,7 +871,8 @@ jobs:
               echo "=== seed-travel (always) ==="
               node prisma/seed-travel.js 2>&1 | tail -20
             fi
-            # Optional RBAC backfill. Keep this OFF for normal deploys so
+
+            # Optional RBAC backfill. Keep this OFF for normal deploys so
             # already-selected permissions remain unchanged across refreshes
             # and restarts. Operators can opt in only when they are
             # intentionally adding a newly-wide preset grant.
@@ -1263,7 +1265,8 @@ jobs:
               echo "=== seed-travel (always) ==="
               node prisma/seed-travel.js 2>&1 | tail -20
             fi
-            # Optional RBAC backfill. Keep this OFF for normal deploys so
+
+            # Optional RBAC backfill. Keep this OFF for normal deploys so
             # already-selected permissions remain unchanged across refreshes
             # and restarts. Operators can opt in only when they are
             # intentionally adding a newly-wide preset grant.

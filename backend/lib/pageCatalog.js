@@ -523,7 +523,7 @@ const PAGE_CATALOG = [
     label: 'Landing Sites',
     description: 'Sector-aware landing site builder',
     category: 'Marketing',
-    vertical: 'generic',
+    vertical: ['generic', 'wellness'],
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
   //  Reports + analytics 
@@ -1475,7 +1475,7 @@ function getCatalog() {
  */
 function getCatalogForVertical(vertical) {
   return PAGE_CATALOG.filter((p) => {
-    if (p.vertical) return p.vertical === vertical;
+    if (p.vertical) return matchesVertical(p.vertical, vertical);
     const isWellness = p.path === '/wellness' || p.path.startsWith('/wellness/');
     if (isWellness) return vertical === 'wellness';
     const isTravel = p.path === '/travel' || p.path.startsWith('/travel/');
@@ -1493,6 +1493,13 @@ function getPage(path) {
 
 function isKnownPage(path) {
   return typeof path === 'string' && PAGES_BY_PATH.has(path);
+}
+
+function matchesVertical(pageVertical, vertical) {
+  if (Array.isArray(pageVertical)) {
+    return pageVertical.includes(vertical);
+  }
+  return pageVertical === vertical;
 }
 
 /**
@@ -1522,7 +1529,7 @@ function getAccessiblePages(permissionSet, opts = {}) {
   // full catalog (back-compat).
   const basePool = opts.vertical
     ? PAGE_CATALOG.filter((p) => {
-        if (p.vertical) return p.vertical === opts.vertical;
+        if (p.vertical) return matchesVertical(p.vertical, opts.vertical);
         const isWellness = p.path === '/wellness' || p.path.startsWith('/wellness/');
         if (isWellness) return opts.vertical === 'wellness';
         const isTravel = p.path === '/travel' || p.path.startsWith('/travel/');

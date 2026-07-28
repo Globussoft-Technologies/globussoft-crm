@@ -157,6 +157,8 @@ const ALLOWED_ORIGINS = [
   // never gets to run.
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5000",
+  "http://localhost:8000",
+  "http://127.0.0.1:8000",
   "https://globuscrm.globussoft.com",
   // Dr. Haror's external marketing site — consumes the public wellness
   // catalog + payment endpoints (POST /api/wellness/public/payment/order +
@@ -957,6 +959,7 @@ app.use("/api", (req, res, next) => {
     "/terms-and-conditions",
     "/legal",
     "/landing-pages/public",
+    "/landing-sites/public",
     "/landing-pages/wanderlux-static",
     "/brochure-assets",
     // Diagnostic PDFs are public by design (PRD §4.2) — the unguessable

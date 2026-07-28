@@ -18,6 +18,7 @@
  */
 
 const express = require("express");
+const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
@@ -89,10 +90,20 @@ const {
   buildCaCsv: buildTravelCaCsv,
   buildAccountingXlsx: buildTravelAccountingXlsx,
 } = require("../lib/travelAccountingExport");
+const {
+  parseSpreadsheetBuffer: parseInvoiceReconciliationSpreadsheet,
+  reconcileRows: reconcileInvoiceRows,
+  normalizeHeader: normalizeInvoiceHeader,
+  normalizeText: normalizeInvoiceText,
+} = require("../lib/travelInvoiceReconciliation");
 // Sub-brand → legal-entity / GSTIN resolution (Q21 config blob on Tenant).
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
+const invoiceReconcileUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
 
 // Arc 2 #901 slice 11 — PRD_TRAVEL_BILLING FR-3.x doc-type taxonomy.
 // Travel verticals need to issue more than just a "TaxInvoice": Proforma
@@ -479,6 +490,99 @@ router.get(
       }
       console.error("[travel-invoices] list error:", e.message);
       res.status(500).json({ error: "Failed to list invoices" });
+    }
+  },
+);
+
+// POST /api/travel/invoices/reconcile/excel-software
+// Read-only reconciliation preview for workbook rows exported from the
+// accounting.xlsx bridge. The route never mutates CRM records; it only
+// compares uploaded rows against the current tenant invoices and returns a
+// discrepancy report so the operator can reconcile off-platform without any
+// DB risk.
+router.post(
+  "/invoices/reconcile/excel-software",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  invoiceReconcileUpload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+        return res.status(400).json({ error: "file field required (multipart)", code: "FILE_REQUIRED" });
+      }
+
+      let parsed;
+      try {
+        parsed = parseInvoiceReconciliationSpreadsheet(req.file.buffer, req.file);
+      } catch (parseErr) {
+        return res.status(400).json({ error: parseErr.message, code: "INVALID_FILE" });
+      }
+
+      const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "file is empty", code: "EMPTY_FILE" });
+      }
+
+      const invoiceNums = new Set();
+      for (const raw of rows) {
+        const mapped = {};
+        for (const [key, value] of Object.entries(raw || {})) {
+          mapped[normalizeInvoiceHeader(key)] = value;
+        }
+        const invoiceNum = normalizeInvoiceText(
+          mapped.invoicenumber ||
+          mapped.invoicenum ||
+          mapped.vouchernumber ||
+          mapped.invoiceid,
+        );
+        if (invoiceNum && invoiceNum.toLowerCase() !== "total") {
+          invoiceNums.add(invoiceNum.toUpperCase());
+        }
+      }
+      if (invoiceNums.size === 0) {
+        return res.status(400).json({ error: "No invoice numbers found in file", code: "MISSING_FIELDS" });
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        invoiceNum: { in: Array.from(invoiceNums) },
+      };
+      if (req.query.subBrand) {
+        assertValidSubBrand(String(req.query.subBrand));
+        where.subBrand = String(req.query.subBrand);
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        select: {
+          id: true,
+          invoiceNum: true,
+          totalAmount: true,
+          status: true,
+          subBrand: true,
+          contactId: true,
+          createdAt: true,
+        },
+      });
+      const contactIds = [...new Set(invoices.map((inv) => inv.contactId).filter((id) => Number.isFinite(Number(id))))];
+      const contacts = contactIds.length > 0
+        ? await prisma.contact.findMany({
+            where: { tenantId: req.travelTenant.id, id: { in: contactIds.map((id) => Number(id)) } },
+            select: { id: true, name: true },
+          })
+        : [];
+      const contactsById = Object.fromEntries(contacts.map((c) => [c.id, c]));
+
+      const report = reconcileInvoiceRows({ rows, invoices, contactsById });
+      report.scannedInvoices = invoices.length;
+      report.subBrand = req.query.subBrand ? String(req.query.subBrand) : null;
+
+      res.status(200).json(report);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-invoices] excel-software reconciliation error:", e.message);
+      res.status(500).json({ error: "Failed to reconcile workbook" });
     }
   },
 );

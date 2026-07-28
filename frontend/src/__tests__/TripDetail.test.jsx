@@ -103,6 +103,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
+const rawFetchMock = vi.fn();
+const originalFetch = globalThis.fetch;
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
   getAuthToken: () => 'test-token',
@@ -270,6 +272,8 @@ function renderPage(tripId = 101) {
 
 beforeEach(() => {
   fetchApiMock.mockReset();
+  rawFetchMock.mockReset();
+  globalThis.fetch = rawFetchMock;
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
@@ -284,6 +288,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -475,6 +480,32 @@ describe('<TripDetail /> — Participants tab', () => {
       ([, o]) => o?.method === 'POST',
     );
     expect(posts.length).toBe(0);
+  });
+
+  it('bulk import panel posts multipart file and shows the summary', async () => {
+    rawFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ inserted: 1, updated: 1, skipped: 0, errors: [], total: 2 }),
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Anaya Sharma');
+    const file = new File(['fullName,parentPhone\nKabir Mehta,9876543210'], 'participants.csv', { type: 'text/csv' });
+    fireEvent.change(screen.getByLabelText(/Bulk import participants file/i), {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Import file/i }));
+    await waitFor(() => {
+      expect(rawFetchMock).toHaveBeenCalled();
+    });
+    const [url, opts] = rawFetchMock.mock.calls[0];
+    expect(url).toBe('/api/travel/trips/101/participants/import');
+    expect(opts?.method).toBe('POST');
+    expect(opts?.body).toBeInstanceOf(FormData);
+    expect(await screen.findByTestId('participant-bulk-import-result')).toBeInTheDocument();
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Imported 1, updated 1/i));
   });
 });
 

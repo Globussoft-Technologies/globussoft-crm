@@ -231,6 +231,7 @@ jobs:
             tests/auth-security-regression-api.spec.js \
             tests/audit-coverage-api.spec.js \
             tests/public-booking-api.spec.js \
+            tests/wellness-public-enquiry-api.spec.js \
             tests/services-api.spec.js \
             tests/sequences-authoring-api.spec.js \
             tests/orchestrator-api.spec.js \

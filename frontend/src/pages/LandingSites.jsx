@@ -1,9 +1,10 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, BarChart3, Sparkles, ExternalLink, LayoutGrid, Megaphone } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { formatPercent } from '../utils/percent';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../App';
 
 const STATUS_COLORS = {
   DRAFT: { bg: 'rgba(59,130,246,0.1)', color: '#3b82f6' },
@@ -35,6 +36,37 @@ function blankBlocks() {
   ];
 }
 
+function buildStarterBlocks({ sectorKey = 'general', campaignName = 'Untitled Landing Site', audience = 'qualified visitors', location = '', isWellness = false }) {
+  if (!isWellness) return blankBlocks();
+  const eventSummary = [
+    'Date: Add the event date',
+    'Time: Add the event time',
+    location ? `Location: ${location}` : 'Location: Add the venue',
+    `Audience: ${audience}`,
+  ].join('\n');
+  return [
+    { id: `seed-${Date.now()}`, type: 'heading', props: { text: campaignName, level: 'h1', align: 'center', color: '#111827' } },
+    { id: `seed-${Date.now() + 1}`, type: 'text', props: { text: 'Use this landing page for a camp, consultation day, or community event. Keep the details clear and the registration form easy to complete.', align: 'center', color: '#4b5563', fontSize: '1rem' } },
+    { id: `seed-${Date.now() + 2}`, type: 'columns', props: { gap: '24px', columns: [
+      { components: [
+        { id: `seed-${Date.now() + 3}`, type: 'heading', props: { text: 'Event details', level: 'h3', align: 'left', color: '#111827' } },
+        { id: `seed-${Date.now() + 4}`, type: 'text', props: { text: eventSummary, align: 'left', color: '#4b5563', fontSize: '0.98rem' } },
+      ] },
+      { components: [
+        { id: `seed-${Date.now() + 5}`, type: 'form', props: { fields: [
+          { label: 'Full name', name: 'name', type: 'text', required: true },
+          { label: 'Email address', name: 'email', type: 'email', required: true },
+          { label: 'Phone number', name: 'phone', type: 'tel', required: true },
+          { label: 'Preferred time', name: 'preferred_time', type: 'text', required: false },
+          { label: 'Notes', name: 'message', type: 'text', required: false },
+        ], submitText: 'Register Now', thankYouMessage: `Thanks. We have received your registration for ${campaignName}.`, enableCaptcha: false, leadRoutingRuleId: '', successRedirectUrl: '' } },
+      ] },
+    ] } },
+    { id: `seed-${Date.now() + 6}`, type: 'image', props: { src: '', alt: `${sectorKey} campaign image`, maxWidth: '100%' } },
+    { id: `seed-${Date.now() + 7}`, type: 'divider', props: { color: '#e5e7eb', margin: '1.5rem' } },
+  ];
+}
+
 function buildTemplateType(sectorKey) {
   return `generic-site-${sectorKey}-v1`;
 }
@@ -42,23 +74,34 @@ function buildTemplateType(sectorKey) {
 export default function LandingSites() {
   const notify = useNotify();
   const navigate = useNavigate();
+  const auth = useContext(AuthContext) || {};
+  const tenantVertical = auth?.user?.tenant?.vertical || auth?.tenant?.vertical || 'generic';
+  const isWellnessTenant = tenantVertical === 'wellness';
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showGenerateModal, setShowGenerateModal] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
-  const [form, setForm] = useState({
-    sectorKey: 'general',
+  const defaultFormState = (wellness = false) => ({
+    sectorKey: wellness ? 'health' : 'general',
     campaignName: '',
     campaignGoal: '',
     businessName: '',
     audience: '',
     location: '',
+    eventDate: '',
+    eventTime: '',
+    eventLocation: '',
     tone: '',
     ctaText: 'Get Started',
     imageMode: 'auto',
   });
+  const [form, setForm] = useState(defaultFormState(isWellnessTenant));
+
+  React.useEffect(() => {
+    setForm((current) => ({ ...defaultFormState(isWellnessTenant), ...current }));
+  }, [isWellnessTenant]);
 
   const loadPages = () => {
     setLoading(true);
@@ -84,14 +127,15 @@ export default function LandingSites() {
 
   const handleCreateBlank = async () => {
     try {
+      const sectorKey = isWellnessTenant ? 'health' : 'general';
       const page = await fetchApi('/api/landing-pages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title: 'Untitled Landing Site',
-          templateType: buildTemplateType('general'),
-          content: JSON.stringify(blankBlocks()),
-          description: 'General landing site',
+          title: isWellnessTenant ? 'Untitled Wellness Event Landing Site' : 'Untitled Landing Site',
+          templateType: buildTemplateType(sectorKey),
+          content: JSON.stringify(buildStarterBlocks({ sectorKey, campaignName: isWellnessTenant ? 'Untitled Wellness Event' : 'Untitled Landing Site', isWellness: isWellnessTenant, audience: 'qualified visitors' })),
+          description: isWellnessTenant ? 'Wellness event landing site' : 'General landing site',
         }),
         silent: true,
       });
@@ -129,6 +173,9 @@ export default function LandingSites() {
           businessName: form.businessName.trim(),
           audience: form.audience.trim(),
           location: form.location.trim(),
+          eventDate: form.eventDate.trim(),
+          eventTime: form.eventTime.trim(),
+          eventLocation: form.eventLocation.trim() || form.location.trim(),
           tone: form.tone.trim(),
           ctaText: form.ctaText.trim(),
           imageMode: form.imageMode,
@@ -144,17 +191,7 @@ export default function LandingSites() {
         notify.success('AI draft created. Review the page before publishing.');
       }
       setShowGenerateModal(false);
-      setForm({
-        sectorKey: 'general',
-        campaignName: '',
-        campaignGoal: '',
-        businessName: '',
-        audience: '',
-        location: '',
-        tone: '',
-        ctaText: 'Get Started',
-        imageMode: 'auto',
-      });
+      setForm(defaultFormState(isWellnessTenant));
       navigate(`/landing-sites/builder/${res.page.id}?ai=1`);
     } catch (err) {
       if (err?.status === 429 && err?.code === 'LLM_BUDGET_EXCEEDED') {
@@ -339,6 +376,18 @@ export default function LandingSites() {
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Location</span>
                 <input className="input-field" value={form.location} onChange={(e) => setForm((s) => ({ ...s, location: e.target.value }))} placeholder="Pune" />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event date</span>
+                <input className="input-field" value={form.eventDate} onChange={(e) => setForm((s) => ({ ...s, eventDate: e.target.value }))} placeholder="12 August 2026" />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event time</span>
+                <input className="input-field" value={form.eventTime} onChange={(e) => setForm((s) => ({ ...s, eventTime: e.target.value }))} placeholder="10:00 AM - 4:00 PM" />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event venue</span>
+                <input className="input-field" value={form.eventLocation} onChange={(e) => setForm((s) => ({ ...s, eventLocation: e.target.value }))} placeholder="Main clinic branch" />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Tone</span>

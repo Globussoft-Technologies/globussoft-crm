@@ -815,6 +815,63 @@ describe('Participants', () => {
     );
   });
 
+  test('POST /participants/import upserts rows additively without clearing blanks', async () => {
+    prisma.tripParticipant.findFirst
+      .mockResolvedValueOnce({ id: 77 })
+      .mockResolvedValueOnce(null);
+    prisma.tripParticipant.update.mockResolvedValue({ id: 77, tripId: 100, fullName: 'Anaya Sharma' });
+    prisma.tripParticipant.create.mockResolvedValue({ id: 88, tripId: 100, fullName: 'Ravi Mehta' });
+
+    const csv = [
+      'fullName,parentName,parentPhone,parentEmail,applicationStatus,consentCapturedAt,reviewNotes',
+      'Anaya Sharma,Riya Sharma,9876543210,parent@example.com,approved,2026-05-01T00:00:00.000Z,Imported row',
+      'Ravi Mehta,,,,waitlisted,,',
+    ].join('\n');
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/participants/import')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from(csv, 'utf8'), 'participants.csv');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ inserted: 1, updated: 1, skipped: 0, total: 2 });
+    expect(prisma.tripParticipant.findFirst).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tripId: 100,
+          fullName: 'Anaya Sharma',
+          parentPhone: '+919876543210',
+          parentEmail: 'parent@example.com',
+        }),
+      }),
+    );
+    expect(prisma.tripParticipant.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 77 },
+        data: expect.objectContaining({
+          fullName: 'Anaya Sharma',
+          parentName: 'Riya Sharma',
+          parentPhone: '+919876543210',
+          parentEmail: 'parent@example.com',
+          applicationStatus: 'approved',
+          reviewNotes: 'Imported row',
+          consentCapturedAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(prisma.tripParticipant.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tenantId: 1,
+          tripId: 100,
+          fullName: 'Ravi Mehta',
+          applicationStatus: 'waitlisted',
+        }),
+      }),
+    );
+  });
+
   test('POST participant returns 201 + persisted row', async () => {
     prisma.tripParticipant.create.mockResolvedValue({
       id: 50, tripId: 100, fullName: 'Bob Patel', aadhaarLast4: '1234',
@@ -1661,3 +1718,5 @@ describe('POST /api/travel/trips/:id/registrations/:rid/reject', () => {
     expect(res.body).toMatchObject({ code: 'REGISTRATION_NOT_FOUND' });
   });
 });
+
+

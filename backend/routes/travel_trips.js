@@ -41,6 +41,7 @@
 // stored (Q14 + Aadhaar Act §29 — see TRAVEL_CRM_RISKS.md R8).
 
 const express = require("express");
+const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
@@ -52,8 +53,16 @@ const visaDocStore = require("../lib/visaDocStore");
 const passportOcrClient = require("../services/passportOcrClient");
 const listProjection = require("../lib/listProjection");
 const { toE164 } = require("../utils/deduplication");
+const {
+  parseSpreadsheetBuffer,
+  parseParticipantImportRow,
+} = require("../lib/travelTmcImport");
 
 const VALID_TRIP_STATUSES = ["confirmed", "in-trip", "completed", "cancelled"];
+const tripImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
 
 // TMC-only access guard. Trips ARE tmc-only, so we just check that "tmc"
 // is in the allowed set (or that the user has full access).
@@ -1539,6 +1548,119 @@ async function loadTrip(req) {
   }
   return trip;
 }
+
+const PARTICIPANT_IMPORT_MAX_ROWS = 5000;
+
+// POST /api/travel/trips/:id/participants/import
+// Additive bulk import for TMC rosters / historical participant sheets.
+// Rows are upserted by a conservative natural key (fullName + parentPhone
+// + parentEmail) and never delete existing participants. Blank cells do not
+// clear stored values on update, so a partially-filled workbook cannot lose
+// data already captured in CRM.
+router.post(
+  "/trips/:id/participants/import",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  tripImportUpload.single("file"),
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+        return res.status(400).json({ error: "file field required (multipart)", code: "FILE_REQUIRED" });
+      }
+
+      let parsed;
+      try {
+        parsed = parseSpreadsheetBuffer(req.file.buffer, req.file);
+      } catch (parseErr) {
+        return res.status(400).json({ error: parseErr.message, code: "INVALID_FILE" });
+      }
+
+      const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "file is empty", code: "EMPTY_FILE" });
+      }
+      if (rows.length > PARTICIPANT_IMPORT_MAX_ROWS) {
+        return res.status(413).json({
+          error: `Too many rows. Max ${PARTICIPANT_IMPORT_MAX_ROWS}`,
+          code: "TOO_MANY_ROWS",
+        });
+      }
+
+      const seen = new Map();
+      const errors = [];
+      let inserted = 0;
+      let updated = 0;
+      let skipped = 0;
+
+      for (let i = 0; i < rows.length; i += 1) {
+        const raw = rows[i] || {};
+        const rowNumber = raw.__row || i + 2;
+        const parsedRow = parseParticipantImportRow(raw, rowNumber);
+        if (parsedRow.errors.length > 0) {
+          errors.push(...parsedRow.errors.map((err) => ({ row: err.rowNumber || rowNumber, reason: err.reason })));
+          skipped += 1;
+          continue;
+        }
+        if (seen.has(parsedRow.naturalKey)) {
+          errors.push({ row: rowNumber, reason: `duplicate of row ${seen.get(parsedRow.naturalKey)} (same natural key)` });
+          skipped += 1;
+          continue;
+        }
+        seen.set(parsedRow.naturalKey, rowNumber);
+
+        const existing = await prisma.tripParticipant.findFirst({
+          where: {
+            tripId: trip.id,
+            fullName: parsedRow.data.fullName,
+            parentPhone: parsedRow.data.parentPhone || null,
+            parentEmail: parsedRow.data.parentEmail || null,
+          },
+          select: { id: true },
+        });
+
+        if (existing) {
+          const data = {};
+          for (const [key, value] of Object.entries(parsedRow.data)) {
+            if (value === undefined || value === null || value === "") continue;
+            data[key] = value;
+          }
+          if (Object.keys(data).length === 0) {
+            skipped += 1;
+            continue;
+          }
+          await prisma.tripParticipant.update({
+            where: { id: existing.id },
+            data,
+          });
+          updated += 1;
+        } else {
+          await prisma.tripParticipant.create({
+            data: {
+              tenantId: req.travelTenant.id,
+              tripId: trip.id,
+              ...parsedRow.data,
+            },
+          });
+          inserted += 1;
+        }
+      }
+
+      res.status(200).json({
+        inserted,
+        updated,
+        skipped,
+        errors,
+        total: rows.length,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] participant import error:", e.message);
+      res.status(500).json({ error: "Failed to import participants" });
+    }
+  },
+);
 
 // GET /api/travel/trips/:id/participants
 //

@@ -717,6 +717,10 @@ export default function InvoicesAdmin() {
     tally: { path: "tally.xml", ext: "xml", label: "Tally XML" },
   };
   const [exporting, setExporting] = useState(null); // format key while in-flight
+  const [reconFile, setReconFile] = useState(null);
+  const [reconResult, setReconResult] = useState(null);
+  const [reconciling, setReconciling] = useState(false);
+  const reconInputRef = useRef(null);
 
   const downloadExport = async (formatKey) => {
     const fmt = EXPORT_FORMATS[formatKey];
@@ -743,6 +747,37 @@ export default function InvoicesAdmin() {
       notify.error(err?.message || `Failed to export ${fmt.label}`);
     } finally {
       setExporting(null);
+    }
+  };
+
+  const runReconciliation = async () => {
+    if (!reconFile) {
+      notify.error("Choose a CSV or XLSX file first");
+      return;
+    }
+    setReconciling(true);
+    try {
+      const token = getAuthToken();
+      const fd = new FormData();
+      fd.append("file", reconFile);
+      const qs = subBrand ? `?subBrand=${encodeURIComponent(subBrand)}` : "";
+      const resp = await fetch(`/api/travel/invoices/reconcile/excel-software${qs}`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const data = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        throw Object.assign(new Error(data?.error || "Failed to reconcile workbook"), { body: data, status: resp.status });
+      }
+      setReconResult(data || null);
+      setReconFile(null);
+      if (reconInputRef.current) reconInputRef.current.value = "";
+      notify.success(`Matched ${data?.matchedRows || 0} invoices`);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to reconcile workbook");
+    } finally {
+      setReconciling(false);
     }
   };
 
@@ -801,6 +836,55 @@ export default function InvoicesAdmin() {
           </div>
         )}
       </header>
+
+      {canWrite && (
+        <div className="glass" data-testid="excel-reconciliation-panel" style={{ padding: 14, marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>Excel Software reconciliation</div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                Upload a CSV or XLSX workbook and compare status, sub-brand, customer, and totals against CRM.
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <input
+                ref={reconInputRef}
+                type="file"
+                accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(e) => setReconFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
+                style={{ maxWidth: 260 }}
+                aria-label="Excel Software reconciliation file"
+              />
+              <button
+                type="button"
+                onClick={runReconciliation}
+                disabled={reconciling}
+                style={{ ...secondaryBtn, opacity: reconciling ? 0.7 : 1, cursor: reconciling ? "wait" : "pointer" }}
+              >
+                <History size={14} /> {reconciling ? "Reconciling..." : "Run reconciliation"}
+              </button>
+            </div>
+          </div>
+          {reconResult && (
+            <div style={{ marginTop: 10, display: "grid", gap: 6 }} data-testid="excel-reconciliation-result">
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                Checked {reconResult.totalRows || 0} rows against {reconResult.scannedInvoices || 0} invoices. Matched {reconResult.matchedRows || 0}, mismatched {reconResult.mismatchedRows || 0}, missing {reconResult.missingRows || 0}.
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                Workbook total {reconResult.workbookAmount ?? 0} vs CRM total {reconResult.matchedAmount ?? 0}.
+              </div>
+              {Array.isArray(reconResult.discrepancies) && reconResult.discrepancies.length > 0 && (
+                <div style={{ display: "grid", gap: 4 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>First discrepancy</div>
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                    {reconResult.discrepancies[0].invoiceNum || "Unknown invoice"} - {reconResult.discrepancies[0].issue || "Mismatch"}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div
         className="glass"

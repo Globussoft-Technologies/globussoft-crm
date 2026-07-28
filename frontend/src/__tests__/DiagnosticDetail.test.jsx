@@ -1138,7 +1138,7 @@ describe('DiagnosticDetail  advisor brief UI (PRD 4.1 + 4.2)', () => {
     expect(screen.queryByTestId('human-pick-select')).toBeNull();
     expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
     expect(screen.queryByTestId('engine-output-expanded')).toBeNull();
-    expect(screen.queryByText(/Senior reviewer  human pick/i)).toBeNull();
+    expect(screen.queryByText('Senior reviewer — human pick')).toBeNull();
   });
 
   it('T11: Save with no selection surfaces a "pick first" notify + does NOT PATCH', async () => {
@@ -1192,3 +1192,4 @@ describe('DiagnosticDetail  advisor brief UI (PRD 4.1 + 4.2)', () => {
     });
   });
 });
+

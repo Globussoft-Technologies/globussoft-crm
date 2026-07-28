@@ -499,8 +499,7 @@ describe('<TripDetail /> — Participants tab', () => {
     fireEvent.click(screen.getByRole('button', { name: /Import file/i }));
     expect(await screen.findByTestId('participant-bulk-import-modal')).toBeInTheDocument();
 
-    const file = new File(['fullName,parentPhone
-Kabir Mehta,9876543210'], 'participants.csv', { type: 'text/csv' });
+    const file = new File(['fullName,parentPhone\nKabir Mehta,9876543210'], 'participants.csv', { type: 'text/csv' });
     fireEvent.change(screen.getByLabelText(/Bulk import participants file/i), {
       target: { files: [file] },
     });
@@ -1981,3 +1980,4 @@ describe('<TripDetail /> — Sync from registration button', () => {
     });
   });
 });
+

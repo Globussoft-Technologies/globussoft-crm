@@ -35,6 +35,7 @@ const pdfRenderer = require("../services/pdfRenderer");
 const { renderTravelDiagnosticPdf } = pdfRenderer;
 const { findDuplicateContactFull } = require("../utils/deduplication");
 const llmRouter = require("../lib/llmRouter");
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { sendEmail } = require("../lib/emailSender");
 const waWebClient = require("../services/whatsappWebClient");
 //  TMC diagnostic engine modules (T2 / T3 / T6 / T7)  used by T8 

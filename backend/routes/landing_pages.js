@@ -9,6 +9,7 @@ const landingPageGeneratorLLM = require("../services/landingPageGeneratorLLM");
 const { uploadFile } = require("../services/s3Service");
 const { snapshotSafe, VERSION_SOURCES } = require("../lib/landingPageVersions");
 const { isValidPhoneOrEmpty } = require("../lib/validators");
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 
 const router = express.Router();
 const publicRouter = express.Router();

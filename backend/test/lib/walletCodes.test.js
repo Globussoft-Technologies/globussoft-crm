@@ -177,7 +177,7 @@ describe('maskGiftCode + lastFour', () => {
 describe('computeCouponDiscount — PERCENT', () => {
   test('10% off ₹1,000 = ₹100 discount, ₹900 final', () => {
     const r = computeCouponDiscount({ discountType: 'PERCENT', discountValue: 10 }, 1000);
-    expect(r).toEqual({ discount: 100, finalAmount: 900, applied: true });
+    expect(r).toEqual({ discount: 100, finalAmount: 900, applied: true, excess: 0 });
   });
 
   test('caps PERCENT at 100% even if value is 150', () => {
@@ -185,22 +185,24 @@ describe('computeCouponDiscount — PERCENT', () => {
     expect(r.discount).toBe(500);
     expect(r.finalAmount).toBe(0);
     expect(r.applied).toBe(true);
+    expect(r.excess).toBe(0);
   });
 
   test('PERCENT 100% off → final 0', () => {
     const r = computeCouponDiscount({ discountType: 'PERCENT', discountValue: 100 }, 250);
-    expect(r).toEqual({ discount: 250, finalAmount: 0, applied: true });
+    expect(r).toEqual({ discount: 250, finalAmount: 0, applied: true, excess: 0 });
   });
 
   test('zero-base PERCENT → zero discount, applied=false', () => {
     const r = computeCouponDiscount({ discountType: 'PERCENT', discountValue: 50 }, 0);
-    expect(r).toEqual({ discount: 0, finalAmount: 0, applied: false });
+    expect(r).toEqual({ discount: 0, finalAmount: 0, applied: false, excess: 0 });
   });
 
   test('zero-pct PERCENT → zero discount', () => {
     const r = computeCouponDiscount({ discountType: 'PERCENT', discountValue: 0 }, 1000);
     expect(r.discount).toBe(0);
     expect(r.applied).toBe(false);
+    expect(r.excess).toBe(0);
   });
 
   test('PERCENT with float result rounds to 2dp', () => {
@@ -208,13 +210,14 @@ describe('computeCouponDiscount — PERCENT', () => {
     // 99 * 0.33 = 32.67 exact
     expect(r.discount).toBe(32.67);
     expect(r.finalAmount).toBe(66.33);
+    expect(r.excess).toBe(0);
   });
 });
 
 describe('computeCouponDiscount — FLAT', () => {
   test('₹50 off ₹1,000 = ₹50 discount, ₹950 final', () => {
     const r = computeCouponDiscount({ discountType: 'FLAT', discountValue: 50 }, 1000);
-    expect(r).toEqual({ discount: 50, finalAmount: 950, applied: true });
+    expect(r).toEqual({ discount: 50, finalAmount: 950, applied: true, excess: 0 });
   });
 
   test('FLAT discount cannot exceed baseAmount (₹500 off ₹200 → ₹200 off, never negative)', () => {
@@ -222,11 +225,17 @@ describe('computeCouponDiscount — FLAT', () => {
     expect(r.discount).toBe(200);
     expect(r.finalAmount).toBe(0);
     expect(r.applied).toBe(true);
+    expect(r.excess).toBe(300);
   });
 
   test('FLAT exactly equal to base → final 0', () => {
     const r = computeCouponDiscount({ discountType: 'FLAT', discountValue: 200 }, 200);
-    expect(r).toEqual({ discount: 200, finalAmount: 0, applied: true });
+    expect(r).toEqual({ discount: 200, finalAmount: 0, applied: true, excess: 0 });
+  });
+
+  test('FLAT value larger than base credits excess to wallet', () => {
+    const r = computeCouponDiscount({ discountType: 'FLAT', discountValue: 6000 }, 5000);
+    expect(r).toEqual({ discount: 5000, finalAmount: 0, applied: true, excess: 1000 });
   });
 });
 
@@ -248,7 +257,7 @@ describe('computeCouponDiscount — service allowlist', () => {
   test('serviceIds JSON array — service NOT in allowlist returns 0', () => {
     const c = { discountType: 'PERCENT', discountValue: 20, serviceIds: '[1,2,3]' };
     const r = computeCouponDiscount(c, 100, 99);
-    expect(r).toEqual({ discount: 0, finalAmount: 100, applied: false });
+    expect(r).toEqual({ discount: 0, finalAmount: 100, applied: false, excess: 0 });
   });
 
   test('serviceIds non-empty + serviceId null → zero (cannot prove the service is in the allowlist)', () => {
@@ -256,6 +265,7 @@ describe('computeCouponDiscount — service allowlist', () => {
     const r = computeCouponDiscount(c, 100, null);
     expect(r.discount).toBe(0);
     expect(r.applied).toBe(false);
+    expect(r.excess).toBe(0);
   });
 
   test('malformed serviceIds (not JSON) treated as empty allowlist', () => {
@@ -269,6 +279,7 @@ describe('computeCouponDiscount — defensive', () => {
     const r = computeCouponDiscount({ discountType: 'PERCENT', discountValue: 10 }, NaN);
     expect(r.discount).toBe(0);
     expect(r.applied).toBe(false);
+    expect(r.excess).toBe(0);
   });
 
   test('negative baseAmount → coerced to zero', () => {
@@ -278,13 +289,14 @@ describe('computeCouponDiscount — defensive', () => {
 
   test('unknown discountType returns zero discount', () => {
     const r = computeCouponDiscount({ discountType: 'BOGO', discountValue: 50 }, 100);
-    expect(r).toEqual({ discount: 0, finalAmount: 100, applied: false });
+    expect(r).toEqual({ discount: 0, finalAmount: 100, applied: false, excess: 0 });
   });
 
   test('null/undefined coupon does not throw', () => {
     expect(() => computeCouponDiscount(null, 100)).not.toThrow();
     const r = computeCouponDiscount(null, 100);
     expect(r.applied).toBe(false);
+    expect(r.excess).toBe(0);
   });
 });
 

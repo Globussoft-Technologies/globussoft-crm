@@ -848,7 +848,7 @@ async function findPaidBookingLockingFee(visitId) {
 
 // Compute the treatment balance due for a visit, given an optional coupon and
 // the already-paid non-refundable locking fee. Returns { baseAmount, discount,
-// lockingFee, balance, applied, coupon, error }.
+// excess, lockingFee, balance, applied, coupon, error }.
 async function computeTreatmentBalance({
   tenantId,
   baseAmount,
@@ -858,6 +858,7 @@ async function computeTreatmentBalance({
 }) {
   let discount = 0;
   let applied = false;
+  let excess = 0;
   let coupon = null;
   if (couponCode && String(couponCode).trim()) {
     const lookup = await loadCouponForApply(
@@ -865,12 +866,13 @@ async function computeTreatmentBalance({
       String(couponCode).trim().toUpperCase(),
     );
     if (lookup.error) {
-      return { error: lookup.error, baseAmount, discount: 0, lockingFee: 0, balance: baseAmount, applied: false };
+      return { error: lookup.error, baseAmount, discount: 0, excess: 0, lockingFee: 0, balance: baseAmount, applied: false };
     }
     coupon = lookup.coupon;
     const result = computeCouponDiscount(coupon, baseAmount, serviceId);
     discount = result.discount;
     applied = result.applied;
+    excess = result.excess;
   }
   const lockingFeePayment = await findPaidBookingLockingFee(visitId);
   const lockingFee = lockingFeePayment ? 200 : 0;
@@ -878,6 +880,7 @@ async function computeTreatmentBalance({
   return {
     baseAmount,
     discount,
+    excess,
     lockingFee,
     balance,
     applied,
@@ -885,8 +888,40 @@ async function computeTreatmentBalance({
   };
 }
 
+// Parse the JSON-text couponBreakdown column on a Visit row. Returns the parsed
+// object when valid, otherwise null. Kept defensive so callers can safely fall
+// back to visit.amountCharged.
+function parseVisitCouponBreakdown(visit) {
+  if (!visit || !visit.couponBreakdown) return null;
+  try {
+    const parsed = JSON.parse(visit.couponBreakdown);
+    if (parsed && typeof parsed === "object" && Number.isFinite(Number(parsed.balance))) {
+      return parsed;
+    }
+  } catch (_e) {
+    // ignore malformed JSON
+  }
+  return null;
+}
 
-async function sendVisitPaymentLink({ visit, tenantId, baseUrl }) {
+// Decorate one or more Visit rows for the frontend by parsing couponBreakdown
+// from its JSON-text column into an object. Mutates the row(s) in place.
+function attachCouponBreakdownToVisits(visits) {
+  if (!Array.isArray(visits)) {
+    if (visits && typeof visits === "object") {
+      const parsed = parseVisitCouponBreakdown(visits);
+      if (parsed) visits.couponBreakdown = parsed;
+    }
+    return visits;
+  }
+  for (const visit of visits) {
+    const parsed = parseVisitCouponBreakdown(visit);
+    if (parsed) visit.couponBreakdown = parsed;
+  }
+  return visits;
+}
+
+async function sendVisitPaymentLink({ visit, tenantId, baseUrl, amount }) {
   const patient = await prisma.patient.findUnique({
     where: { id: visit.patientId },
     select: { id: true, name: true, email: true, phone: true, contactId: true },
@@ -895,7 +930,7 @@ async function sendVisitPaymentLink({ visit, tenantId, baseUrl }) {
   const contact = await ensurePatientContact(patient, tenantId);
   const paymentLink = visit.paymentLinkUrl
     ? { url: visit.paymentLinkUrl, gateway: visit.paymentLinkGateway || "razorpay" }
-    : await generateVisitPaymentLink({ visit, tenantId, baseUrl });
+    : await generateVisitPaymentLink({ visit, tenantId, baseUrl, amount });
 
   if (paymentLink.error || !paymentLink.url) {
     return paymentLink;
@@ -2052,6 +2087,7 @@ router.get("/patients/:id/visits", phiReadGate, async (req, res) => {
       visits,
       req.user.tenantId,
     );
+    attachCouponBreakdownToVisits(visitsWithInvoiceState);
     // Audit-log the read same as the flat /visits list (PRD 11 clinical reads).
     // #534 (PERF-1): fire-and-forget  see PATIENT_LIST_READ above.
     writeAudit(
@@ -3029,6 +3065,9 @@ router.get("/visits", phiReadGate, async (req, res) => {
       visitFindArgs.select = listProjection("Visit", false);
     }
     const visits = await prisma.visit.findMany(visitFindArgs);
+    if (wantFullShape) {
+      attachCouponBreakdownToVisits(visits);
+    }
     // PRD 11 / T2.2: staff-side cross-patient visit list is a PHI read
     // (response includes patient name + phone on full path). One audit row
     // per request, with the filter params and result count  never the row
@@ -3105,6 +3144,7 @@ router.get("/visits/:id", phiReadGate, async (req, res) => {
     if (visit.prescriptions) {
       visit.prescriptions = visit.prescriptions.map(normalizePrescriptionDrugs);
     }
+    attachCouponBreakdownToVisits(visit);
     res.json(visit);
   } catch (e) {
     console.error("[wellness] get visit error:", e.message);
@@ -3596,6 +3636,7 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
         billingBreakdown = {
           baseAmount: balanceCtx.baseAmount,
           discount: balanceCtx.discount,
+          excess: balanceCtx.excess,
           lockingFee: balanceCtx.lockingFee,
           balance: balanceCtx.balance,
           couponCode: balanceCtx.coupon?.code || null,
@@ -3606,6 +3647,27 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
             where: { id: balanceCtx.coupon.id },
             data: { redemptionCount: { increment: 1 } },
           });
+        }
+
+        if (balanceCtx.excess > 0 && updated.patientId) {
+          try {
+            const wallet = await getOrCreateWallet(req, updated.patientId);
+            await writeWalletTransaction({
+              tenantId: req.user.tenantId,
+              walletId: wallet.id,
+              type: "CREDIT_COUPON_EXCESS",
+              absAmount: balanceCtx.excess,
+              performedBy: req.user.userId,
+              reason: `Coupon ${balanceCtx.coupon.code} excess credited`,
+              visitId: updated.id,
+              couponId: balanceCtx.coupon.id,
+            });
+          } catch (excessErr) {
+            console.error(
+              "[wellness] coupon excess wallet credit failed:",
+              excessErr.message,
+            );
+          }
         }
 
         if (balanceCtx.balance > 0) {
@@ -3657,16 +3719,30 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
               data: {
                 paymentLinkUrl: link.url,
                 paymentLinkGeneratedAt: new Date(),
+                couponBreakdown: JSON.stringify(billingBreakdown),
               },
             });
             updated.paymentLinkUrl = finalVisit.paymentLinkUrl;
             updated.paymentLinkGeneratedAt = finalVisit.paymentLinkGeneratedAt;
+            updated.couponBreakdown = finalVisit.couponBreakdown;
           }
         } else if (balanceCtx.applied) {
           // Coupon + locking fee fully cover the bill; no link needed.
-          updated.paymentLinkUrl = null;
-          updated.paymentLinkGeneratedAt = null;
-          updated.paymentStatus = "paid";
+          // Persist the breakdown so the Completed Visits UI can show the
+          // discount even when nothing is due.
+          const finalVisit = await prisma.visit.update({
+            where: { id: updated.id },
+            data: {
+              paymentLinkUrl: null,
+              paymentLinkGeneratedAt: null,
+              paymentStatus: "paid",
+              couponBreakdown: JSON.stringify(billingBreakdown),
+            },
+          });
+          updated.paymentLinkUrl = finalVisit.paymentLinkUrl;
+          updated.paymentLinkGeneratedAt = finalVisit.paymentLinkGeneratedAt;
+          updated.paymentStatus = finalVisit.paymentStatus;
+          updated.couponBreakdown = finalVisit.couponBreakdown;
         }
       } catch (hookErr) {
         console.error(
@@ -3699,6 +3775,7 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
       );
     }
 
+    attachCouponBreakdownToVisits(updated);
     res.json({ ...updated, billingBreakdown });
   } catch (e) {
     console.error("[wellness] update visit error:", e.message);
@@ -3728,10 +3805,12 @@ router.post("/visits/:id/payment-link", phiWriteGate, async (req, res) => {
       return res.status(400).json({ error: "Visit is already paid", code: "VISIT_ALREADY_PAID" });
 
     const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+    const couponBreakdown = parseVisitCouponBreakdown(visit);
     const link = await generateVisitPaymentLink({
       visit,
       tenantId: req.user.tenantId,
       baseUrl: getFrontendUrlFromRequest(req),
+      amount: couponBreakdown ? couponBreakdown.balance : undefined,
     });
 
     if (link.error)
@@ -3771,10 +3850,12 @@ router.post("/visits/:id/payment-link/send", phiWriteGate, async (req, res) => {
     }
 
     const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+    const couponBreakdown = parseVisitCouponBreakdown(visit);
     const result = await sendVisitPaymentLink({
       visit,
       tenantId: req.user.tenantId,
       baseUrl: getFrontendUrlFromRequest(req),
+      amount: couponBreakdown ? couponBreakdown.balance : undefined,
     });
     if (result.error) {
       return res.status(502).json({ error: result.error, code: result.code });
@@ -13878,75 +13959,11 @@ const {
   computeCouponDiscount,
   computeCashbackEarn,
 } = require("../lib/walletCodes");
-
-async function writeWalletTransaction({
-  tenantId,
-  walletId,
-  type,
-  absAmount,
-  performedBy,
-  reason,
-  visitId = null,
-  invoiceId = null,
-  giftCardId = null,
-  couponId = null,
-}) {
-  const isCredit = String(type || "").startsWith("CREDIT_");
-  const isDebit = String(type || "").startsWith("DEBIT_");
-  if (!isCredit && !isDebit) {
-    throw new Error(`Invalid wallet transaction type: ${type}`);
-  }
-  const signed = isCredit ? Math.abs(absAmount) : -Math.abs(absAmount);
-  return prisma.$transaction(async (tx) => {
-    const wallet = await tx.wallet.findFirst({
-      where: { id: walletId, tenantId },
-    });
-    if (!wallet) throw new Error("WALLET_NOT_FOUND");
-    const newBalance = +(wallet.balance + signed).toFixed(2);
-    if (newBalance < 0) {
-      const e = new Error("INSUFFICIENT_BALANCE");
-      e.code = "INSUFFICIENT_BALANCE";
-      throw e;
-    }
-    await tx.wallet.update({
-      where: { id: walletId },
-      data: { balance: newBalance },
-    });
-    return tx.walletTransaction.create({
-      data: {
-        tenantId,
-        walletId,
-        type,
-        amount: signed,
-        reason: reason || null,
-        visitId,
-        invoiceId,
-        giftCardId,
-        couponId,
-        balanceAfter: newBalance,
-        performedBy,
-      },
-    });
-  });
-}
-
-async function getOrCreateWallet(req, patientId) {
-  let wallet = await prisma.wallet.findFirst({
-    where: { tenantId: req.user.tenantId, patientId },
-  });
-  if (wallet) return wallet;
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: req.user.tenantId },
-    select: { defaultCurrency: true },
-  });
-  return prisma.wallet.create({
-    data: {
-      tenantId: req.user.tenantId,
-      patientId,
-      currency: tenant?.defaultCurrency || "INR",
-    },
-  });
-}
+const { loadCouponForApply } = require("../lib/couponApply");
+const {
+  writeWalletTransaction,
+  getOrCreateWallet,
+} = require("../lib/wellnessWallet");
 
 router.get("/patients/:id/wallet", phiReadGate, async (req, res) => {
   try {
@@ -15781,71 +15798,6 @@ router.delete("/coupons/:id", verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
-// tenantId is passed explicitly so callers without a req.user (anonymous public
-// payment flow) can reuse this. Existing auth'd callers pass req.user.tenantId.
-async function loadCouponForApply(tenantId, code) {
-  const coupon = await prisma.coupon.findFirst({
-    where: {
-      tenantId,
-      code: String(code || "")
-        .trim()
-        .toUpperCase(),
-    },
-  });
-  if (!coupon)
-    return {
-      error: {
-        status: 404,
-        code: "COUPON_NOT_FOUND",
-        message: "Coupon not found",
-      },
-    };
-  if (!coupon.isActive)
-    return {
-      error: {
-        status: 409,
-        code: "COUPON_INACTIVE",
-        message: "Coupon is inactive",
-      },
-      coupon,
-    };
-  const now = Date.now();
-  if (coupon.validFrom && coupon.validFrom.getTime() > now) {
-    return {
-      error: {
-        status: 409,
-        code: "COUPON_NOT_YET_VALID",
-        message: "Coupon is not yet valid",
-      },
-      coupon,
-    };
-  }
-  if (coupon.validUntil && coupon.validUntil.getTime() < now) {
-    return {
-      error: {
-        status: 410,
-        code: "COUPON_EXPIRED",
-        message: "Coupon has expired",
-      },
-      coupon,
-    };
-  }
-  if (
-    coupon.maxRedemptions != null &&
-    coupon.redemptionCount >= coupon.maxRedemptions
-  ) {
-    return {
-      error: {
-        status: 409,
-        code: "COUPON_LIMIT_REACHED",
-        message: "Coupon redemption limit reached",
-      },
-      coupon,
-    };
-  }
-  return { coupon };
-}
-
 router.post("/coupons/preview", async (req, res) => {
   try {
     const { code, baseAmount, serviceId, visitId } = req.body || {};
@@ -17243,6 +17195,175 @@ router.patch(
     }
   },
 );
+
+// -----------------------------------------------------------------------------
+// QR Events — Events Management QR generator persistence.
+// -----------------------------------------------------------------------------
+// Replaces the previous localStorage-only store with tenant-scoped Prisma
+// persistence. All endpoints below are staff-authed and isolated to
+// req.user.tenantId. QrCode rows cascade-delete with their parent QrEvent.
+
+router.get("/qr-events", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const events = await prisma.qrEvent.findMany({
+      where: { tenantId },
+      include: { qrs: { orderBy: { createdAt: "desc" } } },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json({ events });
+  } catch (err) {
+    console.error("[wellness] GET /qr-events failed:", err.message);
+    res.status(500).json({ error: "Failed to load QR events", code: "QR_EVENTS_LOAD_FAILED" });
+  }
+});
+
+router.post("/qr-events", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const userId = req.user.userId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const { name } = req.body || {};
+    const trimmed = String(name || "").trim();
+    if (!trimmed) {
+      return res.status(400).json({ error: "Event name is required", code: "QR_EVENT_NAME_REQUIRED" });
+    }
+    const event = await prisma.qrEvent.create({
+      data: { name: trimmed, tenantId, createdBy: userId },
+      include: { qrs: true },
+    });
+    writeAudit("QrEvent", "CREATE", event.id, userId, tenantId, { name: trimmed }).catch(
+      (auditErr) => console.warn("[wellness] audit QrEvent CREATE failed:", auditErr.message),
+    );
+    res.status(201).json(event);
+  } catch (err) {
+    console.error("[wellness] POST /qr-events failed:", err.message);
+    res.status(500).json({ error: "Failed to create QR event", code: "QR_EVENT_CREATE_FAILED" });
+  }
+});
+
+router.delete("/qr-events/:id", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const userId = req.user.userId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const eventId = parseInt(req.params.id, 10);
+    const event = await prisma.qrEvent.findFirst({
+      where: { id: eventId, tenantId },
+      select: { id: true, name: true },
+    });
+    if (!event) {
+      return res.status(404).json({ error: "Event not found", code: "QR_EVENT_NOT_FOUND" });
+    }
+    await prisma.qrEvent.delete({ where: { id: eventId } });
+    writeAudit("QrEvent", "DELETE", event.id, userId, tenantId, { name: event.name }).catch(
+      (auditErr) => console.warn("[wellness] audit QrEvent DELETE failed:", auditErr.message),
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[wellness] DELETE /qr-events/:id failed:", err.message);
+    res.status(500).json({ error: "Failed to delete QR event", code: "QR_EVENT_DELETE_FAILED" });
+  }
+});
+
+router.post("/qr-events/:id/qrs", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const userId = req.user.userId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const eventId = parseInt(req.params.id, 10);
+    const event = await prisma.qrEvent.findFirst({
+      where: { id: eventId, tenantId },
+      select: { id: true },
+    });
+    if (!event) {
+      return res.status(404).json({ error: "Event not found", code: "QR_EVENT_NOT_FOUND" });
+    }
+    const { name, text, size, fgColor, bgColor, errorLevel } = req.body || {};
+    const qr = await prisma.qrCode.create({
+      data: {
+        eventId,
+        tenantId,
+        createdBy: userId,
+        name: String(name || "").trim() || "Untitled QR",
+        text: String(text || "").trim(),
+        size: Number(size) || 256,
+        fgColor: String(fgColor || "#000000"),
+        bgColor: String(bgColor || "#ffffff"),
+        errorLevel: String(errorLevel || "M"),
+      },
+    });
+    res.status(201).json(qr);
+  } catch (err) {
+    console.error("[wellness] POST /qr-events/:id/qrs failed:", err.message);
+    res.status(500).json({ error: "Failed to add QR code", code: "QR_CODE_CREATE_FAILED" });
+  }
+});
+
+router.put("/qr-events/:id/qrs/:qrId", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const eventId = parseInt(req.params.id, 10);
+    const qrId = parseInt(req.params.qrId, 10);
+    const existing = await prisma.qrCode.findFirst({
+      where: { id: qrId, eventId, tenantId },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "QR code not found", code: "QR_CODE_NOT_FOUND" });
+    }
+    const { name, text, size, fgColor, bgColor, errorLevel } = req.body || {};
+    const data = {};
+    if (name !== undefined) data.name = String(name || "").trim() || existing.name || "Untitled QR";
+    if (text !== undefined) data.text = String(text || "").trim();
+    if (size !== undefined) data.size = Number(size) || existing.size;
+    if (fgColor !== undefined) data.fgColor = String(fgColor);
+    if (bgColor !== undefined) data.bgColor = String(bgColor);
+    if (errorLevel !== undefined) data.errorLevel = String(errorLevel);
+    const qr = await prisma.qrCode.update({
+      where: { id: qrId },
+      data,
+    });
+    res.json(qr);
+  } catch (err) {
+    console.error("[wellness] PUT /qr-events/:id/qrs/:qrId failed:", err.message);
+    res.status(500).json({ error: "Failed to update QR code", code: "QR_CODE_UPDATE_FAILED" });
+  }
+});
+
+router.delete("/qr-events/:id/qrs/:qrId", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    if (!tenantId) {
+      return res.status(403).json({ error: "Tenant required", code: "TENANT_REQUIRED" });
+    }
+    const eventId = parseInt(req.params.id, 10);
+    const qrId = parseInt(req.params.qrId, 10);
+    const existing = await prisma.qrCode.findFirst({
+      where: { id: qrId, eventId, tenantId },
+      select: { id: true, name: true },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "QR code not found", code: "QR_CODE_NOT_FOUND" });
+    }
+    await prisma.qrCode.delete({ where: { id: qrId } });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("[wellness] DELETE /qr-events/:id/qrs/:qrId failed:", err.message);
+    res.status(500).json({ error: "Failed to delete QR code", code: "QR_CODE_DELETE_FAILED" });
+  }
+});
 
 module.exports = router;
 

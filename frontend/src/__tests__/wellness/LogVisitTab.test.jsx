@@ -333,6 +333,71 @@ describe('<wellness/LogVisitTab />  payment link surface', () => {
     expect(await screen.findByDisplayValue('https://rzp.io/l/visit-10')).toBeInTheDocument();
   });
 
+  it('renders the coupon-adjusted balance and coupon name when couponBreakdown is present', () => {
+    const patient = {
+      id: 1,
+      visits: [
+        {
+          id: 13,
+          status: 'completed',
+          visitDate: '2026-07-17T10:00:00.000Z',
+          serviceId: 1,
+          service: sampleServices[0],
+          doctor: { name: 'Anita Das' },
+          amountCharged: 7500,
+          paymentLinkUrl: 'https://rzp.io/l/visit-13',
+          couponBreakdown: {
+            baseAmount: 7500,
+            discount: 2500,
+            excess: 0,
+            lockingFee: 0,
+            balance: 5000,
+            couponCode: 'FLAT2500',
+          },
+        },
+      ],
+    };
+
+    renderTab({ patient });
+
+    expect(screen.getByText(/₹7,500/)).toBeInTheDocument();
+    expect(screen.getByText(/Coupon FLAT2500/)).toBeInTheDocument();
+    expect(screen.getByText(/₹2,500 deducted/)).toBeInTheDocument();
+    expect(screen.getByText(/Balance due:/)).toBeInTheDocument();
+    expect(screen.getByText(/₹5,000/)).toBeInTheDocument();
+  });
+
+  it('renders the coupon-adjusted balance from a string couponBreakdown payload', () => {
+    const patient = {
+      id: 1,
+      visits: [
+        {
+          id: 14,
+          status: 'completed',
+          visitDate: '2026-07-16T10:00:00.000Z',
+          serviceId: 1,
+          service: sampleServices[0],
+          doctor: { name: 'Anita Das' },
+          amountCharged: 7500,
+          paymentLinkUrl: 'https://rzp.io/l/visit-14',
+          couponBreakdown: JSON.stringify({
+            baseAmount: 7500,
+            discount: 2500,
+            excess: 0,
+            lockingFee: 0,
+            balance: 5000,
+            couponCode: 'FLAT2500',
+          }),
+        },
+      ],
+    };
+
+    renderTab({ patient });
+
+    expect(screen.getByText(/Coupon FLAT2500/)).toBeInTheDocument();
+    expect(screen.getByText(/Balance due:/)).toBeInTheDocument();
+  });
+
   it('shows a Paid badge and disables Copy for a paid completed visit', () => {
     const patient = {
       id: 1,

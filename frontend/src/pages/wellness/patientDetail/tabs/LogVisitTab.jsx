@@ -24,8 +24,7 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
   // the successful creation immediately.
   const [generatedLinks, setGeneratedLinks] = useState({});
   // Billing controls for the post-treatment payment link: staff can override the
-  // total bill and apply a coupon. The locking fee already paid during booking is
-  // deducted automatically by the backend.
+  // total bill and apply a coupon.
   const [amountCharged, setAmountCharged] = useState('');
   const [couponCode, setCouponCode] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState(null);
@@ -525,15 +524,31 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                     {visit.amountCharged > 0 && (
                       <>
                         {' - '}
-                        {visit.invoice?.amount > 0 && visit.invoice.amount !== visit.amountCharged ? (
-                          <>
-                            <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{visit.amountCharged.toLocaleString('en-IN')}</span>
-                            {' → Balance due: '}
-                            <strong style={{ color: 'var(--success-color)' }}>₹{visit.invoice.amount.toLocaleString('en-IN')}</strong>
-                          </>
-                        ) : (
-                          <>Amount: <strong>₹{visit.amountCharged.toLocaleString('en-IN')}</strong></>
-                        )}
+                        {(() => {
+                          const breakdown = typeof visit.couponBreakdown === 'string'
+                            ? (() => { try { return JSON.parse(visit.couponBreakdown); } catch (_e) { return null; } })()
+                            : visit.couponBreakdown;
+                          if (breakdown && typeof breakdown === 'object' && Number.isFinite(Number(breakdown.balance))) {
+                            return (
+                              <>
+                                <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{Number(breakdown.baseAmount).toLocaleString('en-IN')}</span>
+                                {' — Coupon '}{breakdown.couponCode}{' — ₹'}{Number(breakdown.discount).toLocaleString('en-IN')}{' deducted — '}
+                                <span>Balance due: </span>
+                                <strong style={{ color: 'var(--success-color)' }}>₹{Number(breakdown.balance).toLocaleString('en-IN')}</strong>
+                              </>
+                            );
+                          }
+                          if (visit.invoice?.amount > 0 && visit.invoice.amount !== visit.amountCharged) {
+                            return (
+                              <>
+                                <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{visit.amountCharged.toLocaleString('en-IN')}</span>
+                                {' → Balance due: '}
+                                <strong style={{ color: 'var(--success-color)' }}>₹{visit.invoice.amount.toLocaleString('en-IN')}</strong>
+                              </>
+                            );
+                          }
+                          return <>Amount: <strong>₹{visit.amountCharged.toLocaleString('en-IN')}</strong></>;
+                        })()}
                       </>
                     )}
                   </div>
@@ -644,20 +659,8 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                   <span>-₹{((previewBreakdown || billingBreakdown).discount).toLocaleString('en-IN')}</span>
                 </div>
               )}
-              {billingBreakdown?.lockingFee > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>
-                  <span>Booking locking fee already paid</span>
-                  <span>-₹{billingBreakdown.lockingFee.toLocaleString('en-IN')}</span>
-                </div>
-              )}
-              {previewBreakdown?.lockingFee > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>
-                  <span>Booking locking fee already paid</span>
-                  <span>-₹{previewBreakdown.lockingFee.toLocaleString('en-IN')}</span>
-                </div>
-              )}
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.08)', fontWeight: 600 }}>
-                <span>{billingBreakdown ? 'Balance due' : 'Balance due (after locking fee)'}</span>
+                <span>Balance due</span>
                 <span>
                   ₹{(() => {
                     if (billingBreakdown) return billingBreakdown.balance;
@@ -666,11 +669,6 @@ export default function LogVisitTab({ patient, services, doctors: _doctors, onSa
                   })().toLocaleString('en-IN')}
                 </span>
               </div>
-              {!billingBreakdown && previewBreakdown?.lockingFee === 0 && (
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
-                  No ₹200 booking locking fee has been paid for this appointment yet.
-                </div>
-              )}
             </div>
           )}
 

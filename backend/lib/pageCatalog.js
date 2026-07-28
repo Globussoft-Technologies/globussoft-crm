@@ -474,6 +474,24 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
 
+  //  Events Management (Wellness vertical) 
+  {
+    path: '/wellness/qr-generator',
+    label: 'QR Generator',
+    description: 'Create downloadable QR codes for clinic events, services, and offers',
+    category: 'Events Management',
+    vertical: 'wellness',
+    requiredPermissions: [{ module: 'marketing', action: 'read' }],
+  },
+  {
+    path: '/wellness/events-history',
+    label: 'History',
+    description: 'All QR codes organized by event',
+    category: 'Events Management',
+    vertical: 'wellness',
+    requiredPermissions: [{ module: 'marketing', action: 'read' }],
+  },
+
   //  Marketing 
   {
     path: '/marketing',
@@ -508,15 +526,6 @@ const PAGE_CATALOG = [
     vertical: ['generic', 'wellness'],
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
-  {
-    path: '/wellness/qr-generator',
-    label: 'QR Generator',
-    description: 'Create downloadable QR codes for clinic public pages, services, and offers',
-    category: 'Marketing',
-    vertical: 'wellness',
-    requiredPermissions: [{ module: 'marketing', action: 'read' }],
-  },
-
   //  Reports + analytics 
   {
     path: '/wellness/reports',

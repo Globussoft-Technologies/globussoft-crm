@@ -420,6 +420,7 @@ const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
 const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
 // Marketing QR Generator — create downloadable QR codes for clinic public pages/offers.
 const WellnessQRGenerator = lazy(() => import("./pages/wellness/QRGenerator"));
+const WellnessEventsHistory = lazy(() => import("./pages/wellness/EventsHistory"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
 const WellnessBookAppointment = lazy(() => import("./pages/wellness/BookAppointment"));
 const WellnessAppointments = lazy(() => import("./pages/wellness/Appointments"));
@@ -2084,6 +2085,18 @@ export default function App() {
                     lockedInPlace
                   >
                     <WellnessQRGenerator />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
+              {/* Events History — read-only list of QR codes grouped by event. */}
+              <Route path="wellness/events-history" element={
+                <WellnessOnly>
+                  <RoleGuard
+                    requiredPermission={{ module: 'marketing', action: 'read' }}
+                    feature="Events History"
+                    lockedInPlace
+                  >
+                    <WellnessEventsHistory />
                   </RoleGuard>
                 </WellnessOnly>
               } />

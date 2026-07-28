@@ -1209,7 +1209,7 @@ const WELLNESS_CATEGORY_ICON = {
   Staff: UsersRound,
   "Leads & Revenue": Target,
   Finance: IndianRupee,
-  "Events Management": Calendar,
+  "Events Management": Ticket,
   Marketing: Megaphone,
   Reports: BarChart3,
   Appointments: Calendar,

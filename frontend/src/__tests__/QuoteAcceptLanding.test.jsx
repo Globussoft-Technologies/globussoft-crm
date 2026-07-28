@@ -108,10 +108,12 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
 
   it('2. quote envelope loads → renders id + customer + lines + total', async () => {
     renderPage();
+    // Wait for a loaded-state marker. "Your quote" is intentionally avoided
+    // because the loading spinner contains "Loading your quote…", so a regex
+    // match on /Your quote/i can succeed before the fetch resolves.
     await waitFor(() =>
-      expect(screen.getByText(/Your quote/i)).toBeInTheDocument(),
+      expect(screen.getByText(/Quote #42/i)).toBeInTheDocument(),
     );
-    expect(screen.getByText(/Quote #42/i)).toBeInTheDocument();
     expect(screen.getByText(/Aisha Khan/i)).toBeInTheDocument();
     expect(screen.getByText(/Hotel — 3 nights/i)).toBeInTheDocument();
     expect(screen.getByText(/Coach transfer/i)).toBeInTheDocument();
@@ -154,7 +156,7 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
 
   it('5. accept happy path → confirmation form → POST → thank-you', async () => {
     renderPage();
-    await waitFor(() => screen.getByText(/Your quote/i));
+    await waitFor(() => screen.getByText(/Your trip includes/i));
 
     fireEvent.click(screen.getByRole('button', { name: /Accept this quote/i }));
     await waitFor(() =>
@@ -185,7 +187,7 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
 
   it('6. reject requires reason — empty submit surfaces validation', async () => {
     renderPage();
-    await waitFor(() => screen.getByText(/Your quote/i));
+    await waitFor(() => screen.getByText(/Your trip includes/i));
 
     fireEvent.click(screen.getByRole('button', { name: /Decline/i }));
     await waitFor(() =>
@@ -202,7 +204,7 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
 
   it('7. 409 ALREADY_ACTIONED on accept → friendly message', async () => {
     renderPage();
-    await waitFor(() => screen.getByText(/Your quote/i));
+    await waitFor(() => screen.getByText(/Your trip includes/i));
 
     fireEvent.click(screen.getByRole('button', { name: /Accept this quote/i }));
     await waitFor(() =>

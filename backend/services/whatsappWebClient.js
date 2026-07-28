@@ -94,6 +94,23 @@ function getMemoryMB() {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function describeError(err, fallback = "unknown error") {
+  const direct = [
+    err && typeof err.message === "string" ? err.message : "",
+    typeof err === "string" ? err : "",
+    err && typeof err.toString === "function" ? err.toString() : "",
+  ]
+    .map((v) => String(v || "").trim())
+    .find((v) => v && v !== "[object Object]");
+  return direct || fallback;
+}
+
+const CHAT_IMPORT_WARMUP_MS = 30 * 1000;
+
 // Puppeteer/whatsapp-web.js emit async errors from deep inside Chromium when a
 // session is torn down (phone unlinks → LOGOUT, browser closes mid-inject, a
 // frame detaches during navigation). These surface as unhandledRejection /
@@ -239,7 +256,7 @@ function getSession(tenantId) {
 // Public, JSON-safe connection state for the UI status strip + QR modal.
 function getState(tenantId) {
   const s = getSession(tenantId);
-  if (!s) return { state: STATE.DISCONNECTED, connected: false, phone: null, qr: null };
+  if (!s) return { state: STATE.DISCONNECTED, connected: false, phone: null, qr: null, connectedAt: null };
   return {
     state: s.state,
     connected: s.state === STATE.CONNECTED,
@@ -936,15 +953,6 @@ function wireEvents(client, tenantId) {
     } catch { /* info not always populated immediately */ }
     console.log(`[whatsappWeb] tenant ${tenantId} CONNECTED as ${s.phone || "(unknown number)"}`);
     module.exports.emitState(tenantId);
-    // Backfill the operator's EXISTING conversations into the CRM inbox — this
-    // is what WhatsApp Web does the moment you scan (it shows your whole chat
-    // list + history, not just new messages). Delayed a few seconds so the
-    // WhatsApp chat store finishes its initial sync before we read it.
-    // Fire-and-forget; progress streams via the whatsapp:imported event.
-    setTimeout(() => {
-      module.exports.importAllChats(tenantId).catch((e) =>
-        console.error(`[whatsappWeb] tenant ${tenantId} initial chat import failed: ${e.message}`));
-    }, 4000);
   });
 
   client.on("disconnected", async (reason) => {
@@ -1819,16 +1827,26 @@ async function setOwnProfile(tenantId, { name, about } = {}) {
  *   perChatLimit — recent messages pulled per chat (default 25)
  *   maxChats     — safety cap on number of chats imported (default 300)
  */
-async function importAllChats(tenantId, { perChatLimit = 25, maxChats = 300 } = {}) {
+async function importAllChats(tenantId, { perChatLimit = 25, maxChats = 300, source = "unspecified" } = {}) {
   tenantId = Number(tenantId);
   if (!module.exports.isConnected(tenantId)) return { imported: false, reason: "not-connected" };
   const session = getSession(tenantId);
+  const connectedAtRaw = session && session.connectedAt;
+  const connectedAt = Number.isFinite(Number(connectedAtRaw)) ? Number(connectedAtRaw) : null;
+  const connectedAgeMs = connectedAt != null ? Math.max(0, Date.now() - connectedAt) : null;
+  const warmupRemainingMs = connectedAt != null ? Math.max(0, CHAT_IMPORT_WARMUP_MS - connectedAgeMs) : 0;
+  console.log(`[whatsappWeb] tenant ${tenantId} import start (${source}) - state=${session.state} connectedAgeMs=${connectedAgeMs == null ? "n/a" : connectedAgeMs} importing=${Boolean(session.importing)} lastError=${session.lastError || "none"}`);
+  if (warmupRemainingMs > 0) {
+    const seconds = Math.ceil(warmupRemainingMs / 1000);
+    console.log(`[whatsappWeb] tenant ${tenantId} import warmup-blocked (${source}) - wait ${seconds}s more`);
+    return { imported: false, reason: `WhatsApp is still syncing. Please wait ${seconds}s and try again.` };
+  }
   // In-flight guard — a reconnect storm fires `ready` repeatedly, each
   // scheduling an import. Running two imports for the same tenant concurrently
   // makes them race on the findUnique→create thread upsert (P2002). Skip if one
   // is already running; the guard is cleared in the finally below.
   if (session.importing) {
-    console.log(`[whatsappWeb] tenant ${tenantId} import already in progress — skipping duplicate run`);
+    console.log(`[whatsappWeb] tenant ${tenantId} import already in progress (${source}) - skipping duplicate run`);
     return { imported: false, reason: "already-importing" };
   }
   session.importing = true;
@@ -1837,11 +1855,34 @@ async function importAllChats(tenantId, { perChatLimit = 25, maxChats = 300 } = 
     const prisma = require("../lib/prisma");
 
     let chats = [];
-    try {
-      chats = await session.client.getChats();
-    } catch (e) {
-      console.error(`[whatsappWeb] tenant ${tenantId} getChats failed: ${e.message}`);
-      return { imported: false, reason: e.message };
+    let getChatsErr = null;
+    const getChatsDelays = [0, 2500, 5000];
+    for (let attempt = 0; attempt < getChatsDelays.length; attempt += 1) {
+      if (attempt > 0) await sleep(getChatsDelays[attempt]);
+      if (!module.exports.isConnected(tenantId) || !session.client) {
+        console.warn(`[whatsappWeb] tenant ${tenantId} import aborted (${source}) - session disconnected during getChats`);
+        return { imported: false, reason: "session-disconnected-during-import" };
+      }
+      try {
+        chats = await session.client.getChats();
+        getChatsErr = null;
+        break;
+      } catch (e) {
+        getChatsErr = e;
+        const reason = describeError(e);
+        console.warn(`[whatsappWeb] tenant ${tenantId} getChats attempt ${attempt + 1}/${getChatsDelays.length} failed (${source}): ${reason}`);
+      }
+    }
+    if (getChatsErr) {
+      const reason = describeError(
+        getChatsErr,
+        "WhatsApp connected, but the chat list did not become readable yet. Reset & reconnect may be required."
+      );
+      session.lastError = reason;
+      module.exports.emitState(tenantId);        return {
+          imported: false,
+          reason: "WhatsApp is connected, but its chat list is still syncing. Please keep the linked device online, wait a minute, and try again.",
+        };
     }
 
     // Import 1:1 chats (@c.us / @lid) AND groups (@g.us). Skip channels
@@ -1856,7 +1897,7 @@ async function importAllChats(tenantId, { perChatLimit = 25, maxChats = 300 } = 
       const k = module.exports.chatAddressKind(c && c.id && c.id._serialized) || "other";
       acc[k] = (acc[k] || 0) + 1; return acc;
     }, {});
-    console.log(`[whatsappWeb] tenant ${tenantId} import: ${chats.length} chats total, ${candidates.length} importable (1:1 + groups). breakdown=${JSON.stringify(byKind)}`);
+    console.log(`[whatsappWeb] tenant ${tenantId} import fetched chats (${source}): total=${chats.length} importable=${candidates.length} breakdown=${JSON.stringify(byKind)}`);
 
     let threadsTouched = 0;
     let messages = 0;

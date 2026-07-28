@@ -42,6 +42,12 @@ prisma.customerTraveller.findFirst = vi.fn();
 prisma.customerTraveller.count = vi.fn();
 prisma.customerTraveller.create = vi.fn();
 prisma.customerTraveller.updateMany = vi.fn();
+prisma.tripParticipant = prisma.tripParticipant || {};
+prisma.tripParticipant.findMany = vi.fn();
+prisma.rfuLeadProfile = prisma.rfuLeadProfile || {};
+prisma.rfuLeadProfile.findMany = vi.fn();
+prisma.passportIdentity = prisma.passportIdentity || {};
+prisma.passportIdentity.findMany = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -105,6 +111,9 @@ beforeEach(() => {
   prisma.customerTraveller.count.mockReset().mockResolvedValue(0);
   prisma.customerTraveller.create.mockReset();
   prisma.customerTraveller.updateMany.mockReset().mockResolvedValue({ count: 1 });
+  prisma.tripParticipant.findMany.mockReset().mockResolvedValue([]);
+  prisma.rfuLeadProfile.findMany.mockReset().mockResolvedValue([]);
+  prisma.passportIdentity.findMany.mockReset().mockResolvedValue([]);
   writeAudit.mockClear();
   extractSpy = vi.spyOn(passportOcrClient, 'extractPassport').mockResolvedValue(STUB_ENVELOPE);
   // Stub S3 so tests never touch the live bucket. uploadFile echoes a fake URL

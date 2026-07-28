@@ -201,6 +201,7 @@ model Tenant {
   rejectionRecoveryPrograms           RejectionRecoveryProgram[]
   embassyRules                        EmbassyRule[]
   rfuLeadProfiles                     RfuLeadProfile[]
+  passportIdentities                  PassportIdentity[]
   religiousGuidancePackets            ReligiousGuidancePacket[]
   tripMicrosites                      TripMicrosite[]
   // Travel-vertical financial fork (PRD_TRAVEL_{QUOTE_BUILDER,BILLING,
@@ -653,6 +654,7 @@ model User {
 
   // Travel vertical — Visa Sure embassy-rule authorship (PC-3 RESOLVED 2026-05-24).
   embassyRulesCreated EmbassyRule[] @relation("EmbassyRuleCreator")
+  passportIdentitiesVerified PassportIdentity[] @relation("PassportIdentityVerifiedBy")
 
   // Travel vertical — TMC curriculum-mapping advisor authorship
   // (PRD_TMC_CURRICULUM_MAPPING PC-1 RESOLVED 2026-05-24).
@@ -885,6 +887,7 @@ model Contact {
   // Customer-facing travel quotes. This relation lets quote lists load the
   // customer's display name without a separate contact-list request.
   travelQuotes              TravelQuote[]
+  passportIdentities        PassportIdentity[]
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
@@ -6485,6 +6488,8 @@ model TripParticipant {
   passportVerifiedAt     DateTime?
   passportVerifiedById   Int?
   passportRejectedAt     DateTime?
+  passportIdentityId     Int?
+  passportIdentity       PassportIdentity?        @relation(fields: [passportIdentityId], references: [id], onDelete: SetNull)
   aadhaarLast4           String?
   aadhaarTokenId         String? // DigiLocker token, encrypted
   // Physical Aadhaar scan uploaded via the public microsite (fallback when
@@ -6522,6 +6527,7 @@ model TripParticipant {
 
   @@index([tripId])
   @@index([tripId, applicationStatus])
+  @@index([passportIdentityId])
 }
 
 // ── Hybrid landing-page → microsite registration staging ────────────────
@@ -6658,11 +6664,14 @@ model CustomerTraveller {
   passportVerifiedAt     DateTime?
   passportVerifiedById   Int?
   passportRejectedAt     DateTime?
+  passportIdentityId     Int?
+  passportIdentity       PassportIdentity? @relation(fields: [passportIdentityId], references: [id], onDelete: SetNull)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
   @@index([tenantId, contactId])
   @@index([tenantId, passportVerifiedAt])
+  @@index([passportIdentityId])
 }
 
 // PRD §4.5 + §4.7 — DigiLocker OAuth flow state. Created on /initiate
@@ -6939,6 +6948,8 @@ model VisaApplication {
   priorApplicationId   Int?
   priorApplication     VisaApplication?            @relation("PriorRejection", fields: [priorApplicationId], references: [id], onDelete: SetNull)
   recoveryApplications VisaApplication[]           @relation("PriorRejection")
+  passportIdentityId   Int?
+  passportIdentity     PassportIdentity?              @relation(fields: [passportIdentityId], references: [id], onDelete: SetNull)
   documentChecklist    VisaDocumentChecklistItem[]
   tenant               Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt            DateTime                    @default(now())
@@ -6948,6 +6959,7 @@ model VisaApplication {
   @@index([tenantId, contactId])
   @@index([priorApplicationId])
   @@index([recoveryProgramId])
+  @@index([passportIdentityId])
 }
 
 /// G107 — RejectionRecoveryProgram (PRD_VISA_SURE_PHASE_3 §FR-7).
@@ -9076,4 +9088,41 @@ model StatusDailySnapshot {
 
   @@unique([componentId, date])
   @@index([componentId, date])
+}
+
+// Canonical verified passport/person identity used to link one traveller across
+// customer portal travellers, TMC trip participants, visa applications, ticket
+// prefill, and generated document packages. Passport scans remain in the
+// existing upload stores; this table stores text metadata only.
+model PassportIdentity {
+  id                       Int      @id @default(autoincrement())
+  tenantId                 Int      @default(1)
+  contactId                Int?
+  normalizedPassportNumber String?
+  passportNumber           String?
+  fullName                 String?
+  normalizedFullName       String?
+  dateOfBirth              DateTime?
+  phoneNormalized          String?
+  nationality              String?
+  passportExpiry           DateTime?
+  confidenceJson           String?  @db.Text
+  sourceType               String // customer_traveller | trip_participant | manual | backfill
+  sourceId                 Int
+  verifiedAt               DateTime?
+  verifiedById             Int?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact            Contact?            @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  verifiedBy         User?               @relation("PassportIdentityVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  customerTravellers CustomerTraveller[]
+  tripParticipants   TripParticipant[]
+  visaApplications   VisaApplication[]
+
+  @@unique([tenantId, normalizedPassportNumber])
+  @@index([tenantId, contactId])
+  @@index([tenantId, normalizedFullName, dateOfBirth, phoneNormalized])
+  @@index([verifiedById])
 }

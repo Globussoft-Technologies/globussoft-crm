@@ -131,7 +131,7 @@ describe('stub semantics under test env', () => {
     expect(wa.isEnabled()).toBe(false);
   });
   test('getState for unknown tenant is DISCONNECTED', () => {
-    expect(wa.getState(999)).toMatchObject({ state: 'DISCONNECTED', connected: false });
+    expect(wa.getState(999)).toMatchObject({ state: 'DISCONNECTED', connected: false, connectedAt: null });
   });
   test('connect() never launches a browser under test → DISCONNECTED stub', async () => {
     const st = await wa.connect(TENANT);
@@ -500,6 +500,73 @@ describe('ingestInbound', () => {
     expect(out).toMatchObject({ threadId: 11 });
     expect(prisma.whatsAppOptOut.findUnique).not.toHaveBeenCalled();
     expect(prisma.whatsAppMessage.create).toHaveBeenCalled();
+  });
+});
+
+describe('importAllChats (getChats startup hardening)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test('returns a wait reason while the WhatsApp session is still warming up', async () => {
+    vi.useFakeTimers();
+    await wa.connect(TENANT);
+    const s = wa.getSession(TENANT);
+    s.state = 'CONNECTED';
+    s.connectedAt = Date.now();
+    s.client = { getChats: vi.fn() };
+
+    const out = await wa.importAllChats(TENANT);
+
+    expect(out).toEqual({ imported: false, reason: 'WhatsApp is still syncing. Please wait 30s and try again.' });
+    expect(s.client.getChats).not.toHaveBeenCalled();
+  });
+
+  test('retries getChats and succeeds once the chat store becomes readable', async () => {
+    vi.useFakeTimers();
+    await wa.connect(TENANT);
+    const s = wa.getSession(TENANT);
+    s.state = 'CONNECTED';
+    s.phone = '919538900678';
+    s.lastError = null;
+    s.connectedAt = Date.now() - 31_000;
+    const getChats = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('store not ready'))
+      .mockResolvedValueOnce([]);
+    s.client = { getChats };
+
+    const importPromise = wa.importAllChats(TENANT);
+    await vi.advanceTimersByTimeAsync(2500);
+    const out = await importPromise;
+
+    expect(out).toEqual({ imported: true, threads: 0, messages: 0 });
+    expect(getChats).toHaveBeenCalledTimes(2);
+    expect(s.lastError).toBeNull();
+  });
+
+  test('surfaces a readable reason after repeated getChats failures', async () => {
+    vi.useFakeTimers();
+    await wa.connect(TENANT);
+    const s = wa.getSession(TENANT);
+    s.state = 'CONNECTED';
+    s.lastError = null;
+    s.connectedAt = Date.now() - 31_000;
+    const getChats = vi.fn().mockRejectedValue('r');
+    s.client = { getChats };
+
+    const importPromise = wa.importAllChats(TENANT);
+    await vi.advanceTimersByTimeAsync(8000);
+    const out = await importPromise;
+
+    expect(out).toEqual({
+      imported: false,
+      reason: 'WhatsApp is connected, but its chat list is still syncing. Please keep the linked device online, wait a minute, and try again.',
+    });
+    expect(getChats).toHaveBeenCalledTimes(3);
+    expect(s.lastError).toBe('r');
+    const emit = emits.find((e) => e.ev === 'whatsapp:wa-state');
+    expect(emit).toBeTruthy();
   });
 });
 

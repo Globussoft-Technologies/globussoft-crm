@@ -97,13 +97,40 @@ export default function WhatsAppWebConnect({ apiBase, tenantId, isAdmin, onChang
   const importChats = async () => {
     setImporting(true);
     try {
-      const data = await fetchApi(`${apiBase}/import`, { method: 'POST', body: JSON.stringify({}) });
+      const st = await refresh();
+      if (!st?.connected) {
+        if (st?.qr) setShowQr(true);
+        notify.error('WhatsApp is not connected - scan the QR first.');
+        return;
+      }
+
+      const data = await fetchApi(`${apiBase}/import`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        silent: true,
+      });
+
+      if (data?.imported === false) {
+        await refresh();
+        if (data?.reason === 'already-importing') {
+          notify.info('Chat import is already running. Please wait a few seconds.');
+        } else if (typeof data?.reason === 'string' && data.reason.trim()) {
+          notify.error(data.reason);
+        } else {
+          notify.error('Failed to import chats.');
+        }
+        return;
+      }
+
       notify.info(`Imported ${data?.threads || 0} chats (${data?.messages || 0} messages).`);
+      await refresh();
       reload();
     } catch (err) {
+      await refresh();
       notify.error(err.message || 'Failed to import chats.');
+    } finally {
+      setImporting(false);
     }
-    setImporting(false);
   };
 
   useEffect(() => {

@@ -81,6 +81,10 @@ const VISA_SUB_BRAND = 'visasure';
 
 const EMPTY_FORM = {
   contactId: '',
+  applicantName: '',
+  applicantEmail: '',
+  applicantPhone: '',
+  applicantBirthDate: '',
   applicationType: 'tourist',
   destinationCountry: '',
 };
@@ -279,8 +283,8 @@ export default function VisaApplications() {
     // Client-side gates that mirror the backend's MISSING_FIELDS /
     // INVALID_DESTINATION checks so the user sees the error before the
     // round-trip. Backend is still the source of truth.
-    if (!form.contactId) {
-      setFormError({ field: 'contactId', message: 'Pick a Visa Sure contact' });
+    if (!form.contactId && !(form.applicantName || '').trim()) {
+      setFormError({ field: 'contactId', message: 'Pick a Visa Sure contact or enter a new applicant name' });
       return;
     }
     if (!form.applicationType) {
@@ -300,10 +304,17 @@ export default function VisaApplications() {
     setSaving(true);
     try {
       const body = {
-        contactId: parseInt(form.contactId, 10),
         applicationType: form.applicationType,
         destinationCountry: dest,
       };
+      if (form.contactId) {
+        body.contactId = parseInt(form.contactId, 10);
+      } else {
+        body.applicantName = (form.applicantName || '').trim();
+        if ((form.applicantEmail || '').trim()) body.applicantEmail = form.applicantEmail.trim();
+        if ((form.applicantPhone || '').trim()) body.applicantPhone = form.applicantPhone.trim();
+        if (form.applicantBirthDate) body.applicantBirthDate = form.applicantBirthDate;
+      }
       await fetchApi('/api/travel/visa/applications', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -341,6 +352,15 @@ export default function VisaApplications() {
         case 'NOT_FOUND':
         case 'NOT_VISA_SURE':
           field = 'contactId';
+          break;
+        case 'INVALID_EMAIL':
+          field = 'applicantEmail';
+          break;
+        case 'INVALID_PHONE':
+          field = 'applicantPhone';
+          break;
+        case 'INVALID_BIRTHDATE':
+          field = 'applicantBirthDate';
           break;
         default:
           field = null;
@@ -627,9 +647,7 @@ export default function VisaApplications() {
                 color: 'var(--text-secondary)',
               }}
             >
-              Creates an application in <strong>intake</strong> state. Contact must
-              be in the Visa Sure sub-brand.
-            </p>
+              Creates an application in <strong>intake</strong> state. You can select an existing Visa Sure contact or enter a new applicant here and the CRM will create or reuse the contact automatically.</p>
 
             {formError && !formError.field && (
               <div style={errorBanner} role="alert">
@@ -650,19 +668,18 @@ export default function VisaApplications() {
                   onChange={(e) => setForm({ ...form, contactId: e.target.value })}
                   style={inputStyle}
                   aria-invalid={formError?.field === 'contactId' ? 'true' : undefined}
-                  required
                 >
                   <option value="">
                     {contactsLoading
-                      ? 'Loading contacts…'
+                      ? 'Loading contacts...'
                       : contacts.length === 0
                         ? '(no Visa Sure contacts found)'
-                        : 'Select a contact…'}
+                        : 'Create/reuse from applicant details below'}
                   </option>
                   {contacts.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name || c.email || `Contact #${c.id}`}
-                      {c.email ? ` — ${c.email}` : ''}
+                      {c.email ? ` - ${c.email}` : ''}
                     </option>
                   ))}
                 </select>
@@ -673,11 +690,64 @@ export default function VisaApplications() {
                 )}
                 {!contactsLoading && contacts.length === 0 && (
                   <span style={fieldHintText}>
-                    No contacts with subBrand=&quot;visasure&quot; in the most recent
-                    200. Create one from the Contacts page first.
+                    No contacts with subBrand="visasure" in the most recent 200. You can still continue by entering the applicant details below.
                   </span>
                 )}
               </label>
+
+              <div
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--subtle-bg)',
+                  display: 'grid',
+                  gap: 12,
+                }}
+              >
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  New applicant details
+                </div>
+                <label style={fieldLabel}>
+                  Applicant name
+                  <input
+                    type="text"
+                    value={form.applicantName}
+                    onChange={(e) => setForm({ ...form, applicantName: e.target.value })}
+                    style={inputStyle}
+                    placeholder="Enter name if you are not selecting an existing contact"
+                  />
+                </label>
+                <label style={fieldLabel}>
+                  Applicant email
+                  <input
+                    type="email"
+                    value={form.applicantEmail}
+                    onChange={(e) => setForm({ ...form, applicantEmail: e.target.value })}
+                    style={inputStyle}
+                    placeholder="Optional"
+                  />
+                </label>
+                <label style={fieldLabel}>
+                  Applicant phone
+                  <input
+                    type="text"
+                    value={form.applicantPhone}
+                    onChange={(e) => setForm({ ...form, applicantPhone: e.target.value })}
+                    style={inputStyle}
+                    placeholder="Optional"
+                  />
+                </label>
+                <label style={fieldLabel}>
+                  Applicant date of birth
+                  <input
+                    type="date"
+                    value={form.applicantBirthDate}
+                    onChange={(e) => setForm({ ...form, applicantBirthDate: e.target.value })}
+                    style={inputStyle}
+                  />
+                </label>
+              </div>
 
               <label style={fieldLabel}>
                 Application type
@@ -733,7 +803,7 @@ export default function VisaApplications() {
                 Cancel
               </button>
               <button type="submit" disabled={saving} style={primaryBtn}>
-                {saving ? 'Creating…' : 'Create Application'}
+                {saving ? 'Creating...' : 'Create Application'}
               </button>
             </div>
           </form>

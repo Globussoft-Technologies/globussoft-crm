@@ -120,6 +120,34 @@ const wellnessTenant = {
   vertical: 'wellness',
   defaultCurrency: 'INR',
 };
+const travelTenant = {
+  id: 3,
+  name: 'Travel Ops',
+  slug: 'travel-ops',
+  vertical: 'travel',
+  defaultCurrency: 'INR',
+};
+
+function mockLocationPermission(state = 'granted') {
+  const permissionStatus = { state, onchange: null };
+  Object.defineProperty(global.navigator, 'permissions', {
+    configurable: true,
+    value: {
+      query: vi.fn(() => Promise.resolve(permissionStatus)),
+    },
+  });
+  Object.defineProperty(global.navigator, 'geolocation', {
+    configurable: true,
+    value: {
+      getCurrentPosition: vi.fn((success, error) => { if (error) error(new Error('location unavailable')); }),
+    },
+  });
+  return permissionStatus;
+}
+
+beforeEach(() => {
+  mockLocationPermission('granted');
+});
 
 function renderAttendance({ user = regularUser, tenant = wellnessTenant } = {}) {
   return render(
@@ -146,6 +174,7 @@ describe('<Attendance /> — pre-clock-in state', () => {
     fetchApiMock.mockReset();
     notify.success.mockReset();
     notify.error.mockReset();
+    mockLocationPermission('granted');
   });
 
   it('renders Punch In enabled and Punch Out disabled when no today row exists', async () => {

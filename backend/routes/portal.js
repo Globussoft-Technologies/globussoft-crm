@@ -8,12 +8,22 @@ const prisma = require("../lib/prisma");
 const digilockerClient = require("../services/digilockerClient");
 const s3Service = require("../services/s3Service");
 const passportOcrClient = require("../services/passportOcrClient");
+const { findPassportIdentityCandidates } = require("../lib/passportIdentityLinker");
 const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
 const { notifyMany } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
 const visaDocStore = require("../lib/visaDocStore");
 const { buildForm: buildReviewForm, validateSubmission: validateReviewSubmission } = require("../lib/travelReviewQuestions");
 const travelPortalNotifications = require("../lib/travelPortalNotificationService");
+
+async function safeFindPassportIdentityCandidates(args, context = "portal") {
+  try {
+    return await findPassportIdentityCandidates(args);
+  } catch (err) {
+    console.warn("[Portal][passport-identity:" + context + "] candidate lookup skipped:", err?.message || err);
+    return [];
+  }
+}
 
 // Memory-storage multer for the travel customer's profile avatar — 5 MB cap,
 // image-only (s3Service.uploadImage re-gates the mimetype). Mirrors the staff
@@ -1213,7 +1223,7 @@ router.post(
       }
       const traveller = await prisma.customerTraveller.findFirst({
         where: { id: tid, contactId: req.portal.contactId, tenantId: req.portal.tenantId },
-        select: { id: true, fullName: true, passportVerifiedAt: true, passportExtractionJson: true },
+        select: { id: true, fullName: true, passportVerifiedAt: true, passportExtractionJson: true, contactId: true },
       });
       if (!traveller) {
         return res.status(404).json({ error: "Traveller not found", code: "TRAVELLER_NOT_FOUND" });
@@ -1266,6 +1276,14 @@ router.post(
         uploadedVia: "portal",
         portalContactId: req.portal.contactId,
       };
+      const identityCandidates = await safeFindPassportIdentityCandidates({
+        tenantId: req.portal.tenantId,
+        sourceType: "customer",
+        sourceId: traveller.id,
+        extraction: result.extraction,
+        fullName: traveller.fullName,
+      });
+      persistedEnvelope.identityCandidates = identityCandidates;
 
       // Conditional update guarded on passportVerifiedAt: null — closes the
       // TOCTOU window where a staff verify lands between our read and write.
@@ -1303,6 +1321,7 @@ router.post(
           provider: result.provider,
           storage: stored.storage,
           portalContactId: req.portal.contactId,
+          identityCandidateCount: identityCandidates.length,
         },
         { actorType: "portal" },
       ).catch(() => {});

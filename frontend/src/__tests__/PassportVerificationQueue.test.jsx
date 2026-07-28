@@ -144,6 +144,32 @@ describe('PassportVerificationQueue — operator queue (PRD FR-6)', () => {
     expect(screen.getByText(/Previously rejected/i)).toBeTruthy();
   });
 
+
+  it('shows possible master/client matches without storing document data in the browser', async () => {
+    const rows = [
+      {
+        ...SAMPLE_PENDING[0],
+        identityCandidates: [
+          {
+            sourceType: 'customerTraveller',
+            sourceId: 991,
+            matchedBy: 'passport',
+            strength: 'exact',
+            fullName: 'Jane Doe',
+            contact: { id: 3140, name: 'Jane Doe' },
+          },
+        ],
+      },
+    ];
+    fetchApiMock.mockImplementation(defaultFetchImpl(rows));
+    renderPage();
+
+    await screen.findByText(/Possible existing master\/client match/i);
+    expect(screen.getByText(/matched by passport number/i)).toBeTruthy();
+    expect(screen.getByText(/Contact #3140/i)).toBeTruthy();
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+  });
   it('approve action POSTs /passport-verify with approved=true', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_PENDING));
     renderPage();

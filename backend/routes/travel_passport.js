@@ -55,6 +55,16 @@ const passportOcrClient = require("../services/passportOcrClient");
 const { writeAudit } = require("../lib/audit");
 const { removeScanFromEnvelopeJson } = require("../lib/passportFileStore");
 const visaDocStore = require("../lib/visaDocStore");
+const { findPassportIdentityCandidates, persistPassportIdentity } = require("../lib/passportIdentityLinker");
+
+async function safeFindPassportIdentityCandidates(args, context = "travel-passport") {
+  try {
+    return await findPassportIdentityCandidates(args);
+  } catch (err) {
+    console.warn("[travel-passport][passport-identity:" + context + "] candidate lookup skipped:", err?.message || err);
+    return [];
+  }
+}
 
 // ─── Multer setup (disk storage; matches deals_documents.js convention) ─
 
@@ -231,6 +241,15 @@ router.post(
         imageUrl: fileUrl,
         originalName: req.file.originalname || null,
       };
+      const identityCandidates = await safeFindPassportIdentityCandidates({
+        tenantId: req.travelTenant.id,
+        sourceType: "trip",
+        sourceId: participant.id,
+        extraction: result.extraction,
+        fullName: participant.fullName,
+        phone: participant.parentPhone,
+      });
+      persistedEnvelope.identityCandidates = identityCandidates;
 
       const updated = await prisma.tripParticipant.update({
         where: { id: participant.id },
@@ -257,6 +276,7 @@ router.post(
           extractedFieldNames: Object.keys(result.extraction || {}),
           confidence: result.confidence,
           provider: result.provider,
+          identityCandidateCount: identityCandidates.length,
         },
       ).catch(() => {});
 
@@ -267,6 +287,7 @@ router.post(
         provider: result.provider,
         extractedAt: updated.passportExtractedAt,
         imageUrl: fileUrl,
+        identityCandidates,
       });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -343,6 +364,7 @@ router.get(
           imageUrl: envelope?.imageUrl || null,
           mrzFound: envelope?.mrzFound ?? null,
           note: envelope?.note || null,
+          identityCandidates: envelope?.identityCandidates || [],
         };
       });
 
@@ -363,6 +385,7 @@ router.get(
           imageUrl: envelope?.imageUrl || null,
           mrzFound: envelope?.mrzFound ?? null,
           note: envelope?.note || null,
+          identityCandidates: envelope?.identityCandidates || [],
         };
       });
 
@@ -475,6 +498,15 @@ router.post(
         extractedAt: new Date().toISOString(),
         source: "registration_sync",
       };
+      const identityCandidates = await safeFindPassportIdentityCandidates({
+        tenantId: req.travelTenant.id,
+        sourceType: "trip",
+        sourceId: participant.id,
+        extraction: envelope.extraction,
+        fullName: participant.fullName,
+        phone: participant.parentPhone,
+      });
+      persistedEnvelope.identityCandidates = identityCandidates;
 
       await prisma.tripParticipant.update({
         where: { id: participant.id },
@@ -501,6 +533,7 @@ router.post(
         provider: envelope.provider,
         extractedAt: new Date(),
         note: envelope.note || null,
+        identityCandidates,
       });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -567,9 +600,37 @@ router.post(
           });
         }
 
+        const finalExtraction = {
+          ...extraction,
+          ...edits,
+          passportNumber: finalNumber,
+          dateOfExpiry: finalExpiry || extraction.dateOfExpiry || null,
+        };
+        const identityCandidates = await safeFindPassportIdentityCandidates({
+          tenantId: req.travelTenant.id,
+          sourceType: "trip",
+          sourceId: participant.id,
+          extraction: finalExtraction,
+          fullName: participant.fullName,
+          phone: participant.parentPhone,
+        });
+
+        const passportIdentity = await persistPassportIdentity({
+          tenantId: req.travelTenant.id,
+          sourceType: "trip_participant",
+          sourceId: participant.id,
+          extraction: finalExtraction,
+          fullName: participant.fullName,
+          phone: participant.parentPhone,
+          verifiedAt: new Date(),
+          verifiedById: req.user.userId,
+          envelope: { ...envelope, extraction: finalExtraction },
+        });
+
         const updateData = {
           passportNumber: finalNumber,
           passportExpiry: finalExpiry ? new Date(finalExpiry) : null,
+          passportIdentityId: passportIdentity?.id || null,
           passportVerifiedAt: new Date(),
           passportVerifiedById: req.user.userId,
           passportRejectedAt: null,
@@ -588,6 +649,8 @@ router.post(
           req.travelTenant.id,
           {
             editedFieldNames: Object.keys(edits),
+            identityCandidateCount: identityCandidates.length,
+            passportIdentityLinked: Boolean(passportIdentity?.id),
             // VALUES intentionally not logged — passport number / expiry
             // stay out of the audit trail (PRD FR-9).
           },
@@ -598,6 +661,8 @@ router.post(
           approved: true,
           verifiedAt: updated.passportVerifiedAt,
           verifiedById: updated.passportVerifiedById,
+          identityCandidates,
+          passportIdentityId: passportIdentity?.id || null,
         });
       } else {
         // Rejection path — clears the verified markers (no-op since not
@@ -732,11 +797,38 @@ router.post(
           });
         }
 
+        const finalExtraction = {
+          ...extraction,
+          ...edits,
+          passportNumber: finalNumber,
+          dateOfExpiry: finalExpiry || extraction.dateOfExpiry || null,
+        };
+        const identityCandidates = await safeFindPassportIdentityCandidates({
+          tenantId: req.travelTenant.id,
+          sourceType: "customer",
+          sourceId: traveller.id,
+          extraction: finalExtraction,
+          fullName: traveller.fullName,
+        });
+
+        const passportIdentity = await persistPassportIdentity({
+          tenantId: req.travelTenant.id,
+          contactId: traveller.contactId,
+          sourceType: "customer_traveller",
+          sourceId: traveller.id,
+          extraction: finalExtraction,
+          fullName: traveller.fullName,
+          verifiedAt: new Date(),
+          verifiedById: req.user.userId,
+          envelope: { ...envelope, extraction: finalExtraction },
+        });
+
         const updated = await prisma.customerTraveller.update({
           where: { id: traveller.id },
           data: {
             passportNumber: finalNumber,
             passportExpiry: finalExpiry ? new Date(finalExpiry) : null,
+            passportIdentityId: passportIdentity?.id || null,
             passportVerifiedAt: new Date(),
             passportVerifiedById: req.user.userId,
             passportRejectedAt: null,
@@ -749,7 +841,7 @@ router.post(
           traveller.id,
           req.user.userId,
           req.travelTenant.id,
-          { editedFieldNames: Object.keys(edits) },
+          { editedFieldNames: Object.keys(edits), identityCandidateCount: identityCandidates.length, passportIdentityLinked: Boolean(passportIdentity?.id) },
         ).catch(() => {});
 
         return res.json({
@@ -757,6 +849,8 @@ router.post(
           approved: true,
           verifiedAt: updated.passportVerifiedAt,
           verifiedById: updated.passportVerifiedById,
+          identityCandidates,
+          passportIdentityId: passportIdentity?.id || null,
         });
       } else {
         const updated = await prisma.customerTraveller.update({

@@ -222,7 +222,7 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
     await screen.findByRole('heading', { name: /Quote Builder/i });
     await waitFor(() => {
       const supplierFetch = fetchApiMock.mock.calls.find(
-        ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers?subBrand=tmc'),
+        ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers') && u.includes('subBrand=tmc'),
       );
       expect(supplierFetch).toBeTruthy();
     });
@@ -595,7 +595,7 @@ describe('<QuoteBuilder /> — supplier picker', () => {
     await waitFor(() => {
       expect(
         fetchApiMock.mock.calls.some(
-          ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers?subBrand=tmc'),
+          ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers') && u.includes('subBrand=tmc'),
         ),
       ).toBe(true);
     });
@@ -604,7 +604,7 @@ describe('<QuoteBuilder /> — supplier picker', () => {
     await waitFor(() => {
       expect(
         fetchApiMock.mock.calls.some(
-          ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers?subBrand=rfu'),
+          ([u]) => typeof u === 'string' && u.startsWith('/api/travel/suppliers') && u.includes('subBrand=rfu'),
         ),
       ).toBe(true);
     });

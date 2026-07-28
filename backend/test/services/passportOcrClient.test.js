@@ -9,6 +9,8 @@
  * boundary (no place-of-birth/issue from MRZ), and the graceful-failure paths.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const paddleMock = vi.fn();
 import { extractPassport, isEnabledForTenant, withTimeout } from '../../services/passportOcrClient.js';
 
 // Canonical ICAO specimen MRZ (valid check digits).
@@ -24,10 +26,14 @@ const okOcr = (text = MRZ_TEXT, confidence = 92) => async () => ({ text, confide
 
 beforeEach(() => {
   delete process.env.PASSPORT_OCR_DISABLED;
+  delete process.env.PASSPORT_OCR_ENGINE;
+  paddleMock.mockReset();
 });
 afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.PASSPORT_OCR_DISABLED;
+  delete process.env.PASSPORT_OCR_ENGINE;
+  paddleMock.mockReset();
 });
 
 describe('isEnabledForTenant', () => {
@@ -155,6 +161,49 @@ describe('extractPassport — VIZ cross-check catches MRZ digit/letter slips', (
     expect(res.extraction.dateOfBirth).toBe('2023-03-19');
     expect(res.extraction.dateOfExpiry).toBe('2026-04-20');
     expect(res.note).toMatch(/disagreed/i);
+  });
+});
+
+
+describe('extractPassport - PaddleOCR provider', () => {
+  test('uses PaddleOCR text when PASSPORT_OCR_ENGINE=paddle', async () => {
+    process.env.PASSPORT_OCR_ENGINE = 'paddle';
+    paddleMock.mockResolvedValue({ mrzText: MRZ_TEXT, vizText: MRZ_TEXT, confidence: 96, engine: 'paddle' });
+
+    const res = await extractPassport({ tenantId: 1, fileBuffer: IMG, paddleOcr: paddleMock });
+
+    expect(paddleMock).toHaveBeenCalled();
+    expect(res.provider).toBe('local-paddleocr-v1');
+    expect(res.extraction.passportNumber).toBe('L898902C3');
+    expect(res.mrzFound).toBe(true);
+  });
+});
+
+describe('extractPassport - timeout salvage', () => {
+  test('salvages partial MRZ text when the full OCR pass times out', async () => {
+    vi.useFakeTimers();
+    const partialResult = { current: null };
+    const promise = withTimeout(
+      (async () => {
+        partialResult.current = {
+          mrzText: [
+            'P<ALZAHERI<<REEM<AL<<<<<<<<<<<<<<<<<<<<<<<<',
+            'I56Q12345ARE09021983F21102026<<<<<<<<<<<<<<8',
+          ].join('\n'),
+          confidence: 70,
+          engine: 'tesseract',
+        };
+        await new Promise(() => {});
+      })(),
+      10,
+      { current: { terminate: vi.fn().mockResolvedValue(undefined) } },
+    ).catch((e) => e);
+
+    await vi.advanceTimersByTimeAsync(11);
+    const err = await promise;
+    expect(err).toMatchObject({ code: 'OCR_TIMEOUT' });
+    expect(partialResult.current.mrzText).toContain('I56Q12345ARE09021983F21102026');
+    vi.useRealTimers();
   });
 });
 

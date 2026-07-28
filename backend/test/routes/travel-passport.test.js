@@ -46,6 +46,15 @@ prisma.tripParticipant = {
   findMany: vi.fn(),
   update: vi.fn(),
 };
+prisma.rfuLeadProfile = {
+  findMany: vi.fn(),
+};
+prisma.passportIdentity = {
+  findMany: vi.fn(),
+  findFirst: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+};
 // CustomerTraveller — the unified portal passport store the queue also reads.
 prisma.customerTraveller = {
   findFirst: vi.fn(),
@@ -123,6 +132,11 @@ beforeEach(() => {
   prisma.customerTraveller.findFirst.mockReset();
   prisma.customerTraveller.findMany.mockReset().mockResolvedValue([]);
   prisma.customerTraveller.update.mockReset();
+  prisma.rfuLeadProfile.findMany.mockReset().mockResolvedValue([]);
+  prisma.passportIdentity.findMany.mockReset().mockResolvedValue([]);
+  prisma.passportIdentity.findFirst.mockReset().mockResolvedValue(null);
+  prisma.passportIdentity.create.mockReset().mockResolvedValue({ id: 444 });
+  prisma.passportIdentity.update.mockReset().mockResolvedValue({ id: 444 });
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -538,7 +552,7 @@ describe('GET /verification-queue — union with CustomerTraveller', () => {
 describe('POST /customer-travellers/:id/passport-verify', () => {
   test('approve copies extraction into canonical cols + sets verifiedAt', async () => {
     prisma.customerTraveller.findFirst.mockResolvedValue({
-      id: 7, tenantId: 1, passportExtractedAt: new Date(), passportVerifiedAt: null,
+      id: 7, tenantId: 1, contactId: 3140, fullName: 'Ahmed Khan', passportExtractedAt: new Date(), passportVerifiedAt: null,
       passportExtractionJson: JSON.stringify({ extraction: SAMPLE_EXTRACTION }),
     });
     prisma.customerTraveller.update.mockResolvedValue({ id: 7, passportVerifiedAt: new Date(), passportVerifiedById: 7 });
@@ -551,11 +565,13 @@ describe('POST /customer-travellers/:id/passport-verify', () => {
     const data = prisma.customerTraveller.update.mock.calls[0][0].data;
     expect(data.passportNumber).toBe(SAMPLE_EXTRACTION.passportNumber);
     expect(data.passportVerifiedById).toBe(7);
+    expect(data.passportIdentityId).toBe(444);
+    expect(prisma.passportIdentity.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ contactId: 3140, sourceType: 'customer_traveller' }) }));
   });
 
   test('reject sets rejectedAt', async () => {
     prisma.customerTraveller.findFirst.mockResolvedValue({
-      id: 7, tenantId: 1, passportExtractedAt: new Date(), passportVerifiedAt: null, passportExtractionJson: null,
+      id: 7, tenantId: 1, contactId: 3140, fullName: 'Ahmed Khan', passportExtractedAt: new Date(), passportVerifiedAt: null, passportExtractionJson: null,
     });
     prisma.customerTraveller.update.mockResolvedValue({ id: 7, passportRejectedAt: new Date() });
     const res = await request(makeApp())

@@ -76,6 +76,8 @@ const { requireTravelTenant, getSubBrandAccessSet, canAccessSubBrand } = require
 const { writeAudit } = require("../lib/audit");
 const visaDocStore = require("../lib/visaDocStore");
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
+const { ensureEmail, ensureDateInRange } = require("../lib/validators");
+const { normalizePhone } = require("../utils/deduplication");
 // #920 slice S43: opt-in slim shape via `?fields=summary` for GET /applications.
 // SQL-drops PII columns (rejectionHistoryJson, outcomeReason, familySize,
 // priorApplicationId, recoveryProgramId, updatedAt) at the Prisma layer +
@@ -146,6 +148,213 @@ const STATUS_FIELD = {
   rejected: "rejectedCount",
   appeal: "appealCount",
 };
+
+function normalizeCountryCodeLike(value) {
+  return typeof value === "string" ? value.trim().toUpperCase() : "";
+}
+
+function normalizeApplicantName(value) {
+  return typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+}
+
+function sameCalendarDate(a, b) {
+  if (!a || !b) return false;
+  const da = new Date(a);
+  const db = new Date(b);
+  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return false;
+  return da.toISOString().slice(0, 10) === db.toISOString().slice(0, 10);
+}
+
+async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
+  const explicitContactId = typeof body.contactId === "number" ? body.contactId : null;
+  if (Number.isFinite(explicitContactId)) {
+    const contact = await prisma.contact.findFirst({
+      where: { id: explicitContactId, tenantId },
+      select: { id: true, subBrand: true },
+    });
+    if (!contact) {
+      return { error: { status: 404, body: { error: "Contact not found on this tenant", code: "NOT_FOUND" } } };
+    }
+    if (contact.subBrand !== VISA_SUB_BRAND) {
+      return {
+        error: {
+          status: 403,
+          body: {
+            error: "Contact is not in the Visa Sure sub-brand; visa applications can only be created for visasure contacts",
+            code: "NOT_VISA_SURE",
+          },
+        },
+      };
+    }
+    return { contactId: contact.id, contactMode: "existing" };
+  }
+
+  const applicantName = normalizeApplicantName(body.applicantName);
+  const applicantEmail = typeof body.applicantEmail === "string" ? body.applicantEmail.trim().toLowerCase() : "";
+  const applicantPhoneRaw = typeof body.applicantPhone === "string" ? body.applicantPhone.trim() : "";
+  const applicantPhone = applicantPhoneRaw ? normalizePhone(applicantPhoneRaw) : "";
+  const applicantBirthDateRaw = typeof body.applicantBirthDate === "string" ? body.applicantBirthDate.trim() : "";
+
+  if (!applicantName) {
+    return {
+      error: {
+        status: 400,
+        body: {
+          error: "Provide either contactId or applicantName to create a Visa Sure application",
+          code: "MISSING_FIELDS",
+        },
+      },
+    };
+  }
+
+  if (applicantEmail) {
+    const emailErr = ensureEmail(applicantEmail, { required: false });
+    if (emailErr) return { error: { status: emailErr.status, body: emailErr } };
+  }
+
+  let applicantBirthDate = null;
+  if (applicantBirthDateRaw) {
+    const bdErr = ensureDateInRange(applicantBirthDateRaw, {
+      minYear: 1900,
+      maxYear: new Date().getUTCFullYear(),
+      field: "applicantBirthDate",
+      code: "INVALID_BIRTHDATE",
+    });
+    if (bdErr) {
+      return { error: { status: bdErr.status, body: { error: bdErr.error, code: bdErr.code || "INVALID_BIRTHDATE" } } };
+    }
+    applicantBirthDate = new Date(applicantBirthDateRaw);
+    if (applicantBirthDate.getTime() > Date.now()) {
+      return { error: { status: 400, body: { error: "applicantBirthDate cannot be in the future", code: "INVALID_BIRTHDATE" } } };
+    }
+  }
+
+  const candidateWhere = { tenantId, deletedAt: null, subBrand: VISA_SUB_BRAND };
+  if (applicantEmail) {
+    candidateWhere.OR = [
+      { email: applicantEmail },
+      ...(applicantPhone ? [{ phone: applicantPhoneRaw }, { phone: applicantPhone }] : []),
+    ];
+  } else if (applicantPhone) {
+    candidateWhere.OR = [{ phone: applicantPhoneRaw }, { phone: applicantPhone }];
+  }
+
+  const candidates = candidateWhere.OR && candidateWhere.OR.length > 0
+    ? await prisma.contact.findMany({
+        where: candidateWhere,
+        select: { id: true, name: true, email: true, phone: true, birthDate: true },
+        take: 20,
+      })
+    : [];
+
+  const normalizedName = applicantName.toLowerCase();
+  const matched =
+    candidates.find((c) => applicantEmail && c.email && c.email.toLowerCase() === applicantEmail && applicantBirthDate && sameCalendarDate(c.birthDate, applicantBirthDate))
+    || candidates.find((c) => {
+      if (!applicantPhone) return false;
+      const candidatePhone = c.phone ? normalizePhone(c.phone) : "";
+      const candidateName = normalizeApplicantName(c.name).toLowerCase();
+      return candidatePhone && candidatePhone === applicantPhone && candidateName === normalizedName;
+    })
+    || candidates.find((c) => applicantEmail && c.email && c.email.toLowerCase() === applicantEmail);
+
+  if (matched) return { contactId: matched.id, contactMode: "matched" };
+
+  const created = await prisma.contact.create({
+    data: {
+      tenantId,
+      name: applicantName,
+      email: applicantEmail || null,
+      phone: applicantPhoneRaw || null,
+      birthDate: applicantBirthDate || null,
+      subBrand: VISA_SUB_BRAND,
+      status: "Lead",
+      source: "visa-intake",
+      assignedToId: actorUserId || null,
+    },
+    select: { id: true },
+  });
+
+  writeAudit("Contact", "CREATE", created.id, actorUserId, tenantId, {
+    source: "visa-intake",
+    subBrand: VISA_SUB_BRAND,
+    autoCreatedFrom: "visa-application",
+  }).catch(() => {});
+
+  return { contactId: created.id, contactMode: "created" };
+}
+
+async function evaluateVisaSubmissionBlockers({ tenantId, applicationId, destinationCountry, applicationType }) {
+  const normalizedCountry = normalizeCountryCodeLike(destinationCountry);
+  if (!normalizedCountry) return [];
+
+  const [rules, checklist] = await Promise.all([
+    prisma.embassyRule.findMany({
+      where: {
+        tenantId,
+        destinationCountry: normalizedCountry,
+        isActive: true,
+        severity: "blocker",
+        OR: [{ applicationType: null }, { applicationType }],
+      },
+      select: { id: true, ruleType: true, applicationType: true, conditionJson: true, actionLabel: true },
+      orderBy: [{ ruleType: "asc" }, { id: "asc" }],
+    }),
+    prisma.visaDocumentChecklistItem.findMany({
+      where: { applicationId },
+      select: { docType: true, required: true, status: true },
+    }),
+  ]);
+
+  const blockers = [];
+  const requiredPending = checklist.filter((item) => item.required && item.status !== "verified");
+  if (requiredPending.length > 0) {
+    blockers.push({
+      type: "required_documents_incomplete",
+      message: "Required documents still pending: " + requiredPending.map((item) => item.docType).join(", "),
+    });
+  }
+
+  const checklistByDoc = new Map(checklist.map((item) => [String(item.docType || "").trim().toLowerCase(), item]));
+
+  for (const rule of rules) {
+    if (rule.ruleType === "document_required") {
+      let parsed = null;
+      try { parsed = rule.conditionJson ? JSON.parse(rule.conditionJson) : null; } catch { parsed = null; }
+      const docs = Array.isArray(parsed?.docTypes)
+        ? parsed.docTypes
+        : Array.isArray(parsed?.requiredDocuments)
+          ? parsed.requiredDocuments
+          : parsed?.docType
+            ? [parsed.docType]
+            : [];
+      const missing = docs
+        .map((doc) => String(doc || "").trim())
+        .filter(Boolean)
+        .filter((doc) => {
+          const item = checklistByDoc.get(doc.toLowerCase());
+          return !item || item.status !== "verified";
+        });
+      if (missing.length > 0) {
+        blockers.push({
+          type: "embassy_rule_document_required",
+          ruleId: rule.id,
+          message: rule.actionLabel || ("Embassy rule requires: " + missing.join(", ")),
+          missingDocuments: missing,
+        });
+      }
+      continue;
+    }
+
+    blockers.push({
+      type: "embassy_rule_blocker",
+      ruleId: rule.id,
+      message: rule.actionLabel || ("Embassy rule " + rule.ruleType + " must be cleared first"),
+    });
+  }
+
+  return blockers;
+}
 
 // ─── FR-6 document-checklist lifecycle helpers ──────────────────────
 //
@@ -1679,17 +1888,6 @@ router.post(
       const tenantId = req.travelTenant.id;
       const body = req.body || {};
 
-      // contactId presence + type.
-      const contactId =
-        typeof body.contactId === "number" ? body.contactId : null;
-      if (!Number.isFinite(contactId)) {
-        return res.status(400).json({
-          error: "contactId is required and must be a number",
-          code: "MISSING_FIELDS",
-        });
-      }
-
-      // applicationType presence + enum.
       const applicationType =
         typeof body.applicationType === "string"
           ? body.applicationType.trim()
@@ -1707,7 +1905,6 @@ router.post(
         });
       }
 
-      // destinationCountry presence + length.
       const destinationCountry =
         typeof body.destinationCountry === "string"
           ? body.destinationCountry.trim()
@@ -1725,44 +1922,35 @@ router.post(
         });
       }
 
-      // Contact existence + tenant + sub-brand verification. Single
-      // findFirst with tenantId scope avoids cross-tenant leakage; the
-      // sub-brand check is the second layer (defense-in-depth — same
-      // posture as the GET /:id detail handler).
-      const contact = await prisma.contact.findFirst({
-        where: { id: contactId, tenantId },
-        select: { id: true, subBrand: true },
+      const resolvedContact = await resolveOrCreateVisaContact({
+        tenantId,
+        actorUserId: req.user.userId,
+        body,
       });
-      if (!contact) {
-        return res.status(404).json({
-          error: "Contact not found on this tenant",
-          code: "NOT_FOUND",
-        });
+      if (resolvedContact?.error) {
+        return res.status(resolvedContact.error.status).json(resolvedContact.error.body);
       }
-      if (contact.subBrand !== VISA_SUB_BRAND) {
-        return res.status(403).json({
-          error:
-            "Contact is not in the Visa Sure sub-brand; visa applications can only be created for visasure contacts",
-          code: "NOT_VISA_SURE",
-        });
-      }
+      const contactId = resolvedContact.contactId;
 
-      // Create. `status` is pinned to "intake" here for shape clarity even
-      // though the schema default would land us at the same value.
+      const passportIdentity = prisma.passportIdentity
+        ? await prisma.passportIdentity.findFirst({
+            where: { tenantId, contactId },
+            orderBy: { verifiedAt: "desc" },
+            select: { id: true },
+          })
+        : null;
+
       const created = await prisma.visaApplication.create({
         data: {
           tenantId,
           contactId,
           applicationType,
           destinationCountry,
+          passportIdentityId: passportIdentity?.id || null,
           status: "intake",
         },
       });
 
-      // FR-6.2 — seed this application's live document checklist from the
-      // canonical (applicationType × destinationCountry) template. Best-
-      // effort: a seeding failure must never fail the create (the advisor
-      // can still add documents by hand on the detail page).
       try {
         await seedChecklistFromTemplates({
           applicationId: created.id,
@@ -1777,7 +1965,6 @@ router.post(
         );
       }
 
-      // Best-effort audit — never blocks the response.
       writeAudit(
         "VisaApplication",
         "CREATE",
@@ -1789,12 +1976,36 @@ router.post(
           contactId,
           applicationType,
           destinationCountry,
+          contactResolution: resolvedContact.contactMode,
         },
       ).catch(() => {});
 
-      res.status(201).json(created);
+      res.status(201).json({
+        ...created,
+        contactResolution: resolvedContact.contactMode,
+      });
     } catch (e) {
       console.error("[travel-visa/create] error:", e.message);
+      if (e?.code === "NOT_FOUND") {
+        return res.status(404).json({
+          error: e.message || "Contact not found on this tenant",
+          code: "NOT_FOUND",
+        });
+      }
+      if (e?.code === "NOT_VISA_SURE") {
+        return res.status(403).json({
+          error:
+            e.message ||
+            "Contact is not in the Visa Sure sub-brand; visa applications can only be created for visasure contacts",
+          code: "NOT_VISA_SURE",
+        });
+      }
+      if (["MISSING_FIELDS", "INVALID_EMAIL", "INVALID_BIRTHDATE", "INVALID_PHONE"].includes(e?.code)) {
+        return res.status(400).json({
+          error: e.message || "Invalid applicant details",
+          code: e.code,
+        });
+      }
       res.status(500).json({
         error: "Failed to create visa application",
         code: "INTERNAL_ERROR",
@@ -1904,9 +2115,28 @@ router.patch(
       if (body.status !== undefined) {
         if (typeof body.status !== "string" || !VALID_STATUSES.includes(body.status)) {
           return res.status(400).json({
-            error: `status must be one of: ${VALID_STATUSES.join(", ")}`,
+            error: "status must be one of: " + VALID_STATUSES.join(", "),
             code: "INVALID_STATUS",
           });
+        }
+        if (body.status === "filed") {
+          const appForBlockers = await prisma.visaApplication.findFirst({
+            where: { id, tenantId },
+            select: { id: true, destinationCountry: true, applicationType: true },
+          });
+          const blockers = await evaluateVisaSubmissionBlockers({
+            tenantId,
+            applicationId: id,
+            destinationCountry: appForBlockers?.destinationCountry,
+            applicationType: appForBlockers?.applicationType,
+          });
+          if (blockers.length > 0) {
+            return res.status(400).json({
+              error: "Embassy rules or required documents are still blocking submission for this application",
+              code: "EMBASSY_RULES_BLOCKED",
+              blockers,
+            });
+          }
         }
         data.status = body.status;
       }

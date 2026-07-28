@@ -71,6 +71,22 @@ async function resolveGeofenceContext(tenantId, userId) {
   return { vertical, assignedLocations: rows.map((r) => r.location) };
 }
 
+function summarizeGeofenceAssignment(vertical, assignedLocations) {
+  const usableLocations = (assignedLocations || []).filter(
+    (loc) => typeof loc?.latitude === "number" && typeof loc?.longitude === "number"
+  );
+  return {
+    enabled: vertical === "wellness" && usableLocations.length > 0,
+    assignedCount: (assignedLocations || []).length,
+    usableCount: usableLocations.length,
+    locations: usableLocations.map((loc) => ({
+      id: loc.id,
+      name: loc.name,
+      geofenceRadiusM: typeof loc.geofenceRadiusM === "number" ? loc.geofenceRadiusM : null,
+    })),
+  };
+}
+
 // Body coords are sent as strings/numbers by fetch/JSON — coerce once here
 // so lib/attendanceGeofence.js can assume real numbers or undefined.
 function parseCoords(body) {
@@ -404,6 +420,21 @@ router.get("/me", verifyToken, async (req, res) => {
   } catch (e) {
     console.error("[attendance] me history error:", e.message);
     res.status(500).json({ error: "Failed to load attendance history" });
+  }
+});
+
+router.get("/context", verifyToken, async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const userId = req.user.userId;
+    const { vertical, assignedLocations } = await resolveGeofenceContext(tenantId, userId);
+    res.json({
+      vertical,
+      geofence: summarizeGeofenceAssignment(vertical, assignedLocations),
+    });
+  } catch (e) {
+    console.error("[attendance] context error:", e.message);
+    res.status(500).json({ error: "Failed to load attendance context" });
   }
 });
 

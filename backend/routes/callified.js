@@ -423,4 +423,218 @@ router.get("/calls/lead/:leadId/latest", verifyToken, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/callified/campaigns/with-lead-counts
+ *
+ * Returns every active Callified campaign plus the number of CRM leads
+ * currently assigned to each campaign via Contact.callifiedCampaignId.
+ */
+router.get(
+  "/campaigns/with-lead-counts",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const campaigns = await callifiedClient.listCampaigns(req.user.tenantId);
+      const list = Array.isArray(campaigns) ? campaigns : [];
+      const counts = await prisma.contact.groupBy({
+        by: ["callifiedCampaignId"],
+        where: {
+          tenantId: req.user.tenantId,
+          status: "Lead",
+          deletedAt: null,
+          callifiedCampaignId: { not: null },
+        },
+        _count: { callifiedCampaignId: true },
+      });
+      const countById = new Map(counts.map((c) => [c.callifiedCampaignId, c._count.callifiedCampaignId]));
+      const enriched = list.map((c) => ({
+        id: c.id,
+        name: c.name,
+        product_name: c.product_name || null,
+        leadCount: countById.get(Number(c.id)) || 0,
+      }));
+      res.json({ campaigns: enriched });
+    } catch (e) {
+      if (e.code === "CALLIFIED_NOT_CONFIGURED" || e.code === "CALLIFIED_AUTH_FAILED") {
+        return res.status(503).json({ error: e.message, code: e.code });
+      }
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[callified] campaigns/with-lead-counts error:", e.message);
+      res.status(500).json({ error: "Failed to fetch campaign counts" });
+    }
+  },
+);
+
+/**
+ * POST /api/callified/campaigns/:campaignId/dial-all
+ *
+ * Dials every CRM lead assigned to the given Callified campaign.
+ * Calls are initiated sequentially so Callified's queue receives them one
+ * by one. Per-lead errors are captured and do not abort the batch.
+ */
+router.post(
+  "/campaigns/:campaignId/dial-all",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const campaignId = Number(req.params.campaignId);
+      if (!Number.isFinite(campaignId) || campaignId <= 0) {
+        return res.status(400).json({ error: "Invalid campaignId", code: "INVALID_CAMPAIGN_ID" });
+      }
+
+      const leads = await prisma.contact.findMany({
+        where: {
+          tenantId: req.user.tenantId,
+          status: "Lead",
+          deletedAt: null,
+          callifiedCampaignId: campaignId,
+          phone: { not: null },
+        },
+        orderBy: { id: "asc" },
+      });
+
+      const results = [];
+      let succeeded = 0;
+      let failed = 0;
+
+      for (const lead of leads) {
+        try {
+          const result = await callifiedClient.initiateCallForContact({
+            tenantId: req.user.tenantId,
+            contactId: lead.id,
+            campaignId,
+            userId: req.user.userId,
+            interest: "Bulk campaign dial",
+          });
+          await writeAudit(
+            "CallifiedCall",
+            "INITIATE",
+            String(result.callifiedLeadId),
+            req.user.userId,
+            req.user.tenantId,
+            { contactId: lead.id, campaignId, batch: true },
+          );
+          results.push({ contactId: lead.id, ok: true, callifiedLeadId: result.callifiedLeadId });
+          succeeded += 1;
+        } catch (e) {
+          const code = e.code || `CALLIFIED_API_${e.status || "ERROR"}`;
+          results.push({ contactId: lead.id, ok: false, error: e.message, code });
+          failed += 1;
+          // Fatal config/auth/budget errors should stop the batch.
+          if (
+            e.code === "AI_CALLING_BUDGET_EXCEEDED" ||
+            e.code === "AI_CALLING_DISABLED" ||
+            e.code === "CALLIFIED_NOT_CONFIGURED" ||
+            e.code === "CALLIFIED_AUTH_FAILED"
+          ) {
+            break;
+          }
+        }
+      }
+
+      res.json({ total: leads.length, succeeded, failed, results });
+    } catch (e) {
+      if (e.code === "AI_CALLING_BUDGET_EXCEEDED") {
+        return res.status(402).json({ error: e.message, code: e.code, spentCents: e.spentCents, capCents: e.capCents });
+      }
+      if (e.code === "AI_CALLING_DISABLED") {
+        return res.status(403).json({ error: e.message, code: e.code });
+      }
+      if (e.code === "CALLIFIED_NOT_CONFIGURED" || e.code === "CALLIFIED_AUTH_FAILED") {
+        return res.status(503).json({ error: e.message, code: e.code });
+      }
+      console.error("[callified] campaigns/:campaignId/dial-all error:", e.message);
+      res.status(500).json({ error: "Failed to dial campaign leads" });
+    }
+  },
+);
+
+/**
+ * GET /api/callified/leads/call-summary
+ *
+ * Batch endpoint: returns Callified call count and the latest quality score
+ * for a set of CRM contacts. Used by the Leads table to render the call-count
+ * badge and the Callified Score column without per-row requests.
+ *
+ * Query: ?contactIds=1,2,3 (comma-separated, max 100)
+ */
+router.get("/leads/call-summary", verifyToken, async (req, res) => {
+  try {
+    const raw = String(req.query.contactIds || "");
+    const ids = raw
+      .split(",")
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (ids.length === 0) {
+      return res.json({ summaries: {} });
+    }
+    const maxIds = 100;
+    const limited = ids.slice(0, maxIds);
+
+    const logs = await prisma.callLog.findMany({
+      where: {
+        tenantId: req.user.tenantId,
+        contactId: { in: limited },
+        provider: "callified",
+      },
+      orderBy: { createdAt: "desc" },
+      select: { contactId: true, notes: true },
+    });
+
+    // Keep only the most recent log per contact (Prisma returns them ordered
+    // newest-first, so the first row per contactId wins).
+    const byContact = new Map();
+    for (const log of logs) {
+      if (!byContact.has(log.contactId)) {
+        byContact.set(log.contactId, log);
+      }
+    }
+
+    const callCounts = await prisma.callLog.groupBy({
+      by: ["contactId"],
+      where: {
+        tenantId: req.user.tenantId,
+        contactId: { in: limited },
+        provider: "callified",
+      },
+      _count: { contactId: true },
+    });
+    const countByContact = new Map(callCounts.map((c) => [c.contactId, c._count.contactId]));
+
+    const summaries = {};
+    for (const contactId of limited) {
+      const log = byContact.get(contactId);
+      let lastScore = null;
+      let lastCallifiedLeadId = null;
+      if (log?.notes) {
+        try {
+          const parsed = JSON.parse(log.notes);
+          lastCallifiedLeadId = parsed.callifiedLeadId ? String(parsed.callifiedLeadId) : null;
+          const reviews = Array.isArray(parsed.reviews) ? parsed.reviews : [];
+          const goodReview = reviews.find((r) => r && !r.error && typeof r.quality_score === "number");
+          if (goodReview) {
+            lastScore = Math.round(Number(goodReview.quality_score));
+          }
+        } catch (_) {
+          // ignore malformed notes
+        }
+      }
+      summaries[contactId] = {
+        callCount: countByContact.get(contactId) || 0,
+        lastCallifiedLeadId,
+        lastScore,
+      };
+    }
+
+    res.json({ summaries });
+  } catch (e) {
+    console.error("[callified] leads/call-summary error:", e.message);
+    res.status(500).json({ error: "Failed to fetch call summaries" });
+  }
+});
+
 module.exports = router;

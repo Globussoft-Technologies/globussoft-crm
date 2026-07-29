@@ -695,6 +695,11 @@ model Contact {
   /// pre-existing rows backfill on first tick.
   aiScoreLastComputedAt DateTime?
 
+  // Callified AI calling campaign assigned to this lead. Campaigns live in
+  // Callified, so this is just the remote campaign id stored on the CRM contact
+  // to enable per-lead assignment and bulk campaign dialing.
+  callifiedCampaignId   Int?
+
   // Data enrichment
   industry       String?
   companySize    String?

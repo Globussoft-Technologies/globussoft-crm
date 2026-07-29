@@ -53,7 +53,7 @@ function validateContactInput(body, { isUpdate = false } = {}) {
     const tErr = ensureStringLength(body.treatmentOfInterest, { max: 191, field: "treatmentOfInterest" });
     if (tErr) return tErr;
   }
-  for (const idField of ["preferredLocationId", "preferredPractitionerId"]) {
+  for (const idField of ["preferredLocationId", "preferredPractitionerId", "callifiedCampaignId"]) {
     if (body[idField] !== undefined && body[idField] !== null && body[idField] !== "") {
       const v = Number(body[idField]);
       if (!Number.isInteger(v) || v <= 0) {
@@ -541,7 +541,7 @@ router.post('/', async (req, res) => {
     // String? columns reject "" where they expect null / a valid shape, so
     // normalize empty strings to null before validation. This keeps the route
     // resilient to any frontend/client that sends "" for optional fields.
-    for (const key of ["preferredLocationId", "preferredPractitionerId", "birthDate", "anniversary", "treatmentOfInterest", "gst", "stateCode", "billingStateCode"]) {
+    for (const key of ["preferredLocationId", "preferredPractitionerId", "birthDate", "anniversary", "treatmentOfInterest", "gst", "stateCode", "billingStateCode", "callifiedCampaignId"]) {
       if (req.body[key] === "") req.body[key] = null;
     }
     // #160 #166: validate before hitting Prisma so bad inputs return 400 with a
@@ -775,6 +775,8 @@ router.put('/:id', async (req, res) => {
     // for why this must be stripped before the Prisma spread.
     const customFields = req.body.customFields;
     delete req.body.customFields;
+    // Normalize empty-string optional ids to null (mirrors POST handler).
+    if (req.body.callifiedCampaignId === "") req.body.callifiedCampaignId = null;
     // #168: same input checks as create so PUT can't bypass POST validation.
     const inputErr = validateContactInput(req.body, { isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);

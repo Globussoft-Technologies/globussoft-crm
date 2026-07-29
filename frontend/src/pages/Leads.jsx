@@ -1,7 +1,7 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UserPlus, Search, ArrowRightCircle, UserCheck, Users, Plus, X, Pencil, Trash2, RefreshCw, ChevronLeft, ChevronRight, Phone, FileText } from 'lucide-react';
 import { AuthContext } from '../App';
@@ -101,6 +101,11 @@ const Leads = () => {
   const [callifiedCallLead, setCallifiedCallLead] = useState(null);
   const [callifiedDetailsLead, setCallifiedDetailsLead] = useState(null);
   const [callifiedConfigured, setCallifiedConfigured] = useState(null); // null = loading
+  const [callifiedCampaigns, setCallifiedCampaigns] = useState([]);
+  const [callifiedSummaries, setCallifiedSummaries] = useState({});
+  const [bulkDialCampaignId, setBulkDialCampaignId] = useState('');
+  const [bulkDialing, setBulkDialing] = useState(false);
+  const [bulkDialResult, setBulkDialResult] = useState(null);
   // #892 — Create Lead surface is a header CTA + drawer (not the inline
   // always-visible form). `creating` drives whether the drawer is rendered.
   const [creating, setCreating] = useState(false);
@@ -244,6 +249,22 @@ const Leads = () => {
       .then(d => setCallifiedConfigured(!!d?.isActive))
       .catch(() => setCallifiedConfigured(false));
   }, [isGeneric]);
+
+  // Load Callified campaigns for campaign assignment + bulk dial (generic only).
+  const loadCallifiedCampaigns = useCallback(async () => {
+    if (!isGeneric || !callifiedConfigured) return;
+    try {
+      const d = await fetchApi('/api/callified/campaigns/with-lead-counts');
+      const list = Array.isArray(d?.campaigns) ? d.campaigns : [];
+      setCallifiedCampaigns(list);
+    } catch {
+      setCallifiedCampaigns([]);
+    }
+  }, [isGeneric, callifiedConfigured]);
+
+  useEffect(() => {
+    loadCallifiedCampaigns();
+  }, [loadCallifiedCampaigns]);
 
   // #892 — close the Create drawer on Escape. Attached only while the drawer
   // is open so we don't trap key events for users not actively creating.
@@ -484,6 +505,45 @@ const Leads = () => {
     fetchLeads();
   };
 
+  const handleCampaignChange = async (lead, campaignId) => {
+    try {
+      await fetchApi(`/api/contacts/${lead.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callifiedCampaignId: campaignId ? Number(campaignId) : null }),
+      });
+      await fetchLeads();
+      await loadCallifiedCampaigns();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to assign campaign');
+    }
+  };
+
+  const handleBulkDial = async () => {
+    if (!bulkDialCampaignId) return;
+    const campaign = callifiedCampaigns.find(c => String(c.id) === bulkDialCampaignId);
+    const ok = await notify.confirm({
+      title: 'Dial all campaign leads?',
+      message: `This will call every lead assigned to "${campaign?.name || bulkDialCampaignId}" one by one. Continue?`,
+      confirmText: 'Dial All',
+      cancelText: 'Cancel',
+      destructive: false,
+    });
+    if (!ok) return;
+    setBulkDialing(true);
+    setBulkDialResult(null);
+    try {
+      const res = await fetchApi(`/api/callified/campaigns/${bulkDialCampaignId}/dial-all`, { method: 'POST' });
+      setBulkDialResult(res);
+      notify.success(`Dialled ${res.succeeded}/${res.total} leads`);
+      fetchLeads();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to dial campaign leads');
+    } finally {
+      setBulkDialing(false);
+    }
+  };
+
   const handleBulkAssign = async () => {
     if (selectedLeads.length === 0) return;
     await fetchApi('/api/contacts/bulk-assign', {
@@ -623,6 +683,26 @@ const Leads = () => {
     return matchesSearch && matchesSource && matchesSubBrand && matchesStage;
   });
 
+  // Batch-load Callified call summaries for visible leads (counts + last score).
+  useEffect(() => {
+    if (!isGeneric || filteredLeads.length === 0) {
+      setCallifiedSummaries({});
+      return;
+    }
+    let cancelled = false;
+    const ids = filteredLeads.map(l => l.id).slice(0, 100);
+    fetchApi(`/api/callified/leads/call-summary?contactIds=${ids.join(',')}`)
+      .then(d => {
+        if (cancelled) return;
+        setCallifiedSummaries(d?.summaries || {});
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCallifiedSummaries({});
+      });
+    return () => { cancelled = true; };
+  }, [isGeneric, filteredLeads.map(l => l.id).join(',')]);
+
   const leadsPageCount = Math.max(1, Math.ceil(filteredLeads.length / leadsPageSize));
   const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
   const paginatedLeads = filteredLeads.slice(currentLeadsPage * leadsPageSize, (currentLeadsPage + 1) * leadsPageSize);
@@ -699,6 +779,44 @@ const Leads = () => {
               per-user preference, matches the Freshsales reference UI. */}
           {!isWellness && !isTravel && (
             <ColumnPicker tableKey="leads" onColumnsChange={setVisibleColumns} />
+          )}
+          {isGeneric && callifiedConfigured && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <select
+                className="input-field"
+                value={bulkDialCampaignId}
+                onChange={e => setBulkDialCampaignId(e.target.value)}
+                disabled={bulkDialing}
+                style={{ minWidth: '200px', padding: '0.5rem', fontSize: '0.875rem' }}
+                aria-label="Select campaign to dial"
+              >
+                <option value="">Dial Campaign Leads</option>
+                {callifiedCampaigns.map(c => (
+                  <option key={c.id} value={String(c.id)}>
+                    {c.name || `Campaign ${c.id}`} {c.product_name ? `— ${c.product_name}` : ''} ({c.leadCount || 0})
+                  </option>
+                ))}
+              </select>
+              {bulkDialCampaignId && (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={handleBulkDial}
+                  disabled={bulkDialing}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.5rem 0.875rem', fontSize: '0.875rem' }}
+                >
+                  {bulkDialing ? (
+                    <>
+                      <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} /> Dialling…
+                    </>
+                  ) : (
+                    <>
+                      <Phone size={14} /> Dial All
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           )}
           <button
             type="button"
@@ -833,7 +951,8 @@ const Leads = () => {
           + leadsOptionalCols * 200
           + leadsVisibleCfCols * 200
           + (isTravel ? 320 : 0)
-          + (isAdmin ? 40 : 0);
+          + (isAdmin ? 40 : 0)
+          + (isGeneric ? 390 : 0);
         return (
       <div className="card leads-table-wrapper" style={{ overflow: 'visible' }}>
           <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
@@ -873,7 +992,9 @@ const Leads = () => {
                 {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
                 {isColVisible('aiScore') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>}
                 {isColVisible('source') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>}
-                {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', width: '90px' }}>AI Call</th>}
+                {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', minWidth: '180px' }}>Callified Campaign</th>}
+                {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', width: '110px' }}>AI Call</th>}
+                {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', width: '100px' }}>Callified Score</th>}
                 {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Sub-brand</th>}
                 {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Amount</th>}
                 {/* Generic-vertical-only Lead custom fields (Settings > Lead Fields) —
@@ -894,7 +1015,7 @@ const Leads = () => {
                 // "Customize table" picker can hide.
                 const optionalCols = ['email', 'company', 'phone', 'aiScore', 'source', 'assignedTo', 'createdAt'].filter(isColVisible).length;
                 const visibleCfCols = customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).length;
-                const colSpan = (isAdmin ? 1 : 0) + 1 /* name */ + optionalCols + 1 /* ai call */ + (isTravel ? 2 : 0) + visibleCfCols + 1 /* actions */;
+                const colSpan = (isAdmin ? 1 : 0) + 1 /* name */ + optionalCols + (isGeneric ? 3 /* campaign + ai call + score */ : 0) + (isTravel ? 2 : 0) + visibleCfCols + 1 /* actions */;
                 if (loading) {
                   return <tr><td colSpan={colSpan} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>;
                 }
@@ -954,6 +1075,26 @@ const Leads = () => {
                     </td>
                   )}
                   {isGeneric && (
+                    <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
+                      <select
+                        className="input-field"
+                        value={lead.callifiedCampaignId ? String(lead.callifiedCampaignId) : ''}
+                        onChange={e => handleCampaignChange(lead, e.target.value)}
+                        disabled={!callifiedConfigured}
+                        style={{ minWidth: '160px', padding: '0.4rem 0.6rem', fontSize: '0.8125rem' }}
+                        aria-label={`Assign Callified campaign for ${lead.name || 'lead'}`}
+                      >
+                        <option value="">—</option>
+                        {callifiedCampaigns.map(c => (
+                          <option key={c.id} value={String(c.id)}>
+                            {c.name || `Campaign ${c.id}`}
+                            {c.product_name ? ` — ${c.product_name}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  )}
+                  {isGeneric && (
                     <td style={{ padding: '1rem', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                       <button
                         onClick={() => {
@@ -968,9 +1109,35 @@ const Leads = () => {
                           ...actionIconBtn,
                           color: callifiedConfigured ? 'var(--success-color)' : 'var(--text-secondary)',
                           opacity: callifiedConfigured ? 1 : 0.6,
+                          position: 'relative',
                         }}
                       >
                         <Phone size={15} />
+                        {(() => {
+                          const count = callifiedSummaries[lead.id]?.callCount || 0;
+                          if (count <= 0) return null;
+                          return (
+                            <span style={{
+                              position: 'absolute',
+                              top: -6,
+                              right: -6,
+                              minWidth: '18px',
+                              height: '18px',
+                              padding: '0 4px',
+                              borderRadius: '999px',
+                              background: 'var(--accent-color)',
+                              color: '#fff',
+                              fontSize: '0.65rem',
+                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              border: '2px solid var(--bg-color)',
+                            }}>
+                              {count > 99 ? '99+' : count}
+                            </span>
+                          );
+                        })()}
                       </button>
                       <button
                         onClick={() => {
@@ -990,6 +1157,36 @@ const Leads = () => {
                       >
                         <FileText size={15} />
                       </button>
+                    </td>
+                  )}
+                  {isGeneric && (
+                    <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
+                      {(() => {
+                        const score = callifiedSummaries[lead.id]?.lastScore;
+                        if (score == null) {
+                          return <span style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>—</span>;
+                        }
+                        const color = score >= 4 ? 'var(--success-color)' : score >= 3 ? 'var(--warning-color)' : '#ef4444';
+                        const bg = score >= 4 ? 'rgba(16, 185, 129, 0.1)' : score >= 3 ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)';
+                        return (
+                          <span style={{
+                            padding: '0.25rem 0.75rem',
+                            borderRadius: '999px',
+                            fontSize: '0.75rem',
+                            fontWeight: 'bold',
+                            background: bg,
+                            color,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.15rem',
+                          }}>
+                            {Array.from({ length: 5 }).map((_, i) => (
+                              <span key={i} style={{ opacity: i < score ? 1 : 0.3 }}>★</span>
+                            ))}
+                            <span style={{ marginLeft: 4 }}>{score}/5</span>
+                          </span>
+                        );
+                      })()}
                     </td>
                   )}
                   {isTravel && (
@@ -1378,6 +1575,7 @@ const Leads = () => {
         {isGeneric && callifiedCallLead && (
           <CallifiedLeadCallDialog
             lead={callifiedCallLead}
+            defaultCampaignId={callifiedCallLead.callifiedCampaignId ? String(callifiedCallLead.callifiedCampaignId) : ''}
             onClose={() => setCallifiedCallLead(null)}
             onCalled={() => { /* optionally refresh lead to show updated score later */ }}
           />

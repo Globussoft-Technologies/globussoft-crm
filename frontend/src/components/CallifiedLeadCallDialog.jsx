@@ -12,7 +12,7 @@ import { useNotify } from "../utils/notify";
  *   3. Click Call → POST /api/callified/leads/:leadId/call
  *   4. Show success / error state.
  */
-export default function CallifiedLeadCallDialog({ lead, onClose, onCalled }) {
+export default function CallifiedLeadCallDialog({ lead, onClose, onCalled, defaultCampaignId = '' }) {
   const notify = useNotify();
   const [campaigns, setCampaigns] = useState([]);
   const [loadingCampaigns, setLoadingCampaigns] = useState(true);
@@ -30,7 +30,11 @@ export default function CallifiedLeadCallDialog({ lead, onClose, onCalled }) {
         if (cancelled) return;
         const list = Array.isArray(res?.campaigns) ? res.campaigns : [];
         setCampaigns(list);
-        if (list.length === 1) setSelectedCampaignId(String(list[0].id));
+        if (defaultCampaignId && list.some((c) => String(c.id) === String(defaultCampaignId))) {
+          setSelectedCampaignId(String(defaultCampaignId));
+        } else if (list.length === 1) {
+          setSelectedCampaignId(String(list[0].id));
+        }
       })
       .catch((err) => {
         if (cancelled) return;
@@ -42,7 +46,7 @@ export default function CallifiedLeadCallDialog({ lead, onClose, onCalled }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [defaultCampaignId]);
 
   const handleCall = async () => {
     if (!selectedCampaignId) {

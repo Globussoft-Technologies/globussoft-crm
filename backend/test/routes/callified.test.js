@@ -57,6 +57,8 @@ callifiedClient.initiateCall = vi.fn();
 callifiedClient.fetchCallResult = vi.fn();
 callifiedClient.checkBudgetCap = vi.fn();
 callifiedClient.isEnabledForTenant = vi.fn();
+callifiedClient.listCampaigns = vi.fn();
+callifiedClient.initiateCallForContact = vi.fn();
 
 // Prisma stubs for the auth-middleware path (verifyToken loads the user
 // + checks revokedToken) and the audit-write path.
@@ -71,6 +73,12 @@ prisma.auditLog = {
   create: vi.fn().mockResolvedValue({ id: 1 }),
   findFirst: vi.fn().mockResolvedValue(null),
 };
+prisma.contact = prisma.contact || {};
+prisma.contact.groupBy = vi.fn().mockResolvedValue([]);
+prisma.contact.findMany = vi.fn().mockResolvedValue([]);
+prisma.callLog = prisma.callLog || {};
+prisma.callLog.groupBy = vi.fn().mockResolvedValue([]);
+prisma.callLog.findMany = vi.fn().mockResolvedValue([]);
 
 const callifiedRouter = requireCJS('../../routes/callified');
 
@@ -106,12 +114,18 @@ beforeEach(() => {
   callifiedClient.fetchCallResult.mockReset();
   callifiedClient.checkBudgetCap.mockReset();
   callifiedClient.isEnabledForTenant.mockReset();
+  callifiedClient.listCampaigns.mockReset();
+  callifiedClient.initiateCallForContact.mockReset();
   prisma.user.findUnique.mockReset().mockResolvedValue({
     id: 7, role: 'ADMIN', tenantId: 1, isActive: true,
   });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.groupBy.mockReset().mockResolvedValue([]);
+  prisma.contact.findMany.mockReset().mockResolvedValue([]);
+  prisma.callLog.groupBy.mockReset().mockResolvedValue([]);
+  prisma.callLog.findMany.mockReset().mockResolvedValue([]);
 });
 
 describe('POST /api/callified/calls/initiate', () => {
@@ -461,5 +475,331 @@ describe('GET /api/callified/calls/:callId/result', () => {
     expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ code: 'CALL_NOT_FOUND' });
     expect(res.body.error).toMatch(/not found/i);
+  });
+});
+
+
+describe('GET /api/callified/campaigns/with-lead-counts', () => {
+  test('ADMIN happy path: enriches campaigns with lead counts', async () => {
+    callifiedClient.listCampaigns.mockResolvedValue([
+      { id: 101, name: 'Globussoft outbound', product_name: 'AI calling' },
+      { id: 102, name: 'RFU Umrah follow-up', product_name: null },
+    ]);
+    prisma.contact.groupBy.mockResolvedValue([
+      { callifiedCampaignId: 101, _count: { callifiedCampaignId: 3 } },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/callified/campaigns/with-lead-counts')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      campaigns: [
+        { id: 101, name: 'Globussoft outbound', product_name: 'AI calling', leadCount: 3 },
+        { id: 102, name: 'RFU Umrah follow-up', product_name: null, leadCount: 0 },
+      ],
+    });
+    expect(prisma.contact.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        by: ['callifiedCampaignId'],
+        where: expect.objectContaining({
+          tenantId: 1,
+          status: 'Lead',
+          deletedAt: null,
+          callifiedCampaignId: { not: null },
+        }),
+      }),
+    );
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('USER → 403', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7, role: 'USER', tenantId: 1, isActive: true,
+    });
+
+    const res = await request(makeApp())
+      .get('/api/callified/campaigns/with-lead-counts')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(403);
+    expect(callifiedClient.listCampaigns).not.toHaveBeenCalled();
+  });
+
+  test('CALLIFIED_NOT_CONFIGURED → 503 with structured error', async () => {
+    const err = new Error('Callified integration is not configured');
+    err.code = 'CALLIFIED_NOT_CONFIGURED';
+    callifiedClient.listCampaigns.mockRejectedValue(err);
+
+    const res = await request(makeApp())
+      .get('/api/callified/campaigns/with-lead-counts')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ code: 'CALLIFIED_NOT_CONFIGURED' });
+  });
+
+  test('CALLIFIED_AUTH_FAILED → 503 with structured error', async () => {
+    const err = new Error('Callified authentication failed');
+    err.code = 'CALLIFIED_AUTH_FAILED';
+    callifiedClient.listCampaigns.mockRejectedValue(err);
+
+    const res = await request(makeApp())
+      .get('/api/callified/campaigns/with-lead-counts')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ code: 'CALLIFIED_AUTH_FAILED' });
+  });
+});
+
+describe('POST /api/callified/campaigns/:campaignId/dial-all', () => {
+  function makeLeads(count = 2) {
+    return Array.from({ length: count }, (_, i) => ({
+      id: 1000 + i,
+      tenantId: 1,
+      status: 'Lead',
+      phone: `+91987654320${i}`,
+    }));
+  }
+
+  test('ADMIN happy path: dials every assigned lead and writes audit per success', async () => {
+    const leads = makeLeads(2);
+    prisma.contact.findMany.mockResolvedValue(leads);
+    callifiedClient.initiateCallForContact.mockResolvedValue({
+      callifiedLeadId: 2001,
+      status: 'initiated',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/callified/campaigns/101/dial-all')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      total: 2,
+      succeeded: 2,
+      failed: 0,
+    });
+    expect(callifiedClient.initiateCallForContact).toHaveBeenCalledTimes(2);
+    expect(callifiedClient.initiateCallForContact).toHaveBeenCalledWith({
+      tenantId: 1,
+      contactId: 1000,
+      campaignId: 101,
+      userId: 7,
+      interest: 'Bulk campaign dial',
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
+    const auditArgs = prisma.auditLog.create.mock.calls.map((c) => c[0].data);
+    expect(auditArgs[0]).toMatchObject({
+      entity: 'CallifiedCall',
+      action: 'INITIATE',
+      userId: 7,
+      tenantId: 1,
+    });
+  });
+
+  test('invalid campaignId (abc) → 400 INVALID_CAMPAIGN_ID', async () => {
+    const res = await request(makeApp())
+      .post('/api/callified/campaigns/abc/dial-all')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_CAMPAIGN_ID' });
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+  });
+
+  test('invalid campaignId (0) → 400 INVALID_CAMPAIGN_ID', async () => {
+    const res = await request(makeApp())
+      .post('/api/callified/campaigns/0/dial-all')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_CAMPAIGN_ID' });
+  });
+
+  test('campaign with no matching leads → empty result', async () => {
+    prisma.contact.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .post('/api/callified/campaigns/101/dial-all')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ total: 0, succeeded: 0, failed: 0, results: [] });
+    expect(callifiedClient.initiateCallForContact).not.toHaveBeenCalled();
+  });
+
+  test('USER → 403', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7, role: 'USER', tenantId: 1, isActive: true,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/callified/campaigns/101/dial-all')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(403);
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+  });
+
+  test('per-lead errors are captured and batch continues', async () => {
+    const leads = makeLeads(2);
+    prisma.contact.findMany.mockResolvedValue(leads);
+    callifiedClient.initiateCallForContact
+      .mockResolvedValueOnce({ callifiedLeadId: 2001, status: 'initiated' })
+      .mockRejectedValueOnce(Object.assign(new Error('No dialer available'), { code: 'DIALER_BUSY', status: 503 }));
+
+    const res = await request(makeApp())
+      .post('/api/callified/campaigns/101/dial-all')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 2, succeeded: 1, failed: 1 });
+    expect(res.body.results[1]).toMatchObject({ ok: false, code: 'DIALER_BUSY' });
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('AI_CALLING_BUDGET_EXCEEDED stops batch and surfaces in results', async () => {
+    const leads = makeLeads(3);
+    prisma.contact.findMany.mockResolvedValue(leads);
+    const err = new Error('Cap reached');
+    err.code = 'AI_CALLING_BUDGET_EXCEEDED';
+    err.spentCents = 11000;
+    err.capCents = 10000;
+    callifiedClient.initiateCallForContact.mockRejectedValue(err);
+
+    const res = await request(makeApp())
+      .post('/api/callified/campaigns/101/dial-all')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      total: 3,
+      succeeded: 0,
+      failed: 1,
+    });
+    expect(res.body.results[0]).toMatchObject({
+      ok: false,
+      code: 'AI_CALLING_BUDGET_EXCEEDED',
+    });
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('AI_CALLING_DISABLED stops batch and surfaces in results', async () => {
+    const leads = makeLeads(1);
+    prisma.contact.findMany.mockResolvedValue(leads);
+    const err = new Error('Disabled');
+    err.code = 'AI_CALLING_DISABLED';
+    callifiedClient.initiateCallForContact.mockRejectedValue(err);
+
+    const res = await request(makeApp())
+      .post('/api/callified/campaigns/101/dial-all')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.results[0]).toMatchObject({
+      ok: false,
+      code: 'AI_CALLING_DISABLED',
+    });
+  });
+
+  test('CALLIFIED_NOT_CONFIGURED stops batch and surfaces in results', async () => {
+    const leads = makeLeads(1);
+    prisma.contact.findMany.mockResolvedValue(leads);
+    const err = new Error('Not configured');
+    err.code = 'CALLIFIED_NOT_CONFIGURED';
+    callifiedClient.initiateCallForContact.mockRejectedValue(err);
+
+    const res = await request(makeApp())
+      .post('/api/callified/campaigns/101/dial-all')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.results[0]).toMatchObject({
+      ok: false,
+      code: 'CALLIFIED_NOT_CONFIGURED',
+    });
+  });
+});
+
+describe('GET /api/callified/leads/call-summary', () => {
+  test('happy path: returns call counts + latest score per contact', async () => {
+    prisma.callLog.findMany.mockResolvedValue([
+      {
+        contactId: 11,
+        notes: JSON.stringify({
+          callifiedLeadId: 2001,
+          reviews: [{ quality_score: 4.2, error: null }],
+        }),
+      },
+      {
+        contactId: 11,
+        notes: JSON.stringify({ callifiedLeadId: 1999, reviews: [] }),
+      },
+      {
+        contactId: 12,
+        notes: JSON.stringify({
+          callifiedLeadId: 2002,
+          reviews: [{ quality_score: 2.5 }],
+        }),
+      },
+    ]);
+    prisma.callLog.groupBy.mockResolvedValue([
+      { contactId: 11, _count: { contactId: 2 } },
+      { contactId: 12, _count: { contactId: 1 } },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/callified/leads/call-summary?contactIds=11,12,13')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      summaries: {
+        11: { callCount: 2, lastCallifiedLeadId: '2001', lastScore: 4 },
+        12: { callCount: 1, lastCallifiedLeadId: '2002', lastScore: 3 },
+        13: { callCount: 0, lastCallifiedLeadId: null, lastScore: null },
+      },
+    });
+  });
+
+  test('empty contactIds → { summaries: {} }', async () => {
+    const res = await request(makeApp())
+      .get('/api/callified/leads/call-summary')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ summaries: {} });
+    expect(prisma.callLog.findMany).not.toHaveBeenCalled();
+  });
+
+  test('non-numeric ids are ignored', async () => {
+    prisma.callLog.groupBy.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/callified/leads/call-summary?contactIds=abc,,0,-1')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ summaries: {} });
+  });
+
+  test('max 100 ids respected', async () => {
+    prisma.callLog.groupBy.mockResolvedValue([]);
+    const ids = Array.from({ length: 150 }, (_, i) => i + 1).join(',');
+
+    await request(makeApp())
+      .get(`/api/callified/leads/call-summary?contactIds=${ids}`)
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(prisma.callLog.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          contactId: { in: expect.arrayContaining([1, 100]) },
+        }),
+      }),
+    );
   });
 });

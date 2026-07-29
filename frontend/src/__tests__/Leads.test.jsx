@@ -936,3 +936,165 @@ describe('Leads — travel tenant Amount column reflects actual payments', () =>
     expect(hasINRInRow).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Callified AI-campaign surface (#feat/callifiedleads): campaign column,
+// bulk-dial dropdown, call-count badge, and last-score column.
+// ---------------------------------------------------------------------------
+const CALLIFIED_LEADS = [
+  { id: 11, name: 'Alice Smith', email: 'alice@acme.test', company: 'Acme Corp', aiScore: 88, source: 'Organic', assignedToId: null, callifiedCampaignId: 101, createdAt: '2026-05-01T10:00:00Z' },
+  { id: 12, name: 'Bob Jones', email: 'bob@globex.test', company: 'Globex', aiScore: 55, source: 'Referral', assignedToId: null, callifiedCampaignId: null, createdAt: '2026-05-02T10:00:00Z' },
+];
+
+const CALLIFIED_CAMPAIGNS = [
+  { id: 101, name: 'Globussoft outbound', product_name: 'AI calling', leadCount: 1 },
+  { id: 102, name: 'RFU Umrah follow-up', product_name: null, leadCount: 0 },
+];
+
+const CALLIFIED_SUMMARIES = {
+  11: { callCount: 3, lastCallifiedLeadId: '2001', lastScore: 4 },
+  12: { callCount: 0, lastCallifiedLeadId: null, lastScore: null },
+};
+
+function callifiedFetchMock(url, opts) {
+  if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+    return Promise.resolve(CALLIFIED_LEADS);
+  }
+  if (url === '/api/staff' && !opts) return Promise.resolve([]);
+  if (url === '/api/integrations/callified/config' && !opts) {
+    return Promise.resolve({ isActive: true, baseUrl: 'https://app.callified.ai' });
+  }
+  if (url === '/api/callified/campaigns/with-lead-counts' && !opts) {
+    return Promise.resolve({ campaigns: CALLIFIED_CAMPAIGNS });
+  }
+  if (typeof url === 'string' && url.startsWith('/api/callified/leads/call-summary') && !opts) {
+    return Promise.resolve({ summaries: CALLIFIED_SUMMARIES });
+  }
+  if (opts?.method === 'PUT' || opts?.method === 'POST') return Promise.resolve({ ok: true });
+  return Promise.resolve([]);
+}
+
+describe('Leads — Callified campaign column + bulk dial + call summary', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(callifiedFetchMock);
+    notifyError.mockReset();
+    notifyInfo.mockReset();
+    notifySuccess.mockReset();
+  });
+
+  it('renders Callified Campaign column and per-lead campaign dropdown for generic tenant', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    // Column header rendered.
+    expect(screen.getByText('Callified Campaign')).toBeInTheDocument();
+
+    // Per-row selects rendered with aria-label containing the lead name.
+    const aliceSelect = screen.getByLabelText(/Assign Callified campaign for Alice Smith/i);
+    expect(aliceSelect).toBeInTheDocument();
+    expect(aliceSelect.value).toBe('101');
+
+    const bobSelect = screen.getByLabelText(/Assign Callified campaign for Bob Jones/i);
+    expect(bobSelect).toBeInTheDocument();
+    expect(bobSelect.value).toBe('');
+  });
+
+  it('changing a lead campaign fires PUT /api/contacts/:id and refreshes campaign counts', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    const bobSelect = screen.getByLabelText(/Assign Callified campaign for Bob Jones/i);
+    fireEvent.change(bobSelect, { target: { value: '102' } });
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/contacts/12' && opts?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.callifiedCampaignId).toBe(102);
+    });
+
+    // Campaign counts are re-fetched after assignment.
+    await waitFor(() => {
+      const campaignFetch = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/callified/campaigns/with-lead-counts' && !opts,
+      );
+      expect(campaignFetch).toBeDefined();
+    });
+  });
+
+  it('renders bulk Dial Campaign Leads dropdown with lead counts', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    const bulkSelect = screen.getByLabelText(/Select campaign to dial/i);
+    expect(bulkSelect).toBeInTheDocument();
+
+    // Options include the placeholder + campaigns with lead counts.
+    const options = Array.from(bulkSelect.querySelectorAll('option'));
+    expect(options.some(o => o.textContent.includes('Globussoft outbound') && o.textContent.includes('(1)'))).toBe(true);
+    expect(options.some(o => o.textContent.includes('RFU Umrah follow-up') && o.textContent.includes('(0)'))).toBe(true);
+  });
+
+  it('selecting a campaign and clicking Dial All opens confirm and POSTs bulk dial', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    const bulkSelect = screen.getByLabelText(/Select campaign to dial/i);
+    fireEvent.change(bulkSelect, { target: { value: '101' } });
+
+    const dialAllBtn = screen.getByRole('button', { name: /Dial All/i });
+    expect(dialAllBtn).toBeInTheDocument();
+
+    fetchApiMock.mockClear();
+    fireEvent.click(dialAllBtn);
+
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/callified/campaigns/101/dial-all' && opts?.method === 'POST',
+      );
+      expect(postCall).toBeDefined();
+    });
+  });
+
+  it('renders AI Call count badge and Callified Score column from summaries', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    // AI Call column header.
+    expect(screen.getByText('AI Call')).toBeInTheDocument();
+    // Callified Score column header.
+    expect(screen.getByText('Callified Score')).toBeInTheDocument();
+
+    // Alice has lastScore=4 → 4/5 rendered.
+    expect(screen.getByText('4/5')).toBeInTheDocument();
+
+    // Bob has no score → dash rendered (we assert the column exists above).
+    const scoreCells = screen.getAllByText('—');
+    expect(scoreCells.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('wellness tenant does not render Callified campaign UI', async () => {
+    const wellnessAuth = {
+      tenant: { id: 2, vertical: 'wellness', name: 'Enhanced Wellness' },
+      user: { id: 1, role: 'ADMIN' },
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) return Promise.resolve([]);
+      if (url === '/api/staff' && !opts) return Promise.resolve([]);
+      if (url === '/api/wellness/services' && !opts) return Promise.resolve([]);
+      if (url === '/api/wellness/locations' && !opts) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    renderLeads(wellnessAuth);
+    await waitFor(() => expect(screen.getByText(/No leads found/i)).toBeInTheDocument());
+
+    expect(screen.queryByText('Callified Campaign')).toBeNull();
+    expect(screen.queryByLabelText(/Select campaign to dial/i)).toBeNull();
+    expect(screen.queryByText('Callified Score')).toBeNull();
+  });
+});

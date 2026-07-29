@@ -582,6 +582,32 @@ describe('PUT /api/contacts/:id — update', () => {
     expect(writeAuditMock).toHaveBeenCalledOnce();
     expect(writeAuditMock.mock.calls[0][1]).toBe('UPDATE');
   });
+
+  test('callifiedCampaignId empty string "" is normalized to null', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.contact.update.mockResolvedValueOnce({ ...SAMPLE_CONTACT, callifiedCampaignId: null });
+
+    const res = await request(makeApp())
+      .put('/api/contacts/9001')
+      .send({ callifiedCampaignId: '' });
+
+    expect(res.status).toBe(200);
+    const updateData = prisma.contact.update.mock.calls[0][0].data;
+    expect(updateData.callifiedCampaignId).toBeNull();
+  });
+
+  test('callifiedCampaignId numeric value is persisted', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.contact.update.mockResolvedValueOnce({ ...SAMPLE_CONTACT, callifiedCampaignId: 42 });
+
+    const res = await request(makeApp())
+      .put('/api/contacts/9001')
+      .send({ callifiedCampaignId: 42 });
+
+    expect(res.status).toBe(200);
+    const updateData = prisma.contact.update.mock.calls[0][0].data;
+    expect(updateData.callifiedCampaignId).toBe(42);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────

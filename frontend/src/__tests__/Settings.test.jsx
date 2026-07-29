@@ -634,11 +634,12 @@ describe("<Settings /> — extended card coverage", () => {
     expect(screen.getByText("Leave Requests")).toBeInTheDocument();
     expect(screen.getByText("Expense Reports")).toBeInTheDocument();
 
-    // Channels
+    // Channels (the Callified integration card also has an "Email" fallback
+    // label, so use getAllByText to avoid a multiple-match error).
     expect(screen.getByText("In-App Bell")).toBeInTheDocument();
     expect(screen.getByText("Real-Time Updates")).toBeInTheDocument();
     expect(screen.getByText("Browser Push")).toBeInTheDocument();
-    expect(screen.getByText("Email")).toBeInTheDocument();
+    expect(screen.getAllByText("Email").length).toBeGreaterThanOrEqual(1);
   });
 
   // 22 — Notification Preferences: Save PUTs /api/notifications/preferences with state

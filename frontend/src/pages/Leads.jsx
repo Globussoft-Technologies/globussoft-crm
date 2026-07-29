@@ -3,10 +3,12 @@ import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Search, ArrowRightCircle, UserCheck, Users, Plus, X, Pencil, Trash2, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
+import { UserPlus, Search, ArrowRightCircle, UserCheck, Users, Plus, X, Pencil, Trash2, RefreshCw, ChevronLeft, ChevronRight, Phone, FileText } from 'lucide-react';
 import { AuthContext } from '../App';
 import ColumnPicker from '../components/ColumnPicker';
 import TopScrollSync from '../components/TopScrollSync';
+import CallifiedLeadCallDialog from '../components/CallifiedLeadCallDialog';
+import CallifiedCallDetailsDrawer from '../components/CallifiedCallDetailsDrawer';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
 // #600 — wellness vertical replaces the generic CRM source taxonomy with one
@@ -79,6 +81,8 @@ const Leads = () => {
   const auth = useContext(AuthContext);
   const isWellness = auth?.tenant?.vertical === 'wellness';
   const isTravel = auth?.tenant?.vertical === 'travel';
+  // Callified AI calling is only available in the generic CRM vertical.
+  const isGeneric = !isWellness && !isTravel;
   // Only ADMINs may assign / reassign leads. All other roles see the
   // assignee name as plain text and have no checkbox / bulk-assign surface.
   const isAdmin = auth?.user?.role === 'ADMIN';
@@ -93,6 +97,10 @@ const Leads = () => {
   const [pageInput, setPageInput] = useState('1');
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [bulkAgent, setBulkAgent] = useState('');
+  // Callified AI calling state
+  const [callifiedCallLead, setCallifiedCallLead] = useState(null);
+  const [callifiedDetailsLead, setCallifiedDetailsLead] = useState(null);
+  const [callifiedConfigured, setCallifiedConfigured] = useState(null); // null = loading
   // #892 — Create Lead surface is a header CTA + drawer (not the inline
   // always-visible form). `creating` drives whether the drawer is rendered.
   const [creating, setCreating] = useState(false);
@@ -225,6 +233,17 @@ const Leads = () => {
       .then(d => setCustomFieldDefs(Array.isArray(d) ? d : []))
       .catch(() => setCustomFieldDefs([]));
   }, [isWellness, isTravel]);
+
+  // Check whether Callified AI calling is configured for this tenant (generic only).
+  useEffect(() => {
+    if (!isGeneric) {
+      setCallifiedConfigured(false);
+      return;
+    }
+    fetchApi('/api/integrations/callified/config')
+      .then(d => setCallifiedConfigured(!!d?.isActive))
+      .catch(() => setCallifiedConfigured(false));
+  }, [isGeneric]);
 
   // #892 — close the Create drawer on Escape. Attached only while the drawer
   // is open so we don't trap key events for users not actively creating.
@@ -364,7 +383,7 @@ const Leads = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...newLead, name: trimmedName, phone: phoneOut, countryCode: undefined }),
       });
-      setNewLead({ name: '', email: '', company: '', title: '', countryCode: '+1', phone: '', source: 'Organic', status: 'Lead', customFields: {} });
+      setNewLead({ name: '', email: '', company: '', title: '', countryCode: isWellness || isTravel ? '+91' : '+1', phone: '', source: isWellness ? 'walk-in' : isTravel ? 'tmc_registration' : 'Organic', status: 'Lead', treatmentOfInterest: '', preferredLocationId: '', preferredPractitionerId: '', customFields: {} });
       // #892 — close the drawer on successful create; the list refresh
       // below puts the new row at the top so the user sees the result.
       setCreating(false);
@@ -378,10 +397,23 @@ const Leads = () => {
     // Convert button must move the lead one step (to Prospect), not jump
     // straight to Customer. ConvertedLeads.jsx defaults to the "Prospect"
     // tab, so this is also where the user expects to find the row next.
+    const body = { status: 'Prospect' };
+
+    // If this lead has a Callified AI call, surface "callified" as the source
+    // so converted-lead attribution reflects the AI call channel. Generic vertical only.
+    if (isGeneric) {
+      const hasCallifiedCall = await fetchApi(`/api/callified/calls/lead/${id}/latest`)
+        .then(res => !!res?.callifiedLeadId)
+        .catch(() => false);
+      if (hasCallifiedCall) {
+        body.source = 'callified';
+      }
+    }
+
     await fetchApi(`/api/contacts/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'Prospect' }),
+      body: JSON.stringify(body),
     });
     fetchLeads();
   };
@@ -841,6 +873,7 @@ const Leads = () => {
                 {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
                 {isColVisible('aiScore') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>}
                 {isColVisible('source') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>}
+                {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', width: '90px' }}>AI Call</th>}
                 {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Sub-brand</th>}
                 {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Amount</th>}
                 {/* Generic-vertical-only Lead custom fields (Settings > Lead Fields) —
@@ -861,7 +894,7 @@ const Leads = () => {
                 // "Customize table" picker can hide.
                 const optionalCols = ['email', 'company', 'phone', 'aiScore', 'source', 'assignedTo', 'createdAt'].filter(isColVisible).length;
                 const visibleCfCols = customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).length;
-                const colSpan = (isAdmin ? 1 : 0) + 1 /* name */ + optionalCols + (isTravel ? 2 : 0) + visibleCfCols + 1 /* actions */;
+                const colSpan = (isAdmin ? 1 : 0) + 1 /* name */ + optionalCols + 1 /* ai call */ + (isTravel ? 2 : 0) + visibleCfCols + 1 /* actions */;
                 if (loading) {
                   return <tr><td colSpan={colSpan} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>;
                 }
@@ -918,6 +951,45 @@ const Leads = () => {
                       }}>
                         {lead.source || 'Organic'}
                       </span>
+                    </td>
+                  )}
+                  {isGeneric && (
+                    <td style={{ padding: '1rem', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => {
+                          if (!callifiedConfigured) {
+                            notify.info('Configure Callified in Settings → Integrations to make AI calls');
+                            return;
+                          }
+                          setCallifiedCallLead(lead);
+                        }}
+                        title={callifiedConfigured ? `Call ${lead.name || 'lead'} via AI` : 'Configure Callified settings'}
+                        style={{
+                          ...actionIconBtn,
+                          color: callifiedConfigured ? 'var(--success-color)' : 'var(--text-secondary)',
+                          opacity: callifiedConfigured ? 1 : 0.6,
+                        }}
+                      >
+                        <Phone size={15} />
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!callifiedConfigured) {
+                            notify.info('Configure Callified in Settings → Integrations to view call details');
+                            return;
+                          }
+                          setCallifiedDetailsLead(lead);
+                        }}
+                        title={callifiedConfigured ? `View Callified call details for ${lead.name || 'lead'}` : 'Configure Callified settings'}
+                        style={{
+                          ...actionIconBtn,
+                          marginLeft: 6,
+                          color: callifiedConfigured ? 'var(--accent-color)' : 'var(--text-secondary)',
+                          opacity: callifiedConfigured ? 1 : 0.6,
+                        }}
+                      >
+                        <FileText size={15} />
+                      </button>
                     </td>
                   )}
                   {isTravel && (
@@ -1148,25 +1220,23 @@ const Leads = () => {
                   <input type="text" placeholder="Job Title" maxLength={200} className="input-field" value={newLead.title} onChange={e => handleChange('title', e.target.value)} />
                 )}
                 {/* Phone field — required for wellness (Indian mobile validation),
-                    optional for travel (any format accepted). */}
-                {(isWellness || isTravel) && (
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <select className="input-field" value={newLead.countryCode} onChange={e => handleChange('countryCode', e.target.value)} style={{ width: '100px' }}>
-                      {COUNTRY_CODES.map(cc => (
-                        <option key={cc.code} value={cc.code}>{cc.code}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="tel"
-                      placeholder={isWellness ? 'Phone (10-digit mobile, e.g. 9876543210)' : 'Phone (optional)'}
-                      required={isWellness}
-                      className="input-field"
-                      value={newLead.phone}
-                      onChange={e => handleChange('phone', e.target.value)}
-                      style={{ flex: 1 }}
-                    />
-                  </div>
-                )}
+                    optional for travel and generic (any format accepted). */}
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <select className="input-field" value={newLead.countryCode} onChange={e => handleChange('countryCode', e.target.value)} style={{ width: '100px' }}>
+                    {COUNTRY_CODES.map(cc => (
+                      <option key={cc.code} value={cc.code}>{cc.code}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="tel"
+                    placeholder={isWellness ? 'Phone (10-digit mobile, e.g. 9876543210)' : 'Phone (optional)'}
+                    required={isWellness}
+                    className="input-field"
+                    value={newLead.phone}
+                    onChange={e => handleChange('phone', e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                </div>
                 <select
                   className="input-field"
                   name="source"
@@ -1304,6 +1374,20 @@ const Leads = () => {
               </form>
             </div>
           </div>
+        )}
+        {isGeneric && callifiedCallLead && (
+          <CallifiedLeadCallDialog
+            lead={callifiedCallLead}
+            onClose={() => setCallifiedCallLead(null)}
+            onCalled={() => { /* optionally refresh lead to show updated score later */ }}
+          />
+        )}
+
+        {isGeneric && callifiedDetailsLead && (
+          <CallifiedCallDetailsDrawer
+            lead={callifiedDetailsLead}
+            onClose={() => setCallifiedDetailsLead(null)}
+          />
         )}
     </div>
   );

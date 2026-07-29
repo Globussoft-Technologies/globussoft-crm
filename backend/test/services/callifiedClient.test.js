@@ -809,3 +809,28 @@ describe('initiateCall / fetchCallResult — getCallifiedKey integration (S69)',
     logSpy.mockRestore();
   });
 });
+
+describe('phone normalization', () => {
+  test('normalizeCallifiedPhone strips spaces and keeps Indian E.164 format', () => {
+    const c = loadClient();
+    expect(c.normalizeCallifiedPhone('+91 9176955432')).toBe('+919176955432');
+    expect(c.normalizeCallifiedPhone('+91 9876543210')).toBe('+919876543210');
+    expect(c.normalizeCallifiedPhone('9876543210')).toBe('+919876543210');
+    expect(c.normalizeCallifiedPhone(' 98765 43210 ')).toBe('+919876543210');
+  });
+
+  test('normalizeCallifiedPhone preserves landline and longer international numbers', () => {
+    const c = loadClient();
+    expect(c.normalizeCallifiedPhone('011-1234-5678')).toBe('01112345678');
+    expect(c.normalizeCallifiedPhone('+1 555 123 4567')).toBe('+15551234567');
+    expect(c.normalizeCallifiedPhone('+44 20 7946 0958')).toBe('+442079460958');
+  });
+
+  test('isNormalizedPhoneFormat rejects space-containing numbers', () => {
+    const c = loadClient();
+    expect(c.isNormalizedPhoneFormat('+919176955432')).toBe(true);
+    expect(c.isNormalizedPhoneFormat('9876543210')).toBe(false); // would normalize to +91...
+    expect(c.isNormalizedPhoneFormat('+91 9176955432')).toBe(false);
+    expect(c.isNormalizedPhoneFormat('+91-9176955432')).toBe(false);
+  });
+});

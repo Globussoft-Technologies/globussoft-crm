@@ -536,6 +536,14 @@ router.post('/', async (req, res) => {
     // LeadCustomFieldValue AFTER the contact create succeeds (see below).
     const customFields = req.body.customFields;
     delete req.body.customFields;
+    // #600 / #557 follow-up: the Leads form sends wellness-only optional fields
+    // as empty strings even in the generic vertical. Prisma Int? / DateTime? /
+    // String? columns reject "" where they expect null / a valid shape, so
+    // normalize empty strings to null before validation. This keeps the route
+    // resilient to any frontend/client that sends "" for optional fields.
+    for (const key of ["preferredLocationId", "preferredPractitionerId", "birthDate", "anniversary", "treatmentOfInterest", "gst", "stateCode", "billingStateCode"]) {
+      if (req.body[key] === "") req.body[key] = null;
+    }
     // #160 #166: validate before hitting Prisma so bad inputs return 400 with a
     // clear code instead of a 500 from the DB layer.
     const inputErr = validateContactInput(req.body, { isUpdate: false });

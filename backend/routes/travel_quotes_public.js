@@ -81,6 +81,7 @@ const { getFrontendUrlFromRequest } = require('../lib/requestOrigin');
 // Best-effort customer delivery of the advance-payment link (email + WhatsApp).
 const { sendEmail } = require('../lib/emailSender');
 const waWebClient = require('../services/whatsappWebClient');
+const { composeQuoteBreakdown } = require('../lib/travelPricing');
 
 // Advance share we ask the customer to pay on accept to confirm the booking.
 const ADVANCE_PCT = 0.5; // 50%
@@ -351,8 +352,10 @@ async function loadQuoteByShareToken(shareToken) {
 /**
  * Project a quote + lines into the customer-visible envelope. Strips
  * operator-only fields (supplierId, internal notes, margin %, tenantId).
+ * Adds the Issue 11 worked-example pricing breakdown so customers can see
+ * base → season → markup → final.
  */
-function customerEnvelope(quote, contact) {
+function customerEnvelope(quote, contact, breakdown) {
   const lines = (quote.lines || []).map((l) => ({
     id: l.id,
     lineType: l.lineType,
@@ -371,10 +374,12 @@ function customerEnvelope(quote, contact) {
       totalAmount: quote.totalAmount,
       currency: quote.currency,
       validUntil: quote.validUntil,
+      tripDate: quote.tripDate || null,
       createdAt: quote.createdAt,
       updatedAt: quote.updatedAt,
     },
     lines,
+    breakdown: breakdown || null,
     customer: contact
       ? { name: contact.name || contact.email || '' }
       : null,
@@ -654,6 +659,26 @@ router.get('/quote/:shareToken', async (req, res) => {
       // Non-fatal — render without customer name
     }
 
+    // Issue 11 — load active seasons + markup rules and compose the same
+    // worked-example breakdown shown to operators.
+    let breakdown = null;
+    try {
+      const [seasons, rules] = await Promise.all([
+        prisma.travelSeasonCalendar.findMany({
+          where: { tenantId: quote.tenantId, subBrand: quote.subBrand },
+          orderBy: { id: 'asc' },
+        }),
+        prisma.travelMarkupRule.findMany({
+          where: { tenantId: quote.tenantId, subBrand: quote.subBrand, isActive: true },
+          orderBy: [{ priority: 'asc' }, { id: 'asc' }],
+        }),
+      ]);
+      breakdown = composeQuoteBreakdown(quote, quote.lines || [], seasons, rules);
+    } catch (e) {
+      // Fail-soft — the envelope is still useful without the breakdown.
+      console.error('[travel-quotes-public] breakdown error (non-fatal):', e.message);
+    }
+
     // G124 — DOCUMENT_VIEW audit row for the customer-facing share-token
     // landing. Anonymous viewer (no JWT) → userId=null + actorType=customer.
     // Captures the contact email (if resolvable) + IP + UA + truncated share
@@ -671,7 +696,7 @@ router.get('/quote/:shareToken', async (req, res) => {
       extra: { subBrand: quote.subBrand, status: quote.status },
     });
 
-    return res.json(customerEnvelope(quote, contact));
+    return res.json(customerEnvelope(quote, contact, breakdown));
   } catch (e) {
     console.error('[travel-quotes-public] GET error:', e.message);
     return res.status(500).json({ error: 'Failed to load quote', code: 'INTERNAL_ERROR' });

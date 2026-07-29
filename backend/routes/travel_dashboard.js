@@ -15,6 +15,7 @@
 //     landingPages: { total, published },
 //     costMaster:   { activeRows, bySubBrand: { tmc, rfu, ... } },
 //     pricingRules: { seasons, markupRules },
+//     webCheckins:  { total, pending, done, missed },
 //     recentTrips:  [{ id, tripCode, destination, departDate, status }, ...]  // newest 5
 //   }
 //
@@ -59,6 +60,60 @@ function flattenGroupCount(rows, key) {
     out[r[key]] = r._count?._all ?? 0;
   }
   return out;
+}
+
+// WebCheckin has no direct `subBrand` column — brand lives on the parent
+// Itinerary. Resolve the visible itinerary id-set when the caller is
+// sub-brand-scoped, then count check-in rows into the dashboard tile
+// buckets: total / pending / done / missed.
+async function computeWebCheckinSummary(tenantId, allowed) {
+  const baseWhere = { tenantId };
+  if (allowed instanceof Set) {
+    if (allowed.size === 0) {
+      return { total: 0, pending: 0, done: 0, missed: 0 };
+    }
+    const visibleItins = await prisma.itinerary.findMany({
+      where: { tenantId, subBrand: { in: [...allowed] } },
+      select: { id: true },
+    });
+    if (visibleItins.length === 0) {
+      return { total: 0, pending: 0, done: 0, missed: 0 };
+    }
+    baseWhere.itineraryId = { in: visibleItins.map((i) => i.id) };
+  }
+
+  const now = new Date();
+  const pendingStatuses = ["pending", "reminded", "in-progress"];
+
+  const [total, done, missed, pending] = await Promise.all([
+    prisma.webCheckin.count({ where: baseWhere }),
+    prisma.webCheckin.count({
+      where: {
+        ...baseWhere,
+        OR: [{ deliveredAt: { not: null } }, { status: "done" }],
+      },
+    }),
+    prisma.webCheckin.count({
+      where: {
+        ...baseWhere,
+        OR: [
+          { status: { in: ["fallback-agent", "failed"] } },
+          {
+            AND: [{ status: { in: pendingStatuses } }, { windowOpenAt: { lt: now } }],
+          },
+        ],
+      },
+    }),
+    prisma.webCheckin.count({
+      where: {
+        ...baseWhere,
+        status: { in: pendingStatuses },
+        windowOpenAt: { gte: now },
+      },
+    }),
+  ]);
+
+  return { total, pending, done, missed };
 }
 
 router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
@@ -119,6 +174,7 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
       costMasterBySubBrand,
       seasonCount,
       markupRuleCount,
+      webCheckins,
       recentTripsRaw,
     ] = await Promise.all([
       prisma.tmcTrip.count({ where: tmcWhere() }),
@@ -161,6 +217,7 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
       prisma.travelMarkupRule.count({
         where: scoped(req, allowed, { isActive: true }),
       }),
+      computeWebCheckinSummary(tenantId, allowed),
       prisma.tmcTrip.findMany({
         where: tmcWhere(),
         orderBy: { createdAt: "desc" },
@@ -202,6 +259,7 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
         seasons: seasonCount,
         markupRules: markupRuleCount,
       },
+      webCheckins: webCheckins,
       recentTrips: recentTripsRaw,
     });
   } catch (e) {

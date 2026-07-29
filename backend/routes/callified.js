@@ -23,6 +23,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const callifiedClient = require("../services/callifiedClient");
 const { writeAudit } = require("../lib/audit");
 const { resolveSubBrand } = require("../lib/subBrandResolve");
+const prisma = require("../lib/prisma");
 
 // Sub-brand isolation guard imported from ../lib/subBrandResolve (tick #106
 // rule-of-3 promotion — previously inlined here, in ratehawk.js, and in
@@ -192,6 +193,233 @@ router.get("/enabled", verifyToken, async (req, res) => {
   } catch (e) {
     console.error("[callified] enabled error:", e.message);
     res.status(500).json({ error: "Failed to read enabled flag" });
+  }
+});
+
+/**
+ * GET /api/callified/campaigns
+ *
+ * List active Callified campaigns so the CRM leads page can pick one before
+ * dialing. Open to ADMIN/MANAGER — choosing a campaign costs real money.
+ */
+router.get(
+  "/campaigns",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const campaigns = await callifiedClient.listCampaigns(req.user.tenantId);
+      res.json({ campaigns: campaigns || [] });
+    } catch (e) {
+      if (e.code === "CALLIFIED_NOT_CONFIGURED" || e.code === "CALLIFIED_AUTH_FAILED") {
+        return res.status(503).json({ error: e.message, code: e.code });
+      }
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[callified] campaigns error:", e.message);
+      res.status(500).json({ error: "Failed to fetch campaigns" });
+    }
+  },
+);
+
+/**
+ * POST /api/callified/leads/:leadId/call
+ *
+ * Initiates an outbound AI call to a CRM lead/contact via Callified.
+ * Body: { campaignId (required), interest? }
+ * Creates a Callified lead, enrolls it in the chosen campaign, dials, and
+ * persists a CRM CallLog row.
+ */
+router.post(
+  "/leads/:leadId/call",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const { leadId } = req.params;
+      const { campaignId, interest } = req.body || {};
+
+      if (!campaignId) {
+        return res.status(400).json({ error: "campaignId is required", code: "MISSING_CAMPAIGN_ID" });
+      }
+
+      const result = await callifiedClient.initiateCallForContact({
+        tenantId: req.user.tenantId,
+        contactId: leadId,
+        campaignId,
+        userId: req.user.userId,
+        interest,
+      });
+
+      await writeAudit(
+        "CallifiedCall",
+        "INITIATE",
+        String(result.callifiedLeadId),
+        req.user.userId,
+        req.user.tenantId,
+        {
+          contactId: Number(leadId),
+          campaignId: Number(campaignId),
+          interest: interest || null,
+        },
+      );
+
+      res.json(result);
+    } catch (e) {
+      if (e.code === "AI_CALLING_BUDGET_EXCEEDED") {
+        return res.status(402).json({
+          error: e.message,
+          code: "AI_CALLING_BUDGET_EXCEEDED",
+          spentCents: e.spentCents,
+          capCents: e.capCents,
+        });
+      }
+      if (e.code === "AI_CALLING_DISABLED") {
+        return res.status(403).json({ error: e.message, code: "AI_CALLING_DISABLED" });
+      }
+      if (e.code === "CALLIFIED_NOT_CONFIGURED" || e.code === "CALLIFIED_AUTH_FAILED") {
+        return res.status(503).json({ error: e.message, code: e.code });
+      }
+      if (e.code === "MISSING_PHONE" || e.code === "CONTACT_NOT_FOUND") {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[callified] leads/:leadId/call error:", e.message);
+      res.status(500).json({ error: "Failed to initiate call" });
+    }
+  },
+);
+
+/**
+ * GET /api/callified/calls/:callId/details
+ *
+ * Fetch Callified transcripts + AI reviews for a previously created Callified
+ * lead (callId). Updates the CRM CallLog and returns the full details object.
+ */
+router.get(
+  "/calls/:callId/details",
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { callId } = req.params;
+      const callLog = await prisma.callLog.findFirst({
+        where: {
+          tenantId: req.user.tenantId,
+          provider: "callified",
+          providerCallId: String(callId),
+        },
+      });
+
+      const details = await callifiedClient.fetchAndStoreCallDetails({
+        tenantId: req.user.tenantId,
+        callifiedLeadId: callId,
+        contactId: callLog?.contactId || null,
+        updateScore: true,
+      });
+
+      res.json(details);
+    } catch (e) {
+      if (e.code === "CALLIFIED_NOT_CONFIGURED" || e.code === "CALLIFIED_AUTH_FAILED") {
+        return res.status(503).json({ error: e.message, code: e.code });
+      }
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[callified] calls/:callId/details error:", e.message);
+      res.status(500).json({ error: "Failed to fetch call details" });
+    }
+  },
+);
+
+/**
+ * GET /api/callified/calls/lead/:leadId/attempts
+ *
+ * Returns every CRM CallLog attempt for a contact, newest first. Each attempt
+ * includes the parsed notes (campaign, dial result, initiatedAt, fetched
+ * transcripts/reviews) so the UI can render "Call #1", "Call #2", etc.
+ */
+router.get("/calls/lead/:leadId/attempts", verifyToken, async (req, res) => {
+  try {
+    const { leadId } = req.params;
+    const attempts = await prisma.callLog.findMany({
+      where: {
+        tenantId: req.user.tenantId,
+        contactId: Number(leadId),
+        provider: "callified",
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        createdAt: true,
+        status: true,
+        duration: true,
+        recordingUrl: true,
+        calleeNumber: true,
+        notes: true,
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    const parsed = attempts.map((a) => {
+      let notes = {};
+      if (a.notes) {
+        try {
+          notes = JSON.parse(a.notes);
+        } catch (_) {
+          // leave as raw string below
+        }
+      }
+      return {
+        ...a,
+        notes: typeof notes === "object" && notes !== null ? notes : { raw: a.notes },
+      };
+    });
+
+    res.json({ attempts: parsed });
+  } catch (e) {
+    console.error("[callified] calls/lead/:leadId/attempts error:", e.message);
+    res.status(500).json({ error: "Failed to fetch call attempts" });
+  }
+});
+
+/**
+ * GET /api/callified/calls/lead/:leadId/latest
+ *
+ * Returns the most recent Callified CallLog providerCallId (Callified lead id)
+ * for a CRM contact. Used by the leads list details icon to know which
+ * Callified lead to poll.
+ */
+router.get("/calls/lead/:leadId/latest", verifyToken, async (req, res) => {
+  try {
+    const { leadId } = req.params;
+    const log = await prisma.callLog.findFirst({
+      where: {
+        tenantId: req.user.tenantId,
+        contactId: Number(leadId),
+        provider: "callified",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!log) {
+      return res.json({ callifiedLeadId: null });
+    }
+
+    let callifiedLeadId = log.providerCallId;
+    try {
+      const parsed = JSON.parse(log.notes || "{}");
+      if (parsed.callifiedLeadId) callifiedLeadId = String(parsed.callifiedLeadId);
+    } catch (_) {
+      // ignore malformed notes
+    }
+
+    res.json({ callifiedLeadId: callifiedLeadId || null });
+  } catch (e) {
+    console.error("[callified] calls/lead/:leadId/latest error:", e.message);
+    res.status(500).json({ error: "Failed to fetch latest call" });
   }
 });
 

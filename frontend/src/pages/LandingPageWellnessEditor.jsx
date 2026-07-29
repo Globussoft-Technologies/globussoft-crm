@@ -132,7 +132,7 @@ function buildWellnessScaffold(page = {}, content = []) {
             text('top-nav', page?.navText || 'HOME   SERVICES   ABOUT US   CONTACT', { align: 'center', color: '#1f2f2c', fontSize: '0.78rem', variant: 'wellness-nav' }),
             button('top-cta', page?.topCta || 'Book Now', '#lead-form', { bgColor: '#b31d15', color: '#ffffff', align: 'right', size: 'small' }),
           ] },
-        ], '24px'),
+        ], '8px'),
       ] },
       { fullWidth: true, components: [
         section('wellness-hero-row', 'wellness-hero-row', [
@@ -142,7 +142,6 @@ function buildWellnessScaffold(page = {}, content = []) {
             heading('hero-title-2', page?.heroTitleLine2 || '', 'h1', { align: 'left', color: '#b31d15', variant: 'wellness-hero-accent' }),
             text('hero-copy', page?.heroCopy || summary, { align: 'left', color: '#5f6c67', fontSize: '1.02rem', variant: 'wellness-body' }),
             button('hero-primary-cta', page?.heroPrimaryCta || 'Get Started', '#lead-form', { bgColor: '#b31d15', color: '#ffffff', align: 'left', size: 'medium' }),
-            button('hero-secondary-cta', page?.heroSecondaryCta || 'Contact Us', '#lead-form', { bgColor: '#fff8f7', color: '#b31d15', align: 'left', size: 'medium' }),
             text('hero-note', page?.heroNote || 'Every submission is editable, trackable, and routed to the right team instantly.', { align: 'left', color: '#5f6c67', fontSize: '0.88rem', variant: 'wellness-note' }),
           ] },
           { components: [ image('hero-image', `${campaignName} hero image`) ] },
@@ -154,7 +153,7 @@ function buildWellnessScaffold(page = {}, content = []) {
           { components: [text('detail-time-label', 'Time', { align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label' }), heading('detail-time-value', eventTime, 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' })] },
           { components: [text('detail-location-label', 'Location', { align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label' }), heading('detail-location-value', location, 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' })] },
           { components: [text('detail-audience-label', 'For', { align: 'center', color: '#b31d15', fontSize: '0.72rem', variant: 'wellness-detail-label' }), heading('detail-audience-value', audience, 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-detail-value' })] },
-        ], '18px'),
+        ], '8px'),
       ] },
       { fullWidth: true, components: [
         section('wellness-benefits-row', 'wellness-benefits-row', [
@@ -169,7 +168,7 @@ function buildWellnessScaffold(page = {}, content = []) {
               { components: [text('benefit-2-icon', 'o', { align: 'center', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge' }), heading('benefit-2-title', page?.benefit2Title || 'Professional follow-up', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('benefit-2-body', page?.benefit2Body || 'The team can respond quickly with the right next step once the enquiry is submitted.', { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-card-body' })] },
               { components: [text('benefit-3-icon', ':)', { align: 'center', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge' }), heading('benefit-3-title', page?.benefit3Title || 'Trust-building copy', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('benefit-3-body', page?.benefit3Body || 'Clear language and a polished layout make the page feel credible and easy to use.', { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-card-body' })] },
               { components: [text('benefit-4-icon', '#', { align: 'center', color: '#b31d15', fontSize: '1.45rem', variant: 'wellness-badge' }), heading('benefit-4-title', page?.benefit4Title || 'Stronger conversions', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('benefit-4-body', page?.benefit4Body || 'A focused landing page keeps attention on the offer and the enquiry form.', { align: 'left', color: '#5f6c67', fontSize: '0.94rem', variant: 'wellness-card-body' })] },
-            ], '18px'),
+            ], '8px'),
           ] },
         ], '28px'),
       ] },
@@ -189,7 +188,7 @@ function buildWellnessScaffold(page = {}, content = []) {
               { components: [heading('step-2-number', '2', 'h3', { align: 'center', color: '#b31d15', variant: 'wellness-step-number' }), heading('step-2-title', page?.step2Title || 'Enquire', 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-card-title' }), text('step-2-body', page?.step2Body || 'They submit a short form with the essential details the team needs.', { align: 'center', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
               { components: [heading('step-3-number', '3', 'h3', { align: 'center', color: '#b31d15', variant: 'wellness-step-number' }), heading('step-3-title', page?.step3Title || 'Follow up', 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-card-title' }), text('step-3-body', page?.step3Body || 'The team reviews the enquiry and responds with confirmation or next steps.', { align: 'center', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
               { components: [heading('step-4-number', '4', 'h3', { align: 'center', color: '#b31d15', variant: 'wellness-step-number' }), heading('step-4-title', page?.step4Title || 'Convert', 'h4', { align: 'center', color: '#1f2f2c', variant: 'wellness-card-title' }), text('step-4-body', page?.step4Body || 'A clear process improves trust and keeps the visitor moving toward action.', { align: 'center', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
-            ], '18px'),
+            ], '8px'),
           ] },
         ], '28px'),
       ] },
@@ -206,7 +205,7 @@ function buildWellnessScaffold(page = {}, content = []) {
               { components: [heading('metric-2-value', page?.metric2Value || '0', 'h2', { align: 'center', color: '#ffffff', variant: 'wellness-metric-value' }), text('metric-2-label', page?.metric2Label || 'Manual chasing', { align: 'center', color: '#ffe7e3', fontSize: '0.86rem', variant: 'wellness-metric-label' })] },
               { components: [heading('metric-3-value', page?.metric3Value || '100%', 'h2', { align: 'center', color: '#ffffff', variant: 'wellness-metric-value' }), text('metric-3-label', page?.metric3Label || 'Editable content', { align: 'center', color: '#ffe7e3', fontSize: '0.86rem', variant: 'wellness-metric-label' })] },
               { components: [heading('metric-4-value', page?.metric4Value || '1', 'h2', { align: 'center', color: '#ffffff', variant: 'wellness-metric-value' }), text('metric-4-label', page?.metric4Label || 'Lead pipeline', { align: 'center', color: '#ffe7e3', fontSize: '0.86rem', variant: 'wellness-metric-label' })] },
-            ], '18px'),
+            ], '8px'),
           ] },
         ], '28px'),
       ] },
@@ -218,7 +217,7 @@ function buildWellnessScaffold(page = {}, content = []) {
             text('cta-note', page?.ctaNote || 'Your details will be captured in the CRM and shared with the right team for follow-up.', { align: 'left', color: '#5f6c67', fontSize: '0.86rem', variant: 'wellness-note' }),
           ] },
           { components: [ button('cta-button', page?.ctaText || 'Book Now', '#lead-form', { bgColor: '#b31d15', color: '#ffffff', align: 'center', size: 'large' }) ] },
-        ], '24px'),
+        ], '8px'),
       ] },
       { fullWidth: true, components: [
         section('wellness-form-row', 'wellness-form-row', [
@@ -237,7 +236,7 @@ function buildWellnessScaffold(page = {}, content = []) {
               { components: [heading('register-card-2-title', page?.registerCard2Title || 'Personal follow-up', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-2-body', page?.registerCard2Body || 'A team member can respond with timing, venue, and preparation details.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
               { components: [heading('register-card-3-title', page?.registerCard3Title || 'Secure records', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-3-body', page?.registerCard3Body || 'Every submission remains editable, trackable, and ready for lead follow-up.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
               { components: [heading('register-card-4-title', page?.registerCard4Title || 'Clear next steps', 'h4', { align: 'left', color: '#1f2f2c', variant: 'wellness-card-title' }), text('register-card-4-body', page?.registerCard4Body || 'Visitors know exactly what will happen after they submit the form.', { align: 'left', color: '#5f6c67', fontSize: '0.92rem', variant: 'wellness-card-body' })] },
-            ], '18px'),
+            ], '8px'),
           ] },
         ], '28px'),
       ] },
@@ -252,7 +251,7 @@ function buildWellnessScaffold(page = {}, content = []) {
             text('footer-contact', page?.footerContact || '+91 98765 43210\ninfo@company.com\nKoramangala, Bengaluru', { align: 'left', color: '#5f6c67', fontSize: '0.84rem', variant: 'wellness-footer-contact', whiteSpace: 'pre-line' }),
             text('footer-copy', page?.footerCopy || `(c) ${new Date().getFullYear()} ${businessName}. All rights reserved.`, { align: 'right', color: '#7b807a', fontSize: '0.78rem', variant: 'wellness-footer-copy' }),
           ] },
-        ], '24px'),
+        ], '8px'),
       ] },
     ], '24px'),
   ];
@@ -603,7 +602,6 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
     title2: findBlockInColumns(sections, 'hero-title-2'),
     copy: findBlockInColumns(sections, 'hero-copy'),
     primary: findBlockInColumns(sections, 'hero-primary-cta'),
-    secondary: findBlockInColumns(sections, 'hero-secondary-cta'),
     note: findBlockInColumns(sections, 'hero-note'),
     image: findBlockInColumns(sections, 'hero-image'),
   };
@@ -694,7 +692,6 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
           <Field label="Headline line 2" value={hero.title2?.props?.text} onChange={editText(edit, 'hero-title-2')} placeholder="Supporting line" />
           <Field label="Intro copy" value={hero.copy?.props?.text} onChange={editText(edit, 'hero-copy')} placeholder="Short intro copy" multiline rows={4} />
           <Field label="Primary CTA" value={hero.primary?.props?.text} onChange={editText(edit, 'hero-primary-cta')} placeholder="Get Started" />
-          <Field label="Secondary CTA" value={hero.secondary?.props?.text} onChange={editText(edit, 'hero-secondary-cta')} placeholder="Contact Us" />
           <Field label="Support note" value={hero.note?.props?.text} onChange={editText(edit, 'hero-note')} placeholder="Small helper note" multiline rows={2} />
           <ImageField label="Hero image" value={hero.image?.props?.src} onChange={(value) => edit('hero-image', (block) => ({ ...block, props: { ...block.props, src: value } }))} />
         </SectionEditor>
@@ -795,4 +792,5 @@ export default function LandingPageWellnessEditor({ content, onChange, page }) {
     </div>
   );
 }
+
 

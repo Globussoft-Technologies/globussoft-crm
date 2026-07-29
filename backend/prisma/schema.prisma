@@ -6114,6 +6114,7 @@ model Itinerary {
   // layer — analytics queries read by templateId index instead.
   clonedFromTemplateId    Int?
   items                   ItineraryItem[]
+  cancellationPolicies     CancellationPolicy[]
   contact                 Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
   tenant                  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt               DateTime        @default(now())
@@ -7673,17 +7674,21 @@ model CancellationPolicy {
   tenantId    Int             @default(1)
   name        String          @db.VarChar(255) // e.g. "TMC Default" / "RFU Default"
   subBrand    String? // tmc | rfu | travelstall | visasure | null (tenant-wide)
+  itineraryId Int? // optional attach to a trip/itinerary
   description String?         @db.Text
   tiersJson   String          @db.LongText // JSON array; see model docs above
   isActive    Boolean         @default(true)
   invoices    TravelInvoice[]
+  itinerary   Itinerary?      @relation(fields: [itineraryId], references: [id], onDelete: SetNull)
   tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
   @@unique([tenantId, name])
+  @@unique([tenantId, itineraryId])
   @@index([tenantId, isActive])
   @@index([tenantId, subBrand, isActive])
+  @@index([tenantId, itineraryId])
 }
 
 // PRD_TRAVEL_BILLING FR-3.1.a — line-item composition under TravelInvoice.

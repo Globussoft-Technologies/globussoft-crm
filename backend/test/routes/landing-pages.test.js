@@ -607,6 +607,33 @@ describe('POST /api/landing-pages/:id/publish | /unpublish | /duplicate', () => 
     expect(res.body.publishedAt).toBeTruthy();
   });
 
+  test('publish: blocks a second generic landing site while one is already published', async () => {
+    prisma.landingPage.findFirst.mockImplementation(async (args) => {
+      if (args.where?.id === 50) {
+        return {
+          id: 50,
+          tenantId: 1,
+          status: 'DRAFT',
+          title: 'Hair Treatment',
+          slug: 'hair-treatment',
+          templateType: 'generic-site-wellness-v1',
+          content: JSON.stringify([]),
+        };
+      }
+      if (args.where?.status === 'PUBLISHED') {
+        return { id: 51, tenantId: 1, status: 'PUBLISHED', title: 'Skin Care', slug: 'skin-care' };
+      }
+      return null;
+    });
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/publish')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ANOTHER_LANDING_SITE_PUBLISHED');
+    expect(res.body.currentPublishedLandingSite).toMatchObject({ id: 51, title: 'Skin Care', slug: 'skin-care' });
+    expect(prisma.landingPage.update).not.toHaveBeenCalled();
+  });
+
   test('unpublish: flips PUBLISHED back to DRAFT', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({ id: 50, tenantId: 1, status: 'PUBLISHED' });
     prisma.landingPage.update.mockImplementation(async (args) => ({ id: 50, ...args.data }));

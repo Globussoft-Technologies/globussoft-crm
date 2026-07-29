@@ -9406,8 +9406,9 @@ router.get(
 //
 // Lookup precedence:
 //   1. invoice.cancellationPolicyId (operator-pinned at issue time).
-//   2. Active policy where subBrand === invoice.subBrand (sub-brand-specific).
-//   3. Active policy where subBrand IS NULL (tenant-wide default).
+//   2. invoice.itineraryId (trip-scoped policy for the booked itinerary).
+//   3. Active policy where subBrand === invoice.subBrand (sub-brand-specific).
+//   4. Active policy where subBrand IS NULL (tenant-wide default).
 //   First match wins; deterministic ordering by id ASC for repeatability.
 //
 // Tier-walking algorithm:
@@ -9418,7 +9419,7 @@ router.get(
 //     daysBeforeServiceStart <= daysBeforeStart. That tier's refundPercent
 //     drives the refund amount.
 //   - If daysBeforeStart < smallest threshold (e.g. all tiers say >= 7
-//     days but cancellation is today), no tier matches → refundPercent = 0.
+//     days but cancellation is today), no tier matches ? refundPercent = 0.
 //
 // refundAmount = invoice.totalAmount * (refundPercent / 100), rounded
 // to 2dp (matching the Decimal(15,2) column precision on TravelInvoice).
@@ -9430,6 +9431,15 @@ async function resolveCancellationOutcome(req, invoice) {
       where: {
         id: invoice.cancellationPolicyId,
         tenantId: req.travelTenant.id,
+        isActive: true,
+      },
+    });
+  }
+  if (!policy && invoice.itineraryId) {
+    policy = await prisma.cancellationPolicy.findFirst({
+      where: {
+        tenantId: req.travelTenant.id,
+        itineraryId: invoice.itineraryId,
         isActive: true,
       },
     });

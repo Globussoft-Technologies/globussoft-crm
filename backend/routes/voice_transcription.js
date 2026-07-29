@@ -6,6 +6,7 @@ const FormData = require("form-data");
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 const { llmLimiter } = require("../middleware/apiRateLimiters");
+const { isGeminiLimitError, buildGeminiLimitError } = require("../lib/geminiErrors");
 
 const router = express.Router();
 
@@ -101,6 +102,7 @@ async function transcribeAudio(url) {
       const text = await transcribeWithGemini(buffer, contentType);
       if (text) return { transcript: text, provider: "gemini" };
     } catch (err) {
+      if (isGeminiLimitError(err)) throw buildGeminiLimitError(err);
       console.warn("[VoiceTranscription] Gemini transcription failed:", err.message);
     }
   }
@@ -152,6 +154,9 @@ router.post("/transcribe-url", verifyToken, llmLimiter, async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("[VoiceTranscription] transcribe-url error:", err);
+    if (isGeminiLimitError(err)) {
+      return res.status(429).json({ error: buildGeminiLimitError(err).message, code: "GEMINI_LIMIT_EXHAUSTED" });
+    }
     res.status(500).json({ error: err.message || "Transcription failed" });
   }
 });
@@ -178,6 +183,9 @@ router.post("/call/:callLogId", verifyToken, llmLimiter, async (req, res) => {
     res.json({ transcript, provider, callLogId: updated.id });
   } catch (err) {
     console.error("[VoiceTranscription] call transcribe error:", err);
+    if (isGeminiLimitError(err)) {
+      return res.status(429).json({ error: buildGeminiLimitError(err).message, code: "GEMINI_LIMIT_EXHAUSTED" });
+    }
     res.status(500).json({ error: err.message || "Transcription failed" });
   }
 });
@@ -202,6 +210,9 @@ router.post("/voice-session/:sessionId", verifyToken, llmLimiter, async (req, re
     res.json({ transcript, provider, sessionId: updated.sessionId });
   } catch (err) {
     console.error("[VoiceTranscription] voice-session transcribe error:", err);
+    if (isGeminiLimitError(err)) {
+      return res.status(429).json({ error: buildGeminiLimitError(err).message, code: "GEMINI_LIMIT_EXHAUSTED" });
+    }
     res.status(500).json({ error: err.message || "Transcription failed" });
   }
 });
@@ -241,6 +252,9 @@ router.post("/summarize/:callLogId", verifyToken, llmLimiter, async (req, res) =
     res.json({ summary, callLogId: updated.id });
   } catch (err) {
     console.error("[VoiceTranscription] summarize error:", err);
+    if (isGeminiLimitError(err)) {
+      return res.status(429).json({ error: buildGeminiLimitError(err).message, code: "GEMINI_LIMIT_EXHAUSTED" });
+    }
     res.status(500).json({ error: err.message || "Summarization failed" });
   }
 });

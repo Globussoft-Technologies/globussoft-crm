@@ -92,6 +92,7 @@ authMw.verifyRole = (roles) => (req, res, next) => {
 prisma.integration = {
   findMany: vi.fn(),
   findFirst: vi.fn(),
+  update: vi.fn(),
   upsert: vi.fn(),
   updateMany: vi.fn(),
 };
@@ -122,6 +123,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 beforeEach(() => {
   prisma.integration.findMany.mockReset();
   prisma.integration.findFirst.mockReset();
+  prisma.integration.update.mockReset();
   prisma.integration.upsert.mockReset();
   prisma.integration.updateMany.mockReset();
   prisma.user.findUnique.mockReset();
@@ -137,6 +139,10 @@ beforeEach(() => {
   // Reset env for the Callified group — individual tests opt-in.
   delete process.env.CALLIFIED_SSO_SECRET;
   delete process.env.CALLIFIED_DASHBOARD_URL;
+  delete process.env.CALLIFIED_BASE_URL;
+  delete process.env.CALLIFIED_API_BASE_URL;
+  delete process.env.CALLIFIED_API_URL;
+  delete process.env.CALLIFIED_API_KEY;
 });
 
 // ─── GET / — catalogue overlay ──────────────────────────────────────────
@@ -656,7 +662,7 @@ describe('GET /api/integrations/callified/auth-url — SSO JWT URL', () => {
     const res = await request(app).get('/api/integrations/callified/auth-url');
     expect(res.status).toBe(200);
     expect(typeof res.body.authUrl).toBe('string');
-    expect(res.body.authUrl).toMatch(/^https:\/\/testgo1\.callified\.ai\/api\/auth\/sso\/jwt\?token=/);
+    expect(res.body.authUrl).toMatch(/^https:\/\/env\.callified\.example\.com\/sso\?token=/);
     expect(res.body.authUrl).toMatch(/&redirect=/);
 
     // Verify JWT is valid + role-mapped + payload-pinned.
@@ -673,6 +679,7 @@ describe('GET /api/integrations/callified/auth-url — SSO JWT URL', () => {
 
   test('user not found → 401', async () => {
     process.env.CALLIFIED_SSO_SECRET = 'test-secret';
+    process.env.CALLIFIED_DASHBOARD_URL = 'https://env.callified.example.com/sso';
     prisma.integration.findFirst.mockResolvedValue(null);
     prisma.user.findUnique.mockResolvedValue(null);
     const app = makeApp();
@@ -683,6 +690,7 @@ describe('GET /api/integrations/callified/auth-url — SSO JWT URL', () => {
 
   test('role map: MANAGER→agent, USER→viewer', async () => {
     process.env.CALLIFIED_SSO_SECRET = 'test-secret';
+    process.env.CALLIFIED_DASHBOARD_URL = 'https://env.callified.example.com/sso';
     prisma.integration.findFirst.mockResolvedValue(null);
     const jwt = require('jsonwebtoken');
 
@@ -705,8 +713,9 @@ describe('GET /api/integrations/callified/auth-url — SSO JWT URL', () => {
     expect(jwt.verify(token, 'test-secret').role).toBe('viewer');
   });
 
-  test('integration settings.dashboardUrl + redirectPath override defaults', async () => {
+  test('environment CALLIFIED_DASHBOARD_URL overrides integration settings.dashboardUrl', async () => {
     process.env.CALLIFIED_SSO_SECRET = 'test-secret';
+    process.env.CALLIFIED_DASHBOARD_URL = 'https://env.callified.example.com/sso';
     prisma.integration.findFirst.mockResolvedValue({
       id: 1,
       isActive: true,
@@ -724,14 +733,25 @@ describe('GET /api/integrations/callified/auth-url — SSO JWT URL', () => {
     const app = makeApp();
     const res = await request(app).get('/api/integrations/callified/auth-url');
     expect(res.status).toBe(200);
-    expect(res.body.authUrl).toMatch(/^https:\/\/callified\.example\.com\/sso\?token=/);
+    expect(res.body.authUrl).toMatch(/^https:\/\/env\.callified\.example\.com\/sso\?token=/);
     expect(res.body.authUrl).toMatch(/redirect=%2Fcustom-landing/);
-    // org_id picked up from settings.
     const token = new URL(res.body.authUrl).searchParams.get('token');
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, 'test-secret');
     expect(decoded.org_id).toBe(42);
     expect(decoded.sub).toBe('custom-sub');
+  });
+  test('legacy misspelled CALLIFIED_DASHBOAD_URL still works for backward compatibility', async () => {
+    process.env.CALLIFIED_SSO_SECRET = 'test-secret';
+    process.env.CALLIFIED_DASHBOAD_URL = 'https://legacy.callified.example.com/sso';
+    prisma.integration.findFirst.mockResolvedValue(null);
+    prisma.user.findUnique.mockResolvedValue({
+      id: 7, email: 'admin@globussoft.com', name: 'Admin User', role: 'ADMIN',
+    });
+    const app = makeApp({ userId: 7, tenantId: 1, role: 'ADMIN' });
+    const res = await request(app).get('/api/integrations/callified/auth-url');
+    expect(res.status).toBe(200);
+    expect(res.body.authUrl).toMatch(/^https:\/\/legacy\.callified\.example\.com\/sso\?token=/);
   });
 });
 
@@ -748,6 +768,7 @@ describe('GET /api/integrations/callified/sso — 302 redirect', () => {
 
   test('happy path returns 302 redirect to Callified with token query param', async () => {
     process.env.CALLIFIED_SSO_SECRET = 'test-secret';
+    process.env.CALLIFIED_DASHBOARD_URL = 'https://env.callified.example.com/sso';
     prisma.integration.findFirst.mockResolvedValue(null);
     prisma.user.findUnique.mockResolvedValue({
       id: 7, email: 'admin@globussoft.com', name: 'Admin', role: 'ADMIN',
@@ -757,12 +778,13 @@ describe('GET /api/integrations/callified/sso — 302 redirect', () => {
       .get('/api/integrations/callified/sso')
       .redirects(0); // don't follow — we want to assert on the 302 itself
     expect(res.status).toBe(302);
-    expect(res.headers.location).toMatch(/^https:\/\/testgo1\.callified\.ai\/api\/auth\/sso\/jwt\?token=/);
+    expect(res.headers.location).toMatch(/^https:\/\/env\.callified\.example\.com\/sso\?token=/);
     expect(res.headers.location).toMatch(/&redirect=/);
   });
 
   test('user not found → 401 plain-text', async () => {
     process.env.CALLIFIED_SSO_SECRET = 'test-secret';
+    process.env.CALLIFIED_DASHBOARD_URL = 'https://env.callified.example.com/sso';
     prisma.integration.findFirst.mockResolvedValue(null);
     prisma.user.findUnique.mockResolvedValue(null);
     const app = makeApp();
@@ -771,3 +793,8 @@ describe('GET /api/integrations/callified/sso — 302 redirect', () => {
     expect(res.text).toBe('User not found');
   });
 });
+
+
+
+
+

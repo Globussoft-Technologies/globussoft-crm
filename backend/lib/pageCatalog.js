@@ -990,20 +990,6 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'school_terms', action: 'read' }],
   },
   {
-    path: '/travel/marketing/flyer-studio',
-    label: 'Flyer Studio',
-    description: 'Marketing flyer composer',
-    category: 'Travel Marketing',
-    requiredPermissions: [{ module: 'flyer_studio', action: 'read' }],
-  },
-  {
-    path: '/travel/flyer-templates',
-    label: 'Flyer Templates',
-    description: 'Reusable flyer designs library',
-    category: 'Travel Marketing',
-    requiredPermissions: [{ module: 'flyer_templates', action: 'read' }],
-  },
-  {
     path: '/travel/brochures',
     label: 'Brochure Engine',
     description: 'AI brochure PDF composer (cover, itinerary, pricing)',
@@ -1317,14 +1303,6 @@ const PAGE_CATALOG = [
     category: 'Travel Operations',
     vertical: 'travel',
     requiredPermissions: [{ module: 'suppliers', action: 'read' }],
-  },
-  {
-    path: '/travel/flyer-share-admin',
-    label: 'Flyer Share Admin',
-    description: 'Manage flyer share links + analytics',
-    category: 'Travel Marketing',
-    vertical: 'travel',
-    requiredPermissions: [{ module: 'flyer_studio', action: 'read' }],
   },
   {
     path: '/travel/visa/checklists',

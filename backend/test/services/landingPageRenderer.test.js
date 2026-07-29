@@ -108,10 +108,12 @@ describe('renderPage ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â top-level document',
     expect(html).toContain('people exploring hair treatment solutions');
     expect(html).not.toContain('Blood Donation');
     expect(html).toContain('class="lp-container lp-container--wellness"');
+    expect(html).not.toContain('Contact Us');
     expect(html).toContain('max-width: none');
-    expect(html).toContain('width:100%;max-width:1440px;min-width:0');
-    expect(html).toContain('justify-content:space-between;width:100%;max-width:100%;margin:0;padding:28px 56px');
-    expect(html).toContain('flex-wrap:nowrap;justify-content:space-between;align-items:center;width:100%;');
+    expect(html).toContain('width:100%;max-width:none;min-width:0;margin:0;padding:0');
+    expect(html).not.toContain('max-width:1440px');
+    expect(html).toContain('justify-content:space-between;width:100%;max-width:100%;margin:0;padding:6px 56px 4px');
+    expect(html).toContain('flex-wrap:nowrap;justify-content:space-between;align-items:flex-start;width:100%;');
     expect(html).not.toContain('width:1180px');
     expect(html).not.toContain('max-width:1180px');
     expect(html).toContain('padding:22px 20px;min-height:112px;background:#fffdf7;border:1px solid #e5ded0;border-radius:12px');
@@ -929,5 +931,7 @@ describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â percent-encoded / malfo
     expect(safeUrl('data:image/svg+xml,<svg/>', 'image-src')).toBe('data:image/svg+xml,<svg/>');
   });
 });
+
+
 
 

@@ -565,6 +565,39 @@ describe('POST /invoices/:id/void — S33 cancellation-policy auto-CR-NOTE issua
     expect(Number(res.body.creditNote.totalAmount)).toBe(-5000);
   });
 
+  test('itineraryId on invoice overrides the sub-brand default lookup', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValueOnce(
+      issuedInvoice({ id: 810, totalAmount: '6400.00', itineraryId: 901 }),
+    );
+    prisma.travelInvoice.update.mockImplementation(async ({ data, where }) => ({
+      ...issuedInvoice({ id: where.id }), ...data,
+    }));
+    prisma.cancellationPolicy.findFirst.mockResolvedValueOnce(
+      policyRow({ id: 88, name: 'Goa Trip Policy', itineraryId: 901, subBrand: 'tmc' }),
+    );
+    prisma.travelInvoiceLine.findMany.mockResolvedValueOnce([
+      { serviceStartDate: daysFromNow(45) },
+    ]);
+    prisma.travelInvoice.create.mockImplementation(async ({ data }) => ({
+      id: 1021, ...data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/invoices/810/void')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ reason: 'Trip-specific policy should win' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.cancellationPolicy.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ itineraryId: 901, tenantId: 1, isActive: true }),
+      }),
+    );
+    expect(res.body.policyApplied.policyId).toBe(88);
+    expect(res.body.policyApplied.policyName).toBe('Goa Trip Policy');
+    expect(Number(res.body.creditNote.totalAmount)).toBe(-6400);
+  });
+
   test('void succeeds even if policy lookup throws (defensive — credit-note issuance is best-effort)', async () => {
     prisma.travelInvoice.findFirst.mockResolvedValueOnce(issuedInvoice({ id: 809, totalAmount: '12000.00' }));
     prisma.travelInvoice.update.mockImplementation(async ({ data, where }) => ({

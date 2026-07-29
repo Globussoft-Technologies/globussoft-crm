@@ -41,6 +41,7 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
+const { formatGeminiLimitMessage } = require('../lib/geminiErrors');
 const { buildDestinationLandingPagePrompt } = require('./landingPagePrompts');
 const { guardLandingPageOutput, buildDeterministicFallback } = require('../lib/landingPageGuard');
 const { estimateLlmCost } = require('../lib/apiPricing');
@@ -567,7 +568,7 @@ async function generateLandingPageContent(args = {}) {
       persistCallLog({
         tenantId,
         stub: false,
-        realModeError: geminiError,
+        realModeError: formatGeminiLimitMessage(geminiError) || geminiError,
         inputSize,
         outputSize,
         model: modelUsed,
@@ -583,7 +584,7 @@ async function generateLandingPageContent(args = {}) {
         guardrailIssues: guardResult.issues,
         // Surface the upstream Gemini failure so the operator can see
         // why the fallback fired (or null when Gemini was simply absent).
-        realModeError: geminiError,
+        realModeError: formatGeminiLimitMessage(geminiError) || geminiError,
       };
     } catch (e) {
       realModeError = `Groq: ${groqError || 'n/a'}; Gemini: ${geminiError || 'n/a'}; OpenAI: ${e.message || String(e)}`;
@@ -596,7 +597,7 @@ async function generateLandingPageContent(args = {}) {
     // No OpenAI key configured — surface the upstream failures (Groq +
     // Gemini, whichever fired) so the operator can see why we landed in
     // the stub.
-    realModeError = [groqError && `Groq: ${groqError}`, geminiError && `Gemini: ${geminiError}`]
+    realModeError = [groqError && `Groq: ${groqError}`, geminiError && `Gemini: ${formatGeminiLimitMessage(geminiError) || geminiError}`]
       .filter(Boolean)
       .join('; ') || null;
   }

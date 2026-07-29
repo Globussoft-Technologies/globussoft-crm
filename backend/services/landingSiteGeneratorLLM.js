@@ -7,6 +7,7 @@ if (process.env.NODE_ENV !== 'test') {
 
 const llmRouter = require('../lib/llmRouter');
 const destinationImageProvider = require('./destinationImageProvider');
+const { formatGeminiLimitMessage } = require('../lib/geminiErrors');
 const { getBudgetCap, evaluateCap } = require('../lib/tenantSettings');
 const {
   BASIC_BLOCK_TYPES,
@@ -285,7 +286,7 @@ async function generateLandingSiteContent(input = {}, options = {}) {
       realModeError = null;
       break;
     } catch (err) {
-      realModeError = err.message || String(err);
+      realModeError = formatGeminiLimitMessage(err) || err.message || String(err);
     }
   }
 

@@ -7,6 +7,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const { llmLimiter } = require("../middleware/apiRateLimiters");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { estimateLlmCost } = require("../lib/apiPricing");
+const { formatGeminiLimitMessage } = require("../lib/geminiErrors");
 
 const router = express.Router();
 const { formatMoney } = require("../utils/formatMoney");
@@ -455,7 +456,7 @@ Recent activities: ${(deal.contact?.activities || []).slice(0, 3).map(a => `${a.
           userId: (req.user && req.user.userId) || null,
           surface: "deal-insights",
           status: "failed",
-          errorMessage: aiErr.message,
+          errorMessage: formatGeminiLimitMessage(aiErr) || aiErr.message,
         });
         console.warn("[DealInsights] AI insight skipped:", aiErr.message);
       }

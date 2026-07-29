@@ -54,6 +54,18 @@ prisma.tenant.findUnique = vi.fn().mockResolvedValue({
 });
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+prisma.itinerary = prisma.itinerary || {};
+prisma.itinerary.findFirst = vi.fn().mockResolvedValue({
+  id: 901,
+  tenantId: 1,
+  subBrand: 'tmc',
+  destination: 'Goa',
+  status: 'confirmed',
+  startDate: new Date('2026-08-01T00:00:00.000Z'),
+  endDate: new Date('2026-08-07T00:00:00.000Z'),
+  totalAmount: 120000,
+  currency: 'INR',
+});
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 prisma.auditLog = {
@@ -104,6 +116,17 @@ beforeEach(() => {
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+  prisma.itinerary.findFirst.mockReset().mockResolvedValue({
+    id: 901,
+    tenantId: 1,
+    subBrand: 'tmc',
+    destination: 'Goa',
+    status: 'confirmed',
+    startDate: new Date('2026-08-01T00:00:00.000Z'),
+    endDate: new Date('2026-08-07T00:00:00.000Z'),
+    totalAmount: 120000,
+    currency: 'INR',
+  });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
 });
@@ -330,6 +353,47 @@ describe('POST /api/travel/cancellation-policies', () => {
         data: expect.objectContaining({ subBrand: null }),
       }),
     );
+  });
+
+  test('itineraryId persists and auto-derives subBrand from the trip', async () => {
+    prisma.cancellationPolicy.create.mockImplementation(async ({ data, include }) => ({
+      id: 51,
+      ...data,
+      itinerary: include?.itinerary ? {
+        id: 901,
+        destination: 'Goa',
+        subBrand: 'tmc',
+        status: 'confirmed',
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2026-08-07T00:00:00.000Z'),
+        totalAmount: 120000,
+        currency: 'INR',
+      } : null,
+    }));
+    const res = await request(makeApp())
+      .post('/api/travel/cancellation-policies')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Goa Trip Policy',
+        itineraryId: 901,
+        tiersJson: DEFAULT_TIERS,
+      });
+    expect(res.status).toBe(201);
+    expect(prisma.itinerary.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 901, tenantId: 1 }),
+      }),
+    );
+    expect(prisma.cancellationPolicy.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          itineraryId: 901,
+          subBrand: 'tmc',
+        }),
+      }),
+    );
+    expect(res.body.itineraryId).toBe(901);
+    expect(res.body.subBrand).toBe('tmc');
   });
 
   test('missing name returns 400 MISSING_FIELDS', async () => {

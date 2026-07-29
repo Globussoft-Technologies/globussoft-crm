@@ -340,6 +340,21 @@ describe('POST /draft — AI email draft', () => {
     expect(res.body.draft).toContain('Quick check-in');
   });
 
+  test('Gemini quota exhaustion surfaces a friendly 429', async () => {
+    mockGenerateContent.mockRejectedValue(new Error('429 quota exceeded'));
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/ai/draft')
+      .set('Authorization', makeBearer())
+      .send({ context: 'Quick check-in' });
+
+    expect(res.status).toBe(429);
+    expect(res.body).toMatchObject({
+      code: 'GEMINI_LIMIT_EXHAUSTED',
+      error: 'Gemini limit has been exhausted. Please try again later.',
+    });
+  });
+
   test('default tone (no body.tone) uses professional-yet-warm instruction', async () => {
     mockGenerateContent.mockResolvedValue({
       response: { text: () => 'Body.' },

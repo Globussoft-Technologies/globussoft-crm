@@ -1,9 +1,87 @@
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
+const dotenv = require("dotenv");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 
-const router = express.Router();
+const CALLIFIED_ENV_FILES = [
+  path.resolve(__dirname, "../.env"),
+  path.resolve(__dirname, "../../.env"),
+];
+let callifiedEnvCache = { signature: null, values: {} };
 
+function loadCallifiedEnvSnapshot() {
+  const signature = CALLIFIED_ENV_FILES.map((file) => {
+    try {
+      const stat = fs.statSync(file);
+      return `${file}:${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      return `${file}:missing`;
+    }
+  }).join("|");
+
+  if (callifiedEnvCache.signature === signature) {
+    return callifiedEnvCache.values;
+  }
+
+  const values = {};
+  for (const file of CALLIFIED_ENV_FILES) {
+    try {
+      if (!fs.existsSync(file)) continue;
+      Object.assign(values, dotenv.parse(fs.readFileSync(file)));
+    } catch {
+      /* ignore unreadable env files and fall back to process.env */
+    }
+  }
+
+  callifiedEnvCache = { signature, values };
+  return values;
+}
+
+function getCallifiedEnv(name) {
+  const live = process.env[name];
+  if (live && String(live).trim()) {
+    return String(live).trim();
+  }
+  const snapshot = loadCallifiedEnvSnapshot();
+  const fileValue = snapshot[name];
+  return fileValue && String(fileValue).trim() ? String(fileValue).trim() : null;
+}
+
+function normalizeCallifiedAuthUrl(rawUrl) {
+  if (!rawUrl) return null;
+  const trimmed = String(rawUrl).trim().replace(/\/+$/, "");
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.pathname && parsed.pathname !== "/") {
+      return trimmed;
+    }
+  } catch {
+    if (trimmed.includes("/")) {
+      return trimmed;
+    }
+  }
+  return `${trimmed}/api/auth/sso/jwt`;
+}
+
+function getCallifiedDashboardUrl() {
+  return normalizeCallifiedAuthUrl(
+    getCallifiedEnv("CALLIFIED_DASHBOARD_URL") ||
+    getCallifiedEnv("CALLIFIED_DASHBOAD_URL") ||
+    getCallifiedEnv("CALLIFIED_BASE_URL"),
+  );
+}
+
+function getCallifiedApiBaseUrl() {
+  return (
+    getCallifiedEnv("CALLIFIED_API_BASE_URL") ||
+    getCallifiedEnv("CALLIFIED_API_URL") ||
+    null
+  );
+}
+
+const router = express.Router();
 const AVAILABLE_INTEGRATIONS = [
   {
     provider: "slack",
@@ -299,7 +377,7 @@ router.get("/callified/auth-url", verifyToken, async (req, res) => {
     const jwt = require("jsonwebtoken");
 
     // Get the Callified SSO secret from environment — must match Callified's SSO_SHARED_SECRET
-    const callifiedSecret = process.env.CALLIFIED_SSO_SECRET;
+    const callifiedSecret = getCallifiedEnv("CALLIFIED_SSO_SECRET");
     if (!callifiedSecret) {
       return res.status(503).json({
         error:
@@ -353,10 +431,13 @@ router.get("/callified/auth-url", verifyToken, async (req, res) => {
     // Default is the live Callified SSO endpoint so the integration works
     // out of the box. Override per-deploy with CALLIFIED_DASHBOARD_URL env
     // var, or per-tenant via Integration.settings.dashboardUrl (DB row).
-    const callifiedBaseUrl =
-      process.env.CALLIFIED_DASHBOARD_URL ||
-      settings.dashboardUrl ||
-      "https://testgo1.callified.ai/api/auth/sso/jwt";
+    const callifiedBaseUrl = getCallifiedDashboardUrl() || settings.dashboardUrl || null;
+    if (!callifiedBaseUrl) {
+      return res.status(503).json({
+        error: "Callified dashboard URL not configured",
+        help: "Set CALLIFIED_DASHBOARD_URL in the backend environment",
+      });
+    }
     const redirect = settings.redirectPath || "/crm";
     const authUrl = `${callifiedBaseUrl}?token=${encodeURIComponent(token)}&redirect=${encodeURIComponent(redirect)}`;
 
@@ -374,7 +455,7 @@ router.get("/callified/sso", verifyToken, async (req, res) => {
   try {
     const jwt = require("jsonwebtoken");
 
-    const callifiedSecret = process.env.CALLIFIED_SSO_SECRET;
+    const callifiedSecret = getCallifiedEnv("CALLIFIED_SSO_SECRET");
     if (!callifiedSecret) {
       return res
         .status(503)
@@ -421,10 +502,13 @@ router.get("/callified/sso", verifyToken, async (req, res) => {
       expiresIn: 1800,
     });
 
-    const callifiedBaseUrl =
-      process.env.CALLIFIED_DASHBOARD_URL ||
-      settings.dashboardUrl ||
-      "https://testgo1.callified.ai/api/auth/sso/jwt";
+    const callifiedBaseUrl = getCallifiedDashboardUrl() || settings.dashboardUrl || null;
+    if (!callifiedBaseUrl) {
+      return res.status(503).json({
+        error: "Callified dashboard URL not configured",
+        help: "Set CALLIFIED_DASHBOARD_URL in the backend environment",
+      });
+    }
     const redirect = settings.redirectPath || "/crm";
     const authUrl = `${callifiedBaseUrl}?token=${encodeURIComponent(token)}&redirect=${encodeURIComponent(redirect)}`;
 
@@ -441,7 +525,7 @@ router.get("/callified/sso", verifyToken, async (req, res) => {
 // Uses API key from database (stored via Settings UI).
 router.get("/callified/external-transcripts", verifyToken, async (req, res) => {
   try {
-    const callifiedApiUrl = process.env.CALLIFIED_API_URL;
+    const callifiedApiUrl = getCallifiedApiBaseUrl();
     const tenantId = req.user.tenantId;
 
     if (!callifiedApiUrl) {
@@ -467,7 +551,7 @@ router.get("/callified/external-transcripts", verifyToken, async (req, res) => {
       });
     }
 
-    const callifiedApiKey = integration.token;
+    const callifiedApiKey = getCallifiedEnv("CALLIFIED_API_KEY") || integration.token;
 
     console.log(`[integrations] Fetching Callified transcripts for tenant ${tenantId}`);
 
@@ -575,3 +659,7 @@ router.put("/adsgpt/config", verifyToken, verifyRole(["ADMIN"]), async (req, res
 });
 
 module.exports = router;
+
+
+
+

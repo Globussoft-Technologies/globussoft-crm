@@ -5,10 +5,34 @@ const { verifyToken } = require("../middleware/auth");
 const { llmLimiter } = require("../middleware/apiRateLimiters");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { estimateLlmCost } = require("../lib/apiPricing");
+const { isGeminiLimitError, buildGeminiLimitError } = require("../lib/geminiErrors");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { formatMoney } = require("../utils/formatMoney");
+
+function respondGeminiLimit(res, err, tenantId, surface) {
+  if (!isGeminiLimitError(err)) return false;
+  const quotaErr = buildGeminiLimitError(err);
+  persistLlmCallLog({
+    tenantId: tenantId || 1,
+    task: "email-draft",
+    model: "gemini-2.5-flash",
+    provider: "gemini",
+    reason: null,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    costEstimate: 0,
+    stub: false,
+    userId: null,
+    surface: surface || "ai-email-draft",
+    status: "failed",
+    errorMessage: quotaErr.message,
+  });
+  res.status(429).json({ error: quotaErr.message, code: quotaErr.code });
+  return true;
+}
 
 // Load Gemini API key from root .env or backend .env
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
@@ -78,6 +102,7 @@ Requirements:
       try {
         result = await model.generateContent(prompt);
       } catch (genErr) {
+        if (respondGeminiLimit(res, genErr, (req.user && req.user.tenantId) || 1, "ai-email-draft")) return;
         persistLlmCallLog({
           tenantId: (req.user && req.user.tenantId) || 1,
           task: "email-draft",
@@ -154,6 +179,7 @@ Requirements:
       try {
         result = await model.generateContent(prompt);
       } catch (genErr) {
+        if (respondGeminiLimit(res, genErr, (req.user && req.user.tenantId) || 1, "ai-email-draft")) return;
         persistLlmCallLog({
           tenantId: (req.user && req.user.tenantId) || 1,
           task: "email-draft",
@@ -216,6 +242,7 @@ Context: "${context}"`;
       try {
         result = await model.generateContent(prompt);
       } catch (genErr) {
+        if (respondGeminiLimit(res, genErr, (req.user && req.user.tenantId) || 1, "ai-email-draft")) return;
         persistLlmCallLog({
           tenantId: (req.user && req.user.tenantId) || 1,
           task: "email-draft",

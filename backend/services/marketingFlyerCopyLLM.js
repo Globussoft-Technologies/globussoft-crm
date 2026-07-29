@@ -76,6 +76,7 @@ if (process.env.NODE_ENV !== 'test') {
 
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
 const { estimateLlmCost } = require('../lib/apiPricing');
+const { formatGeminiLimitMessage } = require('../lib/geminiErrors');
 
 // Fire-and-forget LlmCallLog write — mirrors lib/llmRouter.js's
 // persistLlmCallLog helper so this direct Gemini call is visible to the
@@ -470,7 +471,7 @@ async function generateFlyerCopy(args = {}, _ctx = {}) {
       // markers on the headline / body. Full stack so the backend
       // console makes the cause obvious. Capture the message so the
       // route can pass it to the frontend as an error-toast reason.
-      realModeError = e.message || String(e);
+      realModeError = formatGeminiLimitMessage(e) || e.message || String(e);
       console.error(
         `[marketingFlyerCopyLLM] real-mode call failed (falling through to stub): ${realModeError}`,
         e.stack ? `\n${e.stack}` : '',

@@ -9,6 +9,17 @@ import TopScrollSync from '../components/TopScrollSync';
 // #366: include Junk so the chip can show its count if the tenant uses it.
 const STATUSES = ['Lead', 'Prospect', 'Customer', 'Churned', 'Junk'];
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
+const sourceBadgeStyle = {
+  padding: '0.25rem 0.75rem',
+  borderRadius: '999px',
+  fontSize: '0.75rem',
+  fontWeight: 600,
+  backgroundColor: 'var(--accent-bg, rgba(59, 130, 246, 0.15))',
+  color: 'var(--accent-text, var(--primary-color, var(--accent-color, #8b5cf6)))',
+  border: '1px solid var(--border-color)',
+  whiteSpace: 'nowrap',
+  display: 'inline-block',
+};
 
 const ConvertedLeads = () => {
   const notify = useNotify();
@@ -33,7 +44,7 @@ const ConvertedLeads = () => {
       .then(response => {
         // #251: backend response shape is { success, count, data: [...] }, but
         // some sister endpoints return the raw array. Be defensive and handle
-        // both — the previous code only read `response.data` and silently
+        // both ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the previous code only read `response.data` and silently
         // showed 0 leads when the API returned an array directly (or when
         // .data was nested one level deeper inside an axios-style envelope).
         const rows = Array.isArray(response)
@@ -263,7 +274,7 @@ const ConvertedLeads = () => {
             </div>
           </div>
 
-          {/* overflow-x wrapper — the dynamic Lead-custom-field columns
+          {/* overflow-x wrapper ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the dynamic Lead-custom-field columns
               can push this table wider than the viewport. */}
           <TopScrollSync scrollWidth={customFieldDefs.length ? `${900 + customFieldDefs.length * 140}px` : undefined}>
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: customFieldDefs.length ? `${900 + customFieldDefs.length * 140}px` : undefined }}>
@@ -314,17 +325,11 @@ const ConvertedLeads = () => {
                     </span>
                   </td>
                   <td style={{ padding: '1rem' }}>
-                    <span style={{
-                      padding: '0.25rem 0.75rem',
-                      borderRadius: '999px',
-                      fontSize: '0.75rem',
-                      backgroundColor: 'rgba(139, 92, 246, 0.1)',
-                      color: '#8b5cf6',
-                    }}>
+                    <span style={sourceBadgeStyle}>
                       {lead.source || 'Organic'}
                     </span>
                   </td>
-                  {/* Generic-vertical-only Lead custom fields — value or a
+                  {/* Generic-vertical-only Lead custom fields ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â value or a
                       dash for leads that predate the field. */}
                   {customFieldDefs.map(f => {
                     const raw = lead.customFields?.[f.fieldKey];
@@ -348,7 +353,7 @@ const ConvertedLeads = () => {
                     }
                     return (
                       <td key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                        {display ?? <span style={{ color: 'var(--border-color)' }}>—</span>}
+                        {display ?? <span style={{ color: 'var(--border-color)' }}>ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â</span>}
                       </td>
                     );
                   })}
@@ -369,11 +374,11 @@ const ConvertedLeads = () => {
                   <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
                     {formatDate(lead.createdAt)}
                   </td>
-                  {/* #367: revert flow — confirm dialog moves the contact back to /leads. */}
+                  {/* #367: revert flow ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â confirm dialog moves the contact back to /leads. */}
                   <td style={{ padding: '1rem' }}>
                     <button
                       onClick={() => handleRevertToLead(lead.id, lead.name)}
-                      title="Revert to Lead — moves this contact back to /leads"
+                      title="Revert to Lead ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â moves this contact back to /leads"
                       style={{
                         background: 'transparent',
                         border: '1px solid var(--border-color)',

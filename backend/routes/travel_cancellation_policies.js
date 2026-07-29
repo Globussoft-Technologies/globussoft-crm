@@ -112,6 +112,51 @@ function assertValidTiers(tiers) {
   return out;
 }
 
+const POLICY_ITINERARY_SELECT = {
+  id: true,
+  destination: true,
+  subBrand: true,
+  status: true,
+  startDate: true,
+  endDate: true,
+  totalAmount: true,
+  currency: true,
+};
+
+async function resolvePolicyItinerary(req, itineraryId) {
+  if (itineraryId === undefined || itineraryId === null || itineraryId === '') {
+    return null;
+  }
+  const id = parseInt(itineraryId, 10);
+  if (!Number.isFinite(id)) {
+    const err = new Error('itineraryId must be a number');
+    err.status = 400;
+    err.code = 'INVALID_ITINERARY_ID';
+    throw err;
+  }
+
+  const itinerary = await prisma.itinerary.findFirst({
+    where: { id, tenantId: req.travelTenant.id },
+    select: POLICY_ITINERARY_SELECT,
+  });
+  if (!itinerary) {
+    const err = new Error('Trip not found');
+    err.status = 404;
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
+
+  const allowed = await getSubBrandAccessSet(req.user.userId);
+  if (!canAccessSubBrand(allowed, itinerary.subBrand)) {
+    const err = new Error('Sub-brand access denied');
+    err.status = 403;
+    err.code = 'SUB_BRAND_DENIED';
+    throw err;
+  }
+
+  return itinerary;
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/travel/cancellation-policies — list (filterable).
 // Query params: ?subBrand=<sb> ?active=true|false ?limit=<n> ?offset=<n>
@@ -146,6 +191,7 @@ router.get(
           orderBy: [{ isActive: "desc" }, { name: "asc" }],
           take,
           skip,
+          include: { itinerary: { select: POLICY_ITINERARY_SELECT } },
         }),
         prisma.cancellationPolicy.count({ where }),
       ]);
@@ -177,6 +223,7 @@ router.get(
       }
       const row = await prisma.cancellationPolicy.findFirst({
         where: { id, tenantId: req.travelTenant.id },
+        include: { itinerary: { select: POLICY_ITINERARY_SELECT } },
       });
       if (!row) {
         return res
@@ -203,7 +250,7 @@ router.post(
   requireTravelTenant,
   async (req, res) => {
     try {
-      const { name, subBrand, description, tiersJson, isActive } =
+      const { name, subBrand, itineraryId, description, tiersJson, isActive } =
         req.body || {};
 
       if (!name || typeof name !== "string" || !name.trim()) {
@@ -220,6 +267,7 @@ router.post(
       }
 
       let normalizedSubBrand = null;
+      let resolvedItinerary = null;
       if (subBrand !== undefined && subBrand !== null && subBrand !== "") {
         assertValidSubBrand(subBrand);
         const allowed = await getSubBrandAccessSet(req.user.userId);
@@ -232,6 +280,19 @@ router.post(
         normalizedSubBrand = subBrand;
       }
 
+      if (itineraryId !== undefined && itineraryId !== null && itineraryId !== "") {
+        resolvedItinerary = await resolvePolicyItinerary(req, itineraryId);
+        if (normalizedSubBrand && normalizedSubBrand !== resolvedItinerary.subBrand) {
+          return res.status(400).json({
+            error: "itinerary sub-brand must match the policy sub-brand",
+            code: "ITINERARY_SUB_BRAND_MISMATCH",
+          });
+        }
+        if (!normalizedSubBrand) {
+          normalizedSubBrand = resolvedItinerary.subBrand;
+        }
+      }
+
       // tiers validation (throws 400 on bad shape).
       const tiers = assertValidTiers(tiersJson);
 
@@ -240,10 +301,12 @@ router.post(
           tenantId: req.travelTenant.id,
           name: name.trim(),
           subBrand: normalizedSubBrand,
+          itineraryId: resolvedItinerary ? resolvedItinerary.id : null,
           description: description ? String(description) : null,
           tiersJson: JSON.stringify(tiers),
           isActive: isActive !== false,
         },
+        include: { itinerary: { select: POLICY_ITINERARY_SELECT } },
       });
 
       await writeAudit(
@@ -255,6 +318,8 @@ router.post(
         {
           name: created.name,
           subBrand: created.subBrand,
+          itineraryId: created.itineraryId,
+          itineraryLabel: created.itinerary ? created.itinerary.destination : null,
           tierCount: tiers.length,
         },
       );
@@ -295,6 +360,7 @@ router.patch(
       }
       const existing = await prisma.cancellationPolicy.findFirst({
         where: { id, tenantId: req.travelTenant.id },
+        include: { itinerary: { select: POLICY_ITINERARY_SELECT } },
       });
       if (!existing) {
         return res
@@ -304,6 +370,16 @@ router.patch(
 
       const data = {};
       const body = req.body || {};
+      const targetItineraryId = body.itineraryId !== undefined ? body.itineraryId : undefined;
+      let resolvedItinerary = null;
+      if (targetItineraryId !== undefined) {
+        if (targetItineraryId === null || targetItineraryId === "") {
+          data.itineraryId = null;
+        } else {
+          resolvedItinerary = await resolvePolicyItinerary(req, targetItineraryId);
+          data.itineraryId = resolvedItinerary.id;
+        }
+      }
       if (body.name !== undefined) {
         if (typeof body.name !== "string" || !body.name.trim()) {
           return res.status(400).json({
@@ -325,8 +401,22 @@ router.patch(
               code: "SUB_BRAND_DENIED",
             });
           }
+          if (resolvedItinerary && body.subBrand !== resolvedItinerary.subBrand) {
+            return res.status(400).json({
+              error: "itinerary sub-brand must match the policy sub-brand",
+              code: "ITINERARY_SUB_BRAND_MISMATCH",
+            });
+          }
+          if (!resolvedItinerary && existing.itinerary && body.subBrand !== existing.itinerary.subBrand) {
+            return res.status(400).json({
+              error: "selected trip belongs to a different sub-brand",
+              code: "ITINERARY_SUB_BRAND_MISMATCH",
+            });
+          }
           data.subBrand = body.subBrand;
         }
+      } else if (resolvedItinerary) {
+        data.subBrand = resolvedItinerary.subBrand;
       }
       if (body.description !== undefined) {
         data.description = body.description === null ? null : String(body.description);
@@ -346,6 +436,7 @@ router.patch(
       const updated = await prisma.cancellationPolicy.update({
         where: { id },
         data,
+        include: { itinerary: { select: POLICY_ITINERARY_SELECT } },
       });
 
       await writeAudit(
@@ -354,7 +445,10 @@ router.patch(
         updated.id,
         req.user.userId,
         req.travelTenant.id,
-        { fields: Object.keys(data) },
+        {
+          fields: Object.keys(data),
+          itineraryId: updated.itineraryId,
+        },
       );
 
       res.json(updated);

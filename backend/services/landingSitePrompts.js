@@ -143,7 +143,6 @@ function buildWellnessLandingSitePrompt(input = {}) {
     '    "heroCopy": "string",',
     '    "heroNote": "string",',
     '    "heroPrimaryCta": "string",',
-    '    "heroSecondaryCta": "string",',
     '    "detailDateLabel": "string",',
     '    "detailDateValue": "string",',
     '    "detailTimeLabel": "string",',
@@ -255,7 +254,6 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
   const eventLocation = clean(input.eventLocation || input.location, 'Koramangala, Bengaluru', 160);
   const ctaText = clean(input.ctaText, 'Book Now', 40);
   const heroPrimaryCta = clean(input.heroPrimaryCta, 'Get Started', 40);
-  const heroSecondaryCta = clean(input.heroSecondaryCta, 'Contact Us', 40);
   const topCta = clean(input.topCta, 'Book Now', 40);
   const heroKicker = clean(input.heroKicker, 'VISIT - CALL - WRITE', 40);
   const heroTitleLine1 = clean(input.heroTitleLine1, campaignName, 80);
@@ -349,7 +347,6 @@ function buildWellnessRegistrationBlocks(input = {}, sourcePayload = {}) {
             { id: 'hero-title-2', type: 'heading', props: { text: heroTitleLine2, level: 'h1', align: 'left', color: '#b31d15', variant: 'wellness-hero-accent' } },
             { id: 'hero-copy', type: 'text', props: { text: heroCopy, align: 'left', color: '#5f6c67', fontSize: '1.02rem', variant: 'wellness-body' } },
             { id: 'hero-primary-cta', type: 'button', props: { text: heroPrimaryCta, url: '#lead-form', bgColor: '#b31d15', color: '#ffffff', align: 'left', size: 'medium' } },
-            { id: 'hero-secondary-cta', type: 'button', props: { text: heroSecondaryCta, url: '#lead-form', bgColor: '#fff8f7', color: '#b31d15', align: 'left', size: 'medium' } },
             { id: 'hero-note', type: 'text', props: { text: heroNote, align: 'left', color: '#5f6c67', fontSize: '0.88rem', variant: 'wellness-note' } },
           ] },
           { components: [

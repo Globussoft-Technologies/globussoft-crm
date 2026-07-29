@@ -65,6 +65,7 @@ describe('<LandingPageWellnessEditor /> - wellness bootstrap', () => {
     expect(screen.getByText('Wellness Landing Page Editor')).toBeInTheDocument();
     expect(screen.getByLabelText('Headline line 1')).toBeInTheDocument();
     expect(screen.getByLabelText('Brand line')).toHaveValue('Glow Hair Studio');
+    expect(screen.queryByLabelText('Secondary CTA')).not.toBeInTheDocument();
     expect(screen.queryByText(/Blood Donation/i)).not.toBeInTheDocument();
   });
 });

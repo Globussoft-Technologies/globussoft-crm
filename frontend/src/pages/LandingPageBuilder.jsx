@@ -240,6 +240,12 @@ export default function LandingPageBuilder() {
   const [featuringPage, setFeaturingPage] = useState(false);
   // Track all pages so we can warn when another live page exists.
   const [allPages, setAllPages] = useState([]);
+  const currentPublishedLandingSite = isGenericLandingSites
+    ? allPages.find((p) => p.status === 'PUBLISHED' && p.id !== page?.id && typeof p.templateType === 'string' && p.templateType.startsWith('generic-site-')) || null
+    : null;
+  const publishBlockedReason = currentPublishedLandingSite
+    ? `Only one published landing site is allowed at a time. Unpublish "${currentPublishedLandingSite.title}" first.`
+    : '';
 
   // #449: hide the global app sidebar while the builder is mounted. The
   // builder is a 3-column layout that competes with the global Sidebar +
@@ -457,12 +463,9 @@ export default function LandingPageBuilder() {
 
   const handlePublish = async () => {
     if (!page?.id || publishing) return;
-    // We rely on the backend publish transaction to swap the featured/live
-    // page, so don't block wellness or generic pages here if another draft
-    // or live page already exists.
-    const currentLive = allPages.find(p => p.status === 'PUBLISHED' && p.id !== page.id);
-    if (currentLive) {
-      notify.info(`"${currentLive.title}" is currently live. Publishing this page will replace it.`);
+    if (publishBlockedReason) {
+      notify.error(publishBlockedReason);
+      return;
     }
     setPublishing(true);
     try {
@@ -476,6 +479,8 @@ export default function LandingPageBuilder() {
       if (err?.status === 409 && err?.code === 'PUBLISH_GATE_FAILED') {
         setPublishIssues({ ok: false, issues: err.data?.issues || [] });
         setShowPublishModal(true);
+      } else if (err?.status === 409 && err?.code === 'ANOTHER_LANDING_SITE_PUBLISHED') {
+        notify.error(err?.data?.error || publishBlockedReason || 'Only one published landing site is allowed at a time.');
       } else {
         notify.error(err?.message || 'Publish failed.');
       }
@@ -844,19 +849,18 @@ export default function LandingPageBuilder() {
             <Globe size={13} /> Unpublish
           </button>
         ) : (() => {
-          const blockedBy = allPages.find((p) => p.status === 'PUBLISHED' && p.id !== page.id);
           return (
             <button
               onClick={handlePublish}
-              disabled={publishing || !slugIsValid}
+              disabled={publishing || !slugIsValid || Boolean(publishBlockedReason)}
               title={
                 !slugIsValid
                   ? 'Fix the slug first'
-                    : blockedBy
-                    ? ('"' + blockedBy.title + '" is currently live - publishing will replace it')
+                  : publishBlockedReason
+                    ? publishBlockedReason
                     : 'Publish - runs the readiness check then makes the page public'
               }
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.35rem 0.95rem', border: 'none', borderRadius: 6, background: !slugIsValid ? 'var(--subtle-bg)' : '#10b981', cursor: (publishing || !slugIsValid) ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: '#fff', fontWeight: 600, opacity: publishing ? 0.5 : 1 }}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.35rem 0.95rem', border: 'none', borderRadius: 6, background: !slugIsValid ? 'var(--subtle-bg)' : '#10b981', cursor: (publishing || !slugIsValid || publishBlockedReason) ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: '#fff', fontWeight: 600, opacity: (publishing || publishBlockedReason) ? 0.5 : 1 }}
             >
               <Globe size={13} /> {publishing ? 'Publishing...' : 'Publish'}
             </button>
@@ -1148,11 +1152,13 @@ export default function LandingPageBuilder() {
           publishing={publishing}
           onPublish={handlePublish}
           onClose={() => setShowPublishModal(false)}
-          isGenericLandingSites={isGenericLandingSites}
           onJumpToBlock={(blockIndex) => {
             if (typeof blockIndex === 'number') setSelected(blockIndex);
             setShowPublishModal(false);
           }}
+          isGenericLandingSites={isGenericLandingSites}
+          publishDisabled={Boolean(publishBlockedReason)}
+          publishDisabledReason={publishBlockedReason}
         />
       )}
 
@@ -1337,9 +1343,10 @@ const iconBtnStyle = { background: 'none', border: 'none', color: '#fff', cursor
 // authoritative; this modal is a UX shell over it. Clicking an issue
 // jumps to the offending block on the canvas (when blockIndex is
 // supplied by the backend) so the operator can fix it inline.
-function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, onJumpToBlock, isGenericLandingSites }) {
+function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, onJumpToBlock, isGenericLandingSites, publishDisabled, publishDisabledReason }) {
   const ok = verdict?.ok && Array.isArray(verdict.issues) && verdict.issues.length === 0;
   const issues = Array.isArray(verdict?.issues) ? verdict.issues : [];
+  const disabled = Boolean(publishDisabled || publishDisabledReason);
   return (
     <div
       role="dialog"
@@ -1361,12 +1368,18 @@ function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, 
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1rem' }}>
               Page passes every readiness check. Click Publish to make <code>{isGenericLandingSites ? '/landing-sites/:slug' : '/trips'}</code> public.
             </p>
+            {disabled && publishDisabledReason && (
+              <div style={{ marginBottom: '1rem', padding: '0.75rem 0.85rem', borderRadius: 8, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.1)', color: '#b45309', fontSize: '0.85rem', lineHeight: 1.5 }}>
+                {publishDisabledReason}
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
               <button onClick={onClose} style={{ padding: '0.5rem 1rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer' }}>Cancel</button>
               <button
                 onClick={onPublish}
-                disabled={publishing}
-                style={{ padding: '0.5rem 1rem', border: 'none', borderRadius: 6, background: '#10b981', color: '#fff', cursor: publishing ? 'wait' : 'pointer', fontWeight: 600 }}
+                disabled={publishing || disabled}
+                title={disabled ? publishDisabledReason : 'Publish this landing site'}
+                style={{ padding: '0.5rem 1rem', border: 'none', borderRadius: 6, background: '#10b981', color: '#fff', cursor: (publishing || disabled) ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: disabled ? 0.55 : 1 }}
               >
                 {publishing ? 'Publishing...' : 'Publish'}
               </button>

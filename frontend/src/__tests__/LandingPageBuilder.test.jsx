@@ -142,6 +142,7 @@ function renderBuilder(initialPath = "/landing-pages/42", tenantVertical = "trav
       <MemoryRouter initialEntries={[initialPath]}>
         <Routes>
           <Route path="/landing-pages/:id" element={<LandingPageBuilder />} />
+          <Route path="/landing-sites/builder/:id" element={<LandingPageBuilder />} />
         </Routes>
       </MemoryRouter>
     </AuthContext.Provider>,
@@ -460,7 +461,7 @@ describe("<LandingPageBuilder /> — page surface", () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────
-  it("wellness tenants can publish even when another page is already live", async () => {
+  it("wellness tenants can still publish non-landing-site pages when another page is already live", async () => {
     const livePage = {
       ...samplePagePublished,
       id: 44,
@@ -485,7 +486,7 @@ describe("<LandingPageBuilder /> — page surface", () => {
     await user.click(screen.getByRole("button", { name: /^Publish/ }));
 
     await waitFor(() => expect(fetchApiMock.mock.calls.some(([url, opts]) => url === "/api/landing-pages/42/publish" && opts?.method === "POST")).toBe(true));
-    expect(notifyInfo).toHaveBeenCalledWith(expect.stringContaining("Community Wellness Camp"));
+    expect(notifyInfo).not.toHaveBeenCalled();
     await waitFor(() => expect(notifySuccess).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByRole("button", { name: /Unpublish/i })).toBeInTheDocument());
   });
@@ -1183,4 +1184,40 @@ describe("<LandingPageBuilder /> — TMC trip picker combobox", () => {
       expect.stringMatching(/Unlinked/i),
     );
   });
+
+  it('disables publish in the generic landing-site builder when another page is already live', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages/42' && method === 'GET') {
+        return Promise.resolve({ ...samplePageDraft, templateType: 'generic-site-wellness-v1' });
+      }
+      if (url === '/api/landing-pages' && method === 'GET') {
+        return Promise.resolve([
+          { id: 43, title: 'Hair Treatment Live', slug: 'hair-treatment-live', status: 'PUBLISHED', templateType: 'generic-site-wellness-v1' },
+          { id: 42, title: 'Spring Launch', slug: 'spring-launch', status: 'DRAFT', templateType: 'generic-site-wellness-v1' },
+        ]);
+      }
+      if (url === '/api/landing-pages/42/publish-check' && method === 'GET') return Promise.resolve({ ok: true, issues: [] });
+      if (url === '/api/lead-routing' && method === 'GET') return Promise.resolve(sampleRules);
+      return defaultFetch(url, opts);
+    });
+
+    const user = userEvent.setup();
+    renderBuilder('/landing-sites/builder/42', 'wellness');
+
+    await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
+
+    const publishButton = screen.getByRole('button', { name: /^Publish$/i });
+    expect(publishButton).toBeDisabled();
+    expect(publishButton.title).toMatch(/only one published landing site/i);
+
+    await user.click(screen.getByRole('button', { name: /^Check$/i }));
+    await waitFor(() => {
+      const publishButtons = screen.getAllByRole('button', { name: /^Publish$/i });
+      const modalButton = publishButtons.find((btn) => btn !== publishButton);
+      expect(modalButton).toBeDisabled();
+      expect(modalButton.title).toMatch(/only one published landing site/i);
+    });
+  });
+
 });

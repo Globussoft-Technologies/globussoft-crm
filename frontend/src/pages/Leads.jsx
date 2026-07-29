@@ -1,15 +1,16 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
-import React, { useState, useEffect, useContext } from 'react';
+import { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Search, ArrowRightCircle, UserCheck, Users, Plus, X, Pencil, Trash2, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
+import { UserPlus, Search, ArrowRightCircle, Plus, X, Pencil, Trash2, RefreshCw, ChevronLeft, ChevronRight, Filter } from 'lucide-react';
 import { AuthContext } from '../App';
 import ColumnPicker from '../components/ColumnPicker';
 import TopScrollSync from '../components/TopScrollSync';
+import { SUB_BRAND_IDS, subBrandShortLabel } from '../utils/travelSubBrand';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
-// #600 — wellness vertical replaces the generic CRM source taxonomy with one
+// #600  wellness vertical replaces the generic CRM source taxonomy with one
 // that matches Patient-intake channels. WhatsApp is the dominant inbound
 // channel for clinics; LinkedIn / Cold Call don't apply.
 const TRAVEL_SOURCE_OPTIONS = [
@@ -38,8 +39,19 @@ const WELLNESS_SOURCE_OPTIONS = [
 const INDIAN_MOBILE_RE = /^(?:\+?91)?[6-9]\d{9}$/;
 const FIELD_LIMITS = { name: 191, email: 191, company: 191, title: 200, phone: 20 };
 const LEADS_PAGE_SIZE_OPTIONS = [25, 50, 100];
+const sourceBadgeStyle = {
+  padding: '0.25rem 0.75rem',
+  borderRadius: '999px',
+  fontSize: '0.75rem',
+  fontWeight: 600,
+  backgroundColor: 'var(--source-badge-bg, rgba(139, 92, 246, 0.16))',
+  color: 'var(--source-badge-text, var(--text-primary))',
+  border: '1px solid var(--border-color)',
+  whiteSpace: 'nowrap',
+  display: 'inline-block',
+};
 // Reject all C0 controls (NUL/BEL/etc.) + DEL. \t \n \r are intentionally
-// included — text inputs shouldn't carry them either, and any paste-from-
+// included  text inputs shouldn't carry them either, and any paste-from-
 // malicious-source typically smuggles via NUL or BEL. Detecting control
 // chars requires control chars in the pattern; the eslint rule is for
 // preventing accidental control chars, so disable it here intentionally.
@@ -73,7 +85,7 @@ const COUNTRY_CODES = [
 const Leads = () => {
   const navigate = useNavigate();
   const notify = useNotify();
-  // #600 — vertical-aware Lead form. Wellness tenants get the Patient-intake
+  // #600  vertical-aware Lead form. Wellness tenants get the Patient-intake
   // field set (Phone required, wellness sources, treatment of interest,
   // preferred location/practitioner); generic CRM keeps the original fields.
   const auth = useContext(AuthContext);
@@ -93,7 +105,7 @@ const Leads = () => {
   const [pageInput, setPageInput] = useState('1');
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [bulkAgent, setBulkAgent] = useState('');
-  // #892 — Create Lead surface is a header CTA + drawer (not the inline
+  // #892  Create Lead surface is a header CTA + drawer (not the inline
   // always-visible form). `creating` drives whether the drawer is rendered.
   const [creating, setCreating] = useState(false);
   const [sourceFilter, setSourceFilter] = useState('');
@@ -102,7 +114,7 @@ const Leads = () => {
   const [pipelineStages, setPipelineStages] = useState([]);
   const [dealsByContact, setDealsByContact] = useState({});
   const [bookingValueByContact, setBookingValueByContact] = useState({});
-  // TMC instalment paid totals keyed by parent contact email — supplements
+  // TMC instalment paid totals keyed by parent contact email  supplements
   // itinerary advancePaidAmount for leads that have no itinerary row yet.
   const [tmcPaidByEmail, setTmcPaidByEmail] = useState({});
   const [editing, setEditing] = useState(null);
@@ -113,11 +125,30 @@ const Leads = () => {
   // for a generic tenant that hasn't defined any fields yet.
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
   // Generic-vertical-only "Customize table" column-visibility picker
-  // (personal per-user preference — see components/ColumnPicker.jsx).
+  // (personal per-user preference  see components/ColumnPicker.jsx).
   // null = "not loaded yet, show every builtin column" so the table never
   // flashes empty while the preference GET is in flight.
   const [visibleColumns, setVisibleColumns] = useState(null);
-  // #600 — Initial source defaults differ per vertical: wellness leads
+  const isColVisible = (key) => visibleColumns === null || visibleColumns.includes(key);
+  const handleCustomFieldChangeNew = (fieldKey, value) => {
+    setNewLead((prev) => ({
+      ...prev,
+      customFields: {
+        ...(prev.customFields || {}),
+        [fieldKey]: value,
+      },
+    }));
+  };
+  const handleCustomFieldChangeEdit = (fieldKey, value) => {
+    setEditForm((prev) => ({
+      ...prev,
+      customFields: {
+        ...(prev.customFields || {}),
+        [fieldKey]: value,
+      },
+    }));
+  };
+  // #600  Initial source defaults differ per vertical: wellness leads
   // typically arrive walk-in/WhatsApp; generic CRM leads default to Organic.
   const [newLead, setNewLead] = useState({
     name: '',
@@ -170,7 +201,7 @@ const Leads = () => {
           setDealsByContact(map);
         })
         .catch(() => setDealsByContact({}));
-      // Booking value from itineraries — show what the customer has actually paid.
+      // Booking value from itineraries  show what the customer has actually paid.
       // Priority: advancePaidAmount (actual cash received) when it's recorded and > 0.
       // Fallback: totalAmount for committed statuses (accepted/advance_paid/fully_paid)
       // so that legacy itineraries without advancePaidAmount still show their value.
@@ -196,7 +227,7 @@ const Leads = () => {
           setBookingValueByContact(map);
         })
         .catch(() => setBookingValueByContact({}));
-      // Fetch TMC paid instalment totals keyed by parent email — covers leads
+      // Fetch TMC paid instalment totals keyed by parent email  covers leads
       // whose parent contact has no Itinerary row (common for TMC school trips).
       fetchApi('/api/travel/trip-billing/paid-by-contact')
         .then(res => setTmcPaidByEmail(res?.byEmail || {}))
@@ -204,7 +235,7 @@ const Leads = () => {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // #600 — load wellness service catalogue + clinic locations only when the
+  // #600  load wellness service catalogue + clinic locations only when the
   // current tenant is the wellness vertical. Avoids 401 / empty-response
   // chatter from the generic tenant hitting wellness-only endpoints.
   useEffect(() => {
@@ -226,7 +257,7 @@ const Leads = () => {
       .catch(() => setCustomFieldDefs([]));
   }, [isWellness, isTravel]);
 
-  // #892 — close the Create drawer on Escape. Attached only while the drawer
+  // #892  close the Create drawer on Escape. Attached only while the drawer
   // is open so we don't trap key events for users not actively creating.
   useEffect(() => {
     if (!creating) return undefined;
@@ -243,17 +274,17 @@ const Leads = () => {
   const handleCreateLead = async (e) => {
     e.preventDefault();
 
-    // #557 (HI-08) — client-side hardening. Order:
+    // #557 (HI-08)  client-side hardening. Order:
     //   1. Trim required fields + reject whitespace-only (preserves #337).
     //   2. Per-field length caps (rejects, doesn't silently truncate, so the
     //      user knows they need to shorten the input).
-    //   3. Control-character rejection (NUL, BEL, VT, DEL, etc.) — these are
+    //   3. Control-character rejection (NUL, BEL, VT, DEL, etc.)  these are
     //      never legitimate in name/email/company/title and usually signal a
     //      paste-from-malicious-source.
-    //   4. HTML/script tag pre-strip (defence-in-depth — backend's
+    //   4. HTML/script tag pre-strip (defence-in-depth  backend's
     //      sanitizeBody also strips, but surfacing a notice is better UX
     //      than the user wondering why their input looks different).
-    //   5. Email shape sanity check (cheap regex — backend stays the source
+    //   5. Email shape sanity check (cheap regex  backend stays the source
     //      of truth for the strict validation).
     // The backend at routes/contacts.js + sanitizeBody is still the source
     // of truth; these are just guard rails for fast feedback.
@@ -264,7 +295,7 @@ const Leads = () => {
       return;
     }
 
-    // 2. Length caps — match backend Contact column limits (191) for name/
+    // 2. Length caps  match backend Contact column limits (191) for name/
     //    email/company; cap title at 200 (the issue ask). Reject so the user
     //    sees a clear "too long" message rather than a server-side 400.
     const lengthErrors = [];
@@ -288,7 +319,7 @@ const Leads = () => {
       }
     }
 
-    // 4. HTML/script tag pre-strip — surface what was removed so the user
+    // 4. HTML/script tag pre-strip  surface what was removed so the user
     //    isn't surprised. We strip just the dangerous TAGS (matching the
     //    server-side sanitizeBody contract); the inner text content is kept.
     const stripped = {};
@@ -303,7 +334,7 @@ const Leads = () => {
       notify.info('HTML markup was removed from your input before submitting.');
     }
     // Re-trim the stripped name in case stripping the tags reduced it to
-    // whitespace (e.g. the user submitted JUST `<img onerror=…>`). Use
+    // whitespace (e.g. the user submitted JUST `<img onerror=>`). Use
     // nullish-coalesce, NOT logical-OR, so an empty-string result of the
     // strip falls through to the empty-name guard rather than reverting
     // to the un-stripped original.
@@ -313,7 +344,7 @@ const Leads = () => {
       return;
     }
 
-    // 5. Email shape — basic regex (matches backend lib/validateContactInput
+    // 5. Email shape  basic regex (matches backend lib/validateContactInput
     //    + CSV importer). The backend rejects with 400 either way.
     //    #600: under wellness, email is OPTIONAL (Patient intake mirrors this);
     //    phone becomes the required identifier instead.
@@ -329,9 +360,9 @@ const Leads = () => {
     }
 
     // Phone handling per vertical:
-    //   wellness — required, validated against Indian-mobile pattern
-    //   travel   — optional, free-form (prepend country code if provided)
-    //   generic  — optional, free-form (prepend country code if provided)
+    //   wellness  required, validated against Indian-mobile pattern
+    //   travel    optional, free-form (prepend country code if provided)
+    //   generic   optional, free-form (prepend country code if provided)
     let phone = String(newLead.phone || '').trim();
     if (isWellness) {
       const phoneClean = phone.replace(/[\s\-()]/g, '');
@@ -355,7 +386,7 @@ const Leads = () => {
     try {
       // Generic CRM: prepend the picker's country code (the input field
       // is the local-part). Wellness: phone is already canonicalised by
-      // the +91-optional regex above — store as-is.
+      // the +91-optional regex above  store as-is.
       const phoneOut = isWellness
         ? phone
         : (newLead.phone ? `${newLead.countryCode} ${newLead.phone}` : '');
@@ -365,7 +396,7 @@ const Leads = () => {
         body: JSON.stringify({ ...newLead, name: trimmedName, phone: phoneOut, countryCode: undefined }),
       });
       setNewLead({ name: '', email: '', company: '', title: '', countryCode: '+1', phone: '', source: 'Organic', status: 'Lead', customFields: {} });
-      // #892 — close the drawer on successful create; the list refresh
+      // #892  close the drawer on successful create; the list refresh
       // below puts the new row at the top so the user sees the result.
       setCreating(false);
     } finally {
@@ -478,11 +509,90 @@ const Leads = () => {
     }
   };
 
-  const handleChange = (field, value) => {
+    const handleChange = (field, value) => {
     setNewLead(prev => ({ ...prev, [field]: value }));
   };
 
-  // Generic-vertical-only Lead custom fields — renders the right input
+  const sourceFilterOptions = isWellness
+    ? WELLNESS_SOURCE_OPTIONS
+    : isTravel
+    ? TRAVEL_SOURCE_OPTIONS
+    : SOURCE_OPTIONS.map(src => ({ value: src, label: src }));
+
+  const matchesSource = (leadSource, filterValue) => {
+    if (!filterValue) return true;
+    return String(leadSource || '').toLowerCase() === String(filterValue).toLowerCase();
+  };
+
+  const sourceCounts = sourceFilterOptions.reduce((acc, opt) => {
+    acc[opt.value] = leads.filter(lead => matchesSource(lead.source, opt.value)).length;
+    return acc;
+  }, {});
+
+  const travelSubBrandOptions = SUB_BRAND_IDS.map(id => ({ value: id, label: subBrandShortLabel(id) }));
+  const travelStageOptions = pipelineStages.map(stage => ({
+    value: String(stage.id ?? stage.name ?? stage.title),
+    label: stage.title || stage.name || `Stage ${stage.id}`,
+  }));
+  const leadMatchesStage = (lead) => {
+    if (!stageFilter) return true;
+    const deals = dealsByContact[lead.id] || [];
+    return deals.some(deal => [
+      deal.pipelineStageId,
+      deal.stageId,
+      deal.stage,
+      deal.pipelineStage?.id,
+      deal.pipelineStage?.name,
+      deal.pipelineStage?.title,
+    ].some(value => String(value ?? '') === stageFilter));
+  };
+  const leadsTableMinWidth = isTravel
+    ? '1720px'
+    : isWellness
+    ? '1500px'
+    : customFieldDefs.length
+    ? `${900 + customFieldDefs.length * 140}px`
+    : undefined;
+
+  const filteredLeads = leads.filter(lead => {
+    if (!matchesSource(lead.source, sourceFilter)) return false;
+    if (isTravel && subBrandFilter && lead.subBrand !== subBrandFilter) return false;
+    if (isTravel && !leadMatchesStage(lead)) return false;
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return true;
+    return [
+      lead.name,
+      lead.email,
+      lead.company,
+      lead.phone,
+      lead.source,
+      lead.assignedTo?.name,
+      lead.assignedTo?.email,
+    ].some(value => String(value || '').toLowerCase().includes(term));
+  });
+
+  const leadsPageCount = Math.max(1, Math.ceil(filteredLeads.length / leadsPageSize));
+  const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
+  const pageStart = filteredLeads.length === 0 ? 0 : currentLeadsPage * leadsPageSize + 1;
+  const pageEnd = filteredLeads.length === 0 ? 0 : Math.min(filteredLeads.length, currentLeadsPage * leadsPageSize + leadsPageSize);
+  const paginatedLeads = filteredLeads.slice(currentLeadsPage * leadsPageSize, currentLeadsPage * leadsPageSize + leadsPageSize);
+
+  const goToLeadsPage = () => {
+    const nextPage = Number(pageInput);
+    if (!Number.isFinite(nextPage) || nextPage < 1) {
+      setLeadsPage(0);
+      setPageInput('1');
+      return;
+    }
+    const clampedPage = Math.min(nextPage, leadsPageCount);
+    setLeadsPage(clampedPage - 1);
+    setPageInput(String(clampedPage));
+  };
+
+  useEffect(() => {
+    setPageInput(String(currentLeadsPage + 1));
+  }, [currentLeadsPage]);
+// Generic-vertical-only Lead custom fields  renders the right input
   // widget per admin-defined field type (Settings > Lead Fields). Shared
   // between the Create and Edit forms; each caller passes its own
   // `values`/`onChange` so this stays a pure render helper with no state
@@ -504,6 +614,7 @@ const Leads = () => {
           </label>
         );
       }
+
       if (f.fieldType === 'dropdown' || f.fieldType === 'radio') {
         return (
           <select key={f.id} className="input-field" required={f.isRequired} value={value} onChange={e => handle(e.target.value)} {...titleAttr}>
@@ -514,363 +625,197 @@ const Leads = () => {
           </select>
         );
       }
+
       if (f.fieldType === 'multiselect') {
         const selected = Array.isArray(value) ? value : (value ? [value] : []);
         return (
           <div key={f.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }} {...titleAttr}>
-            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</span>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-              {(f.options || []).map((opt) => {
-                const checked = selected.includes(opt);
-                return (
-                  <label key={opt} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.85rem', padding: '0.25rem 0.5rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(e) => {
-                        const next = e.target.checked ? [...selected, opt] : selected.filter((s) => s !== opt);
-                        handle(next);
-                      }}
-                    />
-                    {opt}
-                  </label>
-                );
-              })}
+            {label}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+              {(f.options || []).map((opt) => (
+                <label key={opt} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.8rem', padding: '0.2rem 0.5rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(opt)}
+                    onChange={(e) => {
+                      const next = e.target.checked ? [...selected, opt] : selected.filter((s) => s !== opt);
+                      handle(next);
+                    }}
+                  />
+                  {opt}
+                </label>
+              ))}
             </div>
           </div>
         );
       }
-      if (f.fieldType === 'date') {
-        return (
-          <input key={f.id} type="date" placeholder={placeholder} required={f.isRequired} className="input-field" value={value} onChange={e => handle(e.target.value)} {...titleAttr} />
-        );
-      }
-      if (f.fieldType === 'number') {
-        return (
-          <input key={f.id} type="number" placeholder={placeholder} required={f.isRequired} className="input-field" value={value} onChange={e => handle(e.target.value)} {...titleAttr} />
-        );
-      }
-      if (f.fieldType === 'url') {
-        return (
-          <input key={f.id} type="url" placeholder={placeholder} required={f.isRequired} className="input-field" value={value} onChange={e => handle(e.target.value)} {...titleAttr} />
-        );
-      }
+
       if (f.fieldType === 'textarea') {
         return (
-          <textarea key={f.id} placeholder={placeholder} required={f.isRequired} maxLength={2000} className="input-field" rows={3} value={value} onChange={e => handle(e.target.value)} {...titleAttr} />
+          <textarea
+            key={f.id}
+            className="input-field"
+            required={f.isRequired}
+            value={value}
+            placeholder={placeholder}
+            maxLength={2000}
+            rows={3}
+            onChange={e => handle(e.target.value)}
+            {...titleAttr}
+            style={{ padding: '0.45rem', fontSize: '0.85rem' }}
+          />
         );
       }
-      // text
+
+      const inputType = f.fieldType === 'date' ? 'date' : f.fieldType === 'number' ? 'number' : f.fieldType === 'url' ? 'url' : 'text';
       return (
-        <input key={f.id} type="text" placeholder={placeholder} required={f.isRequired} maxLength={2000} className="input-field" value={value} onChange={e => handle(e.target.value)} {...titleAttr} />
+        <input
+          key={f.id}
+          type={inputType}
+          className="input-field"
+          required={f.isRequired}
+          value={value}
+          placeholder={placeholder}
+          onChange={e => handle(e.target.value)}
+          {...titleAttr}
+          style={{ padding: '0.45rem', fontSize: '0.85rem' }}
+        />
       );
     });
   };
 
-  const handleCustomFieldChangeNew = (key, value) => {
-    setNewLead(prev => ({ ...prev, customFields: { ...prev.customFields, [key]: value } }));
-  };
-
-  const handleCustomFieldChangeEdit = (key, value) => {
-    setEditForm(prev => ({ ...prev, customFields: { ...prev.customFields, [key]: value } }));
-  };
-
-  const filteredLeads = leads.filter(lead => {
-    const term = searchTerm.toLowerCase();
-    const matchesSearch = (
-      lead.name.toLowerCase().includes(term) ||
-      (lead.email && lead.email.toLowerCase().includes(term)) ||
-      (lead.company && lead.company.toLowerCase().includes(term))
-    );
-    const matchesSource = !sourceFilter || (lead.source || '').toLowerCase() === sourceFilter.toLowerCase();
-    const matchesSubBrand = !subBrandFilter || (lead.subBrand || '') === subBrandFilter;
-    // Stage filter: match against the contact's linked deal stage slugs
-    const matchesStage = !stageFilter || (dealsByContact[lead.id] || []).some(
-      d => (d.stage || '') === stageFilter
-    );
-    return matchesSearch && matchesSource && matchesSubBrand && matchesStage;
-  });
-
-  const leadsPageCount = Math.max(1, Math.ceil(filteredLeads.length / leadsPageSize));
-  const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
-  const paginatedLeads = filteredLeads.slice(currentLeadsPage * leadsPageSize, (currentLeadsPage + 1) * leadsPageSize);
-  const pageStart = filteredLeads.length ? currentLeadsPage * leadsPageSize + 1 : 0;
-  const pageEnd = Math.min((currentLeadsPage + 1) * leadsPageSize, filteredLeads.length);
-
-  useEffect(() => {
-    setLeadsPage(0);
-  }, [searchTerm, sourceFilter, subBrandFilter, stageFilter, leadsPageSize]);
-
-  useEffect(() => {
-    setPageInput(String(currentLeadsPage + 1));
-  }, [currentLeadsPage]);
-
-  const goToLeadsPage = () => {
-    const requestedPage = Number.parseInt(pageInput, 10);
-    if (!Number.isFinite(requestedPage)) {
-      setPageInput(String(currentLeadsPage + 1));
-      return;
-    }
-    const nextPage = Math.min(Math.max(requestedPage, 1), leadsPageCount);
-    setLeadsPage(nextPage - 1);
-    setPageInput(String(nextPage));
-  };
-  // Source chip options and counts derived from the full unfiltered leads list
-  const sourceOptions = isTravel ? TRAVEL_SOURCE_OPTIONS : isWellness ? WELLNESS_SOURCE_OPTIONS : SOURCE_OPTIONS.map(s => ({ value: s, label: s }));
-  const sourceCounts = leads.reduce((acc, lead) => {
-    const src = (lead.source || '').toLowerCase();
-    acc[src] = (acc[src] || 0) + 1;
-    return acc;
-  }, {});
-
-  // Generic-vertical-only "Customize table" column visibility (see
-  // components/ColumnPicker.jsx). Wellness/travel tenants and the initial
-  // "preference not loaded yet" moment both default to "show everything" so
-  // this never hides a column for anyone outside the feature's own scope.
-  const isColVisible = (key) => {
-    if (isWellness || isTravel || visibleColumns === null) return true;
-    return visibleColumns.includes(key);
-  };
-
+  const activeSearchTerm = searchTerm.trim();
+  const leadsSummary = activeSearchTerm
+    ? `${filteredLeads.length} of ${leads.length} leads match "${activeSearchTerm}"`
+    : `${leads.length} leads in pipeline`;
+  const leadsColSpan = 2
+    + (isAdmin ? 1 : 0)
+    + ['email', 'company', 'phone', 'aiScore', 'source', 'assignedTo', 'createdAt'].filter(isColVisible).length
+    + (isTravel ? 2 : 0)
+    + customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).length;
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
-      <style>{`
-        .leads-table-wrapper {
-          overflow: visible;
-        }
-        .leads-table {
-          width: 100%;
-        }
-        .leads-table th,
-        .leads-table td {
-          white-space: nowrap;
-        }
-      `}</style>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <UserPlus size={24} style={{ color: 'var(--primary-color, var(--accent-color))' }} />
-          <div>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Leads</h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-              {searchTerm
-                ? `${filteredLeads.length} of ${leads.length} lead${leads.length !== 1 ? 's' : ''} match "${searchTerm}"`
-                : `${leads.length} lead${leads.length !== 1 ? 's' : ''} in pipeline`}
-            </p>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0, flex: '1 1 240px' }}>
+          <UserPlus size={24} color="var(--text-primary)" />
+          <div style={{ minWidth: 0 }}>
+            <h1 style={{ margin: 0, fontSize: '1.5rem', color: 'var(--text-primary)' }}>Leads</h1>
+            <p style={{ margin: '0.2rem 0 0', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{leadsSummary}</p>
           </div>
         </div>
-        {/* #892 — Create Lead is now a header CTA + drawer (was an inline
-            always-visible form to the left of the table). Right-aligned so
-            it sits alongside future header controls; primary styling per
-            the c031ba0 travel/Leads pattern. */}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {/* Generic-vertical-only "Customize table" column picker — personal
-              per-user preference, matches the Freshsales reference UI. */}
-          {!isWellness && !isTravel && (
-            <ColumnPicker tableKey="leads" onColumnsChange={setVisibleColumns} />
-          )}
-          <button
-            type="button"
-            onClick={fetchLeads}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0.5rem 0.875rem', borderRadius: 6, fontWeight: 500, fontSize: '0.875rem', background: 'var(--surface-color)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', cursor: 'pointer' }}
-            aria-label="Refresh leads"
-          >
-            <RefreshCw size={14} /> Refresh
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <button type="button" className="btn-secondary" onClick={fetchLeads} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
+            <RefreshCw size={15} /> Refresh
           </button>
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={openCreate}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', fontSize: '0.875rem' }}
-            aria-label="Create a new lead"
-          >
-            <Plus size={16} />
-            Create Lead
+          <button type="button" className="btn-primary" aria-label="Create a new lead" onClick={openCreate} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
+            <Plus size={16} /> Create Lead
           </button>
         </div>
       </header>
 
-      {/* Bulk Assign Bar — admin only */}
-      {isAdmin && selectedLeads.length > 0 && (
-        <div className="card" style={{ padding: '0.75rem 1.25rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.2)', flexWrap: 'wrap' }}>
-          <Users size={18} color="var(--primary-color, var(--accent-color))" />
-          <span style={{ fontWeight: '500', fontSize: '0.875rem' }}>{selectedLeads.length} lead{selectedLeads.length !== 1 ? 's' : ''} selected</span>
-          <select
-            className="input-field"
-            value={bulkAgent}
-            onChange={e => setBulkAgent(e.target.value)}
-            style={{ width: '200px', padding: '0.5rem' }}
-          >
-            <option value="">Unassign</option>
-            {staff.map(s => (
-              <option key={s.id} value={s.id}>{s.name || s.email}</option>
-            ))}
-          </select>
-          <button className="btn-primary" onClick={handleBulkAssign} style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>
-            <UserCheck size={15} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} />
-            Assign
-          </button>
-          {/* #334: Clear must (a) drop the underlying selection so checkbox
-              rows un-tick, AND (b) reset the bulk-agent dropdown so a
-              re-selection doesn't pick up the previously-chosen agent.
-              One handler, both effects, so the action bar's hidden state
-              and the row state stay in lock-step. */}
-          <button onClick={() => { setSelectedLeads([]); setBulkAgent(''); }} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.875rem' }}>
-            Clear
-          </button>
-        </div>
-      )}
-
-      {/* Source filter chips — travel vertical shows travel-specific sources */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12, padding: 8, borderRadius: 8, background: 'var(--subtle-bg, rgba(255,255,255,0.04))', border: '1px solid var(--border-color)' }} role="toolbar" aria-label="Filter by source">
-        <button
-          type="button"
-          onClick={() => setSourceFilter('')}
-          style={!sourceFilter ? chipActiveStyle : chipStyle}
-          aria-pressed={!sourceFilter}
-        >
+      <div className="card" style={{ padding: '0.6rem 0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+        <button type="button" onClick={() => { setSourceFilter(''); setLeadsPage(0); }} style={!sourceFilter ? chipActiveStyle : chipStyle}>
           All <span style={chipCountStyle}>{leads.length}</span>
         </button>
-        {sourceOptions.map(opt => {
-          const val = opt.value || opt;
-          const label = opt.label || opt;
-          const count = sourceCounts[(val || '').toLowerCase()] || 0;
-          return (
-            <button
-              key={val}
-              type="button"
-              onClick={() => setSourceFilter(sourceFilter === val ? '' : val)}
-              style={sourceFilter === val ? chipActiveStyle : chipStyle}
-              aria-pressed={sourceFilter === val}
-            >
-              {label} <span style={chipCountStyle}>{count}</span>
-            </button>
-          );
-        })}
+        {sourceFilterOptions.map(opt => (
+          <button key={opt.value} type="button" onClick={() => { setSourceFilter(opt.value); setLeadsPage(0); }} style={sourceFilter === opt.value ? chipActiveStyle : chipStyle}>
+            {opt.label} <span style={chipCountStyle}>{sourceCounts[opt.value] || 0}</span>
+          </button>
+        ))}
       </div>
 
-      {/* Sub-brand + Stage filter bar — travel vertical only, synced with pipeline stages */}
       {isTravel && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, marginBottom: 12, background: 'var(--subtle-bg, rgba(255,255,255,0.04))', borderRadius: 8, border: '1px solid var(--border-color)' }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-secondary)', flexShrink: 0 }}><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-          <select
-            value={subBrandFilter}
-            onChange={e => setSubBrandFilter(e.target.value)}
-            style={filterSelectStyle}
-            aria-label="Filter by sub-brand"
-          >
-            <option value="">All sub-brands</option>
-            <option value="tmc">TMC</option>
-            <option value="rfu">RFU</option>
-            <option value="travelstall">Travel Stall</option>
-            <option value="visasure">Visa Sure</option>
-          </select>
-          <select
-            value={stageFilter}
-            onChange={e => setStageFilter(e.target.value)}
-            style={filterSelectStyle}
-            aria-label="Filter by stage"
-          >
-            <option value="">All stages</option>
-            {pipelineStages.length > 0
-              ? pipelineStages.map(s => {
-                  const slug = String(s.name || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-                  return <option key={s.id} value={slug}>{s.name}</option>;
-                })
-              : ['Lead', 'Contacted', 'Proposal', 'Won', 'Lost'].map(s => (
-                  <option key={s} value={s.toLowerCase()}>{s}</option>
-                ))
-            }
-          </select>
-          <span style={{ color: 'var(--text-secondary)', fontSize: 12, marginLeft: 'auto' }}>
-            {filteredLeads.length} {filteredLeads.length === 1 ? 'lead' : 'leads'}
-          </span>
+        <div className="card" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <Filter size={15} style={{ color: 'var(--text-secondary)' }} />
+            <select className="input-field" value={subBrandFilter} onChange={e => { setSubBrandFilter(e.target.value); setLeadsPage(0); }} aria-label="Filter by sub-brand" style={{ width: 'auto', minWidth: 140 }}>
+              <option value="">All sub-brands</option>
+              {travelSubBrandOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+            </select>
+            <select className="input-field" value={stageFilter} onChange={e => { setStageFilter(e.target.value); setLeadsPage(0); }} aria-label="Filter by stage" style={{ width: 'auto', minWidth: 160 }}>
+              <option value="">All stages</option>
+              {travelStageOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+            </select>
+          </div>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>{filteredLeads.length} leads</span>
         </div>
       )}
 
-      {/* #892 — Leads Table (full-width; Create Lead form now lives in the
-          drawer below, triggered by the header CTA). */}
-      {(() => {
-        // Base 600px covers the always-visible Name/Actions columns plus a
-        // safety buffer; each optional/custom-field column adds a generous
-        // 200px share. This guarantees the table is never squeezed below the
-        // width required for all visible columns, so the top/bottom
-        // horizontal scrollbars can actually reach every column.
-        const leadsOptionalCols = ['email', 'company', 'phone', 'aiScore', 'source', 'assignedTo', 'createdAt'].filter(isColVisible).length;
-        const leadsVisibleCfCols = customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).length;
-        const leadsTableMinWidth = 600
-          + leadsOptionalCols * 200
-          + leadsVisibleCfCols * 200
-          + (isTravel ? 320 : 0)
-          + (isAdmin ? 40 : 0);
-        return (
-      <div className="card leads-table-wrapper" style={{ overflow: 'visible' }}>
-          <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
-            <div style={{ position: 'relative', maxWidth: '300px' }}>
-              <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
-              <input
-                type="text"
-                className="input-field"
-                placeholder="Search leads..."
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                style={{ paddingLeft: '2.5rem', backgroundColor: 'var(--surface-hover)' }}
-              />
-            </div>
+      <div className="card" style={{ overflow: 'hidden', maxHeight: 'unset', minHeight: 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
+          <div style={{ position: 'relative', width: 'min(100%, 300px)' }}>
+            <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+            <input
+              type="search"
+              className="input-field"
+              placeholder="Search leads..."
+              value={searchTerm}
+              onChange={e => { setSearchTerm(e.target.value); setLeadsPage(0); }}
+              style={{ paddingLeft: '2.5rem', backgroundColor: 'var(--surface-hover)' }}
+            />
           </div>
-
-          {/* TopScrollSync adds a second scrollbar pinned to the TOP of the
-              table (mirrors the native bottom one) so the user can scroll
-              right from wherever they already are, instead of having to
-              scroll all the way down the page to reach the bottom scrollbar
-              first. leadsTableMinWidth grows with each optional/custom-field
-              column shown so a wide row never gets squeezed by a stale
-              fixed minWidth. */}
-          <TopScrollSync>
-          <table className="leads-table" style={{ width: '100%', minWidth: `${leadsTableMinWidth}px`, borderCollapse: 'collapse', textAlign: 'left' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
-                {isAdmin && (
-                  <th style={{ padding: '1rem', width: '40px' }}>
-                    <input type="checkbox" checked={selectedLeads.length === filteredLeads.length && filteredLeads.length > 0} onChange={toggleSelectAll} style={{ cursor: 'pointer' }} />
-                  </th>
-                )}
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
-                {isColVisible('email') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>}
-                {isColVisible('company') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{isTravel ? 'Category' : 'Company'}</th>}
-                {isColVisible('phone') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Phone</th>}
-                {/* #593: rules-based score (leadScoringEngine.js); dropped misleading "AI" prefix. */}
-                {isColVisible('aiScore') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>}
-                {isColVisible('source') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>}
-                {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Sub-brand</th>}
-                {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Amount</th>}
-                {/* Generic-vertical-only Lead custom fields (Settings > Lead Fields) —
-                    one column per admin-defined field, in displayOrder, each
-                    independently toggleable via the "Customize table" picker. */}
-                {customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).map(f => (
-                  <th key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{f.label}</th>
-                ))}
-                {isColVisible('assignedTo') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>}
-                {isColVisible('createdAt') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>}
-                <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(() => {
-                // colSpan must track exactly how many <th> render above,
-                // including the generic-only optional columns the
-                // "Customize table" picker can hide.
-                const optionalCols = ['email', 'company', 'phone', 'aiScore', 'source', 'assignedTo', 'createdAt'].filter(isColVisible).length;
-                const visibleCfCols = customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).length;
-                const colSpan = (isAdmin ? 1 : 0) + 1 /* name */ + optionalCols + (isTravel ? 2 : 0) + visibleCfCols + 1 /* actions */;
-                if (loading) {
-                  return <tr><td colSpan={colSpan} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>;
-                }
-                if (filteredLeads.length === 0) {
-                  return <tr><td colSpan={colSpan} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>;
-                }
-                return null;
-              })()}
-              {!loading && filteredLeads.length > 0 && paginatedLeads.map(lead => (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {!isWellness && !isTravel && <ColumnPicker tableKey="leads" onColumnsChange={setVisibleColumns} />}
+            {isAdmin && selectedLeads.length > 0 && (
+              <>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{selectedLeads.length} lead{selectedLeads.length === 1 ? '' : 's'} selected</span>
+                <select className="input-field" value={bulkAgent} onChange={e => setBulkAgent(e.target.value)} style={{ width: 'auto', minWidth: 150 }}>
+                  <option value="">Unassign</option>
+                  {staff.map(s => <option key={s.id} value={s.id}>{s.name || s.email}</option>)}
+                </select>
+                <button type="button" className="btn-secondary" onClick={handleBulkAssign}>Assign</button>
+                <button type="button" onClick={() => { setSelectedLeads([]); setBulkAgent(''); }} style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontSize: '0.85rem' }}>Clear</button>
+              </>
+            )}
+          </div>
+        </div>
+        <TopScrollSync scrollWidth={leadsTableMinWidth} forceScrollbar>
+            <table className={isTravel ? "leads-table leads-table--fit" : "leads-table"} style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: leadsTableMinWidth, tableLayout: isTravel ? 'fixed' : 'auto' }}>
+              {isTravel && (
+                <colgroup>
+                  {isAdmin && <col style={{ width: '2.5%' }} />}
+                  <col style={{ width: '10.5%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '8.5%' }} />
+                  <col style={{ width: '6.5%' }} />
+                  <col style={{ width: '8.5%' }} />
+                  <col style={{ width: '6.5%' }} />
+                  <col style={{ width: '7.5%' }} />
+                  <col style={{ width: '7.5%' }} />
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '8%' }} />
+                </colgroup>
+              )}
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--table-header-bg)' }}>
+                  {isAdmin && (
+                    <th style={{ padding: '1rem', width: '40px' }}>
+                      <input type="checkbox" checked={selectedLeads.length === filteredLeads.length && filteredLeads.length > 0} onChange={toggleSelectAll} style={{ cursor: 'pointer' }} />
+                    </th>
+                  )}
+                  <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Name</th>
+                  {isColVisible('email') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Email</th>}
+                  {isColVisible('company') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{isTravel ? 'Category' : 'Company'}</th>}
+                  {isColVisible('phone') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Phone</th>}
+                  {isColVisible('aiScore') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>}
+                  {isColVisible('source') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>}
+                  {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Sub-brand</th>}
+                  {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Amount</th>}
+                  {customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).map(f => (
+                    <th key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{f.label}</th>
+                  ))}
+                  {isColVisible('assignedTo') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>}
+                  {isColVisible('createdAt') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>}
+                  <th style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+              {loading ? (
+                <tr><td colSpan={leadsColSpan} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading leads...</td></tr>
+              ) : filteredLeads.length === 0 ? (
+                <tr><td colSpan={leadsColSpan} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No leads found</td></tr>
+              ) : paginatedLeads.map(lead => (
                 <tr
                   key={lead.id}
                   style={{ borderBottom: '1px solid var(--border-color)', cursor: 'pointer' }}
@@ -885,10 +830,10 @@ const Leads = () => {
                   )}
                   <td style={{ padding: '1rem', fontWeight: '500' }}>{lead.name}</td>
                   {isColVisible('email') && <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.email}</td>}
-                  {isColVisible('company') && <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.company || <span style={{ color: 'var(--border-color)' }}>—</span>}</td>}
+                  {isColVisible('company') && <td style={{ padding: '1rem', color: 'var(--text-secondary)' }}>{lead.company || <span style={{ color: 'var(--border-color)' }}>-</span>}</td>}
                   {isColVisible('phone') && (
                     <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
-                      {lead.phone || <span style={{ color: 'var(--border-color)' }}>—</span>}
+                      {lead.phone || <span style={{ color: 'var(--border-color)' }}>-</span>}
                     </td>
                   )}
                   {isColVisible('aiScore') && (
@@ -907,44 +852,32 @@ const Leads = () => {
                   )}
                   {isColVisible('source') && (
                     <td style={{ padding: '1rem' }}>
-                      <span style={{
-                        padding: '0.25rem 0.75rem',
-                        borderRadius: '999px',
-                        fontSize: '0.75rem',
-                        backgroundColor: 'rgba(139, 92, 246, 0.1)',
-                        color: 'var(--primary-color, var(--accent-color, #8b5cf6))',
-                        whiteSpace: 'nowrap',
-                        display: 'inline-block',
-                      }}>
+                      <span style={sourceBadgeStyle}>
                         {lead.source || 'Organic'}
                       </span>
                     </td>
                   )}
                   {isTravel && (
-                    <td style={{ padding: '1rem' }}>
-                      {lead.subBrand ? (
-                        <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, background: 'var(--subtle-bg-3, rgba(99,102,241,0.1))', color: 'var(--primary-color, var(--accent-color))', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                          {lead.subBrand}
-                        </span>
-                      ) : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
+                    <td style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>
+                      {lead.subBrand ? subBrandShortLabel(lead.subBrand) : <span style={{ color: 'var(--border-color)' }}>-</span>}
                     </td>
                   )}
                   {isTravel && (() => {
-                    // 1. Itinerary advancePaidAmount (highest fidelity — set by sync/webhook)
+                    // 1. Itinerary advancePaidAmount (highest fidelity  set by sync/webhook)
                     const bv = bookingValueByContact[lead.id];
                     if (bv && bv.value > 0) {
                       return (
-                        <td style={{ padding: '1rem', fontWeight: 500, fontSize: '0.875rem' }} title="Amount paid — from instalment payments">
+                        <td style={{ padding: '1rem', fontWeight: 500, fontSize: '0.875rem' }} title="Amount paid">
                           {bv.currency || 'INR'} {Number(bv.value).toLocaleString()}
                         </td>
                       );
                     }
-                    // 2. TMC instalment paid totals keyed by parent email — covers leads
+                    // 2. TMC instalment paid totals keyed by parent email  covers leads
                     // whose parent contact has no itinerary row (common for school trips).
                     const tmcEntry = tmcPaidByEmail[lead.email];
                     if (tmcEntry && tmcEntry.paidTotal > 0) {
                       return (
-                        <td style={{ padding: '1rem', fontWeight: 500, fontSize: '0.875rem' }} title="Amount paid via TMC instalments">
+                        <td style={{ padding: '1rem', fontWeight: 500, fontSize: '0.875rem' }} title="Amount paid">
                           {tmcEntry.currency || 'INR'} {Number(tmcEntry.paidTotal).toLocaleString()}
                         </td>
                       );
@@ -954,11 +887,11 @@ const Leads = () => {
                     const currency = deals[0]?.currency || 'INR';
                     return (
                       <td style={{ padding: '1rem', fontWeight: 500, fontSize: '0.875rem' }}>
-                        {total > 0 ? `${currency} ${total.toLocaleString()}` : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
+                        {total > 0 ? `${currency} ${total.toLocaleString()}` : <span style={{ color: 'var(--text-secondary)' }}>-</span>}
                       </td>
                     );
                   })()}
-                  {/* Generic-vertical-only Lead custom fields — shows every
+                  {/* Generic-vertical-only Lead custom fields  shows every
                       defined field's value, or a dash for leads that predate
                       the field (backend fills the key with null). Each
                       field's column is independently toggleable via the
@@ -985,7 +918,7 @@ const Leads = () => {
                     }
                     return (
                       <td key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                        {display ?? <span style={{ color: 'var(--border-color)' }}>—</span>}
+                        {display ?? <span style={{ color: 'var(--border-color)' }}>-</span>}
                       </td>
                     );
                   })}
@@ -1015,7 +948,7 @@ const Leads = () => {
                       {formatDate(lead.createdAt)}
                     </td>
                   )}
-                  <td style={{ padding: '1rem', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                  <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap', minWidth: '88px' }} onClick={e => e.stopPropagation()}>
                     <button
                       onClick={() => openEdit(lead)}
                       title="Edit lead"
@@ -1086,14 +1019,12 @@ const Leads = () => {
             </div>
           )}
         </div>
-        );
-      })()}
 
-        {/* #892 — Create Lead drawer. Mounted only when `creating` is true.
+        {/* #892  Create Lead drawer. Mounted only when `creating` is true.
             Close triggers: X button, ESC keypress (handled by the useEffect
             above), and clicking on the dark overlay outside the drawer body.
             The form fields + submit handler are unchanged from the previous
-            inline form — only the trigger surface moved. */}
+            inline form  only the trigger surface moved. */}
         {creating && (
           <div
             onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}
@@ -1147,7 +1078,7 @@ const Leads = () => {
                 {!isTravel && (
                   <input type="text" placeholder="Job Title" maxLength={200} className="input-field" value={newLead.title} onChange={e => handleChange('title', e.target.value)} />
                 )}
-                {/* Phone field — required for wellness (Indian mobile validation),
+                {/* Phone field  required for wellness (Indian mobile validation),
                     optional for travel (any format accepted). */}
                 {(isWellness || isTravel) && (
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -1186,7 +1117,7 @@ const Leads = () => {
                       ))}
                 </select>
 
-                {/* #600 — wellness extras: treatment of interest (dropdown of
+                {/* #600  wellness extras: treatment of interest (dropdown of
                     catalog services + a free-text "Other" fallback if the
                     catalogue is empty), preferred clinic, preferred
                     practitioner. All three persist on Contact and feed
@@ -1299,7 +1230,7 @@ const Leads = () => {
                 {renderCustomFieldInputs(editForm.customFields, handleCustomFieldChangeEdit)}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
                   <button type="button" onClick={() => setEditing(null)} style={{ padding: '0.5rem 1rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.875rem' }}>Cancel</button>
-                  <button type="submit" className="btn-primary" disabled={editSaving} style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>{editSaving ? 'Saving…' : 'Save Changes'}</button>
+                  <button type="submit" className="btn-primary" disabled={editSaving} style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>{editSaving ? 'Saving...' : 'Save Changes'}</button>
                 </div>
               </form>
             </div>
@@ -1312,12 +1243,6 @@ const Leads = () => {
 const actionIconBtn = {
   background: 'transparent', border: 'none', cursor: 'pointer', padding: 4,
   color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center',
-};
-const filterSelectStyle = {
-  padding: '6px 10px', borderRadius: 6, fontSize: 13,
-  border: '1px solid var(--border-color)',
-  background: 'var(--surface-color)', color: 'var(--text-primary)',
-  minWidth: 140,
 };
 const chipStyle = {
   display: 'inline-flex', alignItems: 'center', gap: 4,

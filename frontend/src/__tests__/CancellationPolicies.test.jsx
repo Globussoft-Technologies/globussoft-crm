@@ -91,6 +91,21 @@ const USER_USER = { userId: 3, name: 'Plain User', email: 'u@x.com', role: 'USER
 
 // Canonical policy rows — two sub-brands + one tenant-wide to exercise
 // the badge + preview-rendering paths.
+function makeItinerary(overrides = {}) {
+  return {
+    id: 901,
+    tenantId: 1,
+    subBrand: 'tmc',
+    destination: 'Goa',
+    status: 'confirmed',
+    startDate: '2026-08-01T00:00:00.000Z',
+    endDate: '2026-08-07T00:00:00.000Z',
+    totalAmount: 120000,
+    currency: 'INR',
+    ...overrides,
+  };
+}
+
 function makePolicy(overrides = {}) {
   return {
     id: 401,
@@ -98,6 +113,8 @@ function makePolicy(overrides = {}) {
     name: 'TMC Default',
     description: 'Standard TMC school-trip cancellation policy.',
     subBrand: 'tmc',
+    itineraryId: null,
+    itinerary: null,
     tiersJson: JSON.stringify([
       { daysBeforeServiceStart: 60, refundPercent: 100 },
       { daysBeforeServiceStart: 30, refundPercent: 50 },
@@ -111,12 +128,32 @@ function makePolicy(overrides = {}) {
   };
 }
 
+const ITINERARIES_DEFAULT = [
+  makeItinerary({ id: 901, subBrand: 'tmc', destination: 'Goa' }),
+  makeItinerary({
+    id: 902,
+    subBrand: 'rfu',
+    destination: 'Makkah',
+    status: 'draft',
+    startDate: '2026-09-01T00:00:00.000Z',
+    endDate: '2026-09-10T00:00:00.000Z',
+  }),
+];
+
 const POLICIES_DEFAULT = [
-  makePolicy({ id: 401, subBrand: 'tmc', name: 'TMC Default' }),
+  makePolicy({
+    id: 401,
+    subBrand: 'tmc',
+    name: 'TMC Default',
+    itineraryId: 901,
+    itinerary: ITINERARIES_DEFAULT[0],
+  }),
   makePolicy({
     id: 402,
     subBrand: 'rfu',
     name: 'RFU Default',
+    itineraryId: 902,
+    itinerary: ITINERARIES_DEFAULT[1],
     tiersJson: JSON.stringify([
       { daysBeforeServiceStart: 90, refundPercent: 100 },
       { daysBeforeServiceStart: 45, refundPercent: 75 },
@@ -140,12 +177,30 @@ function installFetchMock({
     limit: 50,
     offset: 0,
   },
+  itineraries = ITINERARIES_DEFAULT,
   create = null,
   update = null,
   del = null,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
+    if (
+      typeof url === 'string' &&
+      url.startsWith('/api/travel/itineraries') &&
+      method === 'GET'
+    ) {
+      const parsed = new URL(url, 'http://local.test');
+      const subBrand = parsed.searchParams.get('subBrand');
+      const filtered = subBrand
+        ? itineraries.filter((trip) => trip.subBrand === subBrand)
+        : itineraries;
+      return Promise.resolve({
+        itineraries: filtered,
+        total: filtered.length,
+        limit: Number(parsed.searchParams.get('limit') || 50),
+        offset: Number(parsed.searchParams.get('offset') || 0),
+      });
+    }
     if (
       url.startsWith('/api/travel/cancellation-policies') &&
       method === 'GET'
@@ -174,7 +229,7 @@ function installFetchMock({
       method === 'DELETE'
     ) {
       if (del instanceof Error) return Promise.reject(del);
-      // Backend returns 204 No Content — fetchApi resolves with null/undefined.
+      // Backend returns 204 No Content ? fetchApi resolves with null/undefined.
       return Promise.resolve(null);
     }
     return Promise.resolve(null);

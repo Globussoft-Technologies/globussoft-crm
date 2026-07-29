@@ -673,7 +673,7 @@ describe('Sidebar — load-bearing render surface', () => {
   //   - AdsGPT external button + Callified internal NavLink presence
   //   - tenant.brandColor / backdrop / aside ARIA-role nuances
   //   - travel-vertical specific items (Visa Sure admin-only, Quote Builder
-  //     manager-only, Marketing Flyer Studio manager-only).
+  //     manager-only marketing/output items).
   //
   // (Note: the Sidebar SUT has no expand/collapse groups — section labels
   // are static <div> headers — so the prompt's "collapsible groups" probe
@@ -1007,11 +1007,12 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Embassy Rules')).toBeNull();
     });
 
-    it('renders manager-only travel items (Quote Builder / Flyer Studio / Travel Stall) for MANAGER', () => {
+    it('renders manager-only travel items (Quote Builder / Travel Stall) for MANAGER', () => {
       renderSidebar({ vertical: 'travel', role: 'MANAGER' });
       expect(screen.getByText('Quote Builder')).toBeTruthy();
-      expect(screen.getByText('Marketing Flyer Studio')).toBeTruthy();
-      expect(screen.getByText('Flyer Templates')).toBeTruthy();
+      expect(screen.queryByText('Marketing Flyer Studio')).toBeNull();
+      expect(screen.queryByText('Flyer Templates')).toBeNull();
+      expect(screen.queryByText('Flyer Share Admin')).toBeNull();
       // T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC Catalogue
       // admin entry is ADMIN+MANAGER visible. Page CRUD is verifyRole
       // ADMIN+MANAGER server-side; nav mirrors that posture. PR #1142 added

@@ -8,6 +8,15 @@ import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../compone
 
 const STATUS_COLORS = { DRAFT: { bg: 'rgba(59,130,246,0.1)', color: '#3b82f6' }, PUBLISHED: { bg: 'rgba(16,185,129,0.1)', color: '#10b981' }, ARCHIVED: { bg: 'rgba(107,114,128,0.1)', color: '#6b7280' } };
 
+function friendlyAiError(rawError) {
+  if (!rawError) return null;
+  const m = String(rawError).toLowerCase();
+  if (/(?:gemini).*limit has been exhausted|quota exceeded|exceeded.*quota|rate limit|too many requests|resource[_ -]?exhausted/.test(m)) {
+    return "Gemini limit has been exhausted. Please try again later.";
+  }
+  return null;
+}
+
 export default function LandingPages() {
   const notify = useNotify();
   const [pages, setPages] = useState([]);
@@ -255,6 +264,10 @@ export default function LandingPages() {
       }
       // Surface stub-mode + scrubbed verdicts to the operator so they
       // know whether the page is real-mode AI or a placeholder.
+      if (res.generation?.realModeError) {
+        const friendly = friendlyAiError(res.generation.realModeError);
+        if (friendly) notify.error(friendly);
+      }
       if (res.generation?.stub) {
         notify.info('AI generation is in stub mode (Gemini key not set on this tenant). Draft contains [REVIEW] placeholders.');
       } else if (res.generation?.verdict === 'fallback') {
@@ -270,6 +283,8 @@ export default function LandingPages() {
     } catch (err) {
       if (err?.status === 429 && err?.code === 'LLM_BUDGET_EXCEEDED') {
         setGenError("This tenant has reached its monthly LLM spend cap. Try again next month or raise the cap in tenant settings.");
+      } else if (err?.status === 429 && err?.code === 'GEMINI_LIMIT_EXHAUSTED') {
+        setGenError("Gemini limit has been exhausted. Please try again later.");
       } else {
         setGenError(err?.message || 'Generation failed. Please try again.');
       }

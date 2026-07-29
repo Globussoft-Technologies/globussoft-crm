@@ -85,15 +85,42 @@ const EMPTY_FORM = {
   name: "",
   description: "",
   subBrand: "tmc",
+  itineraryId: "",
   tiers: DEFAULT_TIERS,
   isActive: true,
 };
 
 function formatDate(iso) {
-  if (!iso) return "—";
+  if (!iso) return "?";
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (Number.isNaN(d.getTime())) return "?";
   return d.toISOString().slice(0, 10);
+}
+
+function formatTripText(value) {
+  if (value == null) return "";
+  return String(value)
+    .replace(/#/g, "No. ")
+    .replace(/[^A-Za-z0-9\s.-]+/g, " ")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatItineraryLabel(itinerary) {
+  if (!itinerary || typeof itinerary !== "object") return "No trip selected";
+  const destination = formatTripText(itinerary.destination) || ("Trip " + (itinerary.id ? ("No. " + itinerary.id) : "")).trim();
+  const dates = [];
+  const startDate = formatDate(itinerary.startDate);
+  const endDate = formatDate(itinerary.endDate);
+  if (startDate !== "?" && endDate !== "?") {
+    dates.push(startDate + " to " + endDate);
+  } else if (startDate !== "?") {
+    dates.push("from " + startDate);
+  } else if (endDate !== "?") {
+    dates.push("until " + endDate);
+  }
+  return [destination].concat(dates).filter(Boolean).join(" - ") || "No trip selected";
 }
 
 // Parse a tiersJson string into a tiers array. Returns the array on
@@ -213,6 +240,9 @@ export default function CancellationPolicies() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [tripOptions, setTripOptions] = useState([]);
+  const [tripOptionsLoading, setTripOptionsLoading] = useState(false);
+  const [tripOptionsError, setTripOptionsError] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -237,6 +267,41 @@ export default function CancellationPolicies() {
 
   useEffect(load, [subBrand, activeFilter]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const effectiveTripBrand = form.subBrand || subBrand;
+
+    const loadTrips = async () => {
+      if (!showForm || !effectiveTripBrand) {
+        setTripOptions([]);
+        setTripOptionsLoading(false);
+        setTripOptionsError(null);
+        return;
+      }
+
+      setTripOptionsLoading(true);
+      try {
+        const qs = new URLSearchParams({ subBrand: effectiveTripBrand, fields: "summary", limit: "200" });
+        const res = await fetchApi(`/api/travel/itineraries?${qs.toString()}`);
+        if (cancelled) return;
+        setTripOptions(Array.isArray(res?.itineraries) ? res.itineraries : []);
+        setTripOptionsError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setTripOptions([]);
+        setTripOptionsError(err?.body?.error || err?.message || "Failed to load trips");
+      } finally {
+        if (!cancelled) setTripOptionsLoading(false);
+      }
+    };
+
+    loadTrips();
+    return () => {
+      cancelled = true;
+    };
+  }, [showForm, form.subBrand, subBrand, editingId]);
+
   const resetForm = () => {
     setForm(EMPTY_FORM);
     setEditingId(null);
@@ -247,17 +312,27 @@ export default function CancellationPolicies() {
     setForm({
       ...EMPTY_FORM,
       tiers: DEFAULT_TIERS.map((t) => ({ ...t })),
-      subBrand: defaultSubBrandFor(user, activeSubBrand) || "tmc",
+      subBrand: subBrand || defaultSubBrandFor(user, activeSubBrand) || "tmc",
+      itineraryId: "",
     });
     setShowForm(true);
   };
+
+  useEffect(() => {
+    if (!showForm || editingId || !subBrand) return;
+    setForm((current) => {
+      if (current.subBrand === subBrand) return current;
+      return { ...current, subBrand, itineraryId: "" };
+    });
+  }, [showForm, editingId, subBrand]);
 
   const openEdit = (p) => {
     const parsed = parseTiers(p.tiersJson) || [];
     setForm({
       name: p.name || "",
       description: p.description || "",
-      subBrand: p.subBrand || "",
+      subBrand: p.subBrand || p.itinerary?.subBrand || "",
+      itineraryId: p.itineraryId ? String(p.itineraryId) : "",
       tiers: parsed.length ? parsed : DEFAULT_TIERS.map((t) => ({ ...t })),
       isActive: p.isActive !== false,
     });
@@ -331,6 +406,7 @@ export default function CancellationPolicies() {
         name: form.name.trim(),
         description: form.description || null,
         subBrand: form.subBrand || null,
+        itineraryId: form.itineraryId ? Number(form.itineraryId) : null,
         tiersJson: JSON.stringify(result.normalized),
         isActive: !!form.isActive,
       };
@@ -496,7 +572,7 @@ export default function CancellationPolicies() {
           ) : (
             <select
               value={form.subBrand}
-              onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+              onChange={(e) => setForm({ ...form, subBrand: e.target.value, itineraryId: "" })}
               style={inputStyle}
               aria-label="Sub-brand"
             >
@@ -508,6 +584,26 @@ export default function CancellationPolicies() {
               ))}
             </select>
           )}
+          <select
+            value={form.itineraryId}
+            onChange={(e) => setForm({ ...form, itineraryId: e.target.value })}
+            style={inputStyle}
+            aria-label="Trip"
+            disabled={!(editingId ? form.subBrand : (subBrand || form.subBrand)) || tripOptionsLoading}
+          >
+            <option value="">{(editingId ? form.subBrand : (subBrand || form.subBrand)) ? "No trip selected" : "Select a sub-brand first"}</option>
+            {tripOptionsLoading && <option value="">Loading trips...</option>}
+            {tripOptions.map((trip) => (
+              <option key={trip.id} value={trip.id}>
+                {formatItineraryLabel(trip)}
+              </option>
+            ))}
+          </select>
+          {tripOptionsError ? (
+            <div style={{ gridColumn: "1 / -1", color: "var(--warning-color, #f59e0b)", fontSize: 12 }}>
+              {tripOptionsError}
+            </div>
+          ) : null}
           <label
             style={{
               ...inputStyle,
@@ -665,6 +761,8 @@ export default function CancellationPolicies() {
               onClick={() => {
                 setShowForm(false);
                 resetForm();
+                setTripOptions([]);
+                setTripOptionsError(null);
               }}
               style={secondaryBtn}
             >
@@ -684,6 +782,7 @@ export default function CancellationPolicies() {
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                 <th style={th}>Name</th>
                 <th style={th}>Sub-brand</th>
+                <th style={th}>Trip</th>
                 <th style={th}>Tiers</th>
                 <th style={th}>Preview</th>
                 <th style={th}>Active</th>
@@ -717,6 +816,9 @@ export default function CancellationPolicies() {
                       >
                         {p.subBrand || "tenant"}
                       </span>
+                    </td>
+                    <td style={td} title={formatItineraryLabel(p.itinerary)}>
+                      {formatItineraryLabel(p.itinerary)}
                     </td>
                     <td style={td}>{tierCount}</td>
                     <td

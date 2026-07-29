@@ -1,5 +1,5 @@
 /**
- * Leads.jsx — client-side hardening tests for the Create-Lead form (#557 / HI-08)
+ * Leads.jsx Ã¢â‚¬â€ client-side hardening tests for the Create-Lead form (#557 / HI-08)
  * + vertical-aware Lead form for the wellness tenant (#600)
  * + header CTA + drawer surface (#892).
  *
@@ -10,27 +10,27 @@
  * treatment-of-interest, preferred clinic/practitioner) and confirms the
  * generic CRM form stays unchanged.
  *
- * #892 — Create Lead is no longer an always-visible inline form; it lives
+ * #892 Ã¢â‚¬â€ Create Lead is no longer an always-visible inline form; it lives
  * inside a drawer that opens via the "Create Lead" header CTA. Every test
  * that interacts with the form first calls `openDrawer()` to click the CTA
  * and reveal the inputs. The fields + submit logic are unchanged; only the
  * trigger surface moved.
  *
  * The backend at routes/contacts.js + the global sanitizeBody middleware are
- * still the source of truth — these tests confirm the network call is NOT
+ * still the source of truth Ã¢â‚¬â€ these tests confirm the network call is NOT
  * made when the client-side guards trip, so a malicious or accidental
  * payload doesn't even reach the server.
  *
  * Contracts pinned here:
- *   1. <script>alert(1)</script> in name → form rejects locally; no fetch.
- *   2. Name longer than 191 chars → "too long" error; no fetch.
- *   3. Control char (\x00, \x07) in name → "invalid control characters"; no fetch.
- *   4. Empty required name → "Name is required"; no fetch.
- *   5. Invalid email shape → "valid email" error; no fetch.
- *   6. Happy path → POST /api/contacts fires exactly once with sanitised body.
- *   7. (#600) Wellness tenant → Phone field renders, "WhatsApp" source option
- *      exists; submitting without phone → "Phone is required", no fetch.
- *   8. (#600) Generic tenant → Phone field is hidden, "WhatsApp" not in
+ *   1. <script>alert(1)</script> in name Ã¢â€ â€™ form rejects locally; no fetch.
+ *   2. Name longer than 191 chars Ã¢â€ â€™ "too long" error; no fetch.
+ *   3. Control char (\x00, \x07) in name Ã¢â€ â€™ "invalid control characters"; no fetch.
+ *   4. Empty required name Ã¢â€ â€™ "Name is required"; no fetch.
+ *   5. Invalid email shape Ã¢â€ â€™ "valid email" error; no fetch.
+ *   6. Happy path Ã¢â€ â€™ POST /api/contacts fires exactly once with sanitised body.
+ *   7. (#600) Wellness tenant Ã¢â€ â€™ Phone field renders, "WhatsApp" source option
+ *      exists; submitting without phone Ã¢â€ â€™ "Phone is required", no fetch.
+ *   8. (#600) Generic tenant Ã¢â€ â€™ Phone field is hidden, "WhatsApp" not in
  *      Source dropdown.
  *   9. (#892) "Create Lead" header CTA is rendered; clicking it reveals
  *      the form fields in a drawer.
@@ -75,7 +75,7 @@ function renderLeads(authValue = null) {
   );
 }
 
-// #892 — Create Lead lives in a drawer now. Click the header CTA to mount
+// #892 Ã¢â‚¬â€ Create Lead lives in a drawer now. Click the header CTA to mount
 // the form before any field interaction. The CTA has aria-label "Create a
 // new lead" (which becomes the accessible-name); the visible text is
 // "Create Lead". Match on the aria-label since it takes precedence over
@@ -112,7 +112,7 @@ function defaultFetchMock(url, opts) {
   return Promise.resolve([]);
 }
 
-describe('Leads — Create Lead form client-side hardening (#557)', () => {
+describe('Leads Ã¢â‚¬â€ Create Lead form client-side hardening (#557)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);
@@ -158,7 +158,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     });
     submitForm();
 
-    // After strip, the name is empty → reject with "Name is required" and
+    // After strip, the name is empty Ã¢â€ â€™ reject with "Name is required" and
     // never reach the network. This is the canonical XSS-rejection flow.
     // The "HTML markup was removed" info notice fires first (during strip),
     // followed by the "Name is required" error notice (post-strip empty
@@ -186,7 +186,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     const long = 'A'.repeat(192);
     // Bypass the maxLength attribute by setting state directly via fireEvent
     // (jsdom respects maxLength on input events, so we strip it for this test
-    // by removing the attribute — simulates the React-prototype-setter trick
+    // by removing the attribute Ã¢â‚¬â€ simulates the React-prototype-setter trick
     // from the issue).
     const nameInput = screen.getByPlaceholderText('Full Name');
     nameInput.removeAttribute('maxlength');
@@ -259,7 +259,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     expect(postCall).toBeUndefined();
   });
 
-  it('happy path — valid lead POSTs once with sanitised body', async () => {
+  it('happy path Ã¢â‚¬â€ valid lead POSTs once with sanitised body', async () => {
     renderLeads();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
@@ -301,7 +301,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     expect(screen.getByPlaceholderText('Job Title')).toHaveAttribute('maxLength', '200');
   });
 
-  // #892 — pin the CTA + drawer surface. Pre-#892 the form was always
+  // #892 Ã¢â‚¬â€ pin the CTA + drawer surface. Pre-#892 the form was always
   // visible above the table; post-#892 it lives inside a drawer that
   // opens via the header CTA. Without this test, a future change that
   // accidentally re-renders the form inline would not red the suite.
@@ -316,7 +316,7 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
     expect(screen.queryByPlaceholderText('Full Name')).toBeNull();
     expect(screen.queryByPlaceholderText('Email Address')).toBeNull();
 
-    // Click the CTA → drawer opens → fields become reachable.
+    // Click the CTA Ã¢â€ â€™ drawer opens Ã¢â€ â€™ fields become reachable.
     openDrawer();
     expect(screen.getByPlaceholderText('Full Name')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Email Address')).toBeInTheDocument();
@@ -325,12 +325,12 @@ describe('Leads — Create Lead form client-side hardening (#557)', () => {
   });
 });
 
-// #600 — wellness-vertical Lead form. Verifies the form schema flips when
+// #600 Ã¢â‚¬â€ wellness-vertical Lead form. Verifies the form schema flips when
 // AuthContext.tenant.vertical === 'wellness': Phone field renders, the 8
 // wellness sources replace the 6 generic ones, and submitting without a
 // phone trips the "Phone is required" guard. The generic-tenant case
 // asserts the inverse (Phone hidden, no WhatsApp option).
-describe('Leads — vertical-aware form schema (#600)', () => {
+describe('Leads Ã¢â‚¬â€ vertical-aware form schema (#600)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);
@@ -349,7 +349,7 @@ describe('Leads — vertical-aware form schema (#600)', () => {
     user: { id: 1, role: 'ADMIN' },
   };
 
-  it('wellness tenant → Phone field renders and WhatsApp is in Source dropdown', async () => {
+  it('wellness tenant Ã¢â€ â€™ Phone field renders and WhatsApp is in Source dropdown', async () => {
     renderLeads(wellnessAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     openDrawer();
@@ -375,7 +375,7 @@ describe('Leads — vertical-aware form schema (#600)', () => {
     expect(linkedinOpt).toBeUndefined();
   });
 
-  it('wellness tenant → submitting without phone triggers "Phone is required"', async () => {
+  it('wellness tenant Ã¢â€ â€™ submitting without phone triggers "Phone is required"', async () => {
     renderLeads(wellnessAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
@@ -392,7 +392,7 @@ describe('Leads — vertical-aware form schema (#600)', () => {
     expect(postCall).toBeUndefined();
   });
 
-  it('wellness tenant → happy path POSTs phone, source, and treatmentOfInterest', async () => {
+  it('wellness tenant Ã¢â€ â€™ happy path POSTs phone, source, and treatmentOfInterest', async () => {
     renderLeads(wellnessAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
@@ -426,7 +426,7 @@ describe('Leads — vertical-aware form schema (#600)', () => {
     expect(notifyError).not.toHaveBeenCalled();
   });
 
-  it('generic tenant → Phone field is hidden and WhatsApp is NOT in Source dropdown', async () => {
+  it('generic tenant Ã¢â€ â€™ Phone field is hidden and WhatsApp is NOT in Source dropdown', async () => {
     renderLeads(genericAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     openDrawer();
@@ -449,7 +449,7 @@ describe('Leads — vertical-aware form schema (#600)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Additional coverage — list-side surface (search, score badge, bulk selection,
+// Additional coverage Ã¢â‚¬â€ list-side surface (search, score badge, bulk selection,
 // per-row assign, Convert, drawer close paths). Existing tests above already
 // pin the Create-Lead form hardening and vertical schema. This block targets
 // what the table + bulk bar + drawer-dismiss flows actually do, which is the
@@ -459,7 +459,7 @@ describe('Leads — vertical-aware form schema (#600)', () => {
 // ---------------------------------------------------------------------------
 
 // A small canned-leads fixture covering the 3 score bands the badge uses
-// (>75 success, >40 warning, ≤40 error) plus an assignedToId for the
+// (>75 success, >40 warning, Ã¢â€°Â¤40 error) plus an assignedToId for the
 // per-row assign-dropdown rendering test.
 const SAMPLE_LEADS = [
   { id: 11, name: 'Alice Smith', email: 'alice@acme.test', company: 'Acme Corp', aiScore: 88, source: 'Organic', assignedToId: null, createdAt: '2026-05-01T10:00:00Z' },
@@ -472,7 +472,7 @@ const SAMPLE_STAFF = [
 ];
 
 function leadsFetchMock(url, opts) {
-  // GET /api/contacts?status=Lead → seeded list
+  // GET /api/contacts?status=Lead Ã¢â€ â€™ seeded list
   if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
     return Promise.resolve(SAMPLE_LEADS);
   }
@@ -480,7 +480,7 @@ function leadsFetchMock(url, opts) {
     return Promise.resolve(SAMPLE_STAFF);
   }
   // PUT /api/contacts/:id (convert), PUT /api/contacts/:id/assign, PUT bulk-assign,
-  // POST /api/contacts — all return a benign stub. The component re-fetches
+  // POST /api/contacts Ã¢â‚¬â€ all return a benign stub. The component re-fetches
   // after each, which falls through to the GETs above.
   if (opts?.method === 'PUT' || opts?.method === 'POST') {
     return Promise.resolve({ ok: true });
@@ -490,14 +490,14 @@ function leadsFetchMock(url, opts) {
 
 // ADMIN auth context for tests that exercise admin-only surfaces (checkboxes,
 // bulk-assign bar, per-row assign dropdowns). The SUT gates these on
-// auth?.user?.role === 'ADMIN' — calling renderLeads() without an auth value
+// auth?.user?.role === 'ADMIN' Ã¢â‚¬â€ calling renderLeads() without an auth value
 // (null) means isAdmin=false and those surfaces are hidden.
 const ADMIN_AUTH = {
   tenant: { id: 1, vertical: 'generic', name: 'Globussoft CRM' },
   user: { id: 1, role: 'ADMIN', name: 'Admin User', email: 'admin@crm.test' },
 };
 
-describe('Leads — table, search, bulk operations, row actions, drawer dismiss', () => {
+describe('Leads Ã¢â‚¬â€ table, search, bulk operations, row actions, drawer dismiss', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(leadsFetchMock);
@@ -518,22 +518,35 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
     expect(screen.getByText('alice@acme.test')).toBeInTheDocument();
     expect(screen.getByText('Acme Corp')).toBeInTheDocument();
 
-    // Lead Score badge text — `${aiScore}/100` rendered per row
+    // Lead Score badge text Ã¢â‚¬â€ `${aiScore}/100` rendered per row
     expect(screen.getByText('88/100')).toBeInTheDocument();
     expect(screen.getByText('55/100')).toBeInTheDocument();
     expect(screen.getByText('20/100')).toBeInTheDocument();
 
-    // Header counter — "3 leads in pipeline"
+    // Header counter Ã¢â‚¬â€ "3 leads in pipeline"
     expect(screen.getByText(/3 leads in pipeline/)).toBeInTheDocument();
   });
 
+  it('renders source badges with theme tokens so dark mode stays readable', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    const sourceBadge = screen
+      .getAllByText('Organic')
+      .map(node => node.closest('span'))
+      .find(node => node?.style.backgroundColor.includes('--source-badge-bg'));
+    expect(sourceBadge).toBeInTheDocument();
+    expect(sourceBadge.style.backgroundColor).toBe('var(--source-badge-bg, rgba(139, 92, 246, 0.16))');
+    expect(sourceBadge.style.color).toBe('var(--source-badge-text, var(--text-primary))');
+    expect(sourceBadge.style.border).toBe('1px solid var(--border-color)');
+  });
   it('filters the row list by search term against name / email / company', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     const searchInput = screen.getByPlaceholderText('Search leads...');
 
-    // Filter by company substring → only Globex's Bob remains
+    // Filter by company substring Ã¢â€ â€™ only Globex's Bob remains
     fireEvent.change(searchInput, { target: { value: 'globex' } });
     await waitFor(() => {
       expect(screen.queryByText('Alice Smith')).toBeNull();
@@ -541,7 +554,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
       expect(screen.queryByText('Carol Diaz')).toBeNull();
     });
 
-    // Filter by email substring → only Carol
+    // Filter by email substring Ã¢â€ â€™ only Carol
     fireEvent.change(searchInput, { target: { value: 'initech.test' } });
     await waitFor(() => {
       expect(screen.queryByText('Alice Smith')).toBeNull();
@@ -549,7 +562,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
       expect(screen.getByText('Carol Diaz')).toBeInTheDocument();
     });
 
-    // Clear → all three back
+    // Clear Ã¢â€ â€™ all three back
     fireEvent.change(searchInput, { target: { value: '' } });
     await waitFor(() => {
       expect(screen.getByText('Alice Smith')).toBeInTheDocument();
@@ -558,14 +571,14 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
     });
   });
 
-  it('header counter reflects the active search filter — "X of Y leads match" while typing, plain pipeline count when cleared', async () => {
+  it('header counter reflects the active search filter Ã¢â‚¬â€ "X of Y leads match" while typing, plain pipeline count when cleared', async () => {
     // Regression: pre-fix the header used leads.length (unfiltered) so it
     // still read "3 leads in pipeline" while the table was narrowed to 1
     // result. Post-fix it switches to "X of Y leads match \"<term>\"" while
     // a search is active and reverts to the original phrasing when cleared.
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-    // No search → original phrasing.
+    // No search Ã¢â€ â€™ original phrasing.
     expect(screen.getByText(/3 leads in pipeline/)).toBeInTheDocument();
     const searchInput = screen.getByPlaceholderText('Search leads...');
     fireEvent.change(searchInput, { target: { value: 'globex' } });
@@ -597,7 +610,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
       );
       expect(putCall).toBeDefined();
       const body = JSON.parse(putCall[1].body);
-      // Per #283 — Convert advances ONE step (Lead → Prospect), not jumps to Customer
+      // Per #283 Ã¢â‚¬â€ Convert advances ONE step (Lead Ã¢â€ â€™ Prospect), not jumps to Customer
       expect(body.status).toBe('Prospect');
     });
   });
@@ -667,7 +680,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
     });
 
     // The bulk-assign bar has its own dropdown. Find it by its "Unassign"
-    // first option (the per-row dropdowns start with "Unassigned" — note
+    // first option (the per-row dropdowns start with "Unassigned" Ã¢â‚¬â€ note
     // the trailing 'ed'; the bulk dropdown reads "Unassign" without it).
     const allSelects = screen.getAllByRole('combobox');
     const bulkSelect = allSelects.find(el =>
@@ -712,7 +725,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
       expect(screen.getByText(/3 leads selected/i)).toBeInTheDocument();
     });
 
-    // Click again → deselect all
+    // Click again Ã¢â€ â€™ deselect all
     const refreshed = screen.getAllByRole('checkbox');
     fireEvent.click(refreshed[0]);
     await waitFor(() => {
@@ -726,7 +739,7 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
     openDrawer();
     expect(screen.getByPlaceholderText('Full Name')).toBeInTheDocument();
 
-    // ESC keypress fires window keydown listener → drawer unmounts.
+    // ESC keypress fires window keydown listener Ã¢â€ â€™ drawer unmounts.
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => {
       expect(screen.queryByPlaceholderText('Full Name')).toBeNull();
@@ -806,10 +819,10 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
 });
 
 // ---------------------------------------------------------------------------
-// Amount column — travel vertical: shows advancePaidAmount for partially-paid
+// Amount column Ã¢â‚¬â€ travel vertical: shows advancePaidAmount for partially-paid
 // leads even when the itinerary status is not yet in the COMMITTED set.
 // ---------------------------------------------------------------------------
-describe('Leads — travel tenant Amount column reflects actual payments', () => {
+describe('Leads Ã¢â‚¬â€ travel tenant Amount column reflects actual payments', () => {
   const TRAVEL_AUTH = {
     tenant: { id: 3, vertical: 'travel', name: 'Travel Co', defaultCurrency: 'INR' },
     user: { id: 1, role: 'ADMIN', name: 'Admin', email: 'admin@travel.test' },
@@ -832,7 +845,7 @@ describe('Leads — travel tenant Amount column reflects actual payments', () =>
     if (url === '/api/staff' && !opts) return Promise.resolve([]);
     if (typeof url === 'string' && url.startsWith('/api/deals') && !opts) return Promise.resolve([]);
     if (url === '/api/travel/trip-billing/paid-by-contact' && !opts) {
-      // Lily has paid via TMC instalments directly — keyed by her email
+      // Lily has paid via TMC instalments directly Ã¢â‚¬â€ keyed by her email
       return Promise.resolve({
         byEmail: { 'lily@parent.com': { paidTotal: 90000, currency: 'INR' } },
       });
@@ -841,12 +854,12 @@ describe('Leads — travel tenant Amount column reflects actual payments', () =>
       return Promise.resolve({
         itineraries: [
           // Lily: 'sent' status, advancePaidAmount=0 (itinerary not updated yet)
-          // → falls through to TMC paid-by-contact path which shows 90000
+          // Ã¢â€ â€™ falls through to TMC paid-by-contact path which shows 90000
           { id: 1, contactId: 50, status: 'sent', totalAmount: 120000, advancePaidAmount: 0, currency: 'INR' },
-          // Ahmed: legacy itinerary — advance_paid status but advancePaidAmount not recorded (null)
-          // → fallback: totalAmount shown because status is in COMMITTED set
+          // Ahmed: legacy itinerary Ã¢â‚¬â€ advance_paid status but advancePaidAmount not recorded (null)
+          // Ã¢â€ â€™ fallback: totalAmount shown because status is in COMMITTED set
           { id: 2, contactId: 51, status: 'advance_paid', totalAmount: 185000, advancePaidAmount: null, currency: 'INR' },
-          // No-payment lead: draft, nothing paid, advancePaidAmount=0 → shows dash
+          // No-payment lead: draft, nothing paid, advancePaidAmount=0 Ã¢â€ â€™ shows dash
           { id: 3, contactId: 52, status: 'draft', totalAmount: 80000, advancePaidAmount: 0, currency: 'INR' },
         ],
         total: 3,
@@ -882,8 +895,8 @@ describe('Leads — travel tenant Amount column reflects actual payments', () =>
     expect(tmcCall).toBeDefined();
   });
 
-  it('shows totalAmount for a fully_paid itinerary — bookingValueByContact is populated', async () => {
-    // This test verifies the mapping logic: fully_paid → totalAmount (185000) ends up
+  it('shows totalAmount for a fully_paid itinerary Ã¢â‚¬â€ bookingValueByContact is populated', async () => {
+    // This test verifies the mapping logic: fully_paid Ã¢â€ â€™ totalAmount (185000) ends up
     // in bookingValueByContact[51]. We confirm via the fetchApi call pattern rather
     // than trying to match a locale-sensitive toLocaleString() string.
     const { container } = renderLeads(TRAVEL_AUTH);
@@ -903,14 +916,14 @@ describe('Leads — travel tenant Amount column reflects actual payments', () =>
 
     // Ahmed's Amount cell must not be the no-data dash.
     // Since both rows share the same Amount column and we can't use getByText on split nodes,
-    // assert that the page has TWO non-dash amount entries (Lily + Ahmed) — i.e. at least
+    // assert that the page has TWO non-dash amount entries (Lily + Ahmed) Ã¢â‚¬â€ i.e. at least
     // two Amount-column td elements that contain "INR" somewhere in their text.
     const tds = Array.from(container.querySelectorAll('td'));
     const amountTds = tds.filter(td => td.textContent.includes('INR'));
     expect(amountTds.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('shows — for a lead with no payment (advancePaidAmount=0 and not fully_paid)', async () => {
+  it('shows Ã¢â‚¬â€ for a lead with no payment (advancePaidAmount=0 and not fully_paid)', async () => {
     const { container } = renderLeads(TRAVEL_AUTH);
     await waitFor(() => expect(screen.getByText('No Payment')).toBeInTheDocument());
     await waitFor(() => expect(screen.getByText('Lily')).toBeInTheDocument());
@@ -920,7 +933,7 @@ describe('Leads — travel tenant Amount column reflects actual payments', () =>
       expect(container.textContent).toMatch(/INR/);
     });
 
-    // 3 rows rendered; 2 have payments (Lily + Ahmed) → 2 Amount tds with INR.
+    // 3 rows rendered; 2 have payments (Lily + Ahmed) Ã¢â€ â€™ 2 Amount tds with INR.
     // The no-payment lead (advancePaidAmount=0) falls through to the dash path.
     const tds = Array.from(container.querySelectorAll('td'));
     const amountTds = tds.filter(td => td.textContent.includes('INR'));

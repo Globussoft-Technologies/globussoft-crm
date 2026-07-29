@@ -1079,3 +1079,31 @@ html[data-theme="dark"] .travel-flight-details-box {
   border: 2px solid transparent;
   background-clip: padding-box;
 }
+/* Travel Leads fit mode: keep every column visible without a horizontal table scrollbar. */
+table.leads-table--fit {
+  table-layout: fixed;
+  width: 100%;
+}
+
+table.leads-table--fit th,
+table.leads-table--fit td {
+  box-sizing: border-box;
+  padding: 0.75rem 0.5rem !important;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+
+table.leads-table--fit select.input-field {
+  min-width: 0 !important;
+  width: 100% !important;
+}
+
+table.leads-table--fit td > span {
+  max-width: 100%;
+}
+table.leads-table--fit td:last-child {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}

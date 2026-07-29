@@ -213,6 +213,30 @@ describe('<LandingPages /> — Generate modal', () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
+  it('realModeError for Gemini quota exhaustion shows the friendly toast', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages/generate-from-destination' && method === 'POST') {
+        return Promise.resolve({
+          page: { id: 321 },
+          generation: { stub: false, verdict: 'passed', realModeError: 'Gemini limit has been exhausted. Please try again later.' },
+        });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate Destination Page/i })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /Generate Destination Page/i }));
+    await user.type(screen.getByLabelText(/^Destination/), 'Bali');
+    await user.type(screen.getByLabelText(/Audience/i), 'Honeymooners');
+    await user.click(screen.getByRole('button', { name: /Generate Draft/i }));
+
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/landing-pages/builder/321?ai=1'));
+    expect(notifyError).toHaveBeenCalledWith('Gemini limit has been exhausted. Please try again later.');
+  });
+
   it('Cancel closes the modal without firing any request', async () => {
     const user = userEvent.setup();
     renderPage();

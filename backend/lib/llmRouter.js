@@ -57,6 +57,10 @@
 //     RateHawk clone this wiring against their own integration name.
 
 const { getBudgetCap, evaluateCap } = require("./tenantSettings");
+const {
+  isGeminiLimitError,
+  buildGeminiLimitError,
+} = require("./geminiErrors");
 
 // PRD §9.1 routing table. Each entry: { primary, fallback }.
 // Primary is what we call first; fallback is the real-mode degraded
@@ -852,6 +856,9 @@ async function callGemini(modelId, system, user, apiKey, maxTokens) {
       }
     }
     console.warn(`[llm-router] gemini: '${m}' still failing after ${attemptsPerModel} attempts — trying next model`);
+  }
+  if (isGeminiLimitError(lastErr)) {
+    throw buildGeminiLimitError(lastErr);
   }
   throw lastErr || new Error("gemini call failed");
 }

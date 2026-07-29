@@ -2476,7 +2476,7 @@ export default function QuoteBuilder() {
               <span style={totalsLabel}>GST / TCS</span>
               <span style={totalsValue} aria-label="Tax amount">{currency} {fmt(taxAmount)}</span>
             </div>
-            <div style={{ ...totalStatCard, background: "linear-gradient(135deg, rgba(59,130,246,0.14), rgba(255,255,255,0.02))", borderColor: "rgba(59,130,246,0.18)" }}>
+            <div style={{ ...totalStatCard, background: "linear-gradient(135deg, rgba(59,130,246,0.14), var(--surface-color))", borderColor: "rgba(59,130,246,0.18)" }}>
               <span style={totalsLabel}>Grand Total</span>
               <span style={{ ...totalsValue, color: "var(--primary-color, var(--accent-color))" }} aria-label="Grand total">{currency} {fmt(grandTotal)}</span>
             </div>
@@ -3105,8 +3105,8 @@ const heroPanel = {
   marginBottom: 16,
   borderRadius: 18,
   border: "1px solid rgba(96, 165, 250, 0.16)",
-  background: "linear-gradient(135deg, rgba(250,204,21,0.08), rgba(59,130,246,0.10) 48%, rgba(15,23,42,0.62))",
-  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+  background: "linear-gradient(135deg, rgba(250,204,21,0.08), rgba(59,130,246,0.10) 48%, var(--surface-color))",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03), var(--shadow-sm, 0 1px 2px rgba(18, 38, 71, 0.06))",
 };
 const summaryGrid = {
   display: "grid",
@@ -3117,8 +3117,8 @@ const summaryGrid = {
 const summaryCard = {
   padding: 14,
   borderRadius: 14,
-  background: "linear-gradient(180deg, rgba(15,23,42,0.74), rgba(30,41,59,0.82))",
-  border: "1px solid rgba(148,163,184,0.18)",
+  background: "linear-gradient(180deg, var(--surface-color), var(--subtle-bg-2, var(--surface-color)))",
+  border: "1px solid var(--border-color)",
   backdropFilter: "blur(10px)",
   WebkitBackdropFilter: "blur(10px)",
   boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
@@ -3150,15 +3150,15 @@ const heroAside = {
 const heroAsideCard = {
   padding: 16,
   borderRadius: 16,
-  background: "linear-gradient(180deg, rgba(15,23,42,0.80), rgba(30,41,59,0.88))",
-  border: "1px solid rgba(96,165,250,0.16)",
+  background: "linear-gradient(180deg, var(--surface-color), var(--subtle-bg, var(--surface-color)))",
+  border: "1px solid var(--border-color)",
   boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
 };
 const heroAsideCardMuted = {
   padding: 16,
   borderRadius: 16,
-  background: "rgba(15, 23, 42, 0.36)",
-  border: "1px solid rgba(148,163,184,0.10)",
+  background: "var(--subtle-bg, rgba(15, 23, 42, 0.08))",
+  border: "1px solid var(--border-color)",
 };
 const chipPill = {
   display: "inline-flex",
@@ -3166,11 +3166,11 @@ const chipPill = {
   gap: 6,
   padding: "4px 10px",
   borderRadius: 999,
-  background: "rgba(59,130,246,0.14)",
+  background: "var(--subtle-bg, rgba(59,130,246,0.14))",
   border: "1px solid rgba(96,165,250,0.18)",
   fontSize: 11,
   fontWeight: 700,
-  color: "#c7d2fe",
+  color: "var(--primary-color, var(--accent-color))",
   textTransform: "capitalize",
 };
 const statusChip = {
@@ -3207,14 +3207,14 @@ const shareLinkBox = {
 const miniInfoCard = {
   padding: 12,
   borderRadius: 12,
-  background: "rgba(15,23,42,0.58)",
-  border: "1px solid rgba(148,163,184,0.14)",
+  background: "var(--surface-color)",
+  border: "1px solid var(--border-color)",
 };
 const controlPanelCard = {
   padding: 16,
   borderRadius: 16,
-  background: "linear-gradient(180deg, rgba(15,23,42,0.52), rgba(15,23,42,0.34))",
-  border: "1px solid rgba(148,163,184,0.12)",
+  background: "linear-gradient(180deg, var(--surface-color), var(--subtle-bg, var(--surface-color)))",
+  border: "1px solid var(--border-color)",
   display: "grid",
   gap: 14,
 };
@@ -3227,8 +3227,8 @@ const complianceNoteCard = {
 const totalPanelCard = {
   padding: 16,
   borderRadius: 16,
-  background: "linear-gradient(180deg, rgba(15,23,42,0.86), rgba(30,41,59,0.92))",
-  border: "1px solid rgba(96,165,250,0.14)",
+  background: "linear-gradient(180deg, var(--surface-color), var(--subtle-bg, var(--surface-color)))",
+  border: "1px solid var(--border-color)",
   boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
 };
 const totalsGrid = {
@@ -3241,8 +3241,8 @@ const totalStatCard = {
   gap: 6,
   padding: 14,
   borderRadius: 14,
-  background: "rgba(255,255,255,0.03)",
-  border: "1px solid rgba(148,163,184,0.14)",
+  background: "var(--subtle-bg, rgba(255,255,255,0.03))",
+  border: "1px solid var(--border-color)",
 };
 const primaryBtn = {
   display: "inline-flex",

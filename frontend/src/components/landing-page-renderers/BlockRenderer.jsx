@@ -191,6 +191,8 @@ export default function BlockRenderer({ landingPage = {} }) {
   const blocks = normalizeWellnessCampaignBlocks(rawBlocks);
 
   const slug = landingPage.slug || '';
+  const isWellnessLandingPage = typeof landingPage.templateType === 'string'
+    && landingPage.templateType.startsWith('generic-site-');
   const publicSubmit = !!landingPage.publicSubmit;
   const pageId = publicSubmit ? null : (landingPage.id || null);
   const submitEndpoint = publicSubmit && slug ? `/api/pages/${slug}/submit` : '';
@@ -246,6 +248,12 @@ export default function BlockRenderer({ landingPage = {} }) {
           padding: 48px 20px 72px;
           display: grid;
           gap: 28px;
+        }
+
+        .landing-page .landing-page-content.wellness-content {
+          max-width: 1400px;
+          padding: 48px 32px 80px;
+          gap: 32px;
         }
 
         .landing-page section {
@@ -309,7 +317,7 @@ export default function BlockRenderer({ landingPage = {} }) {
         }
       `}</style>
 
-      <div className="landing-page-content">
+      <div className={`landing-page-content${isWellnessLandingPage ? ' wellness-content' : ''}`}>
         {blocks.map((block, idx) => (
           <React.Fragment key={idx}>
             {renderBlockWithContext(block)}

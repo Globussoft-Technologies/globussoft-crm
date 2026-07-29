@@ -9,6 +9,7 @@ const landingPageGeneratorLLM = require("../services/landingPageGeneratorLLM");
 const { uploadFile } = require("../services/s3Service");
 const { snapshotSafe, VERSION_SOURCES } = require("../lib/landingPageVersions");
 const { isValidPhoneOrEmpty } = require("../lib/validators");
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 
 const router = express.Router();
 const publicRouter = express.Router();
@@ -589,12 +590,14 @@ router.get("/stats", verifyToken, async (req, res) => {
 // parametric ordering rule per CLAUDE.md standing rules.
 router.get("/public/featured", async (req, res) => {
   try {
-    const subBrandFilter = req.query.subBrand;
+    const rawSubBrand = typeof req.query.subBrand === "string" && req.query.subBrand.length > 0
+      ? req.query.subBrand
+      : "tmc";
     const where = { isFeatured: true, status: "PUBLISHED" };
-    if (subBrandFilter === "none") {
+    if (rawSubBrand === "none") {
       where.subBrand = null;
-    } else if (typeof subBrandFilter === "string" && subBrandFilter.length > 0) {
-      where.subBrand = subBrandFilter;
+    } else {
+      where.subBrand = rawSubBrand;
     }
     const page = await prisma.landingPage.findFirst({
       where,
@@ -626,8 +629,17 @@ router.get("/public/featured", async (req, res) => {
 // Auth-exempt via the existing /landing-pages/public openPaths entry.
 router.get("/public/featured-html", async (req, res) => {
   try {
+    const rawSubBrand = typeof req.query.subBrand === "string" && req.query.subBrand.length > 0
+      ? req.query.subBrand
+      : "tmc";
+    const where = { isFeatured: true, status: "PUBLISHED" };
+    if (rawSubBrand === "none") {
+      where.subBrand = null;
+    } else {
+      where.subBrand = rawSubBrand;
+    }
     const page = await prisma.landingPage.findFirst({
-      where: { isFeatured: true, status: "PUBLISHED" },
+      where,
       orderBy: { featuredAt: "desc" },
     });
     if (!page) return res.status(404).json({ error: "No featured page.", code: "NO_FEATURED_PAGE" });

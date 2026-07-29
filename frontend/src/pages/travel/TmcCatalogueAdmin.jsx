@@ -142,6 +142,7 @@ export default function TmcCatalogueAdmin() {
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkImporting, setBulkImporting] = useState(false);
   const [bulkImportResult, setBulkImportResult] = useState(null);
+  const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
   const [pendingReviewTripIds, setPendingReviewTripIds] = useState(() => new Set());
   const bulkFileInputRef = useRef(null);
 
@@ -377,6 +378,18 @@ export default function TmcCatalogueAdmin() {
     setBulkFile(nextFile);
   };
 
+  const openBulkImportModal = () => {
+    setBulkImportModalOpen(true);
+  };
+
+  const closeBulkImportModal = () => {
+    setBulkImportModalOpen(false);
+    setBulkFile(null);
+    if (bulkFileInputRef.current) {
+      bulkFileInputRef.current.value = "";
+    }
+  };
+
   const downloadTemplate = async (format) => {
     try {
       const token = getAuthToken();
@@ -454,10 +467,7 @@ export default function TmcCatalogueAdmin() {
           return next;
         });
       }
-      if (bulkFileInputRef.current) {
-        bulkFileInputRef.current.value = "";
-      }
-      setBulkFile(null);
+      closeBulkImportModal();
       notify.success(
         result?.reviewLabel
           ? `${result.reviewLabel}: ${result.imported || 0} new, ${result.updated || 0} updated`
@@ -538,7 +548,7 @@ export default function TmcCatalogueAdmin() {
         <section
           data-testid="tmc-catalogue-bulk-import"
           style={{
-            background: "var(--surface-color)",
+            background: "var(--bg-color, #111318)",
             border: "1px solid var(--border-color)",
             borderRadius: 12,
             padding: 16,
@@ -573,30 +583,12 @@ export default function TmcCatalogueAdmin() {
             >
               Download XLSX template
             </button>
-            <label
-              style={{
-                ...secondaryBtn,
-                cursor: "pointer",
-                margin: 0,
-              }}
-            >
-              <input
-                ref={bulkFileInputRef}
-                type="file"
-                accept=".csv,.xlsx,.xls"
-                onChange={handleBulkFileChange}
-                aria-label="Bulk import file"
-                style={{ display: "none" }}
-              />
-              {bulkFile ? bulkFile.name : "Choose file"}
-            </label>
             <button
               type="button"
-              onClick={handleBulkImport}
-              disabled={bulkImporting || !bulkFile}
-              style={bulkImporting || !bulkFile ? primaryBtnDisabled : primaryBtn}
+              onClick={openBulkImportModal}
+              style={secondaryBtn}
             >
-              {bulkImporting ? "Importing..." : "Upload & classify"}
+              Import file
             </button>
           </div>
 
@@ -627,6 +619,91 @@ export default function TmcCatalogueAdmin() {
             </div>
           )}
         </section>
+      )}
+
+      {bulkImportModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="tmc-catalogue-import-modal-title"
+          data-testid="tmc-catalogue-import-modal"
+          onClick={closeBulkImportModal}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(6, 10, 18, 0.9)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            zIndex: 1000,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(720px, 100%)",
+              background: "var(--bg-color, #111318)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 16,
+              boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)",
+              padding: 20,
+              display: "grid",
+              gap: 16,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <h2 id="tmc-catalogue-import-modal-title" style={{ margin: 0, fontSize: 20 }}>
+                  Import TMC catalogue from CSV / Excel
+                </h2>
+                <p style={{ margin: "6px 0 0", color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
+                  Upload a CSV or Excel (XLSX) file with the catalogue columns from the template.
+                  Rows are validated before save, and new rows still land archived for review.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeBulkImportModal}
+                style={iconBtn}
+                aria-label="Close import modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gap: 8 }}>
+              <label style={{ color: "var(--text-secondary)", fontSize: 13, fontWeight: 500 }}>
+                Choose file
+              </label>
+              <input
+                ref={bulkFileInputRef}
+                type="file"
+                accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={handleBulkFileChange}
+                aria-label="Bulk import file"
+                style={{ width: "100%" }}
+              />
+              <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                Selected file: <strong>{bulkFile ? bulkFile.name : "No file chosen"}</strong>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={closeBulkImportModal} style={secondaryBtn}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkImport}
+                disabled={bulkImporting || !bulkFile}
+                style={bulkImporting || !bulkFile ? primaryBtnDisabled : primaryBtn}
+              >
+                {bulkImporting ? "Importing..." : "Confirm import"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Tabs */}
@@ -664,7 +741,7 @@ export default function TmcCatalogueAdmin() {
         <form
           onSubmit={handleSubmit}
           style={{
-            background: "var(--surface-color)",
+            background: "var(--bg-color, #111318)",
             padding: 16,
             borderRadius: 8,
             border: "1px solid var(--border-color)",
@@ -1016,7 +1093,7 @@ export default function TmcCatalogueAdmin() {
               key={row.id}
               role="listitem"
               style={{
-                background: "var(--surface-color)",
+                background: "var(--bg-color, #111318)",
                 border: "1px solid var(--border-color)",
                 borderRadius: 8,
                 padding: 14,
@@ -1268,7 +1345,7 @@ function TmcConfigPanel({ notify, isAdmin }) {
     <section
       aria-label="TMC configuration"
       style={{
-        background: "var(--surface-color)",
+        background: "var(--bg-color, #111318)",
         border: "1px solid var(--border-color)",
         borderRadius: 8,
         padding: 14,
@@ -1463,7 +1540,7 @@ const secondaryBtnInline = {
   borderRadius: 6,
   fontWeight: 600,
   fontSize: 13,
-  background: "var(--surface-color)",
+  background: "var(--bg-color, #111318)",
   color: "var(--text-primary)",
   border: "1px solid var(--border-color)",
   cursor: "pointer",
@@ -1508,7 +1585,7 @@ const emptyStyle = {
   textAlign: "center",
   color: "var(--text-secondary)",
   fontSize: 14,
-  background: "var(--surface-color)",
+  background: "var(--bg-color, #111318)",
   border: "1px solid var(--border-color)",
   borderRadius: 8,
 };
@@ -1538,7 +1615,7 @@ const secondaryBtn = {
   borderRadius: 6,
   fontWeight: 600,
   fontSize: 13,
-  background: "var(--surface-color)",
+  background: "var(--bg-color, #111318)",
   color: "var(--text-primary)",
   border: "1px solid var(--border-color)",
   cursor: "pointer",

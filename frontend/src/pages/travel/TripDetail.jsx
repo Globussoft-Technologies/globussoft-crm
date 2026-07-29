@@ -14,7 +14,7 @@ import {
   ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
   Bold, Italic, Heading, Link2, List, Image as ImageIcon, Eye, Download, Upload,
   MapPin, IndianRupee, FileText, CheckCircle2, AlertCircle, Clock, TrendingUp,
-  Sparkles, ArrowRight, RotateCcw,
+  Sparkles, ArrowRight, RotateCcw, X,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -184,7 +184,7 @@ function OverviewTab({ trip, onJump }) {
     <div style={{ display: "grid", gap: 16 }}>
       {/* Hero band — destination + dates + readiness gauge */}
       <div style={{
-        background: "var(--surface-color)", border: "1px solid var(--border-color)",
+        background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
         borderRadius: 12, padding: 20,
         display: "grid", gap: 16,
         gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
@@ -335,7 +335,7 @@ function ReadinessGauge({ score, components }) {
       }}>
         <div style={{
           position: "absolute", inset: 6, borderRadius: "50%",
-          background: "var(--surface-color)",
+          background: "var(--bg-color, #111318)",
           display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
         }}>
           <div style={{ fontSize: 22, fontWeight: 700, color, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
@@ -393,7 +393,7 @@ function KpiCard({ icon: Icon, label, value, hint, onClick, tone }) {
       disabled={!interactive}
       style={{
         textAlign: "left", width: "100%",
-        background: "var(--surface-color)", border: "1px solid var(--border-color)",
+        background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
         borderRadius: 10, padding: 14,
         cursor: interactive ? "pointer" : "default",
         transition: "border-color 120ms, transform 120ms",
@@ -435,7 +435,7 @@ function SummaryBand({ icon: Icon, title, status, statusTone, children, onClick 
       tabIndex={interactive ? 0 : undefined}
       onKeyDown={interactive ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
       style={{
-        background: "var(--surface-color)", border: "1px solid var(--border-color)",
+        background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
         borderRadius: 10, padding: 14,
         cursor: interactive ? "pointer" : "default",
         transition: "border-color 120ms",
@@ -488,7 +488,7 @@ function PayChip({ icon: Icon, count, label, color }) {
       display: "inline-flex", alignItems: "center", gap: 4,
       padding: "3px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600,
       border: `1px solid ${color}`, color,
-      background: "var(--surface-color)",
+      background: "var(--bg-color, #111318)",
     }}>
       <Icon size={11} aria-hidden /> {count} {label}
     </span>
@@ -574,6 +574,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkImportResult, setBulkImportResult] = useState(null);
   const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
   const importInputRef = useRef(null);
 
   const loadPendingRegs = useCallback(async () => {
@@ -589,6 +590,16 @@ function ParticipantsTab({ trip, onChange, notify }) {
   useEffect(() => {
     loadPendingRegs();
   }, [loadPendingRegs]);
+
+  const openBulkImportModal = () => {
+    setBulkImportModalOpen(true);
+  };
+
+  const closeBulkImportModal = () => {
+    setBulkImportModalOpen(false);
+    setBulkFile(null);
+    if (importInputRef.current) importInputRef.current.value = "";
+  };
 
   const bulkImport = async () => {
     if (!bulkFile) {
@@ -610,8 +621,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
         throw Object.assign(new Error(data?.error || "Failed to import participants"), { body: data, status: resp.status });
       }
       setBulkImportResult(data || null);
-      setBulkFile(null);
-      if (importInputRef.current) importInputRef.current.value = "";
+      closeBulkImportModal();
       notify.success(`Imported ${data?.inserted || 0}, updated ${data?.updated || 0}`);
       onChange();
     } catch (e) {
@@ -806,19 +816,9 @@ function ParticipantsTab({ trip, onChange, notify }) {
               Upload a CSV or XLSX file. Existing rows are updated additively, and blank cells never clear data already stored in CRM.
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <input
-              ref={importInputRef}
-              type="file"
-              accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              onChange={(e) => setBulkFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
-              style={{ maxWidth: 240 }}
-              aria-label="Bulk import participants file"
-            />
-            <button type="button" onClick={bulkImport} disabled={bulkImporting} style={{ ...secondaryBtn, opacity: bulkImporting ? 0.7 : 1, cursor: bulkImporting ? "wait" : "pointer" }}>
-              <Upload size={14} /> {bulkImporting ? "Importing..." : "Import file"}
-            </button>
-          </div>
+          <button type="button" onClick={openBulkImportModal} style={{ ...secondaryBtn, alignSelf: "center" }}>
+            <Upload size={14} /> Import file
+          </button>
         </div>
         {bulkImportResult && (
           <div style={{ marginTop: 10, display: "grid", gap: 6 }} data-testid="participant-bulk-import-result">
@@ -834,8 +834,93 @@ function ParticipantsTab({ trip, onChange, notify }) {
         )}
       </div>
 
+      {bulkImportModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="participant-bulk-import-modal-title"
+          data-testid="participant-bulk-import-modal"
+          onClick={closeBulkImportModal}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(6, 10, 18, 0.9)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            zIndex: 1000,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(760px, 100%)",
+              background: "var(--bg-color, #111318)",
+              border: "1px solid var(--border-color)",
+              borderRadius: 16,
+              boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)",
+              padding: 20,
+              display: "grid",
+              gap: 16,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <h2 id="participant-bulk-import-modal-title" style={{ margin: 0, fontSize: 20 }}>
+                  Import Participants from CSV / Excel
+                </h2>
+                <p style={{ margin: "6px 0 0", color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
+                  Upload a CSV or Excel (XLSX) file with columns like fullName and parentPhone.
+                  Existing rows are updated additively and blank cells never clear stored data.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeBulkImportModal}
+                style={iconBtn}
+                aria-label="Close import modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gap: 8 }}>
+              <label style={{ color: "var(--text-secondary)", fontSize: 13, fontWeight: 500 }}>
+                Choose file
+              </label>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(e) => setBulkFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
+                aria-label="Bulk import participants file"
+                style={{ width: "100%" }}
+              />
+              <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                Selected file: <strong>{bulkFile ? bulkFile.name : "No file chosen"}</strong>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={closeBulkImportModal} style={secondaryBtn}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={bulkImport}
+                disabled={bulkImporting || !bulkFile}
+                style={bulkImporting || !bulkFile ? primaryBtnDisabled : primaryBtn}
+              >
+                {bulkImporting ? "Importing..." : "Confirm import"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {adding && (
-        <div style={{ background: "var(--surface-color)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 12 }}>
+        <div style={{ background: "var(--bg-color, #111318)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 12 }}>
           <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))" }}>
             <input placeholder="Full name *" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} style={input} />
             <input placeholder="Parent name" value={form.parentName} onChange={(e) => setForm({ ...form, parentName: e.target.value })} style={input} />
@@ -1511,7 +1596,7 @@ function RoomingTab({ trip, notify }) {
           zIndex: 1000,
         }} onClick={() => setShowAutoAllocateDialog(false)}>
           <div style={{
-            background: "var(--surface-color)", borderRadius: 12, padding: 24, maxWidth: 400,
+            background: "var(--bg-color, #111318)", borderRadius: 12, padding: 24, maxWidth: 400,
             boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
           }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 12px 0" }}>Auto-allocate rooms</h3>
@@ -1649,7 +1734,7 @@ function RoomingTab({ trip, notify }) {
 
               return (
                 <div key={room.id} style={{
-                  background: "var(--surface-color)", border: "1px solid var(--border-color)",
+                  background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
                   borderRadius: 8, padding: 14, display: "flex", justifyContent: "space-between",
                   alignItems: "flex-start", gap: 12,
                 }}>
@@ -1851,7 +1936,7 @@ function RoomCard({
                   type="button"
                   onClick={() => onToggleParticipant(p.id)}
                   style={{
-                    textAlign: "left", padding: "8px 10px", background: "var(--surface-color)",
+                    textAlign: "left", padding: "8px 10px", background: "var(--bg-color, #111318)",
                     border: "1px solid var(--border-color)", borderRadius: 4,
                     cursor: "pointer", fontSize: 13, color: "var(--text-primary)",
                     transition: "all 0.15s",
@@ -2358,7 +2443,7 @@ function PaymentTab({ trip, notify }) {
 
                         if (isEditing) {
                           return (
-                            <div key={i.id} style={{ background: "var(--surface-color)", padding: 12, borderRadius: 6, marginTop: 10, flexDirection: "column", gap: 12, display: "flex" }}>
+                            <div key={i.id} style={{ background: "var(--bg-color, #111318)", padding: 12, borderRadius: 6, marginTop: 10, flexDirection: "column", gap: 12, display: "flex" }}>
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                                 <strong style={{ fontSize: 13 }}>Due {fmt(i.dueDate)} · ₹{Number(i.amount).toLocaleString()}</strong>
                               </div>
@@ -2483,7 +2568,7 @@ function PaymentTab({ trip, notify }) {
                             </div>
                             {hasLink && (
                               <div style={{
-                                background: "var(--surface-color)", borderTop: "1px solid var(--border-color)",
+                                background: "var(--bg-color, #111318)", borderTop: "1px solid var(--border-color)",
                                 borderRadius: "0 0 6px 6px", padding: "8px 10px",
                                 display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
                               }}>
@@ -2734,7 +2819,7 @@ function LandingPageCard({ trip, notify }) {
       ) : (
         <div style={{
           border: "1px solid var(--border-color)", borderRadius: 10, padding: 14,
-          background: "var(--surface-color)",
+          background: "var(--bg-color, #111318)",
           display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
         }}>
           <div style={{ minWidth: 0, flex: 1 }}>
@@ -2818,7 +2903,7 @@ function MicrositeCreate({ trip, onChange, notify }) {
   };
 
   return (
-    <div style={{ background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
+    <div style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
         <div style={{
           width: 40, height: 40, borderRadius: 10,
@@ -2954,7 +3039,7 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
   };
 
   return (
-    <div style={{ background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
+    <div style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 12, padding: 16 }}>
       {/* Live-link hero: promotes the public URL and hosts the primary
           action buttons (Save / Unpublish / AI Generate) at the TOP of the
           card so operators don't have to scroll to the bottom to act. */}
@@ -3030,7 +3115,7 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
       {previewing ? (
         <div
           style={{
-            background: "var(--surface-color)", border: "1px solid var(--border-color)",
+            background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
             borderRadius: 8, padding: 16, maxHeight: 500, overflow: "auto", fontSize: 14,
           }}
           // itineraryHtml is admin-authored; sanitization happens at the route's
@@ -3158,7 +3243,7 @@ function RichTextEditor({ value, onChange, tripId, notify }) {
   };
 
   return (
-    <div style={{ background: "var(--surface-color)", border: "1px solid var(--border-color)", borderRadius: 8, overflow: "hidden" }}>
+    <div style={{ background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)", borderRadius: 8, overflow: "hidden" }}>
       <div style={toolbar} role="toolbar" aria-label="Formatting toolbar">
         <ToolButton onClick={() => exec("bold")} label="Bold (Ctrl+B)"><Bold size={14} /></ToolButton>
         <ToolButton onClick={() => exec("italic")} label="Italic (Ctrl+I)"><Italic size={14} /></ToolButton>
@@ -3243,7 +3328,7 @@ const primaryBtnDisabled = {
 const dangerBtn = {
   display: "inline-flex", alignItems: "center", gap: 6,
   padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
-  background: "var(--surface-color)", color: "var(--danger-color)",
+  background: "var(--bg-color, #111318)", color: "var(--danger-color)",
   border: "1px solid var(--danger-color)", cursor: "pointer",
 };
 
@@ -3255,7 +3340,7 @@ const backLink = {
   padding: "4px 8px", borderRadius: 4,
 };
 const listShell = {
-  background: "var(--surface-color)", borderRadius: 8,
+  background: "var(--bg-color, #111318)", borderRadius: 8,
   border: "1px solid var(--border-color)", overflow: "hidden",
 };
 const row = {
@@ -3279,7 +3364,7 @@ const primaryBtn = {
 const secondaryBtn = {
   display: "inline-flex", alignItems: "center", gap: 6,
   padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
-  background: "var(--surface-color)", color: "var(--text-primary)",
+  background: "var(--bg-color, #111318)", color: "var(--text-primary)",
   border: "1px solid var(--border-color)", cursor: "pointer",
 };
 const addBtn = {

@@ -3676,34 +3676,36 @@ async function renderTmcReadinessReport({
     accent,
   });
 
-  // ── Section 10: Single CTA ──────────────────────────────────────────
-  if (doc.y > doc.page.height - 200) doc.addPage();
-  doc.y = Math.max(doc.y, doc.y + 4);
-  doc.rect(pageMargin, doc.y, contentW, 110).fillAndStroke(BRAND.tealSoft, accent);
-  const ctaY = doc.y - 105;
+  // -- Section 10: Single CTA --------------------------------------------
+  if (doc.y > doc.page.height - doc.page.margins.bottom - 120) {
+    doc.addPage();
+    doc.y = pageMargin;
+  } else {
+    doc.y += 8;
+  }
   doc.font("Helvetica-Bold").fontSize(13).fillColor(accent)
-    .text("Your students are ready.", pageMargin + 14, ctaY + 12, { width: contentW - 28 });
+    .text("Your students are ready.", pageMargin, doc.y, { width: contentW });
   doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
     .text(
       "The calendar is the only thing between this profile and a programme that runs next year. " +
       "Book a 30-minute conversation with the TMC team to walk through this report together.",
-      pageMargin + 14,
-      ctaY + 36,
-      { width: contentW - 28 },
+      pageMargin,
+      doc.y + 6,
+      { width: contentW },
     );
   if (resolvedBookingUrl) {
     doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
-      .text(`Book your slot: ${resolvedBookingUrl}`, pageMargin + 14, ctaY + 84, { width: contentW - 28 });
+      .text(`Book your slot: ${resolvedBookingUrl}`, pageMargin, doc.y + 6, { width: contentW });
   } else {
     doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
       .text(
         "Your TMC executive will reach out within one working day to share their calendar.",
-        pageMargin + 14,
-        ctaY + 84,
-        { width: contentW - 28 },
+        pageMargin,
+        doc.y + 6,
+        { width: contentW },
       );
   }
-  doc.y = ctaY + 120;
+  doc.moveDown(0.8);
 
   // Footer with attribution.
   const footerY = doc.page.height - doc.page.margins.bottom - 28;

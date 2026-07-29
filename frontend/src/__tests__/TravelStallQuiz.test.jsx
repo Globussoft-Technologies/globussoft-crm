@@ -163,7 +163,7 @@ describe('TravelStallQuiz — public wizard (PRD §4.7)', () => {
     expect(screen.getByText(/advisor will reach out/i)).toBeTruthy();
     expect(screen.getByRole('link', { name: /personalised report/i })).toHaveAttribute(
       'href',
-      '/api/uploads/diagnostics/diag-1-abc.pdf',
+      '/uploads/diagnostics/diag-1-abc.pdf', 
     );
 
     // Verify the submit body shape.

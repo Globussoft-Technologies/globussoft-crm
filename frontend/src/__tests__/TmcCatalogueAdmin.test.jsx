@@ -577,7 +577,7 @@ describe('<TmcCatalogueAdmin /> - bulk import template + ingest flow', () => {
     expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Downloaded CSV template/i));
   });
 
-  it('uploads a spreadsheet, shows the ingest summary, and marks imported rows as pending review', async () => {
+  it('opens the modal, uploads a spreadsheet, shows the ingest summary, and marks imported rows as pending review', async () => {
     installFetchMock({
       archived: {
         catalogue: [
@@ -620,10 +620,14 @@ describe('<TmcCatalogueAdmin /> - bulk import template + ingest flow', () => {
 
     renderPage();
     await screen.findByText('Golden Triangle Heritage Trail');
+    expect(screen.queryByLabelText('Bulk import file')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Import file/i }));
+    expect(await screen.findByTestId('tmc-catalogue-import-modal')).toBeInTheDocument();
 
     const file = new File(['tripId,title'], 'tmc-catalogue.csv', { type: 'text/csv' });
     fireEvent.change(screen.getByLabelText('Bulk import file'), { target: { files: [file] } });
-    fireEvent.click(screen.getByRole('button', { name: /Upload & classify/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Confirm import/i }));
 
     await waitFor(() => {
       expect(rawFetchMock).toHaveBeenCalledWith(

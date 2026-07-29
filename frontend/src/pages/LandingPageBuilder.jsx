@@ -8,14 +8,15 @@ import UploadedAssetChip from '../components/UploadedAssetChip';
 import { PRESETS as REG_FORM_PRESETS, listPresets as listRegFormPresets, defaultPropsFor as regFormDefaultPropsFor } from '../utils/travelRegistrationPresets';
 import LandingPageTemplateEditor from './LandingPageTemplateEditor';
 import LandingPageWanderluxEditor, { LayoutPanel as WanderluxLayoutPanel } from './LandingPageWanderluxEditor';
+import LandingPageWellnessEditor from './LandingPageWellnessEditor';
 import { TeeDecisionPanel } from '../components/TeeDecisionPanel';
 import { AuthContext } from '../App';
 
-// Phase D1 — registered travel-page template ids. When a page's
+// Phase D1 � registered travel-page template ids. When a page's
 // templateType matches one of these, the builder mounts the
 // LandingPageTemplateEditor (form-based, content-as-object) instead
 // of the block-array canvas. The list is kept in sync with the
-// backend registry at backend/services/templates/index.js — adding a
+// backend registry at backend/services/templates/index.js � adding a
 // new template needs both ends to know about it.
 const TEMPLATE_TYPE_IDS = new Set([
   'educational-trip-v1',
@@ -23,7 +24,7 @@ const TEMPLATE_TYPE_IDS = new Set([
   'religious-tour-v1',
   'luxury-tour-v1',
   'family-trip-v1',
-  // Road A (2026-06-23) — Wanderlux dynamic generator. Stores content as a
+  // Road A (2026-06-23) � Wanderlux dynamic generator. Stores content as a
   // CONFIG OBJECT (not block array). Without this entry, the builder fell
   // into the block-array branch and crashed with "components.map is not a
   // function" on every wanderlux page (e.g. /landing-pages/builder/18?ai=1).
@@ -43,34 +44,34 @@ import { useBrandKit, brandLogoUrl, brandPrimaryColor } from '../hooks/useBrandK
 // What/why: drag-free WYSIWYG builder for the LandingPage admin surface.
 // The single .jsx ships every component-type renderer (preview-side) and
 // every property editor (right rail). Public render is owned by
-// backend/services/landingPageRenderer.js — keep the two in sync.
+// backend/services/landingPageRenderer.js � keep the two in sync.
 //
-// Recent issue closures (commit `fix(landing-page-builder)` …):
-//   #446 — Image block: "Upload" button next to the URL field. POSTs to
+// Recent issue closures (commit `fix(landing-page-builder)` �):
+//   #446 � Image block: "Upload" button next to the URL field. POSTs to
 //          /api/landing-pages/upload (multer, 5 MB, image/* MIMEs only),
 //          drops the returned url straight into props.src.
-//   #449 — Layout cleanup. Hides the global app sidebar while the builder
+//   #449 � Layout cleanup. Hides the global app sidebar while the builder
 //          is mounted (body class `body--builder-fullscreen`); aligns the
 //          top-bar; groups the right-rail properties into "Component" +
 //          "Page" sections so the user can see what's editable.
-//   #450 — Undo / Redo. useReducer-backed history stack (up to 50 states)
+//   #450 � Undo / Redo. useReducer-backed history stack (up to 50 states)
 //          with Ctrl+Z / Ctrl+Y bindings. Property edits debounce at 500ms
 //          so a single field change produces ONE history entry, not 30.
-//   #451-remainder — Form component now has Lead-Routing rule selector,
+//   #451-remainder � Form component now has Lead-Routing rule selector,
 //          enableCaptcha checkbox, successRedirectUrl override. The
 //          public renderer + submit handler honour all three.
 //
 // Standing rules respected:
 //   - Body strips: stripDangerous middleware deletes id/createdAt/etc
 //     from every PUT body. We use targetUserId-style names for ids. (N/A
-//     here — no userId references.)
+//     here � no userId references.)
 //   - JWT key: req.user.userId, never req.user.id (backend concern).
 //   - Sanitize: HTML in landing-page content is sanitized in the route
 //     already; no second layer here.
 // =====================================================================
 
 const COMPONENT_TYPES = [
-  // ── Generic blocks (work on every landing page) ──────────────────
+  // -- Generic blocks (work on every landing page) ------------------
   { type: 'heading', label: 'Heading', icon: Type, group: 'generic', defaultProps: { text: 'Your Headline Here', level: 'h2', align: 'center', color: '#1e293b' } },
   { type: 'text', label: 'Text', icon: AlignLeft, group: 'generic', defaultProps: { text: 'Enter your text content here.', align: 'left', color: '#64748b', fontSize: '1rem' } },
   { type: 'image', label: 'Image', icon: Image, group: 'generic', defaultProps: { src: 'https://placehold.co/800x400/e2e8f0/94a3b8?text=Image', alt: 'Image', maxWidth: '100%' } },
@@ -80,24 +81,24 @@ const COMPONENT_TYPES = [
   { type: 'spacer', label: 'Spacer', icon: Space, group: 'generic', defaultProps: { height: '40px' } },
   { type: 'video', label: 'Video', icon: Video, group: 'generic', defaultProps: { url: 'https://www.youtube.com/embed/dQw4w9WgXcQ', width: '100%' } },
   { type: 'columns', label: 'Two Columns', icon: Columns, group: 'generic', defaultProps: { gap: '2rem', columns: [{ components: [] }, { components: [] }] } },
-  // ── Travel destination blocks (visual parity with /trips) ──────
+  // -- Travel destination blocks (visual parity with /trips) ------
   // All 8 blocks are scoped by `.trips-page .t-*` CSS injected by
   // backend/services/landingPageRenderer.travel.css on the public
   // render. defaultProps mirror the seed shape the AI generator
   // emits so previews are immediate.
   { type: 'destinationHero', label: 'Destination Hero', icon: MapPin, group: 'travel', defaultProps: { destination: '', headline: '', subhead: '', posterUrl: null, countdownTo: null, ctaText: 'Reserve Your Spot', ctaScrollTarget: '', palette: { bg: '#1f1a17', fg: '#ffffff', accent: '#b8893b' } } },
-  { type: 'cityCards', label: 'City Cards', icon: Building2, group: 'travel', defaultProps: { title: 'Where You’ll Go', subtitle: '', cards: [{ tag: '', title: '', img: null, body: '' }] } },
-  { type: 'highlightsGrid', label: 'Highlights', icon: Sparkles, group: 'travel', defaultProps: { title: 'Why This Destination', subtitle: '', items: [{ icon: '◈', title: '', body: '' }] } },
-  { type: 'inclusionsGrid', label: 'Inclusions', icon: ListChecks, group: 'travel', defaultProps: { title: 'What’s Included', subtitle: '', items: [''] } },
+  { type: 'cityCards', label: 'City Cards', icon: Building2, group: 'travel', defaultProps: { title: 'Where You�ll Go', subtitle: '', cards: [{ tag: '', title: '', img: null, body: '' }] } },
+  { type: 'highlightsGrid', label: 'Highlights', icon: Sparkles, group: 'travel', defaultProps: { title: 'Why This Destination', subtitle: '', items: [{ icon: '?', title: '', body: '' }] } },
+  { type: 'inclusionsGrid', label: 'Inclusions', icon: ListChecks, group: 'travel', defaultProps: { title: 'What�s Included', subtitle: '', items: [''] } },
   { type: 'itineraryTimeline', label: 'Itinerary', icon: CalendarDays, group: 'travel', defaultProps: { title: 'Day-by-day', subtitle: '', days: [{ day: 1, title: '', bullets: [''] }] } },
-  { type: 'tierPricing', label: 'Tier Pricing', icon: IndianRupee, group: 'travel', defaultProps: { title: 'Investment', subtitle: '', currency: '₹', tiers: [{ step: 1, label: '', subtitle: '', amount: null, dueDate: null, vendor: null, tag: null }] } },
-  { type: 'faqAccordion', label: 'FAQ', icon: HelpCircle, group: 'travel', defaultProps: { title: 'Frequently Asked Questions', subtitle: '', categories: [{ id: 'all', label: 'All', icon: '◇' }], faqs: [{ cat: '', q: '', a: '' }] } },
+  { type: 'tierPricing', label: 'Tier Pricing', icon: IndianRupee, group: 'travel', defaultProps: { title: 'Investment', subtitle: '', currency: '?', tiers: [{ step: 1, label: '', subtitle: '', amount: null, dueDate: null, vendor: null, tag: null }] } },
+  { type: 'faqAccordion', label: 'FAQ', icon: HelpCircle, group: 'travel', defaultProps: { title: 'Frequently Asked Questions', subtitle: '', categories: [{ id: 'all', label: 'All', icon: '?' }], faqs: [{ cat: '', q: '', a: '' }] } },
   { type: 'reviewCarousel', label: 'Reviews (manual)', icon: MessageSquare, group: 'travel', defaultProps: { title: 'What People Say', subtitle: '', reviews: [{ name: '', initial: '', text: '' }] } },
   // PR-C: 4 new travel blocks. travelVideo + brochureDownload are
   // operator-added (AI never emits URLs); safetyFeatures + contactFooter
   // are emitted by the AI as shells.
   { type: 'travelVideo', label: 'Video', icon: Film, group: 'travel', defaultProps: { title: 'See the Experience', subtitle: '', url: '', aspectRatio: '16:9' } },
-  { type: 'safetyFeatures', label: 'Safety', icon: Shield, group: 'travel', defaultProps: { title: 'Engineered for Safety', subtitle: '', items: [{ icon: '◈', title: '', body: '' }, { icon: '⊕', title: '', body: '' }, { icon: '⌂', title: '', body: '' }] } },
+  { type: 'safetyFeatures', label: 'Safety', icon: Shield, group: 'travel', defaultProps: { title: 'Engineered for Safety', subtitle: '', items: [{ icon: '?', title: '', body: '' }, { icon: '?', title: '', body: '' }, { icon: '�', title: '', body: '' }] } },
   { type: 'brochureDownload', label: 'Brochure', icon: FileDown, group: 'travel', defaultProps: { title: 'Download the Brochure', subtitle: '', ctaText: 'Get the Brochure', fileUrl: null, formFields: [{ label: 'Full name', name: 'name', type: 'text', required: true }, { label: 'Email', name: 'email', type: 'email', required: true }, { label: 'Phone', name: 'phone', type: 'tel', required: false }] } },
   { type: 'contactFooter', label: 'Contact Footer', icon: PhoneCall, group: 'travel', defaultProps: { brandName: '', phone: null, email: null, ctaText: 'Reserve Your Spot', ctaUrl: '' } },
   // Audience-aware registration form. defaultProps seed from the TMC
@@ -109,16 +110,16 @@ const COMPONENT_TYPES = [
   { type: 'registrationForm', label: 'Registration Form', icon: UserPlus, group: 'travel', defaultProps: regFormDefaultPropsFor('tmc') },
 ];
 
-// ── #450 — undo / redo reducer ───────────────────────────────────────
+// -- #450 � undo / redo reducer ---------------------------------------
 //
 // State shape: { past: Component[][], present: Component[], future: Component[][] }
 // Action types:
-//   SET           — replace `present` (e.g. initial load). Clears future,
+//   SET           � replace `present` (e.g. initial load). Clears future,
 //                   pushes prior present onto past.
-//   COMMIT        — push the current present to past, set new present.
+//   COMMIT        � push the current present to past, set new present.
 //                   Used by add / move / remove / debounced-prop-edit.
-//   UNDO / REDO   — shift one entry between past <-> future.
-//   RESET         — used after save when you want to clear the dirty
+//   UNDO / REDO   � shift one entry between past <-> future.
+//   RESET         � used after save when you want to clear the dirty
 //                   delta; we don't currently expose this since most
 //                   workflows want to keep undoability after save.
 //
@@ -155,7 +156,7 @@ function historyReducer(state, action) {
 }
 
 // Human-readable labels for the LandingPageVersion.source enum. Mirrors
-// the VERSION_SOURCES set in backend/lib/landingPageVersions.js — keep
+// the VERSION_SOURCES set in backend/lib/landingPageVersions.js � keep
 // the two in sync when adding a new source.
 function formatVersionSource(source) {
   switch (source) {
@@ -182,6 +183,7 @@ export default function LandingPageBuilder() {
   const location = useLocation();
   const isTravelTenant = auth?.user?.tenant?.vertical === 'travel' || auth?.tenant?.vertical === 'travel';
   const isGenericLandingSites = location.pathname.startsWith('/landing-sites');
+  const isWellnessTenant = auth?.user?.tenant?.vertical === 'wellness' || auth?.tenant?.vertical === 'wellness';
   // G094: sub-brand preview context. Admin lands at
   //   /landing-pages/<id>/builder?sub_brand=tmc
   // to preview the page chrome under the TMC brand kit; absent param
@@ -192,9 +194,10 @@ export default function LandingPageBuilder() {
   const previewLogo = brandLogoUrl(previewBrandKit);
   const previewAccent = brandPrimaryColor(previewBrandKit);
   const [page, setPage] = useState(null);
+  const isWellnessLandingSite = isGenericLandingSites && isWellnessTenant && page && typeof page.templateType === 'string' && page.templateType.startsWith('generic-site-');
   const [history, dispatch] = useReducer(historyReducer, { past: [], present: [], future: [] });
   const components = history.present;
-  // Phase D1 — template-driven page content (JSON object, not array).
+  // Phase D1 � template-driven page content (JSON object, not array).
   // Used when page.templateType is a registered template id. Sibling
   // state of `components` so block-based pages stay untouched.
   const [templateContent, setTemplateContent] = useState(null);
@@ -214,7 +217,7 @@ export default function LandingPageBuilder() {
   // tenant has no rules configured (UI surfaces a hint instead of an
   // empty dropdown).
   const [routingRules, setRoutingRules] = useState([]);
-  // Trip-link picker — populated only when the operator is on the TMC
+  // Trip-link picker � populated only when the operator is on the TMC
   // sub-brand (the only sub-brand that owns trips today). Empty array
   // for non-TMC pages so the picker stays hidden.
   const [tmcTrips, setTmcTrips] = useState([]);
@@ -224,7 +227,7 @@ export default function LandingPageBuilder() {
   const tripPickerRef = useRef(null);
   // #454: dirty-state tracking + beforeunload guard.
   const [isDirty, setIsDirty] = useState(false);
-  // Version-history drawer state. Lightweight versioning per PRD —
+  // Version-history drawer state. Lightweight versioning per PRD �
   // snapshots are captured server-side on create / manual save /
   // publish / AI generation / restore; the drawer just lists them
   // and offers a Restore button per row.
@@ -251,7 +254,7 @@ export default function LandingPageBuilder() {
   useEffect(() => {
     fetchApi(`/api/landing-pages/${id}`).then(data => {
       setPage(data);
-      // Phase D1 — template pages store content as a JSON OBJECT
+      // Phase D1 � template pages store content as a JSON OBJECT
       // keyed to template slots (hero/programme/cultural/etc).
       // Detect and route to the matching state slot.
       if (isTemplatePageType(data.templateType)) {
@@ -288,7 +291,7 @@ export default function LandingPageBuilder() {
   }, []);
 
   // Fetch TMC trips for the "Link to trip" picker. Travel admins only;
-  // 403 (non-travel tenant or non-TMC sub-brand access) → silently
+  // 403 (non-travel tenant or non-TMC sub-brand access) ? silently
   // leave the picker empty so the toolbar renders without the dropdown
   // for generic users.
   useEffect(() => {
@@ -307,10 +310,10 @@ export default function LandingPageBuilder() {
   }, [page?.tripId]);
 
   // Link / unlink the page to a TMC trip via the existing PUT endpoint.
-  // Schema enforces 1:1 (LandingPage.tripId @unique) — server returns
+  // Schema enforces 1:1 (LandingPage.tripId @unique) � server returns
   // 409 TRIP_ALREADY_LINKED if another page already claims this trip.
   const handleLinkToTrip = async (nextTripId) => {
-    // nextTripId === '' means "unlink" — translate to null for the API
+    // nextTripId === '' means "unlink" � translate to null for the API
     const payload = nextTripId === '' || nextTripId === null
       ? { tripId: null }
       : { tripId: parseInt(nextTripId, 10) };
@@ -324,7 +327,7 @@ export default function LandingPageBuilder() {
       setPage(updated);
       setLinkingTripId(updated.tripId ?? null);
       if (payload.tripId == null) {
-        notify.success('Unlinked — wizard submissions will fall back to lead capture.');
+        notify.success('Unlinked � wizard submissions will fall back to lead capture.');
       } else {
         const trip = tmcTrips.find(t => t.id === payload.tripId);
         notify.success(`Linked to ${trip ? trip.tripCode : `trip #${payload.tripId}`}`);
@@ -395,7 +398,7 @@ export default function LandingPageBuilder() {
     }
     setSaving(true);
     try {
-      // Phase D1 — when the page is in template mode, the persisted
+      // Phase D1 � when the page is in template mode, the persisted
       // content is the object payload (not the block array). Block-
       // based pages keep their existing array shape.
       const contentSerialized = isTemplateMode
@@ -433,7 +436,7 @@ export default function LandingPageBuilder() {
     setSaving(false);
   };
 
-  // Publish flow — save first, then run the backend readiness check,
+  // Publish flow � save first, then run the backend readiness check,
   // then call /publish. The /publish endpoint also enforces the gate
   // server-side; the client preview lets the user see the issues
   // immediately without a publish attempt.
@@ -494,7 +497,7 @@ export default function LandingPageBuilder() {
     }
   };
 
-  // ── Feature / unfeature ──────────────────────────────────────────
+  // -- Feature / unfeature ------------------------------------------
   const handleSetFeatured = async () => {
     if (!page?.id || featuringPage) return;
     setFeaturingPage(true);
@@ -525,7 +528,7 @@ export default function LandingPageBuilder() {
     });
   };
 
-  // ── Version history ──────────────────────────────────────────────
+  // -- Version history ----------------------------------------------
   const loadVersions = async () => {
     if (!page?.id) return;
     setVersionsLoading(true);
@@ -544,12 +547,12 @@ export default function LandingPageBuilder() {
     await loadVersions();
   };
 
-  // PR-E Phase 2.3 — preview a historical version snapshot without
+  // PR-E Phase 2.3 � preview a historical version snapshot without
   // restoring first. Mints a fresh preview token (5-min single-use)
   // and appends ?version=N so the production renderer renders the
   // snapshot instead of the live state. Used by the "Preview" button
   // on each row in the version drawer so operators can compare BEFORE
-  // restoring (Generate → Edit → Preview → Restore → Preview → Publish).
+  // restoring (Generate ? Edit ? Preview ? Restore ? Preview ? Publish).
   const handlePreviewVersion = async (version) => {
     if (!page?.id) return;
     try {
@@ -600,14 +603,14 @@ export default function LandingPageBuilder() {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '');
     if (!baseSlug) {
-      notify.error('Set a title first — slug needs at least one alphanumeric character to derive from.');
+      notify.error('Set a title first � slug needs at least one alphanumeric character to derive from.');
       return;
     }
     setPage({ ...page, slug: baseSlug.slice(0, 50) });
     setIsDirty(true);
   };
 
-  // ── component-mutation helpers (history-aware) ─────────────────────
+  // -- component-mutation helpers (history-aware) ---------------------
 
   const commit = useCallback((next) => {
     dispatch({ type: 'COMMIT', value: next });
@@ -861,7 +864,7 @@ export default function LandingPageBuilder() {
         })()}
       </div>
 
-      {/* Phase D1 — template-driven page editor takes over when the
+      {/* Phase D1: template-driven page editor takes over when the
           page's templateType matches a registered template id. The
           block-array 3-panel layout (palette / canvas / properties)
           stays in place for every other page so non-template flows
@@ -962,6 +965,16 @@ export default function LandingPageBuilder() {
               }}
             />
           </aside>
+        </div>
+      ) : isWellnessLandingSite ? (
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            <LandingPageWellnessEditor
+              content={components}
+              onChange={(next) => { dispatch({ type: 'COMMIT', value: next }); setIsDirty(true); }}
+              page={page}
+            />
+          </div>
         </div>
       ) : (
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -1143,7 +1156,7 @@ export default function LandingPageBuilder() {
         />
       )}
 
-      {/* Version-history drawer. Lightweight per PRD — list + Restore.
+      {/* Version-history drawer. Lightweight per PRD � list + Restore.
           Snapshots are captured server-side on the 5 mutation events
           (create / manual save / publish / AI generation / restore).
           No diff view, no branching, no merge. */}
@@ -1163,7 +1176,7 @@ export default function LandingPageBuilder() {
   );
 }
 
-// ── Version history modal ─────────────────────────────────────────────
+// -- Version history modal ---------------------------------------------
 // Full-screen modal replacing the side drawer, showing all versions in
 // a readable grid with proper spacing and no overlapping text.
 function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, onRestore, onPreview, onRefresh, isGenericLandingSites }) {
@@ -1202,7 +1215,7 @@ function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, o
             }}
             title="Refresh version list"
           >
-            ↻ Refresh
+            ? Refresh
           </button>
           <button
             onClick={onClose}
@@ -1212,7 +1225,7 @@ function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, o
             }}
             aria-label="Close"
           >
-            ✕
+            ?
           </button>
         </div>
 
@@ -1222,7 +1235,7 @@ function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, o
         }}>
           {loading ? (
             <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
-              Loading versions…
+              Loading versions�
             </div>
           ) : versions.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
@@ -1300,7 +1313,7 @@ function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, o
                           }}
                           title="Restore this version"
                         >
-                          <RotateCcw size={13} /> {restoring ? '…' : 'Restore'}
+                          <RotateCcw size={13} /> {restoring ? '�' : 'Restore'}
                         </button>
                       )}
                     </div>
@@ -1317,7 +1330,7 @@ function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, o
 
 const iconBtnStyle = { background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '2px' };
 
-// ── Publish-readiness modal ──────────────────────────────────────────
+// -- Publish-readiness modal ------------------------------------------
 //
 // Shows the operator what's missing before this page can go PUBLISHED.
 // Backend gate (validatePublishReadiness in routes/landing_pages.js) is
@@ -1410,7 +1423,7 @@ function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, 
   );
 }
 
-// #450: undo/redo button styling — disabled state visibly different.
+// #450: undo/redo button styling � disabled state visibly different.
 const iconBarBtnStyle = (enabled) => ({
   display: 'flex',
   alignItems: 'center',
@@ -1435,16 +1448,21 @@ function ComponentPreview({ comp }) {
           ? { fontSize: 'clamp(2rem, 5vw, 3.2rem)', lineHeight: 1.05, fontWeight: 800, margin: '0 0 1rem' }
           : p.variant === 'wellness-section-title' || p.variant === 'wellness-card-title'
             ? { fontSize: p.variant === 'wellness-card-title' ? '1.2rem' : '1.35rem', fontWeight: 800, margin: '0 0 0.6rem' }
+            : p.variant === 'wellness-metric-value'
+              ? { fontSize: 'clamp(2rem, 3vw, 2.75rem)', lineHeight: 1, fontWeight: 900, margin: '0 0 10px', textShadow: '0 2px 16px rgba(0,0,0,0.28)' }
             : {};
       return <Tag style={{ textAlign: p.align, color: p.color, margin: '0.5rem 0', ...variantStyle }}>{p.text}</Tag>;
     }
     case 'text': {
+      if (p.variant === 'wellness-logo-mark' && String(p.text || '').trim() === '+') return null;
       const variantStyle = p.variant === 'wellness-nav'
         ? { textTransform: 'uppercase', letterSpacing: '0.16em', fontWeight: 700, margin: '0.7rem 0 0' }
         : p.variant === 'wellness-eyebrow'
           ? { textTransform: 'uppercase', letterSpacing: '0.14em', fontWeight: 700, margin: '0 0 0.8rem' }
           : p.variant === 'wellness-detail'
             ? { margin: '0 0 0.5rem', lineHeight: 1.45 }
+            : p.variant === 'wellness-metric-label'
+              ? { margin: 0, color: '#fff4ef', fontWeight: 700, lineHeight: 1.45 }
             : p.variant === 'wellness-footer'
               ? { margin: 0, padding: '1.1rem', background: '#202a27', color: '#fff', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700 }
               : {};
@@ -1456,7 +1474,7 @@ function ComponentPreview({ comp }) {
         <img
           src={p.src}
           alt={p.alt || 'Image failed to load'}
-          style={{ maxWidth: p.maxWidth || '100%', width: p.width || '100%', borderRadius: p.variant === 'wellness-event-image' ? '18px' : '6px', height: p.variant === 'wellness-event-image' ? 300 : 'auto', objectFit: p.variant === 'wellness-event-image' ? 'cover' : undefined, minHeight: 80, border: p.variant === 'wellness-event-image' ? '1px solid #d8d2c3' : undefined, background: '#f4f1e8' }}
+          style={{ maxWidth: p.maxWidth || '100%', width: p.width || '100%', borderRadius: p.variant === 'wellness-event-image' ? '18px' : '6px', height: p.variant === 'wellness-event-image' ? 360 : 'auto', objectFit: p.variant === 'wellness-event-image' ? 'cover' : undefined, minHeight: 80, border: p.variant === 'wellness-event-image' ? '1px solid #d8d2c3' : undefined, background: '#f4f1e8' }}
           onError={(e) => {
             if (e.target.dataset.fallback === '1') return;
             e.target.dataset.fallback = '1';
@@ -1472,9 +1490,16 @@ function ComponentPreview({ comp }) {
         />
       </div>
     );
-    case 'button': return <div style={{ textAlign: p.align }}><button style={{ padding: p.size === 'large' ? '1rem 2.5rem' : '0.75rem 1.5rem', background: p.bgColor, color: p.color, border: 'none', borderRadius: '6px', fontWeight: '600', fontSize: p.size === 'large' ? '1.1rem' : '1rem', cursor: 'pointer' }}>{p.text}</button></div>;
+    case 'button': {
+      const isWellnessCta = ['#b31d15', '#fff8f7'].includes(String(p.bgColor || '').toLowerCase()) || String(p.url || '').startsWith('#event-details');
+      const targetUrl = isWellnessCta ? '#lead-form' : p.url;
+      const handlePreviewButtonClick = () => {
+        if (targetUrl === '#lead-form') document.getElementById('lead-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+      return <div style={{ textAlign: p.align }}><button type="button" onClick={handlePreviewButtonClick} style={{ padding: p.size === 'large' ? '1rem 2.5rem' : '0.75rem 1.5rem', background: p.bgColor, color: p.color, border: 'none', borderRadius: '6px', fontWeight: '600', fontSize: p.size === 'large' ? '1.1rem' : '1rem', cursor: 'pointer' }}>{p.text}</button></div>;
+    }
     case 'form': return (
-      <div style={{ width: '100%', maxWidth: p.variant === 'wellness-consultation' ? '520px' : '400px', margin: '0 auto', padding: p.variant === 'wellness-consultation' ? '1.5rem' : 0, background: p.variant === 'wellness-consultation' ? '#fbfaf4' : 'transparent', border: p.variant === 'wellness-consultation' ? '1px solid #d8d2c3' : 'none', borderTop: p.variant === 'wellness-consultation' ? '2px solid #7c6f45' : 'none', borderRadius: p.variant === 'wellness-consultation' ? 14 : 0, display: 'flex', flexDirection: 'column', gap: '0.75rem', boxSizing: 'border-box', overflow: 'hidden' }}>
+      <div style={{ width: '100%', maxWidth: p.variant === 'wellness-consultation' ? '520px' : '400px', margin: '0 auto', padding: p.variant === 'wellness-consultation' ? '1.5rem' : 0, background: p.variant === 'wellness-consultation' ? '#fbfaf4' : 'transparent', border: p.variant === 'wellness-consultation' ? '1px solid #d8d2c3' : 'none', borderTop: p.variant === 'wellness-consultation' ? '2px solid #7c6f45' : 'none', borderRadius: p.variant === 'wellness-consultation' ? 14 : 0, display: 'flex', flexDirection: 'column', gap: '0.75rem', boxSizing: 'border-box', overflow: 'visible' }}>
         {p.title && <h2 style={{ margin: '0 0 0.8rem', color: '#1f2f2c', fontFamily: "Georgia, 'Times New Roman', serif", fontWeight: 500 }}>{p.title}</h2>}
         <div style={{ display: p.variant === 'wellness-consultation' ? 'flex' : 'block', flexWrap: 'wrap', gap: p.variant === 'wellness-consultation' ? '0 0.9rem' : 0 }}>
         {(p.fields || []).map((f, i) => {
@@ -1511,29 +1536,44 @@ function ComponentPreview({ comp }) {
       const isWellnessCampaignPage = variant === 'wellness-campaign-page';
       const isWellnessHeaderRow = variant === 'wellness-header-row';
       const isWellnessHeroRow = variant === 'wellness-hero-row';
+      const isWellnessDetailsStrip = variant === 'wellness-details-strip';
+      const isWellnessBenefitsRow = variant === 'wellness-benefits-row';
+      const isWellnessProcessRow = variant === 'wellness-process-row';
+      const isWellnessImpactBand = variant === 'wellness-impact-band';
+      const isWellnessCtaRow = variant === 'wellness-cta-row';
+      const isWellnessFormRow = variant === 'wellness-form-row';
+      const isWellnessFooterRow = variant === 'wellness-footer-row';
       const isWellnessRegistrationRow = variant === 'wellness-registration-row';
       const isWellnessBenefitCards = variant === 'wellness-benefit-cards';
+      const isWellnessBenefitGrid = variant === 'wellness-benefit-grid';
+      const isWellnessStepGrid = variant === 'wellness-step-grid';
+      const isWellnessMetricGrid = variant === 'wellness-metric-grid';
       const isWellnessConsultation = variant === 'wellness-consultation';
       const looksLikeWellnessSupporting = (p.columns || []).some((col) => (col.components || []).some((child) => ['why-title', 'after-title'].includes(child.id)));
       const isWellnessSupporting = variant === 'wellness-supporting' || looksLikeWellnessSupporting;
-      const isWellnessSection = isWellnessCampaignPage || isWellnessHeaderRow || isWellnessHeroRow || isWellnessRegistrationRow || isWellnessBenefitCards || isWellnessConsultation || isWellnessSupporting;
-      const isWellnessInnerRow = isWellnessHeaderRow || isWellnessHeroRow || isWellnessRegistrationRow || isWellnessBenefitCards;
+      const isWellnessCardGrid = isWellnessBenefitGrid || isWellnessStepGrid || isWellnessMetricGrid;
+      const isWellnessSection = isWellnessCampaignPage || isWellnessHeaderRow || isWellnessHeroRow || isWellnessDetailsStrip || isWellnessBenefitsRow || isWellnessProcessRow || isWellnessImpactBand || isWellnessCtaRow || isWellnessFormRow || isWellnessFooterRow || isWellnessRegistrationRow || isWellnessBenefitCards || isWellnessCardGrid || isWellnessConsultation || isWellnessSupporting;
+      const isWellnessInnerRow = isWellnessHeaderRow || isWellnessHeroRow || isWellnessDetailsStrip || isWellnessBenefitsRow || isWellnessProcessRow || isWellnessCtaRow || isWellnessFormRow || isWellnessFooterRow || isWellnessRegistrationRow || isWellnessBenefitCards || isWellnessCardGrid;
       const hasFullWidthSupport = isWellnessConsultation && (p.columns || []).some((col) => col.fullWidth);
       const containerStyle = isWellnessCampaignPage ? {
-        display: 'flex', flexWrap: 'wrap', gap: p.gap || '0', width: '1040px', maxWidth: '1040px', minWidth: '960px', margin: '0 auto 1.5rem', padding: 0, background: '#fbfaf4', color: '#1f2f2c', border: '1px solid #d8d2c3', borderRadius: 16, boxSizing: 'border-box', overflow: 'hidden'
+        display: 'flex', flexWrap: 'wrap', gap: p.gap || '0', width: '100%', maxWidth: '1440px', minWidth: '0', margin: '0 auto', padding: 0, background: '#fbfaf4', color: '#1f2f2c', border: 'none', borderRadius: 0, boxShadow: 'none', borderTop: isWellnessFooterRow ? '1px solid #ded6c8' : 'none', borderBottom: isWellnessHeaderRow ? '1px solid #ded6c8' : 'none', boxSizing: 'border-box', overflow: 'visible'
       } : {
-        display: 'flex', flexWrap: 'wrap', gap: isWellnessSection ? (p.gap || (isWellnessBenefitCards ? '1rem' : '2rem')) : (p.gap || '2rem'), width: '100%', maxWidth: '100%', margin: isWellnessInnerRow ? 0 : (isWellnessConsultation && !hasFullWidthSupport ? '0 auto 0' : (isWellnessSection ? '0 auto 1.5rem' : 0)), padding: isWellnessHeaderRow ? '1.5rem 4rem 1.1rem' : isWellnessHeroRow ? '2.6rem 4rem 1.75rem' : isWellnessRegistrationRow ? '1.25rem 4rem 3.25rem' : isWellnessBenefitCards ? 0 : (isWellnessSection ? (isWellnessConsultation ? '1.5rem' : '0 1.75rem 1.5rem') : 0), background: isWellnessInnerRow || isWellnessConsultation || isWellnessSupporting ? '#fbfaf4' : 'transparent', color: isWellnessSection ? '#1f2f2c' : undefined, borderRadius: isWellnessConsultation ? (hasFullWidthSupport ? 14 : '14px 14px 0 0') : (isWellnessSupporting ? '0 0 14px 14px' : 0), boxSizing: 'border-box', overflow: 'hidden'
+        display: 'flex', flexWrap: 'wrap', alignItems: (isWellnessHeaderRow || isWellnessFooterRow || isWellnessFormRow) ? 'center' : 'stretch', justifyContent: isWellnessHeaderRow ? 'space-between' : ((isWellnessFooterRow || isWellnessFormRow) ? 'center' : 'flex-start'), gap: isWellnessSection ? (p.gap || ((isWellnessBenefitCards || isWellnessCardGrid) ? '1rem' : '2rem')) : (p.gap || '2rem'), width: isWellnessDetailsStrip ? 'calc(100% - 112px)' : '100%', maxWidth: '100%', margin: isWellnessDetailsStrip ? '0 56px 34px' : isWellnessInnerRow ? 0 : (isWellnessConsultation && !hasFullWidthSupport ? '0 auto 0' : (isWellnessSection ? '0 auto 1.75rem' : 0)), padding: isWellnessHeaderRow ? '28px 56px' : isWellnessHeroRow ? '64px 56px 58px' : isWellnessDetailsStrip ? '22px 24px' : isWellnessBenefitsRow ? '34px 56px 32px' : isWellnessProcessRow ? '28px 56px 36px' : isWellnessImpactBand ? '32px 56px' : isWellnessCtaRow ? '28px 56px' : isWellnessFormRow ? '72px 56px 76px' : isWellnessFooterRow ? '40px 56px' : isWellnessRegistrationRow ? '28px 64px 56px' : (isWellnessBenefitCards || isWellnessCardGrid) ? 0 : (isWellnessSection ? (isWellnessConsultation ? '1.75rem' : '0 56px 36px') : 0), background: isWellnessImpactBand ? 'linear-gradient(90deg, #9e120c 0%, #c61a14 100%)' : isWellnessMetricGrid ? 'transparent' : isWellnessFormRow ? '#eef3ff' : isWellnessFooterRow ? '#fffdf8' : (isWellnessHeaderRow ? '#fffdf8' : (isWellnessInnerRow || isWellnessConsultation || isWellnessSupporting ? '#fbfaf4' : 'transparent')), color: isWellnessImpactBand ? '#ffffff' : (isWellnessSection ? '#1f2f2c' : undefined), borderRadius: isWellnessConsultation ? (hasFullWidthSupport ? 14 : '14px 14px 0 0') : (isWellnessSupporting ? '0 0 14px 14px' : 0), borderTop: isWellnessFooterRow ? '1px solid #ded6c8' : 'none', borderBottom: isWellnessHeaderRow ? '1px solid #ded6c8' : 'none', boxSizing: 'border-box', overflow: 'visible'
       };
       return (
         <div style={containerStyle}>
           {(p.columns || []).map((col, i) => {
             let flex = col.fullWidth ? '1 1 100%' : '1 1 0';
-            if (isWellnessHeroRow) flex = i === 1 ? '0 1 420px' : '1 1 430px';
+            if (isWellnessHeaderRow) flex = i === 0 ? '0 0 360px' : '1 1 auto';
+            if (isWellnessHeroRow) flex = i === 1 ? '0 1 560px' : '1 1 430px';
             if (isWellnessRegistrationRow) flex = i === 0 ? '0 1 500px' : '1 1 390px';
+            if (isWellnessFormRow) flex = (p.columns || []).length === 1 ? '0 1 560px' : (i === 0 ? '0 1 520px' : '1 1 520px');
+            if (isWellnessFooterRow) flex = '1 1 300px';
             if (isWellnessBenefitCards) flex = '1 1 100%';
+            if (isWellnessCardGrid) flex = isWellnessMetricGrid ? '1 1 220px' : '1 1 0';
             if (isWellnessConsultation && i === 1) flex = '0 1 440px';
             return (
-              <div key={i} style={{ flex, minWidth: col.fullWidth ? '100%' : (isWellnessHeroRow ? (i === 1 ? '360px' : '430px') : isWellnessRegistrationRow ? (i === 0 ? '500px' : '360px') : isWellnessSection ? '280px' : '200px'), maxWidth: '100%', boxSizing: 'border-box', padding: isWellnessBenefitCards ? '1.25rem' : 0, background: isWellnessBenefitCards ? '#fffdf7' : 'transparent', border: isWellnessBenefitCards ? '1px solid #d8d2c3' : 'none', borderRadius: isWellnessBenefitCards ? 14 : 0, display: isWellnessBenefitCards ? 'flex' : undefined, flexDirection: isWellnessBenefitCards ? 'column' : undefined, justifyContent: isWellnessBenefitCards ? 'center' : undefined }}>
+              <div key={i} style={{ flex, minWidth: col.fullWidth ? '100%' : (isWellnessHeaderRow ? (i === 0 ? '280px' : '0') : isWellnessHeroRow ? (i === 1 ? '420px' : '500px') : isWellnessDetailsStrip ? '0' : isWellnessFormRow ? ((p.columns || []).length === 1 ? '420px' : (i === 0 ? '420px' : '420px')) : isWellnessRegistrationRow ? (i === 0 ? '540px' : '360px') : isWellnessCardGrid ? '220px' : isWellnessSection ? '240px' : '200px'), maxWidth: '100%', boxSizing: 'border-box', padding: isWellnessDetailsStrip ? '22px 20px' : (isWellnessMetricGrid ? '28px 22px' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '24px' : 0)), minHeight: isWellnessDetailsStrip ? '112px' : (isWellnessMetricGrid ? '132px' : undefined), background: isWellnessMetricGrid ? 'linear-gradient(180deg, rgba(88,11,7,0.96), rgba(140,22,15,0.92))' : ((isWellnessDetailsStrip || isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '#fffdf7' : 'transparent'), border: isWellnessMetricGrid ? '1px solid rgba(255,255,255,0.36)' : (isWellnessDetailsStrip ? '1px solid #e5ded0' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '1px solid #d8d2c3' : 'none')), borderRadius: isWellnessDetailsStrip ? 12 : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? 14 : 0), boxShadow: isWellnessMetricGrid ? '0 18px 36px rgba(70,0,0,0.24)' : (isWellnessDetailsStrip ? '0 10px 24px rgba(31, 47, 44, 0.06)' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? '0 14px 35px rgba(31, 47, 44, 0.07)' : 'none')), display: (isWellnessHeaderRow || isWellnessDetailsStrip || isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? 'flex' : undefined, flexDirection: isWellnessHeaderRow && i === 1 ? 'row' : ((isWellnessDetailsStrip || isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? 'column' : undefined), justifyContent: isWellnessHeaderRow && i === 1 ? 'space-between' : (isWellnessDetailsStrip ? 'center' : ((isWellnessBenefitCards || isWellnessCardGrid || isWellnessSupporting) ? 'flex-start' : undefined)), alignItems: isWellnessHeaderRow ? (i === 0 ? 'flex-start' : 'center') : (isWellnessFooterRow ? (i === 0 ? 'flex-start' : i === (p.columns || []).length - 1 ? 'flex-end' : 'center') : (isWellnessDetailsStrip || isWellnessMetricGrid || (isWellnessFormRow && (p.columns || []).length === 1) ? 'center' : undefined)), textAlign: isWellnessHeaderRow ? (i === 0 ? 'left' : 'right') : (isWellnessFooterRow ? (i === 0 ? 'left' : i === (p.columns || []).length - 1 ? 'right' : 'center') : (isWellnessDetailsStrip || isWellnessMetricGrid || (isWellnessFormRow && (p.columns || []).length === 1) ? 'center' : undefined)), color: isWellnessMetricGrid ? '#ffffff' : undefined, overflowWrap: isWellnessDetailsStrip ? 'anywhere' : undefined }}>
                 {(col.components || []).map((child, j) => (
                   <ComponentPreview key={j} comp={child} />
                 ))}
@@ -1610,13 +1650,13 @@ function PropertyEditor({ comp, updateProp, routingRules }) {
   }
 }
 
-// ── #446 — Image property editor with upload button ─────────────────
+// -- #446 � Image property editor with upload button -----------------
 //
 // Adds an "Upload" button next to the existing URL input. Clicking it
 // opens a hidden <input type="file"> picker. On selection we POST the
 // file to /api/landing-pages/upload (multipart/form-data, field
 // "image"); the backend returns { url, ... } which we drop into
-// props.src. We use raw fetch — fetchApi forces Content-Type:
+// props.src. We use raw fetch � fetchApi forces Content-Type:
 // application/json which corrupts multipart bodies.
 function ImagePropertyEditor({ p, updateProp, field }) {
   const fileRef = useRef(null);
@@ -1633,7 +1673,7 @@ function ImagePropertyEditor({ p, updateProp, field }) {
       const fd = new FormData();
       fd.append('image', file);
       // Bypass fetchApi (it sets Content-Type: application/json which
-      // breaks multipart). We still need the bearer token — use
+      // breaks multipart). We still need the bearer token � use
       // getAuthToken from utils/api.
       const token = getAuthToken();
       const r = await fetch('/api/landing-pages/upload', {
@@ -1673,7 +1713,7 @@ function ImagePropertyEditor({ p, updateProp, field }) {
           />
         ) : (
           <div style={{ display: 'flex', gap: '0.3rem' }}>
-            <input className="input-field" type="text" value={p.src || ''} onChange={e => updateProp('src', e.target.value)} style={{ flex: 1, padding: '0.4rem', fontSize: '0.85rem' }} placeholder="https://… or /uploads/…" />
+            <input className="input-field" type="text" value={p.src || ''} onChange={e => updateProp('src', e.target.value)} style={{ flex: 1, padding: '0.4rem', fontSize: '0.85rem' }} placeholder="https://� or /uploads/�" />
             <button
               type="button"
               onClick={onPick}
@@ -1690,7 +1730,7 @@ function ImagePropertyEditor({ p, updateProp, field }) {
           <div style={{ marginTop: '0.3rem', fontSize: '0.7rem', color: '#ef4444' }}>{uploadError}</div>
         )}
         <div style={{ marginTop: '0.25rem', fontSize: '0.65rem', color: 'var(--text-secondary)', opacity: 0.85 }}>
-          PNG · JPG · WebP · GIF · max 5 MB
+          PNG � JPG � WebP � GIF � max 5 MB
         </div>
       </div>
       {field('Alt Text', 'alt')}
@@ -1699,15 +1739,15 @@ function ImagePropertyEditor({ p, updateProp, field }) {
   );
 }
 
-// ── #451-remainder — Form property editor with extras ────────────────
+// -- #451-remainder � Form property editor with extras ----------------
 //
 // Adds three new property blocks:
 //   1. Lead Routing rule selector (dropdown of LeadRoutingRule rows from
 //      /api/lead-routing). If unset, falls through to tenant-level rules.
-//   2. enableCaptcha checkbox — when true, the public renderer emits a
+//   2. enableCaptcha checkbox � when true, the public renderer emits a
 //      Cloudflare Turnstile widget and the submit handler verifies the
 //      token via challenges.cloudflare.com/turnstile/v0/siteverify.
-//   3. successRedirectUrl text input — when set, the renderer redirects
+//   3. successRedirectUrl text input � when set, the renderer redirects
 //      to this URL on successful submit instead of showing the static
 //      thank-you panel.
 function FormPropertyEditor({ p, updateProp, field, routingRules }) {
@@ -1772,14 +1812,14 @@ function FormPropertyEditor({ p, updateProp, field, routingRules }) {
           onChange={e => updateProp('leadRoutingRuleId', e.target.value)}
           style={{ width: '100%', padding: '0.4rem', fontSize: '0.85rem' }}
         >
-          <option value="">— Use tenant-level routing —</option>
+          <option value="">� Use tenant-level routing �</option>
           {routingRules && routingRules.map(r => (
             <option key={r.id} value={r.id}>{r.name} (priority {r.priority || 0})</option>
           ))}
         </select>
         <div style={{ marginTop: '0.25rem', fontSize: '0.65rem', color: 'var(--text-secondary)', opacity: 0.85 }}>
           {routingRules && routingRules.length === 0
-            ? 'No routing rules configured for this tenant. Configure them under Settings → Lead Routing.'
+            ? 'No routing rules configured for this tenant. Configure them under Settings ? Lead Routing.'
             : 'When unset, the form falls through to tenant-level rules.'}
         </div>
       </div>
@@ -1822,10 +1862,10 @@ function FormPropertyEditor({ p, updateProp, field, routingRules }) {
   );
 }
 
-// ── Travel block sub-components ──────────────────────────────────────
+// -- Travel block sub-components --------------------------------------
 //
 // Each travel block exports a paired Preview + Editor below. The previews
-// mirror — at a smaller fidelity — what the server's
+// mirror � at a smaller fidelity � what the server's
 // landingPageRenderer.travel.css will produce on the public page. Inline
 // styles use the same palette tokens (`#1f1a17` / `#b8893b` / `#6f655c`)
 // the public CSS uses so the builder canvas and the public render don't
@@ -1896,7 +1936,7 @@ function TravelImageField({ label, value, onChange, hint }) {
             value={value || ''}
             onChange={e => onChange(e.target.value || null)}
             style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
-            placeholder="https://… or /uploads/…"
+            placeholder="https://� or /uploads/�"
           />
           <button
             type="button"
@@ -1905,7 +1945,7 @@ function TravelImageField({ label, value, onChange, hint }) {
             title="Upload an image (PNG/JPG/WebP/GIF, max 5 MB)"
             style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.4rem 0.6rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.75rem' }}
           >
-            <Upload size={11} /> {uploading ? '…' : 'Upload'}
+            <Upload size={11} /> {uploading ? '�' : 'Upload'}
           </button>
         </div>
       )}
@@ -1913,7 +1953,7 @@ function TravelImageField({ label, value, onChange, hint }) {
       {err && <div style={{ marginTop: '0.25rem', fontSize: '0.7rem', color: '#ef4444' }}>{err}</div>}
       {empty && !err && (
         <div style={{ marginTop: '0.25rem', fontSize: '0.7rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-          <AlertCircle size={11} /> No image set — publish is blocked until uploaded.
+          <AlertCircle size={11} /> No image set � publish is blocked until uploaded.
         </div>
       )}
       {hint && <div style={{ marginTop: '0.2rem', fontSize: '0.65rem', color: 'var(--text-secondary)', opacity: 0.8 }}>{hint}</div>}
@@ -1940,7 +1980,7 @@ function TravelPreviewBox({ children, accent = '#b8893b', dark = false }) {
   );
 }
 
-// ── destinationHero ──────────────────────────────────────────────────
+// -- destinationHero --------------------------------------------------
 function DestinationHeroPreview({ p }) {
   const palette = p.palette || {};
   const bg = palette.bg || '#1f1a17';
@@ -1961,7 +2001,7 @@ function DestinationHeroPreview({ p }) {
       <button style={{ background: accent, color: '#fff', padding: '0.65rem 1.4rem', border: 'none', borderRadius: 2, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontSize: '0.75rem', cursor: 'default' }}>{p.ctaText || 'Reserve'}</button>
       {!p.posterUrl && (
         <div style={{ marginTop: '0.85rem', fontSize: '0.7rem', color: '#f59e0b', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-          <AlertCircle size={11} /> Hero image not set — upload before publishing.
+          <AlertCircle size={11} /> Hero image not set � upload before publishing.
         </div>
       )}
     </div>
@@ -1994,7 +2034,7 @@ function DestinationHeroEditor({ p, updateProp, field }) {
   );
 }
 
-// ── cityCards ────────────────────────────────────────────────────────
+// -- cityCards --------------------------------------------------------
 function CityCardsPreview({ p }) {
   const cards = Array.isArray(p.cards) ? p.cards : [];
   return (
@@ -2008,7 +2048,7 @@ function CityCardsPreview({ p }) {
             </div>
             <div style={{ padding: '0.5rem 0.7rem' }}>
               {c.tag && <div style={{ fontSize: '0.55rem', letterSpacing: '0.18em', color: '#b8893b', fontWeight: 700, textTransform: 'uppercase' }}>{c.tag}</div>}
-              <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.95rem' }}>{c.title || '—'}</div>
+              <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.95rem' }}>{c.title || '�'}</div>
               {c.body && <div style={{ fontSize: '0.7rem', color: '#6f655c', marginTop: '0.2rem', lineHeight: 1.4 }}>{c.body}</div>}
               {c.benefit && <div style={{ fontSize: '0.65rem', color: '#1f1a17', fontStyle: 'italic', marginTop: '0.35rem', borderTop: '1px dashed #e3d9c8', paddingTop: '0.3rem' }}>&ldquo;{c.benefit}&rdquo;</div>}
             </div>
@@ -2038,7 +2078,7 @@ function CityCardsEditor({ p, updateProp, field }) {
           <input className="input-field" placeholder="Tag (e.g. ICONIC)" value={c.tag || ''} onChange={e => setCard(i, { tag: e.target.value })} style={{ width: '100%', padding: '0.3rem', fontSize: '0.75rem', marginBottom: '0.3rem' }} />
           <input className="input-field" placeholder="City title" value={c.title || ''} onChange={e => setCard(i, { title: e.target.value })} style={{ width: '100%', padding: '0.3rem', fontSize: '0.8rem', marginBottom: '0.3rem' }} />
           <textarea className="input-field" placeholder="What you'll experience in this city" value={c.body || ''} onChange={e => setCard(i, { body: e.target.value })} rows={3} style={{ width: '100%', padding: '0.3rem', fontSize: '0.75rem', marginBottom: '0.3rem', resize: 'vertical' }} />
-          <textarea className="input-field" placeholder="Derived benefit (pull quote — optional)" value={c.benefit || ''} onChange={e => setCard(i, { benefit: e.target.value })} rows={2} style={{ width: '100%', padding: '0.3rem', fontSize: '0.72rem', marginBottom: '0.3rem', resize: 'vertical', fontStyle: 'italic' }} />
+          <textarea className="input-field" placeholder="Derived benefit (pull quote � optional)" value={c.benefit || ''} onChange={e => setCard(i, { benefit: e.target.value })} rows={2} style={{ width: '100%', padding: '0.3rem', fontSize: '0.72rem', marginBottom: '0.3rem', resize: 'vertical', fontStyle: 'italic' }} />
           <TravelImageField label="City image" value={c.img} onChange={(v) => setCard(i, { img: v })} hint="4:3 photo recommended." />
         </div>
       ))}
@@ -2047,7 +2087,7 @@ function CityCardsEditor({ p, updateProp, field }) {
   );
 }
 
-// ── highlightsGrid ───────────────────────────────────────────────────
+// -- highlightsGrid ---------------------------------------------------
 function HighlightsGridPreview({ p }) {
   const items = Array.isArray(p.items) ? p.items : [];
   return (
@@ -2056,8 +2096,8 @@ function HighlightsGridPreview({ p }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.8rem' }}>
         {items.map((it, i) => (
           <div key={i} style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '1.4rem', color: '#b8893b', marginBottom: '0.25rem' }}>{it.icon || '◈'}</div>
-            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.85rem' }}>{it.title || '—'}</div>
+            <div style={{ fontSize: '1.4rem', color: '#b8893b', marginBottom: '0.25rem' }}>{it.icon || '?'}</div>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.85rem' }}>{it.title || '�'}</div>
             {it.body && <div style={{ fontSize: '0.7rem', color: '#6f655c', marginTop: '0.15rem' }}>{it.body}</div>}
           </div>
         ))}
@@ -2069,7 +2109,7 @@ function HighlightsGridPreview({ p }) {
 function HighlightsGridEditor({ p, updateProp, field }) {
   const items = Array.isArray(p.items) ? p.items : [];
   const setItem = (i, patch) => updateProp('items', items.map((c, j) => (j === i ? { ...c, ...patch } : c)));
-  const addItem = () => updateProp('items', [...items, { icon: '◈', title: '', body: '' }]);
+  const addItem = () => updateProp('items', [...items, { icon: '?', title: '', body: '' }]);
   const removeItem = (i) => updateProp('items', items.filter((_, j) => j !== i));
   return (
     <>
@@ -2079,7 +2119,7 @@ function HighlightsGridEditor({ p, updateProp, field }) {
       {items.map((it, i) => (
         <div key={i} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0.5rem', marginBottom: '0.45rem' }}>
           <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.3rem' }}>
-            <input className="input-field" value={it.icon || ''} onChange={e => setItem(i, { icon: e.target.value })} placeholder="◈" style={{ width: 42, padding: '0.3rem', fontSize: '1rem', textAlign: 'center' }} />
+            <input className="input-field" value={it.icon || ''} onChange={e => setItem(i, { icon: e.target.value })} placeholder="?" style={{ width: 42, padding: '0.3rem', fontSize: '1rem', textAlign: 'center' }} />
             <input className="input-field" value={it.title || ''} onChange={e => setItem(i, { title: e.target.value })} placeholder="Title" style={{ flex: 1, padding: '0.3rem', fontSize: '0.8rem' }} />
             <button onClick={() => removeItem(i)} title="Remove" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={12} /></button>
           </div>
@@ -2091,7 +2131,7 @@ function HighlightsGridEditor({ p, updateProp, field }) {
   );
 }
 
-// ── inclusionsGrid ───────────────────────────────────────────────────
+// -- inclusionsGrid ---------------------------------------------------
 function InclusionsGridPreview({ p }) {
   const items = Array.isArray(p.items) ? p.items : [];
   return (
@@ -2100,8 +2140,8 @@ function InclusionsGridPreview({ p }) {
       <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.4rem 1rem' }}>
         {items.map((s, i) => (
           <li key={i} style={{ display: 'flex', gap: '0.4rem', fontSize: '0.85rem' }}>
-            <span style={{ color: '#b8893b', fontWeight: 700 }}>✓</span>
-            <span>{s || '—'}</span>
+            <span style={{ color: '#b8893b', fontWeight: 700 }}>?</span>
+            <span>{s || '�'}</span>
           </li>
         ))}
       </ul>
@@ -2128,7 +2168,7 @@ function InclusionsGridEditor({ p, updateProp, field }) {
   );
 }
 
-// ── itineraryTimeline ────────────────────────────────────────────────
+// -- itineraryTimeline ------------------------------------------------
 function ItineraryTimelinePreview({ p }) {
   const days = Array.isArray(p.days) ? p.days : [];
   return (
@@ -2141,7 +2181,7 @@ function ItineraryTimelinePreview({ p }) {
             <div style={{ flex: 1 }}>
               <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.9rem' }}>{d.title || `Day ${d.day || i + 1}`}</div>
               {(d.bullets || []).filter(Boolean).slice(0, 3).map((b, bi) => (
-                <div key={bi} style={{ fontSize: '0.7rem', color: '#6f655c' }}>· {b}</div>
+                <div key={bi} style={{ fontSize: '0.7rem', color: '#6f655c' }}>� {b}</div>
               ))}
               {d.notes && <div style={{ fontSize: '0.65rem', color: '#6f655c', fontStyle: 'italic', marginTop: '0.25rem', paddingLeft: '0.7rem', borderLeft: '2px solid #e3d9c8' }}>{d.notes}</div>}
             </div>
@@ -2166,7 +2206,7 @@ function ItineraryTimelineEditor({ p, updateProp, field }) {
         <div key={i} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0.55rem', marginBottom: '0.5rem' }}>
           <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center', marginBottom: '0.3rem' }}>
             <input className="input-field" type="number" value={Number.isFinite(d.day) ? d.day : i + 1} onChange={e => setDay(i, { day: parseInt(e.target.value, 10) || i + 1 })} style={{ width: 56, padding: '0.3rem', fontSize: '0.8rem' }} />
-            <input className="input-field" value={d.icon || ''} onChange={e => setDay(i, { icon: e.target.value || null })} placeholder="◈" maxLength={3} style={{ width: 42, padding: '0.3rem', fontSize: '1rem', textAlign: 'center' }} title="Optional icon shown in the day marker (replaces the number)" />
+            <input className="input-field" value={d.icon || ''} onChange={e => setDay(i, { icon: e.target.value || null })} placeholder="?" maxLength={3} style={{ width: 42, padding: '0.3rem', fontSize: '1rem', textAlign: 'center' }} title="Optional icon shown in the day marker (replaces the number)" />
             <input className="input-field" value={d.title || ''} onChange={e => setDay(i, { title: e.target.value })} placeholder="Day title" style={{ flex: 1, padding: '0.3rem', fontSize: '0.8rem' }} />
             <button onClick={() => removeDay(i)} title="Remove day" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={12} /></button>
           </div>
@@ -2192,14 +2232,14 @@ function ItineraryTimelineEditor({ p, updateProp, field }) {
   );
 }
 
-// ── tierPricing ──────────────────────────────────────────────────────
+// -- tierPricing ------------------------------------------------------
 // Pricing values are operator-entered, never AI-generated. The publish
 // gate refuses to push the page until every tier has a non-empty amount.
 // (A future PR may reintroduce a "link to CRM Trip pricing" capability
 // once the instalment-mapping product semantics are decided.)
 function TierPricingPreview({ p }) {
   const tiers = Array.isArray(p.tiers) ? p.tiers : [];
-  const currency = p.currency || '₹';
+  const currency = p.currency || '?';
   return (
     <TravelPreviewBox>
       <h3 style={{ fontFamily: 'Georgia, serif', textAlign: 'center', margin: '0 0 0.9rem', fontWeight: 400 }}>{p.title}</h3>
@@ -2212,7 +2252,7 @@ function TierPricingPreview({ p }) {
               </span>
             )}
             <div style={{ fontSize: '0.6rem', letterSpacing: '0.22em', color: '#b8893b', fontWeight: 700, textTransform: 'uppercase' }}>Step {t.step ?? i + 1}</div>
-            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.95rem', margin: '0.25rem 0 0.4rem' }}>{t.label || '—'}</div>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.95rem', margin: '0.25rem 0 0.4rem' }}>{t.label || '�'}</div>
             {t.amount ? (
               <div style={{ fontFamily: 'Georgia, serif', fontSize: '1.25rem', fontWeight: 600 }}>{currency}{t.amount}</div>
             ) : (
@@ -2240,11 +2280,11 @@ function TierPricingEditor({ p, updateProp, field }) {
       {field('Subtitle', 'subtitle', 'textarea')}
       <div style={{ marginBottom: '0.75rem' }}>
         <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>Currency symbol</label>
-        <input className="input-field" value={p.currency || '₹'} onChange={e => updateProp('currency', e.target.value)} style={{ width: 80, padding: '0.3rem', fontSize: '0.85rem', textAlign: 'center' }} />
+        <input className="input-field" value={p.currency || '?'} onChange={e => updateProp('currency', e.target.value)} style={{ width: 80, padding: '0.3rem', fontSize: '0.85rem', textAlign: 'center' }} />
       </div>
       <div style={{ padding: '0.5rem 0.6rem', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 6, marginBottom: '0.75rem', display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.72rem', color: 'var(--text-primary)' }}>
         <AlertCircle size={14} style={{ color: '#f59e0b', flexShrink: 0, marginTop: 1 }} />
-        <span>AI never fills pricing values. Enter the amount for every tier manually — the publish gate blocks pages with empty tier amounts.</span>
+        <span>AI never fills pricing values. Enter the amount for every tier manually � the publish gate blocks pages with empty tier amounts.</span>
       </div>
       <p style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tiers</p>
       {tiers.map((t, i) => (
@@ -2277,12 +2317,12 @@ function TierPricingEditor({ p, updateProp, field }) {
               }}
               style={{ flex: 1, padding: '0.3rem', fontSize: '0.75rem' }}
             >
-              <option value="">— None —</option>
+              <option value="">� None �</option>
               <option value="Most Popular">Most Popular</option>
               <option value="Early Bird">Early Bird</option>
               <option value="Recommended">Recommended</option>
               <option value="Best Value">Best Value</option>
-              <option value="Custom">Custom…</option>
+              <option value="Custom">Custom�</option>
             </select>
           </div>
           {t.badge && !['Most Popular','Early Bird','Recommended','Best Value'].includes(t.badge) && (
@@ -2302,7 +2342,7 @@ function TierPricingEditor({ p, updateProp, field }) {
   );
 }
 
-// ── faqAccordion ─────────────────────────────────────────────────────
+// -- faqAccordion -----------------------------------------------------
 function FaqAccordionPreview({ p }) {
   const faqs = Array.isArray(p.faqs) ? p.faqs : [];
   const cats = Array.isArray(p.categories) ? p.categories : [];
@@ -2312,7 +2352,7 @@ function FaqAccordionPreview({ p }) {
       {cats.length > 0 && (
         <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '0.3rem', marginBottom: '0.6rem' }}>
           {cats.map(c => (
-            <span key={c.id} style={{ fontSize: '0.6rem', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#6f655c', border: '1px solid #e3d9c8', padding: '0.2rem 0.55rem', borderRadius: 2 }}>{c.icon || '·'} {c.label}</span>
+            <span key={c.id} style={{ fontSize: '0.6rem', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#6f655c', border: '1px solid #e3d9c8', padding: '0.2rem 0.55rem', borderRadius: 2 }}>{c.icon || '�'} {c.label}</span>
           ))}
         </div>
       )}
@@ -2339,13 +2379,13 @@ function FaqAccordionEditor({ p, updateProp, field }) {
       <p style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Categories</p>
       {cats.map((c, i) => (
         <div key={i} style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.35rem' }}>
-          <input className="input-field" value={c.icon || ''} onChange={e => setCat(i, { icon: e.target.value })} placeholder="◇" style={{ width: 40, padding: '0.3rem', fontSize: '0.85rem', textAlign: 'center' }} />
+          <input className="input-field" value={c.icon || ''} onChange={e => setCat(i, { icon: e.target.value })} placeholder="?" style={{ width: 40, padding: '0.3rem', fontSize: '0.85rem', textAlign: 'center' }} />
           <input className="input-field" value={c.id || ''} onChange={e => setCat(i, { id: e.target.value })} placeholder="id" style={{ width: 70, padding: '0.3rem', fontSize: '0.75rem' }} />
           <input className="input-field" value={c.label || ''} onChange={e => setCat(i, { label: e.target.value })} placeholder="Label" style={{ flex: 1, padding: '0.3rem', fontSize: '0.8rem' }} />
           <button onClick={() => updateProp('categories', cats.filter((_, j) => j !== i))} title="Remove category" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={12} /></button>
         </div>
       ))}
-      <button onClick={() => updateProp('categories', [...cats, { id: 'cat_' + Date.now(), label: 'New', icon: '·' }])} style={{ fontSize: '0.72rem', color: 'var(--accent-color)', background: 'none', border: 'none', cursor: 'pointer', marginBottom: '0.6rem' }}>+ Add Category</button>
+      <button onClick={() => updateProp('categories', [...cats, { id: 'cat_' + Date.now(), label: 'New', icon: '�' }])} style={{ fontSize: '0.72rem', color: 'var(--accent-color)', background: 'none', border: 'none', cursor: 'pointer', marginBottom: '0.6rem' }}>+ Add Category</button>
       <p style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.4rem', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>FAQs</p>
       {faqs.map((f, i) => (
         <div key={i} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0.5rem', marginBottom: '0.45rem' }}>
@@ -2365,7 +2405,7 @@ function FaqAccordionEditor({ p, updateProp, field }) {
   );
 }
 
-// ── reviewCarousel (manual-only) ─────────────────────────────────────
+// -- reviewCarousel (manual-only) -------------------------------------
 function ReviewCarouselPreview({ p }) {
   const reviews = Array.isArray(p.reviews) ? p.reviews : [];
   return (
@@ -2376,7 +2416,7 @@ function ReviewCarouselPreview({ p }) {
           <div key={i} style={{ background: '#fffdf8', border: '1px solid #e3d9c8', padding: '0.9rem', textAlign: 'center', borderRadius: 4 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#b8893b', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Georgia, serif', fontWeight: 600, marginBottom: '0.4rem' }}>{(r.initial || (r.name || '?')[0] || '?').toUpperCase()}</div>
             <div style={{ fontSize: '0.78rem', fontStyle: 'italic', color: '#1f1a17' }}>&ldquo;{r.text || '(empty)'}&rdquo;</div>
-            <div style={{ fontSize: '0.65rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: '#6f655c', marginTop: '0.4rem' }}>{r.name || '—'}</div>
+            <div style={{ fontSize: '0.65rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: '#6f655c', marginTop: '0.4rem' }}>{r.name || '�'}</div>
           </div>
         ))}
       </div>
@@ -2391,7 +2431,7 @@ function ReviewCarouselEditor({ p, updateProp, field }) {
     <>
       <div style={{ padding: '0.55rem 0.65rem', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, marginBottom: '0.75rem', fontSize: '0.72rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'flex-start', gap: '0.4rem' }}>
         <MessageSquare size={14} style={{ color: '#3b82f6', flexShrink: 0, marginTop: 1 }} />
-        <span>Reviews are manual-only. The AI generator never emits this block — type each review verbatim from a real source.</span>
+        <span>Reviews are manual-only. The AI generator never emits this block � type each review verbatim from a real source.</span>
       </div>
       {field('Section title', 'title')}
       {field('Subtitle', 'subtitle', 'textarea')}
@@ -2403,7 +2443,7 @@ function ReviewCarouselEditor({ p, updateProp, field }) {
             <input className="input-field" value={r.name || ''} onChange={e => setRev(i, { name: e.target.value })} placeholder="Reviewer name" style={{ flex: 1, padding: '0.3rem', fontSize: '0.8rem' }} />
             <button onClick={() => updateProp('reviews', reviews.filter((_, j) => j !== i))} title="Remove review" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={12} /></button>
           </div>
-          <textarea className="input-field" value={r.text || ''} onChange={e => setRev(i, { text: e.target.value })} placeholder="Review text — verbatim, from a real source" rows={3} style={{ width: '100%', padding: '0.3rem', fontSize: '0.78rem', resize: 'vertical' }} />
+          <textarea className="input-field" value={r.text || ''} onChange={e => setRev(i, { text: e.target.value })} placeholder="Review text � verbatim, from a real source" rows={3} style={{ width: '100%', padding: '0.3rem', fontSize: '0.78rem', resize: 'vertical' }} />
         </div>
       ))}
       <button onClick={() => updateProp('reviews', [...reviews, { name: '', initial: '', text: '' }])} style={{ fontSize: '0.75rem', color: 'var(--accent-color)', background: 'none', border: 'none', cursor: 'pointer' }}>+ Add Review</button>
@@ -2411,13 +2451,13 @@ function ReviewCarouselEditor({ p, updateProp, field }) {
   );
 }
 
-// ── PR-C: travelVideo ────────────────────────────────────────────────
+// -- PR-C: travelVideo ------------------------------------------------
 //
-// Frontend mirror of backend/lib/videoUrl.js — same patterns, kept tiny
+// Frontend mirror of backend/lib/videoUrl.js � same patterns, kept tiny
 // so the preview reflects what the public renderer will actually show
-// (YouTube Shorts / watch / youtu.be → /embed; Vimeo → player.vimeo).
+// (YouTube Shorts / watch / youtu.be ? /embed; Vimeo ? player.vimeo).
 // Mismatch between this and the backend would cause "preview works,
-// public render shows 'refused to connect'" — keep them in sync.
+// public render shows 'refused to connect'" � keep them in sync.
 const LOCAL_VIDEO_UPLOAD_PREFIX = '/api/uploads/landing-page-videos/';
 const LEGACY_LOCAL_VIDEO_UPLOAD_PREFIX = '/uploads/landing-page-videos/';
 function isLocalVideoUpload(url) {
@@ -2443,7 +2483,7 @@ function normalizeVideoEmbedUrl(url) {
   return trimmed;
 }
 
-// Generic (non-travel) video block — same normalisation + upload story
+// Generic (non-travel) video block � same normalisation + upload story
 // as the travel variant, but without the travel chrome. Used by the
 // vanilla "Video" component-palette entry.
 function GenericVideoPreview({ p }) {
@@ -2525,7 +2565,7 @@ function GenericVideoEditor({ p, updateProp, field }) {
               type="url"
               value={p.url || ''}
               onChange={(e) => updateProp('url', e.target.value)}
-              placeholder="https://youtube.com/… or upload"
+              placeholder="https://youtube.com/� or upload"
               style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
             />
             <button
@@ -2545,7 +2585,7 @@ function GenericVideoEditor({ p, updateProp, field }) {
         )}
         {showNormalizedHint && (
           <div style={{ marginTop: '0.3rem', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
-            ✓ Will render as <code style={{ color: 'var(--text-primary)' }}>{normalized}</code>
+            ? Will render as <code style={{ color: 'var(--text-primary)' }}>{normalized}</code>
           </div>
         )}
         <div style={{ marginTop: '0.25rem', fontSize: '0.65rem', color: 'var(--text-secondary)', opacity: 0.85 }}>
@@ -2595,7 +2635,7 @@ function TravelVideoEditor({ p, updateProp, field }) {
     try {
       const fd = new FormData();
       fd.append('video', file);
-      // Raw fetch — fetchApi forces application/json which breaks
+      // Raw fetch � fetchApi forces application/json which breaks
       // multipart bodies. Mirrors ImagePropertyEditor's pattern above.
       const token = getAuthToken();
       const r = await fetch('/api/landing-pages/upload-video', {
@@ -2647,7 +2687,7 @@ function TravelVideoEditor({ p, updateProp, field }) {
               type="url"
               value={p.url || ''}
               onChange={(e) => updateProp('url', e.target.value)}
-              placeholder="https://youtube.com/watch?v=…  or  https://youtu.be/…"
+              placeholder="https://youtube.com/watch?v=�  or  https://youtu.be/�"
               style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
             />
             <button
@@ -2667,17 +2707,17 @@ function TravelVideoEditor({ p, updateProp, field }) {
         )}
         {showNormalizedHint && (
           <div style={{ marginTop: '0.3rem', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
-            ✓ Will render as <code style={{ color: 'var(--text-primary)' }}>{normalized}</code>
+            ? Will render as <code style={{ color: 'var(--text-primary)' }}>{normalized}</code>
           </div>
         )}
         <div style={{ marginTop: '0.25rem', fontSize: '0.65rem', color: 'var(--text-secondary)', opacity: 0.85 }}>
-          Paste any YouTube (watch / Shorts / youtu.be) or Vimeo URL — we auto-convert to the embed form. Or upload MP4/WebM/MOV (max 50 MB).
+          Paste any YouTube (watch / Shorts / youtu.be) or Vimeo URL � we auto-convert to the embed form. Or upload MP4/WebM/MOV (max 50 MB).
         </div>
       </div>
       <div style={{ marginBottom: '0.75rem' }}>
         <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>Aspect ratio</label>
         <select className="input-field" value={p.aspectRatio || '16:9'} onChange={(e) => updateProp('aspectRatio', e.target.value)} style={{ width: '100%', padding: '0.4rem', fontSize: '0.85rem' }}>
-          <option value="16:9">16:9 (default — most YouTube videos)</option>
+          <option value="16:9">16:9 (default � most YouTube videos)</option>
           <option value="9:16">9:16 (vertical / reels)</option>
           <option value="4:3">4:3 (legacy)</option>
         </select>
@@ -2686,7 +2726,7 @@ function TravelVideoEditor({ p, updateProp, field }) {
   );
 }
 
-// ── PR-C: safetyFeatures ─────────────────────────────────────────────
+// -- PR-C: safetyFeatures ---------------------------------------------
 function SafetyFeaturesPreview({ p }) {
   const items = Array.isArray(p.items) ? p.items : [];
   return (
@@ -2695,8 +2735,8 @@ function SafetyFeaturesPreview({ p }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.8rem' }}>
         {items.map((it, i) => (
           <div key={i} style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '1.4rem', color: '#b8893b', marginBottom: '0.25rem' }}>{it.icon || '◈'}</div>
-            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.85rem', color: '#f4efe6' }}>{it.title || '—'}</div>
+            <div style={{ fontSize: '1.4rem', color: '#b8893b', marginBottom: '0.25rem' }}>{it.icon || '?'}</div>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.85rem', color: '#f4efe6' }}>{it.title || '�'}</div>
             {it.body && <div style={{ fontSize: '0.7rem', color: '#d6cdb6', marginTop: '0.15rem' }}>{it.body}</div>}
           </div>
         ))}
@@ -2708,7 +2748,7 @@ function SafetyFeaturesPreview({ p }) {
 function SafetyFeaturesEditor({ p, updateProp, field }) {
   const items = Array.isArray(p.items) ? p.items : [];
   const setItem = (i, patch) => updateProp('items', items.map((c, j) => (j === i ? { ...c, ...patch } : c)));
-  const addItem = () => updateProp('items', [...items, { icon: '◈', title: '', body: '' }]);
+  const addItem = () => updateProp('items', [...items, { icon: '?', title: '', body: '' }]);
   const removeItem = (i) => updateProp('items', items.filter((_, j) => j !== i));
   return (
     <>
@@ -2718,7 +2758,7 @@ function SafetyFeaturesEditor({ p, updateProp, field }) {
       {items.map((it, i) => (
         <div key={i} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0.5rem', marginBottom: '0.45rem' }}>
           <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.3rem' }}>
-            <input className="input-field" value={it.icon || ''} onChange={(e) => setItem(i, { icon: e.target.value })} placeholder="◈" style={{ width: 42, padding: '0.3rem', fontSize: '1rem', textAlign: 'center' }} />
+            <input className="input-field" value={it.icon || ''} onChange={(e) => setItem(i, { icon: e.target.value })} placeholder="?" style={{ width: 42, padding: '0.3rem', fontSize: '1rem', textAlign: 'center' }} />
             <input className="input-field" value={it.title || ''} onChange={(e) => setItem(i, { title: e.target.value })} placeholder="Safety feature title" style={{ flex: 1, padding: '0.3rem', fontSize: '0.8rem' }} />
             <button onClick={() => removeItem(i)} title="Remove" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={12} /></button>
           </div>
@@ -2730,7 +2770,7 @@ function SafetyFeaturesEditor({ p, updateProp, field }) {
   );
 }
 
-// ── PR-C: brochureDownload ───────────────────────────────────────────
+// -- PR-C: brochureDownload -------------------------------------------
 function BrochureDownloadPreview({ p }) {
   return (
     <TravelPreviewBox>
@@ -2741,7 +2781,7 @@ function BrochureDownloadPreview({ p }) {
           {p.ctaText || 'Get the Brochure'}
         </button>
         <div style={{ marginTop: '0.5rem', fontSize: '0.65rem', color: p.fileUrl ? '#10b981' : '#f59e0b' }}>
-          {p.fileUrl ? '✓ Brochure uploaded — direct download' : 'No brochure uploaded — visitors fill the lead-capture form'}
+          {p.fileUrl ? '? Brochure uploaded � direct download' : 'No brochure uploaded � visitors fill the lead-capture form'}
         </div>
       </div>
     </TravelPreviewBox>
@@ -2790,9 +2830,9 @@ function BrochureDownloadEditor({ p, updateProp, field }) {
       <div style={{ marginBottom: '0.75rem' }}>
         <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>Brochure file URL</label>
         <div style={{ display: 'flex', gap: '0.3rem' }}>
-          <input className="input-field" type="text" value={p.fileUrl || ''} onChange={(e) => updateProp('fileUrl', e.target.value || null)} placeholder="https://… or /uploads/…" style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }} />
+          <input className="input-field" type="text" value={p.fileUrl || ''} onChange={(e) => updateProp('fileUrl', e.target.value || null)} placeholder="https://� or /uploads/�" style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }} />
           <button type="button" onClick={onPick} disabled={uploading} title="Upload a PDF brochure" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.4rem 0.6rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.75rem' }}>
-            <Upload size={11} /> {uploading ? '…' : 'Upload'}
+            <Upload size={11} /> {uploading ? '�' : 'Upload'}
           </button>
           <input ref={fileRef} type="file" accept="application/pdf,.pdf" onChange={onFile} style={{ display: 'none' }} />
         </div>
@@ -2805,7 +2845,7 @@ function BrochureDownloadEditor({ p, updateProp, field }) {
   );
 }
 
-// ── Travel: registrationForm ─────────────────────────────────────────
+// -- Travel: registrationForm -----------------------------------------
 // Audience-aware registration form block. Right-rail editor lets the
 // admin pick an audience preset (TMC / RFU / Travel Stall / Visa Sure /
 // Inquiry / Custom); selecting a preset replaces the current field set
@@ -2853,9 +2893,9 @@ function RegistrationFormEditor({ p, updateProp, field, routingRules }) {
     updateProp('fields', next.fields);
     updateProp('submitText', next.submitText);
     updateProp('thankYouMessage', next.thankYouMessage);
-    // Title stays only if currently equal to a preset label — otherwise
+    // Title stays only if currently equal to a preset label � otherwise
     // we don't clobber the operator's custom title.
-    const presetTitles = Object.values(REG_FORM_PRESETS).map((v) => v.label.replace(/ —.*/, ''));
+    const presetTitles = Object.values(REG_FORM_PRESETS).map((v) => v.label.replace(/ �.*/, ''));
     if (!p.title || presetTitles.includes(p.title)) {
       updateProp('title', next.title);
     }
@@ -2951,7 +2991,7 @@ function RegistrationFormEditor({ p, updateProp, field, routingRules }) {
           onChange={(e) => updateProp('leadRoutingRuleId', e.target.value)}
           style={{ width: '100%', padding: '0.4rem', fontSize: '0.85rem' }}
         >
-          <option value="">— Use tenant-level routing —</option>
+          <option value="">� Use tenant-level routing �</option>
           {routingRules && routingRules.map((r) => (
             <option key={r.id} value={r.id}>{r.name} (priority {r.priority || 0})</option>
           ))}
@@ -2989,7 +3029,7 @@ function RegistrationFormEditor({ p, updateProp, field, routingRules }) {
   );
 }
 
-// ── PR-C: contactFooter ──────────────────────────────────────────────
+// -- PR-C: contactFooter ----------------------------------------------
 function ContactFooterPreview({ p }) {
   return (
     <TravelPreviewBox dark>
@@ -2999,7 +3039,7 @@ function ContactFooterPreview({ p }) {
           <span style={{ color: p.phone ? '#b8893b' : '#6f655c', fontStyle: p.phone ? 'normal' : 'italic' }}>
             {p.phone || '[Add phone]'}
           </span>
-          <span style={{ color: '#6f655c' }}>·</span>
+          <span style={{ color: '#6f655c' }}>�</span>
           <span style={{ color: p.email ? '#b8893b' : '#6f655c', fontStyle: p.email ? 'normal' : 'italic' }}>
             {p.email || '[Add email]'}
           </span>
@@ -3030,10 +3070,11 @@ function ContactFooterEditor({ p, updateProp, field }) {
       {field('CTA button text (optional)', 'ctaText')}
       <div style={{ marginBottom: '0.75rem' }}>
         <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>CTA URL (optional)</label>
-        <input className="input-field" type="url" value={p.ctaUrl || ''} onChange={(e) => updateProp('ctaUrl', e.target.value)} placeholder="https://…" style={{ width: '100%', padding: '0.4rem', fontSize: '0.8rem' }} />
+        <input className="input-field" type="url" value={p.ctaUrl || ''} onChange={(e) => updateProp('ctaUrl', e.target.value)} placeholder="https://�" style={{ width: '100%', padding: '0.4rem', fontSize: '0.8rem' }} />
       </div>
     </>
   );
 }
 // Travel block sub-components
+
 

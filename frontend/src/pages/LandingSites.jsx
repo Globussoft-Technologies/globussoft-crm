@@ -1,6 +1,6 @@
-﻿import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, BarChart3, Sparkles, ExternalLink, LayoutGrid, Megaphone } from 'lucide-react';
+import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Sparkles, ExternalLink, LayoutGrid, Megaphone } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { formatPercent } from '../utils/percent';
 import { useNotify } from '../utils/notify';
@@ -84,7 +84,7 @@ export default function LandingSites() {
   const [genError, setGenError] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
   const defaultFormState = (wellness = false) => ({
-    sectorKey: wellness ? 'health' : 'general',
+    sectorKey: wellness ? 'wellness' : 'general',
     campaignName: '',
     campaignGoal: '',
     businessName: '',
@@ -127,7 +127,7 @@ export default function LandingSites() {
 
   const handleCreateBlank = async () => {
     try {
-      const sectorKey = isWellnessTenant ? 'health' : 'general';
+      const sectorKey = isWellnessTenant ? 'wellness' : 'general';
       const page = await fetchApi('/api/landing-pages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -346,36 +346,40 @@ export default function LandingSites() {
               <Megaphone size={20} style={{ color: '#4f46e5' }} /> Generate Landing Site
             </h3>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.1rem' }}>
-              Pick a sector, describe the campaign, and we’ll draft a public landing site you can edit in the builder.
+              Pick a sector, describe the campaign, and weâ€™ll draft a public landing site you can edit in the builder.
             </p>
             {genError && <div style={{ marginBottom: '1rem', padding: '0.75rem', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontSize: '0.85rem' }}>{genError}</div>}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.9rem' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Sector</span>
-                <select value={form.sectorKey} onChange={(e) => setForm((s) => ({ ...s, sectorKey: e.target.value }))} className="input-field">
-                  {SECTOR_OPTIONS.map((sector) => <option key={sector.key} value={sector.key}>{sector.label}</option>)}
-                </select>
+                {isWellnessTenant ? (
+                  <input className="input-field" value="wellness" readOnly aria-readonly="true" />
+                ) : (
+                  <select value={form.sectorKey} onChange={(e) => setForm((s) => ({ ...s, sectorKey: e.target.value }))} className="input-field">
+                    {SECTOR_OPTIONS.map((sector) => <option key={sector.key} value={sector.key}>{sector.label}</option>)}
+                  </select>
+                )}
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Campaign name</span>
-                <input className="input-field" value={form.campaignName} onChange={(e) => setForm((s) => ({ ...s, campaignName: e.target.value }))} placeholder="Blood Donation Camp" />
+                <input className="input-field" value={form.campaignName} onChange={(e) => setForm((s) => ({ ...s, campaignName: e.target.value }))} placeholder="Hair Treatment Consultation" />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Business name</span>
-                <input className="input-field" value={form.businessName} onChange={(e) => setForm((s) => ({ ...s, businessName: e.target.value }))} placeholder="NovaCare Hospital" />
+                <input className="input-field" value={form.businessName} onChange={(e) => setForm((s) => ({ ...s, businessName: e.target.value }))} placeholder="Glow Hair Studio" />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Campaign goal</span>
-                <input className="input-field" value={form.campaignGoal} onChange={(e) => setForm((s) => ({ ...s, campaignGoal: e.target.value }))} placeholder="collect registrations" />
+                <input className="input-field" value={form.campaignGoal} onChange={(e) => setForm((s) => ({ ...s, campaignGoal: e.target.value }))} placeholder="collect enquiries" />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Audience</span>
-                <input className="input-field" value={form.audience} onChange={(e) => setForm((s) => ({ ...s, audience: e.target.value }))} placeholder="local donors and volunteers" />
+                <input className="input-field" value={form.audience} onChange={(e) => setForm((s) => ({ ...s, audience: e.target.value }))} placeholder="people exploring hair treatment options" />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Location</span>
-                <input className="input-field" value={form.location} onChange={(e) => setForm((s) => ({ ...s, location: e.target.value }))} placeholder="Pune" />
+                <input className="input-field" value={form.location} onChange={(e) => setForm((s) => ({ ...s, location: e.target.value }))} placeholder="Koramangala" />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event date</span>
@@ -391,11 +395,11 @@ export default function LandingSites() {
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Tone</span>
-                <input className="input-field" value={form.tone} onChange={(e) => setForm((s) => ({ ...s, tone: e.target.value }))} placeholder="warm and community-focused" />
+                <input className="input-field" value={form.tone} onChange={(e) => setForm((s) => ({ ...s, tone: e.target.value }))} placeholder="calm, professional, and reassuring" />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>CTA label</span>
-                <input className="input-field" value={form.ctaText} onChange={(e) => setForm((s) => ({ ...s, ctaText: e.target.value }))} placeholder="Register Now" />
+                <input className="input-field" value={form.ctaText} onChange={(e) => setForm((s) => ({ ...s, ctaText: e.target.value }))} placeholder="Get Started" />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Image mode</span>
@@ -418,3 +422,6 @@ export default function LandingSites() {
     </div>
   );
 }
+
+
+

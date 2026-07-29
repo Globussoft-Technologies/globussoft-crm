@@ -2,8 +2,8 @@
  * CancellationPolicies.trip-selector.test.jsx ? focused coverage for the new
  * itinerary picker on the travel cancellation-policy form.
  */
-import { beforeEach, describe, expect, fireEvent, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();

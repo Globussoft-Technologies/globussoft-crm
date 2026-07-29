@@ -142,7 +142,7 @@ function buildWellnessLandingSitePrompt(input = {}) {
     '    "heroTitleLine2": "string",',
     '    "heroCopy": "string",',
     '    "heroNote": "string",',
-    '    "heroPrimaryCta": "string",',,
+    '    "heroPrimaryCta": "string",',
     '    "detailDateLabel": "string",',
     '    "detailDateValue": "string",',
     '    "detailTimeLabel": "string",',

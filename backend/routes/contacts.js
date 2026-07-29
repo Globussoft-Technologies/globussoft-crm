@@ -7,6 +7,7 @@ const { ensureEmail, ensureNumberInRange, ensureEnum, ensureStringLength, ensure
 const { writeAudit, diffFields } = require("../lib/audit");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
 const { normalizePhone, computeDuplicateGroupKey, findDuplicateContactFull } = require("../utils/deduplication");
+const { notify } = require('../lib/notificationService');
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed but was never called from any route; rules saved via the
 // FieldPermissions UI had zero effect on read/write payloads. Default
@@ -110,6 +111,16 @@ function validateContactInput(body, { isUpdate = false } = {}) {
     if (annErr) return annErr;
   }
   return null;
+}
+
+function canViewAllLeads(req) {
+  return !!(req && req.user && ['ADMIN', 'MANAGER'].includes(req.user.role));
+}
+
+function canAccessLead(req, contact) {
+  if (!req || !req.user || !contact) return false;
+  if (canViewAllLeads(req)) return true;
+  return Number(contact.assignedToId) === Number(req.user.userId);
 }
 
 // PRD Gap §1.1e — walletBalance is a read-only computed surface. We strip
@@ -438,7 +449,7 @@ router.get('/', async (req, res) => {
     // from a USER is overridden by their own userId — a sales rep cannot
     // probe a colleague's book of business by URL. Total Contacts KPI on
     // /dashboard now reflects own-book size for sales reps.
-    if (req.user.role === 'USER') where.assignedToId = req.user.userId;
+    if (!canViewAllLeads(req)) where.assignedToId = req.user.userId;
     // ?count=1 — sidebar badge polls: return { total } only, skip full fetch.
     if (req.query.count === '1') {
       const total = await prisma.contact.count({ where });
@@ -501,6 +512,7 @@ router.get('/:id', async (req, res) => {
       include: { activities: { orderBy: { createdAt: 'desc' } }, tasks: true, deals: true, assignedTo: { select: { id: true, name: true, email: true } } }
     });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!canAccessLead(req, contact)) return res.status(404).json({ error: 'Contact not found' });
     // #167: 404 soft-deleted rows unless caller opts in.
     if (contact.deletedAt && !includeDeleted) return res.status(404).json({ error: 'Contact not found' });
     // #464: strip read-restricted fields per the caller's role.
@@ -653,28 +665,65 @@ router.put('/bulk-assign', verifyRole(['ADMIN']), async (req, res) => {
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
       return res.status(400).json({ error: 'No contact IDs provided' });
     }
-    const ids = contactIds.map(id => parseInt(id));
-    let assignableIds = ids;
-    let skipped = 0;
-    // Travel security guard — when assigning to a person, drop any brand-tagged
-    // lead the assignee can't access (rather than failing the whole batch).
-    // Generic/wellness leads have subBrand null → always assignable → unchanged.
-    if (assignedToId) {
-      const rows = await prisma.contact.findMany({
-        where: { id: { in: ids }, tenantId: req.user.tenantId },
-        select: { id: true, subBrand: true },
-      });
-      const { getSubBrandAccessSet, canAccessSubBrand } = require('../middleware/travelGuards');
-      const allowed = await getSubBrandAccessSet(parseInt(assignedToId));
-      const ok = rows.filter(r => !r.subBrand || canAccessSubBrand(allowed, r.subBrand)).map(r => r.id);
-      skipped = ids.length - ok.length;
-      assignableIds = ok;
-    }
-    await prisma.contact.updateMany({
-      where: { id: { in: assignableIds }, tenantId: req.user.tenantId },
-      data: { assignedToId: assignedToId ? parseInt(assignedToId) : null }
+    const ids = contactIds.map(id => parseInt(id)).filter(Number.isFinite);
+    const nextAssignedToId = assignedToId ? parseInt(assignedToId) : null;
+    const rows = await prisma.contact.findMany({
+      where: { id: { in: ids }, tenantId: req.user.tenantId },
+      select: { id: true, name: true, subBrand: true, assignedToId: true },
     });
-    res.json({ updated: assignableIds.length, skipped, assignedToId: assignedToId || null });
+
+    let assignableRows = rows;
+    let skippedRows = [];
+    if (nextAssignedToId) {
+      const { getSubBrandAccessSet, canAccessSubBrand } = require('../middleware/travelGuards');
+      const allowed = await getSubBrandAccessSet(nextAssignedToId);
+      assignableRows = rows.filter((r) => !r.subBrand || canAccessSubBrand(allowed, r.subBrand));
+      skippedRows = rows.filter((r) => r.subBrand && !canAccessSubBrand(allowed, r.subBrand));
+    }
+
+    const assignableIds = assignableRows.map((r) => r.id);
+    if (assignableIds.length > 0) {
+      await prisma.contact.updateMany({
+        where: { id: { in: assignableIds }, tenantId: req.user.tenantId },
+        data: { assignedToId: nextAssignedToId },
+      });
+    }
+
+    if (nextAssignedToId) {
+      const actorName = req.user?.name || req.user?.email || 'Admin';
+      for (const row of assignableRows) {
+        if (nextAssignedToId === row.assignedToId) continue;
+        try {
+          const leadName = row.name || ('#' + row.id);
+          await notify({
+            userId: nextAssignedToId,
+            tenantId: req.user.tenantId,
+            title: 'New lead assigned',
+            message: actorName + ' has assigned lead "' + leadName + '" to you. Please look into it.',
+            type: 'info',
+            category: 'lead',
+            entityType: 'lead',
+            entityId: row.id,
+            link: '/contacts/' + row.id,
+            io: req.io,
+          });
+        } catch (notifyErr) {
+          console.error('[contacts] bulk lead assignment notify failed:', notifyErr && notifyErr.message);
+        }
+      }
+    }
+
+    res.json({
+      updated: assignableIds.length,
+      skipped: skippedRows.length,
+      assignedToId: assignedToId || null,
+      skippedDetails: skippedRows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        subBrand: r.subBrand,
+        reason: 'ASSIGNEE_SUB_BRAND_ACCESS_MISMATCH',
+      })),
+    });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to bulk assign agent' });
   }
@@ -684,6 +733,7 @@ router.post('/:id/activities', async (req, res) => {
   try {
     const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!canAccessLead(req, contact)) return res.status(404).json({ error: 'Contact not found' });
     const { type, description } = req.body;
     const activity = await prisma.activity.create({
       data: { type, description, contactId: contact.id, userId: req.user ? req.user.userId : null, tenantId: req.user.tenantId }
@@ -706,6 +756,9 @@ router.post('/:id/summarize-chat', async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid contact ID' });
+    const existing = await prisma.contact.findFirst({ where: { id, tenantId: req.user.tenantId } });
+    if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    if (!canAccessLead(req, existing)) return res.status(404).json({ error: 'Contact not found' });
     const leadConversationSummary = require('../lib/leadConversationSummary');
     const result = await leadConversationSummary.narrativeSummarizeContact({
       tenantId: req.user.tenantId,
@@ -758,6 +811,7 @@ router.put('/:id', async (req, res) => {
   try {
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    if (!canAccessLead(req, existing)) return res.status(404).json({ error: 'Contact not found' });
     // #464: strip write-restricted fields per the caller's role BEFORE
     // validation so blocked-field updates can't slip through.
     req.body = await filterWriteFields(req.body, req.user.role, "Contact", req.user.tenantId);
@@ -1039,11 +1093,32 @@ router.put('/:id/assign', verifyRole(['ADMIN']), async (req, res) => {
         return res.status(403).json({ error: "That staff member doesn't have access to this lead's sub-brand", code: 'SUB_BRAND_ASSIGN_DENIED' });
       }
     }
+    const nextAssignedToId = assignedToId ? parseInt(assignedToId) : null;
     const contact = await prisma.contact.update({
       where: { id: existing.id },
-      data: { assignedToId: assignedToId ? parseInt(assignedToId) : null },
+      data: { assignedToId: nextAssignedToId },
       include: { assignedTo: { select: { id: true, name: true, email: true } } }
     });
+    if (nextAssignedToId && nextAssignedToId !== existing.assignedToId) {
+      try {
+        const actorName = req.user?.name || req.user?.email || 'Admin';
+        const leadName = contact.name || ('#' + contact.id);
+        await notify({
+          userId: nextAssignedToId,
+          tenantId: req.user.tenantId,
+          title: 'New lead assigned',
+          message: actorName + ' has assigned lead "' + leadName + '" to you. Please look into it.',
+          type: 'info',
+          category: 'lead',
+          entityType: 'lead',
+          entityId: contact.id,
+          link: '/contacts/' + contact.id,
+          io: req.io,
+        });
+      } catch (notifyErr) {
+        console.error('[contacts] lead assignment notify failed:', notifyErr && notifyErr.message);
+      }
+    }
     // [GP-CRM integration] Notify registered webhooks (e.g. GlobusPhone) that
     // this contact/lead was re-assigned to a different agent. Fire-and-forget.
     try {
@@ -1391,6 +1466,7 @@ router.get('/:id/attachments', async (req, res) => {
   try {
     const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    if (!canAccessLead(req, contact)) return res.status(404).json({ error: 'Contact not found' });
     res.json(await prisma.contactAttachment.findMany({ where: { contactId: contact.id, tenantId: req.user.tenantId }, orderBy: { createdAt: 'desc' } }));
   } catch (_err) { res.status(500).json({ error: 'Failed to fetch attachments' }); }
 });

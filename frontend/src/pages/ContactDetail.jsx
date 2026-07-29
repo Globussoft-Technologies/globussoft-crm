@@ -3,10 +3,21 @@ import { formatMoney } from '../utils/money';
 import { formatDate, formatDateTime } from '../utils/date';
 import React, { useContext, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Phone, Mail, Calendar, Paperclip, Upload, Trash2, FileText, Download, Target, Pencil, MessageSquareText, Sparkles } from 'lucide-react';
+import { ArrowLeft, Phone, Mail, Paperclip, Upload, Trash2, FileText, Target, Pencil, MessageSquareText, Sparkles } from 'lucide-react';
 import { AuthContext } from '../App';
 
 const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
+const IMAGE_MIME_PREFIX = 'image/';
+const DOCUMENT_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv'];
+
+function isImageFile(file) {
+  return String(file?.type || '').startsWith(IMAGE_MIME_PREFIX);
+}
+
+function isDocumentFile(file) {
+  const lowerName = String(file?.name || '').toLowerCase();
+  return DOCUMENT_EXTENSIONS.some((ext) => lowerName.endsWith(ext));
+}
 
 const ContactDetail = () => {
   const { id } = useParams();
@@ -16,11 +27,13 @@ const ContactDetail = () => {
   const [contact, setContact] = useState(null);
   const [attachments, setAttachments] = useState([]);
   const [showUpload, setShowUpload] = useState(false);
-  const [uploadForm, setUploadForm] = useState({ filename: '', fileUrl: '' });
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState('');
-  const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', company: '', title: '', customFields: {} });
+  const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', company: '', title: '', description: '', customFields: {} });
   // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
 
@@ -187,6 +200,10 @@ const ContactDetail = () => {
   // only the already-summarized blocks already sitting in description.
   const [resummarizing, setResummarizing] = useState(false);
   const [resummarizeError, setResummarizeError] = useState('');
+  const [editingSummary, setEditingSummary] = useState(false);
+  const [summaryDraft, setSummaryDraft] = useState('');
+  const [summarySaving, setSummarySaving] = useState(false);
+  const [summaryError, setSummaryError] = useState('');
   const handleResummarizeCapture = async () => {
     setResummarizing(true);
     setResummarizeError('');
@@ -200,21 +217,101 @@ const ContactDetail = () => {
     }
   };
 
+  const openSummaryEdit = () => {
+    setSummaryDraft(contact?.description || '');
+    setSummaryError('');
+    setEditingSummary(true);
+  };
+
+  const handleSaveSummary = async () => {
+    setSummarySaving(true);
+    setSummaryError('');
+    try {
+      await fetchApi(`/api/contacts/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: summaryDraft }),
+      });
+      setEditingSummary(false);
+      loadContact();
+    } catch (err) {
+      setSummaryError(err?.message || 'Could not save summary changes.');
+    } finally {
+      setSummarySaving(false);
+    }
+  };
+
   const loadAttachments = () => {
     fetchApi(`/api/contacts/${id}/attachments`).then(data => setAttachments(Array.isArray(data) ? data : [])).catch(() => {});
   };
 
   useEffect(() => { loadContact(); loadAttachments(); }, [id]);
 
+  const resetUploadState = () => {
+    setSelectedFiles([]);
+    setUploadError('');
+    setUploadingFiles(false);
+  };
+
+  const handleFilePick = (e) => {
+    const files = Array.from(e.target.files || []);
+    setSelectedFiles(files);
+    setUploadError('');
+  };
+
+  const uploadBatch = async (endpoint, fieldName, files) => {
+    if (!files.length) return [];
+    const form = new FormData();
+    files.forEach((file) => form.append(fieldName, file, file.name));
+    const result = await fetchApi(endpoint, { method: 'POST', body: form });
+    return Array.isArray(result?.urls) ? result.urls : [];
+  };
+
   const handleUpload = async (e) => {
     e.preventDefault();
-    await fetchApi(`/api/contacts/${id}/attachments`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(uploadForm)
-    });
-    setShowUpload(false);
-    setUploadForm({ filename: '', fileUrl: '' });
-    loadAttachments();
+    if (!selectedFiles.length) {
+      setUploadError('Select at least one file to upload.');
+      return;
+    }
+
+    const imageFiles = selectedFiles.filter(isImageFile);
+    const documentFiles = selectedFiles.filter((file) => !isImageFile(file) && isDocumentFile(file));
+    const unsupportedFiles = selectedFiles.filter((file) => !isImageFile(file) && !isDocumentFile(file));
+
+    if (unsupportedFiles.length > 0) {
+      setUploadError('Only images, PDF, DOC, DOCX, XLS, XLSX, and CSV files are supported.');
+      return;
+    }
+
+    setUploadingFiles(true);
+    setUploadError('');
+    try {
+      const [uploadedImages, uploadedDocuments] = await Promise.all([
+        uploadBatch('/api/uploads/images', 'images', imageFiles),
+        uploadBatch('/api/uploads/documents', 'documents', documentFiles),
+      ]);
+
+      const uploadedFiles = [...uploadedImages, ...uploadedDocuments];
+      await Promise.all(uploadedFiles.map((item) => {
+        const matchedFile = selectedFiles.find((file) => file.name === item.fileName && file.size === item.size);
+        return fetchApi(`/api/contacts/${id}/attachments`, {
+          method: 'POST',
+          body: JSON.stringify({
+            filename: item.fileName,
+            fileUrl: item.url,
+            fileSize: item.size,
+            mimeType: matchedFile?.type || null,
+          }),
+        });
+      }));
+
+      setShowUpload(false);
+      resetUploadState();
+      loadAttachments();
+    } catch (err) {
+      setUploadError(err?.message || 'Failed to upload files.');
+      setUploadingFiles(false);
+    }
   };
 
   const handleDeleteAttachment = async (attachId) => {
@@ -389,22 +486,78 @@ const ContactDetail = () => {
                 {resummarizeError && (
                   <p style={{ color: '#ef4444', fontSize: '0.75rem', margin: '0 0 0.5rem' }}>{resummarizeError}</p>
                 )}
-                {contact.description ? (
-                  <pre style={{
-                    margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                    fontFamily: 'inherit', fontSize: '0.8rem', lineHeight: 1.6,
-                    color: 'var(--text-secondary)', maxHeight: 360, overflowY: 'auto',
-                  }}>
-                    {contact.description}
-                  </pre>
+                {summaryError && (
+                  <p style={{ color: '#ef4444', fontSize: '0.75rem', margin: '0 0 0.5rem' }}>{summaryError}</p>
+                )}
+                {editingSummary ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    <textarea
+                      className="input-field"
+                      rows={10}
+                      value={summaryDraft}
+                      onChange={(e) => setSummaryDraft(e.target.value)}
+                      style={{ padding: '0.65rem', fontSize: '0.85rem', resize: 'vertical' }}
+                    />
+                    <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={() => { setEditingSummary(false); setSummaryError(''); setSummaryDraft(contact.description || ''); }}
+                        disabled={summarySaving}
+                        className="btn-secondary"
+                        style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveSummary}
+                        disabled={summarySaving}
+                        className="btn-primary"
+                        style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+                      >
+                        {summarySaving ? 'Saving...' : 'Save summary'}
+                      </button>
+                    </div>
+                  </div>
+                ) : contact.description ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    <pre style={{
+                      margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                      fontFamily: 'inherit', fontSize: '0.8rem', lineHeight: 1.6,
+                      color: 'var(--text-secondary)', maxHeight: 360, overflowY: 'auto',
+                    }}>
+                      {contact.description}
+                    </pre>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={openSummaryEdit}
+                        className="btn-secondary"
+                        style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <Pencil size={13} /> Edit summary
+                      </button>
+                    </div>
+                  </div>
                 ) : (
-                  <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    No summary yet — click Summarize to generate one from the WhatsApp history.
-                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      No summary yet - click Summarize to generate one from the WhatsApp history.
+                    </p>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={openSummaryEdit}
+                        className="btn-secondary"
+                        style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem', display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <Pencil size={13} /> Add summary manually
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             )}
-
             {/* Deals */}
             {contact.deals && contact.deals.length > 0 && (
               <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
@@ -455,11 +608,32 @@ const ContactDetail = () => {
 
             {showUpload && (
               <form onSubmit={handleUpload} style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.75rem', background: 'var(--subtle-bg)', borderRadius: '6px' }}>
-                <input className="input-field" placeholder="File name" required value={uploadForm.filename} onChange={e => setUploadForm({ ...uploadForm, filename: e.target.value })} style={{ padding: '0.4rem', fontSize: '0.8rem' }} />
-                <input className="input-field" placeholder="File URL" required value={uploadForm.fileUrl} onChange={e => setUploadForm({ ...uploadForm, fileUrl: e.target.value })} style={{ padding: '0.4rem', fontSize: '0.8rem' }} />
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Upload files
+                  <input
+                    className="input-field"
+                    type="file"
+                    multiple
+                    accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv"
+                    onChange={handleFilePick}
+                    style={{ padding: '0.4rem', fontSize: '0.8rem' }}
+                  />
+                </label>
+                {selectedFiles.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                    {selectedFiles.map((file) => (
+                      <span key={`${file.name}-${file.size}-${file.lastModified}`} style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        {file.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {uploadError && (
+                  <p style={{ margin: 0, fontSize: '0.75rem', color: '#ef4444' }}>{uploadError}</p>
+                )}
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button type="submit" className="btn-primary" style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem' }}>Save</button>
-                  <button type="button" onClick={() => setShowUpload(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem' }}>Cancel</button>
+                  <button type="submit" className="btn-primary" disabled={uploadingFiles} style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem' }}>{uploadingFiles ? 'Uploading...' : 'Upload'}</button>
+                  <button type="button" onClick={() => { setShowUpload(false); resetUploadState(); }} disabled={uploadingFiles} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem' }}>Cancel</button>
                 </div>
               </form>
             )}

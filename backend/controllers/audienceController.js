@@ -152,6 +152,7 @@ exports.getContactsByStatus = async (req, res) => {
             where: {
                 status: status,
                 tenantId: req.user.tenantId,
+                ...(!["ADMIN", "MANAGER"].includes(req.user.role) ? { assignedToId: req.user.userId } : {}),
             },
             orderBy: {
                 createdAt: "desc",

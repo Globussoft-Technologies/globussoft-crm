@@ -1,10 +1,13 @@
 const express = require("express");
 const router = express.Router();
-const { verifyToken, verifyRole } = require("../middleware/auth");
+const { verifyToken } = require("../middleware/auth");
+const { requirePermission, userHasPermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { ensureEnum, ensureDateInRange } = require("../lib/validators");
 const { writeAudit, diffFields } = require("../lib/audit");
 const { parseDateTimeLocalInTZ } = require("../lib/datetime");
+const { summarizeMessages } = require("../lib/leadConversationSummary");
+const { notify, notifyMany } = require("../lib/notificationService");
 
 const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 
@@ -34,6 +37,127 @@ function parseTenantDateInput(input) {
 // silent coercion to "Pending".
 const ALLOWED_TASK_STATUSES = new Set(["Pending", "In Progress", "Completed", "Cancelled"]);
 const ALLOWED_TASK_PRIORITIES = new Set(["Low", "Medium", "High", "Critical"]);
+const VALID_EXTENSION_SOURCES = new Set(["gmail", "whatsapp"]);
+function canViewAllTasks(req) {
+  return ["ADMIN", "MANAGER", "OWNER"].includes(String(req.user?.role || "").toUpperCase());
+}
+
+async function notifyTaskAssignee({ task, actorId, tenantId, io, reassigned = false }) {
+  if (!task.userId || task.userId === actorId) return;
+  await notify({
+    userId: task.userId,
+    tenantId,
+    title: reassigned ? "Task reassigned to you" : "New task assigned",
+    message: (reassigned ? "A task was reassigned to you" : "A new task was assigned to you") + ": \"" + task.title + "\".",
+    type: "task",
+    priority: task.priority === "Critical" ? "high" : "normal",
+    link: "/tasks",
+    entityType: "Task",
+    entityId: task.id,
+    category: "task",
+    dedupWindowHours: 0,
+    io,
+  });
+}
+
+
+function compactTaskText(value, maxLength = 180) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 15).trimEnd()}...`;
+}
+
+function normalizeExtensionTaskMessages(body) {
+  const capturedAt = body.capturedAt ? new Date(body.capturedAt) : new Date();
+  const validCapturedAt = Number.isNaN(capturedAt.getTime()) ? new Date() : capturedAt;
+
+  if (body.source === "gmail") {
+    return [
+      {
+        direction: "INBOUND",
+        body: [body.subject ? `Subject: ${body.subject}` : null, body.body || ""]
+          .filter(Boolean)
+          .join("\n\n"),
+        createdAt: validCapturedAt,
+      },
+    ].filter((m) => m.body.trim());
+  }
+
+  return (Array.isArray(body.messages) ? body.messages : [])
+    .filter((m) => m && String(m.text || "").trim())
+    .map((m) => ({
+      direction: m.direction === "out" ? "OUTBOUND" : "INBOUND",
+      body: m.text,
+      createdAt: validCapturedAt,
+    }));
+}
+
+function extensionTaskCustomerName(body) {
+  if (body.source === "gmail") {
+    const senderRaw = String(body.sender || "").trim();
+    const m = senderRaw.match(/^(.*?)\s*<([^<>]+)>\s*$/);
+    return (m && m[1] && m[1].trim()) || senderRaw || "Email sender";
+  }
+  return body.chatName || "WhatsApp chat";
+}
+
+function extensionTaskTitle(body) {
+  if (body.source === "gmail") return body.subject || "Follow up on captured email";
+  return body.chatName ? `Follow up: ${body.chatName}` : "Follow up on WhatsApp chat";
+}
+
+function taskNotesFromSummary(summary) {
+  const highlights = Array.isArray(summary.highlights) ? summary.highlights : [];
+  return [
+    summary.purpose,
+    highlights.length ? `Key: ${highlights.join("; ")}` : "",
+    summary.leadStage ? `Stage: ${summary.leadStage}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ");
+}
+function taskResolutionNote(notes) {
+  const text = String(notes || "");
+  if (!text.startsWith("__task_meta__")) return "";
+  try {
+    const meta = JSON.parse(text.slice("__task_meta__".length));
+    return String(meta.r || "").trim();
+  } catch (_e) {
+    return "";
+  }
+}
+
+async function notifyTaskCompletionAdmins({ task, actorId, tenantId, io }) {
+  if (!prisma.user || typeof prisma.user.findMany !== "function") return;
+  const admins = await prisma.user.findMany({
+    where: {
+      tenantId,
+      OR: [
+        { role: { in: ["ADMIN", "MANAGER", "OWNER"] } },
+        { userType: "OWNER" },
+      ],
+    },
+    select: { id: true },
+  });
+  const userIds = admins.map((u) => u.id).filter((id) => id && id !== actorId);
+  if (!userIds.length) return;
+
+  const note = taskResolutionNote(task.notes);
+  await notifyMany({
+    userIds,
+    tenantId,
+    title: "Task resolved",
+    message: `Task "${task.title}" was resolved.${note ? ` Resolution note: ${note}` : ""}`,
+    type: "success",
+    priority: "normal",
+    link: "/tasks",
+    entityType: "Task",
+    entityId: task.id,
+    category: "task",
+    dedupWindowHours: 0,
+    io,
+  });
+}
 
 function validateTaskInput(body) {
   if (body.priority !== undefined && body.priority !== null && body.priority !== "") {
@@ -83,6 +207,7 @@ router.get("/", verifyToken, async (req, res) => {
     if (status) where.status = normalizeStatusFilter(status);
     if (priority) where.priority = priority;
     if (contactId) where.contactId = parseInt(contactId);
+    if (!canViewAllTasks(req)) where.userId = req.user.userId;
     if (overdue === "true") {
       where.dueDate = { lt: new Date() };
       where.status = "Pending";
@@ -155,8 +280,41 @@ router.get("/", verifyToken, async (req, res) => {
   }
 });
 
+
+// POST /api/tasks/extension-summary - summarize a browser-extension capture for task notes.
+router.post("/extension-summary", verifyToken, requirePermission("tasks", "write"), async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.source || !VALID_EXTENSION_SOURCES.has(body.source)) {
+      return res.status(400).json({
+        error: `source must be one of: ${Array.from(VALID_EXTENSION_SOURCES).join(", ")}`,
+        code: "INVALID_SOURCE",
+      });
+    }
+
+    const messages = normalizeExtensionTaskMessages(body);
+    if (!messages.length) {
+      return res.status(400).json({ error: "Capture had no usable text content", code: "EMPTY_CAPTURE" });
+    }
+
+    const summary = await summarizeMessages({
+      tenantId: req.user.tenantId,
+      customerName: extensionTaskCustomerName(body),
+      messages,
+    });
+
+    return res.json({
+      title: compactTaskText(extensionTaskTitle(body), 120),
+      notes: taskNotesFromSummary(summary),
+      summary,
+    });
+  } catch (err) {
+    console.error("[tasks] extension-summary error:", err && err.message);
+    return res.status(500).json({ error: "Failed to summarize task", code: "TASK_SUMMARY_FAILED" });
+  }
+});
 // POST /api/tasks
-router.post("/", verifyToken, async (req, res) => {
+router.post("/", verifyToken, requirePermission("tasks", "write"), async (req, res) => {
   try {
     // #436: the global `stripDangerous` middleware (server.js:299, applied to
     // every route) deletes `userId` from req.body — that's the right thing
@@ -201,15 +359,23 @@ router.post("/", verifyToken, async (req, res) => {
       assignedTo: task.userId,
       contactId: task.contactId,
     });
+    try {
+      await notifyTaskAssignee({ task, actorId: req.user.userId, tenantId: req.user.tenantId, io: req.io });
+    } catch (notifyErr) {
+      console.warn("[tasks] assignee notification skipped:", notifyErr && notifyErr.message);
+    }
     res.status(201).json(task);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to create Task" });
+    console.error("[tasks] create failed:", err);
+    res.status(500).json({
+      error: "Failed to create Task",
+      detail: process.env.NODE_ENV === "production" ? undefined : (err && err.message),
+    });
   }
 });
 
 // PUT /api/tasks/:id — general update
-router.put("/:id", verifyToken, async (req, res) => {
+router.put("/:id", verifyToken, requirePermission("tasks", "update"), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid task ID" });
@@ -221,7 +387,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     const inputErr = validateTaskInput(req.body);
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
-    const { title, notes, dueDate, priority, status } = req.body;
+    const { title, notes, dueDate, priority, status, targetUserId } = req.body;
     const data = {};
     if (title !== undefined) data.title = title;
     if (notes !== undefined) data.notes = notes;
@@ -229,6 +395,9 @@ router.put("/:id", verifyToken, async (req, res) => {
     if (dueDate !== undefined) data.dueDate = dueDate ? parseTenantDateInput(dueDate) : null;
     if (priority !== undefined) data.priority = priority;
     if (status !== undefined) data.status = status;
+    if (targetUserId !== undefined) {
+      data.userId = targetUserId !== null && targetUserId !== "" ? parseInt(targetUserId) : null;
+    }
 
     // gap #17: capture prior status BEFORE the update so task.completed can be
     // gated idempotently — re-saving an already-Completed task must not re-fire.
@@ -259,6 +428,14 @@ router.put("/:id", verifyToken, async (req, res) => {
     } catch (_e) {}
 
     // #179: audit only the keys that actually changed.
+    if (existing.userId !== task.userId) {
+      try {
+        await notifyTaskAssignee({ task, actorId: req.user.userId, tenantId: req.user.tenantId, io: req.io, reassigned: true });
+      } catch (notifyErr) {
+        console.warn("[tasks] reassignment notification skipped:", notifyErr && notifyErr.message);
+      }
+    }
+
     const changes = diffFields(existing, task, Object.keys(data));
     if (Object.keys(changes).length > 0) {
       await writeAudit('Task', 'UPDATE', task.id, req.user.userId, req.user.tenantId, { changedFields: changes });
@@ -280,12 +457,22 @@ router.put("/:id/complete", verifyToken, async (req, res) => {
     const existing = await prisma.task.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Task not found" });
 
-    // gap #17: same idempotency gate as PUT /:id — don't re-fire if already complete.
+    const isAssignedUser = existing.userId === req.user.userId;
+    const canCompleteAny = canViewAllTasks(req) || await userHasPermission(req.user, "tasks", "update");
+    if (!isAssignedUser && !canCompleteAny) {
+      return res.status(403).json({ error: "Only the assignee or a task manager can resolve this task" });
+    }
+
+    // gap #17: same idempotency gate as PUT /:id - don't re-fire if already complete.
     const wasCompleted = existing.status === "Completed";
+    const data = { status: "Completed" };
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, "notes")) {
+      data.notes = req.body.notes || null;
+    }
 
     const task = await prisma.task.update({
       where: { id: existing.id },
-      data: { status: "Completed" },
+      data,
     });
 
     try {
@@ -311,6 +498,11 @@ router.put("/:id/complete", verifyToken, async (req, res) => {
       await writeAudit('Task', 'COMPLETE', task.id, req.user.userId, req.user.tenantId, {
         title: existing.title,
       });
+      try {
+        await notifyTaskCompletionAdmins({ task, actorId: req.user.userId, tenantId: req.user.tenantId, io: req.io });
+      } catch (notifyErr) {
+        console.warn("[tasks] admin completion notification skipped:", notifyErr && notifyErr.message);
+      }
     }
 
     res.json(task);
@@ -321,7 +513,7 @@ router.put("/:id/complete", verifyToken, async (req, res) => {
 });
 
 // DELETE /api/tasks/:id — soft-delete (#167). ADMIN only. Idempotent.
-router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+router.delete("/:id", verifyToken, requirePermission("tasks", "delete"), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid task ID" });
@@ -347,7 +539,7 @@ router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
 });
 
 // POST /api/tasks/:id/restore — undo soft-delete (#167)
-router.post("/:id/restore", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+router.post("/:id/restore", verifyToken, requirePermission("tasks", "delete"), async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid task ID" });
@@ -364,7 +556,6 @@ router.post("/:id/restore", verifyToken, verifyRole(["ADMIN"]), async (req, res)
     const task = await prisma.task.update({
       where: { id: existing.id },
       data: { deletedAt: null },
-      include: { contact: true, user: true },
     });
     res.json({ ...task, restored: true });
   } catch (err) {
@@ -374,3 +565,5 @@ router.post("/:id/restore", verifyToken, verifyRole(["ADMIN"]), async (req, res)
 });
 
 module.exports = router;
+
+

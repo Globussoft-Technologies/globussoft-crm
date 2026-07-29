@@ -1658,7 +1658,7 @@ model Task {
   dueDate   DateTime?
   status    String    @default("Pending") // Pending, Completed
   priority  String    @default("Medium") // Low, Medium, High, Critical
-  notes     String?
+  notes     String?   @db.LongText
   createdAt DateTime  @default(now())
   // #167: soft-delete column (see Contact).
   deletedAt DateTime?

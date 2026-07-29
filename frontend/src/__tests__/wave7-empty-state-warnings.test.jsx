@@ -33,6 +33,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { AuthContext } from '../App';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -160,6 +161,15 @@ describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
   };
 
+  const renderTasks = (TasksComponent) =>
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' } }}>
+          <TasksComponent />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
   it('shows the warning when dueDate is in the past', async () => {
     const Tasks = (await import('../pages/Tasks')).default;
     fetchApiMock.mockImplementation((url) => {
@@ -168,11 +178,7 @@ describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
       return Promise.resolve([]);
     });
 
-    render(
-      <MemoryRouter>
-        <Tasks />
-      </MemoryRouter>,
-    );
+    renderTasks(Tasks);
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
 
@@ -209,11 +215,7 @@ describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
       return Promise.resolve([]);
     });
 
-    render(
-      <MemoryRouter>
-        <Tasks />
-      </MemoryRouter>,
-    );
+    renderTasks(Tasks);
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
 
@@ -241,11 +243,7 @@ describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
       return Promise.resolve([]);
     });
 
-    render(
-      <MemoryRouter>
-        <Tasks />
-      </MemoryRouter>,
-    );
+    renderTasks(Tasks);
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
 
@@ -281,11 +279,7 @@ describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
       return Promise.resolve([]);
     });
 
-    render(
-      <MemoryRouter>
-        <Tasks />
-      </MemoryRouter>,
-    );
+    renderTasks(Tasks);
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
 

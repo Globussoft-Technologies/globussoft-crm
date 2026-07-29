@@ -654,6 +654,7 @@ describe('GET /api/integrations/callified/auth-url — SSO JWT URL', () => {
 
   test('happy path returns a signed Callified URL with token + redirect params', async () => {
     process.env.CALLIFIED_SSO_SECRET = 'test-secret-' + Date.now();
+    process.env.CALLIFIED_DASHBOARD_URL = 'https://env.callified.example.com/sso';
     prisma.integration.findFirst.mockResolvedValue(null);
     prisma.user.findUnique.mockResolvedValue({
       id: 7, email: 'admin@globussoft.com', name: 'Admin User', role: 'ADMIN',

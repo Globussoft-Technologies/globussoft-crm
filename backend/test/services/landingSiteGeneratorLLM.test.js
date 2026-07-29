@@ -1,5 +1,5 @@
 /**
- * landingSiteGeneratorLLM.test.js ? covers the provider cascade and the
+ * landingSiteGeneratorLLM.test.js — covers the provider cascade and the
  * wellness landing-site fallback behaviour.
  */
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
@@ -10,6 +10,7 @@ import prisma from "../../lib/prisma.js";
 // landingSiteGeneratorLLM.js does not trip the prisma-surface guard.
 prisma.tenantSetting = {
   findUnique: vi.fn().mockResolvedValue(null),
+  upsert: vi.fn().mockResolvedValue(null),
 };
 
 const requireCjs = createRequire(import.meta.url);
@@ -18,16 +19,8 @@ const llmRouter = requireCjs("../../lib/llmRouter");
 const destinationImageProvider = requireCjs(
   "../../services/destinationImageProvider",
 );
-
-vi.mock("../../lib/prisma", () => ({
-  tenantSetting: {
-    findUnique: vi.fn(async () => null),
-    upsert: vi.fn(async () => null),
-  },
-}));
 let previousOpenAiModel;
 let previousGroqModel;
-let previousPrismaAllow;
 
 function loadClient() {
   return requireCjs(MODULE_PATH);
@@ -54,12 +47,11 @@ function mockFetchJson(payload) {
 beforeEach(() => {
   previousOpenAiModel = process.env.LLM_MODEL_OPENAI_LANDING;
   previousGroqModel = process.env.GROQ_MODEL;
-  previousPrismaAllow = process.env.PRISMA_ALLOW_REAL_CALLS;
-  process.env.PRISMA_ALLOW_REAL_CALLS = "1";
   delete requireCjs.cache[requireCjs.resolve(MODULE_PATH)];
   destinationImageProvider._resetForTests();
   vi.restoreAllMocks();
   prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tenantSetting.upsert.mockReset().mockResolvedValue(null);
   vi.spyOn(destinationImageProvider, "fetchOne").mockResolvedValue({
     url: "https://example.com/landing-stock.jpg",
     attribution: { photographer: "Test", providerId: "test" },
@@ -69,9 +61,6 @@ beforeEach(() => {
 afterEach(() => {
   process.env.LLM_MODEL_OPENAI_LANDING = previousOpenAiModel;
   process.env.GROQ_MODEL = previousGroqModel;
-  if (previousPrismaAllow === undefined)
-    delete process.env.PRISMA_ALLOW_REAL_CALLS;
-  else process.env.PRISMA_ALLOW_REAL_CALLS = previousPrismaAllow;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });

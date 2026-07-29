@@ -52,11 +52,13 @@ vi.mock('../utils/api', () => ({
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
+const notifyPrompt = vi.fn().mockResolvedValue('Resolved via test');
 const notifyObj = {
   error: notifyError,
   info: notifyInfo,
   success: notifySuccess,
   confirm: () => Promise.resolve(true),
+  prompt: notifyPrompt,
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
@@ -156,7 +158,11 @@ function defaultFetchMock(url, opts) {
 }
 
 function renderTasks() {
-  return render(<Tasks />);
+  return render(
+    <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' } }}>
+      <Tasks />
+    </AuthContext.Provider>,
+  );
 }
 
 // Travel-vertical render: wraps in the real AuthContext.Provider so
@@ -176,6 +182,8 @@ describe('<Tasks /> — page surface', () => {
     notifyError.mockReset();
     notifySuccess.mockReset();
     notifyInfo.mockReset();
+    notifyPrompt.mockReset();
+    notifyPrompt.mockResolvedValue('Resolved via test');
   });
 
   it('renders heading + Create Task CTA + priority-counter chips', async () => {
@@ -511,6 +519,8 @@ describe('<Tasks /> — travel "Assign to (staff)" dropdown', () => {
     notifyError.mockReset();
     notifySuccess.mockReset();
     notifyInfo.mockReset();
+    notifyPrompt.mockReset();
+    notifyPrompt.mockResolvedValue('Resolved via test');
   });
 
   it('travel vertical: fetches /api/staff and renders a staff assignee select', async () => {

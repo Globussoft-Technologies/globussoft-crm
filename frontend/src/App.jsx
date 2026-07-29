@@ -208,7 +208,7 @@ const TestReactLandingPage = lazy(() => import("./pages/TestReactLandingPage"));
 const ParityVerificationTool = lazy(() => import("./pages/ParityVerificationTool"));
 // Phase 2 validation suite Ã¢â‚¬â€ builder round-trip, schema compatibility, routes
 const Phase2ValidationSuite = lazy(() => import("./pages/Phase2ValidationSuite"));
-// Landing-page marketing funnel: email check Ã¢â€ â€™ register Ã¢â€ â€™ plan selection Ã¢â€ â€™ Razorpay Ã¢â€ â€™ success.
+// Landing-page marketing funnel: email check Ã¢â€ â€™ register Ã¢â€ â€™ plan selection Ã¢â€ â€™ Razorpay Ã¢â€ â€™ success.
 const GetStarted = lazy(() => import("./pages/GetStarted"));
 const RegisterSuccess = lazy(() => import("./pages/RegisterSuccess"));
 // Self-service customer registration. Creates a User with userType='CUSTOMER'
@@ -360,7 +360,7 @@ const TravelVisaRecoveryProgram = lazy(() => import("./pages/travel/visa/Recover
 // from backend commit 6d5919a8 Ã¢â‚¬â€ tick #180). ADMIN-only mutation gate;
 // route wrapped in RoleGuard allow=["ADMIN"] mirroring backend
 // POST/PUT/DELETE RBAC. School-trip pitch-deck mappings (curriculum Ãƒâ€”
-// grade Ãƒâ€” subject Ã¢â€ â€™ destination) consumed by the diagnostic engine.
+// grade Ãƒâ€” subject Ã¢â€ â€™ destination) consumed by the diagnostic engine.
 const TravelCurriculumAdmin = lazy(() => import("./pages/travel/CurriculumAdmin"));
 // TMC school term calendar admin Ã¢â‚¬â€ term/holiday/exam windows for trip scheduling.
 const TravelSchoolTermCalendar = lazy(() => import("./pages/travel/SchoolTermCalendar"));
@@ -624,7 +624,7 @@ function TravelOnly({ children }) {
 }
 
 // Back-compat redirect: older notifications linked to /travel/quotes/:id (which
-// never had a route Ã¢â€ â€™ 404). Send those to the Quote Builder for that quote so
+// never had a route Ã¢â€ â€™ 404). Send those to the Quote Builder for that quote so
 // already-sent notifications resolve correctly without a DB backfill.
 function QuoteIdRedirect() {
   const { id } = useParams();
@@ -1754,7 +1754,7 @@ export default function App() {
                   ours vs customer counter). Accept / Reject / Counter back. */}
               <Route path="travel/quotes/:id/counter-review" element={<TravelOnly><RoleGuard requiredPermission={{ module: "quotes", action: "write" }} feature="Counter Review" message="Counter Review requires the 'quotes.write' permission."><TravelQuoteCounterReview /></RoleGuard></TravelOnly>} />
               {/* Back-compat: old notifications linked /travel/quotes/:id (no route
-                  Ã¢â€ â€™ 404). Redirect to the Quote Builder. More-specific routes above
+                  Ã¢â€ â€™ 404). Redirect to the Quote Builder. More-specific routes above
                   (/builder, /:id/counter-review) still win via route ranking. */}
               <Route path="travel/quotes/:id" element={<TravelOnly><QuoteIdRedirect /></TravelOnly>} />
               {/* PRD Ã‚Â§7 Ã¢â‚¬â€ Flight quick-quote (FlightQuoteAgent). Manual

@@ -146,7 +146,7 @@ describe('CancellationPolicies trip selector', () => {
     expect(await screen.findByLabelText(/^Trip$/i)).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Goa/i })).toBeInTheDocument();
 
-    fireEvent.change(screen.getAllByLabelText(/^Sub-brand$/i)[1], {
+    fireEvent.change(screen.getByLabelText(/^Sub-brand$/i), {
       target: { value: 'rfu' },
     });
 
@@ -178,10 +178,11 @@ describe('CancellationPolicies trip selector', () => {
     fireEvent.click(screen.getByRole('button', { name: /New Policy/i }));
     const tripSelect = screen.getByLabelText(/^Trip$/i);
     expect(screen.getByLabelText(/^Sub-brand$/i).value).toBe('travelstall');
-    expect(within(tripSelect).getAllByRole('option')).toHaveLength(1);
+    await waitFor(() => {
+      expect(within(tripSelect).getAllByRole('option')).toHaveLength(1);
+    });
     expect(within(tripSelect).getByRole('option', { name: /No trip selected/i })).toBeInTheDocument();
   });
-
   it('renders cleaner trip labels', async () => {
     renderPage();
     await screen.findByText('TMC Default');

@@ -83,7 +83,7 @@ import {
   Package,
   // Wave 2 Agent II Ã¢â‚¬â€ POS / Cash Register / Shift / Sale
   Calculator,
-  // Used by the dynamic page-catalog Ã¢â€ â€™ sidebar icon lookup for /portal
+  // Used by the dynamic page-catalog Ã¢â€ â€™ sidebar icon lookup for /portal
   UserCircle,
   // Cron PRD Priority A #1 Ã¢â‚¬â€ LLM Spend admin dashboard
   Activity,
@@ -163,8 +163,8 @@ const Sidebar = ({
   const navigate = useNavigate();
   const { activeSubBrand, setActiveSubBrand } = useActiveSubBrand();
   // Branding refactor (2026-07-08): fallback-resolved effective brand for
-  // the active sub-brand (subBrand kit Ã¢â€ â€™ tenant default-brand Ã¢â€ â€™
-  // Tenant.logoUrl/brandColor Ã¢â€ â€™ system default). This is the SINGLE source
+  // the active sub-brand (subBrand kit Ã¢â€ â€™ tenant default-brand Ã¢â€ â€™
+  // Tenant.logoUrl/brandColor Ã¢â€ â€™ system default). This is the SINGLE source
   // the sidebar's one logo reads from Ã¢â‚¬â€ non-travel tenants pass subBrand=null
   // and get the tenant-wide kit / Tenant.logoUrl, unchanged from before.
   const { effective: effectiveBrand } = useEffectiveBrand(
@@ -255,13 +255,13 @@ const Sidebar = ({
       if (list.length === 0) return;
       const first = list[0];
       const last = list[list.length - 1];
-      // Shift-Tab on first Ã¢â€ â€™ wrap to last
+      // Shift-Tab on first Ã¢â€ â€™ wrap to last
       if (e.shiftKey && document.activeElement === first) {
         e.preventDefault();
         last.focus();
         return;
       }
-      // Tab on last Ã¢â€ â€™ wrap to first
+      // Tab on last Ã¢â€ â€™ wrap to first
       if (!e.shiftKey && document.activeElement === last) {
         e.preventDefault();
         first.focus();
@@ -316,7 +316,7 @@ const Sidebar = ({
   // about cause: fetchApi has no retry logic (utils/api.js), and the
   // three filter values (status=Lead / PENDING / OPEN) are all accepted
   // by the backend (Lead matches contacts enum, tasks normalises
-  // PENDINGÃ¢â€ â€™Pending per #436, tickets ignores ?status entirely). The
+  // PENDINGÃ¢â€ â€™Pending per #436, tickets ignores ?status entirely). The
   // storm was 100% the dep-cycle re-mount loop above.
   const refreshCountsRef = useRef(null);
   refreshCountsRef.current = async () => {
@@ -462,7 +462,7 @@ const Sidebar = ({
     }
   }, []);
   // Self-heal a stale/invalid active sub-brand. The selection persists in
-  // sessionStorage, which SURVIVES a logoutÃ¢â€ â€™login in the SAME tab Ã¢â‚¬â€ so an
+  // sessionStorage, which SURVIVES a logoutÃ¢â€ â€™login in the SAME tab Ã¢â‚¬â€ so an
   // admin who picked "RFU", logged out, and logged back in as a TMC-only
   // manager would inherit activeSubBrand="rfu". Since that manager can't
   // access RFU, the brand-scoped nav would then hide ALL their own items
@@ -1411,7 +1411,7 @@ function WellnessNavGroup({
   );
 }
 
-// Count-badge mapping. Path Ã¢â€ â€™ key on the `counts` state object. Live counters
+// Count-badge mapping. Path Ã¢â€ â€™ key on the `counts` state object. Live counters
 // come from /api/{contacts|tasks|tickets|email} polling + socket events and
 // are rendered as a pill on the right side of the matching nav entry.
 const PATH_COUNT_KEY = {
@@ -1422,7 +1422,7 @@ const PATH_COUNT_KEY = {
 };
 
 // Some links want to highlight as active even when on a different path.
-// Path Ã¢â€ â€™ list of additional pathnames to treat as matches.
+// Path Ã¢â€ â€™ list of additional pathnames to treat as matches.
 const PATH_MATCH_ALIASES = {
   "/wellness/invoices": ["/invoices"],
 };
@@ -1512,7 +1512,7 @@ function renderWellnessNav({
     );
   };
 
-  // Render a category whose final list is (catalog items) Ã¢Å â€¢ (non-catalog
+  // Render a category whose final list is (catalog items) Ã¢Å â€¢ (non-catalog
   // hardcoded `extras`). Used for sections that have one or two pages
   // that aren't (yet) in the page catalog Ã¢â‚¬â€ Leads & Revenue (Blocked
   // Numbers), Finance (Cash Registers), Marketing (Campaigns), Admin
@@ -1619,7 +1619,7 @@ function renderWellnessNav({
           The Tenant Settings / AdsGPT Reports / Callified Calls / Wallet
           Bonus Rules sidebar shortcuts were removed by request Ã¢â‚¬â€ the
           underlying routes stay mounted in App.jsx and remain reachable
-          via deep-link (e.g. CapBanners' "Tenant Settings Ã¢â€ â€™" anchor). */}
+          via deep-link (e.g. CapBanners' "Tenant Settings Ã¢â€ â€™" anchor). */}
       {(() => {
         const adminCatalogItems = byCategory["Admin"] || [];
         // Pull Settings out of the catalog admin list Ã¢â‚¬â€ it MUST render
@@ -1958,7 +1958,7 @@ function renderTravelNav({
   activeSubBrand = null,
 }) {
   // isAdmin / isManager drive ONE display-only decision below: the
-  // personal "You Ã¢â€ â€™ Notification Settings" entry, which is a
+  // personal "You Ã¢â€ â€™ Notification Settings" entry, which is a
   // self-service surface for end users and is intentionally hidden
   // from admin / manager / owner tenants (OWNER carries role==='ADMIN'
   // so isAdmin already covers it). This mirrors the generic sidebar's

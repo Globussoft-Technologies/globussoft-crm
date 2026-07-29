@@ -22,15 +22,15 @@
  * payload doesn't even reach the server.
  *
  * Contracts pinned here:
- *   1. <script>alert(1)</script> in name Ã¢â€ â€™ form rejects locally; no fetch.
- *   2. Name longer than 191 chars Ã¢â€ â€™ "too long" error; no fetch.
- *   3. Control char (\x00, \x07) in name Ã¢â€ â€™ "invalid control characters"; no fetch.
- *   4. Empty required name Ã¢â€ â€™ "Name is required"; no fetch.
- *   5. Invalid email shape Ã¢â€ â€™ "valid email" error; no fetch.
- *   6. Happy path Ã¢â€ â€™ POST /api/contacts fires exactly once with sanitised body.
- *   7. (#600) Wellness tenant Ã¢â€ â€™ Phone field renders, "WhatsApp" source option
- *      exists; submitting without phone Ã¢â€ â€™ "Phone is required", no fetch.
- *   8. (#600) Generic tenant Ã¢â€ â€™ Phone field is hidden, "WhatsApp" not in
+ *   1. <script>alert(1)</script> in name Ã¢â€ â€™ form rejects locally; no fetch.
+ *   2. Name longer than 191 chars Ã¢â€ â€™ "too long" error; no fetch.
+ *   3. Control char (\x00, \x07) in name Ã¢â€ â€™ "invalid control characters"; no fetch.
+ *   4. Empty required name Ã¢â€ â€™ "Name is required"; no fetch.
+ *   5. Invalid email shape Ã¢â€ â€™ "valid email" error; no fetch.
+ *   6. Happy path Ã¢â€ â€™ POST /api/contacts fires exactly once with sanitised body.
+ *   7. (#600) Wellness tenant Ã¢â€ â€™ Phone field renders, "WhatsApp" source option
+ *      exists; submitting without phone Ã¢â€ â€™ "Phone is required", no fetch.
+ *   8. (#600) Generic tenant Ã¢â€ â€™ Phone field is hidden, "WhatsApp" not in
  *      Source dropdown.
  *   9. (#892) "Create Lead" header CTA is rendered; clicking it reveals
  *      the form fields in a drawer.
@@ -158,7 +158,7 @@ describe('Leads Ã¢â‚¬â€ Create Lead form client-side hardening (#557)
     });
     submitForm();
 
-    // After strip, the name is empty Ã¢â€ â€™ reject with "Name is required" and
+    // After strip, the name is empty Ã¢â€ â€™ reject with "Name is required" and
     // never reach the network. This is the canonical XSS-rejection flow.
     // The "HTML markup was removed" info notice fires first (during strip),
     // followed by the "Name is required" error notice (post-strip empty
@@ -316,7 +316,7 @@ describe('Leads Ã¢â‚¬â€ Create Lead form client-side hardening (#557)
     expect(screen.queryByPlaceholderText('Full Name')).toBeNull();
     expect(screen.queryByPlaceholderText('Email Address')).toBeNull();
 
-    // Click the CTA Ã¢â€ â€™ drawer opens Ã¢â€ â€™ fields become reachable.
+    // Click the CTA Ã¢â€ â€™ drawer opens Ã¢â€ â€™ fields become reachable.
     openDrawer();
     expect(screen.getByPlaceholderText('Full Name')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Email Address')).toBeInTheDocument();
@@ -349,7 +349,7 @@ describe('Leads Ã¢â‚¬â€ vertical-aware form schema (#600)', () => {
     user: { id: 1, role: 'ADMIN' },
   };
 
-  it('wellness tenant Ã¢â€ â€™ Phone field renders and WhatsApp is in Source dropdown', async () => {
+  it('wellness tenant Ã¢â€ â€™ Phone field renders and WhatsApp is in Source dropdown', async () => {
     renderLeads(wellnessAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     openDrawer();
@@ -375,7 +375,7 @@ describe('Leads Ã¢â‚¬â€ vertical-aware form schema (#600)', () => {
     expect(linkedinOpt).toBeUndefined();
   });
 
-  it('wellness tenant Ã¢â€ â€™ submitting without phone triggers "Phone is required"', async () => {
+  it('wellness tenant Ã¢â€ â€™ submitting without phone triggers "Phone is required"', async () => {
     renderLeads(wellnessAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
@@ -392,7 +392,7 @@ describe('Leads Ã¢â‚¬â€ vertical-aware form schema (#600)', () => {
     expect(postCall).toBeUndefined();
   });
 
-  it('wellness tenant Ã¢â€ â€™ happy path POSTs phone, source, and treatmentOfInterest', async () => {
+  it('wellness tenant Ã¢â€ â€™ happy path POSTs phone, source, and treatmentOfInterest', async () => {
     renderLeads(wellnessAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     fetchApiMock.mockClear();
@@ -426,7 +426,7 @@ describe('Leads Ã¢â‚¬â€ vertical-aware form schema (#600)', () => {
     expect(notifyError).not.toHaveBeenCalled();
   });
 
-  it('generic tenant Ã¢â€ â€™ Phone field is hidden and WhatsApp is NOT in Source dropdown', async () => {
+  it('generic tenant Ã¢â€ â€™ Phone field is hidden and WhatsApp is NOT in Source dropdown', async () => {
     renderLeads(genericAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     openDrawer();
@@ -472,7 +472,7 @@ const SAMPLE_STAFF = [
 ];
 
 function leadsFetchMock(url, opts) {
-  // GET /api/contacts?status=Lead Ã¢â€ â€™ seeded list
+  // GET /api/contacts?status=Lead Ã¢â€ â€™ seeded list
   if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
     return Promise.resolve(SAMPLE_LEADS);
   }
@@ -546,7 +546,7 @@ describe('Leads Ã¢â‚¬â€ table, search, bulk operations, row actions, 
 
     const searchInput = screen.getByPlaceholderText('Search leads...');
 
-    // Filter by company substring Ã¢â€ â€™ only Globex's Bob remains
+    // Filter by company substring Ã¢â€ â€™ only Globex's Bob remains
     fireEvent.change(searchInput, { target: { value: 'globex' } });
     await waitFor(() => {
       expect(screen.queryByText('Alice Smith')).toBeNull();
@@ -554,7 +554,7 @@ describe('Leads Ã¢â‚¬â€ table, search, bulk operations, row actions, 
       expect(screen.queryByText('Carol Diaz')).toBeNull();
     });
 
-    // Filter by email substring Ã¢â€ â€™ only Carol
+    // Filter by email substring Ã¢â€ â€™ only Carol
     fireEvent.change(searchInput, { target: { value: 'initech.test' } });
     await waitFor(() => {
       expect(screen.queryByText('Alice Smith')).toBeNull();
@@ -562,7 +562,7 @@ describe('Leads Ã¢â‚¬â€ table, search, bulk operations, row actions, 
       expect(screen.getByText('Carol Diaz')).toBeInTheDocument();
     });
 
-    // Clear Ã¢â€ â€™ all three back
+    // Clear Ã¢â€ â€™ all three back
     fireEvent.change(searchInput, { target: { value: '' } });
     await waitFor(() => {
       expect(screen.getByText('Alice Smith')).toBeInTheDocument();
@@ -578,7 +578,7 @@ describe('Leads Ã¢â‚¬â€ table, search, bulk operations, row actions, 
     // a search is active and reverts to the original phrasing when cleared.
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-    // No search Ã¢â€ â€™ original phrasing.
+    // No search Ã¢â€ â€™ original phrasing.
     expect(screen.getByText(/3 leads in pipeline/)).toBeInTheDocument();
     const searchInput = screen.getByPlaceholderText('Search leads...');
     fireEvent.change(searchInput, { target: { value: 'globex' } });
@@ -610,7 +610,7 @@ describe('Leads Ã¢â‚¬â€ table, search, bulk operations, row actions, 
       );
       expect(putCall).toBeDefined();
       const body = JSON.parse(putCall[1].body);
-      // Per #283 Ã¢â‚¬â€ Convert advances ONE step (Lead Ã¢â€ â€™ Prospect), not jumps to Customer
+      // Per #283 Ã¢â‚¬â€ Convert advances ONE step (Lead Ã¢â€ â€™ Prospect), not jumps to Customer
       expect(body.status).toBe('Prospect');
     });
   });
@@ -725,7 +725,7 @@ describe('Leads Ã¢â‚¬â€ table, search, bulk operations, row actions, 
       expect(screen.getByText(/3 leads selected/i)).toBeInTheDocument();
     });
 
-    // Click again Ã¢â€ â€™ deselect all
+    // Click again Ã¢â€ â€™ deselect all
     const refreshed = screen.getAllByRole('checkbox');
     fireEvent.click(refreshed[0]);
     await waitFor(() => {
@@ -739,7 +739,7 @@ describe('Leads Ã¢â‚¬â€ table, search, bulk operations, row actions, 
     openDrawer();
     expect(screen.getByPlaceholderText('Full Name')).toBeInTheDocument();
 
-    // ESC keypress fires window keydown listener Ã¢â€ â€™ drawer unmounts.
+    // ESC keypress fires window keydown listener Ã¢â€ â€™ drawer unmounts.
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => {
       expect(screen.queryByPlaceholderText('Full Name')).toBeNull();
@@ -854,12 +854,12 @@ describe('Leads Ã¢â‚¬â€ travel tenant Amount column reflects actual p
       return Promise.resolve({
         itineraries: [
           // Lily: 'sent' status, advancePaidAmount=0 (itinerary not updated yet)
-          // Ã¢â€ â€™ falls through to TMC paid-by-contact path which shows 90000
+          // Ã¢â€ â€™ falls through to TMC paid-by-contact path which shows 90000
           { id: 1, contactId: 50, status: 'sent', totalAmount: 120000, advancePaidAmount: 0, currency: 'INR' },
           // Ahmed: legacy itinerary Ã¢â‚¬â€ advance_paid status but advancePaidAmount not recorded (null)
-          // Ã¢â€ â€™ fallback: totalAmount shown because status is in COMMITTED set
+          // Ã¢â€ â€™ fallback: totalAmount shown because status is in COMMITTED set
           { id: 2, contactId: 51, status: 'advance_paid', totalAmount: 185000, advancePaidAmount: null, currency: 'INR' },
-          // No-payment lead: draft, nothing paid, advancePaidAmount=0 Ã¢â€ â€™ shows dash
+          // No-payment lead: draft, nothing paid, advancePaidAmount=0 Ã¢â€ â€™ shows dash
           { id: 3, contactId: 52, status: 'draft', totalAmount: 80000, advancePaidAmount: 0, currency: 'INR' },
         ],
         total: 3,
@@ -896,7 +896,7 @@ describe('Leads Ã¢â‚¬â€ travel tenant Amount column reflects actual p
   });
 
   it('shows totalAmount for a fully_paid itinerary Ã¢â‚¬â€ bookingValueByContact is populated', async () => {
-    // This test verifies the mapping logic: fully_paid Ã¢â€ â€™ totalAmount (185000) ends up
+    // This test verifies the mapping logic: fully_paid Ã¢â€ â€™ totalAmount (185000) ends up
     // in bookingValueByContact[51]. We confirm via the fetchApi call pattern rather
     // than trying to match a locale-sensitive toLocaleString() string.
     const { container } = renderLeads(TRAVEL_AUTH);
@@ -933,7 +933,7 @@ describe('Leads Ã¢â‚¬â€ travel tenant Amount column reflects actual p
       expect(container.textContent).toMatch(/INR/);
     });
 
-    // 3 rows rendered; 2 have payments (Lily + Ahmed) Ã¢â€ â€™ 2 Amount tds with INR.
+    // 3 rows rendered; 2 have payments (Lily + Ahmed) Ã¢â€ â€™ 2 Amount tds with INR.
     // The no-payment lead (advancePaidAmount=0) falls through to the dash path.
     const tds = Array.from(container.querySelectorAll('td'));
     const amountTds = tds.filter(td => td.textContent.includes('INR'));

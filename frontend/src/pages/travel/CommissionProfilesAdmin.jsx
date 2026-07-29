@@ -110,6 +110,30 @@ const PROFILE_TYPE_BADGE_BG = {
   hybrid: "rgba(168, 85, 247, 0.18)",
 };
 
+function hexToRgb(hex) {
+  const raw = String(hex || '').trim().replace(/^#/, '');
+  if (!/^[0-9a-f]{6}$/i.test(raw)) return null;
+  return {
+    r: parseInt(raw.slice(0, 2), 16),
+    g: parseInt(raw.slice(2, 4), 16),
+    b: parseInt(raw.slice(4, 6), 16),
+  };
+}
+
+function brandedButtonTextColor(background) {
+  const rgb = hexToRgb(background);
+  if (!rgb) return 'var(--accent-text, #fff)';
+  const luminance = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+  return luminance < 160 ? '#F5F1E8' : '#1F2220';
+}
+
+function brandedButtonBorder(background) {
+  const rgb = hexToRgb(background);
+  if (!rgb) return 'none';
+  const luminance = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+  return luminance < 220 ? 'none' : '1px solid rgba(31, 34, 32, 0.18)';
+}
+
 const EMPTY_FORM = {
   name: "",
   subBrand: "",
@@ -250,7 +274,13 @@ export default function CommissionProfilesAdmin() {
   const { activeSubBrand } = useActiveSubBrand();
   // G102: BrandKit lookup for primary-CTA tint.
   const { brandKit } = useBrandKit(activeSubBrand);
-  const primaryBtnBranded = { ...primaryBtn, background: brandPrimaryColor(brandKit) };
+  const brandCtaColor = brandPrimaryColor(brandKit);
+  const primaryBtnBranded = {
+    ...primaryBtn,
+    background: brandCtaColor,
+    color: brandedButtonTextColor(brandCtaColor),
+    border: brandedButtonBorder(brandCtaColor),
+  };
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
   const canDelete = user?.role === "ADMIN";
 

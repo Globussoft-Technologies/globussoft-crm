@@ -2,9 +2,10 @@ import React, { useState, useEffect, useContext, useRef } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
+import { usePermissions } from '../hooks/usePermissions';
 import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
 import { useActiveSubBrand } from '../utils/subBrand';
-import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X, ChevronDown } from 'lucide-react';
+import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X, ChevronDown, Eye, Edit3, Trash2, Save, UserRound } from 'lucide-react';
 import TagPickerPopover from './wellness/patients/TagPickerPopover';
 import { tagChipStyle, chipRemoveStyle, modalInputStyle, filterLabelStyle } from './wellness/patients/styles';
 import { tagColour } from './wellness/patients/constants';
@@ -65,22 +66,30 @@ function isPastDate(localDateTimeStr) {
   return picked.getTime() < Date.now();
 }
 
+function formatDateTimeLocal(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 // Tags + description are encoded together in the Task.notes field so the
 // schema needs no migration. Format: JSON prefix sentinel + envelope.
 // Falls back gracefully for old plain-text notes.
 const NOTES_TAG = '__task_meta__';
-function encodeNotes(tagIds, description) {
-  if (!tagIds || tagIds.length === 0) return description || null;
-  return `${NOTES_TAG}${JSON.stringify({ t: tagIds, d: description || '' })}`;
+function encodeNotes(tagIds, description, resolutionNote = '') {
+  if ((!tagIds || tagIds.length === 0) && !resolutionNote) return description || null;
+  return `${NOTES_TAG}${JSON.stringify({ t: tagIds || [], d: description || '', r: resolutionNote || '' })}`;
 }
 function decodeNotes(raw) {
-  if (!raw) return { tagIds: [], description: '' };
-  if (!raw.startsWith(NOTES_TAG)) return { tagIds: [], description: raw };
+  if (!raw) return { tagIds: [], description: '', resolutionNote: '' };
+  if (!raw.startsWith(NOTES_TAG)) return { tagIds: [], description: raw, resolutionNote: '' };
   try {
-    const { t, d } = JSON.parse(raw.slice(NOTES_TAG.length));
-    return { tagIds: Array.isArray(t) ? t : [], description: d || '' };
+    const { t, d, r } = JSON.parse(raw.slice(NOTES_TAG.length));
+    return { tagIds: Array.isArray(t) ? t : [], description: d || '', resolutionNote: r || '' };
   } catch {
-    return { tagIds: [], description: raw };
+    return { tagIds: [], description: raw, resolutionNote: '' };
   }
 }
 
@@ -93,10 +102,12 @@ const EMPTY_FORM = {
   assignedToId: '',
   tagIds: [],
   description: '',
+  resolutionNote: '',
 };
 
 export default function Tasks() {
   const notify = useNotify();
+  const { hasPermission, isReady: permsReady } = usePermissions();
   const [tasks, setTasks] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [staff, setStaff] = useState([]);
@@ -109,9 +120,15 @@ export default function Tasks() {
   // to the active sub-brand so e.g. an RFU-only operator isn't offered TMC
   // agents. Generic / wellness tenants don't render the staff dropdown at all,
   // so their Tasks form is unchanged.
-  const { tenant } = useContext(AuthContext) || {};
+  const { tenant, user } = useContext(AuthContext) || {};
   const isTravel = tenant?.vertical === 'travel';
   const isWellness = tenant?.vertical === 'wellness';
+  const role = String(user?.role || '').toUpperCase();
+  const currentUserId = user?.userId || user?.id || null;
+  const roleFallbackCanManage = ['ADMIN', 'MANAGER', 'OWNER'].includes(role);
+  const canCreateTasks = roleFallbackCanManage || !permsReady || hasPermission('tasks', 'write');
+  const canUpdateTasks = roleFallbackCanManage || !permsReady || hasPermission('tasks', 'update') || hasPermission('tasks', 'write');
+  const canDeleteTasks = roleFallbackCanManage || (permsReady && hasPermission('tasks', 'delete'));
   const { activeSubBrand } = useActiveSubBrand();
   const assignableStaff = !isTravel
     ? staff
@@ -123,6 +140,9 @@ export default function Tasks() {
   // c031ba0 pattern: header "+ Create Task" CTA opens this drawer; close on
   // X / ESC / outside-click; submit handler is preserved verbatim.
   const [creating, setCreating] = useState(false);
+  const [selectedTask, setSelectedTask] = useState(null);
+  const [editingTask, setEditingTask] = useState(false);
+  const [editTask, setEditTask] = useState(EMPTY_FORM);
 
   useEffect(() => { loadData(); }, []);
 
@@ -148,11 +168,15 @@ export default function Tasks() {
 
   // #893: ESC closes the drawer to match the c031ba0 Travel-page convention.
   useEffect(() => {
-    if (!creating) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') { setCreating(false); setShowTagPicker(false); } };
+    if (!creating && !selectedTask) return undefined;
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (creating) { setCreating(false); setShowTagPicker(false); }
+      if (selectedTask) { setSelectedTask(null); setEditingTask(false); }
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [creating]);
+  }, [creating, selectedTask]);
 
   const loadData = async () => {
     try {
@@ -193,7 +217,7 @@ export default function Tasks() {
         dueDate: newTask.dueDate ? new Date(newTask.dueDate).toISOString() : null,
         // Tags + description are packed into the notes field using a sentinel
         // prefix so no schema migration is needed.
-        notes: encodeNotes(newTask.tagIds, newTask.description),
+        notes: encodeNotes(newTask.tagIds, newTask.description, newTask.resolutionNote),
         contactId: newTask.contactId || undefined,
         // Backend reads `targetUserId` → Task.userId (stripDangerous deletes a
         // raw `userId` from the body). Only send when an assignee was picked.
@@ -211,16 +235,33 @@ export default function Tasks() {
     }
   };
 
-  const markComplete = async (id) => {
+  const markComplete = async (taskOrId) => {
+    const task = typeof taskOrId === 'object' ? taskOrId : tasks.find((t) => t.id === taskOrId) || selectedTask;
+    const id = typeof taskOrId === 'object' ? taskOrId.id : taskOrId;
+    const decoded = decodeNotes(task?.notes || '');
+    const resolutionNote = await notify.prompt({
+      title: 'Resolve task',
+      message: 'Add a short resolution note before marking this task complete.',
+      defaultValue: decoded.resolutionNote || '',
+      placeholder: 'What was done / outcome?',
+      confirmText: 'Resolve',
+    });
+    if (resolutionNote === null) return;
     try {
-      await fetchApi(`/api/tasks/${id}/complete`, { method: 'PUT' });
-      loadData();
-      // #625: invalidate sidebar counters — backend has no `task_completed`
-      // socket emit today, so the polling fallback alone left the badge
-      // stale until the next 60s tick.
+      const notes = encodeNotes(decoded.tagIds, decoded.description, String(resolutionNote || '').trim());
+      const updated = await fetchApi(`/api/tasks/${id}/complete`, {
+        method: 'PUT',
+        body: JSON.stringify({ notes }),
+      });
+      if (selectedTask?.id === id) {
+        setSelectedTask(updated || { ...selectedTask, status: 'Completed', notes });
+      }
+      await loadData();
       window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
+      notify.success('Task resolved');
     } catch (err) {
       console.error(err);
+      notify.error('Failed to resolve task');
     }
   };
 
@@ -259,6 +300,78 @@ export default function Tasks() {
     setNewTask((prev) => ({ ...prev, tagIds: prev.tagIds.filter((id) => id !== tagId) }));
   };
 
+  const assigneeName = (task) => task?.user?.name || task?.user?.email || 'Unassigned';
+  const canResolveTask = (task) => canUpdateTasks || (task?.userId && Number(task.userId) === Number(currentUserId));
+
+  const openTaskDetails = (task) => {
+    const decoded = decodeNotes(task.notes);
+    setSelectedTask(task);
+    setEditingTask(false);
+    setEditTask({
+      title: task.title || '',
+      status: task.status || 'Pending',
+      priority: normalizePriority(task.priority),
+      dueDate: formatDateTimeLocal(task.dueDate),
+      completedAt: '',
+      assignedToId: task.userId ? String(task.userId) : '',
+      tagIds: decoded.tagIds,
+      description: decoded.description,
+      resolutionNote: decoded.resolutionNote,
+    });
+  };
+
+  const closeTaskDetails = () => {
+    setSelectedTask(null);
+    setEditingTask(false);
+  };
+
+  const saveTaskChanges = async () => {
+    if (!selectedTask) return;
+    try {
+      const payload = {
+        title: editTask.title,
+        status: editTask.status,
+        priority: editTask.priority,
+        dueDate: editTask.dueDate ? new Date(editTask.dueDate).toISOString() : null,
+        notes: encodeNotes(editTask.tagIds, editTask.description, editTask.resolutionNote),
+        targetUserId: editTask.assignedToId || '',
+      };
+      const updated = await fetchApi(`/api/tasks/${selectedTask.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      setSelectedTask(updated);
+      setEditingTask(false);
+      await loadData();
+      window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
+      notify.success('Task updated');
+    } catch (err) {
+      console.error(err);
+      notify.error('Failed to update task');
+    }
+  };
+
+  const deleteTask = async () => {
+    if (!selectedTask) return;
+    const ok = await notify.confirm({
+      title: 'Delete task?',
+      message: `Delete "${selectedTask.title}" from the queue?`,
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await fetchApi(`/api/tasks/${selectedTask.id}`, { method: 'DELETE' });
+      closeTaskDetails();
+      await loadData();
+      window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
+      notify.success('Task deleted');
+    } catch (err) {
+      console.error(err);
+      notify.error('Failed to delete task');
+    }
+  };
+
   const selectedTags = allTags.filter((t) => newTask.tagIds.includes(t.id));
 
   const PRIORITY_ORDER = { Critical: 0, High: 1, Medium: 2, Low: 3 };
@@ -290,6 +403,7 @@ export default function Tasks() {
             Prioritized daily follow-ups and outbound activity directives.
           </p>
         </div>
+        {canCreateTasks && (
         <button
           id="open-create-task-btn"
           type="button"
@@ -306,6 +420,7 @@ export default function Tasks() {
         >
           <Plus size={14} /> Create Task
         </button>
+        )}
       </header>
 
       {/* Stats bar */}
@@ -349,6 +464,7 @@ export default function Tasks() {
             ) : activeTasks.map(t => {
               const cfg = PRIORITY_CONFIG[t.priority] || PRIORITY_CONFIG.Medium;
               const overdue = isOverdue(t);
+              const decoded = decodeNotes(t.notes);
               return (
                 <div key={t.id} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -377,15 +493,32 @@ export default function Tasks() {
                         <Clock size={12} /> {new Date(t.dueDate).toLocaleString()}
                       </p>
                     )}
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem', margin: '0.2rem 0 0' }}>
+                      <UserRound size={12} /> Assigned to {assigneeName(t)}
+                    </p>
+                    {decoded.description && (
+                      <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', margin: '0.45rem 0 0', maxWidth: 760, lineHeight: 1.45 }}>
+                        {decoded.description.length > 170 ? `${decoded.description.slice(0, 170).trimEnd()}...` : decoded.description}
+                      </p>
+                    )}
                   </div>
                   <div style={{ display: 'flex', gap: '0.5rem', marginLeft: '1rem', flexShrink: 0 }}>
                     <button
-                      onClick={() => markComplete(t.id)}
+                      onClick={() => openTaskDetails(t)}
+                      className="btn-secondary"
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 0.9rem', fontSize: '0.8rem', position: 'relative', zIndex: 10, pointerEvents: 'all' }}
+                    >
+                      <Eye size={14} /> Details
+                    </button>
+                    {canResolveTask(t) && (
+                    <button
+                      onClick={() => markComplete(t)}
                       className="btn-secondary"
                       style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--success-color)', color: '#fff', border: 'none', padding: '0.5rem 0.9rem', fontSize: '0.8rem', position: 'relative', zIndex: 10, pointerEvents: 'all' }}
                     >
                       <CheckCircle2 size={14} /> Resolve
                     </button>
+                    )}
                   </div>
                 </div>
               );
@@ -401,18 +534,215 @@ export default function Tasks() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {completedTasks.length === 0 ? (
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>No completed tasks yet.</p>
-            ) : completedTasks.slice(0, 8).map(t => (
-              <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.65rem 1rem', background: 'rgba(255,255,255,0.01)', borderRadius: '4px' }}>
-                <span style={{ textDecoration: 'line-through', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{t.title}</span>
-                <span style={{ fontSize: '0.7rem', color: 'var(--success-color)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                  <CheckCircle2 size={10} /> Resolved
-                </span>
+            ) : completedTasks.slice(0, 8).map(t => {
+              const decoded = decodeNotes(t.notes);
+              return (
+              <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', padding: '0.65rem 1rem', background: 'rgba(255,255,255,0.01)', borderRadius: '4px' }}>
+                <div style={{ minWidth: 0 }}>
+                  <span style={{ textDecoration: 'line-through', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{t.title}</span>
+                  {decoded.resolutionNote && (
+                    <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 720 }}>
+                      Note: {decoded.resolutionNote}
+                    </p>
+                  )}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                  <span style={{ fontSize: '0.7rem', color: 'var(--success-color)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <CheckCircle2 size={10} /> Resolved
+                  </span>
+                  <button type="button" onClick={() => openTaskDetails(t)} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '0.35rem 0.65rem', fontSize: '0.75rem' }}>
+                    <Eye size={12} /> Details
+                  </button>
+                </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
       </div>
+
+
+      {selectedTask && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) closeTaskDetails(); }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.62)',
+            backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000, padding: '1rem',
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Task details"
+            style={{
+              background: 'var(--bg-color, #f5f0e8)',
+              color: 'var(--text-primary)',
+              width: '100%',
+              maxWidth: 620,
+              maxHeight: '92vh',
+              overflowY: 'auto',
+              padding: '1.5rem',
+              borderRadius: 16,
+              boxShadow: '0 24px 64px rgba(0,0,0,0.3)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1rem',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+              <div style={{ flex: 1 }}>
+                <p style={{ margin: '0 0 0.25rem', color: 'var(--text-secondary)', fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Task details</p>
+                {editingTask ? (
+                  <input
+                    value={editTask.title}
+                    onChange={(e) => setEditTask({ ...editTask, title: e.target.value })}
+                    style={{ ...modalInputStyle, fontSize: '1.05rem', fontWeight: 700 }}
+                  />
+                ) : (
+                  <h2 style={{ margin: 0, fontSize: '1.25rem' }}>{selectedTask.title}</h2>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={closeTaskDetails}
+                aria-label="Close"
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', borderRadius: 6 }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {editingTask ? (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                    Status
+                    <select value={editTask.status} onChange={(e) => setEditTask({ ...editTask, status: e.target.value })} style={modalInputStyle}>
+                      <option value="Pending">Pending</option>
+                      <option value="In Progress">In Progress</option>
+                      <option value="Completed">Completed</option>
+                      <option value="Cancelled">Cancelled</option>
+                    </select>
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                    Priority
+                    <select value={editTask.priority} onChange={(e) => setEditTask({ ...editTask, priority: e.target.value })} style={modalInputStyle}>
+                      <option value="Critical">Critical</option>
+                      <option value="High">High</option>
+                      <option value="Medium">Medium</option>
+                      <option value="Low">Low</option>
+                    </select>
+                  </label>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: isTravel ? '1fr 1fr' : '1fr', gap: '0.75rem' }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                    Due date
+                    <input type="datetime-local" value={editTask.dueDate} onChange={(e) => setEditTask({ ...editTask, dueDate: e.target.value })} style={modalInputStyle} />
+                  </label>
+                  {isTravel && (
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                      Reassign to
+                      <select value={editTask.assignedToId} onChange={(e) => setEditTask({ ...editTask, assignedToId: e.target.value })} style={modalInputStyle}>
+                        <option value="">Unassigned</option>
+                        {assignableStaff.map((s) => {
+                          const brands = accessibleSubBrands(s);
+                          const scope = brands.length && brands.length < 4 ? ` (${brands.map(subBrandShortLabel).join('/')})` : '';
+                          return <option key={s.id} value={s.id}>{s.name}{scope}</option>;
+                        })}
+                      </select>
+                    </label>
+                  )}
+                </div>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                  Description
+                  <textarea
+                    rows="7"
+                    value={editTask.description}
+                    onChange={(e) => setEditTask({ ...editTask, description: e.target.value })}
+                    style={{ ...modalInputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.45 }}
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+                  Resolution note
+                  <textarea
+                    rows="4"
+                    value={editTask.resolutionNote}
+                    onChange={(e) => setEditTask({ ...editTask, resolutionNote: e.target.value })}
+                    placeholder="Visible after the task is resolved"
+                    style={{ ...modalInputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.45 }}
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                  <PriorityBadge priority={selectedTask.priority} />
+                  <span style={{ padding: '0.2rem 0.6rem', borderRadius: 999, fontSize: '0.72rem', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>{selectedTask.status}</span>
+                  <span style={{ padding: '0.2rem 0.6rem', borderRadius: 999, fontSize: '0.72rem', border: '1px solid var(--border-color)', color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <UserRound size={12} /> {assigneeName(selectedTask)}
+                  </span>
+                </div>
+                {selectedTask.dueDate && (
+                  <p style={{ margin: 0, color: isOverdue(selectedTask) ? '#ef4444' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <Clock size={14} /> {new Date(selectedTask.dueDate).toLocaleString()}
+                  </p>
+                )}
+                {selectedTask.contact && (
+                  <p style={{ margin: 0, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <Search size={14} /> {selectedTask.contact.name}{selectedTask.contact.email ? ` - ${selectedTask.contact.email}` : ''}
+                  </p>
+                )}
+                <section style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                  <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Description</h3>
+                  <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+                    {decodeNotes(selectedTask.notes).description || 'No description added.'}
+                  </p>
+                </section>
+                {decodeNotes(selectedTask.notes).resolutionNote && (
+                  <section style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                    <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Resolution note</h3>
+                    <p style={{ margin: 0, whiteSpace: 'pre-wrap', lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+                      {decodeNotes(selectedTask.notes).resolutionNote}
+                    </p>
+                  </section>
+                )}
+              </>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', paddingTop: '0.25rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {canDeleteTasks && (
+                  <button type="button" onClick={deleteTask} className="btn-secondary" style={{ color: '#ef4444', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <Trash2 size={14} /> Delete
+                  </button>
+                )}
+                {canResolveTask(selectedTask) && selectedTask.status !== 'Completed' && !editingTask && (
+                  <button type="button" onClick={() => markComplete(selectedTask)} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <CheckCircle2 size={14} /> Resolve
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {editingTask ? (
+                  <>
+                    <button type="button" onClick={() => setEditingTask(false)} className="btn-secondary">Cancel</button>
+                    <button type="button" onClick={saveTaskChanges} className="btn-primary" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <Save size={14} /> Save
+                    </button>
+                  </>
+                ) : canUpdateTasks ? (
+                  <button type="button" onClick={() => setEditingTask(true)} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <Edit3 size={14} /> Edit
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Todo modal — matches the reference design */}
       {creating && (

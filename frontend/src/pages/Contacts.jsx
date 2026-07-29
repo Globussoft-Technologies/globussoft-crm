@@ -12,7 +12,7 @@ import ScrollableSelect from '../components/ScrollableSelect';
 import InlineCellEditor from '../components/InlineCellEditor';
 import EditContactModal from '../components/EditContactModal';
 import { AuthContext } from '../App';
-import { accessibleSubBrands } from '../utils/travelSubBrand';
+import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
 
 const parseCSV = (text) => {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
@@ -143,6 +143,12 @@ const Contacts = () => {
     if (isWellness || isTravel || visibleColumns === null) return true;
     return visibleColumns.includes(key);
   };
+  const staffBrandSuffix = (member) => {
+    if (!isTravel) return '';
+    const brands = accessibleSubBrands(member).map(subBrandShortLabel);
+    return brands.length ? ' (' + brands.join(', ') + ')' : '';
+  };
+  const staffOptionLabel = (member) => (member.name || member.email) + staffBrandSuffix(member);
   const assignableStaff = (contact) => {
     if (!isTravel || !contact?.subBrand) return staff;
     return staff.filter(
@@ -292,11 +298,29 @@ const Contacts = () => {
 
   const handleBulkAssign = async () => {
     if (selectedContacts.length === 0) return;
-    await fetchApi('/api/contacts/bulk-assign', {
+    const result = await fetchApi('/api/contacts/bulk-assign', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contactIds: selectedContacts, assignedToId: bulkAgent || null }),
     });
+    if (result?.updated > 0) {
+      notify.success?.(
+        result.updated === 1
+          ? 'Assigned 1 lead successfully'
+          : 'Assigned ' + result.updated + ' leads successfully'
+      );
+    }
+    if (result?.skipped > 0) {
+      const firstSkipped = result.skippedDetails?.[0];
+      const why = firstSkipped?.subBrand
+        ? ' because ' + firstSkipped.subBrand.toUpperCase() + ' is not allowed for the selected staff'
+        : '';
+      notify.info?.(
+        result.skipped === 1
+          ? '1 lead was skipped' + why + '.'
+          : result.skipped + ' leads were skipped' + why + '.'
+      );
+    }
     setSelectedContacts([]);
     setBulkAgent('');
     fetchContacts();
@@ -518,7 +542,7 @@ const Contacts = () => {
           >
             <option value="">Unassign</option>
             {staff.map(s => (
-              <option key={s.id} value={s.id}>{s.name || s.email}</option>
+              <option key={s.id} value={s.id}>{staffOptionLabel(s)}</option>
             ))}
           </select>
           <button className="btn-primary" onClick={handleBulkAssign} style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}>
@@ -571,7 +595,7 @@ const Contacts = () => {
             options={[
               { value: '', label: 'All Assignees' },
               { value: 'unassigned', label: 'Unassigned' },
-              ...staff.map(s => ({ value: String(s.id), label: s.name || s.email })),
+              ...staff.map(s => ({ value: String(s.id), label: staffOptionLabel(s) })),
             ]}
           />
           <select
@@ -774,7 +798,7 @@ const Contacts = () => {
                       >
                         <option value="">Unassigned</option>
                         {assignableStaff(contact).map(s => (
-                          <option key={s.id} value={s.id}>{s.name || s.email}</option>
+                          <option key={s.id} value={s.id}>{staffOptionLabel(s)}</option>
                         ))}
                       </select>
                     ) : (

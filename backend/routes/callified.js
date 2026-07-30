@@ -32,8 +32,8 @@ const prisma = require("../lib/prisma");
 // their scope and mismatching body rejected as 403 SUB_BRAND_MISMATCH;
 // operator JWT callers pass body through. See lib for full JSDoc.
 
-// Minimum time between AI calls to the same CRM contact (default 4 hours).
-const REDIAL_COOLDOWN_MS = Number(process.env.CALLIFIED_REDIAL_COOLDOWN_MS) || 4 * 60 * 60 * 1000;
+// Minimum time between AI calls to the same CRM contact (default 1 minute for testing).
+const REDIAL_COOLDOWN_MS = Number(process.env.CALLIFIED_REDIAL_COOLDOWN_MS) || 60 * 1000;
 const DIAL_ALL_DELAY_MS = Number(process.env.CALLIFIED_DIAL_ALL_DELAY_MS) || 800;
 
 function normalizeForDial(phone) {

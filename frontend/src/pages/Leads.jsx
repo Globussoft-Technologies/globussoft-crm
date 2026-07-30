@@ -1323,26 +1323,23 @@ const Leads = () => {
                 {!isTravel && (
                   <input type="text" placeholder="Job Title" maxLength={200} className="input-field" value={newLead.title} onChange={e => handleChange('title', e.target.value)} />
                 )}
-                {/* Phone field  required for wellness (Indian mobile validation),
-                    optional for travel (any format accepted). */}
-                {(isWellness || isTravel) && (
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <select className="input-field" value={newLead.countryCode} onChange={e => handleChange('countryCode', e.target.value)} style={{ width: '100px' }}>
-                      {COUNTRY_CODES.map(cc => (
-                        <option key={cc.code} value={cc.code}>{cc.code}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="tel"
-                      placeholder={isWellness ? 'Phone (10-digit mobile, e.g. 9876543210)' : 'Phone (optional)'}
-                      required={isWellness}
-                      className="input-field"
-                      value={newLead.phone}
-                      onChange={e => handleChange('phone', e.target.value)}
-                      style={{ flex: 1 }}
-                    />
-                  </div>
-                )}
+                {/* Phone field — required for wellness, optional for generic and travel. */}
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <select className="input-field" value={newLead.countryCode} onChange={e => handleChange('countryCode', e.target.value)} style={{ width: '100px' }}>
+                    {COUNTRY_CODES.map(cc => (
+                      <option key={cc.code} value={cc.code}>{cc.code}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="tel"
+                    placeholder={isWellness ? 'Phone (10-digit mobile, e.g. 9876543210)' : 'Phone (optional)'}
+                    required={isWellness}
+                    className="input-field"
+                    value={newLead.phone}
+                    onChange={e => handleChange('phone', e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                </div>
                 <select
                   className="input-field"
                   name="source"

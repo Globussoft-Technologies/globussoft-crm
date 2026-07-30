@@ -2033,7 +2033,7 @@ function renderTravelNav({
       )}
       <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" requiredPermission={{ module: "web_checkins", action: "read" }} />
       <Link to="/travel/automation-health" icon={Activity} label="Check-in Automation Health" requiredPermission={{ module: "web_checkins", action: "read" }} />
-      <Link to="/travel/passport-verification" icon={BadgeCheck} label="Passport Verification" requiredPermission={{ module: "passport", action: "manage" }} />
+      <Link to="/travel/passport-verification" icon={BadgeCheck} label="Passport" requiredPermission={{ module: "passport", action: "manage" }} />
       <Link to="/travel/cost-master" icon={IndianRupee} label="Cost Master" requiredPermission={{ module: "cost_master", action: "read" }} />
       <Link to="/travel/sightseeing" icon={Camera} label="Sightseeing Master" requiredPermission={{ module: "sightseeing", action: "read" }} />
       <Link to="/travel/itinerary-templates" icon={LayoutTemplate} label="Itinerary Templates" requiredPermission={{ module: "itinerary_templates", action: "read" }} />

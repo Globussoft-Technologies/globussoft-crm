@@ -4,7 +4,8 @@
  *
  * Pins the frontend contract for the page that sits on top of
  * backend/routes/travel_passport.js. Verifies:
- *   - Page header renders.
+ *   - Page header + tabs render.
+ *   - Passport List tab fetches the uploaded-passport list endpoint.
  *   - Empty state renders PRD-correct messaging.
  *   - Data rows render fullName / trip code / extracted fields.
  *   - Approve happy path POSTs /passport-verify with approved=true.
@@ -84,10 +85,24 @@ const SAMPLE_PENDING = [
   },
 ];
 
-function defaultFetchImpl(rows = SAMPLE_PENDING) {
+function defaultFetchImpl(rows = SAMPLE_PENDING, passportRows = []) {
   return (url, opts) => {
     if (url === '/api/travel/passport/verification-queue') {
       return Promise.resolve({ pending: rows, total: rows.length });
+    }
+    if (url.startsWith('/api/travel/passport/passport-list?')) {
+      return Promise.resolve({
+        passports: passportRows,
+        total: passportRows.length,
+        page: 1,
+        pageSize: 3,
+        totalPages: 1,
+        hasPrev: false,
+        hasNext: false,
+        q: '',
+        status: '',
+        source: '',
+      });
     }
     if (url.match(/\/api\/travel\/passport\/participants\/\d+\/passport-verify$/) && opts?.method === 'POST') {
       return Promise.resolve({ ok: true });
@@ -115,10 +130,12 @@ function renderPage() {
 }
 
 describe('PassportVerificationQueue — operator queue (PRD FR-6)', () => {
-  it('renders the page header', async () => {
+  it('renders the page header and tab controls', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl([]));
     renderPage();
-    expect(await screen.findByRole('heading', { name: /Passport Verification/i })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /^Passport$/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Passport Verification tab/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Passport List tab/i })).toBeTruthy();
   });
 
   it('shows the empty state when no pending rows', async () => {
@@ -127,6 +144,132 @@ describe('PassportVerificationQueue — operator queue (PRD FR-6)', () => {
     await waitFor(() => {
       expect(screen.getByText(/No pending passport verifications/i)).toBeTruthy();
     });
+  });
+
+  it('loads the uploaded passport list when the Passport List tab is opened', async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl([]));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Passport List tab/i }));
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/passport/passport-list?page=1&pageSize=3&q=&status=&source=');
+    });
+    expect(await screen.findByText(/No uploaded passports found for the current search and filters\./i)).toBeTruthy();
+  });
+
+  it('searches the full passport list through the backend and keeps the 3-row page contract', async () => {
+    const passportRows = [
+      {
+        kind: 'customer',
+        id: 7,
+        fullName: 'Ahmed Khan',
+        subBrand: 'rfu',
+        passportNumber: 'P9999999',
+        extractedAt: '2026-06-11T10:00:00.000Z',
+        verifiedAt: null,
+        status: 'pending',
+      },
+    ];
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/travel/passport/verification-queue') {
+        return Promise.resolve({ pending: [], total: 0 });
+      }
+      if (url.startsWith('/api/travel/passport/passport-list?')) {
+        const parsed = new URL(`http://localhost${url}`);
+        const q = parsed.searchParams.get('q') || '';
+        return Promise.resolve({
+          passports: q.toLowerCase() === 'ahmed' ? passportRows : [],
+          total: q.toLowerCase() === 'ahmed' ? 7 : 0,
+          page: 1,
+          pageSize: 3,
+          totalPages: q.toLowerCase() === 'ahmed' ? 3 : 1,
+          hasPrev: false,
+          hasNext: q.toLowerCase() === 'ahmed',
+          q,
+          status: '',
+          source: '',
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Passport List tab/i }));
+
+    const searchInput = await screen.findByLabelText(/Search passports/i);
+    fireEvent.change(searchInput, { target: { value: 'Ahmed' } });
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/passport/passport-list?page=1&pageSize=3&q=Ahmed&status=&source=');
+    });
+    expect(await screen.findByText('Ahmed Khan')).toBeTruthy();
+    expect(screen.getByText(/Loaded 1 of 7 passports - more load automatically as you scroll/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Next passport page/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Previous passport page/i })).toBeNull();
+  });
+
+  it('assigns an imported inbox passport to a selected contact', async () => {
+    const inboxRow = {
+      kind: 'customer',
+      id: 807,
+      fullName: 'Imported passport',
+      subBrand: 'passport_inbox',
+      relationship: 'bulk_import_inbox',
+      passportNumber: 'P9999999',
+      extractedAt: '2026-06-11T10:00:00.000Z',
+      verifiedAt: null,
+      status: 'pending',
+      importInbox: true,
+      contactId: 0,
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/passport/verification-queue') {
+        return Promise.resolve({ pending: [], total: 0 });
+      }
+      if (url.startsWith('/api/travel/passport/passport-list?')) {
+        return Promise.resolve({
+          passports: [inboxRow],
+          total: 1,
+          page: 1,
+          pageSize: 3,
+          totalPages: 1,
+          hasPrev: false,
+          hasNext: false,
+          q: '',
+          status: '',
+          source: '',
+        });
+      }
+      if (url.startsWith('/api/travel/passport/contact-search?')) {
+        return Promise.resolve({
+          contacts: [
+            { id: 3140, name: 'Jane Doe', email: 'jane@example.test', phone: '+919999999999', subBrand: 'rfu' },
+          ],
+        });
+      }
+      if (url === '/api/travel/passport/customer-travellers/807/assign-contact' && opts?.method === 'POST') {
+        return Promise.resolve({ assigned: true, contactId: 3140, contactName: 'Jane Doe', relationship: 'self' });
+      }
+      return Promise.resolve({});
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Passport List tab/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Assign Contact for Imported passport/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/passport/contact-search?q=&limit=10');
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Select Jane Doe for passport assignment/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Save Assignment/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/travel/passport/customer-travellers/807/assign-contact',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    expect(notifyObj.success).toHaveBeenCalledWith(expect.stringMatching(/Jane Doe/));
   });
 
   it('renders rows with name, trip code, and extracted fields', async () => {
@@ -309,6 +452,6 @@ describe('PassportVerificationQueue — operator queue (PRD FR-6)', () => {
       expect(screen.getByText(/Forbidden/i)).toBeTruthy();
     });
     // Page didn't crash — heading still present.
-    expect(screen.getByRole('heading', { name: /Passport Verification/i })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /^Passport$/i })).toBeTruthy();
   });
 });

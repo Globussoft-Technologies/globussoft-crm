@@ -59,6 +59,7 @@ prisma.passportIdentity = {
 prisma.customerTraveller = {
   findFirst: vi.fn(),
   findMany: vi.fn(),
+  create: vi.fn(),
   update: vi.fn(),
 };
 prisma.tenant = prisma.tenant || {};
@@ -68,6 +69,10 @@ prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   name: 'Test Travel',
   slug: 'test-travel',
 });
+prisma.contact = {
+  findFirst: vi.fn(),
+  findMany: vi.fn(),
+};
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
 prisma.revokedToken = prisma.revokedToken || {};
@@ -131,6 +136,7 @@ beforeEach(() => {
   prisma.tripParticipant.update.mockReset();
   prisma.customerTraveller.findFirst.mockReset();
   prisma.customerTraveller.findMany.mockReset().mockResolvedValue([]);
+  prisma.customerTraveller.create.mockReset().mockResolvedValue({ id: 807, fullName: 'Imported passport' });
   prisma.customerTraveller.update.mockReset();
   prisma.rfuLeadProfile.findMany.mockReset().mockResolvedValue([]);
   prisma.passportIdentity.findMany.mockReset().mockResolvedValue([]);
@@ -140,6 +146,8 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
+  prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 3140, name: 'Jane Doe', email: 'jane@example.test', phone: '+919999999999', subBrand: 'rfu' });
+  prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
 
@@ -322,6 +330,236 @@ describe('GET /api/travel/passport/verification-queue', () => {
         },
       }),
     );
+  });
+});
+
+// -----------------------------------------------------------------------------
+// GET /passport-list
+// -----------------------------------------------------------------------------
+
+describe('GET /api/travel/passport/passport-list', () => {
+  test('returns uploaded passport rows with the default 3-row pagination metadata', async () => {
+    prisma.tripParticipant.findMany.mockResolvedValue([
+      {
+        id: 55,
+        fullName: 'Jane Doe',
+        passportNumber: 'M1234567',
+        passportExtractedAt: new Date('2026-06-09T10:00:00.000Z'),
+        passportVerifiedAt: new Date('2026-06-10T10:00:00.000Z'),
+        passportRejectedAt: null,
+        passportExtractionJson: JSON.stringify({ imageUrl: '/api/uploads/passport-ocr/a.jpg', originalName: 'Jane Doe.jpg' }),
+        trip: { id: 100, tripCode: 'bali2026', destination: 'Bali' },
+      },
+    ]);
+    prisma.customerTraveller.findMany.mockResolvedValue([
+      {
+        id: 7,
+        fullName: 'Ahmed Khan',
+        subBrand: 'rfu',
+        relationship: 'self',
+        passportNumber: null,
+        passportExtractedAt: new Date('2026-06-11T10:00:00.000Z'),
+        passportVerifiedAt: null,
+        passportRejectedAt: new Date('2026-06-12T10:00:00.000Z'),
+        passportExtractionJson: JSON.stringify({ extraction: { passportNumber: 'P9999999' }, imageUrl: '/api/uploads/passport-ocr/b.jpg', originalName: 'Ahmed Khan.pdf' }),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/passport/passport-list')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      total: 2,
+      page: 1,
+      pageSize: 3,
+      totalPages: 1,
+      hasPrev: false,
+      hasNext: false,
+      q: '',
+    });
+    expect(res.body.passports).toHaveLength(2);
+    expect(res.body.passports[0]).toMatchObject({
+      fullName: 'Ahmed Khan',
+      status: 'rejected',
+      passportNumber: 'P9999999',
+    });
+    expect(res.body.passports[1]).toMatchObject({
+      fullName: 'Jane Doe',
+      status: 'verified',
+      passportNumber: 'M1234567',
+    });
+  });
+
+  test('searches across the full passport dataset before slicing the requested page', async () => {
+    prisma.tripParticipant.findMany.mockResolvedValue([
+      {
+        id: 55,
+        fullName: 'Jane Doe',
+        passportNumber: 'M1234567',
+        passportExtractedAt: new Date('2026-06-09T10:00:00.000Z'),
+        passportVerifiedAt: new Date('2026-06-10T10:00:00.000Z'),
+        passportRejectedAt: null,
+        passportExtractionJson: JSON.stringify({ imageUrl: '/api/uploads/passport-ocr/a.jpg', originalName: 'Jane Doe.jpg' }),
+        trip: { id: 100, tripCode: 'bali2026', destination: 'Bali' },
+      },
+      {
+        id: 56,
+        fullName: 'Mary Jane',
+        passportNumber: 'M7654321',
+        passportExtractedAt: new Date('2026-06-08T10:00:00.000Z'),
+        passportVerifiedAt: null,
+        passportRejectedAt: null,
+        passportExtractionJson: JSON.stringify({ imageUrl: '/api/uploads/passport-ocr/c.jpg', originalName: 'Mary Jane.pdf' }),
+        trip: { id: 101, tripCode: 'umrah2026', destination: 'Mecca' },
+      },
+    ]);
+    prisma.customerTraveller.findMany.mockResolvedValue([
+      {
+        id: 7,
+        fullName: 'Ahmed Khan',
+        subBrand: 'rfu',
+        relationship: 'self',
+        passportNumber: null,
+        passportExtractedAt: new Date('2026-06-11T10:00:00.000Z'),
+        passportVerifiedAt: null,
+        passportRejectedAt: new Date('2026-06-12T10:00:00.000Z'),
+        passportExtractionJson: JSON.stringify({ extraction: { passportNumber: 'P9999999' }, imageUrl: '/api/uploads/passport-ocr/b.jpg', originalName: 'Ahmed Khan.pdf' }),
+      },
+      {
+        id: 8,
+        fullName: 'Jane Smith',
+        subBrand: 'tmc',
+        relationship: 'spouse',
+        passportNumber: 'P1231231',
+        passportExtractedAt: new Date('2026-06-07T10:00:00.000Z'),
+        passportVerifiedAt: null,
+        passportRejectedAt: null,
+        passportExtractionJson: JSON.stringify({ imageUrl: '/api/uploads/passport-ocr/d.jpg', originalName: 'Jane Smith.png' }),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/passport/passport-list?page=2&pageSize=1&q=jane')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      total: 3,
+      page: 2,
+      pageSize: 1,
+      totalPages: 3,
+      hasPrev: true,
+      hasNext: true,
+      q: 'jane',
+    });
+    expect(res.body.passports).toHaveLength(1);
+    expect(res.body.passports[0].fullName).toBe('Mary Jane');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// GET /contact-search
+// -----------------------------------------------------------------------------
+
+describe('GET /api/travel/passport/contact-search', () => {
+  test('returns matching tenant contacts for assignment', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 3140, name: 'Jane Doe', email: 'jane@example.test', phone: '+919999999999', subBrand: 'rfu' },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/passport/contact-search?q=Jane')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.contacts).toHaveLength(1);
+    expect(res.body.contacts[0]).toMatchObject({ id: 3140, name: 'Jane Doe' });
+  });
+});
+
+// -----------------------------------------------------------------------------
+// POST /bulk-upload
+// -----------------------------------------------------------------------------
+
+describe('POST /api/travel/passport/bulk-upload', () => {
+  test('direct file upload queues a matched traveller passport', async () => {
+    prisma.tripParticipant.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 55,
+          fullName: 'Jane Doe',
+          passportExtractedAt: null,
+          passportVerifiedAt: null,
+          passportRejectedAt: null,
+          passportExtractionJson: null,
+          parentPhone: '+919999999999',
+          trip: { id: 100, tripCode: 'bali2026', destination: 'Bali' },
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    prisma.customerTraveller.findMany.mockResolvedValue([]);
+    prisma.tripParticipant.update.mockResolvedValue({ id: 55 });
+
+    const res = await request(makeApp())
+      .post('/api/travel/passport/bulk-upload')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('files', Buffer.from('synthetic-jpeg-bytes'), {
+        filename: 'Jane Doe.jpg',
+        contentType: 'image/jpeg',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 1, queued: 1, skipped: 0, failed: 0 });
+    expect(res.body.results[0]).toMatchObject({
+      fileName: 'Jane Doe.jpg',
+      status: 'queued',
+      matchedTo: 'Jane Doe',
+      kind: 'trip',
+      matchedBy: 'filename',
+    });
+    expect(prisma.tripParticipant.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 55 },
+      data: expect.objectContaining({
+        passportExtractedAt: expect.any(Date),
+        passportRejectedAt: null,
+      }),
+    }));
+  });
+
+  test('unmatched bulk files are imported into the passport inbox instead of failing', async () => {
+    prisma.tripParticipant.findMany.mockResolvedValue([]);
+    prisma.customerTraveller.findMany.mockResolvedValue([]);
+    prisma.customerTraveller.create.mockResolvedValue({ id: 807, fullName: '7' });
+
+    const res = await request(makeApp())
+      .post('/api/travel/passport/bulk-upload')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('files', Buffer.from('synthetic-jpeg-bytes'), {
+        filename: '7.jpg',
+        contentType: 'image/jpeg',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 1, queued: 1, skipped: 0, failed: 0 });
+    expect(res.body.results[0]).toMatchObject({
+      fileName: '7.jpg',
+      status: 'queued',
+      matchedTo: '7',
+      kind: 'customer',
+      matchedBy: 'import_inbox',
+      message: 'Imported into passport inbox for later review',
+    });
+    expect(prisma.customerTraveller.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        tenantId: 1,
+        contactId: 0,
+        subBrand: 'passport_inbox',
+        relationship: 'bulk_import_inbox',
+        passportExtractedAt: expect.any(Date),
+      }),
+    }));
   });
 });
 
@@ -542,6 +780,36 @@ describe('GET /verification-queue — union with CustomerTraveller', () => {
         where: { passportExtractedAt: { not: null }, passportVerifiedAt: null, tenantId: 1 },
       }),
     );
+  });
+});
+
+// -----------------------------------------------------------------------------
+// POST /customer-travellers/:id/assign-contact
+// -----------------------------------------------------------------------------
+
+describe('POST /api/travel/passport/customer-travellers/:id/assign-contact', () => {
+  test('assigns an imported inbox passport to a tenant contact', async () => {
+    prisma.customerTraveller.findFirst.mockResolvedValue({
+      id: 807,
+      tenantId: 1,
+      contactId: 0,
+      subBrand: 'passport_inbox',
+      relationship: 'bulk_import_inbox',
+    });
+    prisma.contact.findFirst.mockResolvedValue({ id: 3140, name: 'Jane Doe', email: 'jane@example.test', phone: '+919999999999', subBrand: 'rfu' });
+    prisma.customerTraveller.update.mockResolvedValue({ id: 807 });
+
+    const res = await request(makeApp())
+      .post('/api/travel/passport/customer-travellers/807/assign-contact')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ contactId: 3140, relationship: 'self' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ assigned: true, contactId: 3140, contactName: 'Jane Doe', relationship: 'self' });
+    expect(prisma.customerTraveller.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 807 },
+      data: expect.objectContaining({ contactId: 3140, subBrand: 'rfu', relationship: 'self' }),
+    }));
   });
 });
 

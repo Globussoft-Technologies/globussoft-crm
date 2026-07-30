@@ -115,6 +115,7 @@ export default function Settings() {
   const [stagesLoading, setStagesLoading] = useState(true);
   const [tenant, setTenantState] = useState(ctxTenant || null);
   const [tenantSaving, setTenantSaving] = useState(false);
+  const [externalReviewUrl, setExternalReviewUrl] = useState("");
   // #611: email-message retention toggle. Industry-default ON for any CRM
   // that claims to track customer comms. Pre-fix the default was OFF, sent
   // emails vanished, Sent folder stayed empty, threading broke.
@@ -173,6 +174,11 @@ export default function Settings() {
   const isCallifiedKeyMasked = callifiedApiKey === MASKED_CALLIFIED_KEY;
 
   useEffect(() => {
+    fetchApi("/api/tenant-settings/travel.externalReviewUrl")
+      .then((res) => setExternalReviewUrl(res?.value || ""))
+      .catch(() => {
+        /* tenant setting may not be reachable */
+      });
     fetchApi("/api/tenants/current")
       .then((res) => {
         setTenantState(res);
@@ -561,10 +567,27 @@ export default function Settings() {
           ownerEmail: tenant.ownerEmail,
         }),
       });
+      const reviewUrl = externalReviewUrl.trim();
+      if (reviewUrl) {
+        await fetchApi("/api/tenant-settings/travel.externalReviewUrl", {
+          method: "PUT",
+          body: JSON.stringify({ value: reviewUrl }),
+        });
+      } else {
+        try {
+          await fetchApi("/api/tenant-settings/travel.externalReviewUrl", {
+            method: "DELETE",
+          });
+        } catch (settingErr) {
+          if (settingErr?.status !== 404) throw settingErr;
+        }
+      }
+      setExternalReviewUrl(reviewUrl);
       setTenantState(updated);
       if (setTenant) setTenant(updated);
+      notify.success("Organization details updated");
     } catch (err) {
-      notify.error("Failed to update organization");
+      notify.error(err?.message || "Failed to update organization");
     }
     setTenantSaving(false);
   };
@@ -1060,6 +1083,34 @@ export default function Settings() {
                     </p>
                   </div>
                 )}
+                <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+                  <label
+                    style={{
+                      display: "block",
+                      marginBottom: "0.4rem",
+                      fontSize: "0.875rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Review Redirect URL
+                  </label>
+                  <input
+                    type="url"
+                    className="input-field"
+                    value={externalReviewUrl}
+                    placeholder="https://search.google.com/local/writereview?placeid=..."
+                    onChange={(e) => setExternalReviewUrl(e.target.value)}
+                  />
+                  <p
+                    style={{
+                      marginTop: "0.4rem",
+                      fontSize: "0.75rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Optional. When set, positive trip reviews classified by real AI can open this page for posting. Leave blank to keep the current in-app thank-you flow only.
+                  </p>
+                </div>
                 <div style={{ minWidth: 0 }}>
                   <label
                     style={{
@@ -4292,3 +4343,7 @@ function NotificationPreferencesCard({ notify }) {
     </div>
   );
 }
+
+
+
+

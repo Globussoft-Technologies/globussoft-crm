@@ -130,7 +130,28 @@ router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (
       prisma.tmcTrip.findMany(findManyArgs),
       prisma.tmcTrip.count({ where }),
     ]);
-    res.json({ trips, total, limit: take, offset: skip });
+
+    const schoolIds = [...new Set((trips || [])
+      .map((trip) => Number(trip.schoolContactId))
+      .filter((id) => Number.isFinite(id)))];
+    let schoolNameById = new Map();
+    if (schoolIds.length > 0) {
+      const contacts = await prisma.contact.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          id: { in: schoolIds },
+        },
+        select: { id: true, name: true },
+      });
+      schoolNameById = new Map(contacts.map((contact) => [contact.id, contact.name]));
+    }
+
+    const decoratedTrips = trips.map((trip) => ({
+      ...trip,
+      schoolName: schoolNameById.get(Number(trip.schoolContactId)) || null,
+    }));
+
+    res.json({ trips: decoratedTrips, total, limit: take, offset: skip });
   } catch (e) {
     console.error("[travel-trips] list error:", e.message);
     res.status(500).json({ error: "Failed to list trips" });

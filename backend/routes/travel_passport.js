@@ -46,6 +46,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const unzipper = require("unzipper");
 
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
@@ -135,6 +136,442 @@ function unlinkUploadedScan(req) {
   if (req.file && req.file.filename) {
     fs.unlink(path.join(uploadPath, req.file.filename), () => {});
   }
+}
+
+const BULK_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024;
+const BULK_MAX_FILES = 100;
+
+function parseEnvelopeJson(json) {
+  try { return json ? JSON.parse(json) : null; } catch (_) { return null; }
+}
+
+function mimeTypeFromFilename(name) {
+  const ext = path.extname(String(name || "")).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".png") return "image/png";
+  if (ext === ".pdf") return "application/pdf";
+  return null;
+}
+
+function normalizeNameKey(value) {
+  return String(value || "").toLowerCase().replace(/\.[^.]+$/, "").replace(/[^a-z0-9]+/g, "").trim();
+}
+
+function extractionNameKeys(extraction) {
+  const surname = String(extraction?.surname || "").trim();
+  const given = String(extraction?.givenNames || "").trim();
+  const keys = new Set();
+  const one = normalizeNameKey(`${given} ${surname}`.trim());
+  const two = normalizeNameKey(`${surname} ${given}`.trim());
+  if (one) keys.add(one);
+  if (two) keys.add(two);
+  return [...keys];
+}
+
+async function storeBufferScan(buffer, mimeType) {
+  const safeExt = PASSPORT_MIME_EXT[(mimeType || "").toLowerCase()];
+  if (!safeExt) {
+    const err = new Error("unsupported file type - JPG / PNG / PDF only");
+    err.status = 415;
+    err.code = "UNSUPPORTED_MIME";
+    throw err;
+  }
+  const filename = `${crypto.randomUUID()}${safeExt}`;
+  const filePath = path.join(uploadPath, filename);
+  await fs.promises.writeFile(filePath, buffer);
+  return {
+    filename,
+    filePath,
+    fileUrl: `/api/uploads/passport-ocr/${filename}`,
+  };
+}
+
+async function buildPassportListRows(tenantId, opts = {}) {
+  const [tripRows, customerRows] = await Promise.all([
+    prisma.tripParticipant.findMany({
+      where: {
+        trip: { tenantId },
+        OR: [
+          { passportExtractedAt: { not: null } },
+          { passportVerifiedAt: { not: null } },
+          { passportRejectedAt: { not: null } },
+        ],
+      },
+      include: {
+        trip: { select: { id: true, tripCode: true, destination: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 5000,
+    }),
+    prisma.customerTraveller.findMany({
+      where: {
+        tenantId,
+        OR: [
+          { passportExtractedAt: { not: null } },
+          { passportVerifiedAt: { not: null } },
+          { passportRejectedAt: { not: null } },
+        ],
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 5000,
+    }),
+  ]);
+
+  const contactIds = [...new Set(customerRows.map((row) => Number(row.contactId)).filter((id) => Number.isFinite(id) && id > 0))];
+  const contactRows = contactIds.length
+    ? await prisma.contact.findMany({
+        where: { tenantId, id: { in: contactIds }, deletedAt: null },
+        select: { id: true, name: true, email: true, phone: true, subBrand: true },
+      })
+    : [];
+  const contactById = new Map(contactRows.map((row) => [row.id, row]));
+
+  const tripOut = tripRows.map((r) => {
+    const envelope = parseEnvelopeJson(r.passportExtractionJson);
+    return {
+      kind: "trip",
+      id: r.id,
+      fullName: r.fullName,
+      trip: r.trip,
+      subBrand: "tmc",
+      relationship: null,
+      contactId: null,
+      contactName: null,
+      contactEmail: null,
+      contactPhone: null,
+      importInbox: false,
+      passportNumber: r.passportNumber || envelope?.extraction?.passportNumber || null,
+      extractedAt: r.passportExtractedAt,
+      verifiedAt: r.passportVerifiedAt,
+      rejectedAt: r.passportRejectedAt,
+      status: r.passportVerifiedAt ? "verified" : r.passportRejectedAt ? "rejected" : "pending",
+      confidence: envelope?.confidence ?? null,
+      provider: envelope?.provider || null,
+      imageUrl: envelope?.imageUrl || null,
+      originalName: envelope?.originalName || null,
+    };
+  });
+
+  const customerOut = customerRows.map((r) => {
+    const envelope = parseEnvelopeJson(r.passportExtractionJson);
+    const contact = contactById.get(Number(r.contactId)) || null;
+    const importInbox = r.subBrand === "passport_inbox" || r.relationship === "bulk_import_inbox" || Number(r.contactId) === 0;
+    return {
+      kind: "customer",
+      id: r.id,
+      fullName: r.fullName,
+      trip: null,
+      subBrand: r.subBrand,
+      relationship: r.relationship || null,
+      contactId: Number.isFinite(Number(r.contactId)) ? Number(r.contactId) : null,
+      contactName: contact?.name || null,
+      contactEmail: contact?.email || null,
+      contactPhone: contact?.phone || null,
+      importInbox,
+      passportNumber: r.passportNumber || envelope?.extraction?.passportNumber || null,
+      extractedAt: r.passportExtractedAt,
+      verifiedAt: r.passportVerifiedAt,
+      rejectedAt: r.passportRejectedAt,
+      status: r.passportVerifiedAt ? "verified" : r.passportRejectedAt ? "rejected" : "pending",
+      confidence: envelope?.confidence ?? null,
+      provider: envelope?.provider || null,
+      imageUrl: envelope?.imageUrl || null,
+      originalName: envelope?.originalName || null,
+    };
+  });
+
+  const allRows = [...tripOut, ...customerOut].sort((a, b) => {
+    const aTime = new Date(a.verifiedAt || a.rejectedAt || a.extractedAt || 0).getTime();
+    const bTime = new Date(b.verifiedAt || b.rejectedAt || b.extractedAt || 0).getTime();
+    return bTime - aTime;
+  });
+
+  const query = String(opts.query || "").trim().toLowerCase();
+  const statusFilter = String(opts.status || "").trim().toLowerCase();
+  const sourceFilter = String(opts.source || "").trim().toLowerCase();
+  const filtered = allRows.filter((row) => {
+    if (statusFilter && row.status !== statusFilter) return false;
+    if (sourceFilter === "trip" && row.kind !== "trip") return false;
+    if (sourceFilter === "customer" && (row.kind !== "customer" || row.importInbox)) return false;
+    if (sourceFilter === "inbox" && !row.importInbox) return false;
+    if (!query) return true;
+    const hay = [
+      row.fullName,
+      row.passportNumber,
+      row.originalName,
+      row.subBrand,
+      row.relationship,
+      row.contactName,
+      row.contactEmail,
+      row.contactPhone,
+      row.trip?.tripCode,
+      row.trip?.destination,
+      row.status,
+      row.importInbox ? "imported passport inbox" : null,
+    ].filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(query);
+  });
+
+  const pageSize = Math.max(1, Math.min(50, Number.parseInt(opts.pageSize, 10) || 3));
+  const page = Math.max(1, Number.parseInt(opts.page, 10) || 1);
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * pageSize;
+  const rows = filtered.slice(start, start + pageSize);
+
+  return {
+    rows,
+    total,
+    page: safePage,
+    pageSize,
+    totalPages,
+    hasPrev: safePage > 1,
+    hasNext: safePage < totalPages,
+    query,
+    statusFilter,
+    sourceFilter,
+  };
+}
+
+async function loadBulkMatchCandidates(tenantId) {
+  const [tripRows, customerRows] = await Promise.all([
+    prisma.tripParticipant.findMany({
+      where: { trip: { tenantId } },
+      include: { trip: { select: { id: true, tripCode: true, destination: true } } },
+      take: 5000,
+    }),
+    prisma.customerTraveller.findMany({
+      where: { tenantId },
+      take: 5000,
+    }),
+  ]);
+
+  const all = [
+    ...tripRows.map((row) => ({ kind: "trip", row })),
+    ...customerRows.map((row) => ({ kind: "customer", row })),
+  ];
+
+  const byName = new Map();
+  for (const item of all) {
+    const key = normalizeNameKey(item.row.fullName);
+    if (!key) continue;
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(item);
+  }
+  return { all, byName };
+}
+
+function chooseBulkSubject(candidateIndex, fileName, extraction) {
+  const fileKey = normalizeNameKey(fileName);
+  const fileMatches = fileKey ? (candidateIndex.byName.get(fileKey) || []) : [];
+  if (fileMatches.length === 1) return { subject: fileMatches[0], matchedBy: "filename" };
+  if (fileMatches.length > 1) return { error: "Multiple traveller matches found for filename" };
+
+  for (const key of extractionNameKeys(extraction)) {
+    const matches = candidateIndex.byName.get(key) || [];
+    if (matches.length === 1) return { subject: matches[0], matchedBy: "ocr_name" };
+    if (matches.length > 1) return { error: "Multiple traveller matches found for extracted name" };
+  }
+  return { error: "No traveller matched this passport filename or OCR name" };
+}
+
+async function persistPassportExtractionForSubject(subject, req, fileMeta, result, matchedBy) {
+  const stored = await storeBufferScan(fileMeta.buffer, fileMeta.mimetype);
+  try {
+    const identityCandidates = await safeFindPassportIdentityCandidates({
+      tenantId: req.travelTenant.id,
+      sourceType: subject.kind,
+      sourceId: subject.row.id,
+      extraction: result.extraction,
+      fullName: subject.row.fullName,
+      phone: subject.kind === "trip" ? subject.row.parentPhone : null,
+    }, "bulk-upload");
+
+    const persistedEnvelope = {
+      ...result,
+      imageFilename: stored.filename,
+      imageUrl: stored.fileUrl,
+      originalName: fileMeta.originalname || null,
+      identityCandidates,
+      bulkMatchedBy: matchedBy,
+    };
+
+    if (subject.kind === "trip") {
+      await prisma.tripParticipant.update({
+        where: { id: subject.row.id },
+        data: {
+          passportExtractionJson: JSON.stringify(persistedEnvelope),
+          passportExtractedAt: new Date(),
+          passportRejectedAt: null,
+        },
+      });
+      await removeScanFromEnvelopeJson(subject.row.passportExtractionJson, stored.filename);
+      writeAudit("TripParticipant", "passport.uploaded", subject.row.id, req.user.userId, req.travelTenant.id, {
+        extractedFieldNames: Object.keys(result.extraction || {}),
+        confidence: result.confidence,
+        provider: result.provider,
+        bulk: true,
+        matchedBy,
+      }).catch(() => {});
+    } else {
+      await prisma.customerTraveller.update({
+        where: { id: subject.row.id },
+        data: {
+          passportExtractionJson: JSON.stringify(persistedEnvelope),
+          passportExtractedAt: new Date(),
+          passportRejectedAt: null,
+        },
+      });
+      await removeScanFromEnvelopeJson(subject.row.passportExtractionJson, stored.filename);
+      writeAudit("CustomerTraveller", "passport.uploaded", subject.row.id, req.user.userId, req.travelTenant.id, {
+        extractedFieldNames: Object.keys(result.extraction || {}),
+        confidence: result.confidence,
+        provider: result.provider,
+        bulk: true,
+        matchedBy,
+      }).catch(() => {});
+    }
+
+    return { stored, identityCandidates };
+  } catch (err) {
+    await fs.promises.unlink(stored.filePath).catch(() => {});
+    throw err;
+  }
+}
+
+function buildBulkInboxName(fileName, extraction) {
+  const given = String(extraction?.givenNames || "").trim();
+  const surname = String(extraction?.surname || "").trim();
+  const extractedName = `${given} ${surname}`.trim();
+  if (extractedName) return extractedName;
+  const raw = path.basename(String(fileName || ""), path.extname(String(fileName || "")));
+  return raw.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim() || "Imported passport";
+}
+
+async function persistPassportImportInbox(req, fileMeta, result) {
+  const stored = await storeBufferScan(fileMeta.buffer, fileMeta.mimetype);
+  try {
+    const fullName = buildBulkInboxName(fileMeta.originalname, result.extraction || {});
+    const identityCandidates = await safeFindPassportIdentityCandidates({
+      tenantId: req.travelTenant.id,
+      sourceType: "customer",
+      sourceId: null,
+      extraction: result.extraction,
+      fullName,
+    }, "bulk-upload-inbox");
+
+    const persistedEnvelope = {
+      ...result,
+      imageFilename: stored.filename,
+      imageUrl: stored.fileUrl,
+      originalName: fileMeta.originalname || null,
+      identityCandidates,
+      bulkMatchedBy: "import_inbox",
+      importInbox: true,
+    };
+
+    const created = await prisma.customerTraveller.create({
+      data: {
+        tenantId: req.travelTenant.id,
+        contactId: 0,
+        subBrand: "passport_inbox",
+        fullName,
+        relationship: "bulk_import_inbox",
+        passportNumber: result.extraction?.passportNumber || null,
+        passportExpiry: result.extraction?.dateOfExpiry ? new Date(result.extraction.dateOfExpiry) : null,
+        passportExtractionJson: JSON.stringify(persistedEnvelope),
+        passportExtractedAt: new Date(),
+        passportRejectedAt: null,
+      },
+    });
+
+    writeAudit("CustomerTraveller", "passport.bulk_imported_unmatched", created.id, req.user.userId, req.travelTenant.id, {
+      extractedFieldNames: Object.keys(result.extraction || {}),
+      confidence: result.confidence,
+      provider: result.provider,
+      bulk: true,
+      matchedBy: "import_inbox",
+      autoCreated: true,
+    }).catch(() => {});
+
+    return { created, identityCandidates, stored };
+  } catch (err) {
+    await fs.promises.unlink(stored.filePath).catch(() => {});
+    throw err;
+  }
+}
+
+const bulkUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: BULK_ARCHIVE_MAX_BYTES, files: BULK_MAX_FILES + 1 },
+  fileFilter: (_req, file, cb) => {
+    const mime = String(file.mimetype || "").toLowerCase();
+    const ext = path.extname(String(file.originalname || "")).toLowerCase();
+    if (file.fieldname === "archive") {
+      if ((mime === "application/zip" || mime === "application/x-zip-compressed") && ext === ".zip") return cb(null, true);
+      return cb(new Error("UNSUPPORTED_ARCHIVE"));
+    }
+    if (file.fieldname === "files" && PASSPORT_MIME_EXT[mime]) return cb(null, true);
+    cb(new Error("UNSUPPORTED_MIME"));
+  },
+});
+
+function bulkUploadHandler(req, res, next) {
+  bulkUpload.fields([{ name: "archive", maxCount: 1 }, { name: "files", maxCount: BULK_MAX_FILES }])(req, res, async (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "bulk upload exceeds size limit", code: "FILE_TOO_LARGE" });
+      }
+      return res.status(400).json({ error: err.message, code: err.code });
+    }
+    if (err && err.message === "UNSUPPORTED_ARCHIVE") {
+      return res.status(415).json({ error: "unsupported archive type - upload a ZIP file", code: "UNSUPPORTED_ARCHIVE" });
+    }
+    if (err && err.message === "UNSUPPORTED_MIME") {
+      return res.status(415).json({ error: "unsupported file type - JPG / PNG / PDF only", code: "UNSUPPORTED_MIME" });
+    }
+    if (err) return next(err);
+
+    try {
+      const archive = req.files?.archive?.[0] || null;
+      const directFiles = Array.isArray(req.files?.files) ? req.files.files : [];
+      if (!archive && directFiles.length === 0) {
+        return res.status(400).json({ error: "upload a ZIP archive or one or more passport files", code: "NO_FILES" });
+      }
+      if (archive && directFiles.length > 0) {
+        return res.status(400).json({ error: "choose either a ZIP archive or direct files, not both", code: "AMBIGUOUS_BULK_SOURCE" });
+      }
+      if (!archive) return next();
+
+      const directory = await unzipper.Open.buffer(archive.buffer);
+      const entries = directory.files.filter((entry) => entry.type === "File");
+      if (entries.length > BULK_MAX_FILES) {
+        return res.status(413).json({ error: `ZIP contains too many files (max ${BULK_MAX_FILES})`, code: "TOO_MANY_FILES" });
+      }
+      const extracted = [];
+      for (const entry of entries) {
+        const entryName = path.basename(entry.path || "");
+        const mimeType = mimeTypeFromFilename(entryName);
+        if (!mimeType) continue;
+        if (Number(entry.vars?.uncompressedSize || 0) > 5 * 1024 * 1024) {
+          return res.status(413).json({ error: `ZIP entry too large: ${entryName}`, code: "FILE_TOO_LARGE" });
+        }
+        extracted.push({
+          fieldname: "files",
+          originalname: entryName,
+          mimetype: mimeType,
+          buffer: await entry.buffer(),
+          size: Number(entry.vars?.uncompressedSize || 0),
+        });
+      }
+      req.files.files = extracted;
+      next();
+    } catch (e) {
+      console.error("[travel-passport] bulk archive parse error:", e.message);
+      res.status(400).json({ error: "Could not read ZIP archive", code: "INVALID_ARCHIVE" });
+    }
+  });
 }
 
 // ─── Sub-brand guard (same shape as travel_trips.js) ──────────────────
@@ -301,6 +738,157 @@ router.post(
 );
 
 // ─── GET /verification-queue (ADMIN+MANAGER) ──────────────────────────
+
+// Passport list - uploaded scans across all statuses.
+
+router.get(
+  "/passport-list",
+  verifyToken,
+  requirePermission("passport", "read"),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const result = await buildPassportListRows(req.travelTenant.id, {
+        query: req.query.q,
+        status: req.query.status,
+        source: req.query.source,
+        page: req.query.page,
+        pageSize: req.query.pageSize,
+      });
+      res.json({
+        passports: result.rows,
+        total: result.total,
+        page: result.page,
+        pageSize: result.pageSize,
+        totalPages: result.totalPages,
+        hasPrev: result.hasPrev,
+        hasNext: result.hasNext,
+        q: result.query,
+        status: result.statusFilter,
+        source: result.sourceFilter,
+      });
+    } catch (e) {
+      console.error("[travel-passport] list error:", e.message);
+      res.status(500).json({ error: "Failed to load passport list" });
+    }
+  },
+);
+
+router.get(
+  "/contact-search",
+  verifyToken,
+  requirePermission("passport", "read"),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const q = String(req.query.q || "").trim();
+      const limit = Math.max(1, Math.min(25, Number.parseInt(req.query.limit, 10) || 10));
+      const where = {
+        tenantId: req.travelTenant.id,
+        deletedAt: null,
+      };
+      if (q) {
+        where.OR = [
+          { name: { contains: q } },
+          { email: { contains: q } },
+          { phone: { contains: q } },
+        ];
+      }
+      const contacts = await prisma.contact.findMany({
+        where,
+        select: { id: true, name: true, email: true, phone: true, subBrand: true },
+        orderBy: { id: "desc" },
+        take: limit,
+      });
+      res.json({ contacts });
+    } catch (e) {
+      console.error("[travel-passport] contact search error:", e.message);
+      res.status(500).json({ error: "Failed to search contacts" });
+    }
+  },
+);
+
+// Bulk upload - accepts either a ZIP archive or multiple direct passport files.
+
+router.post(
+  "/bulk-upload",
+  verifyToken,
+  requirePermission("passport", "update"),
+  requireTravelTenant,
+  requireTmcAccess,
+  bulkUploadHandler,
+  async (req, res) => {
+    try {
+      const files = Array.isArray(req.files?.files) ? req.files.files : [];
+      if (!files.length) {
+        return res.status(400).json({ error: "no passport files found in upload", code: "NO_FILES" });
+      }
+
+      const candidates = await loadBulkMatchCandidates(req.travelTenant.id);
+      const results = [];
+      for (const file of files) {
+        const item = { fileName: file.originalname, size: file.size };
+        try {
+          const result = await passportOcrClient.extractPassport({
+            tenantId: req.travelTenant.id,
+            fileBuffer: file.buffer,
+            fileName: file.originalname,
+            mimeType: file.mimetype,
+          });
+          const match = chooseBulkSubject(candidates, file.originalname, result.extraction || {});
+          if (match.error) {
+            const inbox = await persistPassportImportInbox(req, file, result);
+            results.push({
+              ...item,
+              status: "queued",
+              message: "Imported into passport inbox for later review",
+              matchedTo: inbox.created.fullName,
+              kind: "customer",
+              matchedBy: "import_inbox",
+              passportNumber: result.extraction?.passportNumber || null,
+            });
+            continue;
+          }
+          const subject = match.subject;
+          if (subject.row.passportVerifiedAt) {
+            results.push({ ...item, status: "skipped", message: "Passport already verified for this traveller", matchedTo: subject.row.fullName, kind: subject.kind });
+            continue;
+          }
+          if (subject.row.passportExtractedAt && !subject.row.passportRejectedAt) {
+            results.push({ ...item, status: "skipped", message: "Passport already queued for verification", matchedTo: subject.row.fullName, kind: subject.kind });
+            continue;
+          }
+
+          await persistPassportExtractionForSubject(subject, req, file, result, match.matchedBy);
+          results.push({
+            ...item,
+            status: "queued",
+            matchedTo: subject.row.fullName,
+            kind: subject.kind,
+            matchedBy: match.matchedBy,
+            passportNumber: result.extraction?.passportNumber || null,
+          });
+        } catch (e) {
+          if (e.code === "PASSPORT_OCR_NOT_YET_ENABLED") {
+            results.push({ ...item, status: "failed", message: "Passport OCR is not enabled for this tenant" });
+          } else {
+            results.push({ ...item, status: "failed", message: e.message || "Failed to process passport" });
+          }
+        }
+      }
+
+      const queued = results.filter((r) => r.status === "queued").length;
+      const skipped = results.filter((r) => r.status === "skipped").length;
+      const failed = results.filter((r) => r.status === "failed").length;
+      res.json({ total: results.length, queued, skipped, failed, results });
+    } catch (e) {
+      console.error("[travel-passport] bulk upload error:", e.message);
+      res.status(500).json({ error: "Failed to process bulk passport upload" });
+    }
+  },
+);
 
 router.get(
   "/verification-queue",
@@ -759,6 +1347,70 @@ async function loadCustomerTraveller(req) {
   }
   return traveller;
 }
+
+router.post(
+  "/customer-travellers/:id/assign-contact",
+  verifyToken,
+  requirePermission("passport", "update"),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const traveller = await loadCustomerTraveller(req);
+      if (!(traveller.subBrand === "passport_inbox" || traveller.relationship === "bulk_import_inbox" || Number(traveller.contactId) === 0)) {
+        return res.status(409).json({ error: "Only imported inbox passports can be assigned from this screen", code: "NOT_INBOX_PASSPORT" });
+      }
+
+      const contactId = Number.parseInt(req.body?.contactId, 10);
+      const relationship = String(req.body?.relationship || "self").trim().toLowerCase();
+      const allowedRelationships = new Set(["self", "spouse", "child", "parent", "other"]);
+      if (!Number.isFinite(contactId) || contactId <= 0) {
+        return res.status(400).json({ error: "body.contactId required", code: "INVALID_CONTACT_ID" });
+      }
+      if (!allowedRelationships.has(relationship)) {
+        return res.status(400).json({ error: "body.relationship invalid", code: "INVALID_RELATIONSHIP" });
+      }
+
+      const contact = await prisma.contact.findFirst({
+        where: { id: contactId, tenantId: req.travelTenant.id, deletedAt: null },
+        select: { id: true, name: true, email: true, phone: true, subBrand: true },
+      });
+      if (!contact) {
+        return res.status(404).json({ error: "Contact not found", code: "CONTACT_NOT_FOUND" });
+      }
+
+      const updated = await prisma.customerTraveller.update({
+        where: { id: traveller.id },
+        data: {
+          contactId: contact.id,
+          subBrand: contact.subBrand || "tmc",
+          relationship,
+        },
+      });
+
+      writeAudit(
+        "CustomerTraveller",
+        "passport.assigned_to_contact",
+        traveller.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { contactId: contact.id, relationship },
+      ).catch(() => {});
+
+      return res.json({
+        travellerId: updated.id,
+        contactId: contact.id,
+        contactName: contact.name,
+        relationship,
+        assigned: true,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-passport] assign-contact error:", e.message);
+      res.status(500).json({ error: "Failed to assign passport to contact" });
+    }
+  },
+);
 
 // POST /customer-travellers/:id/passport-verify (ADMIN+MANAGER)
 router.post(

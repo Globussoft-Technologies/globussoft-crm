@@ -2552,6 +2552,158 @@ publicRouter.all(
   },
 );
 
+publicRouter.get("/published/json", async (req, res) => {
+
+  try {
+
+    const rawSubBrand = typeof req.query.subBrand === "string" && req.query.subBrand.length > 0
+
+      ? req.query.subBrand
+
+      : "tmc";
+
+    const where = { isFeatured: true, status: "PUBLISHED" };
+
+    if (rawSubBrand === "none") {
+
+      where.subBrand = null;
+
+    } else {
+
+      where.subBrand = rawSubBrand;
+
+    }
+
+    const page = await prisma.landingPage.findFirst({
+
+      where,
+
+      orderBy: { featuredAt: "desc" },
+
+      select: { content: true },
+
+    });
+
+    if (!page) {
+
+      return res.status(404).json({
+
+        error: "No page is published",
+
+        code: "NO_PAGE_PUBLISHED",
+
+      });
+
+    }
+
+    let parsedContent = page.content;
+
+    if (typeof parsedContent === "string") {
+
+      try {
+
+        parsedContent = JSON.parse(parsedContent);
+
+      } catch (_e) {
+
+        return res.status(500).json({ error: "Published page content is not valid JSON" });
+
+      }
+
+    }
+
+    return res.json(parsedContent);
+
+  } catch (err) {
+
+    console.error("[LandingPage] published json error:", err);
+
+    return res.status(500).json({ error: "Failed to load published page JSON" });
+
+  }
+
+});
+
+
+publicRouter.get("/:slug/json", async (req, res) => {
+
+  try {
+
+    const page = await prisma.landingPage.findFirst({
+
+      where: { slug: req.params.slug, status: "PUBLISHED" },
+
+      select: {
+
+        id: true,
+
+        slug: true,
+
+        title: true,
+
+        status: true,
+
+        templateType: true,
+
+        destination: true,
+
+        subBrand: true,
+
+        metaTitle: true,
+
+        metaDescription: true,
+
+        publishedAt: true,
+
+        updatedAt: true,
+
+        content: true,
+
+      },
+
+    });
+
+    if (!page) {
+
+      return res.status(404).json({
+
+        error: "No page is published",
+
+        code: "NO_PAGE_PUBLISHED",
+
+      });
+
+    }
+
+    let parsedContent = page.content;
+
+    if (typeof parsedContent === "string") {
+
+      try {
+
+        parsedContent = JSON.parse(parsedContent);
+
+      } catch (_e) {
+
+        return res.status(500).json({ error: "Published page content is not valid JSON" });
+
+      }
+
+    }
+
+    return res.json(parsedContent);
+
+  } catch (err) {
+
+    console.error("[LandingPage] public json error:", err);
+
+    return res.status(500).json({ error: "Failed to load page JSON" });
+
+  }
+
+});
+
+
 publicRouter.get("/:slug", async (req, res) => {
   try {
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
@@ -2692,6 +2844,328 @@ async function pickFormFromContent(content, submittedAudience, isBrochureRequest
     || (c.type === "brochureDownload" && (!c.props || !c.props.fileUrl || !String(c.props.fileUrl).trim()))
   )) || null;
 }
+function sanitizeSubmissionBody(body) {
+
+  if (!body || typeof body !== "object" || Array.isArray(body)) return {};
+
+  const out = { ...body };
+
+  delete out.cfTurnstileToken;
+
+  return out;
+
+}
+
+function validateSubmissionForwardUrl(raw) {
+
+  if (typeof raw !== "string" || raw.trim().length === 0) return { ok: false };
+
+  let u;
+
+  try {
+
+    u = new URL(raw.trim());
+
+  } catch (_e) {
+
+    return { ok: false, reason: "invalid_url" };
+
+  }
+
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+
+    return { ok: false, reason: "invalid_scheme" };
+
+  }
+
+  const host = u.hostname.toLowerCase();
+
+  if (
+
+    host === "localhost"
+
+    || host === "127.0.0.1"
+
+    || host === "0.0.0.0"
+
+    || host === "::1"
+
+    || host === "[::1]"
+
+    || /^127\./.test(host)
+
+    || /^10\./.test(host)
+
+    || /^192\.168\./.test(host)
+
+    || /^169\.254\./.test(host)
+
+    || /^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)
+
+    || /^fe80:/i.test(host)
+
+    || /^fc[0-9a-f]{2}:/i.test(host)
+
+    || /^fd[0-9a-f]{2}:/i.test(host)
+
+  ) {
+
+    return { ok: false, reason: "private_host" };
+
+  }
+
+  return { ok: true, url: u.toString() };
+
+}
+
+function resolveSubmissionForwardConfig(page, formProps) {
+
+  const blockUrl = formProps && typeof formProps.webhookUrl === "string" ? formProps.webhookUrl : null;
+
+  const blockSecret = formProps && typeof formProps.webhookSecret === "string" ? formProps.webhookSecret : null;
+
+  if (blockUrl && blockUrl.trim()) {
+
+    return {
+
+      url: blockUrl.trim(),
+
+      secret: blockSecret && blockSecret.trim() ? blockSecret.trim() : null,
+
+      source: "form-block",
+
+    };
+
+  }
+
+  let cfg = null;
+
+  try {
+
+    cfg = typeof page.content === "string" ? JSON.parse(page.content || "{}") : page.content;
+
+  } catch (_e) {
+
+    cfg = null;
+
+  }
+
+  if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) return null;
+
+  const metaUrl = typeof cfg.meta?.submissionWebhookUrl === "string"
+    ? cfg.meta.submissionWebhookUrl
+    : typeof cfg.meta?.webhookUrl === "string"
+      ? cfg.meta.webhookUrl
+      : null;
+
+  const metaSecret = typeof cfg.meta?.submissionWebhookSecret === "string"
+    ? cfg.meta.submissionWebhookSecret
+    : typeof cfg.meta?.webhookSecret === "string"
+      ? cfg.meta.webhookSecret
+      : null;
+
+  if (metaUrl && metaUrl.trim()) {
+
+    return {
+
+      url: metaUrl.trim(),
+
+      secret: metaSecret && metaSecret.trim() ? metaSecret.trim() : null,
+
+      source: "page-meta",
+
+    };
+
+  }
+
+  const registerUrl = typeof cfg.register?.submissionWebhookUrl === "string"
+    ? cfg.register.submissionWebhookUrl
+    : typeof cfg.register?.webhookUrl === "string"
+      ? cfg.register.webhookUrl
+      : null;
+
+  const registerSecret = typeof cfg.register?.submissionWebhookSecret === "string"
+    ? cfg.register.submissionWebhookSecret
+    : typeof cfg.register?.webhookSecret === "string"
+      ? cfg.register.webhookSecret
+      : null;
+
+  if (registerUrl && registerUrl.trim()) {
+
+    return {
+
+      url: registerUrl.trim(),
+
+      secret: registerSecret && registerSecret.trim() ? registerSecret.trim() : null,
+
+      source: "register-config",
+
+    };
+
+  }
+
+  return null;
+
+}
+
+async function forwardLandingPageSubmission({
+
+  req,
+
+  page,
+
+  formProps = {},
+
+  contact = null,
+
+  draft = null,
+
+  formFields = {},
+
+  submittedAudience = null,
+
+  isBrochureRequest = false,
+
+  contactSource = null,
+
+}) {
+
+  try {
+
+    const cfg = resolveSubmissionForwardConfig(page, formProps);
+
+    if (!cfg) return;
+
+    const target = validateSubmissionForwardUrl(cfg.url);
+
+    if (!target.ok) {
+
+      console.warn(
+        `[LandingPage] submission forward skipped for page ${page.id}: ${target.reason || "invalid_target"}`
+      );
+
+      return;
+
+    }
+
+    const payload = {
+
+      event: "landing_page_submission",
+
+      submittedAt: new Date().toISOString(),
+
+      page: {
+
+        id: page.id,
+
+        slug: page.slug,
+
+        title: page.title,
+
+        templateType: page.templateType || null,
+
+        subBrand: page.subBrand || null,
+
+        tripId: page.tripId || null,
+
+      },
+
+      submission: {
+
+        mode: draft ? "registration-draft" : "lead",
+
+        audience: submittedAudience,
+
+        isBrochureRequest,
+
+        contactSource,
+
+        fields: formFields && typeof formFields === "object" ? formFields : {},
+
+        body: sanitizeSubmissionBody(req.body),
+
+      },
+
+      contact: contact ? {
+
+        id: contact.id,
+
+        name: contact.name || null,
+
+        email: contact.email || null,
+
+        phone: contact.phone || null,
+
+        company: contact.company || null,
+
+        source: contact.source || null,
+
+      } : null,
+
+      draft: draft ? {
+
+        id: draft.id,
+
+        status: draft.status || null,
+
+        audience: draft.audience || null,
+
+        draftTokenExpiresAt: draft.draftTokenExpiresAt || null,
+
+      } : null,
+
+      request: {
+
+        ip: req.ip || null,
+
+        userAgent: req.headers["user-agent"] || null,
+
+        referer: req.headers.referer || req.headers.referrer || null,
+
+      },
+
+    };
+
+    const headers = {
+
+      "Content-Type": "application/json",
+
+      "X-Landing-Page-Id": String(page.id),
+
+      "X-Landing-Page-Slug": String(page.slug || ""),
+
+      "X-Landing-Page-Event": "landing_page_submission",
+
+    };
+
+    if (cfg.secret) headers["X-Landing-Page-Secret"] = cfg.secret;
+
+    const response = await fetch(target.url, {
+
+      method: "POST",
+
+      headers,
+
+      body: JSON.stringify(payload),
+
+      signal: AbortSignal.timeout(10000),
+
+    });
+
+    if (!response.ok) {
+
+      console.warn(`[LandingPage] submission forward failed for page ${page.id}: ${response.status}`);
+
+    }
+
+  } catch (err) {
+
+    console.error("[LandingPage] submission forward error:", err.message);
+
+  }
+
+}
+
 async function applyLeadRouting(formProps, tenantId, contactId) {
   if (!formProps || !formProps.leadRoutingRuleId) return null;
   const ruleId = parseInt(formProps.leadRoutingRuleId, 10);
@@ -2881,6 +3355,8 @@ async function handleRegistrationDraft(req, res, page, formProps) {
         tenantId,
       },
     });
+    syncedContact = contact;
+
     await applyLeadRouting(formProps, tenantId, contact.id);
     await prisma.deal.create({
       data: { title: `LP Inbound: ${page.title}`, amount: 0, stage: "lead", contactId: contact.id, tenantId },

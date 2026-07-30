@@ -14,6 +14,7 @@ const { notifyMany } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
 const visaDocStore = require("../lib/visaDocStore");
 const { buildForm: buildReviewForm, validateSubmission: validateReviewSubmission } = require("../lib/travelReviewQuestions");
+const { buildExternalReviewCta } = require("../lib/travelReviewExternal");
 const travelPortalNotifications = require("../lib/travelPortalNotificationService");
 
 async function safeFindPassportIdentityCandidates(args, context = "portal") {
@@ -911,7 +912,13 @@ router.post("/travel/itineraries/:id/review", verifyPortalToken, requireTravelPo
         },
       });
     }
-    res.status(201).json({ ok: true, overallRating });
+    const externalReview = await buildExternalReviewCta({
+      tenantId: req.portal.tenantId,
+      destination: itin.destination || "your trip",
+      overallRating,
+      answers: clean,
+    });
+    res.status(201).json({ ok: true, overallRating, externalReview });
   } catch (err) {
     console.error("[Portal][travel/itin review submit]", err);
     res.status(500).json({ error: "Failed to submit review" });
@@ -2014,3 +2021,5 @@ router.get("/kyc/status", verifyPortalToken, requireTravelPortalTenant, async (r
 });
 
 module.exports = router;
+
+

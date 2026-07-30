@@ -51,7 +51,7 @@ const {
   buildErrorReport,
   setCsvDownloadHeaders,
 } = require("../lib/csvHelpers");
-const { parseXlsxBuffer } = require("../lib/csvIO");
+const { parseXlsxBuffer, toXlsxBuffer } = require("../lib/csvIO");
 
 const router = express.Router();
 
@@ -137,6 +137,166 @@ const COST_MASTER_COLS = [
   { key: "isActive", header: "isActive" },
 ];
 
+const COST_MASTER_TEMPLATE_HEADERS = [
+  "subBrand",
+  "category",
+  "routeOrSku",
+  "supplierName",
+  "baseRate",
+  "currency",
+  "seasonName",
+  "validFrom",
+  "validTo",
+  "hotelView",
+  "hotelFloorLevel",
+  "roomCategory",
+  "isActive",
+];
+
+const COST_MASTER_TEMPLATE_ROWS = [
+  {
+    subBrand: "# subBrand values: tmc, rfu, travelstall, visasure",
+    category: "Required: category, routeOrSku, baseRate",
+    routeOrSku: "Optional: supplierName, currency, seasonName, validFrom, validTo, isActive",
+    supplierName: "Hotel only: hotelView, hotelFloorLevel, roomCategory",
+    baseRate: "New supplier/season names create temporary records",
+  },
+];
+
+const HOTEL_ATTRIBUTE_VIEWS = new Set(["haram_facing", "kaaba_facing", "city_view", "standard"]);
+const HOTEL_ATTRIBUTE_FLOORS = new Set(["low", "mid", "high"]);
+const CATEGORY_TO_SUPPLIER_CATEGORY = Object.freeze({
+  hotel: "hotel",
+  flight: "flight",
+  transport: "transport",
+  visa: "visa-consul",
+  insurance: "other",
+});
+
+function parseImportDate(value, fieldName) {
+  if (value == null || value === "") return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`${fieldName} must be a valid date`);
+  }
+  return date;
+}
+
+function buildAttributesJsonFromRow(row) {
+  if (row.attributesJson != null && String(row.attributesJson).trim()) {
+    return String(row.attributesJson).trim();
+  }
+  const attrs = {};
+  const view = row.hotelView != null ? String(row.hotelView).trim() : "";
+  const floorLevel = row.hotelFloorLevel != null ? String(row.hotelFloorLevel).trim() : "";
+  const roomCategory = row.roomCategory != null ? String(row.roomCategory).trim() : "";
+
+  if (view) {
+    if (!HOTEL_ATTRIBUTE_VIEWS.has(view)) {
+      throw new Error(`invalid hotelView: ${view}`);
+    }
+    attrs.view = view;
+  }
+  if (floorLevel) {
+    if (!HOTEL_ATTRIBUTE_FLOORS.has(floorLevel)) {
+      throw new Error(`invalid hotelFloorLevel: ${floorLevel}`);
+    }
+    attrs.floorLevel = floorLevel;
+  }
+  if (roomCategory) attrs.roomCategory = roomCategory;
+
+  return Object.keys(attrs).length ? JSON.stringify(attrs) : null;
+}
+
+async function resolveSupplierIdForImport({ tenantId, subBrand, category, supplierId, supplierName }) {
+  const trimmedName = supplierName != null ? String(supplierName).trim() : "";
+  if (trimmedName) {
+    const existing = await prisma.travelSupplier.findFirst({
+      where: { tenantId, subBrand, name: trimmedName },
+      orderBy: [{ isActive: "desc" }, { id: "asc" }],
+    });
+    if (existing) return existing.id;
+    const created = await prisma.travelSupplier.create({
+      data: {
+        tenantId,
+        subBrand,
+        name: trimmedName,
+        supplierCategory: CATEGORY_TO_SUPPLIER_CATEGORY[category] || "other",
+      },
+    });
+    return created.id;
+  }
+  if (supplierId && /^\d+$/.test(String(supplierId).trim())) {
+    return parseInt(String(supplierId).trim(), 10);
+  }
+  return null;
+}
+
+async function resolveSeasonIdForImport({ tenantId, subBrand, seasonId, seasonName, validFrom, validTo }) {
+  const trimmedName = seasonName != null ? String(seasonName).trim() : "";
+  if (trimmedName) {
+    const existing = await prisma.travelSeasonCalendar.findFirst({
+      where: { tenantId, subBrand, seasonName: trimmedName },
+      orderBy: [{ startDate: "asc" }, { id: "asc" }],
+    });
+    if (existing) return existing.id;
+    const fallbackDate = new Date();
+    const created = await prisma.travelSeasonCalendar.create({
+      data: {
+        tenantId,
+        subBrand,
+        seasonName: trimmedName,
+        startDate: validFrom || fallbackDate,
+        endDate: validTo || validFrom || fallbackDate,
+      },
+    });
+    return created.id;
+  }
+  if (seasonId && /^\d+$/.test(String(seasonId).trim())) {
+    return parseInt(String(seasonId).trim(), 10);
+  }
+  return null;
+}
+
+router.get(
+  "/cost-master/import-template",
+  verifyToken,
+  requirePermission("cost_master", "read"),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const format = String(req.query.format || "csv").toLowerCase();
+      if (format !== "csv" && format !== "xlsx") {
+        return res.status(400).json({ error: "format must be csv or xlsx", code: "INVALID_FORMAT" });
+      }
+
+      if (format === "xlsx") {
+        const buf = toXlsxBuffer(COST_MASTER_TEMPLATE_HEADERS, COST_MASTER_TEMPLATE_ROWS, "Cost Master Template");
+        res.setHeader(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        );
+        res.setHeader(
+          "Content-Disposition",
+          'attachment; filename="travel-cost-master-template.xlsx"',
+        );
+        return res.send(buf);
+      }
+
+      const csv = serializeRows(
+        COST_MASTER_TEMPLATE_HEADERS.map((header) => ({ key: header, header })),
+        COST_MASTER_TEMPLATE_ROWS,
+      );
+      setCsvDownloadHeaders(res, "travel-cost-master-template.csv");
+      return res.send(csv);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-csv] cost-master template error:", e.message);
+      return res.status(500).json({ error: "Failed to download cost-master template" });
+    }
+  },
+);
+
 router.get("/cost-master/export.csv", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
@@ -207,6 +367,9 @@ router.post(
           const subBrand = String(row.subBrand || "").trim();
           const category = String(row.category || "").trim();
           const routeOrSku = String(row.routeOrSku || "").trim();
+          if (subBrand.startsWith("#") || category.startsWith("#") || routeOrSku.startsWith("#")) {
+            continue;
+          }
           if (!subBrand || !category || !routeOrSku) {
             errors.push({ rowNumber, reason: "missing subBrand, category, or routeOrSku" });
             continue;
@@ -231,23 +394,37 @@ router.post(
             continue;
           }
 
+          const validFrom = parseImportDate(row.validFrom, "validFrom");
+          const validTo = parseImportDate(row.validTo, "validTo");
+          if (validFrom && validTo && validTo < validFrom) {
+            errors.push({ rowNumber, reason: "validTo must be on or after validFrom" });
+            continue;
+          }
+
           const data = {
             subBrand,
             category,
             routeOrSku,
             baseRate,
-            supplierId:
-              row.supplierId && /^\d+$/.test(String(row.supplierId).trim())
-                ? parseInt(String(row.supplierId).trim(), 10)
-                : null,
+            supplierId: await resolveSupplierIdForImport({
+              tenantId: req.travelTenant.id,
+              subBrand,
+              category,
+              supplierId: row.supplierId,
+              supplierName: row.supplierName,
+            }),
             currency: row.currency ? String(row.currency).trim() : "INR",
-            seasonId:
-              row.seasonId && /^\d+$/.test(String(row.seasonId).trim())
-                ? parseInt(String(row.seasonId).trim(), 10)
-                : null,
-            attributesJson: row.attributesJson ? String(row.attributesJson) : null,
-            validFrom: row.validFrom ? new Date(row.validFrom) : null,
-            validTo: row.validTo ? new Date(row.validTo) : null,
+            seasonId: await resolveSeasonIdForImport({
+              tenantId: req.travelTenant.id,
+              subBrand,
+              seasonId: row.seasonId,
+              seasonName: row.seasonName,
+              validFrom,
+              validTo,
+            }),
+            attributesJson: buildAttributesJsonFromRow(row),
+            validFrom,
+            validTo,
             isActive: row.isActive ? row.isActive !== "false" : true,
           };
 

@@ -2231,6 +2231,7 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState(null);
   const [reviewDone, setReviewDone] = useState(false);
+  const [reviewFollowUp, setReviewFollowUp] = useState(null);
   // "What-if" headcount the customer types into the estimate calculator.
   // Empty string = use the advisor's quoted traveler count (pax).
   const [headcount, setHeadcount] = useState("");
@@ -2316,7 +2317,8 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
     setReviewSubmitting(true);
     setReviewError(null);
     try {
-      await portalFetch(`/travel/itineraries/${itinerary.id}/review`, { token, method: "POST", body: { answers } });
+      const result = await portalFetch(`/travel/itineraries/${itinerary.id}/review`, { token, method: "POST", body: { answers } });
+      setReviewFollowUp(result?.externalReview || null);
       setReviewDone(true);
       if (onChanged) await onChanged();
     } catch (e) {
@@ -2491,9 +2493,29 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
       {/* Post-trip review (completed trips). "submitted"/just-done → thanks;
           "available" → the star/options/text form. */}
       {(reviewState === "submitted" || reviewDone) && (
-        <section style={{ ...cardStyle, display: "flex", alignItems: "center", gap: 8 }}>
-          <Star size={18} aria-hidden fill="#F5B301" color="#F5B301" />
-          <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>Thanks for reviewing your trip — we appreciate your feedback!</span>
+        <section style={cardStyle}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Star size={18} aria-hidden fill="#F5B301" color="#F5B301" />
+              <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>Thanks for reviewing your trip � we appreciate your feedback!</span>
+            </div>
+            {reviewDone && reviewFollowUp?.enabled && (
+              <div style={{ padding: 16, borderRadius: 12, border: "1px solid var(--border-color, rgba(255,255,255,0.08))", background: "rgba(255,255,255,0.03)" }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>{reviewFollowUp.message}</div>
+                {reviewFollowUp.suggestedReview && (
+                  <div style={{ color: "var(--text-secondary)", lineHeight: 1.55, marginBottom: 10 }}>{reviewFollowUp.suggestedReview}</div>
+                )}
+                <a
+                  href={reviewFollowUp.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "10px 16px", borderRadius: 10, background: "var(--primary-color)", color: "#fff", textDecoration: "none", fontWeight: 700 }}
+                >
+                  {reviewFollowUp.label || "Post to Google"}
+                </a>
+              </div>
+            )}
+          </div>
         </section>
       )}
       {reviewState === "available" && !reviewDone && (
@@ -2911,3 +2933,8 @@ const backBtnStyle = {
   cursor: "pointer",
   width: "fit-content",
 };
+
+
+
+
+

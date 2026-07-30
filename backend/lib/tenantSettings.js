@@ -121,6 +121,7 @@ const KEYS = {
   REPORT_SMTP_SECURE:                    "report.smtpSecure",
   REPORT_SMTP_USER:                      "report.smtpUser",
   REPORT_SMTP_PASS:                      "report.smtpPass",
+  TRAVEL_EXTERNAL_REVIEW_URL:            "travel.externalReviewUrl",
 };
 
 // Env-var defaults (overridable per-tenant via TenantSetting row).
@@ -159,6 +160,7 @@ const DEFAULTS = {
   [KEYS.REPORT_SMTP_SECURE]: process.env.SMTP_SECURE || "false",
   [KEYS.REPORT_SMTP_USER]: process.env.SMTP_USER || "",
   [KEYS.REPORT_SMTP_PASS]: process.env.SMTP_PASS || "",
+  [KEYS.TRAVEL_EXTERNAL_REVIEW_URL]: process.env.TRAVEL_EXTERNAL_REVIEW_URL || "",
   // Wellness Admin Support Chatbot BYOK default — empty JSON object when no
   // provider config has been saved yet. The actual value is a JSON blob written
   // by routes/wellness_ai_config.js; this default only prevents `getSetting`
@@ -275,3 +277,5 @@ module.exports = {
   getBudgetCap,
   evaluateCap,
 };
+
+

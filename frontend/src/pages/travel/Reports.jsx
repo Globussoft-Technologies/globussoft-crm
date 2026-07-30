@@ -12,6 +12,7 @@
 // subBrandAccess — a TMC-ops user gets 403 on the RFU tab and vice versa.
 
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AlertCircle, BarChart3, Globe, MapPin, RefreshCw, School, Star, TrendingUp, Download,
 } from "lucide-react";
@@ -249,6 +250,13 @@ function StateShell({ loading, error, reload, children }) {
 
 function TmcTab({ dateParams }) {
   const { data, loading, error, reload } = useReport("/api/travel/reports/tmc", dateParams);
+  const navigate = useNavigate();
+
+  const openTrips = (status = "") => {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    navigate(`/travel/trips${q.toString() ? `?${q.toString()}` : ""}`);
+  };
 
   return (
     <StateShell loading={loading} error={error} reload={reload}>
@@ -271,8 +279,18 @@ function TmcTab({ dateParams }) {
             }
           />
 
-          <Card title="Trip status">
-            <KeyValueList obj={data.trips.byStatus} formatter={(v) => String(v)} empty="No trips yet." />
+          <Card
+            title="Trip status"
+            onClick={() => openTrips()}
+            interactive
+            actionLabel="Open trips"
+          >
+            <KeyValueList
+              obj={data.trips.byStatus}
+              formatter={(v) => String(v)}
+              empty="No trips yet."
+              onItemClick={(status) => openTrips(status)}
+            />
           </Card>
 
           <QuoteFunnelCard quotes={data.quotes} />
@@ -472,10 +490,29 @@ function Tile({ icon: Icon, label, primary, footer }) {
   );
 }
 
-function Card({ title, children, wide }) {
+function Card({ title, children, wide, onClick, interactive = false, actionLabel = null }) {
   return (
-    <section style={{ ...cardStyle, gridColumn: wide ? "1 / -1" : undefined }}>
-      <h2 style={cardTitle}>{title}</h2>
+    <section
+      style={{
+        ...cardStyle,
+        gridColumn: wide ? "1 / -1" : undefined,
+        cursor: interactive ? "pointer" : undefined,
+      }}
+      onClick={onClick}
+      onKeyDown={interactive ? (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick?.();
+        }
+      } : undefined}
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-label={interactive && actionLabel ? `${title} - ${actionLabel}` : undefined}
+    >
+      <div style={cardHeaderRow}>
+        <h2 style={cardTitle}>{title}</h2>
+        {actionLabel ? <span style={cardActionText}>{actionLabel}</span> : null}
+      </div>
       {children}
     </section>
   );
@@ -513,17 +550,37 @@ function QuoteFunnelCard({ quotes }) {
   );
 }
 
-function KeyValueList({ obj, formatter, empty: emptyText }) {
+function KeyValueList({ obj, formatter, empty: emptyText, onItemClick = null }) {
   const entries = Object.entries(obj || {});
   if (entries.length === 0) return <div style={empty}>{emptyText}</div>;
   return (
     <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
-      {entries.map(([k, v]) => (
-        <li key={k} style={kvRow}>
-          <span>{k}</span>
-          <span style={{ fontWeight: 600 }}>{formatter(v)}</span>
-        </li>
-      ))}
+      {entries.map(([k, v]) => {
+        const clickable = typeof onItemClick === "function";
+        return (
+          <li
+            key={k}
+            style={{ ...kvRow, cursor: clickable ? "pointer" : undefined }}
+            onClick={clickable ? (e) => {
+              e.stopPropagation();
+              onItemClick(k, v);
+            } : undefined}
+            onKeyDown={clickable ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                onItemClick(k, v);
+              }
+            } : undefined}
+            role={clickable ? "button" : undefined}
+            tabIndex={clickable ? 0 : undefined}
+            aria-label={clickable ? `Open ${k} trips` : undefined}
+          >
+            <span>{k}</span>
+            <span style={{ fontWeight: 600 }}>{formatter(v)}</span>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -590,9 +647,16 @@ const cardStyle = {
   border: "1px solid var(--border-color)",
   borderRadius: 12, padding: 16,
 };
+const cardHeaderRow = {
+  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+  marginBottom: 12,
+};
 const cardTitle = {
-  margin: "0 0 12px", fontSize: 15,
+  margin: 0, fontSize: 15,
   color: "var(--text-primary)",
+};
+const cardActionText = {
+  fontSize: 12, fontWeight: 600, color: "var(--primary-color)",
 };
 const loadingBox = {
   padding: 40, textAlign: "center",

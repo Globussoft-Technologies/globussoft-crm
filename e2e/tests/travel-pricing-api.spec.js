@@ -322,7 +322,7 @@ test.describe("Travel pricing API — /quote composition", () => {
       subBrand: "rfu",
       category: "hotel",
       routeOrSku: routeSku,
-      tripDate: "2026-12-25", // outside all configured seasons
+      tripDate: "2026-10-15", // outside all configured RFU seasons
     });
     expect(res.status()).toBe(200);
     const body = await res.json();

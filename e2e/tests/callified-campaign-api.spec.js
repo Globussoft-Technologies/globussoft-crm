@@ -27,6 +27,7 @@ const RUN_TAG = `E2E_CALLIFIED_${Date.now()}`;
 let adminToken = null;
 let adminUserId = null;
 let userToken = null;
+let userId = null;
 
 async function loginAs(request, email, password) {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -60,8 +61,9 @@ async function getUser(request) {
   if (!userToken) {
     const r = await loginAs(request, 'user@crm.com', 'password123');
     userToken = r.token;
+    userId = r.userId;
   }
-  return { token: userToken };
+  return { token: userToken, userId };
 }
 
 const headers = (token) => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' });
@@ -155,12 +157,10 @@ test.describe('PUT /api/contacts/:id — callifiedCampaignId assignment', () => 
 
   test('regular USER can update a lead campaign (route contract)', async ({ request }) => {
     const { token: adminTok } = await getAdmin(request);
-    const { token: userTok } = await getUser(request);
-    const lead = await createTaggedLead(request);
+    const { token: userTok, userId: uid } = await getUser(request);
+    // USER can only access leads assigned to them (canAccessLead gate).
+    const lead = await createTaggedLead(request, { assignedToId: uid });
 
-    // Note: PUT /api/contacts/:id currently has no role/ownership gate, so a
-    // USER token can update any contact in its tenant. This test pins that
-    // contract rather than the desired RBAC boundary.
     const putRes = await put(request, userTok, `/api/contacts/${lead.id}`, {
       callifiedCampaignId: 99,
     });

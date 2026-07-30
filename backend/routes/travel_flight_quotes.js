@@ -330,10 +330,20 @@ router.post("/agent-quotes", verifyToken, requireTravelTenant, async (req, res) 
       });
     }
 
-    const priceFor = (pricePerPax) =>
-      forcedRule
-        ? pickMarkup([forcedRule], forcedRule.subBrand, forcedRule.scope, pricePerPax, forcedRule.ownerUserId ?? null)
-        : pickMarkup(rules, subBrand, "flight", pricePerPax, req.user.userId);
+    const priceFor = (pricePerPax) => {
+      if (forcedRule) {
+        // Pinned rule: apply it directly without re-running matchKeyJson context
+        // filters, because the caller explicitly chose this rule by ID.
+        let amount = 0;
+        if (forcedRule.markupPct != null) {
+          amount = pricePerPax * (Number(forcedRule.markupPct) / 100);
+        } else if (forcedRule.markupFlat != null) {
+          amount = Number(forcedRule.markupFlat);
+        }
+        return { rule: forcedRule, markupAmount: Math.round(amount * 100) / 100 };
+      }
+      return pickMarkup(rules, subBrand, "flight", pricePerPax, req.user.userId);
+    };
 
     let position = await prisma.itineraryItem.count({ where: { itineraryId: itin.id } });
     const items = [];

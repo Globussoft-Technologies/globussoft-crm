@@ -228,6 +228,52 @@ describe('POST /api/travel/quotes', () => {
     expect(res.body.error).toMatch(/future|today/i);
     expect(prisma.travelQuote.create).not.toHaveBeenCalled();
   });
+
+  test('accepts and persists tripDate (Issue 11)', async () => {
+    const tripDateIso = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+    prisma.travelQuote.create.mockResolvedValue({
+      id: 44, tenantId: 1, subBrand: 'tmc', contactId: 99,
+      status: 'Draft', totalAmount: '45000.00', currency: 'INR',
+      validUntil: tomorrow, tripDate: new Date(tripDateIso),
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/quotes')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 99,
+        totalAmount: '45000.00',
+        currency: 'INR',
+        subBrand: 'tmc',
+        validUntil: tomorrowIso,
+        tripDate: tripDateIso,
+      });
+    expect(res.status).toBe(201);
+    expect(prisma.travelQuote.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tripDate: new Date(tripDateIso),
+        }),
+      }),
+    );
+  });
+
+  test('rejects invalid tripDate with 400 INVALID_TRIP_DATE', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/quotes')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 99,
+        totalAmount: '45000.00',
+        currency: 'INR',
+        subBrand: 'tmc',
+        validUntil: tomorrowIso,
+        tripDate: 'not-a-date',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_TRIP_DATE' });
+    expect(prisma.travelQuote.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/travel/quotes', () => {

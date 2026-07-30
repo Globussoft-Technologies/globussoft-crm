@@ -280,7 +280,7 @@ export default function QuoteAcceptLanding() {
     );
   }
 
-  const { quote, lines = [], customer } = data;
+  const { quote, lines = [], customer, breakdown } = data;
   const totalDisplay = quote?.totalAmount != null
     ? formatMoney(quote.totalAmount, quote.currency)
     : formatMoney(linesTotal, quote?.currency);
@@ -327,6 +327,47 @@ export default function QuoteAcceptLanding() {
               <span style={{ fontSize: 22, fontWeight: 800, color: "#fff", letterSpacing: 0.3 }}>{totalDisplay}</span>
             </div>
           </section>
+
+          {breakdown && (
+            <section aria-label="Pricing breakdown" style={{ marginBottom: 24 }}>
+              <h2 style={{ ...subHeadingStyle, marginTop: 0 }}>How your quote is calculated</h2>
+              <div style={{ background: "var(--bg-color, #f9fafb)", borderRadius: 10, padding: 16, border: "1px solid var(--border-color, #e5e7eb)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                  <span style={{ color: "var(--text-muted, #6b7280)" }}>Base subtotal</span>
+                  <span style={{ fontWeight: 500 }}>{formatMoney(breakdown.baseSubtotal, quote.currency)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                  <span style={{ color: "var(--text-muted, #6b7280)" }}>Season</span>
+                  <span style={{ fontWeight: 500 }}>
+                    {breakdown.seasonMultiplier && breakdown.seasonMultiplier !== 1
+                      ? `×${breakdown.seasonMultiplier}${breakdown.matchedSeasonName ? ` (${breakdown.matchedSeasonName})` : ""}`
+                      : breakdown.tripDate
+                        ? "No season matched"
+                        : "—"}
+                  </span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                  <span style={{ color: "var(--text-muted, #6b7280)" }}>After season</span>
+                  <span style={{ fontWeight: 500 }}>{formatMoney(breakdown.subtotal, quote.currency)}</span>
+                </div>
+                {breakdown.markupApplied.length > 0 && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ color: "var(--text-muted, #6b7280)", marginBottom: 4 }}>Markups</div>
+                    {breakdown.markupApplied.map((m) => (
+                      <div key={m.ruleId} style={{ display: "flex", justifyContent: "space-between", paddingLeft: 12, fontSize: 13 }}>
+                        <span>{m.ruleName}</span>
+                        <span>{formatMoney(m.amount, quote.currency)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--border-color, #e5e7eb)", paddingTop: 10, marginTop: 8, fontWeight: 700 }}>
+                  <span>Total with markup</span>
+                  <span>{formatMoney(breakdown.total, quote.currency)}</span>
+                </div>
+              </div>
+            </section>
+          )}
 
         {error && (
           <div role="alert" style={errorBoxStyle}>

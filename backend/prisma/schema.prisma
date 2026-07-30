@@ -697,6 +697,11 @@ model Contact {
   /// pre-existing rows backfill on first tick.
   aiScoreLastComputedAt DateTime?
 
+  // Callified AI calling campaign assigned to this lead. Campaigns live in
+  // Callified, so this is just the remote campaign id stored on the CRM contact
+  // to enable per-lead assignment and bulk campaign dialing.
+  callifiedCampaignId   Int?
+
   // Data enrichment
   industry       String?
   companySize    String?
@@ -1254,7 +1259,7 @@ model EmailMessage {
 model CallLog {
   id             Int      @id @default(autoincrement())
   duration       Int // seconds
-  notes          String?
+  notes          String?  @db.Text
   direction      String   @default("OUTBOUND")
   recordingUrl   String?
   provider       String? // "myoperator", "knowlarity", "twilio", "webrtc"
@@ -7318,6 +7323,10 @@ model TravelQuote {
   totalAmount          Decimal?              @db.Decimal(15, 2)
   currency             String                @default("INR")
   validUntil           DateTime?
+  // Issue 11 — trip date for season-aware pricing breakdown.
+  // Nullable: existing quotes keep working; new quotes can set it to anchor
+  // TravelSeasonCalendar multiplier selection.
+  tripDate             DateTime?
   // S47 — FX-lock dedicated columns. Populated at customer-accept time
   // by routes/travel_quotes_public.js (mirrors the fxLock block also
   // persisted in TravelQuoteSnapshot.snapshotJson for forensic history /

@@ -44,6 +44,11 @@ function getCallifiedEnv(name) {
   if (live && String(live).trim()) {
     return String(live).trim();
   }
+  // In test mode environment variables must be fully controlled by the test
+  // process (process.env) so local .env files do not leak and break assertions.
+  if (process.env.NODE_ENV === 'test') {
+    return null;
+  }
   const snapshot = loadCallifiedEnvSnapshot();
   const fileValue = snapshot[name];
   return fileValue && String(fileValue).trim() ? String(fileValue).trim() : null;
@@ -655,6 +660,102 @@ router.put("/adsgpt/config", verifyToken, verifyRole(["ADMIN"]), async (req, res
   } catch (err) {
     console.error("[integrations] adsgpt/config PUT:", err);
     res.status(500).json({ error: "Failed to update AdsGPT configuration" });
+  }
+});
+
+// Callified Configuration — read/update full tenant config (API key, fallback
+// email/password, base URL, webhook secret). Stored in Integration row
+// provider="callified" (token = apiKey, settings = JSON of the rest) so no
+// schema migration is needed.
+router.get("/callified/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const row = await prisma.integration.findUnique({
+      where: { tenantId_provider: { tenantId: req.user.tenantId, provider: "callified" } },
+    });
+
+    let settings = {};
+    if (row && row.settings) {
+      try {
+        settings = JSON.parse(row.settings);
+      } catch (e) {
+        console.warn("[integrations] callified/config invalid settings JSON:", e.message);
+      }
+    }
+
+    const envBaseUrl = process.env.CALLIFIED_API_BASE_URL || process.env.CALLIFIED_API_URL || "https://app.callified.ai";
+
+    res.json({
+      apiKey: row?.token ? "••••••••••••••••" : "",
+      email: settings.email || "",
+      password: settings.password ? "••••••••••••••••" : "",
+      baseUrl: settings.baseUrl || envBaseUrl,
+      webhookSecret: settings.webhookSecret ? "••••••••••••••••" : "",
+      isActive: !!row?.isActive,
+      updatedAt: row?.updatedAt || null,
+    });
+  } catch (err) {
+    console.error("[integrations] callified/config GET:", err);
+    res.status(500).json({ error: "Failed to fetch Callified configuration" });
+  }
+});
+
+router.put("/callified/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const { apiKey, email, password, baseUrl, webhookSecret } = req.body || {};
+
+    const row = await prisma.integration.findUnique({
+      where: { tenantId_provider: { tenantId: req.user.tenantId, provider: "callified" } },
+    });
+
+    let existingSettings = {};
+    if (row && row.settings) {
+      try {
+        existingSettings = JSON.parse(row.settings);
+      } catch (e) {
+        console.warn("[integrations] callified/config PUT invalid settings JSON:", e.message);
+      }
+    }
+
+    const token = (typeof apiKey === "string" && apiKey.trim() && apiKey !== "••••••••••••••••")
+      ? apiKey.trim()
+      : (row?.token || null);
+
+    const settings = {
+      email: typeof email === "string" ? email.trim() : (existingSettings.email || ""),
+      password: (typeof password === "string" && password && password !== "••••••••••••••••")
+        ? password
+        : (existingSettings.password || ""),
+      baseUrl: typeof baseUrl === "string" ? baseUrl.trim() : (existingSettings.baseUrl || ""),
+      webhookSecret: (typeof webhookSecret === "string" && webhookSecret && webhookSecret !== "••••••••••••••••")
+        ? webhookSecret
+        : (existingSettings.webhookSecret || ""),
+    };
+
+    const integration = await prisma.integration.upsert({
+      where: { tenantId_provider: { tenantId: req.user.tenantId, provider: "callified" } },
+      update: {
+        token,
+        settings: JSON.stringify(settings),
+        isActive: !!token || !!(settings.email && settings.password),
+      },
+      create: {
+        provider: "callified",
+        tenantId: req.user.tenantId,
+        token,
+        settings: JSON.stringify(settings),
+        isActive: !!token || !!(settings.email && settings.password),
+      },
+    });
+
+    res.json({
+      success: true,
+      isActive: integration.isActive,
+      updatedAt: integration.updatedAt,
+      message: "Callified configuration updated successfully",
+    });
+  } catch (err) {
+    console.error("[integrations] callified/config PUT:", err);
+    res.status(500).json({ error: "Failed to update Callified configuration" });
   }
 });
 

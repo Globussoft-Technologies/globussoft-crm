@@ -110,6 +110,13 @@ import express from 'express';
 import request from 'supertest';
 import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
+
+// Email OTP gate bypass — the route resolves lib/emailOtp at call time, so
+// patching before require() is safe and keeps the public /register path open
+// for these contract tests. Mirrors the same helper patch in auth.test.js.
+const emailOtp = requireCJS('../../lib/emailOtp');
+emailOtp.enforceRegistrationOtp = vi.fn().mockReturnValue({ ok: true, emailVerifiedAt: new Date() });
+
 const portalRouter = requireCJS('../../routes/portal');
 
 // JWT_SECRET resolution mirrors config/secrets.js — the route uses the

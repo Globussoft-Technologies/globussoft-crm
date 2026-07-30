@@ -544,7 +544,7 @@ describe('POST /diagnostics/:id/report-pdf/regen', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
       .send({});
     expect(res.status).toBe(200);
-    expect(res.body.reportPdfUrl).toMatch(/^\/uploads\/diagnostics\/diag-500-/);
+    expect(res.body.reportPdfUrl).toMatch(/^\/api\/uploads\/diagnostics\/diag-500-/);
     expect(pdfRenderer.renderTravelDiagnosticPdf).toHaveBeenCalledTimes(1);
   });
 

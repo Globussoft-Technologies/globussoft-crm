@@ -784,7 +784,7 @@ describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
 });
 
 describe('GET /api/landing-pages/public/featured (no auth, /trips resolver)', () => {
-  test('200 returns the travel featured PUBLISHED row by default', async () => {
+  test('200 returns the featured PUBLISHED row by default', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'japan-2026', title: 'Japan 2026', destination: 'Japan',
       subBrand: 'tmc', featuredAt: new Date('2026-06-22T10:00:00Z'),
@@ -796,21 +796,21 @@ describe('GET /api/landing-pages/public/featured (no auth, /trips resolver)', ()
       id: 50, slug: 'japan-2026', title: 'Japan 2026',
       destination: 'Japan', subBrand: 'tmc',
     });
-    // Default lookup must stay on the travel bucket.
+    // Default lookup returns ANY featured page across all sub-brands.
     const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
     expect(findArgs.where.isFeatured).toBe(true);
     expect(findArgs.where.status).toBe('PUBLISHED');
-    expect(findArgs.where.subBrand).toBe('tmc');
+    expect(findArgs.where.subBrand).toBeUndefined();
     // Recency-ordered.
     expect(findArgs.orderBy).toEqual({ featuredAt: 'desc' });
   });
 
-  test('default lookup ignores a featured wellness row when travel is featured too', async () => {
+  test('?subBrand=tmc ignores a featured wellness row when travel is featured too', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'japan-2026', title: 'Japan 2026', destination: 'Japan',
       subBrand: 'tmc', featuredAt: new Date('2026-06-22T10:00:00Z'),
     });
-    const res = await request(makeApp()).get('/api/landing-pages/public/featured');
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured?subBrand=tmc');
     expect(res.status).toBe(200);
     expect(res.body.subBrand).toBe('tmc');
     const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];

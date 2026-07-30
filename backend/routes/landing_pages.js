@@ -599,11 +599,11 @@ router.get("/public/featured", async (req, res) => {
   try {
     const rawSubBrand = typeof req.query.subBrand === "string" && req.query.subBrand.length > 0
       ? req.query.subBrand
-      : "tmc";
+      : undefined;
     const where = { isFeatured: true, status: "PUBLISHED" };
     if (rawSubBrand === "none") {
       where.subBrand = null;
-    } else {
+    } else if (rawSubBrand) {
       where.subBrand = rawSubBrand;
     }
     const page = await prisma.landingPage.findFirst({
@@ -638,11 +638,11 @@ router.get("/public/featured-html", async (req, res) => {
   try {
     const rawSubBrand = typeof req.query.subBrand === "string" && req.query.subBrand.length > 0
       ? req.query.subBrand
-      : "tmc";
+      : undefined;
     const where = { isFeatured: true, status: "PUBLISHED" };
     if (rawSubBrand === "none") {
       where.subBrand = null;
-    } else {
+    } else if (rawSubBrand) {
       where.subBrand = rawSubBrand;
     }
     const page = await prisma.landingPage.findFirst({

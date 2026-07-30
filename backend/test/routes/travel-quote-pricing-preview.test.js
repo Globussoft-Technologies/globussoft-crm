@@ -55,6 +55,9 @@ prisma.travelQuoteLine = {
 prisma.travelMarkupRule = {
   findMany: vi.fn(),
 };
+prisma.travelSeasonCalendar = {
+  findMany: vi.fn(),
+};
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
@@ -151,6 +154,7 @@ beforeEach(() => {
   prisma.travelQuote.findFirst.mockReset();
   prisma.travelQuoteLine.findMany.mockReset().mockResolvedValue([]);
   prisma.travelMarkupRule.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelSeasonCalendar.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -427,5 +431,88 @@ describe('GET /api/travel/quotes/:id/pricing-preview — rule scoping', () => {
     expect(res.status).toBe(200);
     expect(res.body.markupApplied).toEqual([]);
     expect(res.body.total).toBe(10000);
+  });
+});
+
+describe('GET /api/travel/quotes/:id/pricing-preview — Issue 11 season-aware breakdown', () => {
+  test('tripDate inside a season → seasonMultiplier applied and breakdown fields present', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({
+      subBrand: 'rfu',
+      tripDate: '2026-03-20',
+    }));
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 555, lineType: 'hotel', amount: '10000.00', description: 'Hilton, Makkah — Deluxe' }),
+    ]);
+    prisma.travelSeasonCalendar.findMany.mockResolvedValue([
+      {
+        id: 1, tenantId: 1, subBrand: 'rfu', seasonName: 'ramadan-peak',
+        startDate: new Date('2026-03-01'), endDate: new Date('2026-04-15'),
+        multiplier: '2.0000',
+      },
+    ]);
+    prisma.travelMarkupRule.findMany.mockResolvedValue([
+      makeRule({
+        id: 11, subBrand: 'rfu', scope: 'hotel', markupPct: '10.0000',
+        matchKeyJson: '{"city":"Makkah"}', priority: 10,
+      }),
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/pricing-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tripDate).toBe('2026-03-20');
+    expect(res.body.seasonMultiplier).toBe(2.0);
+    expect(res.body.matchedSeasonName).toBe('ramadan-peak');
+    expect(res.body.baseSubtotal).toBe(10000);
+    expect(res.body.subtotal).toBe(20000); // 10k * 2
+    expect(res.body.total).toBe(22000); // 20k + 10% Makkah markup
+    expect(res.body.lines[0]).toMatchObject({
+      lineId: 555,
+      baseAmount: 10000,
+      seasonAmount: 20000,
+      markupAmount: 2000,
+      finalAmount: 22000,
+    });
+    expect(res.body.markupApplied[0].ruleName).toBe('{"city":"Makkah"}');
+  });
+
+  test('no tripDate → seasonMultiplier 1.0 and matchedSeasonName null', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({ subBrand: 'rfu' }));
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({ id: 555, lineType: 'hotel', amount: '10000.00' }),
+    ]);
+    prisma.travelMarkupRule.findMany.mockResolvedValue([
+      makeRule({ id: 11, subBrand: 'rfu', scope: 'hotel', markupPct: '10.0000' }),
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/pricing-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.seasonMultiplier).toBe(1.0);
+    expect(res.body.matchedSeasonName).toBeNull();
+    expect(res.body.baseSubtotal).toBe(10000);
+    expect(res.body.subtotal).toBe(10000);
+    expect(res.body.total).toBe(11000);
+  });
+
+  test('season findMany is scoped to quote.subBrand', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({ subBrand: 'rfu' }));
+    prisma.travelQuoteLine.findMany.mockResolvedValue([]);
+    prisma.travelSeasonCalendar.findMany.mockResolvedValue([]);
+    prisma.travelMarkupRule.findMany.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/travel/quotes/100/pricing-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(prisma.travelSeasonCalendar.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: 1, subBrand: 'rfu' }),
+      }),
+    );
   });
 });

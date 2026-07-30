@@ -438,6 +438,68 @@ describe('POST /api/contacts — create', () => {
     expect(emitEventMock.mock.calls[0][0]).toBe('contact.created');
   });
 
+  test('empty strings for optional wellness/Int/Date fields are normalized to null → 201 (generic CRM create lead form)', async () => {
+    const created = {
+      id: 12346,
+      name: 'Murali',
+      email: 'bva@gmail.com',
+      phone: '+91 9176955432',
+      company: 'Globus',
+      title: 'Software',
+      source: 'Organic',
+      status: 'Lead',
+      tenantId: TENANT_ID,
+      assignedToId: USER_ID,
+    };
+    findDuplicateMock.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce(created);
+
+    const res = await request(makeApp())
+      .post('/api/contacts')
+      .send({
+        name: 'Murali',
+        email: 'bva@gmail.com',
+        phone: '+91 9176955432',
+        company: 'Globus',
+        title: 'Software',
+        source: 'Organic',
+        status: 'Lead',
+        // Generic CRM form sends these as empty strings because they are
+        // rendered only for wellness/travel; Prisma Int? / DateTime? columns
+        // reject "" unless normalized to null.
+        treatmentOfInterest: '',
+        preferredLocationId: '',
+        preferredPractitionerId: '',
+        gst: '',
+        stateCode: '',
+        billingStateCode: '',
+        birthDate: '',
+        anniversary: '',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 12346, name: 'Murali' });
+
+    const data = prisma.contact.create.mock.calls[0][0].data;
+    // Empty strings must NOT reach Prisma for Int? / DateTime? columns.
+    expect(data.preferredLocationId).toBeNull();
+    expect(data.preferredPractitionerId).toBeNull();
+    expect(data.birthDate).toBeNull();
+    expect(data.anniversary).toBeNull();
+    expect(data.treatmentOfInterest).toBeNull();
+    expect(data.gst).toBeNull();
+    expect(data.stateCode).toBeNull();
+    expect(data.billingStateCode).toBeNull();
+    // Core fields should be preserved unchanged.
+    expect(data.name).toBe('Murali');
+    expect(data.email).toBe('bva@gmail.com');
+    expect(data.phone).toBe('+91 9176955432');
+    expect(data.company).toBe('Globus');
+    expect(data.title).toBe('Software');
+    expect(data.source).toBe('Organic');
+    expect(data.status).toBe('Lead');
+  });
+
   test('missing required email → 400 EMAIL_REQUIRED (#160); prisma NOT called', async () => {
     const res = await request(makeApp())
       .post('/api/contacts')
@@ -519,6 +581,32 @@ describe('PUT /api/contacts/:id — update', () => {
     // writeAudit fires because diffFields returned a non-empty changeset.
     expect(writeAuditMock).toHaveBeenCalledOnce();
     expect(writeAuditMock.mock.calls[0][1]).toBe('UPDATE');
+  });
+
+  test('callifiedCampaignId empty string "" is normalized to null', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.contact.update.mockResolvedValueOnce({ ...SAMPLE_CONTACT, callifiedCampaignId: null });
+
+    const res = await request(makeApp())
+      .put('/api/contacts/9001')
+      .send({ callifiedCampaignId: '' });
+
+    expect(res.status).toBe(200);
+    const updateData = prisma.contact.update.mock.calls[0][0].data;
+    expect(updateData.callifiedCampaignId).toBeNull();
+  });
+
+  test('callifiedCampaignId numeric value is persisted', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.contact.update.mockResolvedValueOnce({ ...SAMPLE_CONTACT, callifiedCampaignId: 42 });
+
+    const res = await request(makeApp())
+      .put('/api/contacts/9001')
+      .send({ callifiedCampaignId: 42 });
+
+    expect(res.status).toBe(200);
+    const updateData = prisma.contact.update.mock.calls[0][0].data;
+    expect(updateData.callifiedCampaignId).toBe(42);
   });
 });
 

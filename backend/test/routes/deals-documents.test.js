@@ -57,7 +57,7 @@
  * handler logic, not multer's framework.
  */
 
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
@@ -87,6 +87,22 @@ if (eventBus.safeEmitEvent) eventBus.safeEmitEvent = vi.fn().mockResolvedValue(u
 import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
+
+// pdfRenderer's applyRupeeCapableFonts skips custom font registration under
+// NODE_ENV==='test'. Vitest sometimes inherits NODE_ENV='development' from
+// backend/.env (loaded by other modules), and on this Windows/Node24/PDFKit
+// combination the custom font registration path can hang the document stream.
+// Lock the test env to 'test' for this spec and restore it afterwards.
+// We use bracket access because Vite's define plugin replaces the bare
+// process.env.NODE_ENV identifier with a string literal at transform time.
+let originalNodeEnv;
+beforeAll(() => {
+  originalNodeEnv = process.env['NODE_ENV'];
+  process.env['NODE_ENV'] = 'test';
+});
+afterAll(() => {
+  process.env['NODE_ENV'] = originalNodeEnv;
+});
 
 // The router uses verifyToken on /download which reads JWT_SECRET from
 // config/secrets.js. Read it back so the test can sign tokens the

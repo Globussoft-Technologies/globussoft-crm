@@ -112,16 +112,39 @@ function pickSeason(seasons, tripDate, subBrand) {
  * the supplied paxCount meets or exceeds that threshold. Rules with no
  * minPax (null / undefined) apply regardless of paxCount.
  *
+ * matchContext (Issue 11): rules may carry a `matchKeyJson` object with
+ * per-product / per-season filters (e.g. {"city":"Makkah"} or
+ * {"seasonName":"hajj-2026"}). A rule matches when every key in its
+ * matchKeyJson equals the corresponding value in matchContext. An empty
+ * object or invalid JSON matches any context, so existing fallback rules
+ * keep working.
+ *
  * Returns { rule, markupAmount } where markupAmount is computed
  * against the supplied subtotal.
  */
-function pickMarkup(rules, subBrand, scope, subtotal, ownerUserId = null, paxCount = null) {
+function pickMarkup(rules, subBrand, scope, subtotal, ownerUserId = null, paxCount = null, matchContext = null) {
+  function ruleMatchesContext(r) {
+    const keyJson = String(r.matchKeyJson || "{}");
+    let keys;
+    try {
+      keys = keyJson ? JSON.parse(keyJson) : {};
+    } catch {
+      return true; // malformed JSON acts as a wildcard (backward-compat)
+    }
+    if (!keys || typeof keys !== "object" || Array.isArray(keys) || Object.keys(keys).length === 0) {
+      return true;
+    }
+    const ctx = matchContext && typeof matchContext === "object" ? matchContext : {};
+    return Object.entries(keys).every(([k, v]) => ctx[k] === v);
+  }
+
   const eligible = (rules || [])
     .filter((r) => r.isActive !== false)
     .filter((r) => r.subBrand === subBrand)
     .filter((r) => r.scope === scope)
     .filter((r) => r.ownerUserId == null || r.ownerUserId === ownerUserId)
-    .filter((r) => r.minPax == null || (paxCount != null && paxCount >= r.minPax));
+    .filter((r) => r.minPax == null || (paxCount != null && paxCount >= r.minPax))
+    .filter((r) => ruleMatchesContext(r));
   if (eligible.length === 0) return { rule: null, markupAmount: 0 };
 
   eligible.sort((a, b) => {
@@ -151,6 +174,7 @@ function pickMarkup(rules, subBrand, scope, subtotal, ownerUserId = null, paxCou
  *   tripDate: string|Date,
  *   ownerUserId?: number|null,
  *   paxCount?: number|null,
+ *   matchContext?: object|null,
  * }} input
  * @returns {QuoteResult}
  */
@@ -158,7 +182,7 @@ function quote(input) {
   if (!input || typeof input !== "object") {
     throw new TypeError("quote: input must be an object");
   }
-  const { cost, seasons = [], rules = [], subBrand, tripDate, ownerUserId = null, paxCount = null } = input;
+  const { cost, seasons = [], rules = [], subBrand, tripDate, ownerUserId = null, paxCount = null, matchContext = null } = input;
   if (!cost || typeof cost !== "object") {
     throw new TypeError("quote: cost row required");
   }
@@ -177,9 +201,18 @@ function quote(input) {
 
   const subtotal = Math.round(baseRate * seasonRes.multiplier * 100) / 100;
 
-  // 2. Markup — scope inferred from cost row's category mapping
+  // 2. Markup — scope inferred from cost row's category mapping.
+  //    Default matchContext carries the cost row + matched season so
+  //    per-product / per-season markup rules (Issue 11) resolve.
   const scope = mapCategoryToScope(cost.category);
-  const markupRes = pickMarkup(rules, subBrand, scope, subtotal, ownerUserId, paxCount);
+  const ctx = matchContext && typeof matchContext === "object"
+    ? matchContext
+    : {
+        category: cost.category,
+        routeOrSku: cost.routeOrSku,
+        seasonName: seasonRes.matchedSeasonName,
+      };
+  const markupRes = pickMarkup(rules, subBrand, scope, subtotal, ownerUserId, paxCount, ctx);
   if (rules.length > 0 && markupRes.rule === null) {
     warnings.push(`no-markup-rule-matched:${subBrand}:${scope}`);
   }
@@ -213,4 +246,119 @@ function mapCategoryToScope(category) {
   return category; // hotel | flight | transport pass through
 }
 
-module.exports = { quote, pickSeason, pickMarkup, mapCategoryToScope };
+/**
+ * Best-effort extract of per-product match keys from a quote line's
+ * free-text description. Used by composeQuoteBreakdown to let per-city /
+ * per-route markup rules resolve on quote lines.
+ */
+function buildLineMatchContext(line, seasonName) {
+  const ctx = {
+    category: line.lineType || null,
+    seasonName: seasonName || null,
+  };
+  const desc = String(line.description || "");
+  if (line.lineType === "hotel") {
+    const m = /,\s*([^—-]+?)\s*(?:—|-|$)/.exec(desc);
+    if (m && m[1]) ctx.city = m[1].trim();
+  }
+  if (line.lineType === "flight" || line.lineType === "transport") {
+    const m = /\b([A-Za-z]{3})\s*(?:→|->|to|-)\s*([A-Za-z]{3})\b/i.exec(desc);
+    if (m) ctx.route = `${m[1].toUpperCase()}-${m[2].toUpperCase()}`;
+  }
+  return ctx;
+}
+
+/**
+ * Compose a worked-example pricing breakdown for a TravelQuote + its lines.
+ * This is the shared engine behind:
+ *   - GET /api/travel/quotes/:id/pricing-preview
+ *   - GET /api/travel/quotes/public/quote/:shareToken
+ *
+ * @param {Object} quote
+ * @param {Array} lines
+ * @param {Array} seasons
+ * @param {Array} rules
+ * @returns {Object} breakdown envelope
+ */
+function composeQuoteBreakdown(quote, lines, seasons, rules) {
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const decoratedLines = [];
+  const ruleAggregateById = new Map();
+  let baseSubtotalAccum = 0;
+  let seasonAdjustedSubtotalAccum = 0;
+
+  const tripDate = quote.tripDate ? new Date(quote.tripDate) : null;
+  const seasonResult = tripDate && !Number.isNaN(tripDate.getTime())
+    ? pickSeason(seasons, tripDate, quote.subBrand)
+    : { multiplier: 1.0, matchedSeasonName: null };
+
+  for (const l of lines || []) {
+    const baseAmount = Number(l.amount || 0);
+    baseSubtotalAccum += baseAmount;
+    const seasonAmount = round2(baseAmount * seasonResult.multiplier);
+    seasonAdjustedSubtotalAccum += seasonAmount;
+
+    const scope = mapCategoryToScope(l.lineType);
+    const matchContext = buildLineMatchContext(l, seasonResult.matchedSeasonName);
+    const { rule, markupAmount } = pickMarkup(
+      rules,
+      quote.subBrand,
+      scope,
+      seasonAmount,
+      null,
+      null,
+      matchContext,
+    );
+
+    const finalAmount = round2(seasonAmount + markupAmount);
+    decoratedLines.push({
+      lineId: l.id,
+      id: l.id,
+      lineType: l.lineType,
+      description: l.description,
+      baseAmount: round2(baseAmount),
+      amount: round2(baseAmount),
+      seasonMultiplier: seasonResult.multiplier,
+      matchedSeasonName: seasonResult.matchedSeasonName,
+      seasonAmount,
+      markupAmount: round2(markupAmount),
+      markupRuleId: rule?.id ?? null,
+      markupRuleName: rule?.matchKeyJson || null,
+      finalAmount,
+      amountWithMarkup: finalAmount,
+    });
+
+    if (rule && markupAmount > 0) {
+      const prior = ruleAggregateById.get(rule.id);
+      if (prior) {
+        prior.amount = round2(prior.amount + markupAmount);
+      } else {
+        ruleAggregateById.set(rule.id, {
+          ruleId: rule.id,
+          ruleName: rule.matchKeyJson || `rule-${rule.id}`,
+          percent: rule.markupPct != null ? Number(rule.markupPct) : null,
+          amount: round2(markupAmount),
+        });
+      }
+    }
+  }
+
+  const baseSubtotal = round2(baseSubtotalAccum);
+  const subtotal = round2(seasonAdjustedSubtotalAccum);
+  const markupApplied = Array.from(ruleAggregateById.values());
+  const totalMarkup = markupApplied.reduce((acc, r) => acc + r.amount, 0);
+  const total = round2(subtotal + totalMarkup);
+
+  return {
+    baseSubtotal,
+    subtotal,
+    markupApplied,
+    total,
+    matchedSeasonName: seasonResult.matchedSeasonName,
+    seasonMultiplier: seasonResult.multiplier,
+    tripDate: tripDate ? tripDate.toISOString().slice(0, 10) : null,
+    lines: decoratedLines,
+  };
+}
+
+module.exports = { quote, pickSeason, pickMarkup, mapCategoryToScope, composeQuoteBreakdown };

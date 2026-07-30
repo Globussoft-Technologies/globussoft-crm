@@ -12,6 +12,7 @@
 //   - Landing pages     total + published
 //   - Cost master       active rows + by-subBrand breakdown
 //   - Pricing rules     seasons + markup rules
+//   - Web check-ins     total + pending/done/missed breakdown
 //
 // Plus a "Recent trips" panel below with the newest 5 trips and quick
 // links into the detail page, and — for MANAGER/ADMIN — a "Team workload"
@@ -23,7 +24,7 @@ import { Link } from "react-router-dom";
 import {
   AlertCircle, BadgePercent, Calendar as CalendarIcon,
   ClipboardCheck, Compass, IndianRupee, FileText, Luggage,
-  Map as MapIcon, RefreshCw, Users,
+  Map as MapIcon, RefreshCw, Ticket, Users,
 } from "lucide-react";
 import { AuthContext } from "../../App";
 import { fetchApi } from "../../utils/api";
@@ -135,6 +136,20 @@ export default function TravelDashboard() {
               value={data.pricingRules.seasons + data.pricingRules.markupRules}
               footer={`${data.pricingRules.seasons} seasons · ${data.pricingRules.markupRules} markup rules`}
               link="/travel/pricing-rules"
+            />
+            <Tile
+              icon={Ticket}
+              label="Web check-ins"
+              value={data.webCheckins?.total ?? 0}
+              accent={
+                (data.webCheckins?.missed ?? 0) > 0 ? (
+                  <span style={{ color: "var(--danger-color)", fontWeight: 600 }}>
+                    {data.webCheckins.missed} missed
+                  </span>
+                ) : null
+              }
+              footer={`${data.webCheckins?.done ?? 0} delivered · ${data.webCheckins?.pending ?? 0} pending · ${data.webCheckins?.missed ?? 0} missed`}
+              link="/travel/web-checkins"
             />
           </div>
 
@@ -254,7 +269,7 @@ function Tile({ icon: Icon, label, value, footer, accent, link }) {
       <div style={{ fontSize: 32, fontWeight: 700, marginTop: 6, color: "var(--text-primary)" }}>
         {value ?? 0}
       </div>
-      {accent && (
+      {accent != null && accent !== "" && (
         <div style={{ fontSize: 12, color: "var(--primary-color)", marginTop: 2 }}>{accent}</div>
       )}
       {footer && (

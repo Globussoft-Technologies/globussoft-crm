@@ -579,6 +579,23 @@ router.post('/', async (req, res) => {
     // ownerId = req.user.userId. Explicit body.assignedToId still wins.
     if (normalised.assignedToId == null) normalised.assignedToId = req.user.userId;
 
+    // Auto-assign new Leads to the tenant's default Callified campaign when set
+    // and no campaign was supplied explicitly. Covers manual create, import,
+    // extension capture, and webhooks.
+    if (normalised.status === "Lead" && normalised.callifiedCampaignId == null) {
+      try {
+        const tenantCfg = await prisma.tenant.findUnique({
+          where: { id: req.user.tenantId },
+          select: { callifiedAutoCampaignId: true },
+        });
+        if (tenantCfg?.callifiedAutoCampaignId) {
+          normalised.callifiedCampaignId = tenantCfg.callifiedAutoCampaignId;
+        }
+      } catch (e) {
+        console.error("[contacts] auto-campaign lookup failed:", e.message);
+      }
+    }
+
     // PRD §4.5 — Phase 2 dedup preflight. Before letting Prisma's
     // @@unique([email, tenantId]) throw a P2002, run the richer
     // findDuplicateContactFull helper so the route can surface a

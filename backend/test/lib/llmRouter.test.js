@@ -165,6 +165,8 @@ describe('llmRouter — module shape', () => {
       "form-vs-call": { primary: "gemini-flash", fallback: "gpt-4" },
       "bulk-text": { primary: "gemini-flash", fallback: "groq-llama" },
       "call-summary": { primary: "gemini-flash", fallback: null },
+      // Callified AI call transcript classification for CRM leads (2026-07-31).
+      "callified-lead-status": { primary: "gemini-flash-lite", fallback: "gemini-flash" },
       "itinerary-suggest": { primary: "gemini-flash", fallback: "gpt-4" },
       // AI quote-template line-item JSON generation (PR #1178).
       "quote-template-generate": { primary: "gemini-flash", fallback: "gpt-4" },
@@ -211,8 +213,9 @@ describe('llmRouter — module shape', () => {
     // / 'transfer-search' + the 'airport-iata' name→code resolver +
     // 'landing-page-generate' (PR #1174) + 'quote-template-generate' (PR #1178) +
     // 'lead-conversation-summary' + 'lead-narrative-summary' (PR #1203) +
-    // 'lead-capture-consolidate' (PR #1210) = 22.
-    expect(r.VALID_TASKS).toHaveLength(22);
+    // 'lead-capture-consolidate' (PR #1210) +
+    // 'callified-lead-status' (Callified lead hot/cold classification) = 23.
+    expect(r.VALID_TASKS).toHaveLength(23);
   });
 });
 
@@ -465,7 +468,7 @@ describe('routeRequest', () => {
         // can render line items without a live LLM key.
         expect(() => JSON.parse(out.text)).not.toThrow();
         expect(Array.isArray(JSON.parse(out.text))).toBe(true);
-      } else if (task === 'lead-conversation-summary' || task === 'lead-narrative-summary' || task === 'lead-capture-consolidate') {
+      } else if (task === 'lead-conversation-summary' || task === 'lead-narrative-summary' || task === 'lead-capture-consolidate' || task === 'callified-lead-status') {
         // Stub returns parseable JSON objects so lead summary consumers can
         // render the summary without a live LLM key.
         expect(() => JSON.parse(out.text)).not.toThrow();

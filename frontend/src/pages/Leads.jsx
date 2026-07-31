@@ -3,13 +3,17 @@ import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
 import { useState, useEffect, useContext, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Search, ArrowRightCircle, Plus, X, Pencil, Trash2, RefreshCw, ChevronLeft, ChevronRight, Phone, FileText, Filter } from 'lucide-react';
+import {
+  UserPlus, Search, ArrowRightCircle, Plus, X, Pencil, Trash2, RefreshCw,
+  ChevronLeft, ChevronRight, Phone, FileText, Filter, SlidersHorizontal, Info,
+} from 'lucide-react';
 import { AuthContext } from '../App';
 import ColumnPicker from '../components/ColumnPicker';
 import TopScrollSync from '../components/TopScrollSync';
 import { SUB_BRAND_IDS, subBrandShortLabel } from '../utils/travelSubBrand';
 import CallifiedLeadCallDialog from '../components/CallifiedLeadCallDialog';
 import CallifiedCallDetailsDrawer from '../components/CallifiedCallDetailsDrawer';
+import CallifiedCallStatusDrawer from '../components/CallifiedCallStatusDrawer';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
 // #600  wellness vertical replaces the generic CRM source taxonomy with one
@@ -84,6 +88,30 @@ const COUNTRY_CODES = [
   { code: '+60', country: 'Malaysia' },
 ];
 
+function buildLeadStatusTooltip(lead) {
+  const source = lead.callifiedLeadStatusSource;
+  const reason = lead.callifiedLeadStatusReason;
+  const updatedAt = lead.callifiedLeadStatusUpdatedAt;
+  const sourceLabel = source === 'gemini'
+    ? 'Gemini AI'
+    : source === 'score'
+    ? 'Callified score / appointment'
+    : source === 'manual'
+    ? 'Manual override'
+    : source || 'Unknown';
+  const parts = [`Basis: ${sourceLabel}`];
+  if (reason) parts.push(`Reason: ${reason}`);
+  if (updatedAt) {
+    try {
+      const d = new Date(updatedAt);
+      if (!Number.isNaN(d.getTime())) {
+        parts.push(`Updated: ${d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`);
+      }
+    } catch (_) { /* ignore */ }
+  }
+  return parts.join('\n');
+}
+
 const Leads = () => {
   const navigate = useNavigate();
   const notify = useNotify();
@@ -115,14 +143,25 @@ const Leads = () => {
   const [callifiedConfigured, setCallifiedConfigured] = useState(null); // null = loading
   const [callifiedCampaigns, setCallifiedCampaigns] = useState([]);
   const [callifiedSummaries, setCallifiedSummaries] = useState({});
-  const [bulkDialCampaignId, setBulkDialCampaignId] = useState('');
-  const [bulkDialing, setBulkDialing] = useState(false);
+  const [selectedCampaignIds, setSelectedCampaignIds] = useState([]);
+  const [campaignDropdownOpen, setCampaignDropdownOpen] = useState(false);
+  const [autoCampaignId, setAutoCampaignId] = useState('');
+  const [savingAutoCampaign, setSavingAutoCampaign] = useState(false);
   // #892  Create Lead surface is a header CTA + drawer (not the inline
   // always-visible form). `creating` drives whether the drawer is rendered.
   const [creating, setCreating] = useState(false);
   const [sourceFilter, setSourceFilter] = useState('');
   const [subBrandFilter, setSubBrandFilter] = useState('');
   const [stageFilter, setStageFilter] = useState('');
+  // Generic CRM Callified filters
+  const [campaignFilter, setCampaignFilter] = useState('');
+  const [leadStatusFilter, setLeadStatusFilter] = useState('');
+  const [assigneeFilter, setAssigneeFilter] = useState('');
+  // Sequential one-by-one call queue
+  const [callQueue, setCallQueue] = useState([]);
+  const [callQueueActive, setCallQueueActive] = useState(false);
+  const [callStatusDrawerOpen, setCallStatusDrawerOpen] = useState(false);
+  const [classifyingLeads, setClassifyingLeads] = useState(new Set());
   const [pipelineStages, setPipelineStages] = useState([]);
   const [dealsByContact, setDealsByContact] = useState({});
   const [bookingValueByContact, setBookingValueByContact] = useState({});
@@ -177,25 +216,181 @@ const Leads = () => {
     customFields: {},
   });
 
-  const fetchLeads = () => {
+  const fetchLeads = async () => {
     setLoading(true);
-    fetchApi('/api/contacts?status=Lead&limit=500')
-      .then(data => {
-        setLeads(data);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+    try {
+      const data = await fetchApi('/api/contacts?status=Lead&limit=500');
+      const rows = Array.isArray(data) ? data : [];
+      setLeads(rows);
+      return rows;
+    } catch {
+      notify.error('Failed to load leads');
+      return [];
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const fetchStaff = () => {
-    fetchApi('/api/staff')
-      .then(data => setStaff(data))
-      .catch(() => {});
+  const fetchStaff = async () => {
+    try {
+      const data = await fetchApi('/api/staff');
+      setStaff(Array.isArray(data) ? data : []);
+    } catch {
+      setStaff([]);
+    }
+  };
+
+  const loadAutoCampaign = async () => {
+    if (!isGeneric) return;
+    try {
+      const d = await fetchApi('/api/callified/auto-campaign');
+      const id = d?.callifiedAutoCampaignId ? String(d.callifiedAutoCampaignId) : '';
+      setAutoCampaignId(id);
+      try { localStorage.setItem('callified_auto_campaign_id', id || ''); } catch {}
+    } catch {
+      // fall back to localStorage only
+      try { setAutoCampaignId(localStorage.getItem('callified_auto_campaign_id') || ''); } catch {}
+    }
+  };
+
+  const saveAutoCampaign = async (campaignId) => {
+    if (!isGeneric) return;
+    setSavingAutoCampaign(true);
+    try {
+      await fetchApi('/api/callified/auto-campaign', {
+        method: 'PUT',
+        body: JSON.stringify({ callifiedAutoCampaignId: campaignId || null }),
+      });
+      setAutoCampaignId(campaignId);
+      try { localStorage.setItem('callified_auto_campaign_id', campaignId || ''); } catch {}
+    } catch (err) {
+      notify.error(err?.message || 'Failed to save auto-assign campaign');
+    } finally {
+      setSavingAutoCampaign(false);
+    }
+  };
+
+  // Refresh everything visible on the Leads page without a full reload.
+  // Re-classifies any generic leads that are linked to a Callified campaign or
+  // currently have no status, so a real call that just completed updates the
+  // Hot/Cold badge without a browser reload.
+  const refreshAll = async () => {
+    const [freshLeads] = await Promise.all([
+      fetchLeads(),
+      fetchStaff(),
+      loadCallifiedCampaigns(),
+      loadAutoCampaign(),
+    ]);
+    if (isGeneric && Array.isArray(freshLeads) && freshLeads.length > 0) {
+      await classifyVisibleLeads(freshLeads, { force: true });
+    }
+    notify.success('Refreshed');
+  };
+
+  // Backfill assignment for hot leads that slipped through without an owner.
+  // Handles existing leads created before auto-assignment, transient backend
+  // failures, or leads that became hot outside the normal classify flow.
+  const ensureHotLeadsAssigned = async (leadRows) => {
+    if (!isGeneric || !Array.isArray(leadRows) || leadRows.length === 0) return;
+    const hotUnassigned = leadRows.filter(l =>
+      l?.id &&
+      l.callifiedLeadStatus === 'hot' &&
+      !l.assignedToId
+    );
+    if (hotUnassigned.length === 0) return;
+    try {
+      const ids = hotUnassigned.map(l => l.id);
+      await fetchApi('/api/callified/leads/ensure-assigned', {
+        method: 'POST',
+        body: JSON.stringify({ contactIds: ids }),
+      });
+      await fetchLeads();
+    } catch (e) {
+      console.error('[leads] ensureHotLeadsAssigned failed:', e?.message);
+    }
+  };
+
+  // Classify visible generic-CRM leads. In normal (non-force) mode it only
+  // touches leads with no status yet. In force mode it re-classifies leads
+  // that have a Callified campaign assigned or any existing status, so refresh
+  // and post-call flows pick up the latest transcript/score.
+  const classifyVisibleLeads = async (leadRows, options = {}) => {
+    if (!isGeneric || !Array.isArray(leadRows)) return;
+    const { force = false } = options;
+    const candidates = leadRows.filter(l => {
+      if (!l?.id) return false;
+      if (force) {
+        // Re-classify leads that have a campaign, have any prior status, or
+        // have at least one Callified call recorded.
+        return Boolean(l.callifiedCampaignId) || Boolean(l.callifiedLeadStatus) || (callifiedSummaries[l.id]?.callCount || 0) > 0;
+      }
+      return !l.callifiedLeadStatus;
+    });
+    if (candidates.length === 0) return;
+    const next = new Set(classifyingLeads);
+    for (const lead of candidates) {
+      next.add(lead.id);
+    }
+    setClassifyingLeads(next);
+    try {
+      const classifyResults = await Promise.all(
+        candidates.map(async (lead) => {
+          try {
+            return await fetchApi(`/api/callified/leads/${lead.id}/classify`, { method: 'POST' });
+          } catch (e) {
+            console.error(`[leads] classify ${lead.id} failed:`, e?.message);
+            return null;
+          }
+        })
+      );
+      // Optimistically merge classification results + auto-assignment into local
+      // state so the Hot/Cold badge and Assigned To column update immediately.
+      const resultById = new Map();
+      for (const r of classifyResults) {
+        if (r?.id) resultById.set(r.id, r);
+      }
+      if (resultById.size > 0) {
+        setLeads(prev => prev.map(l => {
+          const r = resultById.get(l.id);
+          if (!r) return l;
+          return {
+            ...l,
+            callifiedLeadStatus: r.callifiedLeadStatus ?? l.callifiedLeadStatus,
+            callifiedLeadStatusSource: r.callifiedLeadStatusSource ?? l.callifiedLeadStatusSource,
+            callifiedLeadStatusReason: r.reason ?? l.callifiedLeadStatusReason,
+            callifiedLeadStatusUpdatedAt: r.callifiedLeadStatusUpdatedAt ?? l.callifiedLeadStatusUpdatedAt,
+            assignedToId: r.assignedToId ?? l.assignedToId,
+            assignedTo: r.assignedTo ?? l.assignedTo,
+          };
+        }));
+      }
+      await fetchLeads();
+      // The score/call-count badges read from a separate summary cache; refresh
+      // that cache so the Callified Score column updates without a reload.
+      const ids = candidates.map(l => l.id);
+      try {
+        const d = await fetchApi(`/api/callified/leads/call-summary?contactIds=${ids.join(',')}`);
+        setCallifiedSummaries(prev => ({ ...(prev || {}), ...(d?.summaries || {}) }));
+      } catch (e) {
+        console.error('[leads] summary refresh failed:', e?.message);
+      }
+    } finally {
+      setClassifyingLeads(prev => {
+        const updated = new Set(prev);
+        candidates.forEach(l => updated.delete(l.id));
+        return updated;
+      });
+    }
   };
 
   useEffect(() => {
-    fetchLeads();
+    fetchLeads().then(rows => {
+      if (isGeneric && Array.isArray(rows) && rows.length > 0) {
+        ensureHotLeadsAssigned(rows);
+      }
+    });
     fetchStaff();
+    loadAutoCampaign();
     if (isTravel) {
       fetchApi('/api/pipeline_stages')
         .then(data => setPipelineStages(Array.isArray(data) ? data : []))
@@ -432,7 +627,13 @@ const Leads = () => {
       await fetchApi('/api/contacts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...newLead, name: trimmedName, phone: phoneOut, countryCode: undefined }),
+        body: JSON.stringify({
+          ...newLead,
+          name: trimmedName,
+          phone: phoneOut,
+          countryCode: undefined,
+          callifiedCampaignId: isGeneric && autoCampaignId ? Number(autoCampaignId) : undefined,
+        }),
       });
       setNewLead({ name: '', email: '', company: '', title: '', countryCode: '+1', phone: '', source: 'Organic', status: 'Lead', customFields: {} });
       // #892  close the drawer on successful create; the list refresh
@@ -548,40 +749,210 @@ const Leads = () => {
   };
 
   const handleCampaignChange = async (lead, campaignId) => {
+    const previousId = lead.callifiedCampaignId ? String(lead.callifiedCampaignId) : '';
+    const nextId = campaignId ? String(campaignId) : '';
+    // Optimistically update the local row so the dropdown feels instant even
+    // on high-latency deploys.
+    setLeads(prev => prev.map(l =>
+      l.id === lead.id ? { ...l, callifiedCampaignId: nextId ? Number(nextId) : null } : l
+    ));
     try {
       await fetchApi(`/api/contacts/${lead.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ callifiedCampaignId: campaignId ? Number(campaignId) : null }),
+        body: JSON.stringify({ callifiedCampaignId: nextId ? Number(nextId) : null }),
       });
+      // Refetch leads once; reload campaign counts in the background so the
+      // dropdown counts stay fresh without blocking the optimistic update.
       await fetchLeads();
-      await loadCallifiedCampaigns();
+      loadCallifiedCampaigns();
     } catch (err) {
+      // Roll back on failure.
+      setLeads(prev => prev.map(l =>
+        l.id === lead.id ? { ...l, callifiedCampaignId: previousId ? Number(previousId) : null } : l
+      ));
       notify.error(err?.body?.error || err?.message || 'Failed to assign campaign');
     }
   };
 
-  const handleBulkDial = async () => {
-    if (!bulkDialCampaignId) return;
-    const campaign = callifiedCampaigns.find(c => String(c.id) === bulkDialCampaignId);
+  // Poll Callified until a lead's latest call reaches a terminal state or a
+  // timeout passes. Keeps the queue honest one-by-one instead of racing ahead.
+  const pollCallCompletion = async (lead, { callifiedLeadId, timeoutMs = 120_000, intervalMs = 3000 } = {}) => {
+    const start = Date.now();
+    let resolvedId = callifiedLeadId || null;
+    while (Date.now() - start < timeoutMs) {
+      await new Promise(r => setTimeout(r, intervalMs));
+      try {
+        if (!resolvedId) {
+          const latest = await fetchApi(`/api/callified/calls/lead/${lead.id}/latest`);
+          resolvedId = latest?.callifiedLeadId || null;
+          if (!resolvedId) continue;
+        }
+        const details = await fetchApi(`/api/callified/calls/${resolvedId}/details`);
+        const transcripts = details?.transcripts || [];
+        if (transcripts.length > 0) {
+          return { completed: true, callifiedLeadId: resolvedId, details };
+        }
+      } catch (e) {
+        console.error(`[leads] poll call completion for ${lead.id} failed:`, e?.message);
+      }
+    }
+    return { completed: false, callifiedLeadId: resolvedId };
+  };
+
+  // Sequential one-by-one call queue. Accepts an array of { lead, campaignId }.
+  const runCallQueue = async (items) => {
+    if (!Array.isArray(items) || items.length === 0) return;
+    setCallQueue(items.map(it => ({ ...it, status: 'pending' })));
+    setCallQueueActive(true);
+    const completed = [];
+    const failed = [];
+
+    for (let i = 0; i < items.length; i += 1) {
+      const { lead, campaignId } = items[i];
+      setCallQueue(prev => prev.map((it, idx) => idx === i ? { ...it, status: 'calling' } : it));
+      let result;
+      try {
+        result = await fetchApi(`/api/callified/leads/${lead.id}/call`, {
+          method: 'POST',
+          body: JSON.stringify({ campaignId: Number(campaignId) }),
+        });
+      } catch (err) {
+        const msg = err?.body?.error || err?.message || 'Call failed';
+        failed.push({ lead, error: msg });
+        setCallQueue(prev => prev.map((it, idx) => idx === i ? { ...it, status: 'failed', error: msg } : it));
+        continue;
+      }
+
+      // Wait for the call to actually finish at Callified before moving on so
+      // the queue never dials two people at the same time.
+      setCallQueue(prev => prev.map((it, idx) => idx === i ? { ...it, status: 'waiting_for_completion' } : it));
+      const poll = await pollCallCompletion(lead, { callifiedLeadId: result?.callifiedLeadId });
+      completed.push({ lead, callifiedLeadId: poll.callifiedLeadId });
+      setCallQueue(prev => prev.map((it, idx) => idx === i ? { ...it, status: 'completed' } : it));
+    }
+
+    setCallQueueActive(false);
+    setTimeout(() => setCallQueue([]), 4000);
+    const freshLeads = await fetchLeads();
+    if (isGeneric && completed.length > 0 && freshLeads?.length > 0) {
+      // Re-classify the leads we just called so their Hot/Cold status updates
+      // from the latest transcript/score without requiring a browser reload.
+      const dialedIds = new Set(completed.map(c => c.lead.id));
+      classifyVisibleLeads(freshLeads.filter(l => dialedIds.has(l.id)), { force: true });
+    }
+
+    const parts = [];
+    if (completed.length) parts.push(`${completed.length} called`);
+    if (failed.length) parts.push(`${failed.length} failed`);
+    if (parts.length) notify.success(`Dial queue done: ${parts.join(', ')}`);
+  };
+
+  const handleDialSelectedLeads = async () => {
+    if (selectedLeads.length === 0) return;
+    const selectedRows = leads.filter(l => selectedLeads.includes(l.id));
+    const missingPhone = selectedRows.filter(l => !l.phone);
+    const missingCampaign = selectedRows.filter(l => !l.callifiedCampaignId);
+    const dialable = selectedRows.filter(l => l.phone && l.callifiedCampaignId);
+
+    if (dialable.length === 0) {
+      notify.error(`No dialable leads selected. ${missingPhone.length} missing phone, ${missingCampaign.length} missing campaign.`);
+      return;
+    }
+
+    if (missingPhone.length || missingCampaign.length) {
+      notify.info(`Dialing ${dialable.length} leads. Skipped ${missingPhone.length} without phone and ${missingCampaign.length} without campaign.`);
+    }
+
+    const items = dialable.map(l => ({ lead: l, campaignId: l.callifiedCampaignId }));
+    runCallQueue(items);
+  };
+
+  const handleDialSelectedCampaigns = async () => {
+    if (selectedCampaignIds.length === 0) return;
+    const campaigns = callifiedCampaigns.filter(c => selectedCampaignIds.includes(String(c.id)));
+    const allLeadIds = new Set();
+    const items = [];
+    for (const campaign of campaigns) {
+      const campaignLeads = leads.filter(
+        l => String(l.callifiedCampaignId) === String(campaign.id) && l.phone && !allLeadIds.has(l.id)
+      );
+      for (const lead of campaignLeads) {
+        allLeadIds.add(lead.id);
+        items.push({ lead, campaignId: campaign.id });
+      }
+    }
+
+    const targetCount = campaigns.reduce((sum, c) => sum + (c.leadCount || 0), 0);
+    const skippedNoPhone = targetCount - items.length;
+
+    if (items.length === 0) {
+      notify.error('No dialable leads found in the selected campaigns (missing phone numbers).');
+      return;
+    }
+
     const ok = await notify.confirm({
-      title: 'Dial all campaign leads?',
-      message: `This will call every lead assigned to "${campaign?.name || bulkDialCampaignId}" one by one. Continue?`,
+      title: 'Dial selected campaigns?',
+      message: `This will call ${items.length} leads across ${campaigns.length} campaign(s) one by one. ${skippedNoPhone > 0 ? `${skippedNoPhone} lead(s) will be skipped (no phone).` : ''}`,
       confirmText: 'Dial All',
       cancelText: 'Cancel',
       destructive: false,
     });
     if (!ok) return;
-    setBulkDialing(true);
-    try {
-      const res = await fetchApi(`/api/callified/campaigns/${bulkDialCampaignId}/dial-all`, { method: 'POST' });
-      notify.success(`Dialled ${res.succeeded}/${res.total} leads`);
-      fetchLeads();
-    } catch (err) {
-      notify.error(err?.body?.error || err?.message || 'Failed to dial campaign leads');
-    } finally {
-      setBulkDialing(false);
+
+    runCallQueue(items);
+  };
+
+  const handleSingleDial = (lead, campaignId) => {
+    if (!lead.phone) {
+      notify.error('Lead has no phone number');
+      return;
     }
+    if (!campaignId) {
+      notify.error('Please assign a campaign first');
+      return;
+    }
+    runCallQueue([{ lead, campaignId: Number(campaignId) }]);
+  };
+
+  const handleLeadStatusChange = async (lead, status) => {
+    try {
+      setLeads(prev => prev.map(l =>
+        l.id === lead.id ? { ...l, callifiedLeadStatus: status } : l
+      ));
+      const result = await fetchApi(`/api/callified/leads/${lead.id}/lead-status`, {
+        method: 'PUT',
+        body: JSON.stringify({ status }),
+      });
+      setLeads(prev => prev.map(l =>
+        l.id === lead.id
+          ? {
+              ...l,
+              callifiedLeadStatus: result?.callifiedLeadStatus ?? status,
+              callifiedLeadStatusSource: result?.callifiedLeadStatusSource ?? 'manual',
+              callifiedLeadStatusReason: result?.callifiedLeadStatusReason ?? 'Status changed manually by user.',
+              callifiedLeadStatusUpdatedAt: result?.callifiedLeadStatusUpdatedAt ?? new Date().toISOString(),
+              assignedToId: result?.assignedToId ?? l.assignedToId,
+              assignedTo: result?.assignedTo ?? l.assignedTo,
+            }
+          : l
+      ));
+      await fetchLeads();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to update lead status');
+      await fetchLeads();
+    }
+  };
+
+  const resetFilters = () => {
+    setSourceFilter('');
+    setSubBrandFilter('');
+    setStageFilter('');
+    setCampaignFilter('');
+    setLeadStatusFilter('');
+    setAssigneeFilter('');
+    setSearchTerm('');
+    setLeadsPage(0);
   };
 
   const toggleSelect = (id) => {
@@ -641,7 +1012,7 @@ const Leads = () => {
     : isWellness
     ? '1500px'
     : isGeneric
-    ? `${1290 + visibleCfCols * 140}px`
+    ? `${1420 + visibleCfCols * 140}px`
     : customFieldDefs.length
     ? `${900 + customFieldDefs.length * 140}px`
     : undefined;
@@ -650,8 +1021,18 @@ const Leads = () => {
     if (!matchesSource(lead.source, sourceFilter)) return false;
     if (isTravel && subBrandFilter && lead.subBrand !== subBrandFilter) return false;
     if (isTravel && !leadMatchesStage(lead)) return false;
+    if (isGeneric && campaignFilter && String(lead.callifiedCampaignId) !== String(campaignFilter)) return false;
+    if (isGeneric && leadStatusFilter && lead.callifiedLeadStatus !== leadStatusFilter) return false;
+    if (assigneeFilter) {
+      if (assigneeFilter === 'unassigned') {
+        if (lead.assignedToId) return false;
+      } else if (String(lead.assignedToId) !== String(assigneeFilter)) {
+        return false;
+      }
+    }
     const term = searchTerm.trim().toLowerCase();
     if (!term) return true;
+    const campaign = callifiedCampaigns.find(c => String(c.id) === String(lead.callifiedCampaignId));
     return [
       lead.name,
       lead.email,
@@ -660,6 +1041,8 @@ const Leads = () => {
       lead.source,
       lead.assignedTo?.name,
       lead.assignedTo?.email,
+      campaign?.name,
+      lead.callifiedLeadStatus,
     ].some(value => String(value || '').toLowerCase().includes(term));
   });
 
@@ -684,6 +1067,65 @@ const Leads = () => {
     return () => { cancelled = true; };
   }, [isGeneric, filteredLeads.map(l => l.id).join(',')]);
   /* eslint-enable react-hooks/exhaustive-deps */
+
+  // Auto-classify visible generic-CRM leads that haven't been classified yet.
+  // Runs whenever the visible lead set changes and Callified is configured.
+  useEffect(() => {
+    if (!isGeneric || !callifiedConfigured || filteredLeads.length === 0) return;
+    const timeout = setTimeout(() => {
+      classifyVisibleLeads(filteredLeads);
+    }, 500);
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGeneric, callifiedConfigured, filteredLeads.map(l => `${l.id}:${l.callifiedLeadStatus}`).join(',')]);
+
+  // Safety net: any Hot lead that is unassigned (or assigned to a user outside
+  // the active ADMIN/MANAGER/USER pool used by the round-robin picker) should be
+  // round-robin assigned. This catches existing Hot leads, manually-overridden
+  // Hot leads, and cases where the classify-time assignment missed.
+  useEffect(() => {
+    if (!isGeneric || staff.length === 0 || filteredLeads.length === 0) return;
+    const assignableStaffIds = new Set(
+      staff
+        .filter(s => ['ADMIN', 'MANAGER', 'USER'].includes(s.role) && !s.deactivatedAt)
+        .map(s => String(s.id))
+    );
+    const hotUnassigned = filteredLeads.filter(l =>
+      l.callifiedLeadStatus === 'hot' &&
+      (!l.assignedToId || !assignableStaffIds.has(String(l.assignedToId)))
+    );
+    if (hotUnassigned.length === 0) return;
+
+    let cancelled = false;
+    const run = async () => {
+      let assignedCount = 0;
+      for (const lead of hotUnassigned) {
+        if (cancelled) return;
+        try {
+          const result = await fetchApi(`/api/callified/leads/${lead.id}/ensure-hot-assigned`, { method: 'POST' });
+          if (result?.assignedToId) {
+            assignedCount += 1;
+            setLeads(prev => prev.map(l =>
+              l.id === lead.id
+                ? { ...l, assignedToId: result.assignedToId, assignedTo: result.assignedTo }
+                : l
+            ));
+          }
+        } catch (e) {
+          console.error(`[leads] ensure-hot-assigned ${lead.id} failed:`, e?.body || e?.message);
+        }
+      }
+      if (assignedCount > 0) {
+        notify.success(`Auto-assigned ${assignedCount} hot lead(s)`);
+      }
+      // Refresh once at the end so the round-robin pointer and relations are consistent.
+      fetchLeads();
+    };
+
+    const timeout = setTimeout(run, 600);
+    return () => { cancelled = true; clearTimeout(timeout); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGeneric, staff.length, filteredLeads.map(l => `${l.id}:${l.callifiedLeadStatus}:${l.assignedToId}`).join(',')]);
 
   const leadsPageCount = Math.max(1, Math.ceil(filteredLeads.length / leadsPageSize));
   const currentLeadsPage = Math.min(leadsPage, leadsPageCount - 1);
@@ -805,12 +1247,12 @@ const Leads = () => {
   const leadsColSpan = 2
     + (isAdmin ? 1 : 0)
     + ['email', 'company', 'phone', 'aiScore', 'source', 'assignedTo', 'createdAt'].filter(isColVisible).length
-    + (isGeneric ? 3 : 0)
+    + (isGeneric ? 4 : 0)
     + (isTravel ? 2 : 0)
     + visibleCfCols;
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0, flex: '1 1 240px' }}>
           <UserPlus size={24} color="var(--text-primary)" />
           <div style={{ minWidth: 0 }}>
@@ -818,54 +1260,155 @@ const Leads = () => {
             <p style={{ margin: '0.2rem 0 0', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>{leadsSummary}</p>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <button type="button" className="btn-secondary" onClick={fetchLeads} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <button type="button" className="btn-secondary" onClick={refreshAll} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
             <RefreshCw size={15} /> Refresh
           </button>
+
           {isGeneric && callifiedConfigured && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <>
+              {/* Auto-assign campaign: applies to every new lead created. */}
               <select
                 className="input-field"
-                value={bulkDialCampaignId}
-                onChange={e => setBulkDialCampaignId(e.target.value)}
-                disabled={bulkDialing}
+                value={autoCampaignId}
+                onChange={e => saveAutoCampaign(e.target.value)}
+                disabled={savingAutoCampaign}
                 style={{ width: 'auto', minWidth: '200px', fontSize: '0.85rem' }}
-                aria-label="Select campaign to dial"
+                aria-label="Auto-assign new leads to campaign"
+                title="New leads will automatically be assigned to this campaign"
               >
-                <option value="">Dial Campaign Leads</option>
+                <option value="">Auto-assign campaign: off</option>
                 {callifiedCampaigns.map(c => (
                   <option key={c.id} value={String(c.id)}>
-                    {c.name || `Campaign ${c.id}`} {c.product_name ? `— ${c.product_name}` : ''} ({c.leadCount || 0})
+                    {c.name || `Campaign ${c.id}`} {c.product_name ? `— ${c.product_name}` : ''}
                   </option>
                 ))}
               </select>
-              {bulkDialCampaignId && (
+
+              {/* Multi-select campaign dropdown for bulk dial. */}
+              <div style={{ position: 'relative' }}>
                 <button
                   type="button"
-                  className="btn-primary"
-                  onClick={handleBulkDial}
-                  disabled={bulkDialing}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.85rem' }}
+                  className="input-field"
+                  onClick={() => setCampaignDropdownOpen(o => !o)}
+                  disabled={callQueueActive}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', minWidth: '200px', fontSize: '0.85rem', cursor: 'pointer' }}
                 >
-                  {bulkDialing ? (
-                    <>
-                      <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} /> Dialling…
-                    </>
-                  ) : (
-                    <>
-                      <Phone size={14} /> Dial All
-                    </>
-                  )}
+                  <Filter size={14} />
+                  {selectedCampaignIds.length === 0
+                    ? 'Select campaigns to dial'
+                    : `${selectedCampaignIds.length} campaign${selectedCampaignIds.length === 1 ? '' : 's'} selected`}
                 </button>
-              )}
-            </div>
+                {campaignDropdownOpen && (
+                  <>
+                    <div
+                      style={{ position: 'fixed', inset: 0, zIndex: 50 }}
+                      onClick={() => setCampaignDropdownOpen(false)}
+                    />
+                    <div
+                      className="card"
+                      style={{
+                        position: 'absolute',
+                        top: 'calc(100% + 4px)',
+                        right: 0,
+                        zIndex: 51,
+                        minWidth: 260,
+                        maxHeight: 320,
+                        overflowY: 'auto',
+                        padding: '0.5rem',
+                        background: 'var(--bg-color)',
+                        border: '1px solid var(--border-color)',
+                        boxShadow: '0 10px 24px rgba(0,0,0,0.2)',
+                      }}
+                    >
+                      {callifiedCampaigns.length === 0 ? (
+                        <div style={{ padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No campaigns</div>
+                      ) : (
+                        callifiedCampaigns.map(c => (
+                          <label
+                            key={c.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.5rem',
+                              padding: '0.4rem 0.5rem',
+                              fontSize: '0.85rem',
+                              cursor: 'pointer',
+                              borderRadius: 6,
+                            }}
+                            className="table-row-hover"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedCampaignIds.includes(String(c.id))}
+                              onChange={() => {
+                                setSelectedCampaignIds(prev =>
+                                  prev.includes(String(c.id))
+                                    ? prev.filter(id => id !== String(c.id))
+                                    : [...prev, String(c.id)]
+                                );
+                              }}
+                            />
+                            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {c.name || `Campaign ${c.id}`}
+                            </span>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{c.leadCount || 0}</span>
+                          </label>
+                        ))
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleDialSelectedCampaigns}
+                disabled={callQueueActive || selectedCampaignIds.length === 0}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.85rem' }}
+              >
+                {callQueueActive ? (
+                  <><RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} /> Dialling…</>
+                ) : (
+                  <><Phone size={14} /> Dial Campaigns</>
+                )}
+              </button>
+
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setCallStatusDrawerOpen(true)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.85rem' }}
+              >
+                <Phone size={14} /> Call Status
+              </button>
+            </>
           )}
+
+          {isGeneric && selectedLeads.length > 0 && (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleDialSelectedLeads}
+              disabled={callQueueActive}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.85rem' }}
+            >
+              {callQueueActive ? (
+                <><RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} /> Dialling…</>
+              ) : (
+                <><Phone size={14} /> Dial Selected ({selectedLeads.length})</>
+              )}
+            </button>
+          )}
+
           <button type="button" className="btn-primary" aria-label="Create a new lead" onClick={openCreate} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
             <Plus size={16} /> Create Lead
           </button>
         </div>
       </header>
 
+      {/* Source chips row. */}
       <div className="card" style={{ padding: '0.6rem 0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
         <button type="button" onClick={() => { setSourceFilter(''); setLeadsPage(0); }} style={!sourceFilter ? chipActiveStyle : chipStyle}>
           All <span style={chipCountStyle}>{leads.length}</span>
@@ -876,6 +1419,58 @@ const Leads = () => {
           </button>
         ))}
       </div>
+
+      {/* Filters panel for generic CRM. */}
+      {isGeneric && (
+        <div className="card" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+          <SlidersHorizontal size={16} style={{ color: 'var(--text-secondary)' }} />
+          <select
+            className="input-field"
+            value={campaignFilter}
+            onChange={e => { setCampaignFilter(e.target.value); setLeadsPage(0); }}
+            style={{ width: 'auto', minWidth: 160, fontSize: '0.85rem' }}
+            aria-label="Filter by campaign"
+          >
+            <option value="">All campaigns</option>
+            {callifiedCampaigns.map(c => (
+              <option key={c.id} value={String(c.id)}>{c.name || `Campaign ${c.id}`}</option>
+            ))}
+          </select>
+          <select
+            className="input-field"
+            value={leadStatusFilter}
+            onChange={e => { setLeadStatusFilter(e.target.value); setLeadsPage(0); }}
+            style={{ width: 'auto', minWidth: 140, fontSize: '0.85rem' }}
+            aria-label="Filter by lead status"
+          >
+            <option value="">All statuses</option>
+            <option value="hot">Hot</option>
+            <option value="cold">Cold</option>
+            <option value="yet_to_call">Yet to call</option>
+          </select>
+          <select
+            className="input-field"
+            value={assigneeFilter}
+            onChange={e => { setAssigneeFilter(e.target.value); setLeadsPage(0); }}
+            style={{ width: 'auto', minWidth: 150, fontSize: '0.85rem' }}
+            aria-label="Filter by assignee"
+          >
+            <option value="">All owners</option>
+            <option value="unassigned">Unassigned</option>
+            {staff.map(s => (
+              <option key={s.id} value={String(s.id)}>{s.name || s.email}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={resetFilters}
+            style={{ background: 'transparent', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+          >
+            <RefreshCw size={13} /> Reset filters
+          </button>
+          <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>{filteredLeads.length} leads</span>
+        </div>
+      )}
 
       {isTravel && (
         <div className="card" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
@@ -891,6 +1486,58 @@ const Leads = () => {
             </select>
           </div>
           <span style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>{filteredLeads.length} leads</span>
+        </div>
+      )}
+
+      {callQueueActive && (
+        <div className="card" style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+          <RefreshCw size={16} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent-color)', flexShrink: 0 }} />
+          <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>Call queue</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+            {callQueue.map((it, idx) => {
+              const isActive = it.status === 'calling' || it.status === 'waiting_for_completion';
+              const label = it.status === 'completed'
+                ? ' — completed'
+                : it.status === 'failed'
+                ? ` — ${it.error || 'failed'}`
+                : it.status === 'calling'
+                ? ' — calling…'
+                : it.status === 'waiting_for_completion'
+                ? ' — on call / wrapping up…'
+                : ' — pending';
+              return (
+                <span
+                  key={idx}
+                  style={{
+                    padding: '0.2rem 0.5rem',
+                    borderRadius: '999px',
+                    fontSize: '0.75rem',
+                    fontWeight: 600,
+                    background: it.status === 'completed'
+                      ? 'rgba(16,185,129,0.12)'
+                      : it.status === 'failed'
+                      ? 'rgba(239,68,68,0.12)'
+                      : isActive
+                      ? 'rgba(245,158,11,0.12)'
+                      : 'var(--surface-hover)',
+                    color: it.status === 'completed'
+                      ? 'var(--success-color)'
+                      : it.status === 'failed'
+                      ? '#ef4444'
+                      : isActive
+                      ? 'var(--warning-color)'
+                      : 'var(--text-secondary)',
+                  }}
+                >
+                  {it.lead.name || it.lead.phone || `Lead ${idx + 1}`}
+                  {label}
+                </span>
+              );
+            })}
+          </div>
+          <span style={{ marginLeft: 'auto', fontSize: '0.8125rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+            {callQueue.filter(it => it.status === 'completed' || it.status === 'failed').length} / {callQueue.length} done
+          </span>
         </div>
       )}
 
@@ -954,7 +1601,8 @@ const Leads = () => {
                   {isColVisible('aiScore') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>}
                   {isColVisible('source') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>}
                   {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', minWidth: '180px' }}>Callified Campaign</th>}
-                  {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', width: '110px' }}>AI Call</th>}
+                  {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', minWidth: '120px' }}>Lead Status</th>}
+                  {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', width: '110px' }}>Callified AI call</th>}
                   {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', width: '100px' }}>Callified Score</th>}
                   {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Sub-brand</th>}
                   {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Amount</th>}
@@ -1035,13 +1683,66 @@ const Leads = () => {
                   )}
                   {isGeneric && (
                     <td style={{ padding: '1rem', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                      {classifyingLeads.has(lead.id) ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.75rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600, background: 'var(--surface-hover)', color: 'var(--text-secondary)' }}>
+                          <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} /> Classifying…
+                        </span>
+                      ) : (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <select
+                            className="input-field"
+                            value={lead.callifiedLeadStatus || 'yet_to_call'}
+                            onChange={e => handleLeadStatusChange(lead, e.target.value)}
+                            disabled={!callifiedConfigured}
+                            style={{
+                              padding: '0.25rem 0.6rem',
+                              borderRadius: '999px',
+                              fontSize: '0.75rem',
+                              fontWeight: 600,
+                              border: 'none',
+                              cursor: 'pointer',
+                              minWidth: '90px',
+                              color: lead.callifiedLeadStatus === 'hot' ? '#fff' : lead.callifiedLeadStatus === 'cold' ? '#fff' : 'var(--text-secondary)',
+                              backgroundColor: lead.callifiedLeadStatus === 'hot' ? '#ef4444' : lead.callifiedLeadStatus === 'cold' ? '#3b82f6' : 'var(--surface-hover)',
+                            }}
+                            aria-label={`Lead status for ${lead.name || 'lead'}`}
+                          >
+                            <option value="hot">Hot</option>
+                            <option value="cold">Cold</option>
+                            <option value="yet_to_call">Yet to call</option>
+                          </select>
+                          {lead.callifiedLeadStatus && lead.callifiedLeadStatus !== 'yet_to_call' && (
+                            <span
+                              title={buildLeadStatusTooltip(lead)}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '18px',
+                                height: '18px',
+                                borderRadius: '50%',
+                                background: lead.callifiedLeadStatus === 'hot' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                                color: lead.callifiedLeadStatus === 'hot' ? '#ef4444' : '#3b82f6',
+                                cursor: 'help',
+                                marginLeft: '0.15rem',
+                              }}
+                            >
+                              <Info size={12} />
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </td>
+                  )}
+                  {isGeneric && (
+                    <td style={{ padding: '1rem', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                       <button
                         onClick={() => {
                           if (!callifiedConfigured) {
                             notify.info('Configure Callified in Settings → Integrations to make AI calls');
                             return;
                           }
-                          setCallifiedCallLead(lead);
+                          handleSingleDial(lead, lead.callifiedCampaignId);
                         }}
                         title={callifiedConfigured ? `Call ${lead.name || 'lead'} via AI` : 'Configure Callified settings'}
                         style={{ ...actionIconBtn, color: callifiedConfigured ? 'var(--success-color)' : 'var(--text-secondary)', opacity: callifiedConfigured ? 1 : 0.6, position: 'relative' }}
@@ -1175,6 +1876,7 @@ const Leads = () => {
                           value={lead.assignedToId || ''}
                           onChange={e => handleAssign(lead.id, e.target.value)}
                           style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
+                          aria-label={`Assign ${lead.name || 'lead'} to staff`}
                         >
                           <option value="">Unassigned</option>
                           {staff.map(s => (
@@ -1492,6 +2194,10 @@ const Leads = () => {
             lead={callifiedDetailsLead}
             onClose={() => setCallifiedDetailsLead(null)}
           />
+        )}
+
+        {isGeneric && callStatusDrawerOpen && (
+          <CallifiedCallStatusDrawer onClose={() => setCallStatusDrawerOpen(false)} />
         )}
     </div>
   );

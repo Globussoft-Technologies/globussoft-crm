@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { AuthContext } from '../App';
 import ColumnPicker from '../components/ColumnPicker';
+import InlineCellEditor from '../components/InlineCellEditor';
 import TopScrollSync from '../components/TopScrollSync';
 import { SUB_BRAND_IDS, subBrandShortLabel } from '../utils/travelSubBrand';
 import CallifiedLeadCallDialog from '../components/CallifiedLeadCallDialog';
@@ -1841,30 +1842,27 @@ const Leads = () => {
                       defined field's value, or a dash for leads that predate
                       the field (backend fills the key with null). Each
                       field's column is independently toggleable via the
-                      "Customize table" picker (same cf_ prefix as the header). */}
+                      "Customize table" picker (same cf_ prefix as the header).
+                      Reuse the same inline cell editor as Contacts so empty
+                      custom values can be added directly in the table. */}
                   {customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).map(f => {
                     const raw = lead.customFields?.[f.fieldKey];
-                    let display;
-                    if (raw === null || raw === undefined || raw === '') {
-                      display = null;
-                    } else if (f.fieldType === 'checkbox') {
-                      display = raw ? 'Yes' : 'No';
-                    } else if (f.fieldType === 'date') {
-                      display = formatDate(raw);
-                    } else if (f.fieldType === 'multiselect') {
-                      display = Array.isArray(raw) ? raw.join(', ') : String(raw);
-                    } else if (f.fieldType === 'url') {
-                      display = (
-                        <a href={String(raw)} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)' }}>
-                          {String(raw)}
-                        </a>
-                      );
-                    } else {
-                      display = String(raw);
-                    }
                     return (
-                      <td key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                        {display ?? <span style={{ color: 'var(--border-color)' }}>-</span>}
+                      <td
+                        key={f.id}
+                        style={{ padding: '0.75rem 1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <InlineCellEditor
+                          contactId={lead.id}
+                          field={f}
+                          value={raw}
+                          onSaved={(newValue) => {
+                            setLeads(prev => prev.map(l => l.id === lead.id
+                              ? { ...l, customFields: { ...(l.customFields || {}), [f.fieldKey]: newValue } }
+                              : l));
+                          }}
+                        />
                       </td>
                     );
                   })}

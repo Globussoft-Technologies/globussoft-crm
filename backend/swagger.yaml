@@ -173,6 +173,8 @@ components:
     # ─── Shared envelope ──────────────────────────────────────────────
     ErrorResponse:
       type: object
+      additionalProperties: true
+      description: Partner-specific root keys are accepted and preserved by the runtime as _customFields.
       properties:
         error: { type: string, example: "Endpoint not found" }
         code: { type: string, example: "API_ROUTE_NOT_FOUND" }
@@ -1152,6 +1154,8 @@ components:
     # ─── External Partner API ─────────────────────────────────────────
     ExternalLead:
       type: object
+      additionalProperties: true
+      description: Partner-specific root keys are accepted and preserved by the runtime as _customFields.
       properties:
         id: { type: integer, readOnly: true }
         name: { type: string }

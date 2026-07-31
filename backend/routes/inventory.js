@@ -358,43 +358,90 @@ router.post("/upload/service-category-image", adminGate, upload.single("file"), 
 router.get("/products", canReadProducts, async (req, res) => {
   try {
     const isCustomer = req.user?.userType === "CUSTOMER";
+    const where = isCustomer
+      ? {
+          ...tenantWhere(req),
+          isActive: true,
+          NOT: { productType: "Consumption" },
+        }
+      : tenantWhere(req);
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const wantsPaginated = req.query.paginate === "true";
+    const rawCategoryId = req.query.categoryId;
+    const categoryId = rawCategoryId === undefined || rawCategoryId === null || rawCategoryId === ""
+      ? null
+      : parseInt(rawCategoryId, 10);
+
+    if (rawCategoryId !== undefined && rawCategoryId !== null && rawCategoryId !== "" && !Number.isInteger(categoryId)) {
+      return res.status(400).json({ error: "categoryId must be an integer", code: "INVALID_CATEGORY" });
+    }
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { sku: { contains: q } },
+        { brandName: { contains: q } },
+      ];
+    }
+    if (categoryId) where.categoryId = categoryId;
+
+    const selectOrInclude = isCustomer
+      ? {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            price: true,
+            discountedPrice: true,
+            imageUrl: true,
+            brandName: true,
+            volume: true,
+            unit: true,
+            productType: true,
+            // categoryId kept so the frontend's category-filter
+            // dropdown still works; the field is a foreign key, not
+            // sensitive data.
+            categoryId: true,
+            category: { select: { id: true, name: true } },
+          },
+        }
+      : {
+          include: { category: { select: { id: true, name: true } } },
+        };
+
+    if (wantsPaginated) {
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 10, 100));
+      const skip = (page - 1) * limit;
+      const [items, total] = await Promise.all([
+        prisma.product.findMany({
+          where,
+          orderBy: [{ name: "asc" }, { id: "asc" }],
+          skip,
+          take: limit,
+          ...selectOrInclude,
+        }),
+        prisma.product.count({ where }),
+      ]);
+      return res.json({
+        items,
+        pagination: {
+          total,
+          page,
+          limit,
+          pages: Math.max(1, Math.ceil(total / limit)),
+        },
+      });
+    }
+
     // Customer view: only active, non-Consumption (clinic-only) products,
-    // and a safe field set — no SKU / stock counts / cost prices /
+    // and a safe field set ? no SKU / stock counts / cost prices /
     // manufacturer / tax internals / barcode / threshold. Staff view
     // keeps the full row for the catalogue management UI.
     const items = await prisma.product.findMany({
-      where: isCustomer
-        ? {
-            ...tenantWhere(req),
-            isActive: true,
-            NOT: { productType: "Consumption" },
-          }
-        : tenantWhere(req),
+      where,
       orderBy: { name: "asc" },
       take: 200,
-      ...(isCustomer
-        ? {
-            select: {
-              id: true,
-              name: true,
-              description: true,
-              price: true,
-              discountedPrice: true,
-              imageUrl: true,
-              brandName: true,
-              volume: true,
-              unit: true,
-              productType: true,
-              // categoryId kept so the frontend's category-filter
-              // dropdown still works; the field is a foreign key, not
-              // sensitive data.
-              categoryId: true,
-              category: { select: { id: true, name: true } },
-            },
-          }
-        : {
-            include: { category: { select: { id: true, name: true } } },
-          }),
+      ...selectOrInclude,
     });
     res.json(items);
   } catch (e) {

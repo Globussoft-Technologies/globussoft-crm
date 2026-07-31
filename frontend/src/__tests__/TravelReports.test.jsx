@@ -113,6 +113,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -138,6 +139,14 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import TravelReports from '../pages/travel/Reports';
+
+function renderTravelReports() {
+  return render(
+    <MemoryRouter>
+      <TravelReports />
+    </MemoryRouter>,
+  );
+}
 
 // Canonical populated responses.
 const TMC_POPULATED = {
@@ -238,7 +247,7 @@ beforeEach(() => {
 
 describe('<TravelReports /> — page chrome + tabs', () => {
   it('renders heading + the three tabs synchronously', async () => {
-    render(<TravelReports />);
+    renderTravelReports();
     expect(
       screen.getByRole('heading', { name: /Travel Reports/i }),
     ).toBeInTheDocument();
@@ -257,7 +266,7 @@ describe('<TravelReports /> — page chrome + tabs', () => {
   });
 
   it('defaults to TMC tab selected (aria-selected=true)', async () => {
-    render(<TravelReports />);
+    renderTravelReports();
     const tmcTab = screen.getByRole('tab', { name: /TMC/i });
     expect(tmcTab.getAttribute('aria-selected')).toBe('true');
     const rfuTab = screen.getByRole('tab', { name: /RFU/i });
@@ -270,7 +279,7 @@ describe('<TravelReports /> — page chrome + tabs', () => {
 
 describe('<TravelReports /> — mount + lazy-per-tab fetching', () => {
   it('fires GET /api/travel/reports/tmc on mount (initial tab is TMC) and does NOT pre-fetch other tabs', async () => {
-    render(<TravelReports />);
+    renderTravelReports();
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledTimes(1);
     });
@@ -283,7 +292,7 @@ describe('<TravelReports /> — mount + lazy-per-tab fetching', () => {
       resolveTmc = r;
     });
     fetchApiMock.mockImplementation(() => pending);
-    render(<TravelReports />);
+    renderTravelReports();
     // The SUT uses an HTML entity for the ellipsis (&hellip;) which RTL
     // resolves to the literal "…" character. Use the prefix substring.
     expect(screen.getByText(/Loading report/i)).toBeInTheDocument();
@@ -294,7 +303,7 @@ describe('<TravelReports /> — mount + lazy-per-tab fetching', () => {
   });
 
   it('switching to RFU tab fires GET /api/travel/reports/rfu (lazy, not pre-fetched)', async () => {
-    render(<TravelReports />);
+    renderTravelReports();
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledTimes(1);
     });
@@ -307,7 +316,7 @@ describe('<TravelReports /> — mount + lazy-per-tab fetching', () => {
   });
 
   it('switching to Cross-brand tab fires GET /api/travel/reports/cross-brand', async () => {
-    render(<TravelReports />);
+    renderTravelReports();
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledTimes(1);
     });
@@ -321,7 +330,7 @@ describe('<TravelReports /> — mount + lazy-per-tab fetching', () => {
 
 describe('<TravelReports /> — TMC tab content', () => {
   it('renders TMC KPI tiles + cards with populated data', async () => {
-    render(<TravelReports />);
+    renderTravelReports();
     // KPI tile labels.
     expect(
       await screen.findByText(/Total revenue \(active trips\)/i),
@@ -343,7 +352,7 @@ describe('<TravelReports /> — TMC tab content', () => {
   });
 
   it('renders en-IN ₹-formatted revenue (12,34,567 grouping)', async () => {
-    render(<TravelReports />);
+    renderTravelReports();
     // 1234567 → "12,34,567" (en-IN grouping: lakh-and-crore grouping).
     // The value appears in BOTH the KPI tile (Total revenue) AND the
     // Closed_Won row of the Deal funnel — use findAllByText per the
@@ -355,7 +364,7 @@ describe('<TravelReports /> — TMC tab content', () => {
 
   it('renders TMC empty-state copy when no revenue / no schools', async () => {
     installFetchMock({ tmc: TMC_EMPTY });
-    render(<TravelReports />);
+    renderTravelReports();
     // Top destinations card → empty card copy.
     expect(
       await screen.findByText(/No revenue recorded yet\./i),
@@ -371,7 +380,7 @@ describe('<TravelReports /> — TMC tab content', () => {
 
 describe('<TravelReports /> — RFU tab content', () => {
   it('renders RFU KPI tiles + cards after switching to RFU tab', async () => {
-    render(<TravelReports />);
+    renderTravelReports();
     // Wait for TMC mount fetch to settle so we don't race the tab switch.
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledTimes(1);
@@ -389,7 +398,7 @@ describe('<TravelReports /> — RFU tab content', () => {
 
   it('renders RFU empty-state copy when no itineraries / no customers', async () => {
     installFetchMock({ rfu: RFU_EMPTY });
-    render(<TravelReports />);
+    renderTravelReports();
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledTimes(1);
     });
@@ -411,7 +420,7 @@ describe('<TravelReports /> — RFU tab content', () => {
 
 describe('<TravelReports /> — Cross-brand tab content', () => {
   it('renders sub-brand rows with badge + conversion% per brand', async () => {
-    render(<TravelReports />);
+    renderTravelReports();
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledTimes(1);
     });
@@ -438,7 +447,7 @@ describe('<TravelReports /> — Cross-brand tab content', () => {
 
   it('renders Cross-brand empty-state when no sub-brand activity', async () => {
     installFetchMock({ crossBrand: CROSS_BRAND_EMPTY });
-    render(<TravelReports />);
+    renderTravelReports();
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledTimes(1);
     });
@@ -457,7 +466,7 @@ describe('<TravelReports /> — error chrome + 403 quiet path', () => {
     err.body = { error: 'TMC report service unavailable' };
     err.status = 500;
     installFetchMock({ tmc: err });
-    render(<TravelReports />);
+    renderTravelReports();
     // Inline error chrome surfaces.
     expect(
       await screen.findByText(/TMC report service unavailable/i),
@@ -486,7 +495,7 @@ describe('<TravelReports /> — error chrome + 403 quiet path', () => {
     err.body = { error: 'Sub-brand access denied' };
     err.status = 403;
     installFetchMock({ rfu: err });
-    render(<TravelReports />);
+    renderTravelReports();
     // Settle the TMC mount fetch first.
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledTimes(1);
@@ -500,3 +509,4 @@ describe('<TravelReports /> — error chrome + 403 quiet path', () => {
     expect(notifyError).not.toHaveBeenCalled();
   });
 });
+

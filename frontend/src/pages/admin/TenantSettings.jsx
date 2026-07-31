@@ -120,6 +120,7 @@ export default function TenantSettings() {
       await load();
     } catch (e) {
       console.error('[tenant-settings] save failed', e);
+      notify.error(e?.body?.error || e?.message || `Failed to update `);
     } finally {
       setBusy((b) => ({ ...b, [key]: null }));
     }
@@ -136,6 +137,7 @@ export default function TenantSettings() {
       await load();
     } catch (e) {
       console.error('[tenant-settings] revert failed', e);
+      notify.error(e?.body?.error || e?.message || `Failed to revert `);
     } finally {
       setBusy((b) => ({ ...b, [key]: null }));
     }
@@ -436,3 +438,4 @@ export default function TenantSettings() {
     </div>
   );
 }
+

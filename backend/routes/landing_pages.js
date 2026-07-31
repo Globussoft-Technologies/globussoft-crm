@@ -3354,9 +3354,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
         aiScore: 30,
         tenantId,
       },
-    });
-    syncedContact = contact;
-
+    });
     await applyLeadRouting(formProps, tenantId, contact.id);
     await prisma.deal.create({
       data: { title: `LP Inbound: ${page.title}`, amount: 0, stage: "lead", contactId: contact.id, tenantId },

@@ -656,6 +656,58 @@ const SEASON_COLS = [
   { key: "multiplier", header: "multiplier" },
 ];
 
+
+const SEASON_TEMPLATE_HEADERS = ["subBrand", "seasonName", "startDate", "endDate", "multiplier"];
+
+const SEASON_TEMPLATE_ROWS = [
+  {
+    subBrand: "# subBrand values: tmc, rfu, travelstall, visasure",
+    seasonName: "Required: seasonName, startDate, endDate",
+    startDate: "Example: 2026-03-01",
+    endDate: "Example: 2026-04-15",
+    multiplier: "Optional: e.g. 1.25",
+  },
+];
+
+router.get(
+  "/seasons/import-template",
+  verifyToken,
+  requirePermission("pricing", "read"),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const format = String(req.query.format || "csv").toLowerCase();
+      if (format !== "csv" && format !== "xlsx") {
+        return res.status(400).json({ error: "format must be csv or xlsx", code: "INVALID_FORMAT" });
+      }
+
+      if (format === "xlsx") {
+        const buf = toXlsxBuffer(SEASON_TEMPLATE_HEADERS, SEASON_TEMPLATE_ROWS, "Seasons Template");
+        res.setHeader(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        );
+        res.setHeader(
+          "Content-Disposition",
+          'attachment; filename="travel-seasons-template.xlsx"',
+        );
+        return res.send(buf);
+      }
+
+      const csv = serializeRows(
+        SEASON_TEMPLATE_HEADERS.map((header) => ({ key: header, header })),
+        SEASON_TEMPLATE_ROWS,
+      );
+      setCsvDownloadHeaders(res, "travel-seasons-template.csv");
+      return res.send(csv);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-csv] seasons template error:", e.message);
+      return res.status(500).json({ error: "Failed to download seasons template" });
+    }
+  },
+);
+
 router.get("/seasons/export.csv", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
@@ -806,6 +858,70 @@ const MARKUP_RULE_COLS = [
   { key: "priority", header: "priority" },
   { key: "isActive", header: "isActive" },
 ];
+
+
+const MARKUP_RULE_TEMPLATE_HEADERS = [
+  "subBrand",
+  "scope",
+  "matchKeyJson",
+  "markupPct",
+  "markupFlat",
+  "minPax",
+  "priority",
+  "isActive",
+];
+
+const MARKUP_RULE_TEMPLATE_ROWS = [
+  {
+    subBrand: "# subBrand values: tmc, rfu, travelstall, visasure",
+    scope: "Required: flight, hotel, transport, or package",
+    matchKeyJson: "Required JSON, e.g. {\"city\":\"Makkah\"} or {\"supplier\":\"Acme Travels\"}",
+    markupPct: "Use either markupPct (0.15 = 15%)",
+    markupFlat: "or markupFlat (e.g. 500), not both",
+    minPax: "Optional: e.g. 2",
+    priority: "Optional: lower number applies first",
+    isActive: "Optional: true/false",
+  },
+];
+
+router.get(
+  "/markup-rules/import-template",
+  verifyToken,
+  requirePermission("pricing", "read"),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const format = String(req.query.format || "csv").toLowerCase();
+      if (format !== "csv" && format !== "xlsx") {
+        return res.status(400).json({ error: "format must be csv or xlsx", code: "INVALID_FORMAT" });
+      }
+
+      if (format === "xlsx") {
+        const buf = toXlsxBuffer(MARKUP_RULE_TEMPLATE_HEADERS, MARKUP_RULE_TEMPLATE_ROWS, "Markup Rules Template");
+        res.setHeader(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        );
+        res.setHeader(
+          "Content-Disposition",
+          'attachment; filename="travel-markup-rules-template.xlsx"',
+        );
+        return res.send(buf);
+      }
+
+      const csv = serializeRows(
+        MARKUP_RULE_TEMPLATE_HEADERS.map((header) => ({ key: header, header })),
+        MARKUP_RULE_TEMPLATE_ROWS,
+      );
+      setCsvDownloadHeaders(res, "travel-markup-rules-template.csv");
+      return res.send(csv);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-csv] markup-rules template error:", e.message);
+      return res.status(500).json({ error: "Failed to download markup-rules template" });
+    }
+  },
+);
 
 router.get("/markup-rules/export.csv", verifyToken, requireTravelTenant, async (req, res) => {
   try {

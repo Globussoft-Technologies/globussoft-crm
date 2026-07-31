@@ -97,6 +97,13 @@ model Tenant {
   // Null = no fallback configured; resolver behaviour unchanged (subBrand=null
   // bucket wins). Validated against VALID_SUB_BRANDS at write time.
   defaultSubBrand    String?   @db.VarChar(50)
+  // Round-robin pointer for auto-assigning hot leads to staff users.
+  // Stores the last user id that was auto-assigned a hot lead so the next
+  // hot lead gets the following user in the staff list.
+  callifiedLastHotAssignedUserId Int?
+  // Default Callified campaign to auto-assign to every new Lead created in
+  // the tenant. NULL means auto-assign is turned off.
+  callifiedAutoCampaignId Int?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -701,6 +708,13 @@ model Contact {
   // Callified, so this is just the remote campaign id stored on the CRM contact
   // to enable per-lead assignment and bulk campaign dialing.
   callifiedCampaignId   Int?
+
+  // Callified lead status derived from AI call transcript analysis (Gemini)
+  // or fallback rules (score + appointment). Manual override supported.
+  callifiedLeadStatus         String?
+  callifiedLeadStatusSource   String?
+  callifiedLeadStatusReason   String?
+  callifiedLeadStatusUpdatedAt DateTime?
 
   // Data enrichment
   industry       String?

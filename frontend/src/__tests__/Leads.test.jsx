@@ -36,7 +36,7 @@
  *      the form fields in a drawer.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import React from 'react';
 import Leads from '../pages/Leads';
@@ -620,16 +620,11 @@ describe('Leads Ã¢â‚¬â€ table, search, bulk operations, row actions, 
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
-    // Three rows = three assign selects. The middle one is pre-assigned to 7;
-    // the first row (Alice) is unassigned. Pick Alice's select.
-    const allSelects = screen.getAllByRole('combobox');
-    // Filter to the per-row Assigned-To selects (they contain "Unassigned").
-    const assignSelects = allSelects.filter(el =>
-      Array.from(el.querySelectorAll('option')).some(o => o.textContent === 'Unassigned'),
-    );
-    expect(assignSelects.length).toBeGreaterThanOrEqual(3);
+    // The middle row is pre-assigned to 7; the first row (Alice) is unassigned.
+    const aliceAssignSelect = screen.getByLabelText(/Assign Alice Smith to staff/i);
+    expect(aliceAssignSelect).toBeInTheDocument();
 
-    fireEvent.change(assignSelects[0], { target: { value: '7' } });
+    fireEvent.change(aliceAssignSelect, { target: { value: '7' } });
 
     await waitFor(() => {
       const putCall = fetchApiMock.mock.calls.find(
@@ -955,7 +950,7 @@ describe('Leads Ã¢â‚¬â€ travel tenant Amount column reflects actual p
 // bulk-dial dropdown, call-count badge, and last-score column.
 // ---------------------------------------------------------------------------
 const CALLIFIED_LEADS = [
-  { id: 11, name: 'Alice Smith', email: 'alice@acme.test', company: 'Acme Corp', aiScore: 88, source: 'Organic', assignedToId: null, callifiedCampaignId: 101, createdAt: '2026-05-01T10:00:00Z' },
+  { id: 11, name: 'Alice Smith', email: 'alice@acme.test', company: 'Acme Corp', phone: '+1234567890', aiScore: 88, source: 'Organic', assignedToId: null, callifiedCampaignId: 101, createdAt: '2026-05-01T10:00:00Z' },
   { id: 12, name: 'Bob Jones', email: 'bob@globex.test', company: 'Globex', aiScore: 55, source: 'Referral', assignedToId: null, callifiedCampaignId: null, createdAt: '2026-05-02T10:00:00Z' },
 ];
 
@@ -1039,37 +1034,51 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     });
   });
 
-  it('renders bulk Dial Campaign Leads dropdown with lead counts', async () => {
+  it('renders bulk Dial Campaign Leads multi-select dropdown with lead counts', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
-    const bulkSelect = screen.getByLabelText(/Select campaign to dial/i);
-    expect(bulkSelect).toBeInTheDocument();
+    const bulkTrigger = screen.getByRole('button', { name: /Select campaigns to dial/i });
+    expect(bulkTrigger).toBeInTheDocument();
 
-    // Options include the placeholder + campaigns with lead counts.
-    const options = Array.from(bulkSelect.querySelectorAll('option'));
-    expect(options.some(o => o.textContent.includes('Globussoft outbound') && o.textContent.includes('(1)'))).toBe(true);
-    expect(options.some(o => o.textContent.includes('RFU Umrah follow-up') && o.textContent.includes('(0)'))).toBe(true);
+    // Open the dropdown to reveal campaign checkboxes + counts.
+    fireEvent.click(bulkTrigger);
+
+    // The dropdown is rendered inside the trigger's parent; scope to it so
+    // the auto-assign select option with the same campaign name is ignored.
+    const dropdownContainer = bulkTrigger.parentElement;
+    await waitFor(() => {
+      expect(within(dropdownContainer).getByText('Globussoft outbound')).toBeInTheDocument();
+      expect(within(dropdownContainer).getByText('RFU Umrah follow-up')).toBeInTheDocument();
+    });
   });
 
-  it('selecting a campaign and clicking Dial All opens confirm and POSTs bulk dial', async () => {
+  it('selecting campaigns and clicking Dial Campaigns queues calls one by one', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
-    const bulkSelect = screen.getByLabelText(/Select campaign to dial/i);
-    fireEvent.change(bulkSelect, { target: { value: '101' } });
+    const bulkTrigger = screen.getByRole('button', { name: /Select campaigns to dial/i });
+    fireEvent.click(bulkTrigger);
 
-    const dialAllBtn = screen.getByRole('button', { name: /Dial All/i });
-    expect(dialAllBtn).toBeInTheDocument();
+    // Check the Globussoft outbound campaign (the one with dialable leads).
+    const dropdownContainer = bulkTrigger.parentElement;
+    const globusCheckbox = within(dropdownContainer).getByLabelText(/Globussoft outbound/i);
+    fireEvent.click(globusCheckbox);
+
+    const dialBtn = screen.getByRole('button', { name: /Dial Campaigns/i });
+    expect(dialBtn).not.toBeDisabled();
 
     fetchApiMock.mockClear();
-    fireEvent.click(dialAllBtn);
+    fireEvent.click(dialBtn);
 
+    // Sequential queue dials the matching lead via /api/callified/leads/:id/call.
     await waitFor(() => {
       const postCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === '/api/callified/campaigns/101/dial-all' && opts?.method === 'POST',
+        ([url, opts]) => url === '/api/callified/leads/11/call' && opts?.method === 'POST',
       );
       expect(postCall).toBeDefined();
+      const body = JSON.parse(postCall[1].body);
+      expect(body.campaignId).toBe(101);
     });
   });
 
@@ -1077,8 +1086,8 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
-    // AI Call column header.
-    expect(screen.getByText('AI Call')).toBeInTheDocument();
+    // Callified AI call column header.
+    expect(screen.getByText('Callified AI call')).toBeInTheDocument();
     // Callified Score column header.
     expect(screen.getByText('Callified Score')).toBeInTheDocument();
 
@@ -1107,7 +1116,9 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     await waitFor(() => expect(screen.getByText(/No leads found/i)).toBeInTheDocument());
 
     expect(screen.queryByText('Callified Campaign')).toBeNull();
-    expect(screen.queryByLabelText(/Select campaign to dial/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Select campaigns to dial/i })).toBeNull();
+    expect(screen.queryByText('Callified AI call')).toBeNull();
+    expect(screen.queryByText('Lead Status')).toBeNull();
     expect(screen.queryByText('Callified Score')).toBeNull();
   });
 });

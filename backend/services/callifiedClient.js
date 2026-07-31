@@ -1185,6 +1185,116 @@ async function initiateCallForContact({ tenantId, contactId, campaignId, userId,
 }
 
 /**
+ * Map Callified transcript state to a stable CRM CallLog status.
+ *
+ * Trust Callified's transcript status when present, fall back to duration,
+ * and keep the call as INITIATED when no transcript exists yet. Calls that
+ * have been pending for longer than the staleness threshold are marked FAILED
+ * so the Call Status drawer doesn't show ancient calls as "Calling…" forever.
+ */
+function inferCallStatus(transcripts, latestTranscript, initiatedAt) {
+  if (!Array.isArray(transcripts) || transcripts.length === 0) {
+    const staleThresholdMs = Number(process.env.CALLIFIED_STALE_PENDING_MS) || 30 * 60 * 1000;
+    if (initiatedAt && Date.now() - new Date(initiatedAt).getTime() > staleThresholdMs) {
+      return 'FAILED';
+    }
+    return 'INITIATED';
+  }
+
+  const latest = latestTranscript || transcripts[0];
+  const rawStatus = String(latest.status || '').toLowerCase();
+
+  if (rawStatus.includes('complete') || rawStatus.includes('success') || rawStatus.includes('finished')) {
+    return 'COMPLETED';
+  }
+  if (rawStatus.includes('miss') || rawStatus.includes('no_answer') || rawStatus.includes('unanswered') || rawStatus.includes('voicemail')) {
+    return 'MISSED';
+  }
+  if (rawStatus.includes('fail') || rawStatus.includes('error') || rawStatus.includes('busy') || rawStatus.includes('cancel') || rawStatus.includes('invalid')) {
+    return 'FAILED';
+  }
+
+  const duration = Math.round(Number(latest.call_duration_s) || 0);
+  if (duration > 0) return 'COMPLETED';
+
+  // A transcript exists but lasted 0 seconds and had no explicit terminal
+  // status — treat as a missed connection.
+  return 'MISSED';
+}
+
+/**
+ * Poll Callified for every still-pending CRM CallLog and persist the latest
+ * status + transcript summary. Returns how many logs were refreshed.
+ *
+ * Stale pending calls (older than the configured threshold) are marked FAILED
+ * directly without calling Callified, so ancient "Calling…" rows don't pile up.
+ * Recent pending logs are capped at 50 per sync to avoid request timeouts.
+ */
+async function syncPendingCallifiedStatuses(tenantId) {
+  if (!tenantId) return { updated: 0, errors: 0, staleMarkedFailed: 0 };
+
+  const pendingStatuses = ['INITIATED', 'RINGING', 'CONNECTED'];
+  const staleThresholdMs = Number(process.env.CALLIFIED_STALE_PENDING_MS) || 30 * 60 * 1000;
+  const staleCutoff = new Date(Date.now() - staleThresholdMs);
+
+  const [recentPendingLogs, stalePendingLogs] = await Promise.all([
+    prisma.callLog.findMany({
+      where: {
+        tenantId,
+        provider: 'callified',
+        status: { in: pendingStatuses },
+        createdAt: { gte: staleCutoff },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: { id: true, contactId: true, providerCallId: true, createdAt: true },
+    }),
+    prisma.callLog.findMany({
+      where: {
+        tenantId,
+        provider: 'callified',
+        status: { in: pendingStatuses },
+        createdAt: { lt: staleCutoff },
+      },
+      select: { id: true },
+    }),
+  ]);
+
+  let updated = 0;
+  let errors = 0;
+  for (const log of recentPendingLogs) {
+    try {
+      if (!log.providerCallId) continue;
+      await module.exports.fetchAndStoreCallDetails({
+        tenantId,
+        callifiedLeadId: String(log.providerCallId),
+        contactId: log.contactId,
+        updateScore: true,
+        initiatedAt: log.createdAt,
+      });
+      updated += 1;
+    } catch (e) {
+      console.error(`[callifiedClient] syncPendingCallifiedStatuses failed for log ${log.id}: ${e.message}`);
+      errors += 1;
+    }
+  }
+
+  let staleMarkedFailed = 0;
+  if (stalePendingLogs.length > 0) {
+    const { count } = await prisma.callLog.updateMany({
+      where: {
+        id: { in: stalePendingLogs.map((l) => l.id) },
+      },
+      data: { status: 'FAILED' },
+    });
+    staleMarkedFailed = count;
+  }
+
+  console.log(`[callifiedClient] syncPendingCallifiedStatuses: ${updated} updated, ${errors} errors, ${staleMarkedFailed} stale marked failed, ${recentPendingLogs.length} recent pending`);
+  return { updated, errors, staleMarkedFailed, pending: recentPendingLogs.length };
+}
+
+/**
  * Fetch full Callified details for a previously initiated call and update CRM.
  *
  * 1. Finds the most recent CallLog by providerCallId (Callified lead id).
@@ -1193,7 +1303,7 @@ async function initiateCallForContact({ tenantId, contactId, campaignId, userId,
  *    with the fetched details so older call attempts keep their own metadata.
  * 4. Optionally updates the contact aiScore if a review is present.
  */
-async function fetchAndStoreCallDetails({ tenantId, callifiedLeadId, contactId, updateScore = true }) {
+async function fetchAndStoreCallDetails({ tenantId, callifiedLeadId, contactId, updateScore = true, initiatedAt = null }) {
   if (!tenantId || !callifiedLeadId) {
     throw new Error('tenantId and callifiedLeadId required');
   }
@@ -1276,10 +1386,16 @@ async function fetchAndStoreCallDetails({ tenantId, callifiedLeadId, contactId, 
     }
   }
 
+  // If Callified reports the lead is gone (404), the call record is orphaned;
+  // mark it FAILED so it stops appearing as "Calling…" in the status drawer.
+  const isOrphaned = details.fetchError && /\b404\b|lead not found|not found/i.test(details.fetchError);
+  const inferredStatus = isOrphaned
+    ? 'FAILED'
+    : inferCallStatus(sortedTranscripts, latestTranscript, initiatedAt || latestLog?.createdAt);
   const updateData = {
     duration: latestTranscript?.call_duration_s ? Math.round(Number(latestTranscript.call_duration_s)) : 0,
     recordingUrl: latestTranscript?.recording_url || null,
-    status: latestTranscript ? 'COMPLETED' : 'INITIATED',
+    status: inferredStatus,
     notes: notesJson,
   };
 
@@ -1469,6 +1585,8 @@ module.exports = {
   getCallDetails,
   initiateCallForContact,
   fetchAndStoreCallDetails,
+  syncPendingCallifiedStatuses,
+  inferCallStatus,
   computeAiScoreFromReview,
 
   // Phone normalization helpers (exported for tests + external callers)

@@ -207,6 +207,8 @@ prisma.location.findMany = vi.fn();
 prisma.visit = prisma.visit || {};
 prisma.visit.findMany = vi.fn();
 prisma.visit.create = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -236,6 +238,7 @@ beforeEach(() => {
   prisma.location.findMany.mockReset();
   prisma.visit.findMany.mockReset();
   prisma.visit.create.mockReset();
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ callifiedAutoCampaignId: null });
 
   classifyLeadMock.mockReset().mockResolvedValue({
     isJunk: false,
@@ -522,6 +525,8 @@ describe('POST /api/v1/external/leads — create pipeline', () => {
     expect(cArgs.aiScore).toBe(80);
     expect(cArgs.assignedToId).toBe(11);
     expect(cArgs.firstResponseDueAt).toBe(dueAt);
+    // No default Callified campaign configured for this tenant
+    expect(cArgs.callifiedCampaignId).toBeUndefined();
 
     // Activity (system Note) written because note was provided
     expect(prisma.activity.create).toHaveBeenCalledOnce();
@@ -530,6 +535,46 @@ describe('POST /api/v1/external/leads — create pipeline', () => {
     expect(aArgs.contactId).toBe(555);
     expect(aArgs.tenantId).toBe(7);
     expect(aArgs.description).toContain('Asked about hydrafacial pricing');
+  });
+
+  test('default Callified campaign is auto-assigned for new Lead when tenant has callifiedAutoCampaignId', async () => {
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 70,
+      reasons: [],
+    });
+    prisma.tenant.findUnique.mockReset().mockResolvedValueOnce({ callifiedAutoCampaignId: 42 });
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce({
+      id: 556,
+      name: 'External Lead',
+      email: 'ext@example.com',
+      phone: '+919900112234',
+      status: 'Lead',
+      source: 'website-form',
+      aiScore: 70,
+      assignedToId: 11,
+      callifiedCampaignId: 42,
+      tenantId: 7,
+      createdAt: new Date(),
+    });
+
+    const app = makeApp();
+    const res = await request(app).post('/api/v1/external/leads').send({
+      name: 'External Lead',
+      phone: '+919900112234',
+      email: 'ext@example.com',
+      source: 'website-form',
+    });
+
+    expect(res.status).toBe(201);
+    expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
+      where: { id: 7 },
+      select: { callifiedAutoCampaignId: true },
+    });
+    const cArgs = prisma.contact.create.mock.calls[0][0].data;
+    expect(cArgs.status).toBe('Lead');
+    expect(cArgs.callifiedCampaignId).toBe(42);
   });
 
   test('junk verdict → status="Junk", pickAssignee SKIPPED, Activity.type="JunkFilter"', async () => {

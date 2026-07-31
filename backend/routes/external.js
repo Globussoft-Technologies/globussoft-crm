@@ -322,6 +322,26 @@ router.post("/leads", async (req, res) => {
       externalId: externalId ? String(externalId) : null,
       tenantId: req.tenantId,
     };
+
+    // Auto-assign new Leads to the tenant's default Callified campaign when set
+    // and no campaign was supplied explicitly. Mirrors the logic in contacts.js
+    // so external API leads are dialable by Callified just like manually added leads.
+    if (contactData.status === "Lead" && req.body.callifiedCampaignId == null) {
+      try {
+        const tenantCfg = await prisma.tenant.findUnique({
+          where: { id: req.tenantId },
+          select: { callifiedAutoCampaignId: true },
+        });
+        if (tenantCfg?.callifiedAutoCampaignId) {
+          contactData.callifiedCampaignId = tenantCfg.callifiedAutoCampaignId;
+        }
+      } catch (e) {
+        console.error("[external] auto-campaign lookup failed:", e.message);
+      }
+    } else if (req.body.callifiedCampaignId != null) {
+      contactData.callifiedCampaignId = Number(req.body.callifiedCampaignId);
+    }
+
     let contact;
     let deduped = false;
     // [GP-CRM integration] Dedup priority: externalId first (most specific —

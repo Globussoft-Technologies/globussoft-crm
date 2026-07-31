@@ -165,8 +165,10 @@ describe('<wellness/Products /> — page surface', () => {
     // SKU cell (present row).
     expect(screen.getByText('PRP-10')).toBeInTheDocument();
     // Stock counts render in the dedicated stock chip.
-    expect(screen.getByText('25')).toBeInTheDocument();
-    expect(screen.getByText('2')).toBeInTheDocument();
+    const stockChips = screen.getAllByTitle('Click to see details');
+    expect(stockChips).toHaveLength(2);
+    const stockValues = stockChips.map((chip) => chip.textContent).sort();
+    expect(stockValues).toEqual(['2', '25']);
   });
 
   it('clicking "Add Product" opens the create modal titled "New Product"', async () => {

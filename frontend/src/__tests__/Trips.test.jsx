@@ -389,9 +389,9 @@ describe('<Trips /> — row rendering: status / link / dates / participants / pr
   it('renders school-contact id reference per row (#5001 / #5002 / #5003)', async () => {
     renderPage();
     const row1 = (await screen.findByText('TMC-AND-2026-MUMBAI-G7')).closest('tr');
-    expect(within(row1).getByText('#5001')).toBeInTheDocument();
+    expect(within(row1).getByText('School #5001')).toBeInTheDocument();
     const row2 = screen.getByText('TMC-GOA-2026-DPS-G8').closest('tr');
-    expect(within(row2).getByText('#5002')).toBeInTheDocument();
+    expect(within(row2).getByText('School #5002')).toBeInTheDocument();
   });
 });
 
@@ -583,3 +583,4 @@ describe('<Trips /> — search filter (client-side)', () => {
     expect(screen.getByText(/No trips match/i)).toBeInTheDocument();
   });
 });
+

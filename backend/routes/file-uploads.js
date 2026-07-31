@@ -33,16 +33,13 @@ const {
   extractKeyFromUrl,
 } = require("../services/s3Service");
 
-// Protect all upload routes with authentication
-router.use(verifyToken);
-
 /**
  * POST /api/uploads/image
  * Upload a single image file
  * Required: multipart/form-data with 'image' field
  * Returns: { url: "https://s3-url...", fileName: "..." }
  */
-router.post("/image", uploadImageSingle, validateImage, async (req, res) => {
+router.post("/image", verifyToken, uploadImageSingle, validateImage, async (req, res) => {
   try {
     const file = req.file;
 
@@ -75,7 +72,7 @@ router.post("/image", uploadImageSingle, validateImage, async (req, res) => {
  * Required: multipart/form-data with 'images' field (array)
  * Returns: { urls: [...], count: N }
  */
-router.post("/images", uploadImageMultiple, validateImages, async (req, res) => {
+router.post("/images", verifyToken, uploadImageMultiple, validateImages, async (req, res) => {
   try {
     const files = req.files;
 
@@ -111,6 +108,7 @@ router.post("/images", uploadImageMultiple, validateImages, async (req, res) => 
  */
 router.post(
   "/document",
+  verifyToken,
   uploadDocumentSingle,
   validateDocument,
   async (req, res) => {
@@ -155,6 +153,7 @@ router.post(
  */
 router.post(
   "/documents",
+  verifyToken,
   uploadDocumentMultiple,
   validateDocuments,
   async (req, res) => {
@@ -203,7 +202,7 @@ router.post(
  * Required: fileKey (S3 object key or encoded URL)
  * Returns: { success: true }
  */
-router.delete("/file/:fileKey", async (req, res) => {
+router.delete("/file/:fileKey", verifyToken, async (req, res) => {
   try {
     let fileKey = req.params.fileKey;
 

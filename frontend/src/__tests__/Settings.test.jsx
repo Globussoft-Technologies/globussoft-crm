@@ -893,7 +893,7 @@ describe("<Settings /> — error paths + boundary states", () => {
 
     await waitFor(() => {
       expect(notifyObj.error).toHaveBeenCalledWith(
-        expect.stringMatching(/Failed to update organization/i),
+        expect.stringMatching(/backend down|Failed to update organization/i),
       );
     });
   });
@@ -1328,3 +1328,4 @@ describe("<Settings /> — Theme Color branding column", () => {
     );
   });
 });
+

@@ -9,7 +9,7 @@
 // pipeline (Day 7+ Deal-extension lands later).
 
 import { useEffect, useState, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X, Trash2, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -28,6 +28,9 @@ const STATUSES = [
   { value: "completed", label: "Completed" },
   { value: "cancelled", label: "Cancelled" },
 ];
+
+const BRAND_LABEL = "TMC";
+const SUB_BRAND_LABEL = "School trips";
 
 const STATUS_COLORS = {
   confirmed: { bg: "rgba(47,122,77,0.14)", color: "#2F7A4D" },
@@ -58,7 +61,9 @@ export default function Trips() {
   const notify = useNotify();
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialStatus = searchParams.get("status") || "";
+  const [status, setStatus] = useState(initialStatus);
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -98,6 +103,11 @@ export default function Trips() {
     }
   };
 
+  useEffect(() => {
+    const nextStatus = searchParams.get("status") || "";
+    setStatus((current) => (current === nextStatus ? current : nextStatus));
+  }, [searchParams]);
+
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
@@ -113,6 +123,14 @@ export default function Trips() {
   };
 
   useEffect(load, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleStatusChange = (nextStatus) => {
+    setStatus(nextStatus);
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextStatus) nextParams.set("status", nextStatus);
+    else nextParams.delete("status");
+    setSearchParams(nextParams, { replace: true });
+  };
 
   // Track which trip is currently being deleted so we can disable its
   // row's trash button (prevents double-click race) without disabling
@@ -202,7 +220,7 @@ export default function Trips() {
             style={{ ...selectStyle, paddingLeft: 28, minWidth: 240 }}
           />
         </div>
-        <select value={status} onChange={(e) => setStatus(e.target.value)} style={selectStyle} aria-label="Filter by status">
+        <select value={status} onChange={(e) => handleStatusChange(e.target.value)} style={selectStyle} aria-label="Filter by status">
           {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
         <button type="button" onClick={load} style={refreshBtn} aria-label="Reload list">Refresh</button>
@@ -227,10 +245,12 @@ export default function Trips() {
               <tr>
                 <th style={th}>Trip code</th>
                 <th style={th}>Destination</th>
+                <th style={th}>Brand</th>
+                <th style={th}>Sub-brand</th>
                 <th style={th}>Dates</th>
                 <th style={th}>School</th>
                 <th style={th}>Participants</th>
-                <th style={th}>Per-student</th>
+                <th style={th}>Cost</th>
                 <th style={th}>Status</th>
                 <th style={{ ...th, width: 60, textAlign: "right" }} aria-label="Actions"></th>
               </tr>
@@ -246,13 +266,15 @@ export default function Trips() {
                       </Link>
                     </td>
                     <td style={td}>{t.destination}</td>
+                    <td style={td}><span style={brandBadge}>{BRAND_LABEL}</span></td>
+                    <td style={td}>{SUB_BRAND_LABEL}</td>
                     <td style={td}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                         <CalendarIcon size={12} aria-hidden />
                         {fmt(t.departDate)} → {fmt(t.returnDate)}
                       </span>
                     </td>
-                    <td style={td}>#{t.schoolContactId}</td>
+                    <td style={td}>{t.schoolName || (t.schoolContactId ? `School #${t.schoolContactId}` : "?")}</td>
                     <td style={td}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                         <Users size={12} aria-hidden />
@@ -457,4 +479,10 @@ const th = {
 const td = {
   padding: "10px 12px", fontSize: 14,
   color: "var(--text-primary)",
+};
+const brandBadge = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700,
+  letterSpacing: 0.5, textTransform: "uppercase",
+  background: "rgba(91,110,225,0.14)", color: "var(--primary-color)",
 };

@@ -4,7 +4,7 @@
  * shipped tick #100 commit 0054a03, 411 LOC).
  *
  * Scope: pins the page-surface invariants for the per-tenant cap override UI:
- *   1. Loading state: renders "Loading tenant settings…" before the first
+ *   1. Loading state: renders "Loading tenant settings" before the first
  *      fetch resolves.
  *   2. Page chrome on mount: heading "Tenant Settings" + a card per known
  *      cap key (4 — AdsGPT / AI calling / RateHawk / LLM).
@@ -121,7 +121,7 @@ describe('<TenantSettings /> — admin per-tenant cap override UI', () => {
       resolveGet = resolve;
     }));
     render(<TenantSettings />);
-    expect(screen.getByText(/Loading tenant settings…/i)).toBeInTheDocument();
+    expect(screen.getByText(/Loading tenant settings/i)).toBeInTheDocument();
     // Tidy up the dangling promise so the test runner doesn't warn.
     resolveGet?.(makeListResponse());
   });
@@ -339,3 +339,5 @@ describe('<TenantSettings /> — admin per-tenant cap override UI', () => {
     expect(saveBtn).not.toBeDisabled();
   });
 });
+
+

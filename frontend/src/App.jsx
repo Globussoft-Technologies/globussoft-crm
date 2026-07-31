@@ -1978,6 +1978,7 @@ export default function App() {
                   tenants get bounced to their themed calendar; everyone else sees
                   the calendar-sync page (which is the closest generic equivalent). */}
                     <Route path="calendar" element={<CalendarRedirect />} />
+
                     {/* Travel vertical Ã¢â‚¬â€ Day 1 scaffolding. Gated by TravelOnly
                   so generic + wellness tenants get bounced to /dashboard
                   rather than rendering empty travel UI. Phase 1 sub-pages
@@ -2006,8 +2007,8 @@ export default function App() {
                 <TravelOnly>
                   <RoleGuard
                     requiredPermission={{ module: "passport", action: "manage" }}
-                    feature="Passport Verification"
-                    message="Passport Verification requires the 'passport.manage' permission."
+                    feature="Passport"
+                    message="Passport requires the 'passport.manage' permission."
                   >
                     <TravelPassportVerificationQueue />
                   </RoleGuard>

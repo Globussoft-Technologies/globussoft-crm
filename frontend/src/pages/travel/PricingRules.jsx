@@ -64,6 +64,27 @@ async function downloadCsv(notify, url, filename) {
     notify.error(e.message || "Failed to export");
   }
 }
+async function downloadTemplate(notify, url, filenameBase, format) {
+  try {
+    const ext = format === "xlsx" ? "xlsx" : "csv";
+    const label = format === "xlsx" ? "Excel template" : "CSV template";
+    const res = await fetch(`${url}?format=${ext}`, {
+      headers: { Authorization: `Bearer ${getAuthToken()}` },
+    });
+    if (!res.ok) throw new Error(`Failed to download ${label.toLowerCase()}`);
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = `${filenameBase}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objUrl);
+  } catch (e) {
+    notify.error(e.message || `Failed to download ${format} template`);
+  }
+}
 async function uploadCsv(notify, url, file, onDone) {
   // FormData upload (not raw text body) so both CSV and binary XLSX files
   // work — the backend's multer middleware already accepts either via
@@ -100,6 +121,14 @@ const SCOPES = [
   { value: "transport", label: "Transport" },
   { value: "package", label: "Package" },
 ];
+const OTHER_OPTION = "__other__";
+const MATCH_KEY_FIELDS = [
+  { value: "city", label: "City" },
+  { value: "route", label: "Route" },
+  { value: "country", label: "Country" },
+  { value: "supplier", label: "Supplier" },
+  { value: "package", label: "Package" },
+];
 
 // Render a date column as YYYY-MM-DD without the time noise.
 function fmtDate(d) {
@@ -107,6 +136,32 @@ function fmtDate(d) {
   const dt = new Date(d);
   if (!Number.isFinite(dt.getTime())) return "";
   return dt.toISOString().slice(0, 10);
+}
+
+function matchKeyToForm(matchKeyJson) {
+  try {
+    const parsed = JSON.parse(matchKeyJson || "{}");
+    const [key, value] = Object.entries(parsed || {})[0] || ["city", ""];
+    const knownKey = MATCH_KEY_FIELDS.some((f) => f.value === key) ? key : "city";
+    return { matchKeyField: knownKey, matchKeyValue: value == null ? "" : String(value), matchKeyOtherValue: "" };
+  } catch {
+    return { matchKeyField: "city", matchKeyValue: "", matchKeyOtherValue: "" };
+  }
+}
+
+function formToMatchKeyJson(form, value = form.matchKeyValue) {
+  return JSON.stringify({ [form.matchKeyField]: value.trim() });
+}
+
+function formatMatchKey(matchKeyJson) {
+  try {
+    const parsed = JSON.parse(matchKeyJson || "{}");
+    const [key, value] = Object.entries(parsed || {})[0] || [];
+    if (!key) return "";
+    return `${key}: ${value}`;
+  } catch {
+    return matchKeyJson || "";
+  }
 }
 
 export default function PricingRules() {
@@ -152,7 +207,6 @@ function SeasonsSection() {
   const blankForm = { subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), seasonName: "", startDate: "", endDate: "", multiplier: "" };
   const [form, setForm] = useState(blankForm);
   const fileRef = useRef(null);
-
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
@@ -227,6 +281,8 @@ function SeasonsSection() {
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
     return downloadCsv(notify, `/api/travel/seasons/export.csv?${qs.toString()}`, "travel-seasons.csv");
   };
+  const downloadImportTemplate = (format) =>
+    downloadTemplate(notify, "/api/travel/seasons/import-template", "travel-seasons-template", format);
   const importCsv = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -250,6 +306,12 @@ function SeasonsSection() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
             <Download size={14} /> Export CSV
+          </button>
+          <button type="button" onClick={() => downloadImportTemplate("csv")} style={secondaryBtn}>
+            <Download size={14} /> Download CSV Template
+          </button>
+          <button type="button" onClick={() => downloadImportTemplate("xlsx")} style={secondaryBtn}>
+            <Download size={14} /> Download Excel Template
           </button>
           <button
             type="button"
@@ -408,6 +470,7 @@ function MarkupRulesSection() {
   const myBrands = accessibleSubBrands(user);
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [rules, setRules] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterSubBrand, setFilterSubBrand] = useState("");
   const [filterScope, setFilterScope] = useState("");
@@ -415,11 +478,33 @@ function MarkupRulesSection() {
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const blankForm = {
-    subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), scope: "hotel", matchKeyJson: "{}",
-    markupType: "pct", markupValue: "", priority: "100",
+    subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), scope: "hotel",
+    matchKeyField: "city", matchKeyValue: "", matchKeyOtherValue: "",
+    markupType: "pct", markupValue: "", priority: "",
   };
   const [form, setForm] = useState(blankForm);
   const fileRef = useRef(null);
+  const supplierChoices = [...new Set(
+    suppliers
+      .filter((supplier) => !form.subBrand || supplier.subBrand === form.subBrand)
+      .map((supplier) => supplier.name)
+      .filter(Boolean),
+  )].sort((a, b) => a.localeCompare(b));
+  const normalizedMatchValue = form.matchKeyField === "supplier"
+    && form.matchKeyValue
+    && !supplierChoices.includes(form.matchKeyValue)
+    ? OTHER_OPTION
+    : form.matchKeyValue;
+  const fallbackSupplierValue = form.matchKeyValue === OTHER_OPTION ? "" : form.matchKeyValue;
+  const effectiveMatchValue = form.matchKeyField === "supplier" && normalizedMatchValue === OTHER_OPTION
+    ? (form.matchKeyOtherValue || fallbackSupplierValue)
+    : form.matchKeyValue;
+
+  useEffect(() => {
+    fetchApi("/api/travel/suppliers?limit=500&fields=summary")
+      .then((res) => setSuppliers(Array.isArray(res?.suppliers) ? res.suppliers : []))
+      .catch(() => setSuppliers([]));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = () => {
     setLoading(true);
@@ -440,21 +525,19 @@ function MarkupRulesSection() {
     setForm({
       subBrand: r.subBrand,
       scope: r.scope,
-      matchKeyJson: r.matchKeyJson || "{}",
+      ...matchKeyToForm(r.matchKeyJson),
       markupType: r.markupPct != null ? "pct" : "flat",
       markupValue: r.markupPct != null ? String(r.markupPct) : (r.markupFlat != null ? String(r.markupFlat) : ""),
-      priority: String(r.priority ?? 100),
+      priority: r.priority == null ? "" : String(r.priority),
     });
   };
   const cancelEdit = () => { setEditingId(null); setAdding(false); setForm(blankForm); };
 
   const save = async () => {
-    if (!form.matchKeyJson.trim() || !form.markupValue) {
-      notify.error("matchKeyJson and markup value required");
+    if (!effectiveMatchValue.trim() || !form.markupValue) {
+      notify.error("match key and markup value required");
       return;
     }
-    try { JSON.parse(form.matchKeyJson); }
-    catch { notify.error("matchKeyJson is not valid JSON"); return; }
 
     const n = Number(form.markupValue);
     if (!Number.isFinite(n) || n < 0) {
@@ -464,7 +547,7 @@ function MarkupRulesSection() {
 
     const body = {
       scope: form.scope,
-      matchKeyJson: form.matchKeyJson,
+      matchKeyJson: formToMatchKeyJson(form, effectiveMatchValue),
       priority: parseInt(form.priority || "100", 10),
       // backend enforces "exactly one of markupPct / markupFlat" — send the
       // chosen field set + the other explicitly nulled so editing one to the
@@ -530,6 +613,8 @@ function MarkupRulesSection() {
     if (filterScope) qs.set("scope", filterScope);
     return downloadCsv(notify, `/api/travel/markup-rules/export.csv?${qs.toString()}`, "travel-markup-rules.csv");
   };
+  const downloadImportTemplate = (format) =>
+    downloadTemplate(notify, "/api/travel/markup-rules/import-template", "travel-markup-rules-template", format);
   const importCsv = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -553,6 +638,12 @@ function MarkupRulesSection() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
             <Download size={14} /> Export CSV
+          </button>
+          <button type="button" onClick={() => downloadImportTemplate("csv")} style={secondaryBtn}>
+            <Download size={14} /> Download CSV Template
+          </button>
+          <button type="button" onClick={() => downloadImportTemplate("xlsx")} style={secondaryBtn}>
+            <Download size={14} /> Download Excel Template
           </button>
           <button
             type="button"
@@ -655,14 +746,47 @@ function MarkupRulesSection() {
               aria-label="Priority"
             />
           </div>
-          <textarea
-            placeholder='matchKeyJson — e.g. {"city":"Makkah"} or {"route":"DEL-JED"}'
-            value={form.matchKeyJson}
-            onChange={(e) => setForm({ ...form, matchKeyJson: e.target.value })}
-            style={{ ...input, marginTop: 8, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, minHeight: 60 }}
-            aria-label="Match key JSON"
-            spellCheck={false}
-          />
+          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "minmax(min(100%, 160px), 220px) 1fr", marginTop: 8 }}>
+            <select
+              value={form.matchKeyField}
+              onChange={(e) => setForm({ ...form, matchKeyField: e.target.value, matchKeyValue: "", matchKeyOtherValue: "" })}
+              style={input}
+              aria-label="Match field"
+            >
+              {MATCH_KEY_FIELDS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </select>
+            {form.matchKeyField === "supplier" ? (
+              <div style={{ display: "grid", gap: 8, gridTemplateColumns: normalizedMatchValue === OTHER_OPTION ? "1fr 1fr" : "1fr" }}>
+                <select
+                  value={normalizedMatchValue}
+                  onChange={(e) => setForm({ ...form, matchKeyValue: e.target.value, matchKeyOtherValue: e.target.value === OTHER_OPTION ? form.matchKeyOtherValue : "" })}
+                  style={input}
+                  aria-label="Match supplier"
+                >
+                  <option value="">Select supplier</option>
+                  {supplierChoices.map((name) => <option key={name} value={name}>{name}</option>)}
+                  <option value={OTHER_OPTION}>Other</option>
+                </select>
+                {normalizedMatchValue === OTHER_OPTION && (
+                  <input
+                    placeholder="Enter supplier name"
+                    value={form.matchKeyOtherValue || fallbackSupplierValue}
+                    onChange={(e) => setForm({ ...form, matchKeyOtherValue: e.target.value })}
+                    style={input}
+                    aria-label="Match supplier name"
+                  />
+                )}
+              </div>
+            ) : (
+              <input
+                placeholder="e.g. Makkah or DEL-JED"
+                value={form.matchKeyValue}
+                onChange={(e) => setForm({ ...form, matchKeyValue: e.target.value })}
+                style={input}
+                aria-label="Match value"
+              />
+            )}
+          </div>
           <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
             <button type="button" onClick={save} style={primaryBtn}>
               <Save size={14} /> {editingId ? "Save changes" : "Create"}
@@ -698,7 +822,7 @@ function MarkupRulesSection() {
                 <tr key={r.id} style={{ ...trStyle, opacity: r.isActive ? 1 : 0.5 }}>
                   <td style={td}><span style={brandBadge}>{r.subBrand}</span></td>
                   <td style={td}>{r.scope}</td>
-                  <td style={td}><code style={{ fontSize: 11 }}>{r.matchKeyJson}</code></td>
+                  <td style={td}><code style={{ fontSize: 11 }}>{formatMatchKey(r.matchKeyJson)}</code></td>
                   <td style={td}>{formatMarkup(r)}</td>
                   <td style={td}>{r.priority}</td>
                   <td style={td}>

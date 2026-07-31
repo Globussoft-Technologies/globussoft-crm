@@ -96,11 +96,20 @@ const SAMPLE_CATEGORIES = [
   { id: 401, name: 'Consumables', parentId: null, isActive: true },
 ];
 
-function installFetchMock({ products = SAMPLE_PRODUCTS, categories = SAMPLE_CATEGORIES } = {}) {
+function installFetchMock({ products = SAMPLE_PRODUCTS, categories = SAMPLE_CATEGORIES, onProductsRequest = null } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
-    if (url === '/api/wellness/products' && method === 'GET') {
-      return Promise.resolve(products);
+    if (typeof url === 'string' && url.startsWith('/api/wellness/products?') && method === 'GET') {
+      if (typeof onProductsRequest === 'function') return Promise.resolve(onProductsRequest(url));
+      return Promise.resolve({
+        items: products,
+        pagination: {
+          total: products.length,
+          page: 1,
+          limit: 10,
+          pages: 1,
+        },
+      });
     }
     if (url === '/api/wellness/product-categories' && method === 'GET') {
       return Promise.resolve(categories);
@@ -135,7 +144,7 @@ describe('<wellness/Products /> — page surface', () => {
     // so the table renders before the test ends.
     expect(screen.getByRole('button', { name: /Add Product/i })).toBeInTheDocument();
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/products');
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/products?paginate=true&page=1&limit=10');
     });
   });
 
@@ -143,7 +152,7 @@ describe('<wellness/Products /> — page surface', () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/products');
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/products?paginate=true&page=1&limit=10');
     });
     expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/product-categories');
   });
@@ -173,5 +182,31 @@ describe('<wellness/Products /> — page surface', () => {
     installFetchMock({ products: [] });
     renderPage();
     expect(await screen.findByText(/No products yet/i)).toBeInTheDocument();
+  });
+
+  it('search refetches the paginated endpoint instead of filtering only the current slice', async () => {
+    installFetchMock({
+      onProductsRequest: (url) => {
+        if (url.includes('q=Facial')) {
+          return {
+            items: [SAMPLE_PRODUCTS[1]],
+            pagination: { total: 1, page: 1, limit: 10, pages: 1 },
+          };
+        }
+        return {
+          items: [SAMPLE_PRODUCTS[0]],
+          pagination: { total: 1, page: 1, limit: 10, pages: 1 },
+        };
+      },
+    });
+    renderPage();
+    expect(await screen.findByText('PRP serum 10ml')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/Search by name or SKU/i), {
+      target: { value: 'Facial' },
+    });
+    expect(await screen.findByText('Botox 50u')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/products?paginate=true&page=1&limit=10&q=Facial');
+    });
   });
 });

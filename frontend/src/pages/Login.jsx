@@ -224,6 +224,13 @@ const Login = () => {
     if (isGenericDefault && vertical !== "generic") {
       return verticalDefault;
     }
+    // For the generic CRM, /dashboard is the intended landing surface. The
+    // /api/pages/me catalog does not include the hardcoded /dashboard route,
+    // so without this guard the resolver can fall through to /inbox or another
+    // catalog page and confuse users.
+    if (isGenericDefault && vertical === "generic") {
+      return verticalDefault;
+    }
     try {
       const res = await fetch("/api/pages/me", {
         headers: { Authorization: `Bearer ${data.token}` },

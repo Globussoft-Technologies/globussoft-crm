@@ -75,6 +75,10 @@ const TASK_ROUTING = {
   "form-vs-call": { primary: "gemini-flash", fallback: "gpt-4" },
   "bulk-text": { primary: "gemini-flash", fallback: "groq-llama" },
   "call-summary": { primary: "gemini-flash", fallback: null },
+  // Callified AI call transcript classification for CRM leads (2026-07-31).
+  // Reads the latest call transcript + review and decides whether the lead
+  // is hot, cold, or yet to call. Small JSON in/out → flash-lite primary.
+  "callified-lead-status": { primary: "gemini-flash-lite", fallback: "gemini-flash" },
   // Itinerary-suggest (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.6 + AI_SURFACES §3
   // table). 2K in / 4K out — larger out than bulk-text because the full
   // itinerary JSON shape (daySplit + poiSuggestions + thematicNotes) lands
@@ -216,6 +220,7 @@ const ENV_FOR_MODEL = {
   // flight/hotel/transfer search tasks so estimates are web-grounded.
   "gpt-4o-search": "OPENAI_API_KEY",
   "gemini-flash": "GEMINI_API_KEY",
+  "gemini-flash-lite": "GEMINI_API_KEY",
   "claude-haiku": "ANTHROPIC_API_KEY",
   "groq-llama": "GROQ_API_KEY",
   // S16 — image-gen providers for marketing-flyer-image task class
@@ -535,6 +540,8 @@ function buildStubText(task, _payload) {
       return `${tag} Lead profile suggests: (1) confirm budget tier, (2) ask about prior travel, (3) probe destination flexibility. Synthetic content — real Gemini Flash reasoning lands when Q11 keys arrive.`;
     case "call-summary":
       return `${tag} Call summary: customer expressed interest in trip, advisor walked through options, follow-up scheduled. Synthetic content — real Gemini summary lands when Q11 keys arrive.`;
+    case "callified-lead-status":
+      return JSON.stringify({ status: "cold", reason: "No strong buying signals detected in the synthetic transcript." });
     case "lead-conversation-summary":
       // Stub returns valid JSON matching the real-mode shape so
       // leadConversationSummary.js can parse it in dev/CI without a key.
@@ -636,6 +643,7 @@ const MODEL_ID_ENV = {
   // Web-search-enabled OpenAI model (browses the live web at query time).
   "gpt-4o-search": ["LLM_MODEL_GPT_SEARCH", "gpt-4o-search-preview"],
   "gemini-flash": ["LLM_MODEL_GEMINI", "gemini-2.5-flash"],
+  "gemini-flash-lite": ["LLM_MODEL_GEMINI_FLASH_LITE", "gemini-2.5-flash-lite"],
   "perplexity-sonar": ["LLM_MODEL_PERPLEXITY", "sonar"],
 };
 
@@ -677,6 +685,8 @@ function buildPrompt(task, payload) {
     "bulk-text": "You write clear, customer-facing travel copy. Plain text.",
     "call-summary":
       "You summarise a sales/advisory call in a few sentences. Plain text.",
+    "callified-lead-status":
+      "You are a sales-intent classifier for an AI outbound calling system. Given a call transcript (or transcript summary) and optional review data, classify the lead's buying intent as EXACTLY one of: hot, cold, yet_to_call. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"status\":\"hot|cold|yet_to_call\",\"reason\":string}. Rules, in order of priority: 1) If review.appointment_booked is true, status MUST be hot. 2) If review.quality_score is >= 4 (on a 1-5 scale), status MUST be hot. 3) If review.quality_score is <= 2, status MUST be cold. 4) Otherwise, read the transcript: hot = clear buying intent, asked for quote/appointment/next step, or strongly positive. cold = not interested, wrong number, hang-up, or clearly negative. yet_to_call = no call has been made yet or transcript is empty/missing. Keep reason to 1 concise sentence and mention the score/appointment when relevant.",
     "lead-conversation-summary":
       "You are a travel CRM assistant that writes concise, professional lead-history summaries from WhatsApp conversations — never a transcript, never chatty. Given the customer's name, the conversation date, and a batch of new WhatsApp messages (with direction: inbound = customer, outbound = agent), return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"purpose\":string,\"highlights\":string[],\"leadStage\":string}. `purpose` is 1-2 sentences on why the customer reached out / what this batch of messages was about. `highlights` is 2-6 short bullet phrases (no leading dash) covering: destination, travel dates, hotels/flights/visa/services requested, important questions raised, and actions the agent took. `leadStage` is your best single assessment of current status, one of: \"New Enquiry\", \"Quotation Pending\", \"Follow-up Required\", \"Documents Awaited\", \"Booking In Progress\", \"Booking Confirmed\", \"Payment Pending\", \"Closed\", \"Not Interested\" — pick the closest match, do not invent new ones unless truly none fit. Base everything ONLY on the messages given; do not invent destinations, dates or names not present. Return ONLY the JSON object.",
     "lead-narrative-summary":

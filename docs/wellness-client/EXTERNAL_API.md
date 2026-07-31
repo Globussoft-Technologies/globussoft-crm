@@ -130,6 +130,8 @@ Content-Type: application/json
 
 **Required fields:** at least one of `name`, `phone`, `email`.
 
+**Custom fields:** any extra root-level keys are accepted and echoed back under `_customFields` so partner sites can attach their own metadata without a schema change.
+
 #### GET `/leads?since=…` — poll for new leads
 
 Callified polls this every 60 seconds. `since` is an ISO datetime; only leads created at or after `since` are returned.

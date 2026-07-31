@@ -62,6 +62,19 @@ const phoneMatches = (input) => {
 const parseLimit = (v, def = 50, max = 200) => Math.min(parseInt(v) || def, max);
 const parseOffset = (v) => parseInt(v) || 0;
 
+const LEAD_BODY_KEYS = new Set(["name", "phone", "email", "source", "note", "utm", "externalId"]);
+
+function splitCustomLeadFields(body) {
+  if (!body || typeof body !== "object") return {};
+  const customFields = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (!LEAD_BODY_KEYS.has(key)) {
+      customFields[key] = value;
+    }
+  }
+  return customFields;
+}
+
 // ── Tenant info ────────────────────────────────────────────────────
 
 router.get("/me", async (req, res) => {
@@ -264,6 +277,7 @@ router.get("/leads", async (req, res) => {
 router.post("/leads", async (req, res) => {
   try {
     const { name, phone, email, source, note, utm, externalId } = req.body;
+    const customFields = splitCustomLeadFields(req.body);
     if (!name && !phone && !email) {
       return res.status(400).json({ error: "name, phone, or email required", code: "INSUFFICIENT_IDENTITY" });
     }
@@ -322,6 +336,26 @@ router.post("/leads", async (req, res) => {
       externalId: externalId ? String(externalId) : null,
       tenantId: req.tenantId,
     };
+
+    // Auto-assign new Leads to the tenant's default Callified campaign when set
+    // and no campaign was supplied explicitly. Mirrors the logic in contacts.js
+    // so external API leads are dialable by Callified just like manually added leads.
+    if (contactData.status === "Lead" && req.body.callifiedCampaignId == null) {
+      try {
+        const tenantCfg = await prisma.tenant.findUnique({
+          where: { id: req.tenantId },
+          select: { callifiedAutoCampaignId: true },
+        });
+        if (tenantCfg?.callifiedAutoCampaignId) {
+          contactData.callifiedCampaignId = tenantCfg.callifiedAutoCampaignId;
+        }
+      } catch (e) {
+        console.error("[external] auto-campaign lookup failed:", e.message);
+      }
+    } else if (req.body.callifiedCampaignId != null) {
+      contactData.callifiedCampaignId = Number(req.body.callifiedCampaignId);
+    }
+
     let contact;
     let deduped = false;
     // [GP-CRM integration] Dedup priority: externalId first (most specific —
@@ -358,6 +392,7 @@ router.post("/leads", async (req, res) => {
     const activityBits = [
       note,
       utm && `utm=${JSON.stringify(utm)}`,
+      Object.keys(customFields).length ? `customFields=${JSON.stringify(customFields)}` : null,
       verdict.reasons.length && `junk-filter: ${verdict.reasons.join("; ")}`,
     ].filter(Boolean);
     if (activityBits.length) {
@@ -376,6 +411,7 @@ router.post("/leads", async (req, res) => {
       _verdict: verdict,
       _routing: assignee,
       _sla: slaMeta,
+      ...(Object.keys(customFields).length ? { _customFields: customFields } : {}),
       ...(deduped ? { _deduped: true } : {}),
     });
   } catch (e) {
@@ -386,7 +422,14 @@ router.post("/leads", async (req, res) => {
       const existing = await prisma.contact.findFirst({
         where: tenantWhere(req, { email: req.body.email }),
       });
-      if (existing) return res.status(200).json({ ...existing, _deduped: true });
+      if (existing) {
+        const customFields = splitCustomLeadFields(req.body);
+        return res.status(200).json({
+          ...existing,
+          _deduped: true,
+          ...(Object.keys(customFields).length ? { _customFields: customFields } : {}),
+        });
+      }
     }
     res.status(500).json({ error: "Failed to create lead" });
   }

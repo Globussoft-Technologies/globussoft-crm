@@ -8,7 +8,7 @@
 // No creation flow here — trips spawn from the linked Deal in the sales
 // pipeline (Day 7+ Deal-extension lands later).
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X, Trash2, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
@@ -57,17 +57,29 @@ const EMPTY_FORM = {
   departDate: "", returnDate: "", pricePerStudent: "", status: "confirmed",
 };
 
+const PAGE_SIZE = 10;
+
 export default function Trips() {
   const notify = useNotify();
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialStatus = searchParams.get("status") || "";
+  const [loadingMore, setLoadingMore] = useState(false);
   const [status, setStatus] = useState(initialStatus);
   const [search, setSearch] = useState("");
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const listRef = useRef(null);
+  const tripsRef = useRef([]);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
 
   const openCreate = () => {
     setForm(EMPTY_FORM);
@@ -95,7 +107,7 @@ export default function Trips() {
       await fetchApi("/api/travel/trips", { method: "POST", body: JSON.stringify(body) });
       notify.success("Trip created");
       setCreating(false);
-      load();
+      load({ reset: true });
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Failed to create trip");
     } finally {
@@ -108,21 +120,96 @@ export default function Trips() {
     setStatus((current) => (current === nextStatus ? current : nextStatus));
   }, [searchParams]);
 
-  const load = () => {
-    setLoading(true);
+  useEffect(() => {
+    tripsRef.current = trips;
+  }, [trips]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const load = useCallback(async ({ reset = false } = {}) => {
+    const startOffset = reset ? 0 : offsetRef.current;
+
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setTrips([]);
+      tripsRef.current = [];
+      setTotal(0);
+      setOffset(0);
+      setHasMore(true);
+      offsetRef.current = 0;
+      hasMoreRef.current = true;
+      if (listRef.current) {
+        listRef.current.scrollTop = 0;
+      }
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
+
     const qs = new URLSearchParams();
     if (status) qs.set("status", status);
-    qs.set("limit", "100");
-    fetchApi(`/api/travel/trips?${qs.toString()}`)
-      .then((res) => setTrips(Array.isArray(res?.trips) ? res.trips : []))
-      .catch((e) => {
-        notify.error(e?.body?.error || "Failed to load trips");
-        setTrips([]);
-      })
-      .finally(() => setLoading(false));
-  };
+    qs.set("limit", String(PAGE_SIZE));
+    qs.set("offset", String(startOffset));
 
-  useEffect(load, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+    try {
+      const res = await fetchApi(`/api/travel/trips?${qs.toString()}`);
+      const rows = Array.isArray(res?.trips) ? res.trips : [];
+      const totalCount = Number.isFinite(Number(res?.total)) ? Number(res.total) : rows.length;
+      const nextTrips = reset ? rows : [...tripsRef.current, ...rows];
+      const nextOffset = startOffset + rows.length;
+      const nextHasMore = Number.isFinite(totalCount)
+        ? nextOffset < totalCount
+        : rows.length === PAGE_SIZE;
+
+      tripsRef.current = nextTrips;
+      setTrips(nextTrips);
+      setTotal(totalCount);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+      offsetRef.current = nextOffset;
+      hasMoreRef.current = nextHasMore;
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to load trips");
+      setTrips([]);
+      tripsRef.current = [];
+      setTotal(0);
+      setOffset(0);
+      setHasMore(false);
+      offsetRef.current = 0;
+      hasMoreRef.current = false;
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [status, notify]);
+
+  useEffect(() => {
+    load({ reset: true });
+  }, [load]);
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      load({ reset: false });
+    }
+  }, [load]);
 
   const handleStatusChange = (nextStatus) => {
     setStatus(nextStatus);
@@ -175,7 +262,7 @@ export default function Trips() {
     try {
       await fetchApi(`/api/travel/trips/${t.id}`, { method: "DELETE" });
       notify.success(`Trip ${t.tripCode} deleted`);
-      load();
+      load({ reset: true });
     } catch (e) {
       // The route returns 403 RBAC_DENIED for non-ADMIN callers; surface
       // the server-side message so the operator knows it's a perms issue
@@ -223,12 +310,12 @@ export default function Trips() {
         <select value={status} onChange={(e) => handleStatusChange(e.target.value)} style={selectStyle} aria-label="Filter by status">
           {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <button type="button" onClick={load} style={refreshBtn} aria-label="Reload list">Refresh</button>
+        <button type="button" onClick={() => load({ reset: true })} style={refreshBtn} aria-label="Reload list">Refresh</button>
       </div>
 
       <div style={{
         background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)", overflow: "visible",
+        border: "1px solid var(--border-color)",
       }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
@@ -239,27 +326,35 @@ export default function Trips() {
         ) : visibleTrips.length === 0 ? (
           <div style={empty}>No trips match &ldquo;{search}&rdquo;.</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={th}>Trip code</th>
-                <th style={th}>Destination</th>
-                <th style={th}>Brand</th>
-                <th style={th}>Sub-brand</th>
-                <th style={th}>Dates</th>
-                <th style={th}>School</th>
-                <th style={th}>Participants</th>
-                <th style={th}>Cost</th>
-                <th style={th}>Status</th>
-                <th style={{ ...th, width: 60, textAlign: "right" }} aria-label="Actions"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleTrips.map((t) => {
-                const sc = STATUS_COLORS[t.status] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
-                return (
-                  <tr key={t.id} style={{ borderTop: "1px solid var(--border-light)" }}>
+          <div
+            ref={listRef}
+            data-testid="trips-table-scroll"
+            onScroll={handleListScroll}
+            style={{
+              maxHeight: "60vh",
+              overflowY: "auto",
+              overflowX: "hidden",
+            }}
+          >
+            <TopScrollSync>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead style={{position: "sticky", top: 0,background: "#fff",zIndex: 10,}}>
+                <tr>
+                  <th style={th}>Trip code</th>
+                  <th style={th}>Destination</th>
+                  <th style={th}>Dates</th>
+                  <th style={th}>School</th>
+                  <th style={th}>Participants</th>
+                  <th style={th}>Per-student</th>
+                  <th style={th}>Status</th>
+                  <th style={{ ...th, width: 60, textAlign: "right" }} aria-label="Actions"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleTrips.map((t) => {
+                  const sc = STATUS_COLORS[t.status] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
+                  return (
+                    <tr key={t.id} style={{ borderTop: "1px solid var(--border-light)" }}>
                     <td style={td}>
                       <Link to={`/travel/trips/${t.id}`} style={{ color: "var(--primary-color)", textDecoration: "none", fontWeight: 600 }}>
                         {t.tripCode}
@@ -313,12 +408,26 @@ export default function Trips() {
                         <Trash2 size={14} aria-hidden />
                       </button>
                     </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          </TopScrollSync>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {total > 0 && (
+              <div style={{ padding: "12px 0", textAlign: "center", color: "var(--text-secondary)", fontSize: 12 }}>
+                {hasMore ? "Scroll to load more trips." : "You've reached the end of the trips."}
+              </div>
+            )}
+            </TopScrollSync>
+            <div style={{ paddingTop: 12 }}>
+              {loadingMore && (
+                <div style={empty}>Loading more&hellip;</div>
+              )}
+              {!loadingMore && hasMore && (
+                <div aria-hidden="true" data-testid="trips-table-sentinel" style={{ height: 1 }} />
+              )}
+            </div>
+          </div>
         )}
       </div>
 

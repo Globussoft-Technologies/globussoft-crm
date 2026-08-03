@@ -252,18 +252,29 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     });
   });
 
-  it('Next-page button updates the offset query param', async () => {
-    // Need >50 total to render the pager.
-    const manyRows = Array.from({ length: 50 }, (_, i) => ({
+  it('scrolling the queue loads the next page with offset=50', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, i) => ({
       id: i + 1, pnr: `PNR${i}`, airlineCode: '6E', flightNumber: `6E-${100 + i}`,
       departureAt: '2026-06-01T10:30:00.000Z',
       windowOpenAt: '2026-05-31T10:30:00.000Z',
       passengerName: `Passenger ${i}`, status: 'pending',
       boardingPassUrl: null, deliveredAt: null, assignedAgentId: null,
     }));
+    const secondPage = Array.from({ length: 20 }, (_, i) => ({
+      id: 100 + i, pnr: `PNR${50 + i}`, airlineCode: '6E', flightNumber: `6E-${150 + i}`,
+      departureAt: '2026-06-02T10:30:00.000Z',
+      windowOpenAt: '2026-06-01T10:30:00.000Z',
+      passengerName: `Passenger ${50 + i}`, status: 'pending',
+      boardingPassUrl: null, deliveredAt: null, assignedAgentId: null,
+    }));
     fetchApiMock.mockImplementation((url) => {
       if (url.startsWith('/api/travel/webcheckins?')) {
-        return Promise.resolve({ webcheckins: manyRows, total: 120, limit: 50, offset: url.includes('offset=50') ? 50 : 0 });
+        return Promise.resolve({
+          webcheckins: url.includes('offset=50') ? secondPage : firstPage,
+          total: 120,
+          limit: 50,
+          offset: url.includes('offset=50') ? 50 : 0,
+        });
       }
       if (url === '/api/staff') return Promise.resolve(SAMPLE_STAFF);
       return Promise.resolve({});
@@ -271,8 +282,13 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     renderPage();
     await screen.findByText('PNR0');
 
-    const nextBtn = screen.getByRole('button', { name: /Next page/i });
-    fireEvent.click(nextBtn);
+    const scrollArea = screen.getByTestId('webcheckins-table-scroll');
+    Object.defineProperties(scrollArea, {
+      scrollTop: { value: 728, writable: true, configurable: true },
+      clientHeight: { value: 400, writable: true, configurable: true },
+      scrollHeight: { value: 800, writable: true, configurable: true },
+    });
+    fireEvent.scroll(scrollArea);
 
     await waitFor(() => {
       const nextCall = fetchApiMock.mock.calls.find(
@@ -478,7 +494,7 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     });
   });
 
-  it('renders pagination range "1–50 of 120" when total exceeds page size', async () => {
+  it('scrolling the queue loads the next page and appends more rows', async () => {
     const manyRows = Array.from({ length: 50 }, (_, i) => ({
       id: i + 1, pnr: `RNG${i}`, airlineCode: '6E', flightNumber: `6E-${100 + i}`,
       departureAt: '2026-06-01T10:30:00.000Z',
@@ -495,11 +511,20 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     });
     renderPage();
     await screen.findByText('RNG0');
-    // Range text uses an HTML en-dash entity (–); accept either form.
-    const rangeText = screen.getByText(/1.{1,3}50 of 120/);
-    expect(rangeText).toBeTruthy();
-    // Prev button should be disabled at offset 0.
-    const prevBtn = screen.getByRole('button', { name: /Previous page/i });
-    expect(prevBtn.disabled).toBe(true);
+
+    const scrollArea = screen.getByTestId('webcheckins-table-scroll');
+    Object.defineProperties(scrollArea, {
+      scrollTop: { value: 728, writable: true, configurable: true },
+      clientHeight: { value: 400, writable: true, configurable: true },
+      scrollHeight: { value: 800, writable: true, configurable: true },
+    });
+    fireEvent.scroll(scrollArea);
+
+    await waitFor(() => {
+      const nextCall = fetchApiMock.mock.calls.find(
+        ([u]) => typeof u === 'string' && u.includes('offset=50'),
+      );
+      expect(nextCall).toBeTruthy();
+    });
   });
 });

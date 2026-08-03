@@ -44,6 +44,7 @@ const FLOOR_LABELS = { low: "Low floor", mid: "Mid floor", high: "High floor" };
 
 const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SAR"];
 const OTHER_OPTION = "__other__";
+const PAGE_SIZE = 200;
 
 function AttributeChips({ attributes }) {
   const chips = [];
@@ -255,6 +256,7 @@ export default function CostMaster() {
 
   const [rates, setRates] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [filterSubBrand, setFilterSubBrand] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
   const [adding, setAdding] = useState(false);
@@ -262,6 +264,15 @@ export default function CostMaster() {
   const [saving, setSaving] = useState(false);
   const [suppliers, setSuppliers] = useState([]);
   const [seasons, setSeasons] = useState([]);
+  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const listRef = useRef(null);
+  const ratesRef = useRef([]);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
 
   const defaultBrand = defaultSubBrandFor(user, activeSubBrand, myBrands[0]);
   const [form, setForm] = useState({
@@ -281,19 +292,74 @@ export default function CostMaster() {
     roomCategory: "",
   });
 
-  const load = useCallback(() => {
-    setLoading(true);
+  useEffect(() => {
+    ratesRef.current = rates;
+  }, [rates]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const load = useCallback(async ({ reset = false } = {}) => {
+    const startOffset = reset ? 0 : offsetRef.current;
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setRates([]);
+      ratesRef.current = [];
+      setOffset(0);
+      setTotal(0);
+      setHasMore(true);
+      if (listRef.current) listRef.current.scrollTop = 0;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
     const qs = new URLSearchParams();
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
     if (filterCategory) qs.set("category", filterCategory);
-    qs.set("limit", "200");
-    fetchApi(`/api/travel/cost-master?${qs.toString()}`)
-      .then((res) => setRates(Array.isArray(res?.rates) ? res.rates : []))
-      .catch((e) => { notify.error(e?.body?.error || "Failed to load rates"); setRates([]); })
-      .finally(() => setLoading(false));
-  }, [filterSubBrand, filterCategory]); // eslint-disable-line react-hooks/exhaustive-deps
+    qs.set("limit", String(PAGE_SIZE));
+    qs.set("offset", String(startOffset));
+    try {
+      const res = await fetchApi(`/api/travel/cost-master?${qs.toString()}`);
+      const list = Array.isArray(res?.rates) ? res.rates : [];
+      const totalCount = Number.isFinite(Number(res?.total)) ? Number(res.total) : list.length;
+      const nextRates = reset ? list : [...ratesRef.current, ...list];
+      const nextOffset = startOffset + list.length;
+      const nextHasMore = Number.isFinite(totalCount) ? nextOffset < totalCount : list.length === PAGE_SIZE;
+      ratesRef.current = nextRates;
+      setRates(nextRates);
+      setTotal(totalCount);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to load rates");
+      setRates([]);
+      ratesRef.current = [];
+      setTotal(0);
+      setOffset(0);
+      setHasMore(false);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [filterSubBrand, filterCategory, notify]);
 
-  useEffect(load, [load]);
+  useEffect(() => {
+    load({ reset: true });
+  }, [load]);
 
   const loadLookupData = useCallback(() => {
     fetchApi("/api/travel/suppliers?limit=500&fields=summary")
@@ -357,7 +423,7 @@ export default function CostMaster() {
         roomCategory: "",
       }));
       setAdding(false);
-      load();
+      load({ reset: true });
     } catch (e) {
       notify.error(e?.body?.error || "Failed to add rate");
     }
@@ -401,7 +467,7 @@ export default function CostMaster() {
       }
       loadLookupData();
       setEditingId(null);
-      load();
+      load({ reset: true });
     } catch (e) {
       notify.error(e?.body?.error || "Failed to update rate");
     } finally {
@@ -415,7 +481,7 @@ export default function CostMaster() {
     try {
       await fetchApi(`/api/travel/cost-master/${rate.id}`, { method: "DELETE" });
       notify.success("Rate deleted");
-      load();
+      load({ reset: true });
     } catch (e) {
       notify.error(e?.body?.error || "Failed to delete rate");
     }
@@ -428,7 +494,7 @@ export default function CostMaster() {
         method: "PATCH",
         body: JSON.stringify({ isActive: !rate.isActive }),
       });
-      load();
+      load({ reset: true });
     } catch (e) {
       setRates((prev) => prev.map((r) => (r.id === rate.id ? { ...r, isActive: rate.isActive } : r)));
       notify.error(e?.body?.error || "Failed to toggle");
@@ -502,6 +568,15 @@ export default function CostMaster() {
     } catch (e) { notify.error(e.message || "Failed to import"); }
     finally { if (fileRef.current) fileRef.current.value = ""; }
   };
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      load({ reset: false });
+    }
+  }, [load]);
 
   // All sub-brands for the filter dropdown (not scoped to user access â€” filter
   // should show what's IN the table, not what the user can create).
@@ -713,16 +788,26 @@ export default function CostMaster() {
       )}
 
       {/* Table */}
-      <div style={{ background: "var(--surface-color)", borderRadius: 12, border: "1px solid var(--border-color)", overflow: "visible" }}>
-        {loading ? (
+      <div style={{ background: "var(--surface-color)", borderRadius: 12, border: "1px solid var(--border-color)" }}>
+        {loading && rates.length === 0 ? (
           <div style={emptyStyle}>Loading&hellip;</div>
         ) : rates.length === 0 ? (
           <div style={emptyStyle}>No rates yet. Add one using the &ldquo;+ Add rate&rdquo; button above.</div>
         ) : (
-          <TopScrollSync>
+          <div
+            ref={listRef}
+            data-testid="cost-master-table-scroll"
+            onScroll={handleListScroll}
+            style={{
+              maxHeight: "60vh",
+              overflowY: "auto",
+              overflowX: "hidden",
+            }}
+          >
+          <TopScrollSync disabled>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
-              <tr>
+              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
                 <th style={th}>Sub-brand</th>
                 <th style={th}>Category</th>
                 <th style={th}>Route / SKU</th>
@@ -753,7 +838,7 @@ export default function CostMaster() {
                         <code style={{ fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace", fontSize: 13 }}>{r.routeOrSku}</code>
                         {(r.supplierName || r.seasonName) && (
                           <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-                            {[r.supplierName, r.seasonName].filter(Boolean).join(" · ")}
+                            {[r.supplierName, r.seasonName].filter(Boolean).join(" ï¿½ ")}
                           </span>
                         )}
                       </div>
@@ -798,6 +883,15 @@ export default function CostMaster() {
             </tbody>
           </table>
           </TopScrollSync>
+          {loadingMore && (
+            <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
+              Loading more&hellip;
+            </div>
+          )}
+          {!loadingMore && hasMore && (
+            <div data-testid="cost-master-scroll-sentinel" style={{ height: 1 }} />
+          )}
+          </div>
         )}
       </div>
 
@@ -815,7 +909,7 @@ const selectStyle = { padding: "9px 12px", borderRadius: 8, border: "1px solid v
 const input = { padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--bg-color)", color: "var(--text-primary)", fontSize: 13 };
 const inlineInput = { padding: "5px 8px", borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--bg-color)", color: "var(--text-primary)", fontSize: 13, width: "100%" };
 const emptyStyle = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
-const th = { textAlign: "left", padding: "14px 16px", fontSize: 11.5, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)", fontWeight: 600 };
+const th = { position: "sticky", top: 0, background: "#fff", zIndex: 10, textAlign: "left", padding: "14px 16px", fontSize: 11.5, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)", fontWeight: 600 };
 const td = { padding: "14px 16px", fontSize: 13.5, color: "var(--text-primary)", verticalAlign: "middle" };
 const brandBadge = { display: "inline-block", padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--subtle-bg-3, rgba(91,110,248,0.15))", color: "var(--primary-color, #5b6ef8)", textTransform: "uppercase", letterSpacing: 0.5 };
 const attrChip = { padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "var(--subtle-bg)", color: "var(--text-secondary)", border: "1px solid var(--border-color)", whiteSpace: "nowrap" };

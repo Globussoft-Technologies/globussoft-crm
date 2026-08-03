@@ -192,6 +192,18 @@ const ALL_FIXTURE = [PENDING_OCCUPANCY, PENDING_SMS_BLAST, PENDING_CAMPAIGN, APP
 const PENDING_ONLY = [PENDING_OCCUPANCY, PENDING_SMS_BLAST, PENDING_CAMPAIGN];
 const APPROVED_ONLY = [APPROVED_REC];
 
+function makePendingRec(id, title) {
+  return {
+    id,
+    type: 'occupancy_alert',
+    title,
+    body: `Body for ${title}`,
+    priority: 'medium',
+    status: 'pending',
+    createdAt: `2026-05-24T${String(id % 24).padStart(2, '0')}:00:00Z`,
+  };
+}
+
 function installFetchMock({
   filteredList = PENDING_ONLY,
   filteredPromise = null,
@@ -360,6 +372,43 @@ describe('<Recommendations /> — mount fetch + card render', () => {
     expect(
       screen.getAllByRole('button', { name: /Reject/i }).length,
     ).toBeGreaterThanOrEqual(1);
+  });
+
+  it('loads additional cards when the scroll container reaches the bottom', async () => {
+    const manyPending = Array.from({ length: 12 }, (_, index) =>
+      makePendingRec(5000 + index, `Scrollable recommendation ${index + 1}`),
+    );
+    installFetchMock({ filteredList: manyPending, allList: manyPending });
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', {
+          level: 3,
+          name: /^Scrollable recommendation 1$/i,
+        }),
+      ).toBeInTheDocument();
+    });
+
+    expect(
+      screen.queryByRole('heading', {
+        level: 3,
+        name: /Scrollable recommendation 11/i,
+      }),
+    ).toBeNull();
+
+    const scrollContainer = screen.getByTestId('recommendations-list-scroll');
+    Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true });
+    Object.defineProperty(scrollContainer, 'scrollHeight', { value: 800, configurable: true });
+    scrollContainer.scrollTop = 728;
+    fireEvent.scroll(scrollContainer);
+
+    expect(
+      await screen.findByRole('heading', {
+        level: 3,
+        name: /Scrollable recommendation 11/i,
+      }),
+    ).toBeInTheDocument();
   });
 
   it('non-pending row renders "Status: <s>" text instead of Approve/Reject buttons', async () => {

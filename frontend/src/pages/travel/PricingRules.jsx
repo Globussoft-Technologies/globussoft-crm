@@ -420,10 +420,14 @@ function SeasonsSection() {
         ) : seasons.length === 0 ? (
           <div style={empty}>No seasons yet. Add one above.</div>
         ) : (
-          <TopScrollSync>
+          <div
+            data-testid="pricing-rules-seasons-scroll"
+            style={{ maxHeight: "60vh", overflowY: "auto", overflowX: "hidden" }}
+          >
+          <TopScrollSync disabled>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
-              <tr>
+              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
                 <th style={th}>Sub-brand</th>
                 <th style={th}>Name</th>
                 <th style={th}>Start</th>
@@ -453,6 +457,7 @@ function SeasonsSection() {
             </tbody>
           </table>
           </TopScrollSync>
+          </div>
         )}
       </div>
     </section>
@@ -504,7 +509,7 @@ function MarkupRulesSection() {
     fetchApi("/api/travel/suppliers?limit=500&fields=summary")
       .then((res) => setSuppliers(Array.isArray(res?.suppliers) ? res.suppliers : []))
       .catch(() => setSuppliers([]));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const load = () => {
     setLoading(true);
@@ -804,10 +809,14 @@ function MarkupRulesSection() {
         ) : rules.length === 0 ? (
           <div style={empty}>No markup rules yet. Add one above.</div>
         ) : (
-          <TopScrollSync>
+          <div
+            data-testid="pricing-rules-markup-scroll"
+            style={{ maxHeight: "60vh", overflowY: "auto", overflowX: "hidden" }}
+          >
+          <TopScrollSync disabled>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
-              <tr>
+              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
                 <th style={th}>Sub-brand</th>
                 <th style={th}>Scope</th>
                 <th style={th}>Match key</th>
@@ -845,6 +854,7 @@ function MarkupRulesSection() {
             </tbody>
           </table>
           </TopScrollSync>
+          </div>
         )}
       </div>
     </section>
@@ -895,6 +905,9 @@ const input = {
 };
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const th = {
+  position: "sticky",
+  top: 0,
+  zIndex: 10,
   textAlign: "left", padding: "10px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",

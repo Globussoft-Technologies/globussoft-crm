@@ -33,9 +33,9 @@
 // Mirrors SightseeingMaster.jsx (ca052d20) — same #907 arc, same admin-table
 // pattern, same notify hook (`../utils/notify`, not `../hooks/useNotify`).
 
-import React, { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Copy, Download, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Upload, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Copy, Download, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Upload, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
@@ -133,9 +133,17 @@ export default function ItineraryTemplates() {
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
 
   const [items, setItems] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [_total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const listRef = useRef(null);
+  const itemsRef = useRef([]);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
 
   // Filter state
   const [destinationFilter, setDestinationFilter] = useState('');
@@ -186,8 +194,36 @@ export default function ItineraryTemplates() {
   const [contacts, setContacts] = useState([]);
   const [cloneContactId, setCloneContactId] = useState('');
 
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
   const fetchItems = useCallback(() => {
-    setLoading(true);
+    if (offset === 0) {
+      setLoading(true);
+      setLoadingMore(false);
+      itemsRef.current = [];
+      setItems([]);
+      if (listRef.current) listRef.current.scrollTop = 0;
+    } else if (!loadingRef.current) {
+      setLoadingMore(true);
+    }
     const qs = new URLSearchParams();
     if (destinationFilter.trim()) qs.set('destinationName', destinationFilter.trim());
     if (categoryFilter) qs.set('category', categoryFilter);
@@ -200,15 +236,26 @@ export default function ItineraryTemplates() {
     qs.set('offset', String(offset));
     fetchApi(`/api/travel/itinerary-templates?${qs.toString()}`)
       .then((res) => {
-        setItems(Array.isArray(res?.items) ? res.items : []);
-        setTotal(Number(res?.total) || 0);
+        const rows = Array.isArray(res?.items) ? res.items : [];
+        const totalCount = Number(res?.total) || 0;
+        const nextItems = offset === 0 ? rows : [...itemsRef.current, ...rows];
+        const nextOffset = offset + rows.length;
+        const nextHasMore = Number.isFinite(totalCount) ? nextOffset < totalCount : rows.length === PAGE_SIZE;
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+        setTotal(totalCount);
+        setHasMore(nextHasMore);
       })
       .catch((e) => {
         notify.error(e?.body?.error || 'Failed to load itinerary templates');
         setItems([]);
         setTotal(0);
+        setHasMore(false);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setLoadingMore(false);
+      });
   }, [destinationFilter, categoryFilter, subBrandFilter, budgetTierFilter, activeOnly, includeArchived, offset, notify]);
 
   useEffect(() => {
@@ -505,10 +552,14 @@ export default function ItineraryTemplates() {
     return d.toLocaleDateString();
   };
 
-  const canPrev = offset > 0;
-  const canNext = offset + PAGE_SIZE < total;
-  const fromIdx = total === 0 ? 0 : offset + 1;
-  const toIdx = Math.min(offset + items.length, total);
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      setOffset((curr) => curr + PAGE_SIZE);
+    }
+  }, []);
 
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
@@ -918,17 +969,26 @@ export default function ItineraryTemplates() {
           background: 'var(--surface-color)',
           borderRadius: 8,
           border: '1px solid var(--border-color)',
-          overflow: 'hidden',
         }}
       >
-        {loading ? (
+        {loading && items.length === 0 ? (
           <div style={emptyStyle}>Loading&hellip;</div>
         ) : items.length === 0 ? (
           <div style={emptyStyle}>No itinerary templates yet. Add one above.</div>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
+          <div
+            ref={listRef}
+            data-testid="itinerary-templates-table-scroll"
+            onScroll={handleListScroll}
+            style={{
+              maxHeight: '60vh',
+              overflowY: 'auto',
+              overflowX: 'hidden',
+            }}
+          >
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
                 <th style={th}>Name</th>
                 <th style={th}>Destination</th>
                 <th style={th}>Duration</th>
@@ -951,16 +1011,16 @@ export default function ItineraryTemplates() {
                 <th style={th}>Ver</th>
                 <th style={th}>Actions</th>
               </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => (
-                <tr
-                  key={item.id}
-                  style={{
-                    borderTop: '1px solid var(--border-light)',
-                    opacity: item.isActive ? 1 : 0.5,
-                  }}
-                >
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr
+                    key={item.id}
+                    style={{
+                      borderTop: '1px solid var(--border-light)',
+                      opacity: item.isActive ? 1 : 0.5,
+                    }}
+                  >
                   <td style={td}>
                     <strong>{item.name}</strong>
                     {item.description && (
@@ -1078,49 +1138,20 @@ export default function ItineraryTemplates() {
                       </button>
                     </div>
                   </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {loadingMore && (
+              <div style={{ padding: '10px 16px', fontSize: 12, color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)' }}>
+                Loading more&hellip;
+              </div>
+            )}
+            {!loadingMore && hasMore && (
+              <div data-testid="itinerary-templates-scroll-sentinel" style={{ height: 1 }} />
+            )}
+          </div>
         )}
-      </div>
-
-      {/* Pagination */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginTop: 12,
-          fontSize: 13,
-          color: 'var(--text-secondary)',
-        }}
-      >
-        <div>
-          {total === 0
-            ? 'No results'
-            : `Showing ${fromIdx}-${toIdx} of ${total}`}
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            type="button"
-            onClick={() => canPrev && setOffset(Math.max(0, offset - PAGE_SIZE))}
-            disabled={!canPrev}
-            style={canPrev ? secondaryBtn : disabledBtn}
-            aria-label="Previous page"
-          >
-            <ChevronLeft size={14} /> Prev
-          </button>
-          <button
-            type="button"
-            onClick={() => canNext && setOffset(offset + PAGE_SIZE)}
-            disabled={!canNext}
-            style={canNext ? secondaryBtn : disabledBtn}
-            aria-label="Next page"
-          >
-            Next <ChevronRight size={14} />
-          </button>
-        </div>
       </div>
 
       {/* G061 — Detail / preview modal (PRD FR-3.1.d). Renders when the
@@ -1327,7 +1358,7 @@ function TemplatePreviewModal({
               }}
               data-testid="preview-no-pins"
             >
-              No mapped points of interest yet. The template's items don't
+              No mapped points of interest yet. The template&apos;s items don&apos;t
               carry latitude / longitude.
             </div>
           )}
@@ -1503,6 +1534,9 @@ const emptyStyle = {
   fontSize: 14,
 };
 const th = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 10,
   textAlign: 'left',
   padding: '10px 12px',
   fontSize: 12,

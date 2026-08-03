@@ -513,10 +513,14 @@ export default function CurriculumAdmin() {
             with &ldquo;New Mapping&rdquo; or clear the filters to widen the search.
           </div>
         ) : (
-          <TopScrollSync>
+          <div
+            data-testid="curriculum-admin-table-scroll"
+            style={{ maxHeight: '60vh', overflowY: 'auto', overflowX: 'hidden' }}
+          >
+          <TopScrollSync disabled>
           <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
-              <tr>
+              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
                 <th style={{ ...th, width: '12%' }}>Curriculum</th>
                 <th style={{ ...th, width: '6%' }}>Grade</th>
                 <th style={{ ...th, width: '10%' }}>Subject</th>
@@ -576,6 +580,7 @@ export default function CurriculumAdmin() {
             </tbody>
           </table>
           </TopScrollSync>
+          </div>
         )}
       </div>
 
@@ -915,6 +920,9 @@ const empty = {
 };
 
 const th = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 10,
   textAlign: 'left',
   padding: '10px 12px',
   fontSize: 12,

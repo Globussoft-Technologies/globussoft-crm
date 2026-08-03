@@ -1,4 +1,3 @@
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -475,7 +474,7 @@ describe('<NotificationBell />', () => {
     await waitFor(() => expect(screen.queryByText('Linked')).not.toBeInTheDocument());
   });
 
-  it('#853: "View all notifications" footer navigates to /notifications and closes the panel', async () => {
+  it('#853: the footer does not expose a "View all notifications" button', async () => {
     const user = userEvent.setup();
     fetchApi
       .mockResolvedValueOnce({ count: 0 })
@@ -490,14 +489,8 @@ describe('<NotificationBell />', () => {
     const bell = await screen.findByRole('button', { name: /notifications/i });
     await user.click(bell);
 
-    const viewAll = await screen.findByRole('button', { name: /view all notifications/i });
-    await user.click(viewAll);
-
-    expect(navigateMock).toHaveBeenCalledWith('/notifications');
-    // Panel closed.
-    await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /view all notifications/i })).not.toBeInTheDocument(),
-    );
+    await screen.findByText('one');
+    expect(screen.queryByRole('button', { name: /view all notifications/i })).not.toBeInTheDocument();
   });
 
   it('#853: "View all" footer is hidden when the panel is empty', async () => {

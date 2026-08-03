@@ -326,6 +326,44 @@ describe('<Reports /> — broad page surface', () => {
     });
   });
 
+  it('loads additional detail rows when the table container reaches the bottom', async () => {
+    const manyDeals = Array.from({ length: 18 }, (_, index) => ({
+      id: 900 + index,
+      title: `Scrollable deal ${index + 1}`,
+      amount: 1000 + index * 100,
+      stage: 'Won',
+      owner: { name: 'Owner' },
+      contact: { name: 'Contact' },
+      createdAt: '2026-05-01T00:00:00Z',
+    }));
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url.startsWith('/api/reports/query')) return Promise.resolve(sampleData);
+      if (url.startsWith('/api/reports/detailed/deals')) return Promise.resolve(manyDeals);
+      if (url === '/api/report-schedules' && (!opts || opts.method !== 'POST')) return Promise.resolve([]);
+      if (url === '/api/report-schedules' && opts?.method === 'POST') return Promise.resolve({ id: 99 });
+      return Promise.resolve(null);
+    });
+
+    render(<Reports />);
+    fireEvent.click(screen.getByRole('button', { name: /Detailed Data/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Scrollable deal 1')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Scrollable deal 13')).not.toBeInTheDocument();
+
+    const scrollContainer = screen.getByTestId('reports-detail-scroll');
+    Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true });
+    Object.defineProperty(scrollContainer, 'scrollHeight', { value: 800, configurable: true });
+    scrollContainer.scrollTop = 728;
+    fireEvent.scroll(scrollContainer);
+
+    expect(
+      await screen.findByText('Scrollable deal 13'),
+    ).toBeInTheDocument();
+  });
+
   it('setting startDate appends both &from= and &startDate= (#117 dual spelling)', async () => {
     render(<Reports />);
     // Wait for initial fetch.

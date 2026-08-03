@@ -80,6 +80,9 @@ function buildAllowlist() {
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5000",
     "https://globuscrm.globussoft.com",
+    "https://empcloud.com",
+    "https://www.empcloud.com",
+    "https://app.empcloud.com",
   ];
   const envOne = process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [];
   const envMany = process.env.CORS_ALLOWED_ORIGINS

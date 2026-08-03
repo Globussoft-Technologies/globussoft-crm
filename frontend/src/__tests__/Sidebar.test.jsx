@@ -34,7 +34,7 @@
  *   - useNotify returns a STABLE object reference (per the 2026-05-23
  *     standing rule on RTL hook mocks).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
@@ -152,6 +152,7 @@ const { fetchApiMock } = vi.hoisted(() => ({
   fetchApiMock: vi.fn(),
 }));
 vi.mock('../utils/api', () => ({ fetchApi: fetchApiMock }));
+let consoleErrorSpy;
 
 // Sample page catalog used by the wellness-vertical tests that exercise
 // renderWellnessNav. Every entry mirrors the server's shape
@@ -228,6 +229,18 @@ function renderSidebar({
 }
 
 beforeEach(() => {
+  consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation((...args) => {
+    const first = String(args[0] ?? '');
+    if (
+      first.includes('Warning: An update to Sidebar inside a test was not wrapped in act')
+      || first.includes('When testing, code that causes React state updates should be wrapped into act')
+    ) {
+      return;
+    }
+    // Preserve every other console.error so real regressions still surface.
+    // eslint-disable-next-line no-console
+    console.warn(...args);
+  });
   notifyObj.error.mockReset();
   notifyObj.success.mockReset();
   notifyObj.info.mockReset();
@@ -247,6 +260,10 @@ beforeEach(() => {
     }
     return Promise.resolve([]);
   });
+});
+
+afterEach(() => {
+  consoleErrorSpy?.mockRestore();
 });
 
 describe('Sidebar — load-bearing render surface', () => {

@@ -160,6 +160,10 @@ const ALLOWED_ORIGINS = [
   "http://localhost:8000",
   "http://127.0.0.1:8000",
   "https://globuscrm.globussoft.com",
+  // EMP Cloud frontend — browser API calls into the CRM.
+  "https://empcloud.com",
+  "https://www.empcloud.com",
+  "https://app.empcloud.com",
   // Dr. Haror's external marketing site — consumes the public wellness
   // catalog + payment endpoints (POST /api/wellness/public/payment/order +
   // /confirm). Hardcoded because it's part of the product surface, not a

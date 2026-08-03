@@ -548,6 +548,8 @@ router.post('/', async (req, res) => {
     // LeadCustomFieldValue AFTER the contact create succeeds (see below).
     const customFields = req.body.customFields;
     delete req.body.customFields;
+    const skipInitialAssignee = req.body.skipInitialAssignee === true;
+    delete req.body.skipInitialAssignee;
     // #600 / #557 follow-up: the Leads form sends wellness-only optional fields
     // as empty strings even in the generic vertical. Prisma Int? / DateTime? /
     // String? columns reject "" where they expect null / a valid shape, so
@@ -573,11 +575,16 @@ router.post('/', async (req, res) => {
     if (typeof normalised.birthDate === "string" && normalised.birthDate !== "") {
       normalised.birthDate = new Date(normalised.birthDate);
     }
-    // #588: default assignedToId to the creator so USER-role list scoping
-    // (which filters by assignedToId = req.user.userId) actually surfaces
-    // the contact they just created. Mirrors POST /api/deals which sets
-    // ownerId = req.user.userId. Explicit body.assignedToId still wins.
-    if (normalised.assignedToId == null) normalised.assignedToId = req.user.userId;
+    // Generic CRM Callified leads stay unassigned until the call produces a real status.
+    // Explicit assignedToId still wins, and non-generic contact creation keeps the existing creator default.
+    const isGenericLeadAwaitingCall =
+      (req.user.vertical || 'generic') === 'generic' &&
+      normalised.status === 'Lead' &&
+      (!normalised.callifiedLeadStatus || normalised.callifiedLeadStatus === 'yet_to_call');
+    const shouldSkipInitialAssignee = isGenericLeadAwaitingCall || (skipInitialAssignee && normalised.status === 'Lead');
+    if (normalised.assignedToId == null && !shouldSkipInitialAssignee) {
+      normalised.assignedToId = req.user.userId;
+    }
 
     // Auto-assign new Leads to the tenant's default Callified campaign when set
     // and no campaign was supplied explicitly. Covers manual create, import,

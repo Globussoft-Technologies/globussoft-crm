@@ -852,6 +852,12 @@ model Contact {
   // backend/lib/leadConversationSummary.js.
   description String? @db.Text
 
+  // Raw external intake snapshot (JSON string). Stores the full partner
+  // payload so arbitrary keys survive even when they do not map to a native
+  // Contact column or a defined lead custom field. Kept separate from
+  // description because this is structured intake data, not a narrative.
+  externalPayloadJson String? @db.LongText
+
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.

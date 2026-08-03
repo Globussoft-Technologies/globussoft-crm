@@ -499,7 +499,7 @@ const NotificationBell = () => {
                 textAlign: "center",
               }}
             >
-              <button
+              {/* <button
                 onClick={() => {
                   navigate("/notifications");
                   setOpen(false);
@@ -515,7 +515,7 @@ const NotificationBell = () => {
                 aria-label="View all notifications"
               >
                 View all notifications →
-              </button>
+              </button> */}
             </div>
           )}
         </div>

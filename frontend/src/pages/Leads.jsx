@@ -58,6 +58,18 @@ const sourceBadgeStyle = {
   whiteSpace: 'nowrap',
   display: 'inline-block',
 };
+
+const leadSourceLabel = (lead) => (
+  lead?.source
+  || lead?.firstTouchSource
+  || lead?.submitSource
+  || lead?.submittedSource
+  || lead?.customFields?.submit_source
+  || lead?.customFields?.submitSource
+  || lead?.customFields?.lead_source
+  || lead?.customFields?.leadSource
+  || 'Organic'
+);
 // Reject all C0 controls (NUL/BEL/etc.) + DEL. \t \n \r are intentionally
 // included  text inputs shouldn't carry them either, and any paste-from-
 // malicious-source typically smuggles via NUL or BEL. Detecting control
@@ -700,6 +712,7 @@ const Leads = () => {
           name: trimmedName,
           phone: phoneOut,
           countryCode: undefined,
+          skipInitialAssignee: isGeneric ? true : undefined,
           callifiedCampaignId: isGeneric && autoCampaignId ? Number(autoCampaignId) : undefined,
         }),
       });
@@ -719,16 +732,6 @@ const Leads = () => {
     // tab, so this is also where the user expects to find the row next.
     const body = { status: 'Prospect' };
 
-    // If this lead has a Callified AI call, surface "callified" as the source
-    // so converted-lead attribution reflects the AI call channel. Generic vertical only.
-    if (isGeneric) {
-      const hasCallifiedCall = await fetchApi(`/api/callified/calls/lead/${id}/latest`)
-        .then(res => !!res?.callifiedLeadId)
-        .catch(() => false);
-      if (hasCallifiedCall) {
-        body.source = 'callified';
-      }
-    }
 
     await fetchApi(`/api/contacts/${id}`, {
       method: 'PUT',
@@ -1751,7 +1754,7 @@ const Leads = () => {
                   {isColVisible('source') && (
                     <td style={{ padding: '1rem' }}>
                       <span style={sourceBadgeStyle}>
-                        {lead.source || 'Organic'}
+                        {leadSourceLabel(lead)}
                       </span>
                     </td>
                   )}

@@ -21,8 +21,8 @@
 //   server-side via getSubBrandAccessSet.
 
 import { useEffect, useMemo, useState, useContext } from "react";
-import { Link } from "react-router-dom";
-import { Receipt, Pencil, Trash2, Calculator } from "lucide-react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Receipt, Pencil, Trash2, Calculator, UserPlus } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { usePermissions } from "../../hooks/usePermissions";
@@ -49,7 +49,10 @@ const QUOTE_STATUSES = [
   { value: "Draft", label: "Draft" },
   { value: "Sent", label: "Sent" },
   { value: "Accepted", label: "Accepted" },
+  { value: "advance_paid", label: "Advance paid" },
+  { value: "fully_paid", label: "Fully paid" },
   { value: "Rejected", label: "Rejected" },
+  { value: "Expired", label: "Expired" },
 ];
 
 // SUB_BRAND_BG now imported from ../../utils/travelSubBrand (rule-of-3
@@ -63,12 +66,14 @@ const STATUS_BG = {
   Sent: "rgba(59, 130, 246, 0.18)",       // blue
   Accepted: "rgba(34, 197, 94, 0.18)",    // green
   Rejected: "rgba(244, 63, 94, 0.18)",    // rose
+  Expired: "rgba(245, 158, 11, 0.18)",     // amber
 };
 const STATUS_COLOR = {
   Draft: "var(--text-secondary)",
   Sent: "#3b82f6",
   Accepted: "var(--success-color, #22c55e)",
   Rejected: "var(--danger-color, #f43f5e)",
+  Expired: "var(--warning-color, #f59e0b)",
 };
 
 const EMPTY_FORM = {
@@ -97,6 +102,8 @@ function formatDate(iso) {
 
 export default function QuotesAdmin() {
   const notify = useNotify();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
   // G102: BrandKit lookup. Module-level cache means re-mounts of QuotesAdmin
@@ -113,7 +120,8 @@ export default function QuotesAdmin() {
   const canDelete = hasPermission("quotes", "delete");
   // Combined for table-column rendering — show the Actions column if
   // ANY mutation is permitted.
-  const canWrite = canCreate || canEdit || canDelete;
+  const canAssign = user?.role === "ADMIN" && canEdit;
+  const canWrite = canCreate || canEdit || canDelete || canAssign;
 
   // Sub-brand the create/edit form may assign. Single-brand users are locked
   // to their one brand (field rendered read-only); multi-brand users get a
@@ -127,9 +135,14 @@ export default function QuotesAdmin() {
   // #829 — distinguish 403 from genuine empty so the empty-state copy
   // honestly says "Access restricted" instead of "No quotes match."
   const [permissionDenied, setPermissionDenied] = useState(false);
+  const [assignableUsers, setAssignableUsers] = useState([]);
 
-  const [subBrand, setSubBrand] = useState("");
-  const [status, setStatus] = useState("");
+  const initialQuery = new URLSearchParams(location.search);
+  const openedFromReports = initialQuery.get("source") === "reports";
+  const reportsBackTo = "/travel/reports";
+  const quotesListPath = `${location.pathname}${location.search}`;
+  const [subBrand, setSubBrand] = useState(openedFromReports ? (initialQuery.get("subBrand") || "") : "");
+  const [status, setStatus] = useState(openedFromReports ? (initialQuery.get("status") || "") : "");
   const [nameFilter, setNameFilter] = useState("");
 
   const [showForm, setShowForm] = useState(false);
@@ -141,11 +154,14 @@ export default function QuotesAdmin() {
     setLoading(true);
     const qs = new URLSearchParams();
     if (subBrand) qs.set("subBrand", subBrand);
-    if (status) qs.set("status", status);
-    const url = `/api/travel/quotes${qs.toString() ? `?${qs.toString()}` : ""}`;
+    if (status && status !== "Expired") qs.set("status", status);
+    if (status === "Expired") qs.set("limit", "200");
+    const baseUrl = status === "Expired" ? "/api/travel/quotes/expired" : "/api/travel/quotes";
+    const url = `${baseUrl}${qs.toString() ? `?${qs.toString()}` : ""}`;
     fetchApi(url)
       .then((d) => {
-        setQuotes(Array.isArray(d?.quotes) ? d.quotes : []);
+        const nextQuotes = Array.isArray(d?.quotes) ? d.quotes : [];
+        setQuotes(status === "Expired" ? nextQuotes.map((q) => ({ ...q, status: "Expired" })) : nextQuotes);
         setTotal(Number.isFinite(d?.total) ? d.total : 0);
         setPermissionDenied(false);
       })
@@ -172,10 +188,28 @@ export default function QuotesAdmin() {
   // and the other travel modules. Without this the page ignored the global
   // selector entirely (only the in-page dropdown filtered).
   useEffect(() => {
+    const query = new URLSearchParams(location.search);
+    if (query.get("source") === "reports") {
+      setSubBrand(query.get("subBrand") || "");
+      setStatus(query.get("status") || "");
+      return;
+    }
     setSubBrand(activeSubBrand || "");
-  }, [activeSubBrand]);
+  }, [activeSubBrand, location.search]);
 
   useEffect(load, [subBrand, status]);
+  useEffect(() => {
+    if (!canAssign) {
+      setAssignableUsers([]);
+      return;
+    }
+    fetchApi("/api/auth/users", { silent: true })
+      .then((rows) => {
+        const users = Array.isArray(rows) ? rows : [];
+        setAssignableUsers(users.filter((u) => u?.id && u.role !== "ADMIN"));
+      })
+      .catch(() => setAssignableUsers([]));
+  }, [canAssign]);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -246,6 +280,20 @@ export default function QuotesAdmin() {
     }
   };
 
+
+  const handleAssign = async (q, assignedToUserId) => {
+    try {
+      const resp = await fetchApi(`/api/travel/quotes/${q.id}/assignment`, {
+        method: "PUT",
+        body: JSON.stringify({ assignedToUserId: assignedToUserId || null }),
+      });
+      const nextQuote = resp?.quote;
+      setQuotes((prev) => prev.map((row) => (row.id === q.id ? { ...row, ...nextQuote } : row)));
+      notify.success(assignedToUserId ? `Quote #${q.id} assigned` : `Quote #${q.id} unassigned`);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Assignment failed");
+    }
+  };
   const handleDelete = async (q) => {
     const contactName = q.contact?.name || "this contact";
     if (!confirm(`Delete quote #${q.id} for ${contactName}? (Hard delete — no undo.)`)) return;
@@ -271,6 +319,11 @@ export default function QuotesAdmin() {
         }}
       >
         <div>
+          {openedFromReports && (
+            <button type="button" onClick={() => navigate(reportsBackTo)} style={{ ...secondaryBtn, marginBottom: 10 }}>
+              Back to reports
+            </button>
+          )}
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
             <Receipt size={26} aria-hidden /> Travel Quotes
           </h1>
@@ -423,6 +476,7 @@ export default function QuotesAdmin() {
                 <th style={th}>Currency</th>
                 <th style={th}>Valid Until</th>
                 <th style={th}>Sub-brand</th>
+                <th style={th}>Assigned to</th>
                 <th style={th}>Created</th>
                 {canWrite && <th style={{ ...th, textAlign: "center" }}>Actions</th>}
               </tr>
@@ -452,6 +506,26 @@ export default function QuotesAdmin() {
                       {q.subBrand || "—"}
                     </span>
                   </td>
+                  <td style={td}>
+                    {canAssign ? (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <UserPlus size={14} aria-hidden />
+                        <select
+                          value={q.assignedToUserId || ""}
+                          onChange={(e) => handleAssign(q, e.target.value)}
+                          style={{ ...selectStyle, minWidth: 150, padding: "4px 8px" }}
+                          aria-label={`Assign quote #${q.id}`}
+                        >
+                          <option value="">Unassigned</option>
+                          {assignableUsers.map((u) => (
+                            <option key={u.id} value={u.id}>{u.name || u.email || `User #${u.id}`}</option>
+                          ))}
+                        </select>
+                      </span>
+                    ) : (
+                      q.assignedToUser?.name || q.assignedToUser?.email || "Unassigned"
+                    )}
+                  </td>
                   <td style={td}>{formatDate(q.createdAt)}</td>
                   {canWrite && (
                     <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
@@ -464,6 +538,7 @@ export default function QuotesAdmin() {
                           pencil only edits the header fields. */}
                       <Link
                         to={`/travel/quotes/builder/${q.id}`}
+                        state={{ backTo: quotesListPath, backLabel: openedFromReports ? "Back to report results" : "Back to quotes" }}
                         title={`Open quote #${q.id} in the builder`}
                         aria-label={`Open quote #${q.id} in the builder`}
                         style={{ ...iconBtn, display: "inline-flex", textDecoration: "none", color: "var(--primary-color, var(--accent-color))" }}
@@ -499,7 +574,7 @@ export default function QuotesAdmin() {
               {visibleQuotes.length === 0 && (
                 <tr>
                   <td
-                    colSpan={canWrite ? 8 : 7}
+                    colSpan={canWrite ? 9 : 8}
                     style={{
                       ...td,
                       textAlign: "center",

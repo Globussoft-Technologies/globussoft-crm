@@ -29,7 +29,7 @@
 
 import { useEffect, useState, useContext, useRef } from "react";
 import { createPortal } from "react-dom";
-import { useParams, Link } from "react-router-dom";
+import { useLocation, useParams, Link } from "react-router-dom";
 import {
   Map as MapIcon, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Plus, Pencil, Trash2, X, Sparkles, Share2, Download, Check, XCircle, Copy,
@@ -347,6 +347,9 @@ function StatusBadge({ status }) {
 
 export default function ItineraryDetail() {
   const { id } = useParams();
+  const location = useLocation();
+  const backTo = location.state?.backTo || null;
+  const backLabel = location.state?.backLabel || "Back";
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
@@ -858,6 +861,11 @@ export default function ItineraryDetail() {
       <header style={{ marginBottom: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
           <div>
+            {backTo && (
+              <Link to={backTo} style={{ ...secondaryBtn, textDecoration: "none", marginBottom: 10 }}>
+                {backLabel}
+              </Link>
+            )}
             <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
               <MapIcon size={28} aria-hidden /> {itin.destination || "Itinerary"}
             </h1>

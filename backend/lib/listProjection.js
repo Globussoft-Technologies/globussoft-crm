@@ -174,6 +174,8 @@ const PROJECTIONS = Object.freeze({
     status: true,
     totalAmount: true,
     currency: true,
+    assignedToUserId: true,
+    assignedToUser: { select: { id: true, name: true, email: true } },
     validUntil: true,    // expiry-sort UI needs this
     createdAt: true,
     // Contact name is the operator-visible headline for a quote row. The bare

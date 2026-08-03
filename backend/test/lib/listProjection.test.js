@@ -357,6 +357,8 @@ describe('listProjection(modelName, fullShape)', () => {
         status: true,
         totalAmount: true,
         currency: true,
+        assignedToUserId: true,
+        assignedToUser: { select: { id: true, name: true, email: true } },
         validUntil: true,
         createdAt: true,
         contact: { select: { id: true, name: true } },

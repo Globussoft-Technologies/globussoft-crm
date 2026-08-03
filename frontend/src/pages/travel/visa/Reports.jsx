@@ -41,7 +41,8 @@
  *
  * Route mounted in App.jsx: /travel/visa/reports
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import {
   ResponsiveContainer,
   BarChart,
@@ -52,7 +53,7 @@ import {
   CartesianGrid,
   Legend,
 } from 'recharts';
-import { BarChart3 } from 'lucide-react';
+import { ArrowLeft, BarChart3 } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 
@@ -168,6 +169,8 @@ function ChartCard({ title, description, children, empty, emptyMessage }) {
 
 export default function VisaReports() {
   const notify = useNotify();
+  const location = useLocation();
+  const openedFromReports = useMemo(() => new URLSearchParams(location.search).get('source') === 'reports', [location.search]);
 
   const [recovery, setRecovery] = useState(null);
   const [readiness, setReadiness] = useState(null);
@@ -271,6 +274,19 @@ export default function VisaReports() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      {openedFromReports ? (
+        <Link
+          to="/travel/reports"
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            marginBottom: '1rem', padding: '0.4rem 0.65rem', borderRadius: 6,
+            border: '1px solid var(--border-color)', color: 'var(--text-primary)',
+            textDecoration: 'none', background: 'var(--surface-color)', fontSize: '0.85rem',
+          }}
+        >
+          <ArrowLeft size={15} aria-hidden="true" /> Back to reports
+        </Link>
+      ) : null}
       {/* Header bar */}
       <header
         style={{

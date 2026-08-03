@@ -9,7 +9,7 @@
 // pipeline (Day 7+ Deal-extension lands later).
 
 import { useEffect, useState, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X, Trash2, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -56,10 +56,16 @@ const EMPTY_FORM = {
 
 export default function Trips() {
   const notify = useNotify();
+  const location = useLocation();
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState("");
-  const [search, setSearch] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialStatus = searchParams.get("status") || "";
+  const initialSearch = searchParams.get("search") || "";
+  const fromReports = searchParams.get("from") === "reports" || searchParams.get("source") === "reports";
+  const tripsListPath = `${location.pathname}${location.search}`;
+  const [status, setStatus] = useState(initialStatus);
+  const [search, setSearch] = useState(initialSearch);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
@@ -97,6 +103,13 @@ export default function Trips() {
       setSaving(false);
     }
   };
+
+  useEffect(() => {
+    const nextStatus = searchParams.get("status") || "";
+    const nextSearch = searchParams.get("search") || "";
+    setStatus((current) => (current === nextStatus ? current : nextStatus));
+    setSearch((current) => (current === nextSearch ? current : nextSearch));
+  }, [searchParams]);
 
   const load = () => {
     setLoading(true);
@@ -172,6 +185,11 @@ export default function Trips() {
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
+          {fromReports && (
+            <Link to="/travel/reports" style={{ ...backLink, marginBottom: 10 }}>
+              Back to reports
+            </Link>
+          )}
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, marginBottom: 4 }}>
             <Luggage size={28} aria-hidden /> TMC Trips
           </h1>
@@ -241,7 +259,11 @@ export default function Trips() {
                 return (
                   <tr key={t.id} style={{ borderTop: "1px solid var(--border-light)" }}>
                     <td style={td}>
-                      <Link to={`/travel/trips/${t.id}`} style={{ color: "var(--primary-color)", textDecoration: "none", fontWeight: 600 }}>
+                      <Link
+                        to={`/travel/trips/${t.id}`}
+                        state={{ backTo: tripsListPath, backLabel: fromReports ? "Back to reports results" : "Back to trips" }}
+                        style={{ color: "var(--primary-color)", textDecoration: "none", fontWeight: 600 }}
+                      >
                         {t.tripCode}
                       </Link>
                     </td>
@@ -406,6 +428,12 @@ const selectStyle = {
   border: "1px solid var(--border-color)",
   background: "var(--surface-color)", color: "var(--text-primary)",
   minWidth: 160, fontSize: 13,
+};
+const backLink = {
+  display: "inline-flex", alignItems: "center", gap: 4,
+  fontSize: 13, color: "var(--text-secondary)",
+  textDecoration: "none", padding: "6px 12px", borderRadius: 6,
+  border: "1px solid var(--border-color)",
 };
 const refreshBtn = {
   padding: "6px 12px", borderRadius: 6,

@@ -26,7 +26,6 @@ import { useNotify } from '../../utils/notify';
 // import WhatsAppEmbeddedSignup from '../../components/WhatsAppEmbeddedSignup';
 import WhatsAppWebConnect from './whatsapp/WhatsAppWebConnect';
 import { WhatsAppThreadsContext } from './whatsapp/WhatsAppThreadsContext';
-import ThreadList from './whatsapp/ThreadList';
 import ThreadDetail from './whatsapp/ThreadDetail';
 import MessageContextMenu from './whatsapp/MessageContextMenu';
 import UnblockModal from './whatsapp/UnblockModal';
@@ -255,6 +254,13 @@ export default function WhatsAppThreads() {
   // periodic re-render the thread badge would freeze on whatever value
   // it had when the list was last fetched. A cheap 30-second tick keeps
   // the relative timestamps current without needing to refetch the list.
+  // The wellness WhatsApp thread sidebar is hidden; open the first available
+  // conversation automatically so the chat pane is usable without the rail.
+  useEffect(() => {
+    if (loadingList || selectedId) return;
+    const firstThread = threads.find((t) => !t._blocked);
+    if (firstThread) setSelectedId(firstThread.id);
+  }, [threads, loadingList, selectedId]);
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((n) => n + 1), 30_000);
@@ -1171,7 +1177,6 @@ export default function WhatsAppThreads() {
         />
 
         <div style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0 }}>
-          <ThreadList />
           <ThreadDetail />
         </div>
 

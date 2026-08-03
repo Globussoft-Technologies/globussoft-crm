@@ -143,7 +143,7 @@ describe('GET /api/travel/quotes/expired', () => {
     expect(res.body.quotes[0].id).toBe(100);
 
     // Where clause: status filter + validUntil < now.
-    const findManyArgs = prisma.travelQuote.findMany.mock.calls[0][0];
+    const findManyArgs = prisma.travelQuote.findMany.mock.calls.at(-1)[0];
     expect(findManyArgs.where.tenantId).toBe(1);
     expect(findManyArgs.where.status).toEqual({ in: ['Draft', 'Sent'] });
     expect(findManyArgs.where.validUntil.lt).toBeInstanceOf(Date);
@@ -183,6 +183,19 @@ describe('GET /api/travel/quotes/expired', () => {
       .get('/api/travel/quotes/expired')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(prisma.travelQuote.findMany.mock.calls[0][0].take).toBe(50);
+  });
+
+  test('ADMIN can narrow expired quotes by subBrand query', async () => {
+    prisma.travelQuote.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/expired?subBrand=tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const findManyArgs = prisma.travelQuote.findMany.mock.calls.at(-1)[0];
+    expect(findManyArgs.where.subBrand).toBe('tmc');
+    expect(findManyArgs.include).toEqual({ contact: { select: { id: true, name: true } } });
   });
 
   test('MANAGER with subBrandAccess=["tmc"] sees only tmc quotes', async () => {

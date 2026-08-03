@@ -12,7 +12,7 @@
 // still be drafted from a Deal page once the Day 7 Deal-extension CTA lands.
 
 import { useContext, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield, Plus, X,
   Sparkles, AlertTriangle, Trash2, Train, Bus, Car, Camera, Utensils, Search,
@@ -53,6 +53,8 @@ const STATUSES = [
   { value: "sent", label: "Sent" },
   { value: "revised", label: "Revised" },
   { value: "accepted", label: "Accepted" },
+  { value: "advance_paid", label: "Advance paid" },
+  { value: "fully_paid", label: "Fully paid" },
   { value: "rejected", label: "Rejected" },
   { value: "expired", label: "Expired" },
 ];
@@ -281,6 +283,7 @@ function TierBadge({ tier }) {
 export default function Itineraries() {
   const notify = useNotify();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
   // Sub-brands this user may create itineraries under. Single-brand users
@@ -290,8 +293,12 @@ export default function Itineraries() {
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [subBrand, setSubBrand] = useState("");
-  const [status, setStatus] = useState("");
+  const initialQuery = new URLSearchParams(location.search);
+  const openedFromReports = initialQuery.get("source") === "reports";
+  const reportsBackTo = "/travel/reports";
+  const itinerariesListPath = `${location.pathname}${location.search}`;
+  const [subBrand, setSubBrand] = useState(openedFromReports ? (initialQuery.get("subBrand") || "") : "");
+  const [status, setStatus] = useState(openedFromReports ? (initialQuery.get("status") || "") : "");
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
@@ -831,7 +838,7 @@ export default function Itineraries() {
                 return (
                   <tr
                     key={it.id}
-                    onClick={() => navigate(`/travel/itineraries/${it.id}`)}
+                    onClick={() => navigate(`/travel/itineraries/${it.id}`, { state: { backTo: itinerariesListPath, backLabel: openedFromReports ? "Back to report results" : "Back to itineraries" } })}
                     style={{ borderTop: "1px solid var(--border-light)", cursor: "pointer" }}
                     aria-label={`Open itinerary ${it.destination}`}
                   >

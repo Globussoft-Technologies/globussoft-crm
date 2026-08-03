@@ -92,8 +92,8 @@
 //   - Supplier list is fetched on subBrand-change and re-used across all
 //     row pickers in the table (single fetch, not per-row).
 
-import { useEffect, useState, useContext, useCallback } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useState, useContext, useCallback, useMemo } from "react";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown, Plane, Hotel, Search, Car, LayoutTemplate, CreditCard, CheckCircle } from "lucide-react";
 import { FlightResultsBoard, HotelResultsGrid, TransferResultsList, SuggestedItinerary } from "../../components/TravelSearchResults";
 import TopScrollSync from "../../components/TopScrollSync";
@@ -179,6 +179,9 @@ function countTemplateLines(linesJson) {
 
 export default function QuoteBuilder() {
   const { id: routeId } = useParams();
+  const location = useLocation();
+  const backTo = location.state?.backTo || null;
+  const backLabel = location.state?.backLabel || "Back";
   const isEdit = !!routeId;
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
@@ -1543,6 +1546,11 @@ export default function QuoteBuilder() {
         }}
       >
         <div>
+          {backTo && (
+            <Link to={backTo} style={{ ...secondaryBtn, textDecoration: "none", marginBottom: 10 }}>
+              {backLabel}
+            </Link>
+          )}
           <h1
             style={{
               display: "flex",

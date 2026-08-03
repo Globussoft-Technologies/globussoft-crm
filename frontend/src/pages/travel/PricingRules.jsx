@@ -88,6 +88,47 @@ async function uploadCsv(notify, url, file, onDone) {
   onDone?.();
 }
 
+function downloadBlob(blob, filename) {
+  const objUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objUrl);
+}
+
+function csvCell(value) {
+  const str = value == null ? "" : String(value);
+  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+function downloadCsvTemplate(filename, headers, rows) {
+  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+  downloadBlob(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }), filename);
+}
+
+async function downloadXlsxTemplate(filename, sheetName, headers, rows) {
+  const XLSX = await import("xlsx");
+  const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+  const buffer = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+  downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), filename);
+}
+
+const SEASON_TEMPLATE_HEADERS = ["subBrand", "seasonName", "startDate", "endDate", "multiplier"];
+const SEASON_TEMPLATE_ROWS = [
+  ["tmc", "summer-peak", "2026-05-01", "2026-06-15", "1.25"],
+  ["rfu", "ramadan-peak", "2026-03-01", "2026-04-15", "2.00"],
+];
+const MARKUP_TEMPLATE_HEADERS = ["subBrand", "scope", "matchKeyJson", "markupPct", "markupFlat", "priority", "isActive"];
+const MARKUP_TEMPLATE_ROWS = [
+  ["rfu", "hotel", '{"destination":"Dubai"}', "0.15", "", "10", "true"],
+  ["tmc", "transport", '{"vehicleType":"coach"}', "", "500", "20", "true"],
+];
+
 const SUB_BRANDS = [
   { value: "tmc", label: "TMC" },
   { value: "rfu", label: "RFU" },
@@ -227,6 +268,20 @@ function SeasonsSection() {
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
     return downloadCsv(notify, `/api/travel/seasons/export.csv?${qs.toString()}`, "travel-seasons.csv");
   };
+  const downloadSeasonTemplate = async (format) => {
+    try {
+      if (format === "xlsx") {
+        await downloadXlsxTemplate("travel-seasons-template.xlsx", "Seasons", SEASON_TEMPLATE_HEADERS, SEASON_TEMPLATE_ROWS);
+      } else {
+        downloadCsvTemplate("travel-seasons-template.csv", SEASON_TEMPLATE_HEADERS, SEASON_TEMPLATE_ROWS);
+      }
+      notify.success(`Downloaded season template (${format.toUpperCase()})`);
+    } catch (e) {
+      notify.error(e?.message || "Failed to download season template");
+    }
+  };
+
+
   const importCsv = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -250,6 +305,12 @@ function SeasonsSection() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
             <Download size={14} /> Export CSV
+          </button>
+          <button type="button" onClick={() => downloadSeasonTemplate("csv")} style={secondaryBtn}>
+            <Download size={14} /> Download CSV Template
+          </button>
+          <button type="button" onClick={() => downloadSeasonTemplate("xlsx")} style={secondaryBtn}>
+            <Download size={14} /> Download Excel Template
           </button>
           <button
             type="button"
@@ -506,7 +567,13 @@ function MarkupRulesSection() {
   };
 
   const remove = async (r) => {
-    if (!window.confirm(`Delete markup rule (${r.scope} / ${r.subBrand}, priority ${r.priority})?`)) return;
+    const ok = await notify.confirm({
+      title: "Delete markup rule",
+      message: `Delete markup rule (${r.scope} / ${r.subBrand}, priority ${r.priority})?`,
+      confirmText: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/travel/markup-rules/${r.id}`, { method: "DELETE" });
       notify.success("Markup rule deleted");
@@ -529,6 +596,18 @@ function MarkupRulesSection() {
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
     if (filterScope) qs.set("scope", filterScope);
     return downloadCsv(notify, `/api/travel/markup-rules/export.csv?${qs.toString()}`, "travel-markup-rules.csv");
+  };
+  const downloadMarkupTemplate = async (format) => {
+    try {
+      if (format === "xlsx") {
+        await downloadXlsxTemplate("travel-markup-rules-template.xlsx", "Markup Rules", MARKUP_TEMPLATE_HEADERS, MARKUP_TEMPLATE_ROWS);
+      } else {
+        downloadCsvTemplate("travel-markup-rules-template.csv", MARKUP_TEMPLATE_HEADERS, MARKUP_TEMPLATE_ROWS);
+      }
+      notify.success(`Downloaded markup template (${format.toUpperCase()})`);
+    } catch (e) {
+      notify.error(e?.message || "Failed to download markup template");
+    }
   };
   const importCsv = async (e) => {
     const file = e.target.files?.[0];
@@ -553,6 +632,12 @@ function MarkupRulesSection() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
             <Download size={14} /> Export CSV
+          </button>
+          <button type="button" onClick={() => downloadMarkupTemplate("csv")} style={secondaryBtn}>
+            <Download size={14} /> Download CSV Template
+          </button>
+          <button type="button" onClick={() => downloadMarkupTemplate("xlsx")} style={secondaryBtn}>
+            <Download size={14} /> Download Excel Template
           </button>
           <button
             type="button"

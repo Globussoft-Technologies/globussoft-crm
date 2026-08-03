@@ -136,6 +136,109 @@ function assertValidDestinationId(input) {
   }
 }
 
+function assertValidConfidenceScore(input) {
+  if (input === undefined || input === null) return;
+  if (!Number.isInteger(input) || input < 0 || input > 100) {
+    const err = new Error("confidenceScore must be an integer between 0 and 100");
+    err.status = 400;
+    err.code = "INVALID_CONFIDENCE_SCORE";
+    throw err;
+  }
+}
+
+function normalizeOptionalString(input) {
+  if (input === undefined || input === null) return null;
+  const value = sanitizeText(String(input));
+  return value ? value : null;
+}
+
+function buildDestinationKey(destinationId, destinationLabel) {
+  if (Number.isInteger(destinationId)) return `trip:${destinationId}`;
+  const label = typeof destinationLabel === "string" ? sanitizeText(destinationLabel) : "";
+  if (label) return `label:${label.toLowerCase()}`;
+  return "unassigned";
+}
+
+function tokenizeOutcome(input) {
+  return String(input || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+function computeProposalConfidence(targetOutcome, candidate) {
+  const targetTokens = new Set(tokenizeOutcome(targetOutcome));
+  const candidateTokens = new Set(tokenizeOutcome(candidate?.learningOutcome));
+  let overlap = 0;
+  for (const token of targetTokens) {
+    if (candidateTokens.has(token)) overlap += 1;
+  }
+  const overlapBase = targetTokens.size > 0 ? Math.round((overlap / targetTokens.size) * 45) : 0;
+  const fitBase = Number.isInteger(candidate?.fitScore) ? Math.min(candidate.fitScore, 35) : 15;
+  const subjectBonus = candidate?.subject ? 10 : 0;
+  return Math.max(25, Math.min(95, 20 + overlapBase + fitBase + subjectBonus));
+}
+
+function buildProposalReviewWhere(tenantId, query = {}) {
+  const where = { tenantId };
+  if (query.reviewStatus !== undefined) where.reviewStatus = String(query.reviewStatus);
+  if (query.curriculum !== undefined) where.curriculum = String(query.curriculum);
+  if (query.grade !== undefined) where.grade = String(query.grade);
+  if (query.subject !== undefined) where.subject = String(query.subject);
+  if (query.academicYear !== undefined) where.academicYear = String(query.academicYear);
+  return where;
+}
+
+async function approveCurriculumProposal(proposal, reqUser) {
+  const destinationKey = buildDestinationKey(proposal.destinationId, proposal.destinationLabel);
+  const existing = await prisma.travelCurriculumMapping.findFirst({
+    where: {
+      tenantId: proposal.tenantId,
+      academicYear: proposal.academicYear || null,
+      curriculum: proposal.curriculum,
+      grade: proposal.grade,
+      subject: proposal.subject,
+      learningOutcome: proposal.learningOutcome,
+      destinationKey,
+    },
+  });
+
+  const data = {
+    academicYear: proposal.academicYear || null,
+    curriculum: proposal.curriculum,
+    grade: proposal.grade,
+    subject: proposal.subject,
+    learningOutcomeCode: proposal.learningOutcomeCode || null,
+    learningOutcome: proposal.learningOutcome,
+    destinationId: proposal.destinationId == null ? null : proposal.destinationId,
+    destinationLabel: proposal.destinationLabel || null,
+    destinationKey,
+    fitScore: proposal.fitScore == null ? 50 : proposal.fitScore,
+    confidenceScore: proposal.confidenceScore == null ? 50 : proposal.confidenceScore,
+    mappingSource: proposal.proposalSource || "heuristic",
+    fitRationale: proposal.fitRationale || null,
+    isActive: true,
+    approvedAt: new Date(),
+    approvedById: reqUser.userId,
+  };
+
+  if (existing) {
+    return prisma.travelCurriculumMapping.update({
+      where: { id: existing.id },
+      data,
+    });
+  }
+
+  return prisma.travelCurriculumMapping.create({
+    data: {
+      tenantId: proposal.tenantId,
+      createdById: reqUser.userId,
+      ...data,
+    },
+  });
+}
+
 // Translate Prisma's P2002 (unique constraint violation) to a 409 with a
 // stable code so the SPA / specs can distinguish it from generic 500s.
 function isPrismaUniqueViolation(e) {
@@ -156,6 +259,9 @@ router.get("/", verifyToken, async (req, res) => {
     if (req.query.subject !== undefined) {
       where.subject = String(req.query.subject);
     }
+    if (req.query.academicYear !== undefined) {
+      where.academicYear = String(req.query.academicYear);
+    }
     if (req.query.isActive !== undefined) {
       // Accept 'true' / 'false' / '1' / '0'; anything else falls through
       // to the truthiness check (so ?isActive=yes works too).
@@ -169,7 +275,14 @@ router.get("/", verifyToken, async (req, res) => {
     const [mappings, total] = await Promise.all([
       prisma.travelCurriculumMapping.findMany({
         where,
-        orderBy: [{ fitScore: "desc" }, { createdAt: "desc" }],
+        orderBy: [
+          { academicYear: "desc" },
+          { curriculum: "asc" },
+          { grade: "asc" },
+          { subject: "asc" },
+          { fitScore: "desc" },
+          { createdAt: "desc" },
+        ],
         take,
         skip,
       }),
@@ -765,25 +878,35 @@ router.post(
         // hand-create path.
         const dataCreate = {
           tenantId,
+          academicYear: r.academicYear ? sanitizeText(r.academicYear) : null,
           curriculum: sanitizeText(r.curriculum),
           grade: sanitizeText(r.grade),
           subject: sanitizeText(r.subject),
+          learningOutcomeCode: r.learningOutcomeCode ? sanitizeText(r.learningOutcomeCode) : null,
           learningOutcome: sanitizeText(r.learningOutcome),
           destinationLabel: r.destinationLabel
             ? sanitizeText(r.destinationLabel)
             : null,
           destinationId: r.destinationId,
+          destinationKey: buildDestinationKey(r.destinationId, r.destinationLabel),
           fitScore: r.fitScore == null ? 50 : r.fitScore,
+          confidenceScore: r.confidenceScore == null ? 50 : r.confidenceScore,
+          mappingSource: r.mappingSource ? sanitizeText(r.mappingSource) : "imported",
           fitRationale: r.fitRationale ? sanitizeText(r.fitRationale) : null,
           isActive: r.isActive == null ? true : r.isActive,
           createdById: req.user.userId,
         };
         const dataUpdate = {
+          academicYear: r.academicYear ? sanitizeText(r.academicYear) : null,
+          learningOutcomeCode: r.learningOutcomeCode ? sanitizeText(r.learningOutcomeCode) : null,
           destinationLabel: r.destinationLabel
             ? sanitizeText(r.destinationLabel)
             : null,
           destinationId: r.destinationId,
+          destinationKey: buildDestinationKey(r.destinationId, r.destinationLabel),
           fitScore: r.fitScore == null ? 50 : r.fitScore,
+          confidenceScore: r.confidenceScore == null ? 50 : r.confidenceScore,
+          mappingSource: r.mappingSource ? sanitizeText(r.mappingSource) : "imported",
           fitRationale: r.fitRationale ? sanitizeText(r.fitRationale) : null,
           isActive: r.isActive == null ? true : r.isActive,
         };
@@ -797,10 +920,12 @@ router.post(
         const existing = await prisma.travelCurriculumMapping.findFirst({
           where: {
             tenantId,
+            academicYear: dataCreate.academicYear,
             curriculum: dataCreate.curriculum,
             grade: dataCreate.grade,
             subject: dataCreate.subject,
             learningOutcome: dataCreate.learningOutcome,
+            destinationKey: dataCreate.destinationKey,
           },
         });
 
@@ -850,10 +975,14 @@ router.get(
       if (req.query.subject !== undefined) {
         where.subject = String(req.query.subject);
       }
+      if (req.query.academicYear !== undefined) {
+        where.academicYear = String(req.query.academicYear);
+      }
 
       const mappings = await prisma.travelCurriculumMapping.findMany({
         where,
         orderBy: [
+          { academicYear: "desc" },
           { curriculum: "asc" },
           { grade: "asc" },
           { subject: "asc" },
@@ -864,14 +993,18 @@ router.get(
       // Shape rows to the CSV column contract — null → empty string is
       // handled by serializeCsv via renderCell.
       const rows = mappings.map((m) => ({
+        academicYear: m.academicYear || "",
         curriculum: m.curriculum,
         grade: m.grade,
         subject: m.subject,
+        learningOutcomeCode: m.learningOutcomeCode || "",
         learningOutcome: m.learningOutcome || "",
         destinationLabel: m.destinationLabel || "",
         destinationId: m.destinationId == null ? "" : m.destinationId,
         fitScore: m.fitScore == null ? "" : m.fitScore,
+        confidenceScore: m.confidenceScore == null ? "" : m.confidenceScore,
         fitRationale: m.fitRationale || "",
+        mappingSource: m.mappingSource || "",
         isActive: typeof m.isActive === "boolean" ? m.isActive : "",
       }));
 
@@ -1029,6 +1162,271 @@ router.get(
 );
 
 // GET /api/travel-curriculum/:id — single mapping (tenant-scoped).
+router.get(
+  "/proposals",
+  verifyToken,
+  requirePermission("curriculum", "read"),
+  async (req, res) => {
+    try {
+      const where = buildProposalReviewWhere(req.user.tenantId, req.query || {});
+      const proposals = await prisma.travelCurriculumProposal.findMany({
+        where,
+        orderBy: [
+          { reviewStatus: "asc" },
+          { confidenceScore: "desc" },
+          { createdAt: "desc" },
+        ],
+      });
+      res.json({ proposals });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-curriculum] proposals list error:", e.message);
+      res.status(500).json({ error: "Failed to list curriculum proposals" });
+    }
+  },
+);
+
+router.post(
+  "/proposals/generate",
+  verifyToken,
+  requirePermission("curriculum", "write"),
+  async (req, res) => {
+    try {
+      const {
+        academicYear,
+        curriculum,
+        grade,
+        subject,
+        learningOutcomeCode,
+        learningOutcome,
+      } = req.body || {};
+
+      if (!curriculum || !grade || !subject || !learningOutcome) {
+        return res.status(400).json({
+          error: "curriculum, grade, subject, learningOutcome required",
+          code: "MISSING_FIELDS",
+        });
+      }
+
+      assertNonEmptyString(curriculum, "curriculum", "MISSING_FIELDS");
+      assertNonEmptyString(grade, "grade", "MISSING_FIELDS");
+      assertNonEmptyString(subject, "subject", "MISSING_FIELDS");
+      assertNonEmptyString(learningOutcome, "learningOutcome", "MISSING_FIELDS");
+
+      const tenantId = req.user.tenantId;
+      const normalizedAcademicYear = normalizeOptionalString(academicYear);
+      const normalizedOutcomeCode = normalizeOptionalString(learningOutcomeCode);
+      const normalizedCurriculum = sanitizeText(curriculum);
+      const normalizedGrade = sanitizeText(grade);
+      const normalizedSubject = sanitizeText(subject);
+      const normalizedOutcome = sanitizeText(String(learningOutcome));
+
+      const seedMappings = await prisma.travelCurriculumMapping.findMany({
+        where: {
+          tenantId,
+          isActive: true,
+          subject: normalizedSubject,
+          OR: [
+            { curriculum: normalizedCurriculum, grade: normalizedGrade },
+            { curriculum: normalizedCurriculum },
+            { grade: normalizedGrade },
+          ],
+        },
+        orderBy: [{ fitScore: "desc" }, { confidenceScore: "desc" }, { createdAt: "desc" }],
+        take: 25,
+      });
+
+      const byDestination = new Map();
+      for (const mapping of seedMappings) {
+        const destinationKey = buildDestinationKey(mapping.destinationId, mapping.destinationLabel);
+        if (!byDestination.has(destinationKey)) byDestination.set(destinationKey, []);
+        byDestination.get(destinationKey).push(mapping);
+      }
+
+      const created = [];
+      for (const cluster of [...byDestination.values()].slice(0, 5)) {
+        const sample = cluster[0];
+        const confidenceScore = Math.max(...cluster.map((item) => computeProposalConfidence(normalizedOutcome, item)));
+        const fitScore = Math.round(
+          cluster.reduce((sum, item) => sum + (Number.isInteger(item.fitScore) ? item.fitScore : 50), 0) / cluster.length,
+        );
+        const rationaleParts = [];
+        if (sample.curriculum === normalizedCurriculum) rationaleParts.push("same curriculum");
+        if (sample.grade === normalizedGrade) rationaleParts.push("same grade");
+        if (sample.subject === normalizedSubject) rationaleParts.push("same subject");
+        rationaleParts.push("similar learning-outcome wording");
+        const proposalData = {
+          tenantId,
+          academicYear: normalizedAcademicYear,
+          curriculum: normalizedCurriculum,
+          grade: normalizedGrade,
+          subject: normalizedSubject,
+          learningOutcomeCode: normalizedOutcomeCode,
+          learningOutcome: normalizedOutcome,
+          destinationId: sample.destinationId == null ? null : sample.destinationId,
+          destinationLabel: sample.destinationLabel || null,
+          destinationKey: buildDestinationKey(sample.destinationId, sample.destinationLabel),
+          confidenceScore,
+          fitScore,
+          fitRationale: `Heuristic proposal based on ${rationaleParts.join(", ")}.`,
+          proposalSource: "heuristic",
+          reviewStatus: "pending",
+          createdById: req.user.userId,
+        };
+        const existing = await prisma.travelCurriculumProposal.findFirst({
+          where: {
+            tenantId,
+            academicYear: proposalData.academicYear,
+            curriculum: proposalData.curriculum,
+            grade: proposalData.grade,
+            subject: proposalData.subject,
+            learningOutcome: proposalData.learningOutcome,
+            destinationKey: proposalData.destinationKey,
+          },
+        });
+        if (existing) {
+          created.push(await prisma.travelCurriculumProposal.update({
+            where: { id: existing.id },
+            data: {
+              confidenceScore: proposalData.confidenceScore,
+              fitScore: proposalData.fitScore,
+              fitRationale: proposalData.fitRationale,
+              reviewStatus: existing.reviewStatus === "approved" ? "approved" : "pending",
+              proposalSource: "heuristic",
+            },
+          }));
+        } else {
+          created.push(await prisma.travelCurriculumProposal.create({ data: proposalData }));
+        }
+      }
+
+      res.status(201).json({ generated: created.length, proposals: created });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-curriculum] proposals generate error:", e.message);
+      res.status(500).json({ error: "Failed to generate curriculum proposals" });
+    }
+  },
+);
+
+router.post(
+  "/proposals/bulk-approve",
+  verifyToken,
+  requirePermission("curriculum", "update"),
+  async (req, res) => {
+    try {
+      const ids = Array.isArray(req.body?.ids)
+        ? req.body.ids.map((id) => parseInt(id, 10)).filter((id) => Number.isFinite(id))
+        : [];
+      const minConfidence = Number.isInteger(req.body?.minConfidence) ? req.body.minConfidence : null;
+      const where = buildProposalReviewWhere(req.user.tenantId, req.body || {});
+      if (ids.length > 0) where.id = { in: ids };
+      if (minConfidence != null) where.confidenceScore = { gte: minConfidence };
+      if (!where.id && !where.confidenceScore) {
+        return res.status(400).json({
+          error: "Provide ids or minConfidence for bulk approval",
+          code: "MISSING_FIELDS",
+        });
+      }
+
+      const proposals = await prisma.travelCurriculumProposal.findMany({
+        where: { ...where, reviewStatus: "pending" },
+        orderBy: [{ confidenceScore: "desc" }, { id: "asc" }],
+      });
+
+      const approved = [];
+      for (const proposal of proposals) {
+        const mapping = await approveCurriculumProposal(proposal, req.user);
+        approved.push(await prisma.travelCurriculumProposal.update({
+          where: { id: proposal.id },
+          data: {
+            reviewStatus: "approved",
+            reviewedById: req.user.userId,
+            reviewedAt: new Date(),
+            approvedMappingId: mapping.id,
+          },
+        }));
+      }
+
+      res.json({ approvedCount: approved.length, proposals: approved });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-curriculum] proposals bulk approve error:", e.message);
+      res.status(500).json({ error: "Failed to bulk approve curriculum proposals" });
+    }
+  },
+);
+
+router.post(
+  "/proposals/:id/approve",
+  verifyToken,
+  requirePermission("curriculum", "update"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const proposal = await prisma.travelCurriculumProposal.findFirst({
+        where: { id, tenantId: req.user.tenantId },
+      });
+      if (!proposal) {
+        return res.status(404).json({ error: "Curriculum proposal not found", code: "CURRICULUM_NOT_FOUND" });
+      }
+      const mapping = await approveCurriculumProposal(proposal, req.user);
+      const updatedProposal = await prisma.travelCurriculumProposal.update({
+        where: { id },
+        data: {
+          reviewStatus: "approved",
+          reviewedById: req.user.userId,
+          reviewedAt: new Date(),
+          approvedMappingId: mapping.id,
+          reviewNotes: req.body?.reviewNotes ? sanitizeText(String(req.body.reviewNotes)) : proposal.reviewNotes,
+        },
+      });
+      res.json({ proposal: updatedProposal, mapping });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-curriculum] proposal approve error:", e.message);
+      res.status(500).json({ error: "Failed to approve curriculum proposal" });
+    }
+  },
+);
+
+router.post(
+  "/proposals/:id/reject",
+  verifyToken,
+  requirePermission("curriculum", "update"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const proposal = await prisma.travelCurriculumProposal.findFirst({
+        where: { id, tenantId: req.user.tenantId },
+      });
+      if (!proposal) {
+        return res.status(404).json({ error: "Curriculum proposal not found", code: "CURRICULUM_NOT_FOUND" });
+      }
+      const updated = await prisma.travelCurriculumProposal.update({
+        where: { id },
+        data: {
+          reviewStatus: "rejected",
+          reviewedById: req.user.userId,
+          reviewedAt: new Date(),
+          reviewNotes: req.body?.reviewNotes ? sanitizeText(String(req.body.reviewNotes)) : proposal.reviewNotes,
+        },
+      });
+      res.json(updated);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-curriculum] proposal reject error:", e.message);
+      res.status(500).json({ error: "Failed to reject curriculum proposal" });
+    }
+  },
+);
+
 router.get("/:id", verifyToken, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -1062,13 +1460,16 @@ router.post(
   async (req, res) => {
     try {
       const {
+        academicYear,
         curriculum,
         grade,
         subject,
+        learningOutcomeCode,
         learningOutcome,
         destinationId,
         destinationLabel,
         fitScore,
+        confidenceScore,
         fitRationale,
         isActive,
       } = req.body || {};
@@ -1085,18 +1486,24 @@ router.post(
       assertNonEmptyString(subject, "subject", "MISSING_FIELDS");
       assertValidFitScore(fitScore);
       assertValidDestinationId(destinationId);
+      assertValidConfidenceScore(confidenceScore);
 
       const data = {
         tenantId: req.user.tenantId,
+        academicYear: normalizeOptionalString(academicYear),
         curriculum: sanitizeText(curriculum),
         grade: sanitizeText(grade),
         subject: sanitizeText(subject),
+        learningOutcomeCode: normalizeOptionalString(learningOutcomeCode),
         learningOutcome:
           learningOutcome == null ? null : sanitizeText(String(learningOutcome)),
         destinationId: destinationId == null ? null : destinationId,
         destinationLabel:
           destinationLabel == null ? null : sanitizeText(String(destinationLabel)),
+        destinationKey: buildDestinationKey(destinationId, destinationLabel),
         fitScore: fitScore == null ? 50 : fitScore,
+        confidenceScore: confidenceScore == null ? 50 : confidenceScore,
+        mappingSource: "manual",
         fitRationale:
           fitRationale == null ? null : sanitizeText(String(fitRationale)),
         isActive: isActive === undefined ? true : Boolean(isActive),
@@ -1145,18 +1552,24 @@ router.put(
       }
 
       const {
+        academicYear,
         curriculum,
         grade,
         subject,
+        learningOutcomeCode,
         learningOutcome,
         destinationId,
         destinationLabel,
         fitScore,
+        confidenceScore,
         fitRationale,
         isActive,
       } = req.body || {};
 
       const data = {};
+      if (academicYear !== undefined) {
+        data.academicYear = normalizeOptionalString(academicYear);
+      }
       if (curriculum !== undefined) {
         assertNonEmptyString(curriculum, "curriculum", "MISSING_FIELDS");
         data.curriculum = sanitizeText(curriculum);
@@ -1168,6 +1581,9 @@ router.put(
       if (subject !== undefined) {
         assertNonEmptyString(subject, "subject", "MISSING_FIELDS");
         data.subject = sanitizeText(subject);
+      }
+      if (learningOutcomeCode !== undefined) {
+        data.learningOutcomeCode = normalizeOptionalString(learningOutcomeCode);
       }
       if (learningOutcome !== undefined) {
         data.learningOutcome =
@@ -1181,9 +1597,18 @@ router.put(
         data.destinationLabel =
           destinationLabel == null ? null : sanitizeText(String(destinationLabel));
       }
+      if (destinationId !== undefined || destinationLabel !== undefined) {
+        const nextDestinationId = destinationId !== undefined ? destinationId : existing.destinationId;
+        const nextDestinationLabel = destinationLabel !== undefined ? destinationLabel : existing.destinationLabel;
+        data.destinationKey = buildDestinationKey(nextDestinationId, nextDestinationLabel);
+      }
       if (fitScore !== undefined) {
         if (fitScore !== null) assertValidFitScore(fitScore);
         data.fitScore = fitScore;
+      }
+      if (confidenceScore !== undefined) {
+        if (confidenceScore !== null) assertValidConfidenceScore(confidenceScore);
+        data.confidenceScore = confidenceScore;
       }
       if (fitRationale !== undefined) {
         data.fitRationale =

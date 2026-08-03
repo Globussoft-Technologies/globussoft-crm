@@ -6,7 +6,7 @@
  * Hard contract pins:
  *   - GET /quote/:shareToken
  *       valid token + Draft/Sent quote → 200 with customer envelope (only
- *       customer-visible fields; supplierId / notes excluded from lines).
+ *       customer-visible fields; supplierId / notes / pricing breakdown excluded from lines; unitPrice is customer-facing).
  *       valid token + Rejected/Expired quote → 404 QUOTE_NOT_AVAILABLE.
  *       valid token + validUntil < now → 404 QUOTE_EXPIRED.
  *       missing quote → 404 QUOTE_NOT_FOUND.
@@ -195,10 +195,15 @@ describe('GET /api/travel/quotes/public/quote/:shareToken', () => {
     expect(res.body.quote.subBrand).toBe('tmc');
     expect(res.body.quote.status).toBe('Sent');
     expect(res.body.lines).toHaveLength(1);
-    // Line shape pin — supplierId and notes are NOT in customer envelope
+    // Line shape pin: supplierId, notes, and pricing breakdown are not in the customer envelope.
+    expect(res.body).not.toHaveProperty('breakdown');
     expect(res.body.lines[0]).not.toHaveProperty('supplierId');
     expect(res.body.lines[0]).not.toHaveProperty('notes');
-    expect(res.body.lines[0].description).toBe('Hotel — 3 nights');
+    expect(res.body.lines[0].description).toMatch(/Hotel.*3 nights/);
+    // The saved total is baked into the customer-visible line amount, so the
+    // customer sees the adjusted price without a separate markup explanation.
+    expect(Number(res.body.lines[0].amount)).toBe(50000);
+    expect(Number(res.body.lines[0].unitPrice)).toBeCloseTo(16666.67, 2);
     expect(res.body.customer.name).toBe('Aisha Khan');
   });
 

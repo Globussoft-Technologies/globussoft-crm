@@ -26,6 +26,7 @@
 //   GET    /api/travel/supplier-credentials/:id/access-log     — audit trail
 
 const express = require("express");
+const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
@@ -375,8 +376,73 @@ const {
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const listProjection = require("../lib/listProjection");
+const { toCsv, withBom, parseCsv, toXlsxBuffer, parseXlsxBuffer } = require("../lib/csvIO");
 
 const VALID_SUPPLIER_CATEGORIES = ["hotel", "flight", "transport", "visa-consul", "other"];
+const supplierImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+const SUPPLIER_IMPORT_MAX_ROWS = 5000;
+const SUPPLIER_IMPORT_HEADERS = [
+  "subBrand",
+  "name",
+  "supplierCategory",
+  "contactPerson",
+  "phone",
+  "email",
+  "gstin",
+  "addressLine",
+  "status",
+  "paymentTermsKind",
+  "paymentTermsDays",
+  "creditLimit",
+  "creditCurrency",
+  "taxRegimeCode",
+  "primaryContactRole",
+  "commissionPercent",
+  "notes",
+];
+const SUPPLIER_IMPORT_TEMPLATE_ROWS = [
+  {
+    subBrand: "# Required: subBrand, name, supplierCategory",
+    name: "# Optional: contactPerson, phone, email, gstin, addressLine",
+    supplierCategory: "# Optional: status, paymentTermsKind, paymentTermsDays",
+    contactPerson: "# Optional: creditLimit, creditCurrency, taxRegimeCode",
+    phone: "# Optional: primaryContactRole, commissionPercent, notes",
+    email: "# Valid subBrand: tmc, rfu, travelstall, visasure",
+    gstin: "# Valid supplierCategory: hotel, flight, transport, visa-consul, other",
+    addressLine: "# Leave optional cells blank for minimum bulk add",
+    status: "",
+    paymentTermsKind: "",
+    paymentTermsDays: "",
+    creditLimit: "",
+    creditCurrency: "",
+    taxRegimeCode: "",
+    primaryContactRole: "",
+    commissionPercent: "",
+    notes: "",
+  },
+  {
+    subBrand: "tmc",
+    name: "Ramesh Travel",
+    supplierCategory: "transport",
+    contactPerson: "",
+    phone: "",
+    email: "",
+    gstin: "",
+    addressLine: "",
+    status: "active",
+    paymentTermsKind: "",
+    paymentTermsDays: "",
+    creditLimit: "",
+    creditCurrency: "",
+    taxRegimeCode: "",
+    primaryContactRole: "",
+    commissionPercent: "",
+    notes: "",
+  },
+];
 
 function assertValidSupplierCategory(c) {
   if (c == null) return;
@@ -460,6 +526,52 @@ function assertValidStatus(s) {
 // hide the supplier from default pickers).
 function deriveIsActive(status) {
   return status === "active";
+}
+
+function parseSupplierImportBuffer(file) {
+  if (!file || !file.buffer || file.buffer.length === 0) {
+    const err = new Error("No CSV/Excel file uploaded");
+    err.status = 400;
+    err.code = "NO_FILE";
+    throw err;
+  }
+  const name = String(file.originalname || "").toLowerCase();
+  const mt = String(file.mimetype || "").toLowerCase();
+  const isXlsx =
+    name.endsWith(".xlsx") ||
+    name.endsWith(".xls") ||
+    mt === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    mt === "application/vnd.ms-excel";
+  return isXlsx ? parseXlsxBuffer(file.buffer) : parseCsv(file.buffer.toString("utf8"));
+}
+
+function buildSupplierTemplateBuffer(format) {
+  if (format === "xlsx") {
+    return toXlsxBuffer(SUPPLIER_IMPORT_HEADERS, SUPPLIER_IMPORT_TEMPLATE_ROWS, "Suppliers");
+  }
+  return withBom(toCsv(SUPPLIER_IMPORT_HEADERS, SUPPLIER_IMPORT_TEMPLATE_ROWS));
+}
+
+function buildSupplierExportRows(rows) {
+  return (rows || []).map((row) => ({
+    subBrand: row.subBrand || "",
+    name: row.name || "",
+    supplierCategory: row.supplierCategory || "",
+    contactPerson: row.contactPerson || "",
+    phone: row.phone || "",
+    email: row.email || "",
+    gstin: row.gstin || "",
+    addressLine: row.addressLine || "",
+    status: row.status || (row.isActive ? "active" : "archived"),
+    paymentTermsKind: row.paymentTermsKind || "",
+    paymentTermsDays: row.paymentTermsDays ?? "",
+    creditLimit: row.creditLimit ?? "",
+    creditCurrency: row.creditCurrency || "",
+    taxRegimeCode: row.taxRegimeCode || "",
+    primaryContactRole: row.primaryContactRole || "",
+    commissionPercent: row.commissionPercent ?? "",
+    notes: row.notes || "",
+  }));
 }
 
 // PRD_TRAVEL_SUPPLIER_MASTER G041 — payment-terms kind enum.
@@ -593,6 +705,191 @@ function parseSearchLimitOrThrow(input) {
   }
   return Math.min(v, SEARCH_MAX_LIMIT);
 }
+
+router.get(
+  "/suppliers/import-template",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("suppliers", "read"),
+  async (req, res) => {
+    try {
+      const format = String(req.query.format || "csv").toLowerCase();
+      if (format !== "csv" && format !== "xlsx") {
+        return res.status(400).json({ error: "format must be csv or xlsx", code: "INVALID_FORMAT" });
+      }
+      if (format === "xlsx") {
+        const buf = buildSupplierTemplateBuffer("xlsx");
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", "attachment; filename=\"travel-suppliers-template.xlsx\"");
+        return res.send(buf);
+      }
+      const csv = buildSupplierTemplateBuffer("csv");
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", "attachment; filename=\"travel-suppliers-template.csv\"");
+      return res.send(csv);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] supplier template error:", e.message);
+      return res.status(500).json({ error: "Failed to download suppliers template" });
+    }
+  },
+);
+
+router.get(
+  "/suppliers/export.csv",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("suppliers", "read"),
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
+      if (req.query.subBrand) {
+        assertValidSubBrand(String(req.query.subBrand));
+        where.subBrand = String(req.query.subBrand);
+      }
+      if (req.query.includeInactive !== "1" && req.query.includeInactive !== "true") {
+        where.isActive = true;
+      }
+      if (req.query.supplierCategory) {
+        assertValidSupplierCategory(String(req.query.supplierCategory));
+        where.supplierCategory = String(req.query.supplierCategory);
+      }
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand) ? where.subBrand : "__none__"
+          : { in: [...allowed] };
+      }
+      const rows = await prisma.travelSupplier.findMany({
+        where,
+        orderBy: [{ subBrand: "asc" }, { supplierCategory: "asc" }, { name: "asc" }],
+        take: 10000,
+      });
+      const csv = withBom(toCsv(SUPPLIER_IMPORT_HEADERS, buildSupplierExportRows(rows)));
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", "attachment; filename=\"travel-suppliers-export.csv\"");
+      return res.send(csv);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] supplier export error:", e.message);
+      return res.status(500).json({ error: "Failed to export suppliers" });
+    }
+  },
+);
+
+router.post(
+  "/suppliers/import.csv",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("suppliers", "write"),
+  supplierImportUpload.single("file"),
+  async (req, res) => {
+    try {
+      const parsed = parseSupplierImportBuffer(req.file);
+      const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
+      }
+      if (rows.length > SUPPLIER_IMPORT_MAX_ROWS) {
+        return res.status(413).json({ error: `Too many rows. Max ${SUPPLIER_IMPORT_MAX_ROWS}`, code: "TOO_MANY_ROWS" });
+      }
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      let imported = 0;
+      let updated = 0;
+      let skipped = 0;
+      const errors = [];
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const rowNumber = row.__row || i + 2;
+        try {
+          const name = String(row.name || "").trim();
+          const subBrand = String(row.subBrand || "tmc").trim() || "tmc";
+          const supplierCategory = String(row.supplierCategory || "other").trim() || "other";
+          const statusRaw = String(row.status || "").trim().toLowerCase();
+          const paymentTermsKindRaw = String(row.paymentTermsKind || "").trim();
+          const gstin = row.gstin ? String(row.gstin).trim().toUpperCase() : null;
+          if (subBrand.startsWith("#") || name.startsWith("#")) {
+            skipped++;
+            continue;
+          }
+          if (!name) {
+            errors.push({ rowNumber, reason: "name required" });
+            continue;
+          }
+          assertValidSubBrand(subBrand);
+          if (!canAccessSubBrand(allowed, subBrand)) {
+            errors.push({ rowNumber, reason: `sub-brand access denied: ${subBrand}` });
+            continue;
+          }
+          assertValidSupplierCategory(supplierCategory);
+          assertValidGstin(gstin);
+          const status = statusRaw || (String(row.isActive || "").trim().toLowerCase() === "false" ? "archived" : "active");
+          assertValidStatus(status);
+          const paymentTermsKind = paymentTermsKindRaw || "net";
+          assertValidPaymentTermsKind(paymentTermsKind);
+          const paymentTermsDays = row.paymentTermsDays != null && String(row.paymentTermsDays).trim() !== ""
+            ? Number.parseInt(String(row.paymentTermsDays).trim(), 10)
+            : null;
+          const creditLimit = row.creditLimit != null && String(row.creditLimit).trim() !== ""
+            ? Number(String(row.creditLimit).trim())
+            : null;
+          const commissionPercent = row.commissionPercent != null && String(row.commissionPercent).trim() !== ""
+            ? Number(String(row.commissionPercent).trim())
+            : null;
+          assertValidPaymentTerms(paymentTermsDays);
+          assertValidCreditLimit(creditLimit);
+          if (commissionPercent != null && (!Number.isFinite(commissionPercent) || commissionPercent < 0 || commissionPercent > 100)) {
+            errors.push({ rowNumber, reason: "commissionPercent must be 0-100" });
+            continue;
+          }
+          const data = {
+            subBrand,
+            name,
+            supplierCategory,
+            contactPerson: row.contactPerson ? String(row.contactPerson).trim() : null,
+            phone: row.phone ? String(row.phone).trim() : null,
+            email: row.email ? String(row.email).trim() : null,
+            gstin,
+            addressLine: row.addressLine ? String(row.addressLine).trim() : null,
+            status,
+            isActive: deriveIsActive(status),
+            paymentTermsKind,
+            paymentTermsDays: paymentTermsKind === "net" ? paymentTermsDays : null,
+            creditLimit: creditLimit != null ? String(creditLimit) : null,
+            creditCurrency: row.creditCurrency ? String(row.creditCurrency).trim() : "INR",
+            taxRegimeCode: row.taxRegimeCode ? String(row.taxRegimeCode).trim() : null,
+            primaryContactRole: row.primaryContactRole ? String(row.primaryContactRole).trim() : null,
+            commissionPercent: commissionPercent != null ? String(commissionPercent) : null,
+            notes: row.notes ? String(row.notes).trim() : null,
+          };
+          const existing = await prisma.travelSupplier.findFirst({
+            where: { tenantId: req.travelTenant.id, subBrand, name },
+          });
+          if (existing) {
+            await prisma.travelSupplier.update({ where: { id: existing.id }, data });
+            updated++;
+          } else {
+            await prisma.travelSupplier.create({ data: { tenantId: req.travelTenant.id, ...data } });
+            imported++;
+          }
+        } catch (rowErr) {
+          errors.push({ rowNumber, reason: rowErr.message || "Row import failed" });
+        }
+      }
+
+      await writeAudit("TravelSupplier", "CSV_IMPORT", null, req.user.userId, req.travelTenant.id, {
+        rowCount: rows.length, imported, updated, skipped, errorCount: errors.length, source: "csv",
+      });
+
+      return res.json({ imported, updated, skipped, total: rows.length, errors });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] supplier import error:", e.message);
+      return res.status(500).json({ error: "Failed to import suppliers" });
+    }
+  },
+);
 
 router.get(
   "/suppliers/search",

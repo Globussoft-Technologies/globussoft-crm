@@ -8,7 +8,7 @@
 //   Microsite — preview + admin link + publicUuid copy
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useLocation, useParams, Link } from "react-router-dom";
 import {
   Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
   ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
@@ -68,11 +68,14 @@ function toDateInput(d) {
 
 export default function TripDetail() {
   const { id } = useParams();
+  const location = useLocation();
   const notify = useNotify();
   const [tab, setTab] = useState("overview");
   const [trip, setTrip] = useState(null);
   const [loading, setLoading] = useState(true);
   const hasLoadedRef = useRef(false);
+  const backTo = location.state?.backTo || "/travel/trips";
+  const backLabel = location.state?.backLabel || "Trips";
 
   const load = useCallback(() => {
     // Keep the current trip visible on refreshes so tab-local state
@@ -95,7 +98,7 @@ export default function TripDetail() {
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;
   if (!trip) return (
     <div style={{ padding: 24 }}>
-      <Link to="/travel/trips" style={backLink}><ChevronLeft size={16} /> Back to trips</Link>
+      <Link to={backTo} style={backLink}><ChevronLeft size={16} /> {backLabel}</Link>
       <p style={{ color: "var(--text-secondary)" }}>Trip not found.</p>
     </div>
   );
@@ -104,7 +107,7 @@ export default function TripDetail() {
     <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <Link to="/travel/trips" style={backLink}><ChevronLeft size={16} /> Trips</Link>
+          <Link to={backTo} style={backLink}><ChevronLeft size={16} /> {backLabel}</Link>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: "8px 0 4px" }}>
             <Luggage size={28} aria-hidden /> {trip.tripCode}
           </h1>

@@ -18,7 +18,7 @@
 // canonical header + table + add/edit modal pattern). Empty-state
 // honors the #829 permission-denied vs no-rows distinction.
 
-import { useEffect, useState, useContext, Fragment } from "react";
+import { useEffect, useState, useContext, Fragment, useRef } from "react";
 import {
   Building2,
   Plus,
@@ -31,8 +31,10 @@ import {
   Wallet,
   BarChart3,
   AlertTriangle,
+  Download,
+  Upload,
 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { usePermissions } from "../../hooks/usePermissions";
 import {
@@ -327,6 +329,7 @@ export default function SuppliersAdmin() {
   const [exposureLoading, setExposureLoading] = useState(true);
   const [exposureError, setExposureError] = useState(false);
   const [exposureNearLimitOnly, setExposureNearLimitOnly] = useState(false);
+  const fileRef = useRef(null);
 
   const load = () => {
     setLoading(true);
@@ -702,6 +705,80 @@ export default function SuppliersAdmin() {
     }
   };
 
+  const downloadTemplate = async (format) => {
+    try {
+      const ext = format === "xlsx" ? "xlsx" : "csv";
+      const label = format === "xlsx" ? "Excel template" : "CSV template";
+      const res = await fetch(`/api/travel/suppliers/import-template?format=${ext}`, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      if (!res.ok) throw new Error(`Failed to download ${label.toLowerCase()}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `travel-suppliers-template.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify.error(e.message || `Failed to download ${format} template`);
+    }
+  };
+
+  const exportCsv = async () => {
+    try {
+      const qs = new URLSearchParams();
+      if (subBrand) qs.set("subBrand", subBrand);
+      if (supplierCategory) qs.set("supplierCategory", supplierCategory);
+      if (includeInactive) qs.set("includeInactive", "1");
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      const res = await fetch(`/api/travel/suppliers/export.csv${suffix}`, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "travel-suppliers.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify.error(e.message || "Failed to export suppliers");
+    }
+  };
+
+  const importCsv = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/travel/suppliers/import.csv", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+        body: formData,
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || `Import failed (${res.status})`);
+      const summary = `Imported ${body.imported}, updated ${body.updated}, skipped ${body.skipped}`;
+      if (body.errors?.length) {
+        notify.error(`${summary}. First error row ${body.errors[0].rowNumber}: ${body.errors[0].reason}`);
+      } else {
+        notify.success(summary);
+      }
+      load();
+    } catch (e) {
+      notify.error(e.message || "Import failed");
+    } finally {
+      if (event.target) event.target.value = "";
+    }
+  };
+
   return (
     <div
       style={{
@@ -745,12 +822,62 @@ export default function SuppliersAdmin() {
             {total.toLocaleString()} supplier{total === 1 ? "" : "s"}.
           </p>
         </div>
-        {canCreate && (
-          <button type="button" onClick={openCreate} style={primaryBtnBranded}>
-            <Plus size={14} /> New Supplier
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <button type="button" onClick={exportCsv} style={secondaryBtn}>
+            <Download size={14} /> Export CSV
           </button>
-        )}
+          <button type="button" onClick={() => downloadTemplate("csv")} style={secondaryBtn}>
+            <Download size={14} /> Download CSV Template
+          </button>
+          <button type="button" onClick={() => downloadTemplate("xlsx")} style={secondaryBtn}>
+            <Download size={14} /> Download Excel Template
+          </button>
+          {canCreate && (
+            <>
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                style={secondaryBtn}
+                title="Bulk-import suppliers from CSV or Excel using the downloadable template."
+              >
+                <Upload size={14} /> Import CSV/Excel
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".csv,.xlsx,.xls,text/csv"
+                onChange={importCsv}
+                style={{ display: "none" }}
+                aria-label="Upload suppliers CSV or Excel file"
+              />
+              <button type="button" onClick={openCreate} style={primaryBtnBranded}>
+                <Plus size={14} /> New Supplier
+              </button>
+            </>
+          )}
+        </div>
       </header>
+
+      <div
+        className="glass"
+        style={{
+          padding: 12,
+          marginBottom: 16,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
+        <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+          Bulk Import Guide
+        </div>
+        <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+          Required for import: <strong style={{ color: "var(--text-primary)" }}>subBrand, name, supplierCategory</strong>.
+        </div>
+        <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+          Optional: contactPerson, phone, email, gstin, addressLine, status, paymentTermsKind, paymentTermsDays, creditLimit, creditCurrency, taxRegimeCode, primaryContactRole, commissionPercent, notes.
+        </div>
+      </div>
 
       <div
         className="glass"

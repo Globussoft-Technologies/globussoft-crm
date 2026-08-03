@@ -642,10 +642,29 @@ router.post(
                 }
               }
 
-              // Recompute the invoice status from all SUCCESS payments.
+              // Recompute the invoice and quote status from all SUCCESS payments.
               if (travelInvoiceId) {
                 try {
                   await recomputeTravelInvoiceStatus(prisma, tenantIdNum, travelInvoiceId);
+                  const paidAgg = await prisma.payment.aggregate({
+                    where: {
+                      tenantId: tenantIdNum,
+                      status: 'SUCCESS',
+                      OR: [
+                        { invoiceId: travelInvoiceId },
+                        { metadata: { contains: `"travelInvoiceId":${travelInvoiceId}` } },
+                      ],
+                    },
+                    _sum: { amount: true },
+                  });
+                  const totalPaid = Number(paidAgg._sum.amount || 0);
+                  const totalQuote = Number((quote && quote.totalAmount) || 0);
+                  const cumulativeStatus =
+                    totalQuote > 0 && totalPaid >= totalQuote ? 'fully_paid' : 'advance_paid';
+                  await prisma.travelQuote.updateMany({
+                    where: { id: quoteId },
+                    data: { status: cumulativeStatus },
+                  });
                 } catch (e) {
                   console.error('[Payments] travel invoice recompute failed:', e.message);
                 }

@@ -22,8 +22,9 @@
 // new-tab link to boardingPassUrl, not an inline iframe (lighter UI,
 // PDF + image both handled by the browser).
 
-import { useEffect, useState, useRef } from "react";
-import { Filter, Ticket, Calendar as CalendarIcon, Upload, Send, UserCheck, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { useEffect, useMemo, useState, useRef } from "react";
+import { Link, useLocation } from "react-router-dom";
+import { ArrowLeft, Filter, Ticket, Calendar as CalendarIcon, Upload, Send, UserCheck, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
@@ -71,6 +72,8 @@ function fmtDateTime(d) {
 
 export default function WebCheckinQueue() {
   const notify = useNotify();
+  const location = useLocation();
+  const openedFromReports = useMemo(() => new URLSearchParams(location.search).get('source') === 'reports', [location.search]);
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -221,6 +224,11 @@ export default function WebCheckinQueue() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1400, margin: "0 auto" }}>
+      {openedFromReports ? (
+        <Link to="/travel/reports" style={backLinkStyle}>
+          <ArrowLeft size={15} aria-hidden /> Back to reports
+        </Link>
+      ) : null}
       <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, marginBottom: 4 }}>
         <Ticket size={28} aria-hidden /> Web Check-ins
       </h1>
@@ -430,6 +438,13 @@ export default function WebCheckinQueue() {
     </div>
   );
 }
+
+const backLinkStyle = {
+  display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 12,
+  padding: "6px 10px", borderRadius: 6, textDecoration: "none",
+  border: "1px solid var(--border-color)", background: "var(--surface-color)",
+  color: "var(--text-primary)", fontSize: 13, fontWeight: 600,
+};
 
 const selectStyle = {
   padding: "6px 10px", borderRadius: 6,

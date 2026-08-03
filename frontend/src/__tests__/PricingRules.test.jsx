@@ -65,8 +65,8 @@
  *     (line 405: `markupType: r.markupPct != null ? "pct" : "flat"`).
  *
  *   - Prompt said "delete flow: confirmation + DELETE". SUT uses
- *     native `window.confirm`, not `notify.confirm`. Tests stub
- *     `window.confirm` per-test.
+ *     native `window.confirm` for seasons, but markup-rule delete uses
+ *     `notify.confirm` so the centered in-app modal is shown.
  *
  *   - Prompt said "season-based markup percentages". Misframing — seasons
  *     and markup rules are SEPARATE backend tables. Seasons store a
@@ -104,7 +104,7 @@
  *     = ADMIN. (No role-variant tests — see RBAC drift item above.)
  *   - MemoryRouter wraps the SUT (the page renders a <Link to="/travel/
  *     cost-master"> in the header).
- *   - window.confirm stubbed per-test for the delete flow.
+ *   - seasons delete stubs window.confirm; markup-rule delete asserts notify.confirm.
  *   - All data-dependent assertions use await findBy / waitFor (per
  *     CLAUDE.md tick #108 cron-learning: sync getBy for data-dependent
  *     text is a CI race trap).
@@ -830,16 +830,23 @@ describe('<PricingRules /> — delete flows (window.confirm)', () => {
     confirmSpy.mockRestore();
   });
 
-  it('Markup Rules: delete with confirm=true fires DELETE /api/travel/markup-rules/:id', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it('Markup Rules: delete with notify.confirm=true fires DELETE /api/travel/markup-rules/:id', async () => {
+    notifyConfirm.mockResolvedValue(true);
     renderPage();
     await screen.findByText('{"city":"Makkah"}');
     fetchApiMock.mockClear();
     installFetchMock();
     fireEvent.click(screen.getByRole('button', { name: /Delete rule 501/i }));
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/Delete markup rule \(hotel \/ rfu, priority 100\)\?/i),
-    );
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Delete markup rule',
+          destructive: true,
+          confirmText: 'Delete',
+          message: expect.stringMatching(/Delete markup rule \(hotel \/ rfu, priority 100\)\?/i),
+        }),
+      );
+    });
     await waitFor(() => {
       const del = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/travel/markup-rules/501' && o?.method === 'DELETE',
@@ -847,7 +854,19 @@ describe('<PricingRules /> — delete flows (window.confirm)', () => {
       expect(del).toBeTruthy();
     });
     expect(notifySuccess).toHaveBeenCalledWith('Markup rule deleted');
-    confirmSpy.mockRestore();
+  });
+
+  it('Markup Rules: delete with notify.confirm=false short-circuits (no DELETE fired)', async () => {
+    notifyConfirm.mockResolvedValue(false);
+    renderPage();
+    await screen.findByText('city: Makkah');
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /Delete rule 501/i }));
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalled();
+    });
+    const dels = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'DELETE');
+    expect(dels.length).toBe(0);
   });
 });
 

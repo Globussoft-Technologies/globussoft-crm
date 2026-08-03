@@ -45,9 +45,97 @@ const FIELD_TYPES_WITH_OPTIONS = new Set(["dropdown", "radio", "multiselect"]);
 
 const FIELD_TYPE_LABELS = Object.fromEntries(FIELD_TYPE_OPTIONS.map((o) => [o.value, o.label]));
 
-const th = { padding: "0.75rem 1rem", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-secondary)", fontWeight: 600 };
+const th = {
+  padding: "0.75rem 1rem",
+  fontSize: "0.78rem",
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+  color: "var(--text-secondary)",
+  fontWeight: 600,
+  background: "#23262d",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+};
 const td = { padding: "0.75rem 1rem", fontSize: "0.9rem" };
 const iconBtn = { background: "var(--subtle-bg)", border: "1px solid var(--border-color)", borderRadius: 6, padding: "0.375rem 0.5rem", cursor: "pointer", display: "inline-flex", alignItems: "center" };
+
+function getOptionsText(options) {
+  return Array.isArray(options) ? options.join(", ") : "";
+}
+
+function renderFieldPreview(field, optionsText) {
+  const previewOptions = optionsText.split(",").map((o) => o.trim()).filter(Boolean);
+  const sharedProps = {
+    className: "input-field",
+    disabled: true,
+    placeholder: field.placeholder || "",
+    style: { width: "100%" },
+  };
+
+  if (field.fieldType === "textarea") {
+    return <textarea {...sharedProps} rows={4} />;
+  }
+  if (field.fieldType === "number") {
+    return <input {...sharedProps} type="number" />;
+  }
+  if (field.fieldType === "date") {
+    return <input {...sharedProps} type="date" />;
+  }
+  if (field.fieldType === "url") {
+    return <input {...sharedProps} type="url" />;
+  }
+  if (field.fieldType === "checkbox") {
+    return (
+      <label style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", color: "var(--text-secondary)" }}>
+        <input type="checkbox" disabled />
+        Yes / No
+      </label>
+    );
+  }
+  if (field.fieldType === "dropdown") {
+    return (
+      <select {...sharedProps} defaultValue="">
+        <option value="">{field.placeholder || "Select an option"}</option>
+        {previewOptions.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+    );
+  }
+  if (field.fieldType === "multiselect") {
+    return (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+        {previewOptions.length ? previewOptions.map((option) => (
+          <span
+            key={option}
+            style={{
+              padding: "0.3rem 0.6rem",
+              borderRadius: 999,
+              background: "#23262d",
+              border: "1px solid var(--border-color)",
+              color: "var(--text-secondary)",
+              fontSize: "0.85rem",
+            }}
+          >
+            {option}
+          </span>
+        )) : <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Add options to preview this field.</span>}
+      </div>
+    );
+  }
+  if (field.fieldType === "radio") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        {previewOptions.length ? previewOptions.map((option) => (
+          <label key={option} style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", color: "var(--text-secondary)" }}>
+            <input type="radio" disabled name={`preview-radio-${field.id}`} />
+            {option}
+          </label>
+        )) : <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Add options to preview this field.</span>}
+      </div>
+    );
+  }
+  return <input {...sharedProps} type="text" />;
+}
 
 export default function LeadFields() {
   const { tenant } = useContext(AuthContext) || {};
@@ -258,7 +346,7 @@ export default function LeadFields() {
   };
 
   return (
-    <div style={{ padding: "2rem", maxWidth: "860px", margin: "0 auto", animation: "fadeIn 0.3s ease" }}>
+    <div style={{ padding: "2rem", paddingBottom: "3rem", maxWidth: "860px", margin: "0 auto", animation: "fadeIn 0.3s ease" }}>
       <h1 style={{ fontSize: "1.5rem", fontWeight: "bold", marginBottom: "0.25rem" }}>Lead Fields</h1>
       <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
         Add extra fields to your Leads. Once created, a field appears on every lead&rsquo;s create/edit form and detail view for your organization only.
@@ -279,127 +367,97 @@ export default function LeadFields() {
             body="Add your first field below to start capturing extra details on every lead."
           />
         ) : (
-          <div style={{ marginTop: "0.75rem" }}>
-          <TopScrollSync>
-            <table className="stable-table" style={{ borderCollapse: "collapse", width: "100%" }}>
-              <thead>
-                <tr style={{ background: "var(--subtle-bg)" }}>
-                  <th style={{ ...th, width: "72px" }}>Order</th>
-                  <th style={th}>Label</th>
-                  <th style={th}>Type</th>
-                  <th style={th}>Options</th>
-                  <th style={th}>Required</th>
-                  <th style={{ ...th, textAlign: "right" }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {fields.map((f, index) => (
-                  <tr key={f.id} style={{ borderTop: "1px solid var(--border-color)" }}>
-                    <td style={{ ...td, display: "flex", gap: "0.15rem" }}>
-                      <button
-                        onClick={() => handleMoveField(index, -1)}
-                        disabled={index === 0 || reordering}
-                        aria-label={`Move ${f.label} up`}
-                        title="Move up"
-                        style={{
-                          background: "none",
-                          border: "none",
-                          padding: "0.2rem",
-                          color: index === 0 ? "var(--border-color)" : "var(--text-secondary)",
-                          cursor: index === 0 ? "default" : "pointer",
-                        }}
-                      >
-                        <ArrowUp size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleMoveField(index, 1)}
-                        disabled={index === fields.length - 1 || reordering}
-                        aria-label={`Move ${f.label} down`}
-                        title="Move down"
-                        style={{
-                          background: "none",
-                          border: "none",
-                          padding: "0.2rem",
-                          color: index === fields.length - 1 ? "var(--border-color)" : "var(--text-secondary)",
-                          cursor: index === fields.length - 1 ? "default" : "pointer",
-                        }}
-                      >
-                        <ArrowDown size={14} />
-                      </button>
-                    </td>
-                    <td style={{ ...td, fontWeight: 500 }}>{f.label}</td>
-                    <td style={td}>{FIELD_TYPE_LABELS[f.fieldType] || f.fieldType}</td>
-                    <td style={{ ...td, color: "var(--text-secondary)" }}>
-                      {editingOptionsId === f.id ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+          <div style={{ marginTop: "0.75rem", paddingBottom: "0.5rem" }}>
+            <TopScrollSync>
+              <div style={{ background: "#14161b" }}>
+                <table className="stable-table" style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", tableLayout: "fixed" }}>
+                  <thead>
+                    <tr style={{ background: "#23262d", display: "table", width: "100%", tableLayout: "fixed" }}>
+                      <th style={{ ...th, width: "72px" }}>Order</th>
+                      <th style={th}>Label</th>
+                      <th style={th}>Type</th>
+                      <th style={th}>Key</th>
+                      <th style={th}>Options</th>
+                      <th style={th}>Required</th>
+                      <th style={{ ...th, textAlign: "right" }}></th>
+                    </tr>
+                  </thead>
+                  <tbody style={{ display: "block", maxHeight: "clamp(280px, calc(100vh - 430px), 720px)", overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}>
+                    {fields.map((f, index) => (
+                      <tr key={f.id} style={{ borderTop: "1px solid var(--border-color)", display: "table", width: "100%", tableLayout: "fixed" }}>
+                        <td style={{ ...td, display: "flex", gap: "0.15rem" }}>
+                          <button
+                            onClick={() => handleMoveField(index, -1)}
+                            disabled={index === 0 || reordering}
+                            aria-label={`Move ${f.label} up`}
+                            title="Move up"
+                            style={{
+                              background: "none",
+                              border: "none",
+                              padding: "0.2rem",
+                              color: index === 0 ? "var(--border-color)" : "var(--text-secondary)",
+                              cursor: index === 0 ? "default" : "pointer",
+                            }}
+                          >
+                            <ArrowUp size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleMoveField(index, 1)}
+                            disabled={index === fields.length - 1 || reordering}
+                            aria-label={`Move ${f.label} down`}
+                            title="Move down"
+                            style={{
+                              background: "none",
+                              border: "none",
+                              padding: "0.2rem",
+                              color: index === fields.length - 1 ? "var(--border-color)" : "var(--text-secondary)",
+                              cursor: index === fields.length - 1 ? "default" : "pointer",
+                            }}
+                          >
+                            <ArrowDown size={14} />
+                          </button>
+                        </td>
+                        <td style={{ ...td, fontWeight: 500 }}>{f.label}</td>
+                        <td style={td}>{FIELD_TYPE_LABELS[f.fieldType] || f.fieldType}</td>
+                        <td title={`cf_${f.fieldKey}`} style={{ ...td, fontFamily: "monospace", color: "var(--text-secondary)", whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: "170px" }}>{`cf_${f.fieldKey}`}</td>
+                        <td style={{ ...td, color: "var(--text-secondary)" }}>
+                          {FIELD_TYPES_WITH_OPTIONS.has(f.fieldType) ? (Array.isArray(f.options) ? f.options.join(", ") : "") : ""}
+                        </td>
+                        <td style={td}>
                           <input
-                            type="text"
-                            className="input-field"
-                            value={editingOptionsText}
-                            onChange={(e) => setEditingOptionsText(e.target.value)}
-                            placeholder="Comma-separated options"
-                            style={{ minWidth: "220px", padding: "0.4rem 0.6rem", fontSize: "0.85rem" }}
-                            autoFocus
+                            type="checkbox"
+                            checked={Boolean(f.isRequired)}
+                            onChange={() => handleToggleRequired(f)}
+                            style={{ cursor: "pointer" }}
                           />
-                          <button
-                            onClick={() => handleSaveOptions(f)}
-                            disabled={savingOptions}
-                            aria-label="Save options"
-                            title="Save"
-                            style={{ ...iconBtn, color: "var(--success-color, #22c55e)" }}
-                          >
-                            {savingOptions ? <Loader size={14} className="spin" /> : <Check size={14} />}
-                          </button>
-                          <button
-                            onClick={cancelOptionsEditor}
-                            disabled={savingOptions}
-                            aria-label="Cancel editing options"
-                            title="Cancel"
-                            style={iconBtn}
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      ) : FIELD_TYPES_WITH_OPTIONS.has(f.fieldType) ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                          <span>{Array.isArray(f.options) ? f.options.join(", ") : "—"}</span>
-                          <button
-                            onClick={() => openOptionsEditor(f)}
-                            aria-label={`Edit options for ${f.label}`}
-                            title="Edit options"
-                            style={iconBtn}
-                          >
-                            <Pencil size={12} />
-                          </button>
-                        </div>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td style={td}>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(f.isRequired)}
-                        onChange={() => handleToggleRequired(f)}
-                        style={{ cursor: "pointer" }}
-                      />
-                    </td>
-                    <td style={{ ...td, textAlign: "right" }}>
-                      <button
-                        onClick={() => handleDelete(f)}
-                        disabled={deletingId === f.id}
-                        aria-label={`Delete ${f.label}`}
-                        title="Delete field"
-                        style={{ ...iconBtn, color: "var(--danger-color, #ef4444)" }}
-                      >
-                        {deletingId === f.id ? <Loader size={14} className="spin" /> : <Trash2 size={14} />}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TopScrollSync>
+                        </td>
+                        <td style={{ ...td, textAlign: "right" }}>
+                          <div style={{ display: "inline-flex", gap: "0.4rem" }}>
+                            <button
+                              onClick={() => openEditModal(f)}
+                              aria-label={`Edit ${f.label}`}
+                              title="Edit field"
+                              style={iconBtn}
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(f)}
+                              disabled={deletingId === f.id}
+                              aria-label={`Delete ${f.label}`}
+                              title="Delete field"
+                              style={{ ...iconBtn, color: "var(--danger-color, #ef4444)" }}
+                            >
+                              {deletingId === f.id ? <Loader size={14} className="spin" /> : <Trash2 size={14} />}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </TopScrollSync>
           </div>
         )}
       </div>
@@ -503,3 +561,9 @@ export default function LeadFields() {
     </div>
   );
 }
+
+
+
+
+
+

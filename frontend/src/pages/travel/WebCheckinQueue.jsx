@@ -87,6 +87,14 @@ export default function WebCheckinQueue() {
   // Per-row hidden file input refs keyed by checkin id.
   const fileInputs = useRef({});
 
+  // Infinite-scroll guard: prevent multiple pages loading in a single gesture.
+  const scrolledPage = useRef(false);
+
+  useEffect(() => {
+    // Reset scroll guard whenever the query changes so a fresh list can scroll again.
+    scrolledPage.current = false;
+  }, [status, upcomingOnly]);
+
   const load = () => {
     setLoading(true);
     const url = upcomingOnly
@@ -216,6 +224,18 @@ export default function WebCheckinQueue() {
     }
   };
 
+  const handleTableScroll = (e) => {
+    const el = e.currentTarget;
+    if (!el || upcomingOnly || loading || scrolledPage.current) return;
+    const { scrollTop, clientHeight, scrollHeight } = el;
+    const nearBottom = scrollTop + clientHeight >= scrollHeight - 20;
+    const hasMore = offset + rows.length < total;
+    if (nearBottom && hasMore) {
+      scrolledPage.current = true;
+      setOffset((prev) => prev + PAGE_SIZE);
+    }
+  };
+
   // ─── Render ──────────────────────────────────────────────────────
 
   const showingPagination = !upcomingOnly && total > PAGE_SIZE;
@@ -282,10 +302,15 @@ export default function WebCheckinQueue() {
       </div>
 
       {/* Table */}
-      <div style={{
-        background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)", overflow: "auto",
-      }}>
+      <div
+        data-testid="webcheckins-table-scroll"
+        onScroll={handleTableScroll}
+        style={{
+          background: "var(--surface-color)", borderRadius: 8,
+          border: "1px solid var(--border-color)", overflow: "auto",
+          maxHeight: 600,
+        }}
+      >
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : rows.length === 0 ? (

@@ -112,8 +112,12 @@ async function computeMonthlySpendCents(tenantId) {
 /**
  * Whether the real Gemini call should fire. Wraps the key probe so
  * vitest can mock it without setting the env directly.
+ *
+ * Disabled under NODE_ENV=test so unit suites stay offline and
+ * deterministic even when GEMINI_API_KEY is present in the shell/.env.
  */
 async function realModeEnabled(tenantId) {
+  if (process.env.NODE_ENV === 'test') return false;
   const llmRouter = require('../lib/llmRouter');
   const key = await llmRouter.getLlmKey(tenantId, 'gemini-flash');
   return Boolean(key);

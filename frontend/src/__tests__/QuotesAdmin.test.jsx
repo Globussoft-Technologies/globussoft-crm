@@ -146,7 +146,7 @@ const QUOTES_DEFAULT = [
 // Install a fetchApi mock that routes by URL + method. Tests override
 // only the surface they care about.
 function installFetchMock({
-  list = { quotes: QUOTES_DEFAULT, total: QUOTES_DEFAULT.length, limit: 100, offset: 0 },
+  list = { quotes: QUOTES_DEFAULT, total: QUOTES_DEFAULT.length, limit: 50, offset: 0 },
   create = null,
   update = null,
   del = null,
@@ -250,15 +250,15 @@ describe('<QuotesAdmin /> — load + render lifecycle', () => {
     expect(screen.queryByText('Loading…')).toBeNull();
   });
 
-  it('GETs /api/travel/quotes on mount with NO query string when filters are empty', async () => {
+  it('GETs /api/travel/quotes on mount with limit/offset when filters are empty', async () => {
     renderPage();
     await waitFor(() => {
       const listCall = fetchApiMock.mock.calls.find(([u, o]) =>
         typeof u === 'string' && u.startsWith('/api/travel/quotes') && (!o?.method || o.method === 'GET'),
       );
       expect(listCall).toBeTruthy();
-      // No query string when both filters are blank.
-      expect(listCall[0]).toBe('/api/travel/quotes');
+      expect(listCall[0]).toContain('limit=50');
+      expect(listCall[0]).toContain('offset=0');
     });
     // Renders one row per quote.
     expect(await screen.findByText('Alice Smith')).toBeInTheDocument();

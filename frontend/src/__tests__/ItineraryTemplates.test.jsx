@@ -742,50 +742,56 @@ describe('<ItineraryTemplates /> — formatting helpers (cell render)', () => {
 });
 
 describe('<ItineraryTemplates /> — pagination', () => {
-  it('renders "Showing 1-3 of 3" summary and disables both Prev + Next when total fits in one page', async () => {
+  it('renders the first page inside the scroll container when total fits on one page', async () => {
     renderPage();
     await screen.findByText('Makkah-Madinah 10-day Umrah');
 
-    expect(screen.getByText(/Showing 1-3 of 3/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Previous page/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /Next page/i })).toBeDisabled();
+    expect(screen.getByText('Bali Family Holiday')).toBeInTheDocument();
+    expect(screen.getByText('Europe School Trip — 14 days')).toBeInTheDocument();
+    expect(screen.getByTestId('itinerary-templates-table-scroll')).toBeInTheDocument();
+    expect(screen.queryByTestId('itinerary-templates-scroll-sentinel')).toBeNull();
   });
 
-  it('shows "No results" when total=0 (no items)', async () => {
+  it('shows only the empty-state copy when total=0 (no items)', async () => {
     installFetchMock({ list: { items: [], total: 0, limit: 20, offset: 0 } });
     renderPage();
-    await screen.findByText(/No itinerary templates yet/i);
-    expect(screen.getByText(/No results/i)).toBeInTheDocument();
+    await screen.findByText(/No itinerary templates yet\. Add one above\./i);
+    expect(screen.queryByTestId('itinerary-templates-table-scroll')).toBeNull();
   });
 
   it('clicking Next advances offset → re-fetches with ?offset=20', async () => {
     // Simulate a large list — total=50 so we have multiple pages.
-    const bigItems = Array.from({ length: 20 }).map((_, i) =>
+    const firstPage = Array.from({ length: 20 }).map((_, i) =>
       makeItem({ id: 2000 + i, name: `Template ${i + 1}` }),
     );
-    installFetchMock({
-      list: { items: bigItems, total: 50, limit: 20, offset: 0 },
+    const secondPage = Array.from({ length: 20 }).map((_, i) =>
+      makeItem({ id: 3000 + i, name: `Template ${i + 21}` }),
+    );
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/itinerary-templates?') && method === 'GET') {
+        if (url.includes('offset=20')) {
+          return Promise.resolve({ items: secondPage, total: 50, limit: 20, offset: 20 });
+        }
+        return Promise.resolve({ items: firstPage, total: 50, limit: 20, offset: 0 });
+      }
+      if (url.startsWith('/api/contacts?limit=200') && method === 'GET') {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve(null);
     });
+
     renderPage();
     await screen.findByText('Template 1');
 
-    expect(screen.getByText(/Showing 1-20 of 50/i)).toBeInTheDocument();
-    const nextBtn = screen.getByRole('button', { name: /Next page/i });
-    expect(nextBtn).not.toBeDisabled();
-
-    fetchApiMock.mockClear();
-    installFetchMock({
-      list: {
-        items: Array.from({ length: 20 }).map((_, i) =>
-          makeItem({ id: 3000 + i, name: `Template ${i + 21}` }),
-        ),
-        total: 50,
-        limit: 20,
-        offset: 20,
-      },
+    const scrollArea = screen.getByTestId('itinerary-templates-table-scroll');
+    Object.defineProperties(scrollArea, {
+      scrollTop: { value: 728, writable: true, configurable: true },
+      clientHeight: { value: 400, writable: true, configurable: true },
+      scrollHeight: { value: 800, writable: true, configurable: true },
     });
-
-    fireEvent.click(nextBtn);
+    fireEvent.scroll(scrollArea);
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -796,6 +802,9 @@ describe('<ItineraryTemplates /> — pagination', () => {
       );
       expect(call).toBeTruthy();
     });
+
+    expect(await screen.findByText('Template 21')).toBeInTheDocument();
+    expect(screen.getByText('Template 40')).toBeInTheDocument();
   });
 });
 

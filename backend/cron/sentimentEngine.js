@@ -113,9 +113,17 @@ function parseGeminiResponse(raw) {
  * Analyze a single piece of text (email body or call notes).
  * Returns { sentiment, sentimentScore }.
  */
-async function analyzeMessage(text) {
+async function analyzeMessageDetailed(text) {
   const safeText = String(text || "").trim();
-  if (!safeText) return { sentiment: "neutral", sentimentScore: 0 };
+  if (!safeText) {
+    return {
+      sentiment: "neutral",
+      sentimentScore: 0,
+      provider: "empty",
+      trusted: false,
+      usedFallback: true,
+    };
+  }
 
   if (geminiModel) {
     try {
@@ -144,7 +152,14 @@ async function analyzeMessage(text) {
         status: "success",
       });
       const parsed = parseGeminiResponse(raw);
-      if (parsed) return parsed;
+      if (parsed) {
+        return {
+          ...parsed,
+          provider: "gemini",
+          trusted: true,
+          usedFallback: false,
+        };
+      }
     } catch (err) {
       persistLlmCallLog({
         tenantId: 1,
@@ -166,7 +181,17 @@ async function analyzeMessage(text) {
     }
   }
 
-  return ruleBasedAnalyze(safeText);
+  return {
+    ...ruleBasedAnalyze(safeText),
+    provider: "rule-based",
+    trusted: false,
+    usedFallback: true,
+  };
+}
+
+async function analyzeMessage(text) {
+  const { sentiment, sentimentScore } = await analyzeMessageDetailed(text);
+  return { sentiment, sentimentScore };
 }
 
 /**
@@ -231,7 +256,9 @@ function initSentimentCron() {
 module.exports = {
   initSentimentCron,
   analyzeMessage,
+  analyzeMessageDetailed,
   tickSentimentEngine,
   ruleBasedAnalyze,
   parseGeminiResponse,
 };
+

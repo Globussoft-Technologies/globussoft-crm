@@ -343,6 +343,7 @@ jobs:
             tests/gmail-api.spec.js \
             tests/travel-brochures-models-api.spec.js \
             tests/teardown-completeness.spec.js \
+            tests/callified-campaign-api.spec.js \
             tests/demo-hygiene-api.spec.js
 
       - name: Stop backend (SIGTERM → c8 flushes coverage data)

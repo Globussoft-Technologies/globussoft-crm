@@ -95,9 +95,13 @@ prisma.invoice = {
   findFirst: vi.fn(),
   update: vi.fn(),
 };
+prisma.webhook = {
+  findMany: vi.fn(),
+};
 // Wave 6A wired payment.collected emitEvent on Stripe webhook success.
-// emitEvent in lib/eventBus.js calls prisma.automationRule.findMany — stub
-// it so the unit_tests env (no DATABASE_URL) doesn't blow up with
+// emitEvent in lib/eventBus.js calls prisma.automationRule.findMany and
+// deliverWebhooks calls prisma.webhook.findMany — stub both so the
+// unit_tests env (no DATABASE_URL) doesn't blow up with
 // PrismaClientInitializationError on the async event tail.
 prisma.automationRule = prisma.automationRule || {};
 prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
@@ -118,6 +122,13 @@ const stripeLib = requireCJS('stripe');
 const stripe = stripeLib(TEST_API_KEY);
 
 import paymentsRoutes from '../../routes/payments.js';
+
+// Re-set after route import: payments.js calls dotenv.config({ override: true })
+// which can overwrite test secrets with local .env values. The tests below
+// generate Stripe signatures with TEST_WEBHOOK_SECRET, so the route must
+// verify with the same secret.
+process.env.STRIPE_WEBHOOK_SECRET = TEST_WEBHOOK_SECRET;
+process.env.STRIPE_SECRET_KEY = TEST_API_KEY;
 
 function makeApp() {
   const app = express();
@@ -165,11 +176,22 @@ beforeEach(() => {
   prisma.payment.update.mockReset();
   prisma.invoice.findFirst.mockReset();
   prisma.invoice.update.mockReset();
+  if (prisma.webhook?.findMany) prisma.webhook.findMany.mockReset();
+  if (prisma.automationRule?.findMany) prisma.automationRule.findMany.mockReset();
   // Defaults — every test overrides what it cares about.
   prisma.payment.findFirst.mockResolvedValue(null);
   prisma.payment.update.mockResolvedValue({ id: 0, status: 'SUCCESS' });
   prisma.invoice.findFirst.mockResolvedValue(null);
   prisma.invoice.update.mockResolvedValue({ id: 0, status: 'PAID' });
+  prisma.webhook.findMany.mockResolvedValue([]);
+  prisma.automationRule.findMany.mockResolvedValue([]);
+
+  // Re-set secrets before each test: lazy-loaded helpers (e.g. eventBus)
+  // call dotenv.config({ override: true }) on first require, which can
+  // replace test secrets with values from backend/.env. Resetting here
+  // keeps every test using the fixture secrets it signed its payload with.
+  process.env.STRIPE_WEBHOOK_SECRET = TEST_WEBHOOK_SECRET;
+  process.env.STRIPE_SECRET_KEY = TEST_API_KEY;
 });
 
 afterEach(() => {

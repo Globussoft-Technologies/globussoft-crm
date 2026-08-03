@@ -43,7 +43,7 @@ describe("webCheckinEngine — scope query", () => {
     prisma.webCheckin.findMany.mockResolvedValue([]);
     await runWebCheckinTick(NOW);
     const where = prisma.webCheckin.findMany.mock.calls[0][0].where;
-    expect(where.status).toEqual({ in: ["pending", "reminded"] });
+    expect(where.status).toEqual("pending");
     expect(where.itineraryId).toEqual({ not: null });
     expect(where.departureAt).toHaveProperty("gte");
     expect(where.departureAt).toHaveProperty("lte");

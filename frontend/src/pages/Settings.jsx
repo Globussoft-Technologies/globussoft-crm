@@ -60,6 +60,8 @@ export default function Settings() {
   // brandColor, edited via /api/wellness/branding*).
   const { activeSubBrand } = useActiveSubBrand();
   const brandingSubBrand = ctxTenant?.vertical === "travel" ? activeSubBrand : null;
+  // Callified AI calling is a generic-CRM-only integration.
+  const isGenericVertical = ctxTenant?.vertical !== "wellness" && ctxTenant?.vertical !== "travel";
   // Only `reload` is consumed here (busts the shared cache Sidebar also
   // reads from after a save/delete) — the card displays the brand's OWN
   // values via `branding` state, not the fallback-resolved `effective`.
@@ -113,6 +115,7 @@ export default function Settings() {
   const [stagesLoading, setStagesLoading] = useState(true);
   const [tenant, setTenantState] = useState(ctxTenant || null);
   const [tenantSaving, setTenantSaving] = useState(false);
+  const [externalReviewUrl, setExternalReviewUrl] = useState("");
   // #611: email-message retention toggle. Industry-default ON for any CRM
   // that claims to track customer comms. Pre-fix the default was OFF, sent
   // emails vanished, Sent folder stayed empty, threading broke.
@@ -154,14 +157,28 @@ export default function Settings() {
   const [adsgptMsg, setAdsgptMsg] = useState("");
   // Callified integration
   const [callifiedApiKey, setCallifiedApiKey] = useState("");
+  const [callifiedEmail, setCallifiedEmail] = useState("");
+  const [callifiedPassword, setCallifiedPassword] = useState("");
+  const [callifiedBaseUrl, setCallifiedBaseUrl] = useState("https://app.callified.ai");
+  const [callifiedWebhookSecret, setCallifiedWebhookSecret] = useState("");
   const [callifiedShowKey, setCallifiedShowKey] = useState(false);
+  const [callifiedShowPassword, setCallifiedShowPassword] = useState(false);
+  const [callifiedShowWebhookSecret, setCallifiedShowWebhookSecret] = useState(false);
   const [callifiedLoading, setCallifiedLoading] = useState(true);
   const [callifiedSaving, setCallifiedSaving] = useState(false);
   const [callifiedConnected, setCallifiedConnected] = useState(false);
   const [callifiedMsg, setCallifiedMsg] = useState("");
   const [callifiedUpdatedAt, setCallifiedUpdatedAt] = useState(null);
+  const [callifiedDirty, setCallifiedDirty] = useState(false);
+  const MASKED_CALLIFIED_KEY = "••••••••••••••••";
+  const isCallifiedKeyMasked = callifiedApiKey === MASKED_CALLIFIED_KEY;
 
   useEffect(() => {
+    fetchApi("/api/tenant-settings/travel.externalReviewUrl")
+      .then((res) => setExternalReviewUrl(res?.value || ""))
+      .catch(() => {
+        /* tenant setting may not be reachable */
+      });
     fetchApi("/api/tenants/current")
       .then((res) => {
         setTenantState(res);
@@ -189,16 +206,18 @@ export default function Settings() {
       .catch(() => {
         /* adsgpt config may not be available */
       });
-    // Fetch Callified integration status
-    fetchApi("/api/integrations")
-      .then((integrations) => {
-        const callifiedIntegration = integrations.find(
-          (i) => i.provider === "callified",
-        );
-        if (callifiedIntegration && callifiedIntegration.isActive) {
-          setCallifiedConnected(true);
-          setCallifiedUpdatedAt(callifiedIntegration.updatedAt);
-          setCallifiedApiKey("••••••••••••••••");
+    // Fetch Callified integration status for all verticals; only base URL is
+    // pre-filled. Sensitive values (API key, email, password, webhook secret) are
+    // not restored into the form to avoid accidentally exposing them via the eye
+    // toggle; the API key field shows a masked sentinel when a key is saved.
+    fetchApi("/api/integrations/callified/config")
+      .then((config) => {
+        if (config) {
+          setCallifiedConnected(!!config.isActive);
+          setCallifiedUpdatedAt(config.updatedAt || null);
+          setCallifiedBaseUrl(config.baseUrl || "https://app.callified.ai");
+          setCallifiedApiKey(config.apiKey || "");
+          // Do not pre-fill email/password/webhookSecret from the DB; keep them blank.
         }
         setCallifiedLoading(false);
       })
@@ -548,10 +567,27 @@ export default function Settings() {
           ownerEmail: tenant.ownerEmail,
         }),
       });
+      const reviewUrl = externalReviewUrl.trim();
+      if (reviewUrl) {
+        await fetchApi("/api/tenant-settings/travel.externalReviewUrl", {
+          method: "PUT",
+          body: JSON.stringify({ value: reviewUrl }),
+        });
+      } else {
+        try {
+          await fetchApi("/api/tenant-settings/travel.externalReviewUrl", {
+            method: "DELETE",
+          });
+        } catch (settingErr) {
+          if (settingErr?.status !== 404) throw settingErr;
+        }
+      }
+      setExternalReviewUrl(reviewUrl);
       setTenantState(updated);
       if (setTenant) setTenant(updated);
+      notify.success("Organization details updated");
     } catch (err) {
-      notify.error("Failed to update organization");
+      notify.error(err?.message || "Failed to update organization");
     }
     setTenantSaving(false);
   };
@@ -614,28 +650,38 @@ export default function Settings() {
 
   const handleSaveCallifiedKey = async (e) => {
     e.preventDefault();
-    if (!callifiedApiKey || callifiedApiKey.length < 10) {
-      setCallifiedMsg("Please enter a valid API key");
+
+    const hasNewApiKey = callifiedApiKey && callifiedApiKey.length >= 10 && callifiedApiKey !== MASKED_CALLIFIED_KEY;
+    const hasPasswordAuth = callifiedEmail && callifiedEmail.includes("@") && callifiedPassword && callifiedPassword.length >= 4;
+
+    if (!hasNewApiKey && !hasPasswordAuth && !callifiedConnected) {
+      setCallifiedMsg("Please enter a valid API key or an email + password fallback");
       return;
     }
-    if (callifiedApiKey === "••••••••••••••••") {
-      setCallifiedMsg("Please enter the actual API key");
-      return;
-    }
+
     setCallifiedSaving(true);
     setCallifiedMsg("");
     try {
-      await fetchApi("/api/integrations/connect", {
-        method: "POST",
-        body: JSON.stringify({ provider: "callified", token: callifiedApiKey }),
+      await fetchApi("/api/integrations/callified/config", {
+        method: "PUT",
+        body: JSON.stringify({
+          apiKey: callifiedApiKey,
+          email: callifiedEmail,
+          password: callifiedPassword,
+          baseUrl: callifiedBaseUrl,
+          webhookSecret: callifiedWebhookSecret,
+        }),
       });
-      notify.success("Callified API key saved successfully");
+      notify.success("Callified configuration saved successfully");
       setCallifiedConnected(true);
       setCallifiedUpdatedAt(new Date().toISOString());
-      setCallifiedApiKey("••••••••••••••••");
+      if (hasNewApiKey) setCallifiedApiKey(MASKED_CALLIFIED_KEY);
+      if (callifiedPassword) setCallifiedPassword(MASKED_CALLIFIED_KEY);
+      if (callifiedWebhookSecret) setCallifiedWebhookSecret(MASKED_CALLIFIED_KEY);
+      setCallifiedDirty(false);
       setCallifiedMsg("✓ Connected to Callified");
     } catch (err) {
-      const msg = err.message || "Failed to save API key";
+      const msg = err.message || "Failed to save Callified configuration";
       setCallifiedMsg(msg);
       notify.error(msg);
     } finally {
@@ -660,10 +706,43 @@ export default function Settings() {
       notify.success("Callified integration disconnected");
       setCallifiedConnected(false);
       setCallifiedApiKey("");
+      setCallifiedEmail("");
+      setCallifiedPassword("");
+      setCallifiedBaseUrl("https://app.callified.ai");
+      setCallifiedWebhookSecret("");
       setCallifiedUpdatedAt(null);
       setCallifiedMsg("");
+      setCallifiedDirty(false);
     } catch (err) {
       notify.error("Failed to disconnect Callified");
+    } finally {
+      setCallifiedSaving(false);
+    }
+  };
+
+  const handleConnectSimpleCallified = async (e) => {
+    e.preventDefault();
+    if (!callifiedApiKey || callifiedApiKey.length < 10 || callifiedApiKey === MASKED_CALLIFIED_KEY) {
+      setCallifiedMsg("Please enter a valid Callified API key");
+      return;
+    }
+    setCallifiedSaving(true);
+    setCallifiedMsg("");
+    try {
+      await fetchApi("/api/integrations/connect", {
+        method: "POST",
+        body: JSON.stringify({ provider: "callified", token: callifiedApiKey }),
+      });
+      notify.success("Callified connected successfully");
+      setCallifiedConnected(true);
+      setCallifiedUpdatedAt(new Date().toISOString());
+      setCallifiedApiKey(MASKED_CALLIFIED_KEY);
+      setCallifiedDirty(false);
+      setCallifiedMsg("✓ Connected to Callified");
+    } catch (err) {
+      const msg = err.message || "Failed to connect Callified";
+      setCallifiedMsg(msg);
+      notify.error(msg);
     } finally {
       setCallifiedSaving(false);
     }
@@ -1004,6 +1083,34 @@ export default function Settings() {
                     </p>
                   </div>
                 )}
+                <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
+                  <label
+                    style={{
+                      display: "block",
+                      marginBottom: "0.4rem",
+                      fontSize: "0.875rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Review Redirect URL
+                  </label>
+                  <input
+                    type="url"
+                    className="input-field"
+                    value={externalReviewUrl}
+                    placeholder="https://search.google.com/local/writereview?placeid=..."
+                    onChange={(e) => setExternalReviewUrl(e.target.value)}
+                  />
+                  <p
+                    style={{
+                      marginTop: "0.4rem",
+                      fontSize: "0.75rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Optional. When set, positive trip reviews classified by real AI can open this page for posting. Leave blank to keep the current in-app thank-you flow only.
+                  </p>
+                </div>
                 <div style={{ minWidth: 0 }}>
                   <label
                     style={{
@@ -1610,11 +1717,13 @@ export default function Settings() {
             )}
           </div>
 
-          {/* Callified Integration Card */}
-          <div
-            className="card"
-            style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
-          >
+          {isGenericVertical && (
+            <>
+              {/* Callified Integration Card */}
+              <div
+                className="card"
+                style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
+              >
             <h3
               style={{
                 fontSize: "1.25rem",
@@ -1709,7 +1818,7 @@ export default function Settings() {
             >
               {callifiedConnected
                 ? "Your Callified account is connected and ready to use."
-                : "Enter your Callified API key to enable voice and WhatsApp integration."}
+                : "Enter your Callified API key (preferred) or email + password fallback to enable AI outbound calling."}
             </p>
 
             <form
@@ -1720,23 +1829,22 @@ export default function Settings() {
                 gap: "0.75rem",
               }}
             >
-              <div
-                style={{
-                  display: "flex",
-                  gap: "0.75rem",
-                  alignItems: "center",
-                }}
-              >
-                <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
-                  <input
-                    type={callifiedShowKey ? "text" : "password"}
-                    className="input-field"
-                    placeholder="callified_live_..."
-                    value={callifiedApiKey}
-                    onChange={(e) => setCallifiedApiKey(e.target.value)}
-                    disabled={callifiedSaving}
-                    style={{ width: "100%", minWidth: 0, paddingRight: "40px" }}
-                  />
+              {/* API Key */}
+              <label style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>
+                API Key
+              </label>
+              <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+                <input
+                  type={callifiedShowKey && !isCallifiedKeyMasked ? "text" : "password"}
+                  className="input-field"
+                  placeholder={isCallifiedKeyMasked ? "API key is saved" : "ck_..."}
+                  value={callifiedApiKey}
+                  onChange={(e) => { setCallifiedApiKey(e.target.value); setCallifiedDirty(true); }}
+                  readOnly={isCallifiedKeyMasked}
+                  disabled={callifiedSaving}
+                  style={{ width: "100%", minWidth: 0, paddingRight: "40px" }}
+                />
+                {!isCallifiedKeyMasked && (
                   <button
                     type="button"
                     onClick={() => setCallifiedShowKey(!callifiedShowKey)}
@@ -1755,55 +1863,156 @@ export default function Settings() {
                       alignItems: "center",
                     }}
                   >
-                    {callifiedShowKey ? (
-                      <EyeOff size={18} />
-                    ) : (
-                      <Eye size={18} />
-                    )}
+                    {callifiedShowKey ? <Eye size={18} /> : <EyeOff size={18} />}
+                  </button>
+                )}
+              </div>
+
+              {/* Base URL */}
+              <label style={{ fontSize: "0.875rem", color: "var(--text-secondary)", marginTop: "0.25rem" }}>
+                Base URL
+              </label>
+              <input
+                type="text"
+                className="input-field"
+                placeholder="https://app.callified.ai"
+                value={callifiedBaseUrl}
+                onChange={(e) => { setCallifiedBaseUrl(e.target.value); setCallifiedDirty(true); }}
+                disabled={callifiedSaving}
+              />
+
+              <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "0.75rem", marginTop: "0.25rem" }}>
+                <p style={{ fontSize: "0.8125rem", color: "var(--text-secondary)", margin: "0 0 0.5rem 0" }}>
+                  Fallback authentication (used only if API key is not set)
+                </p>
+
+                {/* Fallback Email */}
+                <label style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>
+                  Email
+                </label>
+                <input
+                  type="email"
+                  className="input-field"
+                  placeholder=""
+                  value={callifiedEmail}
+                  onChange={(e) => { setCallifiedEmail(e.target.value); setCallifiedDirty(true); }}
+                  disabled={callifiedSaving}
+                  style={{ marginBottom: "0.5rem" }}
+                />
+
+                {/* Fallback Password */}
+                <label style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>
+                  Password
+                </label>
+                <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+                  <input
+                    type={callifiedShowPassword ? "text" : "password"}
+                    className="input-field"
+                    placeholder="••••••••"
+                    value={callifiedPassword}
+                    onChange={(e) => { setCallifiedPassword(e.target.value); setCallifiedDirty(true); }}
+                    disabled={callifiedSaving}
+                    style={{ width: "100%", minWidth: 0, paddingRight: "40px" }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCallifiedShowPassword(!callifiedShowPassword)}
+                    disabled={callifiedSaving}
+                    style={{
+                      position: "absolute",
+                      right: "0.75rem",
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      background: "transparent",
+                      border: "none",
+                      color: "var(--text-secondary)",
+                      cursor: "pointer",
+                      padding: "0.25rem",
+                      display: "flex",
+                      alignItems: "center",
+                    }}
+                  >
+                    {callifiedShowPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
                 </div>
+              </div>
+
+              {/* Webhook Secret */}
+              <label style={{ fontSize: "0.875rem", color: "var(--text-secondary)", marginTop: "0.25rem" }}>
+                Webhook Secret (optional)
+              </label>
+              <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+                <input
+                  type={callifiedShowWebhookSecret ? "text" : "password"}
+                  className="input-field"
+                  placeholder="HMAC secret for inbound Callified webhooks"
+                  value={callifiedWebhookSecret}
+                  onChange={(e) => { setCallifiedWebhookSecret(e.target.value); setCallifiedDirty(true); }}
+                  disabled={callifiedSaving}
+                  style={{ width: "100%", minWidth: 0, paddingRight: "40px" }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setCallifiedShowWebhookSecret(!callifiedShowWebhookSecret)}
+                  disabled={callifiedSaving}
+                  style={{
+                    position: "absolute",
+                    right: "0.75rem",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                    padding: "0.25rem",
+                    display: "flex",
+                    alignItems: "center",
+                  }}
+                >
+                  {callifiedShowWebhookSecret ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+
+              <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", marginTop: "0.5rem" }}>
                 <button
                   type="submit"
                   className="btn-primary"
-                  disabled={callifiedSaving || !callifiedApiKey.trim()}
+                  disabled={callifiedSaving || !callifiedDirty}
                   style={{ whiteSpace: "nowrap" }}
                 >
                   {callifiedSaving ? (
                     <>
-                      <Loader
-                        size={16}
-                        style={{ animation: "spin 1s linear infinite" }}
-                      />{" "}
-                      {callifiedConnected ? "Updating..." : "Connecting..."}
+                      <Loader size={16} style={{ animation: "spin 1s linear infinite" }} />{" "}
+                      Saving…
                     </>
                   ) : callifiedConnected ? (
-                    "Update Key"
+                    "Update Configuration"
                   ) : (
                     "Connect to Callified"
                   )}
                 </button>
-              </div>
 
-              {callifiedConnected && (
-                <button
-                  type="button"
-                  onClick={handleDisconnectCallified}
-                  disabled={callifiedSaving}
-                  style={{
-                    padding: "0.75rem 1rem",
-                    borderRadius: "6px",
-                    background: "rgba(239, 68, 68, 0.1)",
-                    color: "#ef4444",
-                    border: "1px solid #ef4444",
-                    cursor: "pointer",
-                    fontSize: "0.875rem",
-                    fontWeight: "500",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {callifiedSaving ? "Disconnecting..." : "Disconnect"}
-                </button>
-              )}
+                {callifiedConnected && (
+                  <button
+                    type="button"
+                    onClick={handleDisconnectCallified}
+                    disabled={callifiedSaving}
+                    style={{
+                      padding: "0.75rem 1rem",
+                      borderRadius: "6px",
+                      background: "rgba(239, 68, 68, 0.1)",
+                      color: "#ef4444",
+                      border: "1px solid #ef4444",
+                      cursor: "pointer",
+                      fontSize: "0.875rem",
+                      fontWeight: "500",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {callifiedSaving ? "Disconnecting..." : "Disconnect"}
+                  </button>
+                )}
+              </div>
             </form>
 
             {callifiedMsg && (
@@ -1813,7 +2022,8 @@ export default function Settings() {
                   fontSize: "0.85rem",
                   color:
                     callifiedMsg.includes("✓") ||
-                    callifiedMsg.includes("Connected")
+                    callifiedMsg.includes("Connected") ||
+                    callifiedMsg.includes("successfully")
                       ? "var(--accent-color)"
                       : "var(--danger-color)",
                 }}
@@ -1822,6 +2032,187 @@ export default function Settings() {
               </p>
             )}
           </div>
+          </>
+          )}
+
+          {/* Simple Callified connect card — travel/wellness/legacy verticals keep
+              the original single-API-key "Connect" experience. */}
+          {!isGenericVertical && (
+            <div
+              className="card"
+              style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
+            >
+              <h3
+                style={{
+                  fontSize: "1.25rem",
+                  fontWeight: "600",
+                  marginBottom: "1rem",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                }}
+              >
+                <PhoneCall size={20} color="var(--accent-color)" /> Callified
+                Integration
+              </h3>
+
+              {!callifiedLoading && (
+                <div
+                  style={{
+                    padding: "1rem",
+                    marginBottom: "1.25rem",
+                    borderRadius: "8px",
+                    background: callifiedConnected
+                      ? "rgba(16, 185, 129, 0.1)"
+                      : "rgba(239, 68, 68, 0.1)",
+                    border: `1px solid ${callifiedConnected ? "#10b981" : "#ef4444"}`,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                  }}
+                >
+                  {callifiedConnected ? (
+                    <>
+                      <Check size={20} color="#10b981" />
+                      <div style={{ flex: 1 }}>
+                        <p style={{ fontWeight: "500", color: "#10b981", margin: 0 }}>
+                          ✓ Connected to Callified
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <X size={20} color="#ef4444" />
+                      <div style={{ flex: 1 }}>
+                        <p style={{ fontWeight: "500", color: "#ef4444", margin: 0 }}>
+                          Not Connected
+                        </p>
+                        <p
+                          style={{
+                            color: "var(--text-secondary)",
+                            fontSize: "0.75rem",
+                            margin: "0.25rem 0 0 0",
+                          }}
+                        >
+                          Add your API key to get started
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <p
+                style={{
+                  color: "var(--text-secondary)",
+                  fontSize: "0.875rem",
+                  marginBottom: "1.25rem",
+                }}
+              >
+                Enter your Callified API key to enable voice and WhatsApp integration.
+              </p>
+
+              <form
+                onSubmit={handleConnectSimpleCallified}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.75rem",
+                }}
+              >
+                <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
+                  <input
+                    type={callifiedShowKey && !isCallifiedKeyMasked ? "text" : "password"}
+                    className="input-field"
+                    placeholder={isCallifiedKeyMasked ? "API key is saved" : "ck_..."}
+                    value={callifiedApiKey}
+                    onChange={(e) => { setCallifiedApiKey(e.target.value); setCallifiedDirty(true); }}
+                    readOnly={isCallifiedKeyMasked}
+                    disabled={callifiedSaving}
+                    style={{ width: "100%", minWidth: 0, paddingRight: "40px" }}
+                  />
+                  {!isCallifiedKeyMasked && (
+                    <button
+                      type="button"
+                      onClick={() => setCallifiedShowKey(!callifiedShowKey)}
+                      disabled={callifiedSaving}
+                      style={{
+                        position: "absolute",
+                        right: "0.75rem",
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        background: "transparent",
+                        border: "none",
+                        color: "var(--text-secondary)",
+                        cursor: "pointer",
+                        padding: "0.25rem",
+                        display: "flex",
+                        alignItems: "center",
+                      }}
+                    >
+                      {callifiedShowKey ? <Eye size={18} /> : <EyeOff size={18} />}
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", marginTop: "0.5rem" }}>
+                  <button
+                    type="submit"
+                    className="btn-primary"
+                    disabled={callifiedSaving || (callifiedConnected && !callifiedDirty)}
+                    style={{ whiteSpace: "nowrap" }}
+                  >
+                    {callifiedSaving ? (
+                      <>
+                        <Loader size={16} style={{ animation: "spin 1s linear infinite" }} />{" "}
+                        Connecting…
+                      </>
+                    ) : (
+                      "Connect to Callified"
+                    )}
+                  </button>
+
+                  {callifiedConnected && (
+                    <button
+                      type="button"
+                      onClick={handleDisconnectCallified}
+                      disabled={callifiedSaving}
+                      style={{
+                        padding: "0.75rem 1rem",
+                        borderRadius: "6px",
+                        background: "rgba(239, 68, 68, 0.1)",
+                        color: "#ef4444",
+                        border: "1px solid #ef4444",
+                        cursor: "pointer",
+                        fontSize: "0.875rem",
+                        fontWeight: "500",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {callifiedSaving ? "Disconnecting..." : "Disconnect"}
+                    </button>
+                  )}
+                </div>
+              </form>
+
+              {callifiedMsg && (
+                <p
+                  style={{
+                    marginTop: "1rem",
+                    fontSize: "0.85rem",
+                    color:
+                      callifiedMsg.includes("✓") ||
+                      callifiedMsg.includes("Connected") ||
+                      callifiedMsg.includes("successfully")
+                        ? "var(--accent-color)"
+                        : "var(--danger-color)",
+                  }}
+                >
+                  {callifiedMsg}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* AI Provider (Support Chatbot) — wellness-vertical BYOK card.
               Mounted only for wellness tenants whose user holds
@@ -3952,3 +4343,7 @@ function NotificationPreferencesCard({ notify }) {
     </div>
   );
 }
+
+
+
+

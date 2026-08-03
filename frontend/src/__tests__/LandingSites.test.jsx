@@ -28,6 +28,19 @@ vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 
 import LandingSites from '../pages/LandingSites';
 
+function isoAtLocalMonthOffset(monthOffset, day = 1) {
+  const now = new Date();
+  return new Date(
+    now.getFullYear(),
+    now.getMonth() + monthOffset,
+    day,
+    10,
+    0,
+    0,
+    0,
+  ).toISOString();
+}
+
 function defaultFetchMock(url, opts) {
   const method = (opts && opts.method) || 'GET';
   if (url === '/api/landing-sites' && method === 'GET') return Promise.resolve([]);
@@ -47,9 +60,9 @@ const LANDING_SITE_FIXTURE = [
     submissions: 18,
     templateType: 'generic-site-wellness-v1',
     description: 'Live wellness landing site',
-    createdAt: '2026-07-01T10:00:00.000Z',
-    updatedAt: '2026-07-02T10:00:00.000Z',
-    publishedAt: '2026-07-03T10:00:00.000Z',
+    createdAt: isoAtLocalMonthOffset(0, 1),
+    updatedAt: isoAtLocalMonthOffset(0, 2),
+    publishedAt: isoAtLocalMonthOffset(0, 3),
   },
   {
     id: 11,
@@ -60,8 +73,8 @@ const LANDING_SITE_FIXTURE = [
     submissions: 2,
     templateType: 'generic-site-wellness-v1',
     description: 'Draft wellness landing site',
-    createdAt: '2026-06-04T10:00:00.000Z',
-    updatedAt: '2026-06-05T10:00:00.000Z',
+    createdAt: isoAtLocalMonthOffset(-1, 4),
+    updatedAt: isoAtLocalMonthOffset(-1, 5),
     publishedAt: null,
   },
 ];

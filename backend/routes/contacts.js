@@ -54,7 +54,7 @@ function validateContactInput(body, { isUpdate = false } = {}) {
     const tErr = ensureStringLength(body.treatmentOfInterest, { max: 191, field: "treatmentOfInterest" });
     if (tErr) return tErr;
   }
-  for (const idField of ["preferredLocationId", "preferredPractitionerId"]) {
+  for (const idField of ["preferredLocationId", "preferredPractitionerId", "callifiedCampaignId"]) {
     if (body[idField] !== undefined && body[idField] !== null && body[idField] !== "") {
       const v = Number(body[idField]);
       if (!Number.isInteger(v) || v <= 0) {
@@ -548,6 +548,16 @@ router.post('/', async (req, res) => {
     // LeadCustomFieldValue AFTER the contact create succeeds (see below).
     const customFields = req.body.customFields;
     delete req.body.customFields;
+    const skipInitialAssignee = req.body.skipInitialAssignee === true;
+    delete req.body.skipInitialAssignee;
+    // #600 / #557 follow-up: the Leads form sends wellness-only optional fields
+    // as empty strings even in the generic vertical. Prisma Int? / DateTime? /
+    // String? columns reject "" where they expect null / a valid shape, so
+    // normalize empty strings to null before validation. This keeps the route
+    // resilient to any frontend/client that sends "" for optional fields.
+    for (const key of ["preferredLocationId", "preferredPractitionerId", "birthDate", "anniversary", "treatmentOfInterest", "gst", "stateCode", "billingStateCode", "callifiedCampaignId"]) {
+      if (req.body[key] === "") req.body[key] = null;
+    }
     // #160 #166: validate before hitting Prisma so bad inputs return 400 with a
     // clear code instead of a 500 from the DB layer.
     const inputErr = validateContactInput(req.body, { isUpdate: false });
@@ -565,11 +575,33 @@ router.post('/', async (req, res) => {
     if (typeof normalised.birthDate === "string" && normalised.birthDate !== "") {
       normalised.birthDate = new Date(normalised.birthDate);
     }
-    // #588: default assignedToId to the creator so USER-role list scoping
-    // (which filters by assignedToId = req.user.userId) actually surfaces
-    // the contact they just created. Mirrors POST /api/deals which sets
-    // ownerId = req.user.userId. Explicit body.assignedToId still wins.
-    if (normalised.assignedToId == null) normalised.assignedToId = req.user.userId;
+    // Generic CRM Callified leads stay unassigned until the call produces a real status.
+    // Explicit assignedToId still wins, and non-generic contact creation keeps the existing creator default.
+    const isGenericLeadAwaitingCall =
+      (req.user.vertical || 'generic') === 'generic' &&
+      normalised.status === 'Lead' &&
+      (!normalised.callifiedLeadStatus || normalised.callifiedLeadStatus === 'yet_to_call');
+    const shouldSkipInitialAssignee = isGenericLeadAwaitingCall || (skipInitialAssignee && normalised.status === 'Lead');
+    if (normalised.assignedToId == null && !shouldSkipInitialAssignee) {
+      normalised.assignedToId = req.user.userId;
+    }
+
+    // Auto-assign new Leads to the tenant's default Callified campaign when set
+    // and no campaign was supplied explicitly. Covers manual create, import,
+    // extension capture, and webhooks.
+    if (normalised.status === "Lead" && normalised.callifiedCampaignId == null) {
+      try {
+        const tenantCfg = await prisma.tenant.findUnique({
+          where: { id: req.user.tenantId },
+          select: { callifiedAutoCampaignId: true },
+        });
+        if (tenantCfg?.callifiedAutoCampaignId) {
+          normalised.callifiedCampaignId = tenantCfg.callifiedAutoCampaignId;
+        }
+      } catch (e) {
+        console.error("[contacts] auto-campaign lookup failed:", e.message);
+      }
+    }
 
     // PRD §4.5 — Phase 2 dedup preflight. Before letting Prisma's
     // @@unique([email, tenantId]) throw a P2002, run the richer
@@ -821,6 +853,8 @@ router.put('/:id', async (req, res) => {
     // for why this must be stripped before the Prisma spread.
     const customFields = req.body.customFields;
     delete req.body.customFields;
+    // Normalize empty-string optional ids to null (mirrors POST handler).
+    if (req.body.callifiedCampaignId === "") req.body.callifiedCampaignId = null;
     // #168: same input checks as create so PUT can't bypass POST validation.
     const inputErr = validateContactInput(req.body, { isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);

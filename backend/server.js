@@ -160,6 +160,10 @@ const ALLOWED_ORIGINS = [
   "http://localhost:8000",
   "http://127.0.0.1:8000",
   "https://globuscrm.globussoft.com",
+  // EMP Cloud frontend — browser API calls into the CRM.
+  "https://empcloud.com",
+  "https://www.empcloud.com",
+  "https://app.empcloud.com",
   // Dr. Haror's external marketing site — consumes the public wellness
   // catalog + payment endpoints (POST /api/wellness/public/payment/order +
   // /confirm). Hardcoded because it's part of the product surface, not a
@@ -966,6 +970,8 @@ app.use("/api", (req, res, next) => {
     // 16-byte random suffix in the filename is the access-control mechanism.
     // They are opened via plain <a href> (no fetch, no Authorization header)
     // from the public report page, WhatsApp links, and email delivery.
+    // Canonical /api/uploads path plus legacy /uploads fallback.
+    "/api/uploads/diagnostics/",
     "/uploads/diagnostics/",
     // Public landing-page submit + tracking pixels are referenced by
     // rendered pages as /api/pages/<slug>/submit and /api/pages/<slug>/track.
@@ -2298,10 +2304,9 @@ if (process.env.DISABLE_CRONS === "1") {
   console.log("✓ Cron engine: visaRiskFlagEngine (every 6 hours)");
 
   // Initialize Travel CRM web check-in scheduler (every 15 min).
-  // PRD §4.6 + §6.3 row 1 — flips WebCheckin status pending → reminded
-  // when windowOpenAt arrives, then reminded → fallback-agent if stalled
-  // 30m+. Browser-automation half (P1B) deferred — this scheduler only
-  // handles the tracking + reminder side.
+  // Notifies the assigned agent (or all admins/managers if unassigned) when a
+  // pending WebCheckin has departureAt within the next 24 hours. Status model
+  // is binary pending/done; no automation, no fallback-agent transitions.
   const { initWebCheckinSchedulerCron } = require("./cron/webCheckinScheduler");
   initWebCheckinSchedulerCron();
 

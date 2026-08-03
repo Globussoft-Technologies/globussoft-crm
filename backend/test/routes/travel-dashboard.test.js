@@ -3,10 +3,10 @@
  * Travel CRM — Owner Dashboard aggregate (Phase 1) contract tests.
  *
  * Pins backend/routes/travel_dashboard.js:
- *   GET /api/travel/dashboard — single endpoint, runs 14 prisma aggregates
- *   in parallel and shapes a response with seven sections (trips,
+ *   GET /api/travel/dashboard — single endpoint, runs 15 prisma aggregates
+ *   in parallel and shapes a response with eight sections (trips,
  *   diagnostics, itineraries, landingPages, costMaster, pricingRules,
- *   recentTrips).
+ *   webCheckins, recentTrips).
  *
  * What's pinned
  * -------------
@@ -50,6 +50,7 @@ prisma.travelDiagnostic = {
 prisma.itinerary = {
   count: vi.fn(),
   groupBy: vi.fn(),
+  findMany: vi.fn(),
 };
 prisma.landingPage = {
   count: vi.fn(),
@@ -62,6 +63,9 @@ prisma.travelSeasonCalendar = {
   count: vi.fn(),
 };
 prisma.travelMarkupRule = {
+  count: vi.fn(),
+};
+prisma.webCheckin = {
   count: vi.fn(),
 };
 prisma.tenant = prisma.tenant || {};
@@ -114,11 +118,13 @@ function installDefaultAggregates() {
   prisma.travelDiagnostic.groupBy.mockResolvedValue([]);
   prisma.itinerary.count.mockResolvedValue(0);
   prisma.itinerary.groupBy.mockResolvedValue([]);
+  prisma.itinerary.findMany.mockResolvedValue([]);
   prisma.landingPage.count.mockResolvedValue(0);
   prisma.travelCostMaster.count.mockResolvedValue(0);
   prisma.travelCostMaster.groupBy.mockResolvedValue([]);
   prisma.travelSeasonCalendar.count.mockResolvedValue(0);
   prisma.travelMarkupRule.count.mockResolvedValue(0);
+  prisma.webCheckin.count.mockResolvedValue(0);
 }
 
 beforeAll(() => {
@@ -133,11 +139,13 @@ beforeEach(() => {
   prisma.travelDiagnostic.groupBy.mockReset();
   prisma.itinerary.count.mockReset();
   prisma.itinerary.groupBy.mockReset();
+  prisma.itinerary.findMany.mockReset();
   prisma.landingPage.count.mockReset();
   prisma.travelCostMaster.count.mockReset();
   prisma.travelCostMaster.groupBy.mockReset();
   prisma.travelSeasonCalendar.count.mockReset();
   prisma.travelMarkupRule.count.mockReset();
+  prisma.webCheckin.count.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -202,7 +210,7 @@ describe('GET /api/travel/dashboard — vertical gate (requireTravelTenant)', ()
 });
 
 describe('GET /api/travel/dashboard — happy path envelope', () => {
-  test('ADMIN with no data: 200 + all 7 sections present with zeroed counts', async () => {
+  test('ADMIN with no data: 200 + all 8 sections present with zeroed counts', async () => {
     const res = await request(makeApp())
       .get('/api/travel/dashboard')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
@@ -214,11 +222,12 @@ describe('GET /api/travel/dashboard — happy path envelope', () => {
       landingPages: { total: 0, published: 0 },
       costMaster: { activeRows: 0, bySubBrand: {} },
       pricingRules: { seasons: 0, markupRules: 0 },
+      webCheckins: { total: 0, pending: 0, done: 0, missed: 0 },
       recentTrips: [],
     });
     // microsites section must NOT appear in the response.
     expect(res.body).not.toHaveProperty('microsites');
-    // Every aggregate should fire — Promise.all dispatches all 14.
+    // Every aggregate should fire — Promise.all dispatches all 15.
     expect(prisma.tmcTrip.count).toHaveBeenCalledTimes(2); // total + upcoming30d
     expect(prisma.tmcTrip.groupBy).toHaveBeenCalledTimes(1);
     expect(prisma.tmcTrip.findMany).toHaveBeenCalledTimes(1);
@@ -231,6 +240,7 @@ describe('GET /api/travel/dashboard — happy path envelope', () => {
     expect(prisma.travelCostMaster.groupBy).toHaveBeenCalledTimes(1);
     expect(prisma.travelSeasonCalendar.count).toHaveBeenCalledTimes(1);
     expect(prisma.travelMarkupRule.count).toHaveBeenCalledTimes(1);
+    expect(prisma.webCheckin.count).toHaveBeenCalledTimes(4);
   });
 
   test('flattens prisma groupBy rows into byStatus / byClassification / bySubBrand maps', async () => {
@@ -312,6 +322,25 @@ describe('GET /api/travel/dashboard — happy path envelope', () => {
     expect(findManyArgs.select).not.toHaveProperty('participantNames');
     expect(findManyArgs.select).not.toHaveProperty('totalAmount');
   });
+
+  test('webCheckins roll-up counts pending / done / missed correctly', async () => {
+    // The summary issues 4 count queries in order: total, done, missed, pending.
+    prisma.webCheckin.count
+      .mockResolvedValueOnce(5)
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(3)
+      .mockResolvedValueOnce(1);
+    const res = await request(makeApp())
+      .get('/api/travel/dashboard')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.webCheckins).toEqual({
+      total: 5,
+      pending: 1,
+      done: 1,
+      missed: 3,
+    });
+  });
 });
 
 describe('GET /api/travel/dashboard — tenant + sub-brand scoping', () => {
@@ -338,6 +367,10 @@ describe('GET /api/travel/dashboard — tenant + sub-brand scoping', () => {
     // travelMarkupRule.count (with isActive=true)
     expect(prisma.travelMarkupRule.count.mock.calls[0][0]).toMatchObject({
       where: expect.objectContaining({ tenantId: 1, isActive: true }),
+    });
+    // webCheckin.count (dashboard tile summary) — first call is total.
+    expect(prisma.webCheckin.count.mock.calls[0][0]).toMatchObject({
+      where: expect.objectContaining({ tenantId: 1 }),
     });
   });
 
@@ -419,6 +452,39 @@ describe('GET /api/travel/dashboard — tenant + sub-brand scoping', () => {
       subBrand: { in: ['tmc'] },
       status: 'PUBLISHED',
     });
+  });
+
+  test('webCheckin summary is sub-brand narrowed via parent Itinerary id-set', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['tmc']),
+    });
+    prisma.itinerary.findMany.mockResolvedValue([{ id: 10 }, { id: 20 }]);
+    await request(makeApp())
+      .get('/api/travel/dashboard')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+    // webCheckin.count calls reuse the same narrowed baseWhere. Probe the
+    // first (total) call.
+    const webCheckinWhere = prisma.webCheckin.count.mock.calls[0][0].where;
+    expect(webCheckinWhere).toMatchObject({
+      tenantId: 1,
+      itineraryId: { in: [10, 20] },
+    });
+  });
+
+  test('webCheckin summary returns zeroed envelope when no itineraries are visible', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['tmc']),
+    });
+    prisma.itinerary.findMany.mockResolvedValue([]);
+    const res = await request(makeApp())
+      .get('/api/travel/dashboard')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.webCheckins).toEqual({ total: 0, pending: 0, done: 0, missed: 0 });
+    // No webCheckin.count should fire when the visible id-set is empty.
+    expect(prisma.webCheckin.count).not.toHaveBeenCalled();
   });
 
   test('diagnostics and trips upcoming30d carry the time-window narrow', async () => {

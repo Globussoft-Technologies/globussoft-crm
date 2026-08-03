@@ -97,6 +97,13 @@ model Tenant {
   // Null = no fallback configured; resolver behaviour unchanged (subBrand=null
   // bucket wins). Validated against VALID_SUB_BRANDS at write time.
   defaultSubBrand    String?   @db.VarChar(50)
+  // Round-robin pointer for auto-assigning hot leads to staff users.
+  // Stores the last user id that was auto-assigned a hot lead so the next
+  // hot lead gets the following user in the staff list.
+  callifiedLastHotAssignedUserId Int?
+  // Default Callified campaign to auto-assign to every new Lead created in
+  // the tenant. NULL means auto-assign is turned off.
+  callifiedAutoCampaignId Int?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -699,6 +706,18 @@ model Contact {
   /// pre-existing rows backfill on first tick.
   aiScoreLastComputedAt DateTime?
 
+  // Callified AI calling campaign assigned to this lead. Campaigns live in
+  // Callified, so this is just the remote campaign id stored on the CRM contact
+  // to enable per-lead assignment and bulk campaign dialing.
+  callifiedCampaignId   Int?
+
+  // Callified lead status derived from AI call transcript analysis (Gemini)
+  // or fallback rules (score + appointment). Manual override supported.
+  callifiedLeadStatus         String?
+  callifiedLeadStatusSource   String?
+  callifiedLeadStatusReason   String?
+  callifiedLeadStatusUpdatedAt DateTime?
+
   // Data enrichment
   industry       String?
   companySize    String?
@@ -834,6 +853,12 @@ model Contact {
   // here — never overwritten, never regenerated. See
   // backend/lib/leadConversationSummary.js.
   description String? @db.Text
+
+  // Raw external intake snapshot (JSON string). Stores the full partner
+  // payload so arbitrary keys survive even when they do not map to a native
+  // Contact column or a defined lead custom field. Kept separate from
+  // description because this is structured intake data, not a narrative.
+  externalPayloadJson String? @db.LongText
 
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
@@ -1256,7 +1281,7 @@ model EmailMessage {
 model CallLog {
   id             Int      @id @default(autoincrement())
   duration       Int // seconds
-  notes          String?
+  notes          String?  @db.Text
   direction      String   @default("OUTBOUND")
   recordingUrl   String?
   provider       String? // "myoperator", "knowlarity", "twilio", "webrtc"
@@ -6800,7 +6825,7 @@ model WebCheckin {
   passengerName      String
   seatPref           String?
   mealPref           String?
-  status             String    @default("pending") // pending | reminded | in-progress | done | fallback-agent | failed
+  status             String    @default("pending") // pending | done
   attemptsJson       String?   @db.Text // [{at, result, errorReason}]
   // Customer-facing web check-in reminder EMAILS sent by cron/webCheckinEngine.js
   // (2026-06-16) — distinct from the scheduler's WhatsApp/status lifecycle.
@@ -7320,6 +7345,10 @@ model TravelQuote {
   totalAmount          Decimal?              @db.Decimal(15, 2)
   currency             String                @default("INR")
   validUntil           DateTime?
+  // Issue 11 — trip date for season-aware pricing breakdown.
+  // Nullable: existing quotes keep working; new quotes can set it to anchor
+  // TravelSeasonCalendar multiplier selection.
+  tripDate             DateTime?
   // S47 — FX-lock dedicated columns. Populated at customer-accept time
   // by routes/travel_quotes_public.js (mirrors the fxLock block also
   // persisted in TravelQuoteSnapshot.snapshotJson for forensic history /

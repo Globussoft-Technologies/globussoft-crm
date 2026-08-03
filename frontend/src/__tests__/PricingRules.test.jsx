@@ -219,6 +219,7 @@ const RULES_DEFAULT = [
 function installFetchMock({
   seasonsList = { seasons: SEASONS_DEFAULT },
   rulesList = { rules: RULES_DEFAULT },
+  suppliersList = { suppliers: [{ id: 701, subBrand: 'rfu', name: 'Acme Travels' }] },
   seasonCreate = null,
   seasonPatch = null,
   seasonDelete = null,
@@ -243,6 +244,10 @@ function installFetchMock({
     if (/^\/api\/travel\/seasons\/\d+$/.test(url) && method === 'DELETE') {
       if (seasonDelete instanceof Error) return Promise.reject(seasonDelete);
       return Promise.resolve(null);
+    }
+    if (url.startsWith('/api/travel/suppliers?') && method === 'GET') {
+      if (suppliersList instanceof Error) return Promise.reject(suppliersList);
+      return Promise.resolve(suppliersList);
     }
     if (url.startsWith('/api/travel/markup-rules?') && method === 'GET') {
       if (rulesList instanceof Error) return Promise.reject(rulesList);
@@ -299,6 +304,8 @@ describe('<PricingRules /> — page chrome', () => {
     // count badge — e.g. "Seasons 0" — so use a permissive regex).
     expect(screen.getByRole('heading', { name: /Seasons/i, level: 2 })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Markup Rules/i, level: 2 })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Download CSV Template/i })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /Download Excel Template/i })).toHaveLength(2);
     // Wait for mount-time GETs to settle.
     await waitFor(() => {
       const seasonsCalls = fetchApiMock.mock.calls.filter(([u]) => typeof u === 'string' && u.startsWith('/api/travel/seasons'));
@@ -356,7 +363,7 @@ describe('<PricingRules /> — load + render lifecycle', () => {
     expect(await screen.findByText('ramadan-peak')).toBeInTheDocument();
     expect(screen.getByText('summer-school')).toBeInTheDocument();
     // Markup rule matchKeyJson cell uses <code> wrapper.
-    expect(screen.getByText('{"city":"Makkah"}')).toBeInTheDocument();
+    expect(screen.getByText('city: Makkah')).toBeInTheDocument();
   });
 
   it('renders Seasons empty state when API returns seasons:[]', async () => {
@@ -395,7 +402,7 @@ describe('<PricingRules /> — filter behavior', () => {
 
   it('Markup Rules: sub-brand + scope + active filters each fire a re-fetch with the right qs', async () => {
     renderPage();
-    await screen.findByText('{"city":"Makkah"}');
+    await screen.findByText('city: Makkah');
     // Sub-brand filter
     fetchApiMock.mockClear();
     installFetchMock({ rulesList: { rules: [RULES_DEFAULT[0]] } });
@@ -466,13 +473,13 @@ describe('<PricingRules /> — row rendering', () => {
   it('Markup rule row formats pct as "%XX.YY" via ×100, flat as "+₹X,YYY"', async () => {
     renderPage();
     // Pct row: markupPct 0.15 → "15.00%"
-    const pctMatch = await screen.findByText('{"city":"Makkah"}');
+    const pctMatch = await screen.findByText('city: Makkah');
     const pctTr = pctMatch.closest('tr');
     expect(pctTr).toBeTruthy();
     expect(within(pctTr).getByText('15.00%')).toBeInTheDocument();
     expect(within(pctTr).getByText('hotel')).toBeInTheDocument();
     // Flat row: markupFlat 500 → "+₹500"
-    const flatMatch = screen.getByText('{"route":"DEL-BLR"}');
+    const flatMatch = screen.getByText('route: DEL-BLR');
     const flatTr = flatMatch.closest('tr');
     expect(within(flatTr).getByText(/\+₹500/)).toBeInTheDocument();
     expect(within(flatTr).getByText('flight')).toBeInTheDocument();
@@ -544,7 +551,7 @@ describe('<PricingRules /> — Seasons add-flow + validation', () => {
 describe('<PricingRules /> — Markup Rules toggle-active', () => {
   it('clicking the active-toggle PATCHes /api/travel/markup-rules/:id with { isActive: !current }', async () => {
     renderPage();
-    await screen.findByText('{"city":"Makkah"}');
+    await screen.findByText('city: Makkah');
     fetchApiMock.mockClear();
     installFetchMock();
     // Toggle button has aria-label "Toggle active for rule 501".
@@ -588,17 +595,16 @@ describe('<PricingRules /> — Markup Rules toggle-active', () => {
 //   - Inactive row dimming + null-multiplier em-dash fallback — small
 //     visual invariants that have shipped twice in this admin-page family.
 
-describe('<PricingRules /> — Markup Rules add-flow + validation', () => {
-  it('add-rule with matchKeyJson + pct sends POST with markupPct set + markupFlat null', async () => {
+describe('<PricingRules /> � Markup Rules add-flow + validation', () => {
+  it('add-rule with match field/value + pct sends POST with markupPct set + markupFlat null', async () => {
     renderPage();
-    await screen.findByText('{"city":"Makkah"}');
+    await screen.findByText('city: Makkah');
     fireEvent.click(screen.getByRole('button', { name: /Add rule/i }));
-    // Form surfaces. Fill markup value (default markupType=pct from blankForm
-    // SUT line 380) + matchKeyJson textarea (default "{}").
     const valueInput = screen.getByLabelText(/^Markup value$/i);
-    const matchKeyInput = screen.getByLabelText(/^Match key JSON$/i);
+    const matchValueInput = screen.getByLabelText(/^Match value$/i);
+    expect(screen.getByLabelText(/^Priority$/i).value).toBe('');
     fireEvent.change(valueInput, { target: { value: '0.25' } });
-    fireEvent.change(matchKeyInput, { target: { value: '{"city":"Madinah"}' } });
+    fireEvent.change(matchValueInput, { target: { value: 'Madinah' } });
     fetchApiMock.mockClear();
     installFetchMock();
     fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
@@ -608,14 +614,11 @@ describe('<PricingRules /> — Markup Rules add-flow + validation', () => {
       );
       expect(post).toBeTruthy();
       const body = JSON.parse(post[1].body);
-      // Backend enforces exactly-one-of. SUT lines 433-434 send pct OR null.
       expect(body.markupPct).toBe(0.25);
       expect(body.markupFlat).toBeNull();
       expect(body.matchKeyJson).toBe('{"city":"Madinah"}');
-      // priority parsed via parseInt (SUT line 429) — defaults to "100" string.
       expect(body.priority).toBe(100);
       expect(typeof body.priority).toBe('number');
-      // Default subBrand + scope from blankForm.
       expect(body.subBrand).toBe('rfu');
       expect(body.scope).toBe('hotel');
     });
@@ -624,12 +627,12 @@ describe('<PricingRules /> — Markup Rules add-flow + validation', () => {
 
   it('switching markupType=flat sends POST with markupFlat set + markupPct null', async () => {
     renderPage();
-    await screen.findByText('{"city":"Makkah"}');
+    await screen.findByText('city: Makkah');
     fireEvent.click(screen.getByRole('button', { name: /Add rule/i }));
-    // Flip markupType to "flat".
     fireEvent.change(screen.getByLabelText(/^Markup type$/i), { target: { value: 'flat' } });
     fireEvent.change(screen.getByLabelText(/^Markup value$/i), { target: { value: '750' } });
-    fireEvent.change(screen.getByLabelText(/^Match key JSON$/i), { target: { value: '{"route":"BOM-DXB"}' } });
+    fireEvent.change(screen.getByLabelText(/^Match field$/i), { target: { value: 'route' } });
+    fireEvent.change(screen.getByLabelText(/^Match value$/i), { target: { value: 'BOM-DXB' } });
     fetchApiMock.mockClear();
     installFetchMock();
     fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
@@ -639,43 +642,45 @@ describe('<PricingRules /> — Markup Rules add-flow + validation', () => {
       );
       expect(post).toBeTruthy();
       const body = JSON.parse(post[1].body);
+      expect(body.matchKeyJson).toBe('{"route":"BOM-DXB"}');
       expect(body.markupFlat).toBe(750);
       expect(body.markupPct).toBeNull();
     });
   });
 
-  it('validation: empty matchKeyJson surfaces notify.error + skips POST', async () => {
+  it('selecting Supplier uses supplier dropdown and sends selected supplier name', async () => {
     renderPage();
-    await screen.findByText('{"city":"Makkah"}');
+    await screen.findByText('city: Makkah');
     fireEvent.click(screen.getByRole('button', { name: /Add rule/i }));
-    // Blank out the matchKeyJson textarea (default is "{}", which is
-    // valid — set to whitespace-only to trip the .trim() guard SUT line 413).
-    fireEvent.change(screen.getByLabelText(/^Match key JSON$/i), { target: { value: '   ' } });
-    fireEvent.change(screen.getByLabelText(/^Markup value$/i), { target: { value: '0.1' } });
+    fireEvent.change(screen.getByLabelText(/^Match field$/i), { target: { value: 'supplier' } });
+    const supplierSelect = await screen.findByLabelText(/^Match supplier$/i);
+    expect(within(supplierSelect).getByRole('option', { name: 'Acme Travels' })).toBeInTheDocument();
+    fireEvent.change(supplierSelect, { target: { value: 'Acme Travels' } });
+    fireEvent.change(screen.getByLabelText(/^Markup value$/i), { target: { value: '0.2' } });
     fetchApiMock.mockClear();
+    installFetchMock();
     fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/matchKeyJson.*markup value required/i),
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/markup-rules' && o?.method === 'POST',
       );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.matchKeyJson).toBe('{"supplier":"Acme Travels"}');
     });
-    const posts = fetchApiMock.mock.calls.filter(
-      ([u, o]) => u === '/api/travel/markup-rules' && o?.method === 'POST',
-    );
-    expect(posts.length).toBe(0);
   });
 
-  it('validation: malformed matchKeyJson surfaces "not valid JSON" error', async () => {
+  it('validation: empty match value surfaces notify.error + skips POST', async () => {
     renderPage();
-    await screen.findByText('{"city":"Makkah"}');
+    await screen.findByText('city: Makkah');
     fireEvent.click(screen.getByRole('button', { name: /Add rule/i }));
-    fireEvent.change(screen.getByLabelText(/^Match key JSON$/i), { target: { value: '{not-json' } });
+    fireEvent.change(screen.getByLabelText(/^Match value$/i), { target: { value: '   ' } });
     fireEvent.change(screen.getByLabelText(/^Markup value$/i), { target: { value: '0.1' } });
     fetchApiMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/matchKeyJson is not valid JSON/i),
+        expect.stringMatching(/match key.*markup value required/i),
       );
     });
     const posts = fetchApiMock.mock.calls.filter(
@@ -686,12 +691,9 @@ describe('<PricingRules /> — Markup Rules add-flow + validation', () => {
 
   it('validation: negative markup value surfaces "non-negative number" error', async () => {
     renderPage();
-    await screen.findByText('{"city":"Makkah"}');
+    await screen.findByText('city: Makkah');
     fireEvent.click(screen.getByRole('button', { name: /Add rule/i }));
-    fireEvent.change(screen.getByLabelText(/^Match key JSON$/i), { target: { value: '{"city":"Jeddah"}' } });
-    // Note: native input[type=number] with min=0 may strip the negative on
-    // user-type, but fireEvent.change bypasses that; the value reaches the
-    // handler. SUT lines 420-424 then guard with Number.isFinite + n < 0.
+    fireEvent.change(screen.getByLabelText(/^Match value$/i), { target: { value: 'Jeddah' } });
     fireEvent.change(screen.getByLabelText(/^Markup value$/i), { target: { value: '-5' } });
     fetchApiMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /^Create$/ }));
@@ -710,7 +712,7 @@ describe('<PricingRules /> — Markup Rules add-flow + validation', () => {
 describe('<PricingRules /> — Markup Rules edit-flow', () => {
   it('editing a pct rule pre-fills markupType=pct + markupValue from markupPct', async () => {
     renderPage();
-    await screen.findByText('{"city":"Makkah"}');
+    await screen.findByText('city: Makkah');
     // Row 501 is the pct rule (markupPct: 0.15).
     fireEvent.click(screen.getByRole('button', { name: /Edit rule 501/i }));
     // After startEdit, markupType select reads "pct" + markupValue reads "0.15".
@@ -718,8 +720,9 @@ describe('<PricingRules /> — Markup Rules edit-flow', () => {
     expect(typeSelect.value).toBe('pct');
     const valueInput = screen.getByLabelText(/^Markup value$/i);
     expect(valueInput.value).toBe('0.15');
-    // Match key textarea pre-filled.
-    expect(screen.getByLabelText(/^Match key JSON$/i).value).toBe('{"city":"Makkah"}');
+    // Match key controls are pre-filled from the stored API JSON.
+    expect(screen.getByLabelText(/^Match field$/i).value).toBe('city');
+    expect(screen.getByLabelText(/^Match value$/i).value).toBe('Makkah');
     // Sub-brand select is disabled in edit mode (SUT line 566 — `disabled={editingId != null}`).
     const subBrandSelect = screen.getByLabelText(/^Sub-brand$/i);
     expect(subBrandSelect.disabled).toBe(true);
@@ -744,7 +747,7 @@ describe('<PricingRules /> — Markup Rules edit-flow', () => {
 
   it('editing a flat rule pre-fills markupType=flat + markupValue from markupFlat', async () => {
     renderPage();
-    await screen.findByText('{"route":"DEL-BLR"}');
+    await screen.findByText('route: DEL-BLR');
     // Row 502 is the flat rule (markupFlat: 500).
     fireEvent.click(screen.getByRole('button', { name: /Edit rule 502/i }));
     // SUT line 405 derives markupType from "markupPct != null ? 'pct' : 'flat'".
@@ -833,7 +836,7 @@ describe('<PricingRules /> — delete flows (window.confirm)', () => {
   it('Markup Rules: delete with notify.confirm=true fires DELETE /api/travel/markup-rules/:id', async () => {
     notifyConfirm.mockResolvedValue(true);
     renderPage();
-    await screen.findByText('{"city":"Makkah"}');
+    await screen.findByText('city: Makkah');
     fetchApiMock.mockClear();
     installFetchMock();
     fireEvent.click(screen.getByRole('button', { name: /Delete rule 501/i }));
@@ -889,7 +892,7 @@ describe('<PricingRules /> — visual invariants', () => {
   it('inactive markup rule row shipping in the table is still interactable (toggle present)', async () => {
     renderPage();
     // Row 503 is isActive:false (per RULES_DEFAULT seed).
-    await screen.findByText('{"city":"Makkah"}');
+    await screen.findByText('city: Makkah');
     const toggleBtn = screen.getByRole('button', { name: /Toggle active for rule 503/i });
     expect(toggleBtn).toBeInTheDocument();
     // Toggling sends isActive:true (current is false).
@@ -909,8 +912,8 @@ describe('<PricingRules /> — visual invariants', () => {
   it('priority column renders raw numeric value (no formatting)', async () => {
     renderPage();
     // Row 502 has priority 50 (lowest); row 501 has 100; 503 has 200.
-    await screen.findByText('{"route":"DEL-BLR"}');
-    const flatTr = screen.getByText('{"route":"DEL-BLR"}').closest('tr');
+    await screen.findByText('route: DEL-BLR');
+    const flatTr = screen.getByText('route: DEL-BLR').closest('tr');
     expect(within(flatTr).getByText('50')).toBeInTheDocument();
   });
 });

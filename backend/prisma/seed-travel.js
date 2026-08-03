@@ -633,12 +633,34 @@ async function main() {
   console.log(`[seed-travel] cost-master rows: ${cmCreated} created, ${costRows.length - cmCreated} already existed`);
 
   // ── 6. Season calendar ──────────────────────────────────────────────
+  // Issue 11 — per-sub-brand religious / peak / festive / off-peak seasons.
+  // Kept additive: existing season names (ramadan-peak, school-holiday, lean,
+  // school-summer, school-winter) are preserved so re-runs don't orphan rows.
   const seasons = [
+    // RFU — Umrah / Hajj religious calendar
     { subBrand: "rfu", seasonName: "ramadan-peak", startDate: "2026-03-01", endDate: "2026-04-15", multiplier: 2.0 },
+    { subBrand: "rfu", seasonName: "rabi-al-awwal", startDate: "2026-09-01", endDate: "2026-09-30", multiplier: 1.25 },
+    { subBrand: "rfu", seasonName: "hajj-2026", startDate: "2026-06-01", endDate: "2026-07-15", multiplier: 2.5 },
     { subBrand: "rfu", seasonName: "school-holiday", startDate: "2026-06-01", endDate: "2026-07-15", multiplier: 1.3 },
+    { subBrand: "rfu", seasonName: "peak", startDate: "2026-11-15", endDate: "2026-12-31", multiplier: 1.4 },
+    { subBrand: "rfu", seasonName: "festive", startDate: "2026-12-20", endDate: "2027-01-05", multiplier: 1.5 },
+    { subBrand: "rfu", seasonName: "off-peak", startDate: "2026-08-01", endDate: "2026-09-30", multiplier: 0.85 },
     { subBrand: "rfu", seasonName: "lean", startDate: "2026-08-01", endDate: "2026-09-30", multiplier: 0.85 },
+    // TMC — school travel windows + general leisure
     { subBrand: "tmc", seasonName: "school-summer", startDate: "2026-05-15", endDate: "2026-07-15", multiplier: 1.4 },
     { subBrand: "tmc", seasonName: "school-winter", startDate: "2026-12-15", endDate: "2027-01-15", multiplier: 1.2 },
+    { subBrand: "tmc", seasonName: "peak", startDate: "2026-05-01", endDate: "2026-07-31", multiplier: 1.35 },
+    { subBrand: "tmc", seasonName: "festive", startDate: "2026-12-20", endDate: "2027-01-05", multiplier: 1.3 },
+    { subBrand: "tmc", seasonName: "off-peak", startDate: "2026-08-16", endDate: "2026-09-30", multiplier: 0.9 },
+    // Travel Stall — family leisure
+    { subBrand: "travelstall", seasonName: "peak", startDate: "2026-05-01", endDate: "2026-07-31", multiplier: 1.3 },
+    { subBrand: "travelstall", seasonName: "festive", startDate: "2026-12-20", endDate: "2027-01-05", multiplier: 1.25 },
+    { subBrand: "travelstall", seasonName: "summer-break", startDate: "2026-05-01", endDate: "2026-06-30", multiplier: 1.2 },
+    { subBrand: "travelstall", seasonName: "off-peak", startDate: "2026-08-16", endDate: "2026-09-30", multiplier: 0.9 },
+    // Visa Sure — appointment demand windows
+    { subBrand: "visasure", seasonName: "peak", startDate: "2026-05-01", endDate: "2026-08-31", multiplier: 1.15 },
+    { subBrand: "visasure", seasonName: "festive", startDate: "2026-12-01", endDate: "2027-01-15", multiplier: 1.1 },
+    { subBrand: "visasure", seasonName: "off-peak", startDate: "2026-09-01", endDate: "2026-11-30", multiplier: 0.95 },
   ];
   // Idempotent guard: TravelSeasonCalendar has no @unique constraint —
   // key on (tenantId, subBrand, seasonName) which is the natural business
@@ -669,17 +691,43 @@ async function main() {
   console.log(`[seed-travel] season calendar rows: ${scCreated} created, ${seasons.length - scCreated} already existed`);
 
   // ── 7. Markup rules ─────────────────────────────────────────────────
+  // Issue 11 — per-sub-brand / per-product / per-season markup rules.
+  // matchKeyJson filters are evaluated by lib/travelPricing.js::pickMarkup.
+  // Priority convention: lower number = higher priority. Specific rules
+  // (season + product) win over product-only, which win over fallbacks.
   const markupRules = [
-    { subBrand: "rfu", scope: "hotel", markupPct: 10, priority: 100 },
-    { subBrand: "rfu", scope: "flight", markupPct: 5, priority: 100 },
-    { subBrand: "rfu", scope: "transport", markupPct: 15, priority: 100 },
-    { subBrand: "tmc", scope: "hotel", markupPct: 12, priority: 100 },
-    { subBrand: "tmc", scope: "flight", markupPct: 7, priority: 100 },
+    // RFU — Hajj / Ramadan season-led packages
+    { subBrand: "rfu", scope: "package", matchKeyJson: '{"seasonName":"hajj-2026"}', markupPct: 25, priority: 5 },
+    { subBrand: "rfu", scope: "hotel", matchKeyJson: '{"city":"Makkah"}', markupPct: 18, priority: 10 },
+    { subBrand: "rfu", scope: "hotel", matchKeyJson: '{"city":"Madinah"}', markupPct: 15, priority: 11 },
+    { subBrand: "rfu", scope: "flight", matchKeyJson: '{"route":"BLR-JED"}', markupPct: 8, priority: 10 },
+    { subBrand: "rfu", scope: "flight", matchKeyJson: '{"route":"BLR-MED"}', markupPct: 7, priority: 11 },
+    { subBrand: "rfu", scope: "transport", matchKeyJson: '{}', markupPct: 15, priority: 100 },
+    { subBrand: "rfu", scope: "hotel", matchKeyJson: '{}', markupPct: 10, priority: 100 },
+    { subBrand: "rfu", scope: "flight", matchKeyJson: '{}', markupPct: 5, priority: 100 },
+    // TMC — school trips + packages
+    { subBrand: "tmc", scope: "hotel", matchKeyJson: '{"city":"Bali"}', markupPct: 14, priority: 10 },
+    { subBrand: "tmc", scope: "hotel", matchKeyJson: '{"city":"Europe"}', markupPct: 12, priority: 11 },
+    { subBrand: "tmc", scope: "flight", matchKeyJson: '{"route":"BLR-DPS"}', markupPct: 8, priority: 10 },
+    { subBrand: "tmc", scope: "package", matchKeyJson: '{"seasonName":"school-summer"}', markupPct: 10, priority: 20 },
+    { subBrand: "tmc", scope: "transport", matchKeyJson: '{}', markupPct: 12, priority: 100 },
+    { subBrand: "tmc", scope: "hotel", matchKeyJson: '{}', markupPct: 12, priority: 100 },
+    { subBrand: "tmc", scope: "flight", matchKeyJson: '{}', markupPct: 7, priority: 100 },
+    // Travel Stall — family leisure
+    { subBrand: "travelstall", scope: "hotel", matchKeyJson: '{"city":"Maldives"}', markupPct: 15, priority: 10 },
+    { subBrand: "travelstall", scope: "hotel", matchKeyJson: '{"city":"Dubai"}', markupPct: 12, priority: 11 },
+    { subBrand: "travelstall", scope: "flight", matchKeyJson: '{}', markupPct: 6, priority: 100 },
+    { subBrand: "travelstall", scope: "hotel", matchKeyJson: '{}', markupPct: 10, priority: 100 },
+    { subBrand: "travelstall", scope: "package", matchKeyJson: '{}', markupPct: 8, priority: 100 },
+    // Visa Sure — visa assistance
+    { subBrand: "visasure", scope: "package", matchKeyJson: '{"seasonName":"peak"}', markupPct: 12, priority: 20 },
+    { subBrand: "visasure", scope: "package", matchKeyJson: '{}', markupPct: 10, priority: 100 },
+    { subBrand: "visasure", scope: "service", matchKeyJson: '{}', markupPct: 15, priority: 100 },
   ];
-  // Idempotent guard: TravelMarkupRule has no @unique constraint — key on
-  // (tenantId, subBrand, scope, priority) which uniquely identifies the
-  // placeholder default rule for the seed. Real admin-created rules carry
-  // distinct matchKeyJson/markupPct and won't collide with this guard.
+  // Idempotent guard: key on (tenantId, subBrand, scope, matchKeyJson) to
+  // align with the CSV import path in routes/travel_csv_io.js. Each unique
+  // (subBrand + scope + matchKeyJson) tuple is one logical rule; re-running
+  // the seed updates the existing row instead of creating a duplicate.
   let mrCreated = 0;
   for (const m of markupRules) {
     const existing = await prisma.travelMarkupRule.findFirst({
@@ -687,7 +735,7 @@ async function main() {
         tenantId: tenant.id,
         subBrand: m.subBrand,
         scope: m.scope,
-        priority: m.priority,
+        matchKeyJson: m.matchKeyJson,
       },
       select: { id: true },
     });
@@ -697,7 +745,7 @@ async function main() {
         tenantId: tenant.id,
         subBrand: m.subBrand,
         scope: m.scope,
-        matchKeyJson: "{}",
+        matchKeyJson: m.matchKeyJson,
         markupPct: m.markupPct,
         priority: m.priority,
         isActive: true,

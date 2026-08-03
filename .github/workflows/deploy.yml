@@ -1,4 +1,4 @@
-﻿name: Deploy to demo server (crm.globusdemos.com)
+name: Deploy to demo server (crm.globusdemos.com)
 
 on:
   push:
@@ -539,6 +539,7 @@ jobs:
             tests/gmail-api.spec.js \
             tests/travel-brochures-models-api.spec.js \
             tests/teardown-completeness.spec.js \
+            tests/callified-campaign-api.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"
 

@@ -9,7 +9,7 @@
  *
  * Scope — the SUT is WIRED (not a pure SHELL like its 2 sibling sub-brand
  * dashboards). It uses useState/useEffect/fetchApi/useNotify and renders a
- * 6-tile KPI grid + Recent trips table after data resolves. One round-trip
+ * 7-tile KPI grid + Recent trips table after data resolves. One round-trip
  * to GET /api/travel/dashboard backs everything.
  *
  * Test cases (12 — sized to a wired SUT with loading/error/data/empty paths):
@@ -25,16 +25,17 @@
  *      await findBy for data-dependent text).
  *   5. GET on mount: hits /api/travel/dashboard (exactly one call, no query
  *      args, no method override — default GET).
- *   6. KPI tiles — six tiles render with their labels: Active trips,
+ *   6. KPI tiles — seven tiles render with their labels: Active trips,
  *      Diagnostics (last 30 days), Itineraries, Microsites, Cost master
- *      (active rates), Pricing rules. Plus their headline numeric values.
+ *      (active rates), Pricing rules, Web check-ins. Plus their headline numeric values.
  *   7. KPI tiles — accent + footer text: "12 departing in 30 days" accent
  *      under Active trips; "all current" microsites footer when expired=0;
- *      "3 expired" microsites footer when expired>0.
+ *      "3 expired" microsites footer when expired>0; missed count rendered
+ *      in danger color when webCheckins.missed > 0.
  *   8. KPI tiles — links: each linked tile wraps a <Link> with the expected
  *      href (/travel/trips, /travel/diagnostics, /travel/itineraries,
- *      /landing-pages, /travel/cost-master, /travel/pricing-rules).
- *      All 6 KPI tiles are linked.
+ *      /landing-pages, /travel/cost-master, /travel/pricing-rules,
+ *      /travel/web-checkins). All 7 KPI tiles are linked.
  *   9. Recent trips table — happy path: renders 1 row per `recentTrips`
  *      entry, with tripCode as a <Link> to /travel/trips/:id, destination,
  *      depart + return dates, and the status badge text.
@@ -166,6 +167,12 @@ const DASHBOARD_DEFAULT = {
     seasons: 4,
     markupRules: 7,
   },
+  webCheckins: {
+    total: 9,
+    pending: 3,
+    done: 5,
+    missed: 1,
+  },
   recentTrips: [
     {
       id: 101,
@@ -293,18 +300,19 @@ describe('<TravelDashboard /> — loading / fetch / error', () => {
 });
 
 describe('<TravelDashboard /> — KPI tiles', () => {
-  it('renders all six tile labels with their headline values', async () => {
+  it('renders all seven tile labels with their headline values', async () => {
     installFetchMock();
     renderPage();
     // Wait for data render via the trips.total headline.
     await screen.findByText('47');
-    // Six tile labels.
+    // Seven tile labels.
     expect(screen.getByText('Active trips')).toBeInTheDocument();
     expect(screen.getByText('Diagnostics (last 30 days)')).toBeInTheDocument();
     expect(screen.getByText('Itineraries')).toBeInTheDocument();
     expect(screen.getByText('Landing pages')).toBeInTheDocument();
     expect(screen.getByText('Cost master (active rates)')).toBeInTheDocument();
     expect(screen.getByText('Pricing rules')).toBeInTheDocument();
+    expect(screen.getByText('Web check-ins')).toBeInTheDocument();
     // Microsites tile must not appear.
     expect(screen.queryByText('Microsites')).not.toBeInTheDocument();
     // Headline values.
@@ -314,6 +322,7 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     expect(screen.getByText('8')).toBeInTheDocument();  // landingPages.total
     expect(screen.getByText('134')).toBeInTheDocument(); // costMaster activeRows
     expect(screen.getByText('11')).toBeInTheDocument();  // pricingRules: 4+7
+    expect(screen.getByText('9')).toBeInTheDocument();  // webCheckins.total
   });
 
   it('renders the upcoming-30d accent and the landing pages published footer', async () => {
@@ -333,6 +342,30 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     });
     renderPage();
     await screen.findByText('3 published');
+  });
+
+  it('renders the web check-ins footer breakdown and missed accent', async () => {
+    installFetchMock();
+    renderPage();
+    await screen.findByText('Web check-ins');
+    expect(screen.getByText('5 delivered · 3 pending · 1 missed')).toBeInTheDocument();
+    // Danger-color accent shows the missed count.
+    expect(screen.getByText('1 missed')).toBeInTheDocument();
+  });
+
+  it('does not render the missed accent when no web check-ins are missed', async () => {
+    installFetchMock({
+      data: {
+        ...DASHBOARD_DEFAULT,
+        webCheckins: { total: 3, pending: 1, done: 2, missed: 0 },
+      },
+    });
+    renderPage();
+    await screen.findByText('Web check-ins');
+    expect(screen.getByText('2 delivered · 1 pending · 0 missed')).toBeInTheDocument();
+    // The footer contains "0 missed" as a substring, but the danger-color
+    // accent (an exact text node of "0 missed") must not render.
+    expect(screen.queryByText('0 missed')).not.toBeInTheDocument();
   });
 
   it('linked tiles wrap their content in an anchor with the expected href', async () => {
@@ -364,9 +397,13 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     const priceAnchor = screen.getByText('Pricing rules').closest('a');
     expect(priceAnchor).toHaveAttribute('href', '/travel/pricing-rules');
 
-    // Tile-link count = 6 KPI links + 2 recent-trip links = 8 anchors total.
+    // Web check-ins → /travel/web-checkins
+    const webCheckinAnchor = screen.getByText('Web check-ins').closest('a');
+    expect(webCheckinAnchor).toHaveAttribute('href', '/travel/web-checkins');
+
+    // Tile-link count = 7 KPI links + 2 recent-trip links = 9 anchors total.
     const anchors = container.querySelectorAll('a');
-    expect(anchors.length).toBe(8);
+    expect(anchors.length).toBe(9);
   });
 });
 

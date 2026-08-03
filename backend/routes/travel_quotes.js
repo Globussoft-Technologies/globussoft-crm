@@ -58,7 +58,7 @@ const { fetchDestinationImageBuffer } = require("../lib/destinationImage");
 const { mintShareToken } = require("../lib/quoteShareToken");
 const waWebClient = require("../services/whatsappWebClient");
 const { sendEmail } = require("../lib/emailSender");
-const { pickMarkup, mapCategoryToScope } = require("../lib/travelPricing");
+const { pickMarkup, mapCategoryToScope, composeQuoteBreakdown } = require("../lib/travelPricing");
 const {
   computeGstForLines,
   isInterstateSupply,
@@ -377,6 +377,27 @@ function parseValidUntil(input) {
   }
   return d;
 }
+
+/**
+ * Parse an optional trip date. Unlike validUntil, a trip can legitimately
+ * be in the past (reference quotes, refunds, post-trip reconciliation),
+ * so we only reject unparseable input.
+ *
+ * Returns the parsed Date (or null if input was nullish).
+ */
+function parseTripDate(input) {
+  if (input == null || input === "") return null;
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) {
+    const err = new Error("tripDate must be a parseable date");
+    err.status = 400;
+    err.code = "INVALID_TRIP_DATE";
+    throw err;
+  }
+  return d;
+}
+
+
 
 // ─── PRD §4.1 diagnostic-first guard (gap A9a) ───────────────────────
 //
@@ -2118,7 +2139,7 @@ router.get("/quotes/:id", verifyToken, requireTravelTenant, async (req, res) => 
 // POST /api/travel/quotes — ADMIN/MANAGER only.
 // Required: contactId, totalAmount, currency.
 // Optional: subBrand (per Q25 — defaults to "tmc"), status (default "Draft"),
-// validUntil (parseable date, today-or-future).
+// validUntil (parseable date, today-or-future), tripDate (parseable date).
 router.post(
   "/quotes",
   verifyToken,
@@ -2128,7 +2149,7 @@ router.post(
     try {
       const {
         contactId, totalAmount, currency,
-        subBrand, status, validUntil, quoteMode,
+        subBrand, status, validUntil, tripDate, quoteMode,
       } = req.body || {};
 
       if (contactId == null || totalAmount == null || !currency) {
@@ -2149,6 +2170,7 @@ router.post(
       assertValidStatus(status);
       if (subBrand) assertValidSubBrand(subBrand);
       const parsedValidUntil = parseValidUntil(validUntil);
+      const parsedTripDate = parseTripDate(tripDate);
 
       // Optional request-level quote mode (PRD §4.4 — see the gap-A6
       // block above parseValidUntil). Not persisted: TravelQuote has no
@@ -2201,6 +2223,7 @@ router.post(
           totalAmount: totalAmount,
           currency: String(currency),
           validUntil: parsedValidUntil,
+          tripDate: parsedTripDate,
         },
       });
 
@@ -2271,7 +2294,7 @@ router.put(
       const data = {};
       const {
         contactId, totalAmount, currency,
-        subBrand, status, validUntil,
+        subBrand, status, validUntil, tripDate,
       } = req.body || {};
 
       if (contactId !== undefined) {
@@ -2296,6 +2319,9 @@ router.put(
       }
       if (validUntil !== undefined) {
         data.validUntil = parseValidUntil(validUntil);
+      }
+      if (tripDate !== undefined) {
+        data.tripDate = parseTripDate(tripDate);
       }
 
       if (Object.keys(data).length === 0) {
@@ -3504,73 +3530,32 @@ router.get(
         orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       });
 
-      const rules = await prisma.travelMarkupRule.findMany({
-        where: {
-          tenantId: req.travelTenant.id,
-          subBrand: quote.subBrand,
-          isActive: true,
-        },
-        orderBy: [{ priority: "asc" }, { id: "asc" }],
-      });
+      const [seasons, rules] = await Promise.all([
+        prisma.travelSeasonCalendar.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            subBrand: quote.subBrand,
+          },
+          orderBy: [{ startDate: "asc" }, { id: "asc" }],
+        }),
+        prisma.travelMarkupRule.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            subBrand: quote.subBrand,
+            isActive: true,
+          },
+          orderBy: [{ priority: "asc" }, { id: "asc" }],
+        }),
+      ]);
 
-      // Per-line markup composition. For each line:
-      //   1. Map lineType → markup scope.
-      //   2. pickMarkup against the line's pre-markup amount.
-      //   3. Capture the matched rule (if any) into the dedupe map.
-      // Round to 2 decimals at every step so subtotal+lineMarkups always
-      // == total to the cent (no floating-point drift in the envelope).
-      const round2 = (n) => Math.round(n * 100) / 100;
-      const decoratedLines = [];
-      const ruleAggregateById = new Map();
-      let subtotalAccum = 0;
-
-      for (const l of lines) {
-        const lineAmount = Number(l.amount || 0);
-        subtotalAccum += lineAmount;
-
-        const scope = mapCategoryToScope(l.lineType);
-        const { rule, markupAmount } = pickMarkup(
-          rules,
-          quote.subBrand,
-          scope,
-          lineAmount,
-        );
-
-        const amountWithMarkup = round2(lineAmount + markupAmount);
-        decoratedLines.push({
-          id: l.id,
-          lineType: l.lineType,
-          description: l.description,
-          amount: round2(lineAmount),
-          amountWithMarkup,
-        });
-
-        if (rule && markupAmount > 0) {
-          const prior = ruleAggregateById.get(rule.id);
-          if (prior) {
-            prior.amount = round2(prior.amount + markupAmount);
-          } else {
-            ruleAggregateById.set(rule.id, {
-              ruleId: rule.id,
-              ruleName: rule.matchKeyJson || `rule-${rule.id}`,
-              percent: rule.markupPct != null ? Number(rule.markupPct) : null,
-              amount: round2(markupAmount),
-            });
-          }
-        }
-      }
-
-      const subtotal = round2(subtotalAccum);
-      const markupApplied = Array.from(ruleAggregateById.values());
-      const totalMarkup = markupApplied.reduce((acc, r) => acc + r.amount, 0);
-      const total = round2(subtotal + totalMarkup);
+      // Issue 11 — per-line worked-example breakdown using the shared
+      // composeQuoteBreakdown helper so the customer-facing envelope shows
+      // the exact same math.
+      const breakdown = composeQuoteBreakdown(quote, lines, seasons, rules);
 
       res.json({
-        subtotal,
-        markupApplied,
-        total,
+        ...breakdown,
         currency: quote.currency,
-        lines: decoratedLines,
       });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });

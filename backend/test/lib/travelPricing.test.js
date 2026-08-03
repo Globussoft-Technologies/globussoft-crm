@@ -8,7 +8,7 @@
 
 import { describe, test, expect } from "vitest";
 
-const { quote, pickSeason, pickMarkup, mapCategoryToScope } = await import(
+const { quote, pickSeason, pickMarkup, mapCategoryToScope, composeQuoteBreakdown } = await import(
   "../../lib/travelPricing.js"
 );
 
@@ -407,5 +407,187 @@ describe("quote", () => {
     // Pinning this prevents a future "if (category == null)" refactor
     // from silently leaking "" through as a non-matching scope.
     expect(mapCategoryToScope("")).toBe("package");
+  });
+
+  // ─── Issue 11 — per-product / per-season markup rules ─────────────────
+
+  test("pickMarkup — matchKeyJson filters by product (city, route)", () => {
+    const rules = [
+      {
+        id: 30,
+        subBrand: "rfu",
+        scope: "hotel",
+        matchKeyJson: '{"city":"Makkah"}',
+        markupPct: 18,
+        ownerUserId: null,
+        priority: 10,
+        isActive: true,
+      },
+      {
+        id: 31,
+        subBrand: "rfu",
+        scope: "hotel",
+        matchKeyJson: '{}',
+        markupPct: 10,
+        ownerUserId: null,
+        priority: 100,
+        isActive: true,
+      },
+    ];
+    // Makkah hotel → specific 18% rule wins despite lower priority number
+    // (higher priority) of the 10% fallback? Wait priority 10 < 100, so it
+    // wins anyway. Use a test where priority alone isn't enough.
+    const makkahRes = pickMarkup(rules, "rfu", "hotel", 10000, null, null, { city: "Makkah" });
+    expect(makkahRes.rule.id).toBe(30);
+    expect(makkahRes.markupAmount).toBe(1800);
+
+    // Madinah hotel → specific rule doesn't match, fallback wins
+    const madinahRes = pickMarkup(rules, "rfu", "hotel", 10000, null, null, { city: "Madinah" });
+    expect(madinahRes.rule.id).toBe(31);
+    expect(madinahRes.markupAmount).toBe(1000);
+  });
+
+  test("pickMarkup — matchKeyJson filters by seasonName", () => {
+    const rules = [
+      {
+        id: 40,
+        subBrand: "rfu",
+        scope: "package",
+        matchKeyJson: '{"seasonName":"hajj-2026"}',
+        markupPct: 25,
+        ownerUserId: null,
+        priority: 5,
+        isActive: true,
+      },
+      {
+        id: 41,
+        subBrand: "rfu",
+        scope: "package",
+        matchKeyJson: '{}',
+        markupPct: 10,
+        ownerUserId: null,
+        priority: 100,
+        isActive: true,
+      },
+    ];
+    const hajjRes = pickMarkup(rules, "rfu", "package", 10000, null, null, { seasonName: "hajj-2026" });
+    expect(hajjRes.rule.id).toBe(40);
+    expect(hajjRes.markupAmount).toBe(2500);
+
+    const leanRes = pickMarkup(rules, "rfu", "package", 10000, null, null, { seasonName: "lean" });
+    expect(leanRes.rule.id).toBe(41);
+    expect(leanRes.markupAmount).toBe(1000);
+  });
+
+  test("pickMarkup — matchKeyJson supports combined filters", () => {
+    const rules = [
+      {
+        id: 50,
+        subBrand: "rfu",
+        scope: "hotel",
+        matchKeyJson: '{"city":"Makkah","seasonName":"hajj-2026"}',
+        markupPct: 30,
+        ownerUserId: null,
+        priority: 5,
+        isActive: true,
+      },
+      {
+        id: 51,
+        subBrand: "rfu",
+        scope: "hotel",
+        matchKeyJson: '{"city":"Makkah"}',
+        markupPct: 18,
+        ownerUserId: null,
+        priority: 10,
+        isActive: true,
+      },
+    ];
+    const combined = pickMarkup(rules, "rfu", "hotel", 10000, null, null, { city: "Makkah", seasonName: "hajj-2026" });
+    expect(combined.rule.id).toBe(50);
+
+    const cityOnly = pickMarkup(rules, "rfu", "hotel", 10000, null, null, { city: "Makkah", seasonName: "ramadan-peak" });
+    expect(cityOnly.rule.id).toBe(51);
+  });
+
+  test("pickMarkup — malformed matchKeyJson acts as wildcard", () => {
+    const rules = [
+      {
+        id: 60,
+        subBrand: "rfu",
+        scope: "hotel",
+        matchKeyJson: "not-json",
+        markupPct: 12,
+        ownerUserId: null,
+        priority: 10,
+        isActive: true,
+      },
+    ];
+    const res = pickMarkup(rules, "rfu", "hotel", 10000, null, null, { city: "Makkah" });
+    expect(res.rule.id).toBe(60);
+    expect(res.markupAmount).toBe(1200);
+  });
+});
+
+// ─── composeQuoteBreakdown ─────────────────────────────────────────────
+
+describe("composeQuoteBreakdown", () => {
+  const quote = {
+    id: 1,
+    subBrand: "rfu",
+    tripDate: "2026-03-20",
+    currency: "INR",
+  };
+
+  const seasons = [
+    { subBrand: "rfu", seasonName: "ramadan-peak", startDate: "2026-03-01", endDate: "2026-04-15", multiplier: 2.0, isActive: true },
+  ];
+
+  const rules = [
+    { id: 1, subBrand: "rfu", scope: "hotel", matchKeyJson: '{"city":"Makkah"}', markupPct: 10, priority: 10, isActive: true },
+    { id: 2, subBrand: "rfu", scope: "flight", matchKeyJson: '{}', markupPct: 5, priority: 100, isActive: true },
+  ];
+
+  test("returns base → season → markup → final per line", () => {
+    const lines = [
+      { id: 101, lineType: "hotel", description: "Hilton, Makkah — Deluxe", amount: 10000 },
+      { id: 102, lineType: "flight", description: "BLR → JED Economy", amount: 20000 },
+    ];
+    const bd = composeQuoteBreakdown(quote, lines, seasons, rules);
+
+    expect(bd.baseSubtotal).toBe(30000);
+    expect(bd.subtotal).toBe(60000); // 2x season
+    expect(bd.total).toBe(64000); // + 5% flight markup (2k) + 10% hotel markup (2k) = 60000 + 4000
+    expect(bd.matchedSeasonName).toBe("ramadan-peak");
+
+    const hotelLine = bd.lines.find((l) => l.lineId === 101);
+    expect(hotelLine.baseAmount).toBe(10000);
+    expect(hotelLine.seasonAmount).toBe(20000);
+    expect(hotelLine.markupAmount).toBe(2000); // 10% of 20k
+    expect(hotelLine.finalAmount).toBe(22000);
+
+    const flightLine = bd.lines.find((l) => l.lineId === 102);
+    expect(flightLine.baseAmount).toBe(20000);
+    expect(flightLine.seasonAmount).toBe(40000);
+    expect(flightLine.markupAmount).toBe(2000); // 5% of 40k
+    expect(flightLine.finalAmount).toBe(42000);
+  });
+
+  test("without tripDate season multiplier is 1.0", () => {
+    const bd = composeQuoteBreakdown({ ...quote, tripDate: null }, [
+      { id: 101, lineType: "hotel", description: "Hilton, Makkah — Deluxe", amount: 10000 },
+    ], seasons, rules);
+    expect(bd.seasonMultiplier).toBe(1.0);
+    expect(bd.matchedSeasonName).toBeNull();
+    expect(bd.subtotal).toBe(10000);
+    expect(bd.total).toBe(11000); // 10% markup on 10k
+  });
+
+  test("ruleName in aggregate uses matchKeyJson", () => {
+    const bd = composeQuoteBreakdown(quote, [
+      { id: 101, lineType: "hotel", description: "Hilton, Makkah — Deluxe", amount: 10000 },
+    ], seasons, rules);
+    expect(bd.markupApplied).toHaveLength(1);
+    expect(bd.markupApplied[0].ruleName).toBe('{"city":"Makkah"}');
+    expect(bd.markupApplied[0].percent).toBe(10);
   });
 });

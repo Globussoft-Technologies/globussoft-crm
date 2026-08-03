@@ -5,10 +5,7 @@
  * surfaces added to routes/travel_webcheckin.js:
  *
  *   POST /api/travel/webcheckins/:id/automation/retry
- *     - 200 → status reset to 'reminded', attemptsJson cleared
- *     - 409 ALREADY_DONE when status='done'
- *     - 409 AUTOMATION_SKIPPED when automationSkipped=true
- *     - 404 NOT_FOUND cross-tenant
+ *     - 409 AUTOMATION_DISABLED (automation is off for this vertical)
  *   PATCH /api/travel/webcheckins/:id
  *     - automationSkipped=true persisted
  *   GET /api/travel/automation-health/per-airline
@@ -70,46 +67,14 @@ beforeEach(() => {
 });
 
 describe('POST /api/travel/webcheckins/:id/automation/retry', () => {
-  test('200 → resets status to reminded + clears attemptsJson', async () => {
-    prisma.webCheckin.findFirst.mockResolvedValue({ id: 5, tenantId: 1, status: 'fallback-agent', automationSkipped: false });
-    prisma.webCheckin.update.mockImplementation(async ({ data }) => ({ id: 5, ...data }));
-    const res = await request(makeApp())
-      .post('/api/travel/webcheckins/5/automation/retry')
-      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(prisma.webCheckin.update).toHaveBeenCalledWith({
-      where: { id: 5 },
-      data: { status: 'reminded', attemptsJson: null },
-    });
-  });
-
-  test('409 ALREADY_DONE when status=done', async () => {
-    prisma.webCheckin.findFirst.mockResolvedValue({ id: 5, tenantId: 1, status: 'done', automationSkipped: false });
+  test('automation is disabled → 409 AUTOMATION_DISABLED for any id', async () => {
     const res = await request(makeApp())
       .post('/api/travel/webcheckins/5/automation/retry')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe('ALREADY_DONE');
+    expect(res.body.code).toBe('AUTOMATION_DISABLED');
+    expect(prisma.webCheckin.findFirst).not.toHaveBeenCalled();
     expect(prisma.webCheckin.update).not.toHaveBeenCalled();
-  });
-
-  test('409 AUTOMATION_SKIPPED when automationSkipped=true', async () => {
-    prisma.webCheckin.findFirst.mockResolvedValue({ id: 5, tenantId: 1, status: 'reminded', automationSkipped: true });
-    const res = await request(makeApp())
-      .post('/api/travel/webcheckins/5/automation/retry')
-      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('AUTOMATION_SKIPPED');
-  });
-
-  test('404 NOT_FOUND cross-tenant', async () => {
-    prisma.webCheckin.findFirst.mockResolvedValue(null);
-    const res = await request(makeApp())
-      .post('/api/travel/webcheckins/999/automation/retry')
-      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('NOT_FOUND');
   });
 
   test('USER role → 403 RBAC_DENIED', async () => {

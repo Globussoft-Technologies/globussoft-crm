@@ -122,6 +122,17 @@ import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
+
+// Patch email/phone OTP helpers so public signup/register tests bypass the
+// email-verification gate without changing the route's behavior. The route
+// resolves these through the module object, so property changes are visible
+// at call time.
+const emailOtp = requireCJS('../../lib/emailOtp');
+emailOtp.enforceRegistrationOtp = vi.fn().mockReturnValue({ ok: true, emailVerifiedAt: new Date() });
+const phoneOtp = requireCJS('../../lib/phoneOtp');
+phoneOtp.isValidPhone = vi.fn().mockReturnValue(false);
+phoneOtp.checkVerifiedPhoneToken = vi.fn().mockReturnValue(false);
+
 const authRouter = requireCJS('../../routes/auth');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';

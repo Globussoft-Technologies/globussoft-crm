@@ -11,7 +11,7 @@
  *      no RBAC gate in the SUT).
  *   2. Loading state: shows "Loading…" placeholder before first GET resolves
  *      (await findByText per CLAUDE.md tick #108 cron-learning).
- *   3. GET on mount: hits /api/travel/trips?limit=100 (no status when filter
+ *   3. GET on mount: hits /api/travel/trips?limit=10&offset=0 (no status when filter
  *      is empty) and renders one row per trip (table layout, 7 columns).
  *   4. Empty state: zero trips → "No trips yet. New trips spawn from the
  *      linked Deal in the sales pipeline." copy.
@@ -188,7 +188,7 @@ const SCHOOLS_DEFAULT = [
 // Install a fetchApi mock that routes by URL + method. Tests override only
 // the surface they care about.
 function installFetchMock({
-  list = { trips: TRIPS_DEFAULT, total: TRIPS_DEFAULT.length, limit: 100, offset: 0 },
+  list = { trips: TRIPS_DEFAULT, total: TRIPS_DEFAULT.length, limit: 10, offset: 0 },
   schools = SCHOOLS_DEFAULT,
   create = null,
 } = {}) {
@@ -265,6 +265,7 @@ describe('<Trips /> — page chrome', () => {
       );
       expect(calls.length).toBeGreaterThan(0);
     });
+    expect(screen.getByTestId('trips-table-scroll')).toBeInTheDocument();
   });
 });
 
@@ -280,12 +281,12 @@ describe('<Trips /> — load + render lifecycle', () => {
     });
     renderPage();
     expect(await screen.findByText('Loading…')).toBeInTheDocument();
-    resolveList({ trips: TRIPS_DEFAULT, total: TRIPS_DEFAULT.length, limit: 100, offset: 0 });
+    resolveList({ trips: TRIPS_DEFAULT, total: TRIPS_DEFAULT.length, limit: 10, offset: 0 });
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     expect(screen.queryByText('Loading…')).toBeNull();
   });
 
-  it('GETs /api/travel/trips on mount with limit=100 + no status when filter empty', async () => {
+  it('GETs /api/travel/trips on mount with limit=10&offset=0 + no status when filter empty', async () => {
     renderPage();
     await waitFor(() => {
       const listCall = fetchApiMock.mock.calls.find(([u, o]) =>
@@ -294,7 +295,8 @@ describe('<Trips /> — load + render lifecycle', () => {
         && (!o?.method || o.method === 'GET'),
       );
       expect(listCall).toBeTruthy();
-      expect(listCall[0]).toContain('limit=100');
+      expect(listCall[0]).toContain('limit=10');
+      expect(listCall[0]).toContain('offset=0');
       // No status= when filter empty.
       expect(listCall[0]).not.toContain('status=');
     });
@@ -304,8 +306,77 @@ describe('<Trips /> — load + render lifecycle', () => {
     expect(screen.getByText('TMC-SHIM-2025-BPS-G10')).toBeInTheDocument();
   });
 
+  it('scrolling the table container requests the second page with offset=10', async () => {
+    const firstPage = Array.from({ length: 10 }, (_, i) =>
+      makeTrip({
+        id: 201 + i,
+        tripCode: `TMC-PAGE1-${i + 1}`,
+        destination: `Dest ${i + 1}`,
+        schoolContactId: 6001 + i,
+        status: i % 2 === 0 ? 'confirmed' : 'in-trip',
+        pricePerStudent: 50000 + i * 1000,
+        _count: { participants: 10 + i, documentRequirements: 0 },
+      }),
+    );
+    const secondPage = [
+      makeTrip({
+        id: 301,
+        tripCode: 'TMC-PAGE2-1',
+        destination: 'Dest 11',
+        schoolContactId: 7001,
+        status: 'completed',
+        pricePerStudent: 91000,
+        _count: { participants: 21, documentRequirements: 1 },
+      }),
+      makeTrip({
+        id: 302,
+        tripCode: 'TMC-PAGE2-2',
+        destination: 'Dest 12',
+        schoolContactId: 7002,
+        status: 'cancelled',
+        pricePerStudent: null,
+        _count: { participants: 5, documentRequirements: 0 },
+      }),
+    ];
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/trips') && method === 'GET') {
+        if (url.includes('offset=10')) {
+          return Promise.resolve({ trips: secondPage, total: 12, limit: 10, offset: 10 });
+        }
+        return Promise.resolve({ trips: firstPage, total: 12, limit: 10, offset: 0 });
+      }
+      if (url.startsWith('/api/contacts') && method === 'GET') {
+        return Promise.resolve(SCHOOLS_DEFAULT);
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await screen.findByText('TMC-PAGE1-1');
+    const scrollContainer = screen.getByTestId('trips-table-scroll');
+    Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true });
+    Object.defineProperty(scrollContainer, 'scrollHeight', { value: 800, configurable: true });
+    scrollContainer.scrollTop = 728;
+    fireEvent.scroll(scrollContainer);
+
+    await waitFor(() => {
+      const nextCall = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string'
+        && u.startsWith('/api/travel/trips')
+        && (!o?.method || o.method === 'GET')
+        && u.includes('offset=10'),
+      );
+      expect(nextCall).toBeTruthy();
+    });
+
+    expect(await screen.findByText('TMC-PAGE2-1')).toBeInTheDocument();
+    expect(screen.getByText('TMC-PAGE2-2')).toBeInTheDocument();
+  });
+
   it('renders empty-state copy when trips=[]', async () => {
-    installFetchMock({ list: { trips: [], total: 0, limit: 100, offset: 0 } });
+    installFetchMock({ list: { trips: [], total: 0, limit: 10, offset: 0 } });
     renderPage();
     expect(
       await screen.findByText(/No trips yet\. New trips spawn from the linked Deal/i),
@@ -328,7 +399,7 @@ describe('<Trips /> — filter behavior', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fetchApiMock.mockClear();
-    installFetchMock({ list: { trips: [TRIPS_DEFAULT[0]], total: 1, limit: 100, offset: 0 } });
+    installFetchMock({ list: { trips: [TRIPS_DEFAULT[0]], total: 1, limit: 10, offset: 0 } });
     fireEvent.change(screen.getByLabelText(/Filter by status/i), {
       target: { value: 'confirmed' },
     });
@@ -402,9 +473,9 @@ describe('<Trips /> — row rendering: status / link / dates / participants / pr
   it('renders school-contact id reference per row (#5001 / #5002 / #5003)', async () => {
     renderPage();
     const row1 = (await screen.findByText('TMC-AND-2026-MUMBAI-G7')).closest('tr');
-    expect(within(row1).getByText('#5001')).toBeInTheDocument();
+    expect(within(row1).getByText('School #5001')).toBeInTheDocument();
     const row2 = screen.getByText('TMC-GOA-2026-DPS-G8').closest('tr');
-    expect(within(row2).getByText('#5002')).toBeInTheDocument();
+    expect(within(row2).getByText('School #5002')).toBeInTheDocument();
   });
 });
 
@@ -575,7 +646,7 @@ describe('<Trips /> — search filter (client-side)', () => {
   it('status filter and search work together — status narrows the fetched list, search narrows the rendered list', async () => {
     // Server returns only confirmed trips after status filter.
     installFetchMock({
-      list: { trips: [TRIPS_DEFAULT[0]], total: 1, limit: 100, offset: 0 },
+      list: { trips: [TRIPS_DEFAULT[0]], total: 1, limit: 10, offset: 0 },
     });
     renderPage();
     fireEvent.change(screen.getByLabelText(/Filter by status/i), {
@@ -596,3 +667,4 @@ describe('<Trips /> — search filter (client-side)', () => {
     expect(screen.getByText(/No trips match/i)).toBeInTheDocument();
   });
 });
+

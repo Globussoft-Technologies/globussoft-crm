@@ -97,11 +97,11 @@ async function generateDiagnosticPdfBestEffort(diag, bank) {
     const filename = `diag-${diag.id}-${rand}.pdf`;
     const filepath = path.join(DIAG_PDF_DIR, filename);
     await fs.promises.writeFile(filepath, pdfBuf);
-    // Use the public /uploads prefix so the file opens without auth.
-    // The backend + Nginx + Vite dev proxy all route /uploads/diagnostics
-    // to the backend static mount, while /api/uploads/diagnostics can still
-    // be normalized client-side for older persisted rows.
-    const url = `/uploads/diagnostics/${filename}`;
+    // Use the canonical /api/uploads prefix so the file opens without auth.
+    // The backend + Nginx + Vite dev proxy all route /api/uploads/diagnostics
+    // to the backend static mount. The legacy /uploads/diagnostics prefix is
+    // still served as a fallback for older persisted rows.
+    const url = `/api/uploads/diagnostics/${filename}`;
     await prisma.travelDiagnostic.update({
       where: { id: diag.id },
       data: { reportPdfUrl: url },

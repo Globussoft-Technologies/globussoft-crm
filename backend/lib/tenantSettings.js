@@ -101,6 +101,8 @@ const KEYS = {
   // as a sensible starting point; ops can tune per-tenant.
   IMAGE_LLM_MONTHLY_CAP_USD_CENTS:       "budgetCap_image_llm_monthly_usd_cents",
   BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS: "budgetCap_booking_expedia_monthly_usd_cents",
+  // Generic CRM Leads page — AI transcript classification for Callified calls.
+  CALLIFIED_AI_TRANSCRIPT_ENABLED:       "feature.callified.ai_transcript.enabled",
   // Cron / operational settings (§4.5 hardcoded-value fixes)
   ORCHESTRATOR_DEFAULT_WORKING_MINUTES:  "orchestrator.defaultWorkingMinutes",
   SMS_DEDUP_PHRASE_24H:                  "sms.dedupPhrase24h",
@@ -121,6 +123,7 @@ const KEYS = {
   REPORT_SMTP_SECURE:                    "report.smtpSecure",
   REPORT_SMTP_USER:                      "report.smtpUser",
   REPORT_SMTP_PASS:                      "report.smtpPass",
+  TRAVEL_EXTERNAL_REVIEW_URL:            "travel.externalReviewUrl",
 };
 
 // Env-var defaults (overridable per-tenant via TenantSetting row).
@@ -143,6 +146,8 @@ const DEFAULTS = {
     Number(process.env.IMAGE_LLM_MONTHLY_CAP_USD_CENTS ?? 10000),
   [KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS]:
     Number(process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS ?? 10000),
+  // Generic CRM Leads page — AI transcript classification enabled by default.
+  [KEYS.CALLIFIED_AI_TRANSCRIPT_ENABLED]: "true",
   // Cron / operational defaults (§4.5 hardcoded-value fixes)
   [KEYS.ORCHESTRATOR_DEFAULT_WORKING_MINUTES]: 660,
   [KEYS.SMS_DEDUP_PHRASE_24H]: "tomorrow at",
@@ -159,6 +164,7 @@ const DEFAULTS = {
   [KEYS.REPORT_SMTP_SECURE]: process.env.SMTP_SECURE || "false",
   [KEYS.REPORT_SMTP_USER]: process.env.SMTP_USER || "",
   [KEYS.REPORT_SMTP_PASS]: process.env.SMTP_PASS || "",
+  [KEYS.TRAVEL_EXTERNAL_REVIEW_URL]: process.env.TRAVEL_EXTERNAL_REVIEW_URL || "",
   // Wellness Admin Support Chatbot BYOK default — empty JSON object when no
   // provider config has been saved yet. The actual value is a JSON blob written
   // by routes/wellness_ai_config.js; this default only prevents `getSetting`
@@ -275,3 +281,5 @@ module.exports = {
   getBudgetCap,
   evaluateCap,
 };
+
+

@@ -352,14 +352,14 @@ async function runWebCheckinAutomationTick(now = new Date(), deps = {}) {
 }
 
 function initWebCheckinAutomationCron() {
-  // Every 15 min, off-cluster (mirrors scheduler's jitter but offset by a few
-  // minutes so automation claims `reminded` rows before the scheduler's
-  // +30-min stall sweep can flip them to fallback-agent).
+  // Automation is disabled by default; this vertical is manual-only for now.
+  // The route /travel/automation-health and its sidebar entry are hidden.
   cronRegistry.register({
     name: "webCheckinAutomation",
     description: "Performs airline web check-in for reminded/retry-eligible bookings (every 15 min)",
     defaultSchedule: "8,23,38,53 * * * *",
     tickFn: runWebCheckinAutomationTick,
+    defaultEnabled: false,
   }).catch((e) => console.error("[WebCheckinAutomation] cronRegistry registration failed:", e.message));
 }
 

@@ -14,9 +14,9 @@
  *      "New bank" CTA only renders for ADMIN role (SUT lines 74-82).
  *   2. Loading state: shows "Loading…" before first GET resolves
  *      (await findByText per CLAUDE.md tick #108 cron-learning).
- *   3. GET on mount: hits /api/travel/diagnostics?limit=100 with NO
+ *   3. GET on mount: hits /api/travel/diagnostics?limit=10&offset=0 with NO
  *      subBrand/classification query params when filters are blank
- *      (SUT lines 46-53: builds URLSearchParams; limit=100 always set).
+ *      (SUT lines 46-53: builds URLSearchParams; limit=10 + offset always set).
  *   4. Empty-state: zero diagnostics → renders the "No diagnostics submitted
  *      yet." copy + the "Take diagnostic" hint (SUT lines 138-140).
  *   5. Sub-brand filter: selecting "rfu" re-fetches with ?subBrand=rfu
@@ -45,7 +45,7 @@
  *      and clears the diagnostics list (SUT lines 56-60).
  *
  * Backend contract pinned (per backend/routes/travel_diagnostics.js):
- *   GET /api/travel/diagnostics[?subBrand=&classification=&limit=]
+ *   GET /api/travel/diagnostics[?subBrand=&classification=&limit=&offset=]
  *       → 200 { diagnostics: [...] }
  *       | 500 on error
  *
@@ -271,15 +271,16 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
     expect(screen.queryByText('Loading…')).toBeNull();
   });
 
-  it('GETs /api/travel/diagnostics?limit=100 on mount with NO subBrand/classification query string', async () => {
+  it('GETs /api/travel/diagnostics?limit=10&offset=0 on mount with NO subBrand/classification query string', async () => {
     renderPage();
     await waitFor(() => {
       const listCall = fetchApiMock.mock.calls.find(([u]) =>
         typeof u === 'string' && u.startsWith('/api/travel/diagnostics'),
       );
       expect(listCall).toBeTruthy();
-      // limit=100 is always set by the SUT (line 51).
-      expect(listCall[0]).toContain('limit=100');
+      // limit=10 and offset=0 are always set by the SUT.
+      expect(listCall[0]).toContain('limit=10');
+      expect(listCall[0]).toContain('offset=0');
       // No subBrand= / classification= when both filters are blank.
       expect(listCall[0]).not.toContain('subBrand=');
       expect(listCall[0]).not.toContain('classification=');
@@ -288,6 +289,74 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
     expect(await screen.findByText('tmc')).toBeInTheDocument();
     expect(screen.getByText('rfu')).toBeInTheDocument();
     expect(screen.getByText('visasure')).toBeInTheDocument();
+  });
+
+  it('scrolling the table container loads the next slice at offset=10', async () => {
+    const firstPage = Array.from({ length: 10 }, (_, i) =>
+      makeDiagnostic({
+        id: 801 + i,
+        subBrand: i === 0 ? 'tmc' : 'rfu',
+        classification: i === 0 ? 'level_1' : 'level_2',
+        classificationLabel: i === 0 ? 'School-Trip Standard' : 'Umrah Premium',
+        score: 1 + i,
+        recommendedTier: i === 0 ? 'entry' : 'primary',
+        contactId: 6000 + i,
+        createdAt: `2026-05-${String(20 + i).padStart(2, '0')}T10:00:00.000Z`,
+      }),
+    );
+    const secondPage = [
+      makeDiagnostic({
+        id: 901,
+        subBrand: 'travelstall',
+        classification: 'level_3',
+        classificationLabel: 'Travel Stall Pro',
+        score: 9.75,
+        recommendedTier: 'premium',
+        contactId: 7001,
+        createdAt: '2026-06-01T10:00:00.000Z',
+      }),
+      makeDiagnostic({
+        id: 902,
+        subBrand: 'visasure',
+        classification: 'level_4',
+        classificationLabel: 'Visa Sure Elite',
+        score: 8.5,
+        recommendedTier: 'primary',
+        contactId: 7002,
+        createdAt: '2026-06-02T10:00:00.000Z',
+      }),
+    ];
+
+    fetchApiMock.mockImplementation((url) => {
+      if (typeof url === 'string' && url.startsWith('/api/travel/diagnostics')) {
+        const parsed = new URL(url, 'http://localhost');
+        if (parsed.searchParams.get('offset') === '10') {
+          return Promise.resolve({ diagnostics: secondPage, total: 12, limit: 10, offset: 10 });
+        }
+        return Promise.resolve({ diagnostics: firstPage, total: 12, limit: 10, offset: 0 });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await screen.findByText('tmc');
+
+    const scrollContainer = screen.getByTestId('diagnostics-table-scroll');
+    Object.defineProperties(scrollContainer, {
+      scrollTop: { value: 1000, writable: true, configurable: true },
+      clientHeight: { value: 500, writable: true, configurable: true },
+      scrollHeight: { value: 1400, writable: true, configurable: true },
+    });
+    fireEvent.scroll(scrollContainer);
+
+    await waitFor(() => {
+      const nextPageCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.includes('offset=10'),
+      );
+      expect(nextPageCall).toBeTruthy();
+    });
+
+    expect(await screen.findByText('travelstall')).toBeInTheDocument();
   });
 
   it('renders empty-state copy when diagnostics=[] (SUT lines 138-140)', async () => {

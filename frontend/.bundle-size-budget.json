@@ -49,8 +49,8 @@
     },
     {
       "pattern": "LandingPageBuilder-*.js",
-      "maxKB": 300,
-      "comment": "PR #1199 landing page builder + block renderer + travel block editor. Currently ~243 KB; lazy-loaded on the builder route only."
+      "maxKB": 320,
+      "comment": "PR #1199 landing page builder + block renderer + travel block editor. Currently ~243 KB baseline. Bumped 300→320 on 2026-07-30: PR #1260 added wellness landing-site editor, publish-gate workflow, and cancellation-policy UI wiring into the builder chunk, pushing it ~2 KB over the 300 KB cap."
     }
   ],
 

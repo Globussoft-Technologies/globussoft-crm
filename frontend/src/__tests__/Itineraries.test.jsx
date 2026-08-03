@@ -12,10 +12,11 @@
  *      sub-brand-access via getSubBrandAccessSet on POST).
  *   2. Loading state: shows "Loading…" before first GET resolves (await
  *      findByText per CLAUDE.md tick #108 cron-learning).
- *   3. GET on mount: hits /api/travel/itineraries?limit=100 (no sub-brand
+ *   3. GET on mount: hits /api/travel/itineraries?limit=10&offset=0 (no sub-brand
  *      or status query params when filters are blank) and renders one row
- *      per itinerary (table layout with 9 columns: Destination, Sub-brand,
- *      Contact, Dates, Items, Total, Status, Tier, Updated).
+ *      per itinerary inside the fixed-height scroll container (table layout
+ *      with 9 columns: Destination, Sub-brand, Contact, Dates, Items, Total,
+ *      Status, Tier, Updated).
  *   4. Empty state: zero itineraries → renders the "No itineraries yet."
  *      empty-state copy + the "Create Itinerary" hint.
  *   5. Sub-brand filter: changing the <select> to "rfu" re-fetches with
@@ -60,7 +61,7 @@
  *      SUT useEffect lines 180-185).
  *
  * Backend contract pinned (per backend/routes/travel_itineraries.js):
- *   GET    /api/travel/itineraries[?subBrand=&status=&limit=]
+ *   GET    /api/travel/itineraries[?subBrand=&status=&limit=&offset=]
  *          → 200 { itineraries, total, limit, offset }
  *          | 400 INVALID_STATUS / 500
  *   POST   /api/travel/itineraries  body:{subBrand,contactId,destination,
@@ -303,7 +304,7 @@ const CONTACTS_DEFAULT = [
 // Install a fetchApi mock that routes by URL + method. Tests override only
 // the surface they care about.
 function installFetchMock({
-  list = { itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0 },
+  list = { itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 10, offset: 0 },
   contacts = CONTACTS_DEFAULT,
   create = null,
 } = {}) {
@@ -382,6 +383,7 @@ describe('<Itineraries /> — page chrome + filter bar', () => {
       );
       expect(calls.length).toBeGreaterThan(0);
     });
+    expect(screen.getByTestId('itineraries-scroll-area')).toBeInTheDocument();
   });
 });
 
@@ -398,12 +400,12 @@ describe('<Itineraries /> — load + render lifecycle', () => {
     renderPage();
     // Loading text renders before list resolves (SUT line 232: "Loading&hellip;").
     expect(await screen.findByText('Loading…')).toBeInTheDocument();
-    resolveList({ itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0 });
+    resolveList({ itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 10, offset: 0 });
     await screen.findByText('Andaman Islands');
     expect(screen.queryByText('Loading…')).toBeNull();
   });
 
-  it('GETs /api/travel/itineraries?limit=100 on mount with NO sub-brand/status query string', async () => {
+  it('GETs /api/travel/itineraries?limit=10&offset=0 on mount with NO sub-brand/status query string', async () => {
     renderPage();
     await waitFor(() => {
       const listCall = fetchApiMock.mock.calls.find(([u, o]) =>
@@ -412,8 +414,9 @@ describe('<Itineraries /> — load + render lifecycle', () => {
         && (!o?.method || o.method === 'GET'),
       );
       expect(listCall).toBeTruthy();
-      // limit=100 is always set by the SUT (line 167).
-      expect(listCall[0]).toContain('limit=100');
+      // limit=10 and offset=0 are always set by the SUT.
+      expect(listCall[0]).toContain('limit=10');
+      expect(listCall[0]).toContain('offset=0');
       // No subBrand= / status= when both filters are blank.
       expect(listCall[0]).not.toContain('subBrand=');
       expect(listCall[0]).not.toContain('status=');
@@ -424,8 +427,91 @@ describe('<Itineraries /> — load + render lifecycle', () => {
     expect(screen.getByText('Schengen visa')).toBeInTheDocument();
   });
 
+  it('scrolling the list pane near the bottom requests the second page with offset=10', async () => {
+    const firstPage = Array.from({ length: 10 }, (_, i) =>
+      makeItin({
+        id: 501 + i,
+        destination: `Page 1 Trip ${i + 1}`,
+        subBrand: i % 2 === 0 ? 'tmc' : 'rfu',
+        status: i % 2 === 0 ? 'draft' : 'sent',
+        productTier: i % 3 === 0 ? 'entry' : 'primary',
+        totalAmount: 10000 + i * 1000,
+        currency: 'INR',
+        contactId: 5001,
+        items: [],
+        updatedAt: `2026-05-${String(10 + i).padStart(2, '0')}T10:00:00.000Z`,
+      }),
+    );
+    const secondPage = [
+      makeItin({
+        id: 601,
+        destination: 'Page 2 Trip 1',
+        subBrand: 'visasure',
+        status: 'accepted',
+        productTier: 'premium',
+        totalAmount: 75000,
+        currency: 'USD',
+        contactId: 5002,
+        items: [],
+        updatedAt: '2026-06-01T10:00:00.000Z',
+      }),
+      makeItin({
+        id: 602,
+        destination: 'Page 2 Trip 2',
+        subBrand: 'tmc',
+        status: 'revised',
+        productTier: null,
+        totalAmount: 22000,
+        currency: 'INR',
+        contactId: 5001,
+        items: [],
+        updatedAt: '2026-06-02T10:00:00.000Z',
+      }),
+    ];
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
+        if (url.includes('offset=10')) {
+          return Promise.resolve({ itineraries: secondPage, total: 12, limit: 10, offset: 10 });
+        }
+        return Promise.resolve({ itineraries: firstPage, total: 12, limit: 10, offset: 0 });
+      }
+      if (url.startsWith('/api/contacts') && method === 'GET') {
+        return Promise.resolve(CONTACTS_DEFAULT);
+      }
+      if (url === '/api/auth/me/permissions' && method === 'GET') {
+        return Promise.resolve({ isOwner: true, permissions: [] });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await screen.findByText('Page 1 Trip 1');
+    const scrollArea = screen.getByTestId('itineraries-scroll-area');
+    Object.defineProperties(scrollArea, {
+      scrollTop: { value: 728, writable: true, configurable: true },
+      clientHeight: { value: 400, writable: true, configurable: true },
+      scrollHeight: { value: 800, writable: true, configurable: true },
+    });
+    fireEvent.scroll(scrollArea);
+
+    await waitFor(() => {
+      const nextCall = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string'
+        && u.startsWith('/api/travel/itineraries')
+        && (!o?.method || o.method === 'GET')
+        && u.includes('offset=10'),
+      );
+      expect(nextCall).toBeTruthy();
+    });
+
+    expect(await screen.findByText('Page 2 Trip 1')).toBeInTheDocument();
+    expect(screen.getByText('Page 2 Trip 2')).toBeInTheDocument();
+  });
+
   it('renders empty-state copy when itineraries=[] (SUT line 234-237)', async () => {
-    installFetchMock({ list: { itineraries: [], total: 0, limit: 100, offset: 0 } });
+    installFetchMock({ list: { itineraries: [], total: 0, limit: 10, offset: 0 } });
     renderPage();
     expect(
       await screen.findByText(/No itineraries yet\./i),
@@ -448,7 +534,7 @@ describe('<Itineraries /> — filter behaviour', () => {
     renderPage();
     await screen.findByText('Andaman Islands');
     fetchApiMock.mockClear();
-    installFetchMock({ list: { itineraries: [ITINS_DEFAULT[1]], total: 1, limit: 100, offset: 0 } });
+    installFetchMock({ list: { itineraries: [ITINS_DEFAULT[1]], total: 1, limit: 10, offset: 0 } });
     fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), {
       target: { value: 'rfu' },
     });
@@ -466,7 +552,7 @@ describe('<Itineraries /> — filter behaviour', () => {
     renderPage();
     await screen.findByText('Andaman Islands');
     fetchApiMock.mockClear();
-    installFetchMock({ list: { itineraries: [ITINS_DEFAULT[1]], total: 1, limit: 100, offset: 0 } });
+    installFetchMock({ list: { itineraries: [ITINS_DEFAULT[1]], total: 1, limit: 10, offset: 0 } });
     fireEvent.change(screen.getByLabelText(/Filter by status/i), {
       target: { value: 'sent' },
     });
@@ -1157,6 +1243,7 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
     await screen.findByTestId('suggest-preview-pane');
+    await screen.findByRole('option', { name: /Riya Sharma/i });
   }
 
   it('happy path: pick contact + click materialise → POSTs correct body + notify.success + navigate', async () => {
@@ -1170,7 +1257,11 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     const createBtn = screen.getByRole('button', {
       name: /Create itinerary from this suggestion/i,
     });
-    expect(createBtn).not.toBeDisabled();
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /Create itinerary from this suggestion/i }),
+      ).not.toBeDisabled();
+    });
     fireEvent.click(createBtn);
     // notify.success fires with "Itinerary created with 3 items".
     await waitFor(() => {
@@ -1236,6 +1327,11 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
       screen.getByLabelText(/Contact for materialised itinerary/i),
       { target: { value: '5001' } },
     );
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /Create itinerary from this suggestion/i }),
+      ).not.toBeDisabled();
+    });
     fireEvent.click(
       screen.getByRole('button', {
         name: /Create itinerary from this suggestion/i,
@@ -1279,6 +1375,11 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     );
     const triggerBtn = screen.getByRole('button', {
       name: /Create itinerary from this suggestion/i,
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /Create itinerary from this suggestion/i }),
+      ).not.toBeDisabled();
     });
     fireEvent.click(triggerBtn);
     // Loading text + disabled state. The button's aria-label stays
@@ -1352,6 +1453,11 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
       screen.getByLabelText(/Contact for materialised itinerary/i),
       { target: { value: '5001' } },
     );
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /Create itinerary from this suggestion/i }),
+      ).not.toBeDisabled();
+    });
     fireEvent.click(
       screen.getByRole('button', {
         name: /Create itinerary from this suggestion/i,

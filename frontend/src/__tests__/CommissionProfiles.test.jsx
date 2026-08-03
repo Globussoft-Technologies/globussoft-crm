@@ -44,13 +44,15 @@
  *      fires.
  */
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
 }));
+
+let consoleErrorSpy;
 
 // Stable notify object — see the 2026-05-RTL "stable mock object references
 // for hooks" standing rule. Re-creating { error: vi.fn(), confirm: vi.fn() }
@@ -149,6 +151,20 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     notifyConfirm.mockReset();
     notifyConfirm.mockImplementation(() => Promise.resolve(true));
     fetchApiMock.mockImplementation(defaultFetchMock);
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation((...args) => {
+      const firstArg = String(args[0] ?? '');
+      if (
+        firstArg.includes('Warning: An update to CommissionProfiles inside a test was not wrapped in act') ||
+        firstArg.includes('When testing, code that causes React state updates should be wrapped into act')
+      ) {
+        return;
+      }
+      console.warn(...args);
+    });
+  });
+
+  afterEach(() => {
+    consoleErrorSpy?.mockRestore();
   });
 
   it('mounts and fires GET /api/staff/commission-profiles', async () => {
@@ -430,6 +446,8 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
         return Promise.resolve({ id: 11 });
       }
       if (url === COMMISSION_URL) return Promise.resolve(sampleRows);
+      if (url === COMMISSION_DATA_URL) return Promise.resolve(sampleCommissionData);
+      if (url === '/api/wellness/products') return Promise.resolve([]);
       return Promise.resolve(null);
     });
 
@@ -447,6 +465,11 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     expect(screen.getByTestId('profile-form-name')).toHaveValue('Senior Doctor Cut');
     expect(screen.getByDisplayValue('Monthly')).toBeInTheDocument();
 
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    const { currentMonthStart, defaultMonthEnd } = getCommissionWindowBounds();
+    fireEvent.change(dateInputs[0], { target: { value: currentMonthStart } });
+    fireEvent.change(dateInputs[1], { target: { value: defaultMonthEnd } });
+
     // Bump the percentage to 30.
     const numberInputs = document.querySelectorAll('input[type="number"]');
     fireEvent.change(numberInputs[0], { target: { value: '30' } });
@@ -460,8 +483,8 @@ describe('<CommissionProfiles /> — Commission Profiles admin page surface', ()
     expect(putBody.percentage).toBe(30);
     expect(putBody.basis).toBe('REVENUE_PERCENT');
     expect(putBody.period).toBe('MONTHLY');
-    expect(putBody.periodStart).toBe('2026-07-01T00:00:00.000Z');
-    expect(putBody.periodEnd).toBe('2026-08-01T00:00:00.000Z');
+    expect(putBody.periodStart).toBe(`${currentMonthStart}T00:00:00.000Z`);
+    expect(putBody.periodEnd).toBe(`${defaultMonthEnd}T00:00:00.000Z`);
     expect(putBody.isActive).toBe(true);
   });
 

@@ -13,14 +13,13 @@
 //
 // See backend/routes/travel_diagnostics.js for the underlying contract.
 
-import { useEffect, useState, useContext } from 'react';
+import { useEffect, useState, useContext, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { ClipboardCheck, Plus, Compass, Filter } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 import TopScrollSync from '../../components/TopScrollSync';
-
 const SUB_BRANDS = [
   { value: '', label: 'All sub-brands' },
   { value: 'tmc', label: 'TMC (schools)' },
@@ -38,32 +37,118 @@ export default function Diagnostics() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN';
+  const PAGE_SIZE = 10;
 
   const [diagnostics, setDiagnostics] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [subBrand, setSubBrand] = useState('');
   const [classification, setClassification] = useState('');
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const listRef = useRef(null);
+  const diagnosticsRef = useRef([]);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
 
-  const load = () => {
-    setLoading(true);
+  useEffect(() => {
+    diagnosticsRef.current = diagnostics;
+  }, [diagnostics]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const load = useCallback(async ({ reset = false } = {}) => {
+    const startOffset = reset ? 0 : offsetRef.current;
+
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setDiagnostics([]);
+      diagnosticsRef.current = [];
+      setTotal(0);
+      setOffset(0);
+      setHasMore(true);
+      offsetRef.current = 0;
+      hasMoreRef.current = true;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
+
     const qs = new URLSearchParams();
     if (subBrand) qs.set('subBrand', subBrand);
     if (classification) qs.set('classification', classification);
-    qs.set('limit', '100');
-    fetchApi(`/api/travel/diagnostics?${qs.toString()}`)
-      .then((res) => {
-        setDiagnostics(Array.isArray(res?.diagnostics) ? res.diagnostics : []);
-      })
-      .catch((e) => {
-        const msg = e?.body?.error || 'Failed to load diagnostics';
-        notify.error(msg);
-        setDiagnostics([]);
-      })
-      .finally(() => setLoading(false));
-    // notify is stable from useNotify; declared above the closure.
-  };
 
-  useEffect(load, [subBrand, classification]); // eslint-disable-line react-hooks/exhaustive-deps
+    qs.set('limit', String(PAGE_SIZE));
+    qs.set('offset', String(startOffset));
+
+    try {
+      const res = await fetchApi(`/api/travel/diagnostics?${qs.toString()}`);
+      const rows = Array.isArray(res?.diagnostics) ? res.diagnostics : [];
+      const totalCount = Number.isFinite(Number(res?.total))
+        ? Number(res.total)
+        : rows.length;
+      const nextRows = reset ? rows : [...diagnosticsRef.current, ...rows];
+      const nextOffset = startOffset + rows.length;
+      const nextHasMore = Number.isFinite(totalCount)
+        ? nextOffset < totalCount
+        : rows.length === PAGE_SIZE;
+
+      diagnosticsRef.current = nextRows;
+      setDiagnostics(nextRows);
+      setTotal(totalCount);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+      offsetRef.current = nextOffset;
+      hasMoreRef.current = nextHasMore;
+    } catch (e) {
+      notify.error(e?.body?.error || 'Failed to load diagnostics');
+      setDiagnostics([]);
+      diagnosticsRef.current = [];
+      setTotal(0);
+      setHasMore(false);
+      setOffset(0);
+      offsetRef.current = 0;
+      hasMoreRef.current = false;
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [subBrand, classification, notify, PAGE_SIZE]);
+
+  useEffect(() => {
+    load({ reset: true });
+  }, [load]);
+
+  const reload = useCallback(() => {
+    load({ reset: true });
+  }, [load]);
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      load({ reset: false });
+    }
+  }, [load]);
 
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
@@ -105,7 +190,7 @@ export default function Diagnostics() {
         <Filter size={16} aria-hidden style={{ color: 'var(--text-secondary)' }} />
         <select
           value={subBrand}
-          onChange={(e) => setSubBrand(e.target.value)}
+          onChange={(e) => { setSubBrand(e.target.value); }}
           style={selectStyle}
           aria-label="Filter by sub-brand"
         >
@@ -115,7 +200,7 @@ export default function Diagnostics() {
         </select>
         <select
           value={classification}
-          onChange={(e) => setClassification(e.target.value)}
+          onChange={(e) => { setClassification(e.target.value); }}
           style={selectStyle}
           aria-label="Filter by classification"
         >
@@ -125,7 +210,7 @@ export default function Diagnostics() {
           <option value="level_3">Level 3</option>
           <option value="level_4">Level 4</option>
         </select>
-        <button type="button" onClick={load} style={refreshBtn} aria-label="Reload list">
+        <button type="button" onClick={reload} style={refreshBtn} aria-label="Reload list">
           Refresh
         </button>
       </div>
@@ -133,9 +218,9 @@ export default function Diagnostics() {
       {/* Table */}
       <div style={{
         background: 'var(--surface-color)', borderRadius: 8,
-        border: '1px solid var(--border-color)', overflow: 'visible',
+        border: '1px solid var(--border-color)',
       }}>
-        {loading ? (
+        {loading && diagnostics.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : diagnostics.length === 0 ? (
           <div style={empty}>
@@ -144,9 +229,19 @@ export default function Diagnostics() {
               : <>No diagnostics submitted yet. Click <strong>Take diagnostic</strong> to start.</>}
           </div>
         ) : (
+          <div
+            ref={listRef}
+            onScroll={handleListScroll}
+            data-testid="diagnostics-table-scroll"
+            style={{
+              maxHeight: '60vh',
+              overflowY: 'auto',
+              overflowX: 'hidden',
+            }}
+          >
           <TopScrollSync>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
+          <table aria-label="Diagnostics results" style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead style={{position: "sticky", top: 0,background: "#fff",zIndex: 10,}}>
               <tr>
                 <th style={th}>Submitted</th>
                 <th style={th}>Sub-brand</th>
@@ -201,6 +296,20 @@ export default function Diagnostics() {
             </tbody>
           </table>
           </TopScrollSync>
+          <div style={{ padding: '12px 0' }}>
+            {loadingMore && (
+              <div style={empty}>Loading more&hellip;</div>
+            )}
+            {!loadingMore && hasMore && (
+              <div aria-hidden="true" data-testid="diagnostics-scroll-sentinel" style={{ height: 1 }} />
+            )}
+            {!hasMore && total > 0 && (
+              <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: 12 }}>
+                You&apos;ve reached the end of the table.
+              </div>
+            )}
+          </div>
+          </div>
         )}
       </div>
     </div>

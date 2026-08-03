@@ -1278,15 +1278,343 @@ export default function App() {
                         </HomeForNonAdmin>
                       }
                     />
+                          {/* Wellness vertical â€” gated by WellnessOnly so generic-CRM
+                        tenants can't surface wellness pages by URL (#325). */}
+                    <Route path="wellness" element={<WellnessOnly><WellnessOwnerOnly><WellnessOwnerDashboard /></WellnessOwnerOnly></WellnessOnly>} />
+                    <Route path="wellness/recommendations" element={<WellnessOnly><WellnessRecommendations /></WellnessOnly>} />
+                    <Route path="wellness/patients" element={<WellnessOnly><WellnessPatients /></WellnessOnly>} />
+                    <Route path="wellness/patients/:id" element={<WellnessOnly><WellnessPatientDetail /></WellnessOnly>} />
+                    <Route path="wellness/services" element={<WellnessOnly><WellnessServices /></WellnessOnly>} />
+                    {/* Wave 7 Agent A â€” ServiceCategory + Drug admin pages (admin/manager) */}
+                    {/* Wave 7 Agent A â€” ServiceCategory + Drug admin pages. Gated
+                        by permissions that mirror the page catalog's entries â€” any
+                        role granted `services.write` / `prescriptions.write` passes
+                        (no hardcoded ADMIN/MANAGER allowlist). */}
+                    <Route path="wellness/service-categories" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'services', action: 'read' }}
+                          feature="Service Categories"
+                          lockedInPlace
+                        >
+                          <WellnessServiceCategories />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/drugs" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'prescriptions', action: 'read' }}
+                          feature="Drug catalogue"
+                          lockedInPlace
+                        >
+                          <WellnessDrugs />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/visits" element={<WellnessOnly><WellnessVisits /></WellnessOnly>} />
+                    {/* Prescriptions list â€” tenant-wide, with patient filter +
+                        per-row PDF download. Gated on prescriptions.read via
+                        the page catalog (Sidebar) AND the page-level RoleGuard
+                        here (route protection). Backend PDF endpoint inherits
+                        the same RBAC + tenant scope. */}
+                    <Route path="wellness/prescriptions" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'prescriptions', action: 'read' }}
+                          feature="Prescriptions"
+                          lockedInPlace
+                        >
+                          <WellnessPrescriptions />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    {/* Staff-authed self-view of own Rx. Sidebar surfacing comes
+                        from the page catalog entry (gated on my_prescriptions.read).
+                        Backend `/api/wellness/my-prescriptions[/:id/pdf]` is gated
+                        on the same permission + scoped to req.user.userId's linked
+                        Patient row. */}
+                    <Route path="wellness/my-prescriptions" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'my_prescriptions', action: 'read' }}
+                          feature="My Prescriptions"
+                          lockedInPlace
+                        >
+                          <WellnessMyPrescriptions />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/locations" element={<WellnessOnly><WellnessLocations /></WellnessOnly>} />
+                    {/* Wave 11 Agent EE: Memberships catalog */}
+                    <Route path="wellness/memberships" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'services', action: 'read' }}
+                          feature="Memberships"
+                          lockedInPlace
+                        >
+                          <WellnessMemberships />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback */}
+                    <Route path="wellness/wallet" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'patient_wallets', action: 'read' }}
+                          feature="Wallet ledger"
+                          lockedInPlace
+                        >
+                          <WellnessWallet />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/giftcards" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'gift_cards', action: 'read' }}
+                          feature="Gift Cards"
+                          lockedInPlace
+                        >
+                          <WellnessGiftCards />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    {/* Customer-facing storefront â€” any authenticated user
+                        can browse + buy. Gift card value lands on the chosen
+                        patient's wallet on Razorpay payment success. */}
+                    <Route path="wellness/buy-giftcards" element={
+                      <WellnessOnly>
+                        <WellnessBuyGiftCards />
+                      </WellnessOnly>
+                    } />
+                    {/* Customer-facing transaction history. Like Buy Gift Cards,
+                        any authenticated wellness user can open it; the data is
+                        scoped server-side to the caller's own Patient. The sidebar
+                        entry is gated to customer-tier roles via the customerOnly
+                        page-catalog flag. */}
+                    <Route path="wellness/my-transactions" element={
+                      <WellnessOnly>
+                        <WellnessMyTransactions />
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/coupons" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'marketing', action: 'read' }}
+                          feature="Coupons"
+                          lockedInPlace
+                        >
+                          <WellnessCoupons />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/cashback-rules" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'marketing', action: 'read' }}
+                          feature="Cashback rules"
+                          lockedInPlace
+                        >
+                          <WellnessCashbackRules />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    {/* QR Generator â€” marketing tool for downloadable QR codes. */}
+                    <Route path="wellness/qr-generator" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'marketing', action: 'read' }}
+                          feature="QR Generator"
+                          lockedInPlace
+                        >
+                          <WellnessQRGenerator />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    {/* Events History â€” read-only list of QR codes grouped by event. */}
+                    <Route path="wellness/events-history" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'marketing', action: 'read' }}
+                          feature="Events History"
+                          lockedInPlace
+                        >
+                          <WellnessEventsHistory />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
+                    <Route path="wellness/appointments" element={<WellnessOnly><WellnessAppointments /></WellnessOnly>} />
+                    <Route path="wellness/my-appointments" element={<WellnessOnly><WellnessMyAppointments /></WellnessOnly>} />
+                    <Route path="wellness/my-bookings" element={<WellnessOnly><WellnessMyBookings /></WellnessOnly>} />
+                    <Route path="wellness/book-appointment" element={<WellnessOnly><WellnessBookAppointment /></WellnessOnly>} />
+                    {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
+                    <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
+                    <Route path="wellness/whatsapp/templates" element={<WellnessOnly><WellnessWhatsAppTemplates /></WellnessOnly>} />
+                    <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />
+                    <Route path="wellness/telecaller" element={<WellnessOnly><WellnessTelecallerQueue /></WellnessOnly>} />
+                    {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}
+                    <Route path="telecaller" element={<Navigate to="/wellness/telecaller" replace />} />
+                    {/* #406: stale-URL aliases. Older docs / QA prompts reference
+                        /wellness/service-catalog + /wellness/telecaller-queue;
+                        canonical routes are /wellness/services + /wellness/telecaller.
+                        Mirrors the #183 alias pattern above so deep links from old
+                        docs / bookmarks still land on the right page. */}
+                    <Route path="wellness/service-catalog" element={<Navigate to="/wellness/services" replace />} />
+                    <Route path="wellness/telecaller-queue" element={<Navigate to="/wellness/telecaller" replace />} />
+                    <Route path="wellness/per-location" element={<WellnessOnly><WellnessPerLocation /></WellnessOnly>} />
+                    <Route path="wellness/loyalty" element={<WellnessOnly><WellnessLoyalty /></WellnessOnly>} />
+                    <Route path="wellness/waitlist" element={<WellnessOnly><WellnessWaitlist /></WellnessOnly>} />
+                    <Route path="wellness/inventory" element={<WellnessOnly><WellnessInventory /></WellnessOnly>} />
+                    {/* Wave 11 Agent HH â€” Inventory backbone admin pages. All
+                        6 pages gated on `inventory.read` for sidebar + page-mount
+                        visibility (matches the page catalog). The create / edit
+                        / delete actions inside each page are gated separately at
+                        the backend route level (.write / .update / .delete /
+                        .manage in routes/inventory.js) â€” a read-only role sees
+                        the page in read-only mode; the action buttons should
+                        hide themselves based on per-action permission checks
+                        via usePermissions(). */}
+                    <Route path="wellness/product-categories" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'products', action: 'read' }}
+                          feature="Product categories"
+                          lockedInPlace
+                        >
+                          <WellnessProductCategories />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/products" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'products', action: 'read' }}
+                          feature="Products"
+                          lockedInPlace
+                        >
+                          <WellnessProducts />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/vendors" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'inventory', action: 'read' }}
+                          feature="Vendors"
+                          lockedInPlace
+                        >
+                          <WellnessVendors />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/inventory-receipts" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'inventory', action: 'read' }}
+                          feature="Inventory receipts"
+                          lockedInPlace
+                        >
+                          <WellnessInventoryReceipts />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/inventory-adjustments" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'inventory', action: 'read' }}
+                          feature="Inventory adjustments"
+                          lockedInPlace
+                        >
+                          <WellnessInventoryAdjustments />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/auto-consumption-rules" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'products', action: 'manage' }}
+                          feature="Auto-consumption rules"
+                          lockedInPlace
+                        >
+                          <WellnessAutoConsumptionRules />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    {/* Wave 11 Agent GG â€” Resource availability admin pages.
+                        Gated on settings.read (matches page catalog). The
+                        booking-conflict gate runs on every POST/PUT visit. */}
+                    <Route path="wellness/resources" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'settings', action: 'read' }}
+                          feature="Resources"
+                          lockedInPlace
+                        >
+                          <WellnessResources />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/holidays" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'settings', action: 'read' }}
+                          feature="Holidays"
+                          lockedInPlace
+                        >
+                          <WellnessHolidays />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    <Route path="wellness/working-hours" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'settings', action: 'read' }}
+                          feature="Working hours"
+                          lockedInPlace
+                        >
+                          <WellnessWorkingHours />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    {/* Wave 2 Agent JJ â€” Staff Attendance + Leave Management. */}
+                    <Route path="wellness/attendance" element={<WellnessOnly><WellnessAttendance /></WellnessOnly>} />
+                    {/* Admin/Manager attendance dashboard â€” KPI tiles + all-staff
+                        list + admin-only edit/delete. Mounted under both wellness
+                        and travel since both verticals have staff that punch in/out.
+                        Page itself reads tenant from AuthContext and uses the same
+                        /api/attendance/* routes; no per-vertical branching needed. */}
+                    <Route path="wellness/attendance-dashboard" element={<WellnessOnly><AttendanceDashboard /></WellnessOnly>} />
+                    <Route path="wellness/attendance/calendar" element={<WellnessOnly><WellnessAttendanceCalendar /></WellnessOnly>} />
+                    <Route path="travel/attendance" element={<AttendanceDashboard />} />
+                    <Route path="wellness/leave" element={<WellnessOnly><WellnessLeave /></WellnessOnly>} />
+                    {/* Wave 2 Agent II â€” POS / Cash Register / Shift / Sale.
+                        Backend is wellness-vertical-gated + role
+                        ADMIN/MANAGER/doctor/professional/telecaller/helper.
+                        Frontend allows the wider operational bucket (everyone
+                        except plain USER) so a cashier user can ring sales. */}
+                    <Route path="wellness/pos" element={
+                      <WellnessOnly>
+                        <RoleGuard
+                          requiredPermission={{ module: 'pos', action: 'read' }}
+                          feature="Point of Sale"
+                          lockedInPlace
+                        >
+                          <WellnessPointOfSale />
+                        </RoleGuard>
+                      </WellnessOnly>
+                    } />
+                    {/* #309: /wellness/invoices used to render a blank page (no
+                        route binding). Wellness shares the generic CRM Invoices
+                        UI â€” alias the prefixed URL to the canonical /invoices
+                        route so the sidebar link, deep links from emails, and
+                        bookmarks all resolve. Mirrors the /wellness/inventory
+                        fix from #305. */}
                     <Route
-                      path="wellness"
-                      element={
-                        <WellnessOnly>
-                          <WellnessOwnerOnly>
-                            <WellnessOwnerDashboard />
-                          </WellnessOwnerOnly>
-                        </WellnessOnly>
-                      }
+                      path="wellness/invoices"
+                      element={<Navigate to="/invoices" replace />}
                     />
                     <Route path="contacts" element={<Contacts />} />
                     <Route path="contacts/:id" element={<ContactDetail />} />
@@ -1651,6 +1979,7 @@ export default function App() {
                   tenants get bounced to their themed calendar; everyone else sees
                   the calendar-sync page (which is the closest generic equivalent). */}
                     <Route path="calendar" element={<CalendarRedirect />} />
+
                     {/* Travel vertical Ã¢â‚¬â€ Day 1 scaffolding. Gated by TravelOnly
                   so generic + wellness tenants get bounced to /dashboard
                   rather than rendering empty travel UI. Phase 1 sub-pages
@@ -1679,8 +2008,8 @@ export default function App() {
                 <TravelOnly>
                   <RoleGuard
                     requiredPermission={{ module: "passport", action: "manage" }}
-                    feature="Passport Verification"
-                    message="Passport Verification requires the 'passport.manage' permission."
+                    feature="Passport"
+                    message="Passport requires the 'passport.manage' permission."
                   >
                     <TravelPassportVerificationQueue />
                   </RoleGuard>

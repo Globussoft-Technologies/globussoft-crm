@@ -85,6 +85,10 @@ describe('GET /api/staff/commission-profiles', () => {
 
 describe('POST /api/staff/commission-profiles', () => {
   test('persists period + periodStart/periodEnd on create', async () => {
+    const today = new Date();
+    const periodStart = formatDateInput(new Date(today.getFullYear(), today.getMonth(), 1));
+    const periodEnd = formatDateInput(new Date(today.getFullYear(), today.getMonth() + 1, 1));
+
     prisma.commissionProfile.create.mockResolvedValue({
       id: 22,
       tenantId: 1,
@@ -93,8 +97,8 @@ describe('POST /api/staff/commission-profiles', () => {
       percentage: '12.5',
       flatAmount: null,
       period: 'MONTHLY',
-      periodStart: new Date('2026-07-01T00:00:00.000Z'),
-      periodEnd: new Date('2026-08-01T00:00:00.000Z'),
+      periodStart: new Date(periodStart),
+      periodEnd: new Date(periodEnd),
       appliesToCategory: null,
       appliesToProduct: null,
       isActive: true,
@@ -108,8 +112,8 @@ describe('POST /api/staff/commission-profiles', () => {
         flatAmount: null,
         basis: 'REVENUE_PERCENT',
         period: 'MONTHLY',
-        periodStart: '2026-07-01',
-        periodEnd: '2026-08-01',
+        periodStart,
+        periodEnd,
         appliesToProduct: null,
         isActive: true,
       });
@@ -120,8 +124,8 @@ describe('POST /api/staff/commission-profiles', () => {
         data: expect.objectContaining({
           name: 'Monthly Bonus',
           period: 'MONTHLY',
-          periodStart: new Date('2026-07-01'),
-          periodEnd: new Date('2026-08-01'),
+          periodStart: new Date(periodStart),
+          periodEnd: new Date(periodEnd),
         }),
       }),
     );
@@ -131,6 +135,10 @@ describe('POST /api/staff/commission-profiles', () => {
 
 describe('PUT /api/staff/commission-profiles/:id', () => {
   test('persists period + periodStart/periodEnd on update', async () => {
+    const today = new Date();
+    const periodStart = formatDateInput(new Date(today.getFullYear(), today.getMonth(), 1));
+    const periodEnd = formatDateInput(new Date(today.getFullYear(), today.getMonth() + 3, 1));
+
     prisma.commissionProfile.findFirst.mockResolvedValue({
       id: 22,
       tenantId: 1,
@@ -153,8 +161,8 @@ describe('PUT /api/staff/commission-profiles/:id', () => {
       percentage: '15',
       flatAmount: null,
       period: 'QUARTERLY',
-      periodStart: new Date('2026-07-01T00:00:00.000Z'),
-      periodEnd: new Date('2026-10-01T00:00:00.000Z'),
+      periodStart: new Date(periodStart),
+      periodEnd: new Date(periodEnd),
       appliesToCategory: null,
       appliesToProduct: null,
       isActive: true,
@@ -165,8 +173,8 @@ describe('PUT /api/staff/commission-profiles/:id', () => {
       .send({
         percentage: 15,
         period: 'QUARTERLY',
-        periodStart: '2026-07-01',
-        periodEnd: '2026-10-01',
+        periodStart,
+        periodEnd,
       });
 
     expect(res.status).toBe(200);
@@ -175,8 +183,8 @@ describe('PUT /api/staff/commission-profiles/:id', () => {
         where: { id: 22 },
         data: expect.objectContaining({
           period: 'QUARTERLY',
-          periodStart: new Date('2026-07-01'),
-          periodEnd: new Date('2026-10-01'),
+          periodStart: new Date(periodStart),
+          periodEnd: new Date(periodEnd),
         }),
       }),
     );

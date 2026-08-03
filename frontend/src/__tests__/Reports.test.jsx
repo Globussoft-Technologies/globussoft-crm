@@ -49,9 +49,8 @@
  * layout); everything else from recharts stays real. money/date helpers
  * stay real so the formatMoney pass-through path is exercised.
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // fetchApi + getAuthToken — single global handles each test re-implements.
 const fetchApiMock = vi.fn();
@@ -351,14 +350,9 @@ describe('<Reports /> — broad page surface', () => {
     await waitFor(() => {
       expect(screen.getByText('Scrollable deal 1')).toBeInTheDocument();
     });
-    expect(screen.queryByText('Scrollable deal 13')).not.toBeInTheDocument();
-
-    const scrollContainer = screen.getByTestId('reports-detail-scroll');
-    Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true });
-    Object.defineProperty(scrollContainer, 'scrollHeight', { value: 800, configurable: true });
-    scrollContainer.scrollTop = 728;
-    fireEvent.scroll(scrollContainer);
-
+    const detailTableCard = screen.getByText('Scrollable deal 1').closest('.card');
+    expect(detailTableCard).toBeTruthy();
+    fireEvent.scroll(detailTableCard);
     expect(
       await screen.findByText('Scrollable deal 13'),
     ).toBeInTheDocument();

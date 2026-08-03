@@ -435,6 +435,9 @@ describe('buildAllowlist', () => {
     expect(list).toContain('http://127.0.0.1:5173');
     expect(list).toContain('http://127.0.0.1:5000');
     expect(list).toContain('https://globuscrm.globussoft.com');
+    expect(list).toContain('https://empcloud.com');
+    expect(list).toContain('https://www.empcloud.com');
+    expect(list).toContain('https://app.empcloud.com');
   });
 
   test('extends with FRONTEND_URL env var', () => {

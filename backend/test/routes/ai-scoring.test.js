@@ -98,6 +98,7 @@ function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN' } = {}) {
 const leadScoringEngine = requireCJS('../../cron/leadScoringEngine');
 leadScoringEngine.computeScore = vi.fn(() => 0);
 leadScoringEngine.tickLeadScoringEngine = vi.fn();
+leadScoringEngine.scoreContactsByIds = vi.fn();
 
 const aiScoringRouter = requireCJS('../../routes/ai_scoring');
 
@@ -118,8 +119,10 @@ beforeEach(() => {
   prisma.contact.findFirst.mockReset();
   leadScoringEngine.computeScore.mockReset();
   leadScoringEngine.tickLeadScoringEngine.mockReset();
+  leadScoringEngine.scoreContactsByIds.mockReset();
   // Sensible defaults — tests override as needed.
   leadScoringEngine.computeScore.mockReturnValue(42);
+  leadScoringEngine.scoreContactsByIds.mockResolvedValue({ scored: 3, errors: 0 });
 });
 
 // ─── GET /score/:dealId — deal-based predictive probability ────────
@@ -364,6 +367,67 @@ describe('GET /contact/:contactId — factor breakdown', () => {
       .set('Authorization', makeBearer());
     expect(res.status).toBe(500);
     expect(res.body.error).toBe('Failed to get contact score');
+  });
+});
+
+// ─── POST /contacts — on-demand batch aiScore ───────────────────────
+
+describe('POST /contacts — on-demand batch aiScore', () => {
+  test('400 when contactIds is missing or not an array', async () => {
+    const app = makeApp();
+    const res1 = await request(app)
+      .post('/api/ai-scoring/contacts')
+      .set('Authorization', makeBearer())
+      .send({});
+    expect(res1.status).toBe(400);
+    expect(res1.body.code).toBe('MISSING_CONTACT_IDS');
+
+    const res2 = await request(app)
+      .post('/api/ai-scoring/contacts')
+      .set('Authorization', makeBearer())
+      .send({ contactIds: 'not-array' });
+    expect(res2.status).toBe(400);
+    expect(res2.body.code).toBe('MISSING_CONTACT_IDS');
+  });
+
+  test('400 when contactIds exceeds 100', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/ai-scoring/contacts')
+      .set('Authorization', makeBearer())
+      .send({ contactIds: Array.from({ length: 101 }, (_, i) => i + 1) });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('TOO_MANY_CONTACT_IDS');
+  });
+
+  test('200 with success payload and forwards tenantId/io', async () => {
+    const fakeIo = { emit: vi.fn() };
+    leadScoringEngine.scoreContactsByIds.mockResolvedValue({ scored: 5, errors: 1 });
+
+    const app = makeApp({ io: fakeIo });
+    const res = await request(app)
+      .post('/api/ai-scoring/contacts')
+      .set('Authorization', makeBearer({ tenantId: 8 }))
+      .send({ contactIds: [1, 2, 3] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, scored: 5, errors: 1 });
+    expect(leadScoringEngine.scoreContactsByIds).toHaveBeenCalledTimes(1);
+    const [tenantId, ids, io] = leadScoringEngine.scoreContactsByIds.mock.calls[0];
+    expect(tenantId).toBe(8);
+    expect(ids).toEqual([1, 2, 3]);
+    expect(io).toBe(fakeIo);
+  });
+
+  test('500 envelope when scoreContactsByIds throws', async () => {
+    leadScoringEngine.scoreContactsByIds.mockRejectedValue(new Error('boom'));
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/ai-scoring/contacts')
+      .set('Authorization', makeBearer())
+      .send({ contactIds: [1] });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('Failed to score contacts');
   });
 });
 

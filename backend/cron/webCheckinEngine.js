@@ -31,7 +31,6 @@ const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationSer
 
 const { MILESTONES, milestoneTag, dueMilestone } = content;
 const PAID_STATUSES = ["advance_paid", "fully_paid"];
-const ACTIVE_WC_STATUSES = ["pending", "reminded"]; // skip done/in-progress/fallback-agent/failed
 const HORIZON_HOURS = Math.max(...MILESTONES) + 1; // 37h scan window upper bound
 const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
 const PORTAL_URL = `${PORTAL_BASE}/travel/portal`;
@@ -52,7 +51,7 @@ async function runWebCheckinTick(now = new Date()) {
 
   const rows = await prisma.webCheckin.findMany({
     where: {
-      status: { in: ACTIVE_WC_STATUSES },
+      status: "pending",
       departureAt: { gte: now, lte: horizon },
       itineraryId: { not: null },
     },

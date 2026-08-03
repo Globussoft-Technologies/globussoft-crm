@@ -25,6 +25,7 @@ const { writeAudit } = require("../lib/audit");
 const { resolveSubBrand } = require("../lib/subBrandResolve");
 const prisma = require("../lib/prisma");
 const { routeRequest, llmEnabled } = require("../lib/llmRouter");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 const { notify } = require("../lib/notificationService");
 
 // Sub-brand isolation guard imported from ../lib/subBrandResolve (tick #106
@@ -606,7 +607,7 @@ function fallbackClassify(review) {
   return { status: "cold", reason: `Neutral Callified score ${score}/5.` };
 }
 
-async function classifyLeadStatus(tenantId, contactId) {
+async function classifyLeadStatus(tenantId, contactId, { userId = null } = {}) {
   const { hasCall, review, transcript } = await fetchLatestCallReviewForContact(tenantId, contactId);
   if (!hasCall) {
     return {
@@ -625,6 +626,15 @@ async function classifyLeadStatus(tenantId, contactId) {
   // It acts as the source of truth when Gemini is unavailable, and as a guard
   // rail when Gemini returns a result that contradicts hard signals.
   const fallback = fallbackClassify(review);
+
+  // If the tenant has disabled AI transcript classification, use the fallback.
+  const aiTranscriptEnabled = await getSetting(tenantId, KEYS.CALLIFIED_AI_TRANSCRIPT_ENABLED, {
+    coerce: (v) => String(v).toLowerCase() !== "false",
+  });
+  if (!aiTranscriptEnabled) {
+    console.log(`[callified] AI transcript classification disabled for tenant ${tenantId}; using score/appointment fallback for contact ${contactId}.`);
+    return { status: fallback.status, source: "score", reason: fallback.reason };
+  }
 
   // If no Gemini key is configured, use the score/appointment fallback directly.
   const geminiReady = await llmEnabled("callified-lead-status", tenantId).catch((e) => {
@@ -651,6 +661,8 @@ async function classifyLeadStatus(tenantId, contactId) {
     review: reviewPayload,
     hasTranscript: !!transcriptText,
     hasReview: !!reviewPayload,
+    __surface: "leads-callified-transcript",
+    __userId: userId,
   };
 
   try {
@@ -699,6 +711,9 @@ async function assignHotLeadRoundRobin(tenantId, contactId, status, options = {}
   const { force = false } = options;
 
   try {
+    // Bump interactive transaction timeout: under load the staff lookup +
+    // tenant update can exceed Prisma's 5s default, causing the assignment to
+    // roll back and leaving the hot lead unassigned.
     const result = await prisma.$transaction(async (tx) => {
       const contact = await tx.contact.findFirst({
         where: { id: Number(contactId), tenantId },
@@ -769,7 +784,7 @@ async function assignHotLeadRoundRobin(tenantId, contactId, status, options = {}
       });
 
       return { assignedToId: nextUser.id, reason: "assigned" };
-    });
+    }, { timeout: 15000 });
 
     const assignedToId = result.assignedToId;
     if (!assignedToId) return null;
@@ -818,7 +833,7 @@ router.post("/leads/:leadId/classify", verifyToken, async (req, res) => {
     });
     if (!contact) return res.status(404).json({ error: "Lead not found" });
 
-    const classification = await classifyLeadStatus(req.user.tenantId, leadId);
+    const classification = await classifyLeadStatus(req.user.tenantId, leadId, { userId: req.user.userId });
     const updateData = {
       callifiedLeadStatus: classification.status,
       callifiedLeadStatusSource: classification.source,
@@ -831,21 +846,29 @@ router.post("/leads/:leadId/classify", verifyToken, async (req, res) => {
       if (assignedToId) updateData.assignedToId = assignedToId;
     }
 
-    const updated = await prisma.contact.update({
-      where: { id: leadId },
-      data: updateData,
-      include: { assignedTo: { select: { id: true, name: true, email: true } } },
-    });
+    try {
+      const updated = await prisma.contact.update({
+        where: { id: leadId },
+        data: updateData,
+        include: { assignedTo: { select: { id: true, name: true, email: true } } },
+      });
 
-    res.json({
-      id: updated.id,
-      callifiedLeadStatus: updated.callifiedLeadStatus,
-      callifiedLeadStatusSource: updated.callifiedLeadStatusSource,
-      callifiedLeadStatusUpdatedAt: updated.callifiedLeadStatusUpdatedAt,
-      assignedToId: updated.assignedToId,
-      assignedTo: updated.assignedTo,
-      reason: classification.reason,
-    });
+      res.json({
+        id: updated.id,
+        callifiedLeadStatus: updated.callifiedLeadStatus,
+        callifiedLeadStatusSource: updated.callifiedLeadStatusSource,
+        callifiedLeadStatusUpdatedAt: updated.callifiedLeadStatusUpdatedAt,
+        assignedToId: updated.assignedToId,
+        assignedTo: updated.assignedTo,
+        reason: classification.reason,
+      });
+    } catch (updateErr) {
+      if (updateErr.code === "P2025") {
+        console.error(`[callified] leads/:leadId/classify contact ${leadId} not found during update`);
+        return res.status(404).json({ error: "Lead not found", code: "LEAD_NOT_FOUND" });
+      }
+      throw updateErr;
+    }
   } catch (e) {
     console.error("[callified] leads/:leadId/classify error:", e.message);
     res.status(500).json({ error: "Failed to classify lead" });

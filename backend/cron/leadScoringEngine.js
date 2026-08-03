@@ -387,6 +387,75 @@ function computeScore(contact) {
 const RECOMPUTE_WINDOW_HOURS = 24;
 
 /**
+ * Score a specific list of contacts sequentially.
+ *
+ * Used by the generic CRM Leads page Refresh action. Sequential updates
+ * avoid the connection-pool saturation that the old cron caused when it
+ * fired one update per contact in parallel across every active tenant.
+ */
+async function scoreContactsByIds(tenantId, contactIds, io) {
+  if (!tenantId || !Array.isArray(contactIds) || contactIds.length === 0) {
+    return { scored: 0, errors: 0 };
+  }
+
+  const ids = [...new Set(contactIds.map((id) => Number(id)).filter(Number.isFinite))].slice(0, 100);
+  if (ids.length === 0) {
+    return { scored: 0, errors: 0 };
+  }
+
+  const contacts = await prisma.contact.findMany({
+    where: {
+      tenantId,
+      id: { in: ids },
+    },
+    include: {
+      deals: true,
+      activities: true,
+      sequenceEnrollments: true,
+      emails: { select: { direction: true, sentimentScore: true, createdAt: true } },
+      callLogs: { select: { createdAt: true } },
+      touchpoints: { select: { channel: true } },
+      whatsappMessages: { select: { direction: true, status: true, createdAt: true } },
+    },
+  });
+
+  const tickStart = new Date();
+  let scored = 0;
+  let errors = 0;
+
+  for (const contact of contacts) {
+    try {
+      let newScore = null;
+      if (aiModel) {
+        newScore = await scoreWithGemini(contact);
+      }
+      if (newScore === null) {
+        newScore = computeScore(contact);
+      }
+      await prisma.contact.update({
+        where: { id: contact.id },
+        data: {
+          aiScore: newScore,
+          aiScoreLastComputedAt: tickStart,
+        },
+      });
+      scored += 1;
+    } catch (err) {
+      console.error(`[LeadScoring] scoreContactsByIds update failed for contact ${contact.id}: ${err.message}`);
+      errors += 1;
+    }
+  }
+
+  console.log(`[LeadScoring] scoreContactsByIds: scored=${scored}, errors=${errors} for tenant=${tenantId}`);
+
+  if (io && scored > 0) {
+    io.emit('lead_scores_updated', { count: scored, ts: new Date() });
+  }
+
+  return { scored, errors };
+}
+
+/**
  * Core scoring tick — called by cron and by the debug endpoint.
  *
  * #421 — three architectural fixes vs the original sweep:
@@ -514,18 +583,15 @@ async function tickLeadScoringEngine(io) {
  * take effect without a server restart. `io` is captured by closure since
  * cronRegistry's tickFn contract takes no arguments. runImmediately
  * reproduces the historical "run once at startup" behavior.
+ *
+ * #<new> — automatic cron registration is disabled. The old background sweep
+ * was saturating the Prisma connection pool by parallelising updates across
+ * all tenants. aiScore is now recomputed on demand via the generic CRM
+ * Leads page Refresh action (POST /api/ai_scoring/contacts), which uses
+ * scoreContactsByIds and updates contacts sequentially.
  */
-function initLeadScoringCron(io) {
-  cronRegistry.register({
-    name: 'leadScoringEngine',
-    description: 'Recomputes Contact.aiScore for stale/unscored contacts (multi-factor formula + Gemini)',
-    defaultSchedule: '*/10 * * * *',
-    runImmediately: true,
-    tickFn: () => {
-      console.log('[LeadScoring] Cron tick — rescoring all contacts...');
-      return tickLeadScoringEngine(io);
-    },
-  }).catch((e) => console.error('[LeadScoring] cronRegistry registration failed:', e.message));
+function initLeadScoringCron(_io) {
+  console.log('[LeadScoring] Automatic cron disabled; scoring is now on-demand via /api/ai_scoring/contacts');
 }
 
-module.exports = { initLeadScoringCron, tickLeadScoringEngine, computeScore };
+module.exports = { initLeadScoringCron, tickLeadScoringEngine, computeScore, scoreContactsByIds };

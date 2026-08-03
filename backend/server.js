@@ -2304,10 +2304,9 @@ if (process.env.DISABLE_CRONS === "1") {
   console.log("✓ Cron engine: visaRiskFlagEngine (every 6 hours)");
 
   // Initialize Travel CRM web check-in scheduler (every 15 min).
-  // PRD §4.6 + §6.3 row 1 — flips WebCheckin status pending → reminded
-  // when windowOpenAt arrives, then reminded → fallback-agent if stalled
-  // 30m+. Browser-automation half (P1B) deferred — this scheduler only
-  // handles the tracking + reminder side.
+  // Notifies the assigned agent (or all admins/managers if unassigned) when a
+  // pending WebCheckin has departureAt within the next 24 hours. Status model
+  // is binary pending/done; no automation, no fallback-agent transitions.
   const { initWebCheckinSchedulerCron } = require("./cron/webCheckinScheduler");
   initWebCheckinSchedulerCron();
 

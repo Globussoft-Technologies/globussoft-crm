@@ -43,22 +43,14 @@ function normalizeUploadUrl(url) {
 const STATUSES = [
   { value: "", label: "All statuses" },
   { value: "pending", label: "Pending" },
-  { value: "reminded", label: "Reminded" },
-  { value: "in-progress", label: "In progress" },
   { value: "done", label: "Done" },
-  { value: "fallback-agent", label: "Fallback agent" },
-  { value: "failed", label: "Failed" },
 ];
 
-// Status badge palette — schema enum is pending|reminded|in-progress|done|
-// fallback-agent|failed (backend/routes/travel_webcheckin.js:VALID_STATUSES).
+// Status badge palette — backend/routes/travel_webcheckin.js:VALID_STATUSES
+// is now binary: pending | done.
 const STATUS_COLORS = {
   pending: { bg: "rgba(38,99,180,0.14)", color: "#1F5DAA" },
-  reminded: { bg: "rgba(40,160,180,0.16)", color: "#1E7E8C" },
-  "in-progress": { bg: "rgba(200,154,78,0.18)", color: "#9A6F2E" },
   done: { bg: "rgba(47,122,77,0.16)", color: "#2F7A4D" },
-  "fallback-agent": { bg: "rgba(168,50,63,0.16)", color: "#A8323F" },
-  failed: { bg: "rgba(168,50,63,0.18)", color: "#A8323F" },
 };
 
 const PAGE_SIZE = 50;

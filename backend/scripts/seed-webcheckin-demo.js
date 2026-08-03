@@ -1,18 +1,14 @@
 #!/usr/bin/env node
 /**
- * Demo seed for the web check-in AUTOMATION feature
- * (PRD_AIRLINE_WEBCHECKIN_AUTOMATION). Creates, for tenant 1:
+ * Demo seed for the Web Check-ins queue (manual-only model).
+ * Creates, for tenant 1:
  *   - a demo contact
- *   - a PAID, non-Visa-Sure (tmc) itinerary  ← the engine's gate
- *   - 3 WebCheckin rows in status 'reminded' whose PNR prefix drives the
- *     deterministic stub adapter (services/airlineAdapters/_stub.js):
- *         OK6E...     (6E / IndiGo)   -> success      -> status 'done'
- *         CAPTCHAEK.. (EK / Emirates) -> captcha      -> 'fallback-agent'
- *         FAILAI...   (AI / Air India)-> transient    -> retries -> 'fallback-agent'
+ *   - a PAID, non-Visa-Sure (tmc) itinerary
+ *   - 3 WebCheckin rows in status 'pending' with departureAt within the next
+ *     24 hours so the scheduler cron will notify operators on its next tick.
  *
  * Usage (from backend/):
  *   node scripts/seed-webcheckin-demo.js
- *   WEBCHECKIN_AUTOMATION_STUB=1 node -e "require('./cron/webCheckinAutomation').runWebCheckinAutomationTick().then(s=>console.log(s))"
  *
  * Idempotent-ish: re-running creates a fresh itinerary + rows each time (so you
  * can re-demo). Delete demo rows in Prisma Studio when done. Tenant 1 must exist
@@ -43,14 +39,14 @@ async function main() {
       contactId: contact.id,
       destination: "Dubai",
       subBrand: "tmc",
-      status: "fully_paid", // PAID gate the engine requires
+      status: "fully_paid",
     },
   });
 
   const flights = [
-    { pnr: "OK6E01", airlineCode: "6E", flightNumber: "6E-201", note: "-> success" },
-    { pnr: "CAPTCHAEK1", airlineCode: "EK", flightNumber: "EK-512", note: "-> captcha/fallback" },
-    { pnr: "FAILAI1", airlineCode: "AI", flightNumber: "AI-840", note: "-> retry/fallback" },
+    { pnr: "DEMO6E01", airlineCode: "6E", flightNumber: "6E-201" },
+    { pnr: "DEMOEK01", airlineCode: "EK", flightNumber: "EK-512" },
+    { pnr: "DEMOAI01", airlineCode: "AI", flightNumber: "AI-840" },
   ];
 
   const made = [];
@@ -64,21 +60,19 @@ async function main() {
         airlineCode: f.airlineCode,
         flightNumber: f.flightNumber,
         passengerName: "Web Check-in Demo Passenger",
-        departureAt: new Date(now + 30 * HOUR), // future flight
-        windowOpenAt: new Date(now - 2 * HOUR), // window already open
-        status: "reminded", // ready for the engine to pick up
-        automationSkipped: false,
+        departureAt: new Date(now + 12 * HOUR), // within 24h → scheduler will notify
+        windowOpenAt: new Date(now - 2 * HOUR),
+        status: "pending",
       },
     });
     made.push({ id: row.id, ...f });
   }
 
-  console.log("Seeded demo web check-in automation data:");
+  console.log("Seeded demo web check-in queue data:");
   console.log("  contact   id =", contact.id);
   console.log("  itinerary id =", itinerary.id, "(status fully_paid, subBrand tmc)");
-  for (const m of made) console.log(`  webcheckin id = ${m.id}  ${m.airlineCode} ${m.pnr}  ${m.note}`);
-  console.log("\nNext: run the engine tick with the stub adapter:");
-  console.log("  WEBCHECKIN_AUTOMATION_STUB=1 node -e \"require('./cron/webCheckinAutomation').runWebCheckinAutomationTick().then(s=>console.log(s))\"");
+  for (const m of made) console.log(`  webcheckin id = ${m.id}  ${m.airlineCode} ${m.pnr}`);
+  console.log("\nNext: wait for the scheduler cron (every 15 min) or open /travel/web-checkins.");
 }
 
 main()

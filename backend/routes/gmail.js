@@ -42,6 +42,9 @@ const {
   parseGmailMessage,
   extractEmailAddress,
 } = require("../lib/gmailMessage");
+const { requireTravelTenant } = require("../middleware/travelGuards");
+const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // Memory-based upload — files stay as Buffers, never touch disk.
 // 25 MB per file (Gmail's attachment limit); 10 files max per send.
@@ -77,6 +80,16 @@ const SCOPES = [
 ];
 
 const PROVIDER = "google";
+
+// Gemini client for the Travel-vertical “email → web check-in” extraction.
+// Reuses the root .env loaded at the top of this file.
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+let genAI = null;
+let geminiModel = null;
+if (GEMINI_API_KEY) {
+  genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+  geminiModel = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || "gemini-2.5-flash" });
+}
 
 function buildOAuthClient() {
   return new google.auth.OAuth2(
@@ -295,7 +308,6 @@ router.get("/callback", async (req, res) => {
 // GET /status — is the current user's mailbox connected?
 router.get("/status", verifyToken, async (req, res) => {
   try {
-    const tenantId = req.user.tenantId;
     const integration = await prisma.gmailIntegration.findUnique({
       where: {
         tenantId_userId_provider: {
@@ -322,7 +334,6 @@ router.get("/status", verifyToken, async (req, res) => {
 // DELETE /disconnect — drop the integration row.
 router.delete("/disconnect", verifyToken, async (req, res) => {
   try {
-    const tenantId = req.user.tenantId;
     await prisma.gmailIntegration
       .delete({
         where: {
@@ -413,6 +424,256 @@ router.get("/messages", verifyToken, async (req, res) => {
       .json({ error: "Couldn't load your Gmail messages right now." });
   }
 });
+
+function safeJsonParse(str) {
+  if (!str || typeof str !== "string") return null;
+  const cleaned = str.replace(/^```json\s*|\s*```$/gi, "").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    return null;
+  }
+}
+
+function parseIsoOrNull(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
+// POST /api/gmail/messages/:messageId/webcheckin
+//   Travel-vertical only. Reads the connected Gmail account, fetches the
+//   message + attachments, sends them to Gemini, and creates a WebCheckin row.
+//   MUST mount before `/messages/:messageId` so Express doesn't treat
+//   "webcheckin" as a message id.
+router.post(
+  "/messages/:messageId/webcheckin",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      if (!geminiModel) {
+        return res.status(400).json({
+          error: "Gemini is not configured on the server. Add GEMINI_API_KEY.",
+          code: "GEMINI_NOT_CONFIGURED",
+        });
+      }
+
+      const userId = req.user.userId;
+      const tenantId = req.user.tenantId;
+      const { messageId } = req.params;
+
+      const { client } = await getAuthorizedClientForUser(userId, tenantId);
+      const gmail = google.gmail({ version: "v1", auth: client });
+
+      // 1. Fetch the full message.
+      const full = await gmail.users.messages.get({
+        userId: "me",
+        id: messageId,
+        format: "full",
+      });
+      const parsed = parseGmailMessage(full.data);
+      if (!parsed) {
+        return res.status(404).json({ error: "Message not found", code: "MESSAGE_NOT_FOUND" });
+      }
+
+      // 2. Download every attachment into memory.
+      const attachmentBuffers = [];
+      if (Array.isArray(parsed.attachments)) {
+        for (const att of parsed.attachments) {
+          try {
+            const { data } = await gmail.users.messages.attachments.get({
+              userId: "me",
+              messageId,
+              id: att.attachmentId,
+            });
+            const buf = data && data.data
+              ? Buffer.from(data.data, "base64url")
+              : Buffer.alloc(0);
+            attachmentBuffers.push({ ...att, data: buf });
+          } catch (attErr) {
+            console.error(`[gmail/webcheckin] failed to download attachment ${att.attachmentId}:`, attErr.message);
+            // Continue without this attachment — don't fail the whole flow.
+          }
+        }
+      }
+
+      // 3. Build the multimodal Gemini prompt.
+      const emailContext = `Email subject: ${parsed.subject || "(no subject)"}
+From: ${parsed.from || "(unknown)"}
+Date: ${parsed.date || "(unknown)"}
+
+Body:
+${parsed.text || parsed.html || parsed.snippet || "(no body text)"}`;
+
+      const promptText = `You are an expert travel-document parser. Analyse the following airline email and any attached files (PDFs or images of tickets/boarding passes) and extract structured flight check-in details.
+
+${emailContext}
+
+Return ONLY a single JSON object with this exact shape (no markdown, no explanation):
+{
+  "isFlightTicket": true|false,
+  "confidence": 0.0-1.0,
+  "passengerName": "full name of the passenger",
+  "passengerEmail": "email if visible, else null",
+  "passengerPhone": "phone if visible, else null",
+  "pnr": "booking reference / PNR / confirmation code",
+  "airlineCode": "3-letter or 2-letter IATA airline code (e.g. EK, 6E, AI). Uppercase.",
+  "flightNumber": "flight number including airline prefix, e.g. EK-571 or 6E-1234",
+  "departureAt": "ISO-8601 datetime string in UTC if timezone is given, else local",
+  "seatPref": "seat preference if mentioned, else null",
+  "mealPref": "meal preference if mentioned, else null",
+  "notes": "any other useful check-in info"
+}
+
+Rules:
+- If the email is clearly NOT a flight ticket/booking, set isFlightTicket=false and confidence=0.
+- departureAt MUST be a valid ISO-8601 string (e.g. 2026-08-15T10:30:00Z or 2026-08-15T10:30:00+05:30). If only a date is given, use 00:00:00.
+- airlineCode should be just the carrier code (e.g. "EK"), not the full name.
+- flightNumber should include the airline prefix (e.g. "EK-571").
+- If multiple passengers are listed, use the first named adult passenger for passengerName.`;
+
+      const parts = [{ text: promptText }];
+      for (const att of attachmentBuffers) {
+        const mime = att.mimeType || "application/octet-stream";
+        if (mime.startsWith("image/") || mime === "application/pdf") {
+          parts.push({
+            inlineData: {
+              mimeType: mime,
+              data: att.data.toString("base64"),
+            },
+          });
+        }
+      }
+
+      let geminiResult;
+      try {
+        geminiResult = await geminiModel.generateContent({ contents: [{ role: "user", parts }] });
+      } catch (genErr) {
+        console.error("[gmail/webcheckin] Gemini error:", genErr.message || genErr);
+        return res.status(502).json({
+          error: "Failed to analyse the email with Gemini. Please try again.",
+          code: "GEMINI_ERROR",
+        });
+      }
+
+      const rawText = geminiResult?.response?.text?.() || "";
+      const extracted = safeJsonParse(rawText);
+      if (!extracted || typeof extracted !== "object") {
+        return res.status(502).json({
+          error: "Gemini returned an unparseable response.",
+          code: "GEMINI_MALFORMED",
+        });
+      }
+
+      if (extracted.isFlightTicket === false) {
+        return res.status(400).json({
+          error: "This email does not appear to be a flight ticket or booking.",
+          code: "NOT_FLIGHT_TICKET",
+          extracted,
+        });
+      }
+
+      const confidence = Number.isFinite(extracted.confidence) ? extracted.confidence : 0;
+      if (confidence < 0.5) {
+        return res.status(400).json({
+          error: "Could not confidently extract flight details from this email.",
+          code: "LOW_CONFIDENCE",
+          extracted,
+        });
+      }
+
+      const departureAt = parseIsoOrNull(extracted.departureAt);
+      if (!departureAt) {
+        return res.status(400).json({
+          error: "Could not determine the flight departure datetime.",
+          code: "MISSING_DEPARTURE",
+          extracted,
+        });
+      }
+
+      const airlineCode = String(extracted.airlineCode || "").toUpperCase().trim();
+      const flightNumber = String(extracted.flightNumber || "").trim();
+      const pnr = String(extracted.pnr || "").trim();
+      const passengerName = String(extracted.passengerName || "").trim();
+
+      if (!airlineCode || !flightNumber || !pnr || !passengerName) {
+        return res.status(400).json({
+          error: "Missing required flight details (airline, flight number, PNR, or passenger name).",
+          code: "INCOMPLETE_EXTRACTION",
+          extracted,
+        });
+      }
+
+      // 4. Resolve or auto-create the passenger Contact.
+      let contact = null;
+      if (extracted.passengerEmail) {
+        const email = String(extracted.passengerEmail).toLowerCase().trim();
+        contact = await prisma.contact.findFirst({
+          where: { tenantId, email },
+          select: { id: true },
+        });
+      }
+      if (!contact && passengerName) {
+        contact = await prisma.contact.findFirst({
+          where: { tenantId, name: passengerName },
+          select: { id: true },
+        });
+      }
+      if (!contact) {
+        contact = await prisma.contact.create({
+          data: {
+            tenantId,
+            name: passengerName || "Passenger",
+            email: extracted.passengerEmail || null,
+            phone: extracted.passengerPhone || null,
+            status: "Customer",
+            source: "email-webcheckin",
+          },
+        });
+      }
+
+      // 5. Create the WebCheckin row.
+      const windowOpenAt = computeWindowOpenAt(departureAt, airlineCode);
+      const webcheckin = await prisma.webCheckin.create({
+        data: {
+          tenantId,
+          contactId: contact.id,
+          itineraryId: null,
+          pnr,
+          airlineCode,
+          flightNumber,
+          departureAt,
+          windowOpenAt,
+          passengerName,
+          seatPref: extracted.seatPref || null,
+          mealPref: extracted.mealPref || null,
+          status: "pending",
+        },
+      });
+
+      return res.status(201).json({
+        success: true,
+        webcheckin,
+        contactId: contact.id,
+        extracted,
+      });
+    } catch (err) {
+      if (isReauthError(err)) {
+        return res.status(401).json({
+          error: "Your Gmail connection has expired. Please reconnect.",
+          code: "RECONNECT_REQUIRED",
+        });
+      }
+      if (isGmailNotEnabledError(err)) {
+        return res.status(400).json({ error: GMAIL_NOT_ENABLED_MSG, code: "GMAIL_NOT_ENABLED" });
+      }
+      if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+      console.error("[gmail/webcheckin] error:", err);
+      return res.status(500).json({ error: "Could not create web check-in from this email." });
+    }
+  },
+);
 
 // GET /messages/:messageId — one full message, parsed.
 //

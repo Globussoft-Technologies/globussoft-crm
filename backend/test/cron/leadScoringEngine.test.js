@@ -139,6 +139,7 @@ const { mockGenerateContent } = vi.hoisted(() => {
 import {
   computeScore,
   tickLeadScoringEngine,
+  scoreContactsByIds,
 } from '../../cron/leadScoringEngine.js';
 
 beforeAll(() => {
@@ -851,6 +852,69 @@ describe('tickLeadScoringEngine — orchestration', () => {
     const dbErr = new Error('DB unreachable');
     prisma.contact.findMany.mockRejectedValueOnce(dbErr);
     await expect(tickLeadScoringEngine(null)).rejects.toThrow('DB unreachable');
+  });
+});
+
+// ─── scoreContactsByIds — on-demand sequential scoring ────────────────────
+
+describe('scoreContactsByIds — on-demand sequential scoring', () => {
+  test('happy path: scores provided contacts sequentially and returns counts', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      contactWith({ id: 11, status: 'Customer' }),
+      contactWith({ id: 22, status: 'Lead' }),
+    ]);
+
+    const result = await scoreContactsByIds(1, [11, 22], null);
+
+    expect(result).toEqual({ scored: 2, errors: 0 });
+    expect(prisma.contact.findMany).toHaveBeenCalledTimes(1);
+    const findArg = prisma.contact.findMany.mock.calls[0][0];
+    expect(findArg.where.tenantId).toBe(1);
+    expect(findArg.where.id.in).toEqual([11, 22]);
+    expect(prisma.contact.update).toHaveBeenCalledTimes(2);
+    for (const call of prisma.contact.update.mock.calls) {
+      const arg = call[0];
+      expect(arg.data).toHaveProperty('aiScore');
+      expect(arg.data).toHaveProperty('aiScoreLastComputedAt');
+    }
+  });
+
+  test('deduplicates and caps contactIds at 100', async () => {
+    prisma.contact.findMany.mockResolvedValue([]);
+    const ids = Array.from({ length: 150 }, (_, i) => i + 1);
+    await scoreContactsByIds(1, ids, null);
+    const findArg = prisma.contact.findMany.mock.calls[0][0];
+    expect(findArg.where.id.in.length).toBe(100);
+  });
+
+  test('emits lead_scores_updated when io is supplied', async () => {
+    prisma.contact.findMany.mockResolvedValue([contactWith({ id: 7 })]);
+    const io = { emit: vi.fn() };
+    await scoreContactsByIds(1, [7], io);
+    expect(io.emit).toHaveBeenCalledTimes(1);
+    const [event, payload] = io.emit.mock.calls[0];
+    expect(event).toBe('lead_scores_updated');
+    expect(payload.count).toBe(1);
+  });
+
+  test('tolerates single-contact update failures and counts them as errors', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      contactWith({ id: 31 }),
+      contactWith({ id: 32 }),
+    ]);
+    prisma.contact.update
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error('deadlock'));
+
+    const result = await scoreContactsByIds(1, [31, 32], null);
+
+    expect(result).toEqual({ scored: 1, errors: 1 });
+  });
+
+  test('empty or invalid input returns zero counts without touching DB', async () => {
+    expect(await scoreContactsByIds(1, [], null)).toEqual({ scored: 0, errors: 0 });
+    expect(await scoreContactsByIds(null, [1], null)).toEqual({ scored: 0, errors: 0 });
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
   });
 });
 

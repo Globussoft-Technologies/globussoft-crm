@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   UserPlus, Search, ArrowRightCircle, Plus, X, Pencil, Trash2, RefreshCw,
   ChevronLeft, ChevronRight, Phone, FileText, Filter, SlidersHorizontal, Info,
+  Settings,
 } from 'lucide-react';
 import { AuthContext } from '../App';
 import ColumnPicker from '../components/ColumnPicker';
@@ -163,6 +164,11 @@ const Leads = () => {
   const [callQueueActive, setCallQueueActive] = useState(false);
   const [callStatusDrawerOpen, setCallStatusDrawerOpen] = useState(false);
   const [classifyingLeads, setClassifyingLeads] = useState(new Set());
+  // Generic CRM Leads page — AI transcript classification toggle (gear menu next
+  // to the Lead Status column). Default true matches the tenant-setting default.
+  const [aiTranscriptEnabled, setAiTranscriptEnabled] = useState(true);
+  const [aiTranscriptSaving, setAiTranscriptSaving] = useState(false);
+  const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
   const [pipelineStages, setPipelineStages] = useState([]);
   const [dealsByContact, setDealsByContact] = useState({});
   const [bookingValueByContact, setBookingValueByContact] = useState({});
@@ -217,8 +223,8 @@ const Leads = () => {
     customFields: {},
   });
 
-  const fetchLeads = async () => {
-    setLoading(true);
+  const fetchLeads = async ({ background = false } = {}) => {
+    if (!background) setLoading(true);
     try {
       const data = await fetchApi('/api/contacts?status=Lead&limit=500');
       const rows = Array.isArray(data) ? data : [];
@@ -228,7 +234,7 @@ const Leads = () => {
       notify.error('Failed to load leads');
       return [];
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   };
 
@@ -272,9 +278,9 @@ const Leads = () => {
   };
 
   // Refresh everything visible on the Leads page without a full reload.
-  // Re-classifies any generic leads that are linked to a Callified campaign or
-  // currently have no status, so a real call that just completed updates the
-  // Hot/Cold badge without a browser reload.
+  // Recomputes AI scores and re-classifies Hot/Cold only for leads that were
+  // actually called, so a real call that just completed updates both the Lead
+  // Score and the Lead Status without a browser reload.
   const refreshAll = async () => {
     const [freshLeads] = await Promise.all([
       fetchLeads(),
@@ -283,7 +289,33 @@ const Leads = () => {
       loadAutoCampaign(),
     ]);
     if (isGeneric && Array.isArray(freshLeads) && freshLeads.length > 0) {
-      await classifyVisibleLeads(freshLeads, { force: true });
+      // Score + classify only leads that were actually called. This avoids
+      // burning Gemini credits / HTTP time on hundreds of untouched leads while
+      // still updating status/score for contacts that have fresh Callified data.
+      const visibleIds = freshLeads.map((l) => l.id);
+      try {
+        const summaryRes = await fetchApi(`/api/callified/leads/call-summary?contactIds=${visibleIds.join(',')}`);
+        const summaries = summaryRes?.summaries || {};
+        const calledLeadIds = freshLeads
+          .filter((l) => (summaries[l.id]?.callCount || 0) > 0)
+          .map((l) => l.id);
+
+        if (calledLeadIds.length > 0) {
+          await fetchApi('/api/ai_scoring/contacts', {
+            method: 'POST',
+            body: JSON.stringify({ contactIds: calledLeadIds }),
+          });
+          const scoredLeads = await fetchLeads({ background: true });
+          // Re-classify called leads so Hot/Cold refreshes from the latest
+          // transcript/score (e.g. a preliminary Cold gets corrected to Hot).
+          if (Array.isArray(scoredLeads) && scoredLeads.length > 0) {
+            const calledSet = new Set(calledLeadIds);
+            classifyVisibleLeads(scoredLeads.filter((l) => calledSet.has(l.id)), { force: true });
+          }
+        }
+      } catch (e) {
+        console.error('[leads] aiScore/classify refresh failed:', e?.message);
+      }
     }
     notify.success('Refreshed');
   };
@@ -305,7 +337,7 @@ const Leads = () => {
         method: 'POST',
         body: JSON.stringify({ contactIds: ids }),
       });
-      await fetchLeads();
+      await fetchLeads({ background: true });
     } catch (e) {
       console.error('[leads] ensureHotLeadsAssigned failed:', e?.message);
     }
@@ -334,22 +366,20 @@ const Leads = () => {
     }
     setClassifyingLeads(next);
     try {
-      const classifyResults = await Promise.all(
-        candidates.map(async (lead) => {
-          try {
-            return await fetchApi(`/api/callified/leads/${lead.id}/classify`, { method: 'POST' });
-          } catch (e) {
-            console.error(`[leads] classify ${lead.id} failed:`, e?.message);
-            return null;
-          }
-        })
-      );
+      // Classify one lead at a time. Bulk dials can produce hundreds of completed
+      // calls; firing that many classify requests in parallel hammers the backend
+      // and can hit rate limits. Sequential keeps it predictable and safe.
+      const resultById = new Map();
+      for (const lead of candidates) {
+        try {
+          const r = await fetchApi(`/api/callified/leads/${lead.id}/classify`, { method: 'POST' });
+          if (r?.id) resultById.set(r.id, r);
+        } catch (e) {
+          console.error(`[leads] classify ${lead.id} failed:`, e?.message);
+        }
+      }
       // Optimistically merge classification results + auto-assignment into local
       // state so the Hot/Cold badge and Assigned To column update immediately.
-      const resultById = new Map();
-      for (const r of classifyResults) {
-        if (r?.id) resultById.set(r.id, r);
-      }
       if (resultById.size > 0) {
         setLeads(prev => prev.map(l => {
           const r = resultById.get(l.id);
@@ -365,7 +395,7 @@ const Leads = () => {
           };
         }));
       }
-      await fetchLeads();
+      await fetchLeads({ background: true });
       // The score/call-count badges read from a separate summary cache; refresh
       // that cache so the Callified Score column updates without a reload.
       const ids = candidates.map(l => l.id);
@@ -491,6 +521,43 @@ const Leads = () => {
   useEffect(() => {
     loadCallifiedCampaigns();
   }, [loadCallifiedCampaigns]);
+
+  // Generic CRM Leads page — load the AI transcript classification tenant setting.
+  const loadAiTranscriptSetting = useCallback(async () => {
+    if (!isGeneric) return;
+    try {
+      const d = await fetchApi('/api/tenant-settings/feature.callified.ai_transcript.enabled');
+      setAiTranscriptEnabled(String(d?.value).toLowerCase() !== 'false');
+    } catch (e) {
+      setAiTranscriptEnabled(true);
+    }
+  }, [isGeneric]);
+
+  useEffect(() => {
+    loadAiTranscriptSetting();
+  }, [loadAiTranscriptSetting]);
+
+  const saveAiTranscriptEnabled = async (next) => {
+    if (!isAdmin) {
+      notify.info('Only admins can change AI transcript classification settings.');
+      return;
+    }
+    setAiTranscriptSaving(true);
+    try {
+      const d = await fetchApi('/api/tenant-settings/feature.callified.ai_transcript.enabled', {
+        method: 'PUT',
+        body: JSON.stringify({ value: next ? 'true' : 'false', category: 'feature-flag' }),
+      });
+      setAiTranscriptEnabled(String(d?.value).toLowerCase() !== 'false');
+      notify.success(`AI transcript classification ${next ? 'enabled' : 'disabled'}`);
+    } catch (e) {
+      notify.error(e?.body?.error || 'Failed to save AI transcript setting');
+      // Re-sync so the toggle reflects the server truth.
+      loadAiTranscriptSetting();
+    } finally {
+      setAiTranscriptSaving(false);
+    }
+  };
 
   // #892  close the Create drawer on Escape. Attached only while the drawer
   // is open so we don't trap key events for users not actively creating.
@@ -641,7 +708,7 @@ const Leads = () => {
       // below puts the new row at the top so the user sees the result.
       setCreating(false);
     } finally {
-      fetchLeads();
+      fetchLeads({ background: true });
     }
   };
 
@@ -668,7 +735,7 @@ const Leads = () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    fetchLeads();
+    fetchLeads({ background: true });
   };
 
   const openEdit = (lead) => {
@@ -702,7 +769,7 @@ const Leads = () => {
       });
       notify.success('Lead updated');
       setEditing(null);
-      fetchLeads();
+      fetchLeads({ background: true });
     } catch (err) {
       notify.error(err?.body?.error || err?.message || 'Failed to update lead');
     } finally {
@@ -722,7 +789,7 @@ const Leads = () => {
     try {
       await fetchApi(`/api/contacts/${lead.id}`, { method: 'DELETE' });
       notify.success('Lead deleted');
-      fetchLeads();
+      fetchLeads({ background: true });
     } catch (err) {
       notify.error(err?.body?.error || err?.message || 'Failed to delete lead');
     }
@@ -734,7 +801,7 @@ const Leads = () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ assignedToId: assignedToId || null }),
     });
-    fetchLeads();
+    fetchLeads({ background: true });
   };
 
   const handleBulkAssign = async () => {
@@ -746,7 +813,7 @@ const Leads = () => {
     });
     setSelectedLeads([]);
     setBulkAgent('');
-    fetchLeads();
+    fetchLeads({ background: true });
   };
 
   const handleCampaignChange = async (lead, campaignId) => {
@@ -765,7 +832,7 @@ const Leads = () => {
       });
       // Refetch leads once; reload campaign counts in the background so the
       // dropdown counts stay fresh without blocking the optimistic update.
-      await fetchLeads();
+      await fetchLeads({ background: true });
       loadCallifiedCampaigns();
     } catch (err) {
       // Roll back on failure.
@@ -776,8 +843,10 @@ const Leads = () => {
     }
   };
 
-  // Poll Callified until a lead's latest call reaches a terminal state or a
-  // timeout passes. Keeps the queue honest one-by-one instead of racing ahead.
+  // Poll Callified until a lead's latest call has a transcript, or a timeout
+  // passes. The post-call classify reads the latest review from Callified; if
+  // the review is still preliminary, the Refresh button re-classifies called
+  // leads so the status corrects itself once the final review is available.
   const pollCallCompletion = async (lead, { callifiedLeadId, timeoutMs = 120_000, intervalMs = 3000 } = {}) => {
     const start = Date.now();
     let resolvedId = callifiedLeadId || null;
@@ -835,7 +904,7 @@ const Leads = () => {
 
     setCallQueueActive(false);
     setTimeout(() => setCallQueue([]), 4000);
-    const freshLeads = await fetchLeads();
+    const freshLeads = await fetchLeads({ background: true });
     if (isGeneric && completed.length > 0 && freshLeads?.length > 0) {
       // Re-classify the leads we just called so their Hot/Cold status updates
       // from the latest transcript/score without requiring a browser reload.
@@ -938,10 +1007,10 @@ const Leads = () => {
             }
           : l
       ));
-      await fetchLeads();
     } catch (err) {
       notify.error(err?.body?.error || err?.message || 'Failed to update lead status');
-      await fetchLeads();
+    } finally {
+      await fetchLeads({ background: true });
     }
   };
 
@@ -1069,17 +1138,6 @@ const Leads = () => {
   }, [isGeneric, filteredLeads.map(l => l.id).join(',')]);
   /* eslint-enable react-hooks/exhaustive-deps */
 
-  // Auto-classify visible generic-CRM leads that haven't been classified yet.
-  // Runs whenever the visible lead set changes and Callified is configured.
-  useEffect(() => {
-    if (!isGeneric || !callifiedConfigured || filteredLeads.length === 0) return;
-    const timeout = setTimeout(() => {
-      classifyVisibleLeads(filteredLeads);
-    }, 500);
-    return () => clearTimeout(timeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isGeneric, callifiedConfigured, filteredLeads.map(l => `${l.id}:${l.callifiedLeadStatus}`).join(',')]);
-
   // Safety net: any Hot lead that is unassigned (or assigned to a user outside
   // the active ADMIN/MANAGER/USER pool used by the round-robin picker) should be
   // round-robin assigned. This catches existing Hot leads, manually-overridden
@@ -1120,7 +1178,7 @@ const Leads = () => {
         notify.success(`Auto-assigned ${assignedCount} hot lead(s)`);
       }
       // Refresh once at the end so the round-robin pointer and relations are consistent.
-      fetchLeads();
+      fetchLeads({ background: true });
     };
 
     const timeout = setTimeout(run, 600);
@@ -1602,7 +1660,42 @@ const Leads = () => {
                   {isColVisible('aiScore') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Lead Score</th>}
                   {isColVisible('source') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>}
                   {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', minWidth: '180px' }}>Callified Campaign</th>}
-                  {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', minWidth: '120px' }}>Lead Status</th>}
+                  {isGeneric && (
+                    <th style={{ position: 'relative', padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', minWidth: '140px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span>Lead Status</span>
+                        <button
+                          type="button"
+                          aria-label="Lead status AI settings"
+                          title="Lead status AI settings"
+                          onClick={(e) => { e.stopPropagation(); setAiSettingsOpen(o => !o); }}
+                          disabled={aiTranscriptSaving}
+                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 2, border: 'none', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', borderRadius: 4 }}
+                        >
+                          <Settings size={14} />
+                        </button>
+                      </div>
+                      {aiSettingsOpen && (
+                        <>
+                          <div style={{ position: 'fixed', inset: 0, zIndex: 50 }} onClick={() => setAiSettingsOpen(false)} />
+                          <div className="card" style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 8, zIndex: 51, padding: '0.75rem', minWidth: '250px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                              <input
+                                type="checkbox"
+                                checked={aiTranscriptEnabled}
+                                disabled={aiTranscriptSaving || !isAdmin}
+                                onChange={(e) => { saveAiTranscriptEnabled(e.target.checked); }}
+                              />
+                              AI Based transcription classification
+                            </label>
+                            {!isAdmin && (
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>Only admins can change this.</div>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </th>
+                  )}
                   {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', width: '110px' }}>Callified AI call</th>}
                   {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', width: '100px' }}>Callified Score</th>}
                   {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Sub-brand</th>}

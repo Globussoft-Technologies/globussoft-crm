@@ -516,6 +516,10 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
       createdAt: new Date(),
     };
     prisma.contact.create.mockResolvedValueOnce(createdContact);
+    prisma.tenant.findUnique.mockResolvedValue({
+      vertical: "wellness",
+      callifiedAutoCampaignId: null,
+    });
 
     const app = makeApp();
     const res = await request(app).post("/api/v1/external/leads").send({
@@ -581,7 +585,7 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     });
     prisma.tenant.findUnique
       .mockReset()
-      .mockResolvedValueOnce({ callifiedAutoCampaignId: 42 });
+      .mockResolvedValueOnce({ vertical: "generic", callifiedAutoCampaignId: 42 });
     prisma.contact.findFirst.mockResolvedValueOnce(null);
     prisma.contact.create.mockResolvedValueOnce({
       id: 556,
@@ -608,7 +612,7 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     expect(res.status).toBe(201);
     expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
       where: { id: 7 },
-      select: { callifiedAutoCampaignId: true },
+      select: { vertical: true, callifiedAutoCampaignId: true },
     });
     const cArgs = prisma.contact.create.mock.calls[0][0].data;
     expect(cArgs.status).toBe("Lead");
@@ -710,12 +714,12 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
         tenantId: 7,
         fieldKey: {
           in: [
+            "company",
             "total_number_of_employees",
             "select_a_product",
             "utm_source",
             "utm_medium",
             "submit_source",
-            "company",
             "work_number",
             "custom_field_one",
             "custom_field_two",

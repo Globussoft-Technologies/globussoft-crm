@@ -1,4 +1,4 @@
-﻿// @ts-check
+// @ts-check
 /**
  * Unit tests for backend/routes/external.js — the External Partner API
  * mounted at /api/v1/external/* and consumed by sister Globussoft products
@@ -777,6 +777,8 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     expect(aArgs.type).toBe("JunkFilter");
     expect(aArgs.description).toContain("junk-filter");
   });
+});
+
 describe("POST /api/v1/external/calls", () => {
   test("no phone/contactId/callerNumber/calleeNumber → 400", async () => {
     const app = makeApp();

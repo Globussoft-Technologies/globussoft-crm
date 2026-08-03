@@ -59,6 +59,8 @@ export default function Trips() {
   const location = useLocation();
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialStatus = searchParams.get("status") || "";
   const initialSearch = searchParams.get("search") || "";
@@ -111,21 +113,44 @@ export default function Trips() {
     setSearch((current) => (current === nextSearch ? current : nextSearch));
   }, [searchParams]);
 
-  const load = () => {
+  const LIMIT = 10;
+  const hasMore = trips.length < total;
+
+  const load = (append = false, nextOffset = 0) => {
     setLoading(true);
     const qs = new URLSearchParams();
     if (status) qs.set("status", status);
-    qs.set("limit", "100");
+    qs.set("limit", String(LIMIT));
+    qs.set("offset", String(nextOffset));
     fetchApi(`/api/travel/trips?${qs.toString()}`)
-      .then((res) => setTrips(Array.isArray(res?.trips) ? res.trips : []))
+      .then((res) => {
+        const nextTrips = Array.isArray(res?.trips) ? res.trips : [];
+        setTrips(append ? (prev) => [...prev, ...nextTrips] : nextTrips);
+        setTotal(typeof res?.total === "number" ? res.total : nextTrips.length);
+        setOffset(nextOffset);
+      })
       .catch((e) => {
         notify.error(e?.body?.error || "Failed to load trips");
-        setTrips([]);
+        if (!append) {
+          setTrips([]);
+          setTotal(0);
+          setOffset(0);
+        }
       })
       .finally(() => setLoading(false));
   };
 
-  useEffect(load, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadMore = () => {
+    if (loading || !hasMore) return;
+    load(true, offset + LIMIT);
+  };
+
+  const resetAndLoad = () => {
+    setOffset(0);
+    load(false, 0);
+  };
+
+  useEffect(resetAndLoad, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Track which trip is currently being deleted so we can disable its
   // row's trash button (prevents double-click race) without disabling
@@ -223,13 +248,23 @@ export default function Trips() {
         <select value={status} onChange={(e) => setStatus(e.target.value)} style={selectStyle} aria-label="Filter by status">
           {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <button type="button" onClick={load} style={refreshBtn} aria-label="Reload list">Refresh</button>
+        <button type="button" onClick={resetAndLoad} style={refreshBtn} aria-label="Reload list">Refresh</button>
       </div>
 
-      <div style={{
-        background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)", overflow: "visible",
-      }}>
+      <div
+        data-testid="trips-table-scroll"
+        onScroll={(e) => {
+          const { scrollTop, clientHeight, scrollHeight } = e.currentTarget;
+          if (scrollTop + clientHeight >= scrollHeight - 80) {
+            loadMore();
+          }
+        }}
+        style={{
+          background: "var(--surface-color)", borderRadius: 8,
+          border: "1px solid var(--border-color)", overflow: "auto",
+          maxHeight: 480,
+        }}
+      >
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : trips.length === 0 ? (
@@ -274,7 +309,7 @@ export default function Trips() {
                         {fmt(t.departDate)} → {fmt(t.returnDate)}
                       </span>
                     </td>
-                    <td style={td}>#{t.schoolContactId}</td>
+                    <td style={td}>School #{t.schoolContactId}</td>
                     <td style={td}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                         <Users size={12} aria-hidden />

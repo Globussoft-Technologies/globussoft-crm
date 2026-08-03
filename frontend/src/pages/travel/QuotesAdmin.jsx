@@ -155,9 +155,14 @@ export default function QuotesAdmin() {
     const qs = new URLSearchParams();
     if (subBrand) qs.set("subBrand", subBrand);
     if (status && status !== "Expired") qs.set("status", status);
-    if (status === "Expired") qs.set("limit", "200");
+    if (status === "Expired") {
+      qs.set("limit", "200");
+    } else {
+      qs.set("limit", "50");
+      qs.set("offset", "0");
+    }
     const baseUrl = status === "Expired" ? "/api/travel/quotes/expired" : "/api/travel/quotes";
-    const url = `${baseUrl}${qs.toString() ? `?${qs.toString()}` : ""}`;
+    const url = `${baseUrl}?${qs.toString()}`;
     fetchApi(url)
       .then((d) => {
         const nextQuotes = Array.isArray(d?.quotes) ? d.quotes : [];

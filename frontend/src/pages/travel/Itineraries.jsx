@@ -293,6 +293,8 @@ export default function Itineraries() {
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
   const initialQuery = new URLSearchParams(location.search);
   const openedFromReports = initialQuery.get("source") === "reports";
   const reportsBackTo = "/travel/reports";
@@ -619,22 +621,45 @@ export default function Itineraries() {
     }
   };
 
-  const load = () => {
+  const LIMIT = 10;
+  const hasMore = items.length < total;
+
+  const load = (append = false, nextOffset = 0) => {
     setLoading(true);
     const qs = new URLSearchParams();
     if (subBrand) qs.set("subBrand", subBrand);
     if (status) qs.set("status", status);
-    qs.set("limit", "100");
+    qs.set("limit", String(LIMIT));
+    qs.set("offset", String(nextOffset));
     fetchApi(`/api/travel/itineraries?${qs.toString()}`)
-      .then((res) => setItems(Array.isArray(res?.itineraries) ? res.itineraries : []))
+      .then((res) => {
+        const nextItems = Array.isArray(res?.itineraries) ? res.itineraries : [];
+        setItems(append ? (prev) => [...prev, ...nextItems] : nextItems);
+        setTotal(typeof res?.total === "number" ? res.total : nextItems.length);
+        setOffset(nextOffset);
+      })
       .catch((e) => {
         notify.error(e?.body?.error || "Failed to load itineraries");
-        setItems([]);
+        if (!append) {
+          setItems([]);
+          setTotal(0);
+          setOffset(0);
+        }
       })
       .finally(() => setLoading(false));
   };
 
-  useEffect(load, [subBrand, status]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadMore = () => {
+    if (loading || !hasMore) return;
+    load(true, offset + LIMIT);
+  };
+
+  const resetAndLoad = () => {
+    setOffset(0);
+    load(false, 0);
+  };
+
+  useEffect(resetAndLoad, [subBrand, status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close drawer on Escape
   useEffect(() => {
@@ -739,7 +764,7 @@ export default function Itineraries() {
             </button>
           )}
         </div>
-        <button type="button" onClick={load} style={refreshBtn} aria-label="Reload list">Refresh</button>
+        <button type="button" onClick={resetAndLoad} style={refreshBtn} aria-label="Reload list">Refresh</button>
       </div>
 
       {/* S81 — selected-itinerary map panel. Shown only when the operator
@@ -793,10 +818,20 @@ export default function Itineraries() {
         </div>
       )}
 
-      <div style={{
-        background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)", overflow: "visible",
-      }}>
+      <div
+        data-testid="itineraries-scroll-area"
+        onScroll={(e) => {
+          const { scrollTop, clientHeight, scrollHeight } = e.currentTarget;
+          if (scrollTop + clientHeight >= scrollHeight - 80) {
+            loadMore();
+          }
+        }}
+        style={{
+          background: "var(--surface-color)", borderRadius: 8,
+          border: "1px solid var(--border-color)", overflow: "auto",
+          maxHeight: 480,
+        }}
+      >
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : items.length === 0 ? (
@@ -838,7 +873,15 @@ export default function Itineraries() {
                 return (
                   <tr
                     key={it.id}
-                    onClick={() => navigate(`/travel/itineraries/${it.id}`, { state: { backTo: itinerariesListPath, backLabel: openedFromReports ? "Back to report results" : "Back to itineraries" } })}
+                    onClick={() => {
+                      if (openedFromReports) {
+                        navigate(`/travel/itineraries/${it.id}`, {
+                          state: { backTo: itinerariesListPath, backLabel: "Back to report results" },
+                        });
+                      } else {
+                        navigate(`/travel/itineraries/${it.id}`);
+                      }
+                    }}
                     style={{ borderTop: "1px solid var(--border-light)", cursor: "pointer" }}
                     aria-label={`Open itinerary ${it.destination}`}
                   >

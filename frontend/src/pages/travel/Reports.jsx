@@ -11,7 +11,7 @@
 // grid. Sub-brand scoping happens server-side via the caller's
 // subBrandAccess — a TMC-ops user gets 403 on the RFU tab and vice versa.
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigateSafe } from "../../utils/routerSafe";
 import {
   AlertCircle, BarChart3, ChevronDown, ChevronRight, FileCheck2, Globe, MapPin, PlaneTakeoff, RefreshCw, School, Star, TrendingUp, Download, Users, Wallet,
 } from "lucide-react";
@@ -251,7 +251,7 @@ function StateShell({ loading, error, reload, children }) {
 // Complete Reports overview: baseline report areas requested by the client.
 function OverviewTab({ dateParams, onSelectTab }) {
   const { data, loading, error, reload } = useReport("/api/travel/reports/summary", dateParams);
-  const navigate = useNavigate();
+  const navigate = useNavigateSafe();
 
   const reportQuery = () => {
     const q = new URLSearchParams({ source: "reports" });
@@ -434,7 +434,7 @@ function money(value) {
 
 function TmcTab({ dateParams }) {
   const { data, loading, error, reload } = useReport("/api/travel/reports/tmc", dateParams);
-  const navigate = useNavigate();
+  const navigate = useNavigateSafe();
   const [detailView, setDetailView] = useState(null);
 
   const tmcReportQuery = (extra = {}) => {
@@ -577,7 +577,7 @@ function TmcTab({ dateParams }) {
 
 function RfuTab({ dateParams }) {
   const { data, loading, error, reload } = useReport("/api/travel/reports/rfu", dateParams);
-  const navigate = useNavigate();
+  const navigate = useNavigateSafe();
   const [detailView, setDetailView] = useState(null);
 
   const analytics = useMemo(() => {
@@ -938,9 +938,23 @@ function Tile({ icon: Icon, label, primary, footer, onClick = null }) {
   );
 }
 
-function Card({ title, children, wide }) {
+function Card({ title, children, wide, interactive, onClick, actionLabel }) {
+  const isInteractive = interactive === true && typeof onClick === "function";
+  const label = actionLabel ? `${title} - ${actionLabel}` : title;
   return (
-    <section style={{ ...cardStyle, gridColumn: wide ? "1 / -1" : undefined }}>
+    <section
+      style={{ ...cardStyle, cursor: isInteractive ? "pointer" : undefined, gridColumn: wide ? "1 / -1" : undefined }}
+      role={isInteractive ? "button" : undefined}
+      tabIndex={isInteractive ? 0 : undefined}
+      aria-label={isInteractive ? label : undefined}
+      onClick={isInteractive ? onClick : undefined}
+      onKeyDown={isInteractive ? (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      } : undefined}
+    >
       <h2 style={cardTitle}>{title}</h2>
       {children}
     </section>

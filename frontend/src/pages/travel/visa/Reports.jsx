@@ -42,7 +42,8 @@
  * Route mounted in App.jsx: /travel/visa/reports
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { useLocationSafe } from '../../../utils/routerSafe';
 import {
   ResponsiveContainer,
   BarChart,
@@ -169,7 +170,7 @@ function ChartCard({ title, description, children, empty, emptyMessage }) {
 
 export default function VisaReports() {
   const notify = useNotify();
-  const location = useLocation();
+  const location = useLocationSafe();
   const openedFromReports = useMemo(() => new URLSearchParams(location.search).get('source') === 'reports', [location.search]);
 
   const [recovery, setRecovery] = useState(null);

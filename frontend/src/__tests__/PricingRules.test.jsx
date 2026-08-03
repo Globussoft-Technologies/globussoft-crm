@@ -595,7 +595,7 @@ describe('<PricingRules /> — Markup Rules toggle-active', () => {
 //   - Inactive row dimming + null-multiplier em-dash fallback — small
 //     visual invariants that have shipped twice in this admin-page family.
 
-describe('<PricingRules /> � Markup Rules add-flow + validation', () => {
+describe('<PricingRules /> — Markup Rules add-flow + validation', () => {
   it('add-rule with match field/value + pct sends POST with markupPct set + markupFlat null', async () => {
     renderPage();
     await screen.findByText('city: Makkah');

@@ -1,16 +1,16 @@
-﻿// Travel CRM â€” Commission Profiles admin page.
+// Travel CRM — Commission Profiles admin page.
 //
-// PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 3 â€” operator-facing CRUD UI for
+// PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 3 — operator-facing CRUD UI for
 // TravelCommissionProfile rows. Profiles capture named agent-payout
 // shapes (flat_percent / tiered / per_pax_flat / hybrid) consumed by the
 // agentCommissionCalculator lib (slice 1 commit cb284098).
 //
 // Consumes the CRUD backend shipped in slice 2 (commit b5042743):
-//   GET    /api/travel/commission-profiles                â€” list (filters: subBrand / profileType / isActive)
-//   GET    /api/travel/commission-profiles/:id            â€” fetch one
-//   POST   /api/travel/commission-profiles                â€” ADMIN/MANAGER create
-//   PUT    /api/travel/commission-profiles/:id            â€” ADMIN/MANAGER partial update
-//   DELETE /api/travel/commission-profiles/:id            â€” ADMIN-only hard delete (204)
+//   GET    /api/travel/commission-profiles                — list (filters: subBrand / profileType / isActive)
+//   GET    /api/travel/commission-profiles/:id            — fetch one
+//   POST   /api/travel/commission-profiles                — ADMIN/MANAGER create
+//   PUT    /api/travel/commission-profiles/:id            — ADMIN/MANAGER partial update
+//   DELETE /api/travel/commission-profiles/:id            — ADMIN-only hard delete (204)
 //
 // Body shape posted:
 //   { name, subBrand, profileType, profileJson: JSON.stringify(profile), notes }
@@ -21,27 +21,27 @@
 // Slice scope:
 //   - List table with sub-brand + isActive filters
 //   - Modal create / edit with type-conditional sub-form
-//   - flat_percent â†’ percent input (0-100)
-//   - per_pax_flat â†’ amountPerPax (number)
-//   - hybrid â†’ baseAmount + thresholdAmount + overagePercent
-//   - tiered â†’ dynamic list of {uptoCents, percent} rows + "Add tier"
+//   - flat_percent → percent input (0-100)
+//   - per_pax_flat → amountPerPax (number)
+//   - hybrid → baseAmount + thresholdAmount + overagePercent
+//   - tiered → dynamic list of {uptoCents, percent} rows + "Add tier"
 //   - Edit pre-fills by JSON.parse-ing the row's profileJson string
 //   - Delete uses notify.confirm
 //
 // Sidebar wire-in is a SEPARATE slice (deferred per slice-prompt).
 //
-// Slice 8 extension â€” Preview Calculator panel:
+// Slice 8 extension — Preview Calculator panel:
 //   Each row gains a Calculator-icon button next to Edit. Clicking opens a
 //   what-if panel above the table: operator enters sale amount + pax count,
 //   hits "Calculate", and the panel POSTs to /commission-profiles/:id/preview
 //   (slice 7, commit 52f4d53d). The server response carries
-//   { commission, breakdown, ... } which we render inline â€” commission as
+//   { commission, breakdown, ... } which we render inline — commission as
 //   the large success-coloured number, breakdown as a monospace diagnostic
-//   line. Lets operators sanity-check "if I sell this Umrah package at â‚¹2.5L,
+//   line. Lets operators sanity-check "if I sell this Umrah package at ₹2.5L,
 //   what does the agent earn?" before committing to a profile assignment
 //   (slice 6) or persisting a real invoice line item.
 //
-// Slice 10 extension â€” Ledger panel:
+// Slice 10 extension — Ledger panel:
 //   Each row gains a List-icon button. Clicking opens a ledger panel above
 //   the table that GETs /commission-profiles/:id/ledger (slice 9, commit
 //   e04c0990). Renders one row per Deal whose Contact carries this profile
@@ -52,13 +52,13 @@
 //   with ?stage=won. Empty / loading / 403 / error states all handled.
 //   Lets operators verify "for this profile, what has each agent actually
 //   earned so far?" without dropping into Deals/Contacts and aggregating
-//   client-side (a structural-bug class â€” see CLAUDE.md standing rules).
+//   client-side (a structural-bug class — see CLAUDE.md standing rules).
 //
-// Slice 12 extension â€” Download CSV (this slice):
+// Slice 12 extension — Download CSV (this slice):
 //   Ledger-panel header gains a "Download CSV" button that hits the slice-11
 //   endpoint GET /commission-profiles/:id/ledger.csv (commit 75ac8390).
 //   Carries the current `?stage=` filter so what the operator sees on screen
-//   matches what they download. Uses the canonical Blob â†’ createObjectURL â†’
+//   matches what they download. Uses the canonical Blob → createObjectURL →
 //   anchor.click() pattern (cloned verbatim from Products.jsx CSV export so
 //   the FE has one consistent download flow). The endpoint streams text/csv
 //   server-side with a Content-Disposition filename; we override with our
@@ -92,7 +92,7 @@ const SUB_BRANDS = [
   { value: "visasure", label: "Visa Sure" },
 ];
 
-// Profile-type whitelist mirror â€” kept in lockstep with the backend
+// Profile-type whitelist mirror — kept in lockstep with the backend
 // VALID_PROFILE_TYPES constant in routes/travel_commission_profiles.js.
 // If the backend grows another type, this list grows here too.
 const PROFILE_TYPES = [
@@ -148,7 +148,7 @@ const EMPTY_FORM = {
   releaseMode: "on_booking",
   profileType: "flat_percent",
   notes: "",
-  // type-specific sub-form fields â€” only the relevant subset is consumed
+  // type-specific sub-form fields — only the relevant subset is consumed
   // when building profileJson at submit time. Strings throughout for
   // controlled-input ergonomics; coerced at the build step.
   percent: "",
@@ -162,7 +162,7 @@ const EMPTY_FORM = {
 // Build the {profileType-specific} profileJson body. Returns null + emits a
 // notify.error string when the shape is invalid (e.g. unparseable number).
 // Per slice-prompt: percent=0 is a LEGITIMATE profile (operator may zero out
-// commission temporarily) â€” only NaN / negative / non-finite gets rejected.
+// commission temporarily) — only NaN / negative / non-finite gets rejected.
 function buildProfileJson(form, notifyErr) {
   switch (form.profileType) {
     case "flat_percent": {
@@ -239,7 +239,7 @@ function buildProfileJson(form, notifyErr) {
 }
 
 // Parse an existing profileJson string back into the form's flat fields so
-// edit pre-fill works. Defensive â€” partial / malformed JSON yields blank
+// edit pre-fill works. Defensive — partial / malformed JSON yields blank
 // fields rather than throwing.
 function toDateInputValue(value) {
   if (!value) return "";
@@ -317,9 +317,9 @@ export default function CommissionProfilesAdmin() {
   const [staffOptions, setStaffOptions] = useState([]);
 
   // Sub-brand access scoping (mirrors Leads.jsx). myBrands = the sub-brands
-  // this user may act on (ADMIN â†’ all 4; restricted user â†’ their granted
+  // this user may act on (ADMIN → all 4; restricted user → their granted
   // subset). lockedBrand is non-null only when the user is pinned to exactly
-  // one brand â€” in that case the create/edit form renders a read-only field
+  // one brand — in that case the create/edit form renders a read-only field
   // instead of a free dropdown.
   const myBrands = accessibleSubBrands(user);
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
@@ -352,14 +352,14 @@ export default function CommissionProfilesAdmin() {
   // payload after a successful GET /:id/ledger. `ledgerLoading` gates the
   // re-fetch chip + initial fetch so the operator can't double-fire while a
   // request is in flight. `ledgerError` surfaces a friendly message when the
-  // GET fails (network error, 403, 404 â€” full body text propagates via the
+  // GET fails (network error, 403, 404 — full body text propagates via the
   // fetchApi reject path).
   const [ledgerProfile, setLedgerProfile] = useState(null);
   const [ledgerData, setLedgerData] = useState(null);
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState(null);
   const [ledgerWonOnly, setLedgerWonOnly] = useState(false);
-  // Slice 12 â€” Download CSV in-flight gate so the operator can't double-fire
+  // Slice 12 — Download CSV in-flight gate so the operator can't double-fire
   // the export endpoint while a download is being assembled.
   const [ledgerCsvBusy, setLedgerCsvBusy] = useState(false);
 
@@ -405,7 +405,7 @@ export default function CommissionProfilesAdmin() {
 
   const openCreate = () => {
     // Default the sub-brand to the user's resolved brand (single-brand users
-    // â†’ their one brand; multi-brand â†’ active sidebar brand when accessible,
+    // → their one brand; multi-brand → active sidebar brand when accessible,
     // else first brand) rather than the EMPTY_FORM blank.
     setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
     setEditingId(null);
@@ -503,12 +503,12 @@ export default function CommissionProfilesAdmin() {
 
   // Hit POST /api/travel/commission-profiles/:id/preview with the operator-
   // entered sale amount + paxCount. The backend returns { commission, breakdown,
-  // ... } â€” we render both. paxCount defaults to 1 server-side if omitted, but
+  // ... } — we render both. paxCount defaults to 1 server-side if omitted, but
   // we always send it so the wire shape is deterministic.
   const handlePreview = async (e) => {
     if (e?.preventDefault) e.preventDefault();
     if (!previewingProfile) return;
-    // Reject blank explicitly â€” Number("") coerces to 0 which would pass the
+    // Reject blank explicitly — Number("") coerces to 0 which would pass the
     // numeric guard but the operator clearly meant "no value entered".
     const rawSale = String(previewForm.saleAmount).trim();
     if (rawSale === "") {
@@ -561,11 +561,11 @@ export default function CommissionProfilesAdmin() {
     setLedgerWonOnly(false);
   };
 
-  // Ledger fetch â€” re-runs on profile change or stage-toggle change. The
+  // Ledger fetch — re-runs on profile change or stage-toggle change. The
   // GET /:id/ledger contract returns { profileId, profileName, profileType,
   // entries[], totalEntries, totalCommission, limit, offset } per slice 9
   // (commit e04c0990). Errors render as a friendly message inline rather
-  // than firing notify.error â€” the panel is the operator's focus, so the
+  // than firing notify.error — the panel is the operator's focus, so the
   // message belongs there, not in a toast.
   useEffect(() => {
     if (!ledgerProfile) return undefined;
@@ -597,10 +597,10 @@ export default function CommissionProfilesAdmin() {
     };
   }, [ledgerProfile, ledgerWonOnly]);
 
-  // Slice 12 â€” Download the ledger as CSV. Hits the slice-11 export endpoint
+  // Slice 12 — Download the ledger as CSV. Hits the slice-11 export endpoint
   // GET /:id/ledger.csv, mirroring the current `?stage=` filter so the file
-  // matches what the operator sees on screen. Uses the canonical Blob â†’
-  // createObjectURL â†’ anchor.click() pattern (Products.jsx is the reference);
+  // matches what the operator sees on screen. Uses the canonical Blob →
+  // createObjectURL → anchor.click() pattern (Products.jsx is the reference);
   // wraps with try/finally on `ledgerCsvBusy` so repeated clicks are gated.
   const handleLedgerDownload = async () => {
     if (!ledgerProfile || ledgerCsvBusy) return;
@@ -620,7 +620,7 @@ export default function CommissionProfilesAdmin() {
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = objectUrl;
-      // Friendlier filename than the server-supplied Content-Disposition â€”
+      // Friendlier filename than the server-supplied Content-Disposition —
       // pivots on profileName + today so multiple files don't collide.
       const safeName = (ledgerProfile.name || "ledger")
         .toLowerCase()
@@ -938,7 +938,7 @@ export default function CommissionProfilesAdmin() {
               data-testid="tier-editor"
             >
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                Tier ladder â€” sales up to <em>upto</em> earn the row's percent.
+                Tier ladder — sales up to <em>upto</em> earn the row's percent.
               </div>
               {(form.tiers || []).map((tier, idx) => (
                 <div
@@ -952,7 +952,7 @@ export default function CommissionProfilesAdmin() {
                   }}
                 >
                   <label style={fieldLabel}>
-                    <span>Tier {idx + 1} â€” upto</span>
+                    <span>Tier {idx + 1} — upto</span>
                     <input
                       type="number"
                       min="0"
@@ -964,7 +964,7 @@ export default function CommissionProfilesAdmin() {
                     />
                   </label>
                   <label style={fieldLabel}>
-                    <span>Tier {idx + 1} â€” percent</span>
+                    <span>Tier {idx + 1} — percent</span>
                     <input
                       type="number"
                       min="0"
@@ -1015,7 +1015,7 @@ export default function CommissionProfilesAdmin() {
               disabled={saving}
               style={{ ...primaryBtn, background: "var(--success-color, var(--primary-color))" }}
             >
-              {saving ? "Savingâ€¦" : editingId ? "Save Changes" : "Save"}
+              {saving ? "Saving…" : editingId ? "Save Changes" : "Save"}
             </button>
             <button
               type="button"
@@ -1046,7 +1046,7 @@ export default function CommissionProfilesAdmin() {
             <Calculator size={18} aria-hidden />
             <strong>Preview commission</strong>
             <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-              â€” {previewingProfile.name} ({previewingProfile.profileType})
+              — {previewingProfile.name} ({previewingProfile.profileType})
             </span>
           </div>
           <label style={fieldLabel}>
@@ -1079,7 +1079,7 @@ export default function CommissionProfilesAdmin() {
               disabled={previewLoading}
               style={{ ...primaryBtn, background: "var(--primary-color, var(--accent-color))" }}
             >
-              {previewLoading ? "Calculatingâ€¦" : "Calculate"}
+              {previewLoading ? "Calculating…" : "Calculate"}
             </button>
             <button
               type="button"
@@ -1151,7 +1151,7 @@ export default function CommissionProfilesAdmin() {
             <List size={18} aria-hidden />
             <strong>Commission ledger</strong>
             <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-              â€” {ledgerProfile.name} ({ledgerProfile.profileType})
+              — {ledgerProfile.name} ({ledgerProfile.profileType})
             </span>
             <label
               style={{
@@ -1182,7 +1182,7 @@ export default function CommissionProfilesAdmin() {
               data-testid="commission-profile-ledger-download-csv"
               title="Download the ledger as CSV (mirrors the current stage filter)"
             >
-              <Download size={14} /> {ledgerCsvBusy ? "Downloadingâ€¦" : "Download CSV"}
+              <Download size={14} /> {ledgerCsvBusy ? "Downloading…" : "Download CSV"}
             </button>
             <button
               type="button"
@@ -1194,7 +1194,7 @@ export default function CommissionProfilesAdmin() {
             </button>
           </div>
 
-          {/* Summary tile â€” total commission across the displayed page.
+          {/* Summary tile — total commission across the displayed page.
               `totalCommission` is the SERVER-computed sum from slice 9 (half-up
               rounded to 2dp). `totalEntries` is the full filtered count, which
               may exceed the page (limit 50 default). */}
@@ -1550,7 +1550,7 @@ export default function CommissionProfilesAdmin() {
                       <>
                         <Percent size={20} style={{ opacity: 0.4, marginBottom: 6 }} />
                         <div>
-                          No commission profiles yet â€” create one to define agent payouts.
+                          No commission profiles yet — create one to define agent payouts.
                         </div>
                       </>
                     )}

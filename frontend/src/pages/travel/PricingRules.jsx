@@ -476,11 +476,34 @@ function MarkupRulesSection() {
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const blankForm = {
-    subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), scope: "hotel", matchKeyJson: "{}",
-    markupType: "pct", markupValue: "", priority: "100",
+    subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), scope: "hotel", matchField: "city", matchValue: "",
+    markupType: "pct", markupValue: "", priority: "",
   };
   const [form, setForm] = useState(blankForm);
   const fileRef = useRef(null);
+  const [suppliers, setSuppliers] = useState([]);
+
+  // Fetch supplier names when the markup-rule form is open and the match
+  // field is "supplier". Used to populate the match-value dropdown.
+  useEffect(() => {
+    if (!adding && editingId == null) return;
+    if (form.matchField !== "supplier" || !form.subBrand) {
+      setSuppliers([]);
+      return;
+    }
+    let cancelled = false;
+    fetchApi(`/api/travel/suppliers?fields=summary&subBrand=${encodeURIComponent(form.subBrand)}`)
+      .then((res) => {
+        if (!cancelled) setSuppliers(Array.isArray(res?.suppliers) ? res.suppliers : []);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          notify.error(e?.body?.error || "Failed to load suppliers");
+          setSuppliers([]);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [adding, editingId, form.matchField, form.subBrand]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = () => {
     setLoading(true);
@@ -495,27 +518,41 @@ function MarkupRulesSection() {
   };
   useEffect(load, [filterSubBrand, filterScope, filterActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const parseMatchKey = (json) => {
+    try {
+      const obj = JSON.parse(json || "{}");
+      const keys = Object.keys(obj);
+      if (keys.length === 1) {
+        const key = keys[0];
+        return { matchField: key, matchValue: String(obj[key]) };
+      }
+    } catch { /* fall through */ }
+    return { matchField: "", matchValue: "" };
+  };
+
   const startEdit = (r) => {
     setEditingId(r.id);
     setAdding(false);
+    const { matchField, matchValue } = parseMatchKey(r.matchKeyJson);
     setForm({
       subBrand: r.subBrand,
       scope: r.scope,
-      matchKeyJson: r.matchKeyJson || "{}",
+      matchField,
+      matchValue,
       markupType: r.markupPct != null ? "pct" : "flat",
       markupValue: r.markupPct != null ? String(r.markupPct) : (r.markupFlat != null ? String(r.markupFlat) : ""),
-      priority: String(r.priority ?? 100),
+      priority: String(r.priority ?? ""),
     });
   };
   const cancelEdit = () => { setEditingId(null); setAdding(false); setForm(blankForm); };
 
   const save = async () => {
-    if (!form.matchKeyJson.trim() || !form.markupValue) {
-      notify.error("matchKeyJson and markup value required");
+    const matchField = (form.matchField || "").trim();
+    const matchValue = (form.matchValue || "").trim();
+    if (!matchField || !matchValue || !form.markupValue) {
+      notify.error("match key and markup value required");
       return;
     }
-    try { JSON.parse(form.matchKeyJson); }
-    catch { notify.error("matchKeyJson is not valid JSON"); return; }
 
     const n = Number(form.markupValue);
     if (!Number.isFinite(n) || n < 0) {
@@ -523,9 +560,11 @@ function MarkupRulesSection() {
       return;
     }
 
+    const matchKeyJson = JSON.stringify({ [matchField]: matchValue });
+
     const body = {
       scope: form.scope,
-      matchKeyJson: form.matchKeyJson,
+      matchKeyJson,
       priority: parseInt(form.priority || "100", 10),
       // backend enforces "exactly one of markupPct / markupFlat" — send the
       // chosen field set + the other explicitly nulled so editing one to the
@@ -587,6 +626,16 @@ function MarkupRulesSection() {
     if (r.markupPct != null) return `${(Number(r.markupPct) * 100).toFixed(2)}%`;
     if (r.markupFlat != null) return `+₹${Number(r.markupFlat).toLocaleString()}`;
     return "—";
+  };
+
+  const formatMatchKey = (json) => {
+    const { matchField, matchValue } = parseMatchKey(json);
+    if (matchField) return `${matchField}: ${matchValue}`;
+    try {
+      const obj = JSON.parse(json || "{}");
+      if (Object.keys(obj).length === 0) return "{}";
+    } catch { /* fall through */ }
+    return json || "";
   };
 
   const showForm = adding || editingId != null;
@@ -740,14 +789,39 @@ function MarkupRulesSection() {
               aria-label="Priority"
             />
           </div>
-          <textarea
-            placeholder='matchKeyJson — e.g. {"city":"Makkah"} or {"route":"DEL-JED"}'
-            value={form.matchKeyJson}
-            onChange={(e) => setForm({ ...form, matchKeyJson: e.target.value })}
-            style={{ ...input, marginTop: 8, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, minHeight: 60 }}
-            aria-label="Match key JSON"
-            spellCheck={false}
-          />
+          <div style={{ display: "grid", gap: 8, marginTop: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))" }}>
+            <select
+              value={form.matchField}
+              onChange={(e) => setForm({ ...form, matchField: e.target.value, matchValue: "" })}
+              style={input}
+              aria-label="Match field"
+            >
+              <option value="city">City</option>
+              <option value="route">Route</option>
+              <option value="supplier">Supplier</option>
+              <option value="destination">Destination</option>
+              <option value="vehicleType">Vehicle type</option>
+            </select>
+            {form.matchField === "supplier" ? (
+              <select
+                value={form.matchValue}
+                onChange={(e) => setForm({ ...form, matchValue: e.target.value })}
+                style={input}
+                aria-label="Match supplier"
+              >
+                <option value="">Select supplier</option>
+                {suppliers.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select>
+            ) : (
+              <input
+                placeholder="Match value"
+                value={form.matchValue}
+                onChange={(e) => setForm({ ...form, matchValue: e.target.value })}
+                style={input}
+                aria-label="Match value"
+              />
+            )}
+          </div>
           <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
             <button type="button" onClick={save} style={primaryBtn}>
               <Save size={14} /> {editingId ? "Save changes" : "Create"}
@@ -783,7 +857,7 @@ function MarkupRulesSection() {
                 <tr key={r.id} style={{ ...trStyle, opacity: r.isActive ? 1 : 0.5 }}>
                   <td style={td}><span style={brandBadge}>{r.subBrand}</span></td>
                   <td style={td}>{r.scope}</td>
-                  <td style={td}><code style={{ fontSize: 11 }}>{r.matchKeyJson}</code></td>
+                  <td style={td}>{formatMatchKey(r.matchKeyJson)}</td>
                   <td style={td}>{formatMarkup(r)}</td>
                   <td style={td}>{r.priority}</td>
                   <td style={td}>

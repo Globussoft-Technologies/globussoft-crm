@@ -1252,6 +1252,8 @@ export default function QuoteBuilder() {
   // (button is disabled in NEW mode) and is informational only — the
   // preview total does NOT feed back into Save Draft's payload. The
   // separate disclaimer near the panel reinforces this for operators.
+  // Fail-soft: 4xx/5xx errors do NOT surface a toast (Issue 11); they simply
+  // leave the panel closed so the operator isn't blocked while editing.
   const handlePricingPreview = async () => {
     if (!quoteId) {
       notify.error("Save the quote first before calculating with markups");
@@ -1266,6 +1268,9 @@ export default function QuoteBuilder() {
       const resp = await fetchApi(`/api/travel/quotes/${quoteId}/pricing-preview`);
       if (resp && typeof resp === "object") {
         setPricingPreview({
+          baseSubtotal: Number(resp.baseSubtotal) || 0,
+          seasonMultiplier: Number(resp.seasonMultiplier) || 1,
+          matchedSeasonName: resp.matchedSeasonName || "",
           subtotal: Number(resp.subtotal) || 0,
           total: Number(resp.total) || 0,
           currency: resp.currency || currency || "INR",
@@ -1273,14 +1278,23 @@ export default function QuoteBuilder() {
           lines: Array.isArray(resp.lines) ? resp.lines : [],
         });
       }
-    } catch (err) {
-      notify.error(err?.data?.error || err?.message || "Pricing preview failed");
+    } catch {
+      // Fail-soft: pricing preview is informational; a backend error should
+      // not block the operator with a toast while they are still editing.
     } finally {
       setPreviewLoading(false);
     }
   };
 
   const dismissPricingPreview = () => setPricingPreview(null);
+
+  // Auto-fetch pricing preview in edit mode once persisted lines have loaded.
+  useEffect(() => {
+    if (!quoteId || loading || previewLoading || pricingPreview) return;
+    if (persistedLines.length === 0 && draftLines.length === 0) return;
+    handlePricingPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteId, loading, persistedLines.length, draftLines.length]);
 
   // Slice 11: Accept / Decline workflow endpoints (POST
   // /api/travel/quotes/:id/{accept,decline}). Dedicated semantic
@@ -1660,10 +1674,10 @@ export default function QuoteBuilder() {
                     ? "Add a line first"
                     : "Calculate subtotal + markup-rule preview"
               }
-              aria-label="Calculate with markups"
+              aria-label="Refresh pricing breakdown"
             >
               <TrendingUp size={14} />{" "}
-              {previewLoading ? "Calculating…" : "Calculate with markups"}
+              {previewLoading ? "Calculating…" : "Refresh pricing breakdown"}
             </button>
             <button
               type="button"
@@ -2565,7 +2579,21 @@ export default function QuoteBuilder() {
           </div>
           <div style={{ display: "grid", gap: 8 }}>
             <div style={totalsRow}>
-              <span style={totalsLabel}>Subtotal (pre-markup)</span>
+              <span style={totalsLabel}>Base subtotal</span>
+              <span style={totalsValue} aria-label="Pricing preview base subtotal">
+                {pricingPreview.currency} {fmt(pricingPreview.baseSubtotal)}
+              </span>
+            </div>
+            {pricingPreview.seasonMultiplier > 1 && pricingPreview.matchedSeasonName && (
+              <div style={totalsRow}>
+                <span style={totalsLabel}>Season</span>
+                <span style={totalsValue} aria-label="Pricing preview season">
+                  ×{pricingPreview.seasonMultiplier} ({pricingPreview.matchedSeasonName})
+                </span>
+              </div>
+            )}
+            <div style={totalsRow}>
+              <span style={totalsLabel}>Subtotal</span>
               <span style={totalsValue} aria-label="Pricing preview subtotal">
                 {pricingPreview.currency} {fmt(pricingPreview.subtotal)}
               </span>

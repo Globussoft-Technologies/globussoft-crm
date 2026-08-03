@@ -1031,6 +1031,17 @@ function callifiedFetchMock(url, opts) {
   if (typeof url === 'string' && url.startsWith('/api/callified/leads/call-summary') && !opts) {
     return Promise.resolve({ summaries: CALLIFIED_SUMMARIES });
   }
+  if (typeof url === 'string' && url.startsWith('/api/tenant-settings/') && opts?.method === 'PUT') {
+    try {
+      const body = JSON.parse(opts.body || '{}');
+      return Promise.resolve({ value: body.value });
+    } catch {
+      return Promise.resolve({ value: 'true' });
+    }
+  }
+  if (typeof url === 'string' && url.startsWith('/api/tenant-settings/') && !opts) {
+    return Promise.resolve({ value: 'true', defaultValue: 'true', isOverride: false });
+  }
   if (opts?.method === 'PUT' || opts?.method === 'POST') return Promise.resolve({ ok: true });
   return Promise.resolve([]);
 }
@@ -1173,5 +1184,34 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     expect(screen.queryByText('Callified AI call')).toBeNull();
     expect(screen.queryByText('Lead Status')).toBeNull();
     expect(screen.queryByText('Callified Score')).toBeNull();
+  });
+
+  it('Lead Status gear menu opens and toggling AI classification saves immediately', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /Lead status AI settings/i }));
+    const toggle = screen.getByLabelText(/AI Based transcription classification/i);
+    expect(toggle).toBeInTheDocument();
+    expect(toggle.checked).toBe(true);
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/tenant-settings/feature.callified.ai_transcript.enabled') &&
+          opts?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.value).toBe('false');
+      expect(body.category).toBe('feature-flag');
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/disabled/i));
+    });
   });
 });

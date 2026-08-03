@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useContext } from 'react';
 import {
   Mail, RefreshCw, Plug, Trash2, Send, X, PencilLine, CornerUpLeft,
   Search, Inbox as InboxIcon, AlertTriangle, Check, Paperclip,
-  Link2, List, ListOrdered,
+  Link2, List, ListOrdered, Ticket,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../App';
 
 // Make bare URLs in a plain-text email body clickable — React-safe (renders real
 // <a> nodes, never dangerouslySetInnerHTML, so injected markup stays inert).
@@ -41,6 +42,7 @@ function linkifyText(text) {
 //   DELETE /api/gmail/disconnect
 //   GET    /api/gmail/messages?q&maxResults → { messages: [...] }
 //   GET    /api/gmail/messages/:messageId   → full parsed message
+//   POST   /api/gmail/messages/:messageId/webcheckin → Travel only; LLM extraction → WebCheckin row
 //   POST   /api/gmail/send             → { success, gmailMessageId, ... }
 // The OAuth callback bounces back here with ?connected=gmail / ?error=…
 
@@ -133,8 +135,17 @@ const FOLDERS = [
   { key: 'all', label: 'All', icon: Mail, q: '' },
 ];
 
+const FLIGHT_KEYWORDS = /\b(flight|airline|ticket|booking|pnr|e-ticket|eticket|boarding pass|passenger|departure|airport|iata|flight no|flight number|confirmation)\b/i;
+function looksLikeFlightTicket(msg) {
+  const haystack = `${msg?.subject || ''} ${msg?.snippet || ''} ${msg?.text || ''}`;
+  return FLIGHT_KEYWORDS.test(haystack);
+}
+
 export default function GmailInbox() {
   const notify = useNotify();
+  const auth = useContext(AuthContext) || {};
+  const { tenant } = auth;
+  const isTravel = tenant?.vertical === 'travel';
   const [status, setStatus] = useState({ connected: false, emailAddress: null, lastSyncAt: null });
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [messages, setMessages] = useState([]);
@@ -151,6 +162,7 @@ export default function GmailInbox() {
   const [showBcc, setShowBcc] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [sending, setSending] = useState(false);
+  const [sendingToWebcheckin, setSendingToWebcheckin] = useState(false);
   const fileInputRef = useRef(null);
   const bodyRef = useRef(null);
 
@@ -281,6 +293,23 @@ export default function GmailInbox() {
     const subject = msg.subject ? (/^re:/i.test(msg.subject) ? msg.subject : `Re: ${msg.subject}`) : '';
     openCompose({ to: senderEmail(msg.from), subject });
     setSelected(null);
+  };
+
+  const sendToWebcheckin = async (msg) => {
+    if (!msg?.id) return;
+    setSendingToWebcheckin(true);
+    try {
+      const res = await fetchApi(`/api/gmail/messages/${msg.id}/webcheckin`, {
+        method: 'POST',
+        silent: true,
+      });
+      notify.success(`Web check-in created for ${res?.webcheckin?.passengerName || 'passenger'}.`);
+      setSelected(null);
+    } catch (err) {
+      notify.error(err?.message || 'Could not create web check-in from this email.');
+    } finally {
+      setSendingToWebcheckin(false);
+    }
   };
 
   const handleSend = async (e) => {
@@ -559,6 +588,22 @@ export default function GmailInbox() {
                       display: 'inline-flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
                     <CornerUpLeft size={14} /> Reply
                   </button>
+                  {isTravel && looksLikeFlightTicket(selected) && (
+                    <button
+                      onClick={() => sendToWebcheckin(selected)}
+                      disabled={sendingToWebcheckin}
+                      title="Create a Web Check-in row from this ticket"
+                      style={{
+                        background: 'var(--primary-color, var(--accent-color))', border: 'none', color: '#fff',
+                        borderRadius: 999, padding: '0.4rem 0.85rem', cursor: sendingToWebcheckin ? 'wait' : 'pointer',
+                        fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0,
+                        opacity: sendingToWebcheckin ? 0.7 : 1,
+                      }}
+                    >
+                      <Ticket size={14} />
+                      {sendingToWebcheckin ? 'Creating…' : 'Send to Web Check-in'}
+                    </button>
+                  )}
                 </div>
                 {/* Plain-text body (NOT raw HTML) — safe against injected markup. */}
                 <div style={{ padding: '1.25rem 1.5rem', borderTop: '1px solid var(--border-color)',

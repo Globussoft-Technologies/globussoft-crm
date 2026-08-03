@@ -471,10 +471,10 @@ router.get("/travel/itineraries", verifyPortalToken, requireTravelPortalTenant, 
         items: { orderBy: { position: "asc" } },
       },
     });
-    // Attach a web-check-in "due" flag per trip: any active WebCheckin row
-    // (pending/reminded) whose flight departs within the next 36h. Drives the
-    // portal's "Have you checked in? Yes/No" banner (2026-06-16). The Yes
-    // action flips those rows to "done" → flag clears + reminders stop.
+    // Attach a web-check-in "due" flag per trip: any pending WebCheckin row
+    // whose flight departs within the next 36h. Drives the portal's
+    // "Have you checked in? Yes/No" banner (2026-06-16). The Yes action flips
+    // those rows to "done" → flag clears + reminders stop.
     const ids = itineraries.map((i) => i.id);
     let dueByItin = {};
     if (ids.length) {
@@ -484,7 +484,7 @@ router.get("/travel/itineraries", verifyPortalToken, requireTravelPortalTenant, 
         where: {
           tenantId: req.portal.tenantId,
           itineraryId: { in: ids },
-          status: { in: ["pending", "reminded"] },
+          status: "pending",
           departureAt: { gte: now, lte: horizon },
         },
         select: { itineraryId: true },
@@ -833,11 +833,10 @@ router.post("/travel/itineraries/:id/preferred-dates", verifyPortalToken, requir
 // POST /api/portal/travel/itineraries/:id/webcheckin-confirm
 //
 // The customer's "Yes, I've checked in" action for a flight trip (2026-06-16).
-// Flips every still-active WebCheckin row for this trip → status "done" — the
-// SAME rows the existing webCheckinScheduler + the email engine read, so this
-// one confirm stops BOTH (no more reminder emails, no agent-fallback
-// escalation). Ownership verified by loadPortalOwnedItinerary. Idempotent: if
-// no active rows remain it's a no-op success (updated: 0).
+// Flips every still-pending WebCheckin row for this trip → status "done" —
+// the SAME rows the email engine reads, so this one confirm stops reminders.
+// Ownership verified by loadPortalOwnedItinerary. Idempotent: if no pending
+// rows remain it's a no-op success (updated: 0).
 router.post("/travel/itineraries/:id/webcheckin-confirm", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
   try {
     const itin = await loadPortalOwnedItinerary(req, res);
@@ -846,7 +845,7 @@ router.post("/travel/itineraries/:id/webcheckin-confirm", verifyPortalToken, req
       where: {
         itineraryId: itin.id,
         tenantId: req.portal.tenantId,
-        status: { in: ["pending", "reminded"] },
+        status: "pending",
       },
       data: { status: "done" },
     });

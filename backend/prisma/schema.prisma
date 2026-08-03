@@ -6817,7 +6817,7 @@ model WebCheckin {
   passengerName      String
   seatPref           String?
   mealPref           String?
-  status             String    @default("pending") // pending | reminded | in-progress | done | fallback-agent | failed
+  status             String    @default("pending") // pending | done
   attemptsJson       String?   @db.Text // [{at, result, errorReason}]
   // Customer-facing web check-in reminder EMAILS sent by cron/webCheckinEngine.js
   // (2026-06-16) — distinct from the scheduler's WhatsApp/status lifecycle.

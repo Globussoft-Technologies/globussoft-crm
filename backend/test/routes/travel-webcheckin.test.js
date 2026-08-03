@@ -14,7 +14,7 @@
  *   - GET /api/travel/webcheckins — tenant-scoped list; ?status filter;
  *     ?status=garbage → 400 INVALID_STATUS.
  *   - GET /api/travel/webcheckins/upcoming — windowOpenAt range filter
- *     within next 48h, status in (pending, reminded).
+ *     within next 48h, status = pending.
  *   - GET /api/travel/webcheckins/:id — 400 INVALID_ID on NaN; 404 NOT_FOUND
  *     when cross-tenant (findFirst returns null).
  *   - POST /api/travel/webcheckins — 201 happy path; 400 MISSING_FIELDS;
@@ -161,7 +161,7 @@ describe('GET /api/travel/webcheckins (list)', () => {
 });
 
 describe('GET /api/travel/webcheckins/upcoming', () => {
-  test('returns rows in the next-48h window with status in (pending, reminded)', async () => {
+  test('returns rows in the next-48h window with status = pending', async () => {
     prisma.webCheckin.findMany.mockResolvedValue([
       { id: 1, tenantId: 1, pnr: 'ABC', status: 'pending', windowOpenAt: new Date() },
     ]);
@@ -175,7 +175,7 @@ describe('GET /api/travel/webcheckins/upcoming', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           tenantId: 1,
-          status: { in: ['pending', 'reminded'] },
+          status: 'pending',
           windowOpenAt: expect.objectContaining({ gte: expect.any(Date), lte: expect.any(Date) }),
         }),
         orderBy: { windowOpenAt: 'asc' },

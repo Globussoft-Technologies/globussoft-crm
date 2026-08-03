@@ -101,6 +101,8 @@ const KEYS = {
   // as a sensible starting point; ops can tune per-tenant.
   IMAGE_LLM_MONTHLY_CAP_USD_CENTS:       "budgetCap_image_llm_monthly_usd_cents",
   BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS: "budgetCap_booking_expedia_monthly_usd_cents",
+  // Generic CRM Leads page — AI transcript classification for Callified calls.
+  CALLIFIED_AI_TRANSCRIPT_ENABLED:       "feature.callified.ai_transcript.enabled",
   // Cron / operational settings (§4.5 hardcoded-value fixes)
   ORCHESTRATOR_DEFAULT_WORKING_MINUTES:  "orchestrator.defaultWorkingMinutes",
   SMS_DEDUP_PHRASE_24H:                  "sms.dedupPhrase24h",
@@ -144,6 +146,8 @@ const DEFAULTS = {
     Number(process.env.IMAGE_LLM_MONTHLY_CAP_USD_CENTS ?? 10000),
   [KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS]:
     Number(process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS ?? 10000),
+  // Generic CRM Leads page — AI transcript classification enabled by default.
+  [KEYS.CALLIFIED_AI_TRANSCRIPT_ENABLED]: "true",
   // Cron / operational defaults (§4.5 hardcoded-value fixes)
   [KEYS.ORCHESTRATOR_DEFAULT_WORKING_MINUTES]: 660,
   [KEYS.SMS_DEDUP_PHRASE_24H]: "tomorrow at",

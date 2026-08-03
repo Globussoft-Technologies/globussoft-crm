@@ -98,6 +98,8 @@ prisma.callLog.findMany = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 prisma.tenant.update = vi.fn();
+prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.tenantSetting.findUnique = vi.fn();
 // $transaction(cb) invokes the callback with the same prisma singleton so
 // tx.user / tx.contact / tx.tenant resolve to our mocks.
 prisma.$transaction = vi.fn(async (cb) => cb(prisma));
@@ -131,6 +133,7 @@ beforeEach(() => {
   prisma.callLog.findMany.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.tenant.update.mockReset();
+  prisma.tenantSetting.findUnique.mockReset();
   prisma.$transaction.mockReset().mockImplementation(async (cb) => cb(prisma));
 });
 
@@ -300,6 +303,76 @@ describe('POST /api/callified/leads/:leadId/classify', () => {
     expect(res.body.callifiedLeadStatus).toBe('cold');
     expect(res.body.assignedToId).toBeNull();
     expect(prisma.user.findMany).not.toHaveBeenCalled();
+  });
+
+  test('AI transcript classification disabled → skips Gemini and uses score fallback', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'false' });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 11, tenantId: 1, assignedToId: null, callifiedLeadStatus: null,
+    });
+    prisma.contact.update.mockResolvedValue({
+      id: 11, assignedToId: null, callifiedLeadStatus: 'cold', assignedTo: null,
+    });
+    prisma.callLog.findMany.mockResolvedValue([
+      {
+        id: 1,
+        contactId: 11,
+        provider: 'callified',
+        notes: JSON.stringify({ reviews: [{ quality_score: 1.5, appointment_booked: false }] }),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/callified/leads/11/classify')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.callifiedLeadStatus).toBe('cold');
+    expect(routeRequestMock).not.toHaveBeenCalled();
+  });
+
+  test('AI transcript classification enabled → routeRequest receives __surface and __userId', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'true' });
+    llmEnabledMock.mockResolvedValue(true);
+    routeRequestMock.mockResolvedValue({ text: JSON.stringify({ status: 'hot', reason: 'Gemini says hot' }) });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 11, tenantId: 1, assignedToId: null, callifiedLeadStatus: null,
+    });
+    prisma.contact.update.mockResolvedValue({
+      id: 11, assignedToId: null, callifiedLeadStatus: 'hot', assignedTo: null,
+    });
+    prisma.user.findMany.mockResolvedValue([
+      { id: 101, role: 'ADMIN', deactivatedAt: null },
+      { id: 102, role: 'USER', deactivatedAt: null },
+    ]);
+    prisma.tenant.findUnique.mockResolvedValue({ callifiedLastHotAssignedUserId: null });
+    prisma.tenant.update.mockResolvedValue({ id: 1, callifiedLastHotAssignedUserId: 101 });
+    prisma.callLog.findMany.mockResolvedValue([
+      {
+        id: 1,
+        contactId: 11,
+        provider: 'callified',
+        notes: JSON.stringify({ reviews: [{ quality_score: 3, appointment_booked: false }] }),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/callified/leads/11/classify')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.callifiedLeadStatus).toBe('hot');
+    expect(routeRequestMock).toHaveBeenCalledTimes(1);
+    expect(routeRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: 'callified-lead-status',
+        tenantId: 1,
+        payload: expect.objectContaining({
+          __surface: 'leads-callified-transcript',
+          __userId: 7,
+        }),
+      }),
+    );
   });
 });
 

@@ -77,8 +77,9 @@ const TASK_ROUTING = {
   "call-summary": { primary: "gemini-flash", fallback: null },
   // Callified AI call transcript classification for CRM leads (2026-07-31).
   // Reads the latest call transcript + review and decides whether the lead
-  // is hot, cold, or yet to call. Small JSON in/out → flash-lite primary.
-  "callified-lead-status": { primary: "gemini-flash-lite", fallback: "gemini-flash" },
+  // is hot, cold, or yet to call. Small JSON in/out → flash primary.
+  // NOTE: gemini-2.5-flash-lite was retired by Google; use gemini-flash.
+  "callified-lead-status": { primary: "gemini-flash", fallback: "gpt-4" },
   // Itinerary-suggest (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.6 + AI_SURFACES §3
   // table). 2K in / 4K out — larger out than bulk-text because the full
   // itinerary JSON shape (daySplit + poiSuggestions + thematicNotes) lands
@@ -643,7 +644,7 @@ const MODEL_ID_ENV = {
   // Web-search-enabled OpenAI model (browses the live web at query time).
   "gpt-4o-search": ["LLM_MODEL_GPT_SEARCH", "gpt-4o-search-preview"],
   "gemini-flash": ["LLM_MODEL_GEMINI", "gemini-2.5-flash"],
-  "gemini-flash-lite": ["LLM_MODEL_GEMINI_FLASH_LITE", "gemini-2.5-flash-lite"],
+  "gemini-flash-lite": ["LLM_MODEL_GEMINI_FLASH_LITE", "gemini-2.0-flash"],
   "perplexity-sonar": ["LLM_MODEL_PERPLEXITY", "sonar"],
 };
 
@@ -834,7 +835,7 @@ function geminiModelChain(primaryId) {
   const raw = process.env.LLM_GEMINI_FALLBACK_MODELS;
   const fallbacks = raw && raw.trim()
     ? raw.split(",").map((s) => s.trim()).filter(Boolean)
-    : ["gemini-2.5-flash-lite", "gemini-2.0-flash"];
+    : ["gemini-2.0-flash"];
   return [primaryId, ...fallbacks].filter((m, i, a) => m && a.indexOf(m) === i);
 }
 

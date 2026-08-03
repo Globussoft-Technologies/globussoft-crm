@@ -22,10 +22,11 @@
 // new-tab link to boardingPassUrl, not an inline iframe (lighter UI,
 // PDF + image both handled by the browser).
 
-import { useEffect, useState, useRef } from "react";
-import { Filter, Ticket, Calendar as CalendarIcon, Upload, Send, UserCheck, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { useEffect, useState, useRef, useCallback } from "react";
+import { Filter, Ticket, Calendar as CalendarIcon, Upload, Send, UserCheck, RefreshCw } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
 
 // Rewrite /uploads/... → /api/uploads/... so production deployments (where the
 // frontend SPA catches /uploads/* before it reaches the backend static mount)
@@ -42,22 +43,14 @@ function normalizeUploadUrl(url) {
 const STATUSES = [
   { value: "", label: "All statuses" },
   { value: "pending", label: "Pending" },
-  { value: "reminded", label: "Reminded" },
-  { value: "in-progress", label: "In progress" },
   { value: "done", label: "Done" },
-  { value: "fallback-agent", label: "Fallback agent" },
-  { value: "failed", label: "Failed" },
 ];
 
-// Status badge palette — schema enum is pending|reminded|in-progress|done|
-// fallback-agent|failed (backend/routes/travel_webcheckin.js:VALID_STATUSES).
+// Status badge palette — backend/routes/travel_webcheckin.js:VALID_STATUSES
+// is now binary: pending | done.
 const STATUS_COLORS = {
   pending: { bg: "rgba(38,99,180,0.14)", color: "#1F5DAA" },
-  reminded: { bg: "rgba(40,160,180,0.16)", color: "#1E7E8C" },
-  "in-progress": { bg: "rgba(200,154,78,0.18)", color: "#9A6F2E" },
   done: { bg: "rgba(47,122,77,0.16)", color: "#2F7A4D" },
-  "fallback-agent": { bg: "rgba(168,50,63,0.16)", color: "#A8323F" },
-  failed: { bg: "rgba(168,50,63,0.18)", color: "#A8323F" },
 };
 
 const PAGE_SIZE = 50;
@@ -74,42 +67,97 @@ export default function WebCheckinQueue() {
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [status, setStatus] = useState("");
   const [upcomingOnly, setUpcomingOnly] = useState(false);
   const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
   const [staff, setStaff] = useState([]);
   const [uploadingId, setUploadingId] = useState(null);
   const [deliveringId, setDeliveringId] = useState(null);
   const [reassigningId, setReassigningId] = useState(null);
   // Per-row hidden file input refs keyed by checkin id.
   const fileInputs = useRef({});
+  const listRef = useRef(null);
+  const rowsRef = useRef([]);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
 
-  const load = () => {
-    setLoading(true);
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = !upcomingOnly && (offset + rows.length < total);
+  }, [upcomingOnly, offset, rows.length, total]);
+
+  const load = useCallback(async ({ reset = false } = {}) => {
+    const startOffset = reset ? 0 : offsetRef.current;
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setRows([]);
+      rowsRef.current = [];
+      setTotal(0);
+      setOffset(0);
+      setHasMore(true);
+      if (listRef.current) listRef.current.scrollTop = 0;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
+
     const url = upcomingOnly
       ? `/api/travel/webcheckins/upcoming`
       : (() => {
           const qs = new URLSearchParams();
           if (status) qs.set("status", status);
           qs.set("limit", String(PAGE_SIZE));
-          qs.set("offset", String(offset));
+          qs.set("offset", String(startOffset));
           return `/api/travel/webcheckins?${qs.toString()}`;
         })();
-    fetchApi(url)
-      .then((res) => {
-        const list = Array.isArray(res?.webcheckins) ? res.webcheckins : [];
-        setRows(list);
-        setTotal(Number.isFinite(res?.total) ? res.total : list.length);
-      })
-      .catch((e) => {
-        // fetchApi already toasted; just zero the state.
-        if (e?.status !== 401) {
-          setRows([]);
-          setTotal(0);
-        }
-      })
-      .finally(() => setLoading(false));
-  };
+    try {
+      const res = await fetchApi(url);
+      const list = Array.isArray(res?.webcheckins) ? res.webcheckins : [];
+      const totalCount = Number.isFinite(Number(res?.total)) ? Number(res.total) : list.length;
+      const nextRows = upcomingOnly || reset ? list : [...rowsRef.current, ...list];
+      const nextOffset = upcomingOnly ? 0 : startOffset + list.length;
+      const nextHasMore = upcomingOnly
+        ? false
+        : (Number.isFinite(totalCount) ? nextOffset < totalCount : list.length === PAGE_SIZE);
+      rowsRef.current = nextRows;
+      setRows(nextRows);
+      setTotal(totalCount);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+    } catch (e) {
+      // fetchApi already toasted; just zero the state.
+      if (e?.status !== 401) {
+        setRows([]);
+        rowsRef.current = [];
+        setTotal(0);
+        setOffset(0);
+        setHasMore(false);
+      }
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [upcomingOnly, status]);
 
   // Staff list for the reassign dropdown — loaded once. /api/staff is
   // tolerant of every authed role and returns a small list per tenant.
@@ -119,7 +167,9 @@ export default function WebCheckinQueue() {
       .catch(() => setStaff([]));
   }, []);
 
-  useEffect(load, [status, upcomingOnly, offset]);
+  useEffect(() => {
+    load({ reset: true });
+  }, [load]);
 
   // Filter changes reset offset to 0 so the user doesn't land mid-page
   // on a smaller filtered result-set.
@@ -131,6 +181,15 @@ export default function WebCheckinQueue() {
     setUpcomingOnly(e.target.checked);
     setOffset(0);
   };
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || upcomingOnly || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      load({ reset: false });
+    }
+  }, [load, upcomingOnly]);
 
   // ─── Per-row actions ──────────────────────────────────────────────
 
@@ -161,7 +220,7 @@ export default function WebCheckinQueue() {
         return;
       }
       notify.success("Boarding pass uploaded.");
-      load();
+      load({ reset: true });
     } catch (err) {
       notify.error(err?.message || "Upload failed");
     } finally {
@@ -184,7 +243,7 @@ export default function WebCheckinQueue() {
         silent: true,
       });
       notify.success("Marked delivered.");
-      load();
+      load({ reset: true });
     } catch (err) {
       // 409 NO_BOARDING_PASS is the most common — surface it as a clear toast.
       if (err?.code === "NO_BOARDING_PASS") {
@@ -205,7 +264,7 @@ export default function WebCheckinQueue() {
         body: JSON.stringify({ assignedAgentId: agentId ? parseInt(agentId, 10) : null }),
       });
       notify.success(agentId ? "Reassigned." : "Unassigned.");
-      load();
+      load({ reset: true });
     } catch (err) {
       notify.error(err?.message || "Failed to reassign");
     } finally {
@@ -214,10 +273,6 @@ export default function WebCheckinQueue() {
   };
 
   // ─── Render ──────────────────────────────────────────────────────
-
-  const showingPagination = !upcomingOnly && total > PAGE_SIZE;
-  const fromIdx = total === 0 ? 0 : offset + 1;
-  const toIdx = Math.min(offset + rows.length, total);
 
   return (
     <div style={{ padding: 24, maxWidth: 1400, margin: "0 auto" }}>
@@ -260,25 +315,20 @@ export default function WebCheckinQueue() {
         </label>
         <button
           type="button"
-          onClick={load}
+          onClick={() => load({ reset: true })}
           style={refreshBtn}
           aria-label="Refresh"
         >
           <RefreshCw size={14} aria-hidden style={{ marginRight: 4 }} /> Refresh
         </button>
-        {showingPagination && (
-          <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-secondary)" }}>
-            {fromIdx}&ndash;{toIdx} of {total}
-          </span>
-        )}
       </div>
 
       {/* Table */}
       <div style={{
         background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)", overflow: "auto",
+        border: "1px solid var(--border-color)",
       }}>
-        {loading ? (
+        {loading && rows.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : rows.length === 0 ? (
           <div style={empty}>
@@ -286,9 +336,20 @@ export default function WebCheckinQueue() {
             flights are accepted.
           </div>
         ) : (
+          <div
+            ref={listRef}
+            data-testid="webcheckins-table-scroll"
+            onScroll={handleListScroll}
+            style={{
+              maxHeight: "60vh",
+              overflowY: "auto",
+              overflowX: "hidden",
+            }}
+          >
+            <TopScrollSync disabled>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
             <thead>
-              <tr>
+              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
                 <th style={th}>Window opens</th>
                 <th style={th}>PNR</th>
                 <th style={th}>Flight</th>
@@ -398,35 +459,20 @@ export default function WebCheckinQueue() {
               })}
             </tbody>
           </table>
+            </TopScrollSync>
+            {loadingMore && (
+              <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-light)" }}>
+                Loading more&hellip;
+              </div>
+            )}
+            {!upcomingOnly && hasMore && !loadingMore && (
+              <div data-testid="webcheckins-scroll-sentinel" style={{ height: 1 }} />
+            )}
+          </div>
         )}
       </div>
 
       {/* Pagination — only when not in upcoming mode and total exceeds page. */}
-      {showingPagination && (
-        <div style={{
-          display: "flex", justifyContent: "flex-end", alignItems: "center",
-          gap: 8, marginTop: 12,
-        }}>
-          <button
-            type="button"
-            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-            disabled={offset === 0}
-            style={pagerBtn}
-            aria-label="Previous page"
-          >
-            <ChevronLeft size={14} aria-hidden /> Prev
-          </button>
-          <button
-            type="button"
-            onClick={() => setOffset(offset + PAGE_SIZE)}
-            disabled={offset + rows.length >= total}
-            style={pagerBtn}
-            aria-label="Next page"
-          >
-            Next <ChevronRight size={14} aria-hidden />
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -457,18 +503,14 @@ const actionBtn = {
   background: "var(--surface-color)", color: "var(--text-primary)",
   fontSize: 12, cursor: "pointer", height: 28, minWidth: 75, whiteSpace: "nowrap", flexShrink: 0,
 };
-const pagerBtn = {
-  display: "inline-flex", alignItems: "center", gap: 2,
-  padding: "6px 12px", borderRadius: 6,
-  border: "1px solid var(--border-color)",
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 13, cursor: "pointer",
-};
 const empty = {
   padding: 32, textAlign: "center",
   color: "var(--text-secondary)", fontSize: 14,
 };
 const th = {
+  position: "sticky",
+  top: 0,
+  zIndex: 10,
   textAlign: "left", padding: "12px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",

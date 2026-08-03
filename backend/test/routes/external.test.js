@@ -186,11 +186,16 @@ prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
 prisma.contact.findMany = vi.fn();
 prisma.contact.create = vi.fn();
+prisma.contact.update = vi.fn();
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn();
 prisma.activity = prisma.activity || {};
 prisma.activity.create = vi.fn();
 prisma.callLog = prisma.callLog || {};
+prisma.leadCustomFieldDefinition = prisma.leadCustomFieldDefinition || {};
+prisma.leadCustomFieldDefinition.findMany = vi.fn();
+prisma.leadCustomFieldValue = prisma.leadCustomFieldValue || {};
+prisma.leadCustomFieldValue.upsert = vi.fn();
 prisma.callLog.findFirst = vi.fn();
 prisma.callLog.create = vi.fn();
 prisma.callLog.update = vi.fn();
@@ -226,8 +231,11 @@ beforeEach(() => {
   prisma.contact.findFirst.mockReset();
   prisma.contact.findMany.mockReset();
   prisma.contact.create.mockReset();
+  prisma.contact.update.mockReset();
   prisma.patient.findFirst.mockReset();
   prisma.activity.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.leadCustomFieldDefinition.findMany.mockReset();
+  prisma.leadCustomFieldValue.upsert.mockReset();
   prisma.callLog.findFirst.mockReset();
   prisma.callLog.create.mockReset();
   prisma.callLog.update.mockReset();
@@ -508,6 +516,10 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
       createdAt: new Date(),
     };
     prisma.contact.create.mockResolvedValueOnce(createdContact);
+    prisma.tenant.findUnique.mockResolvedValue({
+      vertical: "wellness",
+      callifiedAutoCampaignId: null,
+    });
 
     const app = makeApp();
     const res = await request(app).post("/api/v1/external/leads").send({
@@ -573,7 +585,7 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     });
     prisma.tenant.findUnique
       .mockReset()
-      .mockResolvedValueOnce({ callifiedAutoCampaignId: 42 });
+      .mockResolvedValueOnce({ vertical: "generic", callifiedAutoCampaignId: 42 });
     prisma.contact.findFirst.mockResolvedValueOnce(null);
     prisma.contact.create.mockResolvedValueOnce({
       id: 556,
@@ -600,14 +612,13 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     expect(res.status).toBe(201);
     expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
       where: { id: 7 },
-      select: { callifiedAutoCampaignId: true },
+      select: { vertical: true, callifiedAutoCampaignId: true },
     });
     const cArgs = prisma.contact.create.mock.calls[0][0].data;
     expect(cArgs.status).toBe("Lead");
     expect(cArgs.callifiedCampaignId).toBe(42);
   });
-
-  test("custom keys are preserved in response and activity description", async () => {
+  test("custom keys are preserved in response, activity, and full payload storage", async () => {
     classifyLeadMock.mockResolvedValueOnce({
       isJunk: false,
       score: 77,
@@ -622,12 +633,21 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
       tier: "high",
       minutes: 5,
     });
+    prisma.leadCustomFieldDefinition.findMany.mockResolvedValueOnce([
+      { id: 31, fieldKey: "total_number_of_employees", fieldType: "number" },
+      { id: 32, fieldKey: "select_a_product", fieldType: "text" },
+      { id: 33, fieldKey: "utm_source", fieldType: "text" },
+      { id: 34, fieldKey: "utm_medium", fieldType: "text" },
+      { id: 35, fieldKey: "submit_source", fieldType: "text" },
+    ]);
+    prisma.leadCustomFieldValue.upsert.mockResolvedValue({ id: 1 });
     prisma.contact.findFirst.mockResolvedValueOnce(null);
     prisma.contact.create.mockResolvedValueOnce({
       id: 888,
       name: "Neha Kapoor",
       email: "neha@example.com",
       phone: "+919877665544",
+      company: "Testing",
       status: "Lead",
       source: "website-form",
       aiScore: 77,
@@ -644,127 +664,77 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
         name: "Neha Kapoor",
         phone: "+919877665544",
         email: "neha@example.com",
+        company: "Testing",
         source: "website-form",
         note: "Interested in a consultation",
+        cf_total_number_of_employees: "11",
+        cf_select_a_product: "HRMS",
+        cf_utm_source: "google",
+        cf_utm_medium: "cpc",
+        cf_submit_source: "contact-us",
+        work_number: "",
+        custom_field_one: "any value",
+        custom_field_two: { nested: true },
         preferredLanguage: "Hindi",
         campaignCode: "EW-2026",
         partnerMeta: { landingPage: "hero", branch: "south" },
       });
 
     expect(res.status).toBe(201);
+    expect(res.body.company).toBe("Testing");
     expect(res.body._customFields).toEqual({
+      company: "Testing",
+      cf_total_number_of_employees: "11",
+      cf_select_a_product: "HRMS",
+      cf_utm_source: "google",
+      cf_utm_medium: "cpc",
+      cf_submit_source: "contact-us",
+      work_number: "",
+      custom_field_one: "any value",
+      custom_field_two: { nested: true },
       preferredLanguage: "Hindi",
       campaignCode: "EW-2026",
       partnerMeta: { landingPage: "hero", branch: "south" },
     });
     expect(res.body._verdict.score).toBe(77);
 
-    const aArgs = prisma.activity.create.mock.calls[0][0].data;
-    expect(aArgs.description).toContain("customFields=");
-    expect(aArgs.description).toContain("preferredLanguage");
-    expect(aArgs.description).toContain("partnerMeta");
-  });
-
-  test("default Callified campaign is auto-assigned for new Lead when tenant has callifiedAutoCampaignId", async () => {
-    classifyLeadMock.mockResolvedValueOnce({
-      isJunk: false,
-      score: 70,
-      reasons: [],
-    });
-    prisma.tenant.findUnique
-      .mockReset()
-      .mockResolvedValueOnce({ callifiedAutoCampaignId: 42 });
-    prisma.contact.findFirst.mockResolvedValueOnce(null);
-    prisma.contact.create.mockResolvedValueOnce({
-      id: 556,
-      name: "External Lead",
-      email: "ext@example.com",
-      phone: "+919900112234",
-      status: "Lead",
-      source: "website-form",
-      aiScore: 70,
-      assignedToId: 11,
-      callifiedCampaignId: 42,
-      tenantId: 7,
-      createdAt: new Date(),
-    });
-
-    const app = makeApp();
-    const res = await request(app).post("/api/v1/external/leads").send({
-      name: "External Lead",
-      phone: "+919900112234",
-      email: "ext@example.com",
-      source: "website-form",
-    });
-
-    expect(res.status).toBe(201);
-    expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
-      where: { id: 7 },
-      select: { callifiedAutoCampaignId: true },
-    });
     const cArgs = prisma.contact.create.mock.calls[0][0].data;
-    expect(cArgs.status).toBe("Lead");
-    expect(cArgs.callifiedCampaignId).toBe(42);
-  });
-
-  test("custom keys are preserved in response and activity description", async () => {
-    classifyLeadMock.mockResolvedValueOnce({
-      isJunk: false,
-      score: 77,
-      reasons: [],
-    });
-    pickAssigneeMock.mockResolvedValueOnce({
-      userId: 12,
-      reason: "matched service keyword",
-    });
-    computeFirstResponseDueAtMock.mockResolvedValueOnce({
-      dueAt: new Date("2026-06-01T11:05:00Z"),
-      tier: "high",
-      minutes: 5,
-    });
-    prisma.contact.findFirst.mockResolvedValueOnce(null);
-    prisma.contact.create.mockResolvedValueOnce({
-      id: 888,
-      name: "Neha Kapoor",
-      email: "neha@example.com",
-      phone: "+919877665544",
-      status: "Lead",
-      source: "website-form",
-      aiScore: 77,
-      assignedToId: 12,
-      firstResponseDueAt: new Date("2026-06-01T11:05:00Z"),
-      tenantId: 7,
-      createdAt: new Date(),
-    });
-
-    const app = makeApp();
-    const res = await request(app)
-      .post("/api/v1/external/leads")
-      .send({
-        name: "Neha Kapoor",
-        phone: "+919877665544",
-        email: "neha@example.com",
-        source: "website-form",
-        note: "Interested in a consultation",
-        preferredLanguage: "Hindi",
-        campaignCode: "EW-2026",
-        partnerMeta: { landingPage: "hero", branch: "south" },
-      });
-
-    expect(res.status).toBe(201);
-    expect(res.body._customFields).toEqual({
-      preferredLanguage: "Hindi",
-      campaignCode: "EW-2026",
-      partnerMeta: { landingPage: "hero", branch: "south" },
-    });
-    expect(res.body._verdict.score).toBe(77);
+    expect(cArgs.company).toBe("Testing");
+    expect(cArgs.externalPayloadJson).toContain("\"work_number\":\"\"");
+    expect(cArgs.externalPayloadJson).toContain("\"custom_field_two\"");
+    expect(cArgs.externalPayloadJson).toContain("\"cf_select_a_product\":\"HRMS\"");
 
     const aArgs = prisma.activity.create.mock.calls[0][0].data;
     expect(aArgs.description).toContain("customFields=");
-    expect(aArgs.description).toContain("preferredLanguage");
+    expect(aArgs.description).toContain("cf_total_number_of_employees");
     expect(aArgs.description).toContain("partnerMeta");
+
+    expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 7,
+        fieldKey: {
+          in: [
+            "company",
+            "total_number_of_employees",
+            "select_a_product",
+            "utm_source",
+            "utm_medium",
+            "submit_source",
+            "work_number",
+            "custom_field_one",
+            "custom_field_two",
+            "preferredLanguage",
+            "campaignCode",
+            "partnerMeta",
+          ],
+        },
+      },
+    });
+    expect(prisma.leadCustomFieldValue.upsert).toHaveBeenCalledTimes(5);
+    expect(prisma.leadCustomFieldValue.upsert.mock.calls.map((call) => call[0].create.fieldId)).toEqual([31, 32, 33, 34, 35]);
   });
-  test('junk verdict → status="Junk", pickAssignee SKIPPED, Activity.type="JunkFilter"', async () => {
+
+  test("junk verdict → status=\"Junk\", pickAssignee SKIPPED, Activity.type=\"JunkFilter\"", async () => {
     classifyLeadMock.mockResolvedValueOnce({
       isJunk: true,
       score: 5,
@@ -781,6 +751,7 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
       name: "xyzz qwerty",
       email: null,
       phone: "+10000000000",
+      company: null,
       status: "Junk",
       source: "callified",
       aiScore: 5,
@@ -801,15 +772,10 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     expect(res.body._routing.userId).toBeNull();
     expect(res.body._routing.reason).toMatch(/junk/i);
 
-    // pickAssignee MUST NOT have been called when junk
     expect(pickAssigneeMock).not.toHaveBeenCalled();
-
-    // Contact created with status='Junk'
     const cArgs = prisma.contact.create.mock.calls[0][0].data;
     expect(cArgs.status).toBe("Junk");
     expect(cArgs.assignedToId).toBeNull();
-
-    // Activity created with type='JunkFilter' since reasons[] is non-empty
     expect(prisma.activity.create).toHaveBeenCalledOnce();
     const aArgs = prisma.activity.create.mock.calls[0][0].data;
     expect(aArgs.type).toBe("JunkFilter");
@@ -1070,3 +1036,5 @@ describe("GET /api/v1/external/services + appointments — catalog shape", () =>
     expect(args.where.visitDate.lte).toEqual(new Date("2026-06-30T23:59:59Z"));
   });
 });
+
+

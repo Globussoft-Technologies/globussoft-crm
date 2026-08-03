@@ -68,7 +68,7 @@ function buildRawMessage(opts = {}) {
   const stamp = `${Date.now().toString(36)}_${Math.floor(Math.random() * 1e9).toString(36)}`;
 
   // Inner body section: single-part or multipart/alternative
-  let bodyContentType, bodyEncoding, bodyContent, bodyIsMultipart;
+  let bodyContentType, bodyContent, bodyIsMultipart;
   if (hasHtml && hasText) {
     const altBound = `alt_${stamp}`;
     const textPart = `Content-Type: text/plain; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${Buffer.from(text, "utf8").toString("base64")}`;
@@ -78,12 +78,10 @@ function buildRawMessage(opts = {}) {
     bodyIsMultipart = true;
   } else if (hasHtml) {
     bodyContentType = 'text/html; charset="UTF-8"';
-    bodyEncoding = "base64";
     bodyContent = Buffer.from(html, "utf8").toString("base64");
     bodyIsMultipart = false;
   } else {
     bodyContentType = 'text/plain; charset="UTF-8"';
-    bodyEncoding = "base64";
     bodyContent = Buffer.from(hasText ? text : "", "utf8").toString("base64");
     bodyIsMultipart = false;
   }
@@ -167,6 +165,39 @@ function extractBody(payload) {
 }
 
 /**
+ * Walk a Gmail payload and collect attachment metadata (parts with an
+ * attachmentId). Gmail keeps attachment *data* out of the message.get('full')
+ * payload; callers must fetch each attachment via users.messages.attachments.get.
+ *
+ * @param {object} payload
+ * @returns {Array<{filename:string, mimeType:string, size:number, attachmentId:string}>}
+ */
+function extractAttachments(payload) {
+  const attachments = [];
+  const seen = new Set();
+  const walk = (part) => {
+    if (!part || typeof part !== "object") return;
+    const body = part.body || {};
+    const hasAttachmentId = typeof body.attachmentId === "string" && body.attachmentId.length > 0;
+    if (hasAttachmentId) {
+      const key = `${part.filename || ""}|${body.attachmentId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        attachments.push({
+          filename: part.filename || `attachment-${attachments.length + 1}`,
+          mimeType: part.mimeType || "application/octet-stream",
+          size: Number.isFinite(body.size) ? body.size : 0,
+          attachmentId: body.attachmentId,
+        });
+      }
+    }
+    if (Array.isArray(part.parts)) part.parts.forEach(walk);
+  };
+  walk(payload);
+  return attachments;
+}
+
+/**
  * Flatten a gmail.users.messages.get response into a CRM-friendly shape.
  *
  * @param {object} apiMsg
@@ -191,6 +222,7 @@ function parseGmailMessage(apiMsg) {
     text,
     html,
     body: text || html || snippet || "",
+    attachments: extractAttachments(payload),
   };
 }
 
@@ -211,4 +243,5 @@ module.exports = {
   headerValue,
   parseGmailMessage,
   extractEmailAddress,
+  extractAttachments,
 };

@@ -20,7 +20,7 @@
 // - subBrand — optional, defaults to "tmc"; sub-brand isolation enforced
 //   server-side via getSubBrandAccessSet.
 
-import { useEffect, useMemo, useState, useContext } from "react";
+import { useEffect, useMemo, useState, useContext, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
 import { Receipt, Pencil, Trash2, Calculator } from "lucide-react";
 import { fetchApi } from "../../utils/api";
@@ -79,6 +79,7 @@ const EMPTY_FORM = {
   validUntil: "",
   subBrand: "tmc",
 };
+const PAGE_SIZE = 50;
 
 // Tomorrow as min for the validUntil date picker. Backend accepts
 // "today or future" but using tomorrow eliminates the TZ-window flake
@@ -124,6 +125,9 @@ export default function QuotesAdmin() {
   const [quotes, setQuotes] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
   // #829 — distinguish 403 from genuine empty so the empty-state copy
   // honestly says "Access restricted" instead of "No quotes match."
   const [permissionDenied, setPermissionDenied] = useState(false);
@@ -136,26 +140,79 @@ export default function QuotesAdmin() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const listRef = useRef(null);
+  const quotesRef = useRef([]);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
 
-  const load = () => {
-    setLoading(true);
+  useEffect(() => {
+    quotesRef.current = quotes;
+  }, [quotes]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const load = useCallback(async ({ reset = false } = {}) => {
+    const startOffset = reset ? 0 : offsetRef.current;
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setQuotes([]);
+      quotesRef.current = [];
+      setTotal(0);
+      setOffset(0);
+      setHasMore(true);
+      setPermissionDenied(false);
+      if (listRef.current) listRef.current.scrollTop = 0;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
     const qs = new URLSearchParams();
     if (subBrand) qs.set("subBrand", subBrand);
     if (status) qs.set("status", status);
-    const url = `/api/travel/quotes${qs.toString() ? `?${qs.toString()}` : ""}`;
-    fetchApi(url)
-      .then((d) => {
-        setQuotes(Array.isArray(d?.quotes) ? d.quotes : []);
-        setTotal(Number.isFinite(d?.total) ? d.total : 0);
-        setPermissionDenied(false);
-      })
-      .catch((err) => {
-        setQuotes([]);
-        setTotal(0);
-        setPermissionDenied(err?.status === 403);
-      })
-      .finally(() => setLoading(false));
-  };
+    qs.set("limit", String(PAGE_SIZE));
+    qs.set("offset", String(startOffset));
+    try {
+      const d = await fetchApi(`/api/travel/quotes?${qs.toString()}`);
+      const rows = Array.isArray(d?.quotes) ? d.quotes : [];
+      const totalCount = Number.isFinite(Number(d?.total)) ? Number(d.total) : rows.length;
+      const nextQuotes = reset ? rows : [...quotesRef.current, ...rows];
+      const nextOffset = startOffset + rows.length;
+      const nextHasMore = Number.isFinite(totalCount) ? nextOffset < totalCount : rows.length === PAGE_SIZE;
+      quotesRef.current = nextQuotes;
+      setQuotes(nextQuotes);
+      setTotal(totalCount);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+      setPermissionDenied(false);
+    } catch (err) {
+      setQuotes([]);
+      quotesRef.current = [];
+      setTotal(0);
+      setOffset(0);
+      setHasMore(false);
+      setPermissionDenied(err?.status === 403);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [subBrand, status]);
 
   // Name filter is a derived client-side view over the raw fetched rows.
   // The backend now joins contact.name, so we filter directly on it.
@@ -175,7 +232,9 @@ export default function QuotesAdmin() {
     setSubBrand(activeSubBrand || "");
   }, [activeSubBrand]);
 
-  useEffect(load, [subBrand, status]);
+  useEffect(() => {
+    load({ reset: true });
+  }, [load]);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -238,7 +297,7 @@ export default function QuotesAdmin() {
       }
       setShowForm(false);
       resetForm();
-      load();
+      load({ reset: true });
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Save failed");
     } finally {
@@ -248,15 +307,24 @@ export default function QuotesAdmin() {
 
   const handleDelete = async (q) => {
     const contactName = q.contact?.name || "this contact";
-    if (!confirm(`Delete quote #${q.id} for ${contactName}? (Hard delete — no undo.)`)) return;
+    if (!confirm(`Delete quote #${q.id} for ${contactName}? (Hard delete - no undo.)`)) return;
     try {
       await fetchApi(`/api/travel/quotes/${q.id}`, { method: "DELETE" });
       notify.success(`Quote #${q.id} deleted`);
-      load();
+      load({ reset: true });
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Delete failed");
     }
   };
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      load({ reset: false });
+    }
+  }, [load]);
 
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
@@ -410,13 +478,19 @@ export default function QuotesAdmin() {
         className="glass"
         style={{ padding: 0, overflow: "visible" }}
       >
-        {loading ? (
+        {loading && quotes.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : (
-          <TopScrollSync>
+          <div
+            ref={listRef}
+            data-testid="quotes-admin-table-scroll"
+            onScroll={handleListScroll}
+            style={{ maxHeight: "60vh", overflowY: "auto", overflowX: "hidden" }}
+          >
+          <TopScrollSync disabled>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
-              <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                 <th style={th}>Contact</th>
                 <th style={th}>Status</th>
                 <th style={th}>Total</th>
@@ -527,6 +601,15 @@ export default function QuotesAdmin() {
             </tbody>
           </table>
           </TopScrollSync>
+          {loadingMore && (
+            <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
+              Loading more&hellip;
+            </div>
+          )}
+          {!loadingMore && hasMore && (
+            <div data-testid="quotes-admin-scroll-sentinel" style={{ height: 1 }} />
+          )}
+          </div>
         )}
       </div>
     </div>
@@ -534,6 +617,9 @@ export default function QuotesAdmin() {
 }
 
 const th = {
+  position: "sticky",
+  top: 0,
+  zIndex: 10,
   textAlign: "left",
   padding: "10px 12px",
   fontSize: 12,

@@ -139,6 +139,10 @@ vi.mock('../utils/notify', () => ({
 
 import TravelReports from '../pages/travel/Reports';
 
+function renderTravelReports() {
+  return render(<TravelReports />);
+}
+
 // Canonical populated responses.
 const TMC_POPULATED = {
   revenue: {

@@ -302,6 +302,13 @@ export default function LeadFields() {
     }
   };
 
+  const openEditModal = (field) => {
+    if (FIELD_TYPES_WITH_OPTIONS.has(field.fieldType)) {
+      openOptionsEditor(field);
+      return;
+    }
+    notify.info("Editing is currently available for option-based fields from this table.");
+  };
   const openOptionsEditor = (field) => {
     setEditingOptionsId(field.id);
     setEditingOptionsText(Array.isArray(field.options) ? field.options.join(", ") : "");

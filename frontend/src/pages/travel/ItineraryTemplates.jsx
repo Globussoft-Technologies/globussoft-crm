@@ -33,7 +33,7 @@
 // Mirrors SightseeingMaster.jsx (ca052d20) — same #907 arc, same admin-table
 // pattern, same notify hook (`../utils/notify`, not `../hooks/useNotify`).
 
-import React, { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Archive, ArchiveRestore, Copy, Download, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Upload, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
@@ -133,7 +133,7 @@ export default function ItineraryTemplates() {
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
 
   const [items, setItems] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [_total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -1358,7 +1358,7 @@ function TemplatePreviewModal({
               }}
               data-testid="preview-no-pins"
             >
-              No mapped points of interest yet. The template's items don't
+              No mapped points of interest yet. The template&apos;s items don&apos;t
               carry latitude / longitude.
             </div>
           )}
@@ -1536,7 +1536,6 @@ const emptyStyle = {
 const th = {
   position: 'sticky',
   top: 0,
-  background: '#fff',
   zIndex: 10,
   textAlign: 'left',
   padding: '10px 12px',

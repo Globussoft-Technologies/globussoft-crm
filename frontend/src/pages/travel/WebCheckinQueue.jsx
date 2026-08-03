@@ -518,7 +518,6 @@ const empty = {
 const th = {
   position: "sticky",
   top: 0,
-  background: "#fff",
   zIndex: 10,
   textAlign: "left", padding: "12px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,

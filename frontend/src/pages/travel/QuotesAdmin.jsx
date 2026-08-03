@@ -619,7 +619,6 @@ export default function QuotesAdmin() {
 const th = {
   position: "sticky",
   top: 0,
-  background: "#fff",
   zIndex: 10,
   textAlign: "left",
   padding: "10px 12px",

@@ -509,7 +509,7 @@ function MarkupRulesSection() {
     fetchApi("/api/travel/suppliers?limit=500&fields=summary")
       .then((res) => setSuppliers(Array.isArray(res?.suppliers) ? res.suppliers : []))
       .catch(() => setSuppliers([]));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const load = () => {
     setLoading(true);
@@ -907,7 +907,6 @@ const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)"
 const th = {
   position: "sticky",
   top: 0,
-  background: "#fff",
   zIndex: 10,
   textAlign: "left", padding: "10px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,

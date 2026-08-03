@@ -489,15 +489,12 @@ describe('<Itineraries /> — load + render lifecycle', () => {
     renderPage();
     await screen.findByText('Page 1 Trip 1');
     const scrollArea = screen.getByTestId('itineraries-scroll-area');
-    Object.defineProperty(scrollArea, 'clientHeight', { value: 400, configurable: true });
-    Object.defineProperty(scrollArea, 'scrollHeight', { value: 800, configurable: true });
-    fireEvent.scroll(scrollArea, {
-      target: {
-        scrollTop: 728,
-        clientHeight: 400,
-        scrollHeight: 800,
-      },
+    Object.defineProperties(scrollArea, {
+      scrollTop: { value: 728, writable: true, configurable: true },
+      clientHeight: { value: 400, writable: true, configurable: true },
+      scrollHeight: { value: 800, writable: true, configurable: true },
     });
+    fireEvent.scroll(scrollArea);
 
     await waitFor(() => {
       const nextCall = fetchApiMock.mock.calls.find(([u, o]) =>
@@ -1246,6 +1243,7 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
     await screen.findByTestId('suggest-preview-pane');
+    await screen.findByRole('option', { name: /Riya Sharma/i });
   }
 
   it('happy path: pick contact + click materialise → POSTs correct body + notify.success + navigate', async () => {
@@ -1259,7 +1257,11 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     const createBtn = screen.getByRole('button', {
       name: /Create itinerary from this suggestion/i,
     });
-    expect(createBtn).not.toBeDisabled();
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /Create itinerary from this suggestion/i }),
+      ).not.toBeDisabled();
+    });
     fireEvent.click(createBtn);
     // notify.success fires with "Itinerary created with 3 items".
     await waitFor(() => {
@@ -1325,6 +1327,11 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
       screen.getByLabelText(/Contact for materialised itinerary/i),
       { target: { value: '5001' } },
     );
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /Create itinerary from this suggestion/i }),
+      ).not.toBeDisabled();
+    });
     fireEvent.click(
       screen.getByRole('button', {
         name: /Create itinerary from this suggestion/i,
@@ -1368,6 +1375,11 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     );
     const triggerBtn = screen.getByRole('button', {
       name: /Create itinerary from this suggestion/i,
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /Create itinerary from this suggestion/i }),
+      ).not.toBeDisabled();
     });
     fireEvent.click(triggerBtn);
     // Loading text + disabled state. The button's aria-label stays
@@ -1441,6 +1453,11 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
       screen.getByLabelText(/Contact for materialised itinerary/i),
       { target: { value: '5001' } },
     );
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: /Create itinerary from this suggestion/i }),
+      ).not.toBeDisabled();
+    });
     fireEvent.click(
       screen.getByRole('button', {
         name: /Create itinerary from this suggestion/i,

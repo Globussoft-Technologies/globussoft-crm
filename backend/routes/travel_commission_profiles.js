@@ -2984,7 +2984,7 @@ router.get(
 //
 // Why a separate endpoint instead of an aggregate=quarter query param on
 // by-month: callers expect different defaults (12 quarters = 3 years at
-// quarter granularity is a sensible UI default; 36 months â‰  12 quarters in
+// quarter granularity is a sensible UI default; 36 months != 12 quarters in
 // any meaningful sense). Different default sort + bucket validation regex.
 // Keeping the two reads disjoint lets each evolve independently â€” same
 // rationale slice 15 cites for not extending by-contact.

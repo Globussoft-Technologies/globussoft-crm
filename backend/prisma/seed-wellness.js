@@ -934,6 +934,18 @@ async function main() {
     { name: "Minoxidil",     genericName: "Minoxidil",       dosageForm: "topical",   strengthValue: "5",   strengthUnit: "%",  defaultDosage: "1 ml",      defaultFrequency: "twice daily on scalp",     defaultDuration: "ongoing", notes: "Apply on dry scalp; do not wash for 4 hours." },
     { name: "Finasteride",   genericName: "Finasteride",     dosageForm: "tablet",    strengthValue: "1",   strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once daily",               defaultDuration: "ongoing", notes: "Schedule H — physician supervision required." },
     { name: "Tretinoin",     genericName: "Tretinoin",       dosageForm: "topical",   strengthValue: "0.025", strengthUnit: "%",defaultDosage: "pea-size",  defaultFrequency: "once at night",            defaultDuration: "12 weeks", notes: "Apply on dry skin; sunscreen mandatory next day." },
+    { name: "Amlodipine",    genericName: "Amlodipine",      dosageForm: "tablet",    strengthValue: "5",   strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once daily",               defaultDuration: "ongoing" },
+    { name: "Losartan",      genericName: "Losartan",        dosageForm: "tablet",    strengthValue: "50",  strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once daily",               defaultDuration: "ongoing" },
+    { name: "Metoprolol",    genericName: "Metoprolol",      dosageForm: "tablet",    strengthValue: "25",  strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "twice daily",              defaultDuration: "ongoing" },
+    { name: "Pantocid",      genericName: "Pantoprazole",    dosageForm: "tablet",    strengthValue: "40",  strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once daily before breakfast", defaultDuration: "14 days" },
+    { name: "Montelukast",   genericName: "Montelukast",     dosageForm: "tablet",    strengthValue: "10",  strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once at night",            defaultDuration: "ongoing" },
+    { name: "Loratadine",    genericName: "Loratadine",      dosageForm: "tablet",    strengthValue: "10",  strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "once daily",               defaultDuration: "5 days" },
+    { name: "ORS",           genericName: "Oral Rehydration Salts", dosageForm: "syrup", strengthValue: "200", strengthUnit: "ml", defaultDosage: "200 ml", defaultFrequency: "after each loose motion", defaultDuration: "as needed" },
+    { name: "Clotrimazole",  genericName: "Clotrimazole",    dosageForm: "topical",   strengthValue: "1",   strengthUnit: "%", defaultDosage: "thin layer", defaultFrequency: "twice daily",              defaultDuration: "2 weeks" },
+    { name: "Mupirocin",     genericName: "Mupirocin",       dosageForm: "topical",   strengthValue: "2",   strengthUnit: "%", defaultDosage: "thin layer", defaultFrequency: "twice daily",              defaultDuration: "5 days" },
+    { name: "Naproxen",      genericName: "Naproxen",        dosageForm: "tablet",    strengthValue: "250", strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "twice daily after food",    defaultDuration: "5 days" },
+    { name: "Dolo 650",      genericName: "Paracetamol",     dosageForm: "tablet",    strengthValue: "650", strengthUnit: "mg", defaultDosage: "1 tablet",  defaultFrequency: "every 6 hours as needed",   defaultDuration: "3 days" },
+    { name: "Cetaphil Lotion", genericName: "Moisturizing lotion", dosageForm: "topical", strengthValue: "", strengthUnit: "", defaultDosage: "apply as needed", defaultFrequency: "twice daily", defaultDuration: "ongoing" },
   ];
   for (const d of drugSeeds) {
     const existing = await prisma.drug.findFirst({ where: { tenantId: tenant.id, name: d.name } });
@@ -1033,6 +1045,208 @@ async function main() {
     }
   }
   console.log(`[seed-wellness] membership plans: ${membershipPlanSeeds.length}`);
+
+  // 11. Landing-site demo catalog for /landing-sites infinite scroll.
+  // Keep one published "active" card plus a healthy batch of drafts so the
+  // list needs multiple pages and the scroll sentinel is easy to observe.
+  const landingSiteAuthor = userMap["admin@wellness.demo"] || userMap["rishu@enhancedwellness.in"] || null;
+  const landingSiteContent = (title, ctaText) => JSON.stringify([
+    { id: `seed-${title}-hero`, type: "heading", props: { text: title, level: "h1", align: "center", color: "#111827" } },
+    { id: `seed-${title}-body`, type: "text", props: { text: `Book a wellness consultation or event registration for ${title.toLowerCase()}.`, align: "center", color: "#4b5563", fontSize: "1rem" } },
+    { id: `seed-${title}-cta`, type: "form", props: { fields: [
+      { label: "Name", name: "name", type: "text", required: true },
+      { label: "Phone", name: "phone", type: "tel", required: true },
+      { label: "Email", name: "email", type: "email", required: false },
+    ], submitText: ctaText, thankYouMessage: `Thanks for your interest in ${title}.`, enableCaptcha: false, leadRoutingRuleId: "", successRedirectUrl: "" } },
+  ]);
+  const landingSiteSeeds = [
+    {
+      title: "Summer Wellness Detox Retreat",
+      slug: "summer-wellness-detox-retreat",
+      description: "Health event registration landing site for holistic detox and consultation bookings.",
+      status: "PUBLISHED",
+      visits: 142,
+      submissions: 18,
+      publishedAt: new Date(Date.now() - 6 * 86400000),
+      isFeatured: true,
+      featuredAt: new Date(Date.now() - 6 * 86400000),
+    },
+    {
+      title: "Wellness Yoga Retreat",
+      slug: "wellness-yoga-retreat",
+      description: "Mindfulness retreat landing site for weekend registrations.",
+      status: "DRAFT",
+      visits: 48,
+      submissions: 7,
+    },
+    {
+      title: "Monsoon Recovery Camp",
+      slug: "monsoon-recovery-camp",
+      description: "Seasonal wellness camp for post-monsoon care and skin refresh sessions.",
+      status: "DRAFT",
+      visits: 33,
+      submissions: 5,
+    },
+    {
+      title: "Hair Fall Consultation Drive",
+      slug: "hair-fall-consultation-drive",
+      description: "Lead-capture page for hair fall assessments and doctor callbacks.",
+      status: "DRAFT",
+      visits: 64,
+      submissions: 11,
+    },
+    {
+      title: "Advanced Skin Care Workshop",
+      slug: "advanced-skin-care-workshop",
+      description: "Workshop registration page for skin consultation and treatment demos.",
+      status: "ARCHIVED",
+      visits: 19,
+      submissions: 2,
+    },
+    {
+      title: "Aesthetic Glow Evening",
+      slug: "aesthetic-glow-evening",
+      description: "Evening event landing page for Botox and filler consultations.",
+      status: "DRAFT",
+      visits: 57,
+      submissions: 6,
+    },
+    {
+      title: "Hair Transplant Open House",
+      slug: "hair-transplant-open-house",
+      description: "Open house landing site for graft assessments and surgical counseling.",
+      status: "DRAFT",
+      visits: 88,
+      submissions: 13,
+    },
+    {
+      title: "Slimming Studio Signup",
+      slug: "slimming-studio-signup",
+      description: "Signup page for slimming assessments and package enquiries.",
+      status: "DRAFT",
+      visits: 41,
+      submissions: 4,
+    },
+    {
+      title: "Botox Aftercare Reminder",
+      slug: "botox-aftercare-reminder",
+      description: "Aftercare landing page for follow-up visits and reviews.",
+      status: "ARCHIVED",
+      visits: 23,
+      submissions: 1,
+    },
+    {
+      title: "Clinic Anniversary Camp",
+      slug: "clinic-anniversary-camp",
+      description: "Anniversary campaign landing page for free consultation registrations.",
+      status: "DRAFT",
+      visits: 73,
+      submissions: 9,
+    },
+    {
+      title: "Hair PRP Roadshow",
+      slug: "hair-prp-roadshow",
+      description: "Roadshow registration page for PRP sessions and callback capture.",
+      status: "DRAFT",
+      visits: 52,
+      submissions: 8,
+    },
+    {
+      title: "Skin Renewal Week",
+      slug: "skin-renewal-week",
+      description: "Promotional landing site for a week-long skin consultation offer.",
+      status: "DRAFT",
+      visits: 29,
+      submissions: 3,
+    },
+    {
+      title: "Family Wellness Day",
+      slug: "family-wellness-day",
+      description: "Community day landing page for family consultations and bookings.",
+      status: "DRAFT",
+      visits: 96,
+      submissions: 16,
+    },
+    {
+      title: "Telecaller Lead Sprint",
+      slug: "telecaller-lead-sprint",
+      description: "Internal lead-capture page used to test follow-up campaigns.",
+      status: "ARCHIVED",
+      visits: 15,
+      submissions: 0,
+    },
+    {
+      title: "Weekend Aesthetics Pop-Up",
+      slug: "weekend-aesthetics-pop-up",
+      description: "Pop-up event page for premium aesthetic consultations.",
+      status: "DRAFT",
+      visits: 67,
+      submissions: 10,
+    },
+    {
+      title: "Post-Procedure Care Guide",
+      slug: "post-procedure-care-guide",
+      description: "Aftercare and follow-up registration page for recent patients.",
+      status: "DRAFT",
+      visits: 31,
+      submissions: 2,
+    },
+    {
+      title: "Wellness Membership Drive",
+      slug: "wellness-membership-drive",
+      description: "Membership signup page with offer details and callback capture.",
+      status: "DRAFT",
+      visits: 105,
+      submissions: 21,
+    },
+    {
+      title: "Clinic Reengagement Offer",
+      slug: "clinic-reengagement-offer",
+      description: "Reactivation campaign for dormant leads and past patients.",
+      status: "ARCHIVED",
+      visits: 11,
+      submissions: 1,
+    },
+  ];
+  for (const site of landingSiteSeeds) {
+    const existing = await prisma.landingPage.findFirst({
+      where: { tenantId: tenant.id, slug: site.slug },
+      select: { id: true },
+    });
+    const common = {
+      title: site.title,
+      slug: site.slug,
+      description: site.description,
+      templateType: "generic-site-wellness-v1",
+      content: landingSiteContent(site.title, site.status === "PUBLISHED" ? "Register Now" : "Learn More"),
+      cssOverrides: null,
+      metaTitle: `${site.title} | Enhanced Wellness`,
+      metaDescription: site.description,
+      status: site.status,
+      visits: site.visits,
+      submissions: site.submissions,
+      publishedAt: site.publishedAt || null,
+      destination: null,
+      subBrand: null,
+      generatedByAi: false,
+      generatedAt: null,
+      isFeatured: !!site.isFeatured,
+      featuredAt: site.featuredAt || null,
+      tenantId: tenant.id,
+      userId: landingSiteAuthor ? landingSiteAuthor.id : null,
+    };
+    if (existing) {
+      await prisma.landingPage.update({ where: { id: existing.id }, data: common });
+    } else {
+      await prisma.landingPage.create({
+        data: {
+          ...common,
+          createdAt: new Date(Date.now() - (landingSiteSeeds.indexOf(site) + 1) * 86400000),
+        },
+      });
+    }
+  }
+  console.log(`[seed-wellness] landing sites: ${landingSiteSeeds.length}`);
 
   console.log("\n[seed-wellness] DONE");
   console.log("\nLogin to Enhanced Wellness with:");

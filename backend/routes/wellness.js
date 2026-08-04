@@ -7645,9 +7645,13 @@ router.get(
       if (req.query.activeOnly === "1" || req.query.activeOnly === "true") {
         where.isActive = true;
       }
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 200);
+      const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
       const rows = await prisma.resource.findMany({
         where,
         orderBy: { name: "asc" },
+        take: limit,
+        skip: offset,
       });
       res.json(rows);
     } catch (e) {
@@ -8661,7 +8665,7 @@ function sendCsv(res, baseName, window, csvText) {
 
 // Generic tabular PDF  a renderer matching the prescription/consent style:
 // clinic letterhead, centered title, range subtitle, and a paginated table.
-async function renderReportPdf(title, columns, rows, range, clinic) {
+async function renderReportPdf(title, columns, rows, range, clinic, options = {}) {
   const PDFDocument = require("pdfkit");
   const doc = new PDFDocument({ size: "A4", margin: 40, layout: "landscape" });
   applyRupeeCapableFonts(doc); //  glyph fix
@@ -8718,60 +8722,90 @@ async function renderReportPdf(title, columns, rows, range, clinic) {
   }
   doc.moveDown(0.6);
 
-  // Table  equal-width columns scaled to printable width.
+  // Table
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
   const printW = right - left;
-  const colW = printW / columns.length;
-  const headerY = doc.y;
-  doc.font("Helvetica-Bold").fontSize(9).fillColor("#333");
-  columns.forEach((h, i) => {
-    doc.text(String(h), left + i * colW + 2, headerY, {
-      width: colW - 4,
-      ellipsis: true,
-    });
+  const configuredColumns = Array.isArray(options.columns) ? options.columns : [];
+  const weights = columns.map((_, i) => {
+    const w = Number(configuredColumns[i]?.weight);
+    return w > 0 ? w : 1;
   });
-  doc
-    .moveTo(left, headerY + 14)
-    .lineTo(right, headerY + 14)
-    .lineWidth(0.5)
-    .strokeColor("#bbb")
-    .stroke();
-
-  let y = headerY + 18;
-  doc.font("Helvetica").fontSize(9).fillColor("#222");
-  const lineH = 14;
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || columns.length;
+  const colWidths = weights.map((weight) => (printW * weight) / totalWeight);
+  const colLefts = colWidths.reduce((acc, width, i) => {
+    acc.push(i === 0 ? left : acc[i - 1] + colWidths[i - 1]);
+    return acc;
+  }, []);
+  const numericColumns = new Set(
+    columns
+      .map((name, index) => ({ name: String(name).toLowerCase(), index }))
+      .filter(({ name }) =>
+        /visits|patients|leads|junk|qualified|revenue|cost|contribution|rate|%|rev/.test(name),
+      )
+      .map(({ index }) => index),
+  );
+  const cellPadX = 4;
+  const cellGapY = 6;
+  const lineH = 11.5;
   const bottom = doc.page.height - doc.page.margins.bottom - 20;
-  for (const row of rows) {
-    if (y + lineH > bottom) {
-      doc.addPage({ size: "A4", margin: 40, layout: "landscape" });
-      y = doc.page.margins.top;
-      // re-emit table header on new page for readability
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#333");
-      columns.forEach((h, i) => {
-        doc.text(String(h), left + i * colW + 2, y, {
-          width: colW - 4,
-          ellipsis: true,
-        });
+
+  const drawHeader = (yPos) => {
+    doc.font("Helvetica-Bold").fontSize(8).fillColor("#333");
+    const heights = columns.map((h, i) =>
+      doc.heightOfString(String(h), {
+        width: Math.max(12, colWidths[i] - cellPadX * 2),
+        lineGap: 1,
+      }),
+    );
+    const headerH = Math.max(14, ...heights);
+    columns.forEach((h, i) => {
+      doc.text(String(h), colLefts[i] + cellPadX, yPos, {
+        width: Math.max(12, colWidths[i] - cellPadX * 2),
+        lineGap: 1,
+        align: numericColumns.has(i) ? "right" : "left",
       });
-      doc
-        .moveTo(left, y + 14)
-        .lineTo(right, y + 14)
-        .lineWidth(0.5)
-        .strokeColor("#bbb")
-        .stroke();
-      y += 18;
-      doc.font("Helvetica").fontSize(9).fillColor("#222");
+    });
+    doc
+      .moveTo(left, yPos + headerH + 4)
+      .lineTo(right, yPos + headerH + 4)
+      .lineWidth(0.5)
+      .strokeColor("#bbb")
+      .stroke();
+    return yPos + headerH + 9;
+  };
+
+  let y = drawHeader(doc.y);
+  doc.font("Helvetica").fontSize(8.5).fillColor("#222");
+  for (const row of rows) {
+    doc.font("Helvetica").fontSize(8.5);
+    const rowH = Math.max(
+      lineH,
+      ...row.map((cell, i) =>
+        doc.heightOfString(cell === null || cell === undefined ? "" : String(cell), {
+          width: Math.max(12, colWidths[i] - cellPadX * 2),
+          lineGap: 1,
+        }),
+      ),
+    );
+    if (y + rowH > bottom) {
+      doc.addPage({ size: "A4", margin: 40, layout: "landscape" });
+      y = drawHeader(doc.page.margins.top);
+      doc.font("Helvetica").fontSize(8.5).fillColor("#222");
     }
     row.forEach((cell, i) => {
       doc.text(
         cell === null || cell === undefined ? "" : String(cell),
-        left + i * colW + 2,
+        colLefts[i] + cellPadX,
         y,
-        { width: colW - 4, ellipsis: true },
+        {
+          width: Math.max(12, colWidths[i] - cellPadX * 2),
+          lineGap: 1,
+          align: numericColumns.has(i) ? "right" : "left",
+        },
       );
     });
-    y += lineH;
+    y += rowH + cellGapY;
   }
   if (rows.length === 0) {
     doc.fillColor("#888").text("No data in this window.", left, y + 6, {
@@ -8913,6 +8947,17 @@ router.get(
         rows,
         result.window,
         clinic,
+        {
+          columns: [
+            { weight: 2.6 },
+            { weight: 1.55 },
+            { weight: 0.75 },
+            { weight: 0.7 },
+            { weight: 1.05 },
+            { weight: 1.05 },
+            { weight: 1.15 },
+          ],
+        },
       );
       sendPdf(res, "pnl-by-service", result.window, buf);
     } catch (e) {
@@ -9033,6 +9078,14 @@ router.get(
         rows,
         result.window,
         clinic,
+        {
+          columns: [
+            { weight: 2.2 },
+            { weight: 1.4 },
+            { weight: 0.7 },
+            { weight: 1 },
+          ],
+        },
       );
       sendPdf(res, "per-professional", result.window, buf);
     } catch (e) {
@@ -9167,6 +9220,17 @@ router.get(
         rows,
         result.window,
         clinic,
+        {
+          columns: [
+            { weight: 2.3 },
+            { weight: 1.25 },
+            { weight: 1.25 },
+            { weight: 0.8 },
+            { weight: 0.7 },
+            { weight: 1 },
+            { weight: 0.85 },
+          ],
+        },
       );
       sendPdf(res, "per-location", result.window, buf);
     } catch (e) {
@@ -9321,6 +9385,18 @@ router.get(
         rows,
         result.window,
         clinic,
+        {
+          columns: [
+            { weight: 2.4 },
+            { weight: 0.65 },
+            { weight: 0.65 },
+            { weight: 0.75 },
+            { weight: 0.9 },
+            { weight: 0.75 },
+            { weight: 1.1 },
+            { weight: 1.1 },
+          ],
+        },
       );
       sendPdf(res, "attribution", result.window, buf);
     } catch (e) {
@@ -13562,13 +13638,16 @@ router.get("/waitlist", async (req, res) => {
   try {
     const where = tenantWhere(req);
     if (req.query.status) where.status = String(req.query.status);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
     const items = await prisma.waitlist.findMany({
       where,
       orderBy: { createdAt: "desc" },
       include: {
         patient: { select: { id: true, name: true, phone: true } },
       },
-      take: 200,
+      take: limit,
+      skip: offset,
     });
     res.json(items);
   } catch (e) {

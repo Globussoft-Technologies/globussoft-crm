@@ -350,11 +350,10 @@ describe('renderTravelItineraryPdf — S52 brand-kit selector', () => {
     const buf = await renderTravelItineraryPdf(itineraryFixture({ subBrand: 'tmc' }), contactFixture());
     expect(Buffer.isBuffer(buf)).toBe(true);
     expect(buf.slice(0, 4).toString()).toBe('%PDF');
-    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(true);
     // Pre-S52 legacy SUB_BRAND_ACCENT.tmc (#0B4F6C) must NOT appear
+    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(false);
     expect(pdfContainsHexColor(buf, '#0B4F6C')).toBe(false);
-    // RFU's distinctive green is NOT in a TMC itinerary
-    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(false);
   });
 
   test('RFU sub-brand + no tenant → RFU fallback header (#0B5345)', async () => {
@@ -448,8 +447,9 @@ describe('renderTravelDiagnosticPdf — S52 brand-kit selector', () => {
       contactFixture(),
       bankFixture(),
     );
-    expect(pdfContainsHexColor(buf, '#283747')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(true);
     // Pre-S52 SUB_BRAND_ACCENT.visasure (#7A2F5C) must NOT appear
+    expect(pdfContainsHexColor(buf, '#283747')).toBe(false);
     expect(pdfContainsHexColor(buf, '#7A2F5C')).toBe(false);
   });
 
@@ -459,12 +459,13 @@ describe('renderTravelDiagnosticPdf — S52 brand-kit selector', () => {
       contactFixture(),
       bankFixture(),
     );
-    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(true);
     // Pre-S52 SUB_BRAND_ACCENT.tmc (#0B4F6C) must NOT appear
+    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(false);
     expect(pdfContainsHexColor(buf, '#0B4F6C')).toBe(false);
   });
 
-  test('explicit tenant cascade overrides fallback for diagnostic header', async () => {
+  test('diagnostic header stays green even when tenant branding exists', async () => {
     const tenant = {
       subBrandConfigJson: JSON.stringify({ visasure: { headerColor: '#445566' } }),
     };
@@ -474,7 +475,8 @@ describe('renderTravelDiagnosticPdf — S52 brand-kit selector', () => {
       bankFixture(),
       { tenant },
     );
-    expect(pdfContainsHexColor(buf, '#445566')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(true);
+    expect(pdfContainsHexColor(buf, '#445566')).toBe(false);
     expect(pdfContainsHexColor(buf, '#283747')).toBe(false);
   });
 

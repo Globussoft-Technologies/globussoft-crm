@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, CheckCircle2, Clock, XCircle, UserPlus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -6,7 +6,6 @@ import { formatDate } from '../../utils/date';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
 import PageHeader from '../../components/PageHeader';
 import Modal from '../../components/ui/Modal';
-import TopScrollSync from '../../components/TopScrollSync';
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All', icon: null },
@@ -16,6 +15,8 @@ const STATUS_OPTIONS = [
   { value: 'expired', label: 'Expired', icon: XCircle, color: 'var(--text-secondary)' },
   { value: 'cancelled', label: 'Cancelled', icon: XCircle, color: '#ef4444' },
 ];
+
+const WAITLIST_BATCH_SIZE = 12;
 
 export default function Waitlist() {
   const notify = useNotify();
@@ -27,46 +28,93 @@ export default function Waitlist() {
   const [showAdd, setShowAdd] = useState(false);
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
   const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
-  const visibleItems = (rangeStart && rangeEnd)
-    ? items.filter((it) => {
-        const ts = new Date(it.createdAt).getTime();
-        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
-      })
-    : items;
+  const listRef = useRef(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [dateFrom, dateTo] = useMemo(() => {
+    if (!rangeStart || !rangeEnd) return [null, null];
+    const from = new Date(rangeStart);
+    const to = new Date(rangeEnd);
+    const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return [ymd(from), ymd(to)];
+  }, [rangeStart, rangeEnd]);
+  const filterRows = useCallback((rows) => rows.filter((row) => {
+    if (filter !== 'all' && row.status !== filter) return false;
+    if (dateFrom && dateTo) {
+      const ts = new Date(row.createdAt).getTime();
+      const start = new Date(dateFrom).getTime();
+      const end = new Date(`${dateTo}T23:59:59.999`).getTime();
+      return ts >= start && ts <= end;
+    }
+    return true;
+  }), [dateFrom, dateTo, filter]);
+  const visibleItems = useMemo(() => (
+    (rangeStart && rangeEnd)
+      ? items.filter((it) => {
+          const ts = new Date(it.createdAt).getTime();
+          return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+        })
+      : items
+  ), [items, rangeStart, rangeEnd]);
   // #363: estimatedWaitMin is a strict numeric (minutes). Pre-fix the rough
   // "preferredDateRange" textbox doubled as a wait-time field and accepted
   // free text like "soon" / "tomorrow", which the cron couldn't bucket.
   // preferredFrom / preferredTo are YYYY-MM-DD strings from native date pickers.
-  // The backend's `preferredDateRange` column is a single string — at submit time
+  // The backend's `preferredDateRange` column is a single string â€” at submit time
   // we concatenate as `from..to` (matching the legacy free-text shape) or send
-  // just one side when only one is filled. Both empty → omitted (no preference).
+  // just one side when only one is filled. Both empty â†’ omitted (no preference).
   const [form, setForm] = useState({ patientId: '', serviceId: '', preferredFrom: '', preferredTo: '', estimatedWaitMin: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const todayIso = new Date().toISOString().slice(0, 10);
 
-  const load = () => {
-    setLoading(true);
-    const url = filter === 'all'
-      ? '/api/wellness/waitlist'
-      : `/api/wellness/waitlist?status=${encodeURIComponent(filter)}`;
+  const load = useCallback(async ({ replace = true, offset = 0 } = {}) => {
+    if (replace) {
+      setLoading(true);
+      setHasMore(true);
+      if (listRef.current) listRef.current.scrollTop = 0;
+    } else {
+      setLoadingMore(true);
+    }
+    try {
+      const q = new URLSearchParams();
+      if (filter !== 'all') q.set('status', filter);
+      if (dateFrom) q.set('from', dateFrom);
+      if (dateTo) q.set('to', dateTo);
+      q.set('limit', String(WAITLIST_BATCH_SIZE));
+      if (offset > 0) q.set('offset', String(offset));
+      const w = await fetchApi(`/api/wellness/waitlist?${q.toString()}`);
+      const batch = Array.isArray(w) ? w : [];
+      setItems((prev) => (replace ? batch : [...prev, ...batch]));
+      setHasMore(batch.length === WAITLIST_BATCH_SIZE);
+    } catch (_err) {
+      if (replace) setItems([]);
+      setHasMore(false);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [dateFrom, dateTo, filter]);
+
+  useEffect(() => {
+    setItems([]);
+    setHasMore(true);
+    load({ replace: true, offset: 0 });
+  }, [load]);
+
+  useEffect(() => {
     Promise.all([
-      fetchApi(url),
       fetchApi('/api/wellness/patients').catch(() => []),
       fetchApi('/api/wellness/services').catch(() => []),
-    ])
-      .then(([w, p, s]) => {
-        setItems(Array.isArray(w) ? w : []);
-        // #126: GET /api/wellness/patients returns { patients, total } (paginated),
-        // not a raw array. Pre-fix the dropdown was always empty because Array.isArray(p)
-        // was false on the object response.
-        setPatients(Array.isArray(p) ? p : Array.isArray(p?.patients) ? p.patients : []);
-        setServices(Array.isArray(s) ? s : []);
-      })
-      .catch(() => setItems([]))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(load, [filter]);
+    ]).then(([p, s]) => {
+      // #126: GET /api/wellness/patients returns { patients, total } (paginated),
+      // not a raw array. Pre-fix the dropdown was always empty because Array.isArray(p)
+      // was false on the object response.
+      const apiPatients = Array.isArray(p) ? p : Array.isArray(p?.patients) ? p.patients : [];
+      const apiServices = Array.isArray(s) ? s : [];
+      setPatients(apiPatients);
+      setServices(apiServices);
+    });
+  }, []);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -75,7 +123,7 @@ export default function Waitlist() {
       return;
     }
     // Build the legacy `from..to` string from the two date pickers. If only one
-    // side is filled, send it bare; both empty → omit (no preference).
+    // side is filled, send it bare; both empty â†’ omit (no preference).
     let preferredDateRange;
     if (form.preferredFrom && form.preferredTo) {
       preferredDateRange = `${form.preferredFrom}..${form.preferredTo}`;
@@ -102,7 +150,7 @@ export default function Waitlist() {
       setShowAdd(false);
       setForm({ patientId: '', serviceId: '', preferredFrom: '', preferredTo: '', estimatedWaitMin: '', notes: '' });
       load();
-      // #362: same root cause as #392 — sidebar / external counters don't
+      // #362: same root cause as #392 â€” sidebar / external counters don't
       // refresh after a fresh POST. Refetching the local list above already
       // updates this page; this CustomEvent gives any listening shell
       // (sidebar badge, dashboard tile) a free hook to re-pull its count.
@@ -118,9 +166,9 @@ export default function Waitlist() {
         method: 'PUT',
         body: JSON.stringify({ status }),
       });
-      notify.success(`Marked ${status}`);
-      load();
-    } catch (_err) { /* fetchApi already toasted */ }
+    notify.success(`Marked ${status}`);
+    load();
+  } catch (_err) { /* fetchApi already toasted */ }
   };
 
   const remove = async (id) => {
@@ -132,14 +180,23 @@ export default function Waitlist() {
     } catch (_err) { /* fetchApi already toasted */ }
   };
 
-  const serviceName = (id) => services.find((s) => s.id === id)?.name || '—';
+  const serviceName = (id) => services.find((s) => s.id === id)?.name || 'â€”';
+  const displayServiceName = (row) => row.serviceLabel || (row.serviceId ? serviceName(row.serviceId) : '');
 
-  // Display-only formatter — storage stays `from..to` (schema-documented contract,
+  // Display-only formatter â€” storage stays `from..to` (schema-documented contract,
   // backend's parseTenantDateInput falls back gracefully on the legacy shape).
   const formatPreferredDates = (raw) => {
-    if (!raw) return '—';
+    if (!raw) return 'â€”';
     return raw.includes('..') ? raw.split('..').join(' - ') : raw;
   };
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (loading || loadingMore || !hasMore) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
+      load({ replace: false, offset: items.length });
+    }
+  }, [hasMore, items.length, load, loading, loadingMore]);
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
@@ -169,8 +226,8 @@ export default function Waitlist() {
               border: '1px solid rgba(255,255,255,0.1)',
               borderRadius: 999,
               cursor: 'pointer',
-              fontSize: '0.8rem',
-            }}
+            fontSize: '0.8rem',
+          }}
           >
             {opt.label}
           </button>
@@ -190,7 +247,7 @@ export default function Waitlist() {
           <div>
             <label style={labelStyle}>Patient *</label>
             <select value={form.patientId} onChange={(e) => setForm({ ...form, patientId: e.target.value })} style={inputStyle} required>
-              <option value="">Select patient…</option>
+              <option value="">Select patientâ€¦</option>
               {patients.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}{p.phone ? ` (${p.phone})` : ''}</option>
               ))}
@@ -227,7 +284,7 @@ export default function Waitlist() {
               />
             </div>
           </div>
-          {/* #363: wait time was free text — switch to bounded number. Unit lives in the label, no suffix box. */}
+          {/* #363: wait time was free text â€” switch to bounded number. Unit lives in the label, no suffix box. */}
           <div>
             <label style={labelStyle}>Wait time (minutes)</label>
             <input
@@ -247,13 +304,13 @@ export default function Waitlist() {
           </div>
           <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
             <button type="button" onClick={() => setShowAdd(false)} style={{ padding: '0.55rem 1rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem' }}>Cancel</button>
-            <button type="submit" disabled={saving} style={{ padding: '0.55rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem' }}>{saving ? 'Saving…' : 'Add'}</button>
+            <button type="submit" disabled={saving} style={{ padding: '0.55rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem' }}>{saving ? 'Savingâ€¦' : 'Add'}</button>
           </div>
         </form>
       </Modal>
 
       {loading ? (
-        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading…</div>
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading...</div>
       ) : items.length === 0 ? (
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
           <UserPlus size={28} style={{ opacity: 0.5, marginBottom: '0.5rem' }} />
@@ -261,7 +318,7 @@ export default function Waitlist() {
         </div>
       ) : (
         <>
-          <div className="glass" style={{ padding: '0.6rem 0.85rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.6rem', marginBottom: '0.5rem' }}>
+          <div className="glass" style={{ padding: '0.6rem 0.85rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
             <DateRangeFilter value={dateFilter} onChange={setDateFilter} label="Filter by added date" />
             <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
               {visibleItems.length === items.length
@@ -272,59 +329,115 @@ export default function Waitlist() {
           {visibleItems.length === 0 ? (
             <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No entries in the selected range.</div>
           ) : (
-        <div className="glass" style={{ padding: '0.5rem' }}>
-        <TopScrollSync>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-            <thead>
-              <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
-                <th style={thStyle}>Patient</th>
-                <th style={thStyle}>Service</th>
-                <th style={thStyle}>Preferred</th>
-                <th style={thStyle}>Status</th>
-                <th style={thStyle}>Added</th>
-                <th style={thStyle}>Offered</th>
-                <th style={thStyle}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleItems.map((w) => {
-                const opt = STATUS_OPTIONS.find((o) => o.value === w.status);
-                return (
-                  <tr key={w.id} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <td style={tdStyle}>
-                      <div style={{ fontWeight: 500 }}>{w.patient?.name || '—'}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{w.patient?.phone || ''}</div>
-                    </td>
-                    <td style={tdStyle}>{w.serviceId ? serviceName(w.serviceId) : <span style={{ color: 'var(--text-secondary)' }}>Any</span>}</td>
-                    <td style={tdStyle}>{formatPreferredDates(w.preferredDateRange)}</td>
-                    <td style={tdStyle}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: 999, fontSize: '0.75rem', color: opt?.color || 'var(--text-primary)' }}>
-                        {w.status}
-                      </span>
-                    </td>
-                    <td style={tdStyle}>{formatDate(w.createdAt)}</td>
-                    <td style={tdStyle}>{w.offeredAt ? new Date(w.offeredAt).toLocaleString('en-IN') : '—'}</td>
-                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                      {w.status === 'waiting' && (
-                        <button onClick={() => setStatus(w.id, 'offered')} style={actionBtn('var(--accent-color)')}>Offer</button>
-                      )}
-                      {w.status === 'offered' && (
-                        <button onClick={() => setStatus(w.id, 'booked')} style={actionBtn('var(--success-color)')}>Mark booked</button>
-                      )}
-                      {(w.status === 'waiting' || w.status === 'offered') && (
-                        <button onClick={() => setStatus(w.id, 'cancelled')} style={actionBtn('transparent', 'var(--text-secondary)')}>Cancel</button>
-                      )}
-                      <button onClick={() => remove(w.id)} title="Delete" style={{ ...actionBtn('transparent', '#ef4444'), padding: '0.3rem 0.5rem' }}>
-                        <Trash2 size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </TopScrollSync>
-        </div>
+            <div
+              className="glass"
+              style={{
+                padding: '0.6rem',
+                borderRadius: 18,
+                border: '1px solid var(--border-color)',
+                boxShadow: '0 14px 32px rgba(16, 24, 40, 0.08)',
+              }}
+            >
+              <div style={{ background: 'var(--bg-color)', borderRadius: '14px 14px 0 0', boxShadow: '0 1px 0 var(--border-color)' }}>
+                <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
+                  <colgroup>
+                    <col style={{ width: '23%' }} />
+                    <col style={{ width: '18%' }} />
+                    <col style={{ width: '19%' }} />
+                    <col style={{ width: '10%' }} />
+                    <col style={{ width: '10%' }} />
+                    <col style={{ width: '10%' }} />
+                    <col style={{ width: '10%' }} />
+                  </colgroup>
+                  <thead>
+                    <tr style={{ textAlign: 'left', color: 'var(--text-secondary)' }}>
+                      <th style={{ ...thStyle, borderRadius: '14px 0 0 0' }}>Patient</th>
+                      <th style={thStyle}>Service</th>
+                      <th style={thStyle}>Preferred</th>
+                      <th style={thStyle}>Status</th>
+                      <th style={thStyle}>Added</th>
+                      <th style={thStyle}>Offered</th>
+                      <th style={{ ...thStyle, borderRadius: '0 14px 0 0' }}>Actions</th>
+                    </tr>
+                  </thead>
+                </table>
+              </div>
+
+              <div
+                ref={listRef}
+                onScroll={handleListScroll}
+                style={{
+                  maxHeight: 'calc(100vh - 470px)',
+                  overflowY: 'auto',
+                  overflowX: 'hidden',
+                  paddingTop: '0.35rem',
+                }}
+              >
+                <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.85rem' }}>
+                  <colgroup>
+                    <col style={{ width: '23%' }} />
+                    <col style={{ width: '18%' }} />
+                    <col style={{ width: '19%' }} />
+                    <col style={{ width: '10%' }} />
+                    <col style={{ width: '10%' }} />
+                    <col style={{ width: '10%' }} />
+                    <col style={{ width: '10%' }} />
+                  </colgroup>
+                  <tbody>
+                    {visibleItems.map((w) => {
+                      const opt = STATUS_OPTIONS.find((o) => o.value === w.status);
+                      return (
+                        <tr key={w.id} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                          <td style={tdStyle}>
+                            <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.patient?.name || '?'}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.patient?.phone || ''}</div>
+                          </td>
+                          <td style={{ ...tdStyle, overflowWrap: 'anywhere' }}>{displayServiceName(w) ? displayServiceName(w) : <span style={{ color: 'var(--text-secondary)' }}>Any</span>}</td>
+                          <td style={{ ...tdStyle, overflowWrap: 'anywhere' }}>{formatPreferredDates(w.preferredDateRange)}</td>
+                          <td style={tdStyle}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.2rem 0.5rem', background: 'rgba(38, 54, 94, 0.08)', borderRadius: 999, fontSize: '0.75rem', color: opt?.color || 'var(--text-primary)' }}>
+                              {w.status}
+                            </span>
+                          </td>
+                          <td style={tdStyle}>{formatDate(w.createdAt)}</td>
+                          <td style={tdStyle}>{w.offeredAt ? new Date(w.offeredAt).toLocaleString('en-IN') : '?'}</td>
+                          <td style={tdStyle}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                              {w.status === 'waiting' && (
+                                <button onClick={() => setStatus(w.id, 'offered')} style={actionBtn('var(--accent-color)')}>Offer</button>
+                              )}
+                              {w.status === 'offered' && (
+                                <button onClick={() => setStatus(w.id, 'booked')} style={actionBtn('var(--success-color)')}>Mark booked</button>
+                              )}
+                              {(w.status === 'waiting' || w.status === 'offered') && (
+                                <button onClick={() => setStatus(w.id, 'cancelled')} style={actionBtn('transparent', 'var(--text-secondary)')}>Cancel</button>
+                              )}
+                              <button onClick={() => remove(w.id)} title="Delete" style={{ ...actionBtn('transparent', '#ef4444'), padding: '0.3rem 0.5rem' }}>
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {loadingMore && (
+                      <tr>
+                        <td colSpan={7} style={{ padding: '0.9rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                          Loading more entries...
+                        </td>
+                      </tr>
+                    )}
+                    {!hasMore && visibleItems.length > 0 && (
+                      <tr>
+                        <td colSpan={7} style={{ padding: '0.9rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                          You have reached the end of the waitlist.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           )}
         </>
       )}
@@ -334,7 +447,7 @@ export default function Waitlist() {
 
 const labelStyle = { display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' };
 const inputStyle = { width: '100%', padding: '0.55rem 0.75rem', background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' };
-const thStyle = { padding: '0.6rem 0.5rem', fontWeight: 500, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' };
+const thStyle = { padding: '0.75rem 0.5rem', fontWeight: 600, fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.08em', background: 'var(--bg-color)', boxShadow: '0 1px 0 var(--border-color)' };
 const tdStyle = { padding: '0.6rem 0.5rem' };
 const actionBtn = (bg, color = '#fff') => ({
   padding: '0.3rem 0.65rem',
@@ -346,3 +459,6 @@ const actionBtn = (bg, color = '#fff') => ({
   fontSize: '0.75rem',
   marginRight: '0.3rem',
 });
+
+
+

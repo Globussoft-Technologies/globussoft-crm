@@ -107,6 +107,165 @@ async function travelQuotePayments(tenantId, dateRange = null) {
     .filter(Boolean);
 }
 
+const REPORT_COLORS = {
+  navy: "#26365e",
+  teal: "#26365e",
+  tealSoft: "#e6ebf5",
+  line: "#cdd7e6",
+  text: "#0f172a",
+  muted: "#475569",
+  soft: "#f5f7fb",
+  card: "#ffffff",
+  tableHead: "#26365e",
+  tableStripe: "#f7f8fc",
+  tableTotal: "#e8edf6",
+};
+
+function formatDisplayDate(value) {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatDateRangeLabel(dateRange) {
+  if (!dateRange) return "All time";
+  const parts = [];
+  if (dateRange.gte) parts.push(`From ${formatDisplayDate(dateRange.gte)}`);
+  if (dateRange.lte) parts.push(`To ${formatDisplayDate(dateRange.lte)}`);
+  return parts.length ? parts.join("  ") : "All time";
+}
+
+function drawReportHeader(doc, { title, subtitle, dateRange, generatedAt }) {
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const width = right - left;
+  const headerY = doc.y;
+
+  doc.save();
+  doc.rect(left, headerY, width, 108).fill(REPORT_COLORS.soft);
+  doc.rect(left, headerY, width, 8).fill(REPORT_COLORS.navy);
+  doc.rect(left, headerY, 8, 108).fill(REPORT_COLORS.navy);
+  doc.roundedRect(left, headerY, width, 108, 12).lineWidth(1).strokeColor(REPORT_COLORS.line).stroke();
+  doc.restore();
+
+  doc.font("Helvetica-Bold").fontSize(22).fillColor(REPORT_COLORS.navy).text(title, left + 18, headerY + 18, {
+    width: width - 170,
+    lineBreak: false,
+    ellipsis: true,
+  });
+  doc.font("Helvetica").fontSize(11).fillColor(REPORT_COLORS.text).text(subtitle, left + 18, headerY + 45, {
+    width: width - 170,
+    lineBreak: false,
+    ellipsis: true,
+  });
+
+  const badgeX = right - 136;
+  const badgeY = headerY + 18;
+  doc.save();
+  doc.roundedRect(badgeX, badgeY, 118, 26, 13).fill("#e6ebf8");
+  doc.restore();
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(REPORT_COLORS.navy).text("TRAVEL REPORT", badgeX, badgeY + 8, {
+    width: 118,
+    align: "center",
+    lineBreak: false,
+  });
+
+  const metaY = headerY + 72;
+  doc.font("Helvetica").fontSize(8.5).fillColor(REPORT_COLORS.muted);
+  const generatedDate = formatDisplayDate(generatedAt);
+  const generatedTime = new Date(generatedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+  doc.text(`Generated: ${generatedDate} at ${generatedTime}`, left + 18, metaY, {
+    width: width - 36,
+    align: "left",
+    lineBreak: false,
+    ellipsis: true,
+  });
+  doc.text(formatDateRangeLabel(dateRange), left + 18, metaY + 13, {
+    width: width - 36,
+    align: "left",
+    lineBreak: false,
+    ellipsis: true,
+  });
+
+  doc.y = headerY + 126;
+  return doc.y;
+}
+
+function drawMetricCards(doc, cards, opts = {}) {
+  if (!cards || cards.length === 0) return doc.y;
+  const left = opts.x || doc.page.margins.left;
+  const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const gap = opts.gap || 10;
+  const cols = Math.max(1, Math.min(opts.cols || 2, cards.length));
+  const cardW = (width - gap * (cols - 1)) / cols;
+  const cardH = opts.height || 80;
+  let y = opts.startY != null ? opts.startY : doc.y;
+  let rowH = cardH;
+
+  cards.forEach((card, idx) => {
+    const col = idx % cols;
+    if (col === 0 && idx > 0) {
+      y += rowH + gap;
+      rowH = cardH;
+    }
+
+    const x = left + col * (cardW + gap);
+    const currentW = card.span === 2 && cols >= 2 ? cardW * 2 + gap : cardW;
+    const accent = card.accent || REPORT_COLORS.navy;
+
+    doc.save();
+    doc.roundedRect(x, y, currentW, cardH, 12).fill(REPORT_COLORS.card);
+    doc.roundedRect(x, y, currentW, cardH, 12).lineWidth(1).strokeColor(REPORT_COLORS.line).stroke();
+    doc.roundedRect(x, y, currentW, 8, 12).fill(accent);
+    doc.restore();
+
+    doc.font("Helvetica").fontSize(8.5).fillColor(REPORT_COLORS.muted).text(card.label || "", x + 14, y + 14, {
+      width: currentW - 24,
+      lineBreak: false,
+      ellipsis: true,
+    });
+    doc.font("Helvetica-Bold").fontSize(17).fillColor(REPORT_COLORS.text).text(card.value || "", x + 14, y + 28, {
+      width: currentW - 24,
+      lineBreak: false,
+      ellipsis: true,
+    });
+    if (card.note) {
+      doc.font("Helvetica").fontSize(8.5).fillColor(REPORT_COLORS.muted).text(card.note, x + 14, y + 52, {
+        width: currentW - 24,
+        lineBreak: false,
+        ellipsis: true,
+      });
+    }
+
+    rowH = Math.max(rowH, cardH);
+  });
+
+  doc.y = y + rowH;
+  return doc.y;
+}
+
+function drawSectionHeading(doc, label) {
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const y = doc.y;
+  doc.font("Helvetica-Bold").fontSize(13.5).fillColor(REPORT_COLORS.navy).text(label, left, y, {
+    width: right - left,
+    lineBreak: false,
+    ellipsis: true,
+  });
+  const lineY = y + 18;
+  doc.save();
+  doc.moveTo(left, lineY).lineTo(right, lineY).lineWidth(0.8).strokeColor(REPORT_COLORS.line).stroke();
+  doc.restore();
+  doc.y = lineY + 8;
+  return doc.y;
+}
+
 // The travel SALES funnel lives in TravelQuote (Draft/Sent/Accepted/Rejected/
 // Expired), NOT the generic Deal table — travel never creates Deal rows, which
 // is why the "Deal funnel" was always empty. This surfaces the real quote
@@ -1091,13 +1250,14 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
       const itineraryRevenue = Object.values(d.itineraries.amountByStatus || {}).reduce((sum, value) => sum + Number(value || 0), 0);
       const quoteRevenue = Object.entries(d.quotes.amountByStatus || {}).reduce((sum, [status, amount]) => sum + (isAcceptedQuoteStatus(status) ? Number(amount || 0) : 0), 0);
       const collected = (d.agentProductivity?.payments || []).reduce((sum, row) => sum + Number(row.amount || 0), 0);
-      kpiTable([
+      summaryCards([
         ["Itinerary Revenue", inr(itineraryRevenue)],
         ["Accepted Quote Value", inr(quoteRevenue)],
         ["Collected", inr(collected)],
-        ["Itineraries", String(d.itineraries.total)],
-        ["Customers", String(d.customers.unique)],
-        ["Repeat Customers", `${d.customers.repeat} (${d.customers.repeatRatePct}%)`],
+        { label: "Itineraries", value: String(d.itineraries.total), note: "All statuses", accent: REPORT_COLORS.navy },
+        { label: "Customers", value: String(d.customers.unique), note: `Repeat Customers ${d.customers.repeat}`, accent: REPORT_COLORS.navy },
+        { label: "Repeat rate", value: `${d.customers.repeatRatePct}%`, note: "Returning customers", accent: REPORT_COLORS.navy },
+        { label: "Quote volume", value: String(Object.values(d.quotes.byStatus || {}).reduce((sum, n) => sum + Number(n || 0), 0)), note: "All quote statuses", accent: REPORT_COLORS.navy },
       ]);
 
       tableSection("Itinerary Revenue Source Detail", [

@@ -23,6 +23,7 @@ const { classifyLead } = require("../lib/leadJunkFilter");
 const { pickAssignee } = require("../lib/leadAutoRouter");
 const { computeFirstResponseDueAt } = require("../lib/leadSla");
 const { writeLeadCustomFieldValues } = require("../lib/leadCustomFieldValues");
+const { notifyAdminsOfNewLead } = require("../lib/leadNotifications");
 
 const router = express.Router();
 
@@ -435,20 +436,29 @@ router.post("/leads", async (req, res) => {
       }
     }
     if (contact) {
-      const dedupeUpdates = { externalPayloadJson };
-      for (const [key, value] of Object.entries(contactFieldUpdates)) {
-        if (contact[key] == null || contact[key] === "") {
-          dedupeUpdates[key] = value;
+      if (contact.deletedAt) {
+        const restoreData = { ...contactData, ...contactFieldUpdates, externalPayloadJson, deletedAt: null };
+        if (!email) delete restoreData.email;
+        contact = await prisma.contact.update({ where: { id: contact.id }, data: restoreData });
+      } else {
+        const dedupeUpdates = { externalPayloadJson };
+        for (const [key, value] of Object.entries(contactFieldUpdates)) {
+          if (contact[key] == null || contact[key] === "") {
+            dedupeUpdates[key] = value;
+          }
         }
-      }
-      if (Object.keys(dedupeUpdates).length > 1) {
-        contact = await prisma.contact.update({ where: { id: contact.id }, data: dedupeUpdates });
+        if (Object.keys(dedupeUpdates).length > 1) {
+          contact = await prisma.contact.update({ where: { id: contact.id }, data: dedupeUpdates });
+        }
       }
     } else {
       contact = await prisma.contact.create({ data: { ...contactData, ...contactFieldUpdates, externalPayloadJson } });
     }
     if (Object.keys(storageCustomFields).length) {
       await writeLeadCustomFieldValues(contact.id, req.tenantId, storageCustomFields);
+    }
+    if (contact.status === "Lead") {
+      await notifyAdminsOfNewLead({ tenantId: req.tenantId, contact, io: req.io });
     }
 
 

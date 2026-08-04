@@ -22,7 +22,10 @@
 
 import { useContext, useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { Plus, Trash2, Loader, ListChecks, ArrowUp, ArrowDown, Pencil, Check, X } from "lucide-react";
+import { Plus, Trash2, Loader, ListChecks, ArrowUp, ArrowDown, Pencil, GripVertical } from "lucide-react";
+import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { AuthContext } from "../../App";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -57,6 +60,141 @@ const th = {
 };
 const td = { padding: "0.75rem 1rem", fontSize: "0.9rem" };
 const iconBtn = { background: "var(--subtle-bg)", border: "1px solid var(--border-color)", borderRadius: 6, padding: "0.375rem 0.5rem", cursor: "pointer", display: "inline-flex", alignItems: "center" };
+
+function normalizeFieldOrder(list) {
+  return list.map((field, displayOrder) => ({ ...field, displayOrder }));
+}
+
+function SortableLeadFieldRow({
+  field,
+  index,
+  total,
+  reordering,
+  onMove,
+  onEdit,
+  onDelete,
+  onToggleRequired,
+  deletingId,
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: String(field.id) });
+
+  return (
+    <tr
+      ref={setNodeRef}
+      style={{
+        borderTop: "1px solid var(--border-color)",
+        display: "table",
+        width: "100%",
+        tableLayout: "fixed",
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.88 : 1,
+        boxShadow: isDragging ? "0 10px 22px rgba(0, 0, 0, 0.22)" : "none",
+        background: isDragging ? "rgba(37, 99, 235, 0.06)" : "transparent",
+      }}>
+      <td style={{ ...td, display: "flex", gap: "0.15rem", alignItems: "center" }}>
+        <button
+          type="button"
+          aria-label={`Drag ${field.label} to reorder`}
+          title="Drag to reorder"
+          disabled={reordering}
+          {...attributes}
+          {...listeners}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: "none",
+            border: "1px solid transparent",
+            padding: "0.2rem",
+            color: reordering ? "var(--border-color)" : "var(--text-secondary)",
+            cursor: reordering ? "not-allowed" : "grab",
+            touchAction: "none",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <GripVertical size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onMove(index, -1)}
+          disabled={index === 0 || reordering}
+          aria-label={`Move ${field.label} up`}
+          title="Move up"
+          style={{
+            background: "none",
+            border: "none",
+            padding: "0.2rem",
+            color: index === 0 ? "var(--border-color)" : "var(--text-secondary)",
+            cursor: index === 0 ? "default" : "pointer",
+          }}
+        >
+          <ArrowUp size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onMove(index, 1)}
+          disabled={index === total - 1 || reordering}
+          aria-label={`Move ${field.label} down`}
+          title="Move down"
+          style={{
+            background: "none",
+            border: "none",
+            padding: "0.2rem",
+            color: index === total - 1 ? "var(--border-color)" : "var(--text-secondary)",
+            cursor: index === total - 1 ? "default" : "pointer",
+          }}
+        >
+          <ArrowDown size={14} />
+        </button>
+      </td>
+      <td style={{ ...td, fontWeight: 500 }}>{field.label}</td>
+      <td style={td}>{FIELD_TYPE_LABELS[field.fieldType] || field.fieldType}</td>
+      <td title={`cf_${field.fieldKey}`} style={{ ...td, fontFamily: "monospace", color: "var(--text-secondary)", whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: "170px" }}>{`cf_${field.fieldKey}`}</td>
+      <td style={{ ...td, color: "var(--text-secondary)" }}>
+        {FIELD_TYPES_WITH_OPTIONS.has(field.fieldType) ? (Array.isArray(field.options) ? field.options.join(", ") : "") : ""}
+      </td>
+      <td style={td}>
+        <input
+          type="checkbox"
+          checked={Boolean(field.isRequired)}
+          onChange={() => onToggleRequired(field)}
+          style={{ cursor: "pointer" }}
+        />
+      </td>
+      <td style={{ ...td, textAlign: "right" }}>
+        <div style={{ display: "inline-flex", gap: "0.4rem" }}>
+          <button
+            type="button"
+            onClick={() => onEdit(field)}
+            aria-label={`Edit ${field.label}`}
+            title="Edit field"
+            style={iconBtn}
+          >
+            <Pencil size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(field)}
+            disabled={deletingId === field.id}
+            aria-label={`Delete ${field.label}`}
+            title="Delete field"
+            style={{ ...iconBtn, color: "var(--danger-color, #ef4444)" }}
+          >
+            {deletingId === field.id ? <Loader size={14} className="spin" /> : <Trash2 size={14} />}
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
 
 function getOptionsText(options) {
   return Array.isArray(options) ? options.join(", ") : "";
@@ -164,16 +302,20 @@ export default function LeadFields() {
   const [editingOptionsId, setEditingOptionsId] = useState(null);
   const [editingOptionsText, setEditingOptionsText] = useState("");
   const [savingOptions, setSavingOptions] = useState(false);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
-  const load = async () => {
-    setLoading(true);
+  const load = async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const data = await fetchApi("/api/lead-custom-fields");
       setFields(Array.isArray(data) ? data : []);
     } catch (err) {
       notify.error(err?.message || "Failed to load lead fields");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -232,7 +374,7 @@ export default function LeadFields() {
       });
       notify.success("Field created");
       resetCreateForm();
-      await load();
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to create field");
     } finally {
@@ -252,7 +394,7 @@ export default function LeadFields() {
     try {
       await fetchApi(`/api/lead-custom-fields/${field.id}`, { method: "DELETE" });
       notify.success("Field deleted");
-      await load();
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to delete field");
     } finally {
@@ -266,40 +408,50 @@ export default function LeadFields() {
         method: "PUT",
         body: JSON.stringify({ isRequired: !field.isRequired }),
       });
-      await load();
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to update field");
     }
   };
 
-  // Swaps this field's displayOrder with its neighbour in `direction`
-  // (-1 = up, +1 = down). No bulk /reorder endpoint exists for this
-  // resource (unlike Pipeline Stages), so this swaps the two rows'
-  // displayOrder via two calls to the existing per-field PUT — fine at the
-  // scale a settings page like this operates at (a handful of fields).
-  // Optimistic UI update first so the row visibly moves immediately;
-  // reload() on failure undoes it and surfaces the error.
-  const handleMoveField = async (index, direction) => {
-    const swapIndex = index + direction;
-    if (swapIndex < 0 || swapIndex >= fields.length || reordering) return;
-    const a = fields[index];
-    const b = fields[swapIndex];
-    const reordered = [...fields];
-    [reordered[index], reordered[swapIndex]] = [reordered[swapIndex], reordered[index]];
-    setFields(reordered);
+  // No bulk /reorder endpoint exists for this resource, so we sync the full
+  // ordering through the existing per-field PUT. The field set is small enough
+  // that the extra calls are an acceptable tradeoff for a much smoother UX.
+  const syncFieldOrder = async (nextFields) => {
+    if (!Array.isArray(nextFields) || !nextFields.length || reordering) return;
+    const orderedFields = normalizeFieldOrder(nextFields);
+    setFields(orderedFields);
     setReordering(true);
     try {
-      await Promise.all([
-        fetchApi(`/api/lead-custom-fields/${a.id}`, { method: "PUT", body: JSON.stringify({ displayOrder: b.displayOrder }) }),
-        fetchApi(`/api/lead-custom-fields/${b.id}`, { method: "PUT", body: JSON.stringify({ displayOrder: a.displayOrder }) }),
-      ]);
-      await load();
+      await Promise.all(
+        orderedFields.map((field) =>
+          fetchApi(`/api/lead-custom-fields/${field.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ displayOrder: field.displayOrder }),
+          }),
+        ),
+      );
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to reorder fields");
-      await load();
+      await load({ silent: true });
     } finally {
       setReordering(false);
     }
+  };
+
+  const handleMoveField = async (index, direction) => {
+    const swapIndex = index + direction;
+    if (swapIndex < 0 || swapIndex >= fields.length || reordering) return;
+    await syncFieldOrder(arrayMove(fields, index, swapIndex));
+  };
+
+  const handleDragEnd = async ({ active, over }) => {
+    if (!over || active.id === over.id || reordering) return;
+    const oldIndex = fields.findIndex((field) => String(field.id) === String(active.id));
+    const newIndex = fields.findIndex((field) => String(field.id) === String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    await syncFieldOrder(arrayMove(fields, oldIndex, newIndex));
   };
 
   const openEditModal = (field) => {
@@ -344,7 +496,7 @@ export default function LeadFields() {
       });
       notify.success("Options updated");
       cancelOptionsEditor();
-      await load();
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to update options");
     } finally {
@@ -377,92 +529,39 @@ export default function LeadFields() {
           <div style={{ marginTop: "0.75rem", paddingBottom: "0.5rem" }}>
             <TopScrollSync>
               <div style={{ background: "#14161b" }}>
-                <table className="stable-table" style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", tableLayout: "fixed" }}>
-                  <thead>
-                    <tr style={{ background: "#23262d", display: "table", width: "100%", tableLayout: "fixed" }}>
-                      <th style={{ ...th, width: "72px" }}>Order</th>
-                      <th style={th}>Label</th>
-                      <th style={th}>Type</th>
-                      <th style={th}>Key</th>
-                      <th style={th}>Options</th>
-                      <th style={th}>Required</th>
-                      <th style={{ ...th, textAlign: "right" }}></th>
-                    </tr>
-                  </thead>
-                  <tbody style={{ display: "block", maxHeight: "clamp(280px, calc(100vh - 430px), 720px)", overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}>
-                    {fields.map((f, index) => (
-                      <tr key={f.id} style={{ borderTop: "1px solid var(--border-color)", display: "table", width: "100%", tableLayout: "fixed" }}>
-                        <td style={{ ...td, display: "flex", gap: "0.15rem" }}>
-                          <button
-                            onClick={() => handleMoveField(index, -1)}
-                            disabled={index === 0 || reordering}
-                            aria-label={`Move ${f.label} up`}
-                            title="Move up"
-                            style={{
-                              background: "none",
-                              border: "none",
-                              padding: "0.2rem",
-                              color: index === 0 ? "var(--border-color)" : "var(--text-secondary)",
-                              cursor: index === 0 ? "default" : "pointer",
-                            }}
-                          >
-                            <ArrowUp size={14} />
-                          </button>
-                          <button
-                            onClick={() => handleMoveField(index, 1)}
-                            disabled={index === fields.length - 1 || reordering}
-                            aria-label={`Move ${f.label} down`}
-                            title="Move down"
-                            style={{
-                              background: "none",
-                              border: "none",
-                              padding: "0.2rem",
-                              color: index === fields.length - 1 ? "var(--border-color)" : "var(--text-secondary)",
-                              cursor: index === fields.length - 1 ? "default" : "pointer",
-                            }}
-                          >
-                            <ArrowDown size={14} />
-                          </button>
-                        </td>
-                        <td style={{ ...td, fontWeight: 500 }}>{f.label}</td>
-                        <td style={td}>{FIELD_TYPE_LABELS[f.fieldType] || f.fieldType}</td>
-                        <td title={`cf_${f.fieldKey}`} style={{ ...td, fontFamily: "monospace", color: "var(--text-secondary)", whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: "170px" }}>{`cf_${f.fieldKey}`}</td>
-                        <td style={{ ...td, color: "var(--text-secondary)" }}>
-                          {FIELD_TYPES_WITH_OPTIONS.has(f.fieldType) ? (Array.isArray(f.options) ? f.options.join(", ") : "") : ""}
-                        </td>
-                        <td style={td}>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(f.isRequired)}
-                            onChange={() => handleToggleRequired(f)}
-                            style={{ cursor: "pointer" }}
-                          />
-                        </td>
-                        <td style={{ ...td, textAlign: "right" }}>
-                          <div style={{ display: "inline-flex", gap: "0.4rem" }}>
-                            <button
-                              onClick={() => openEditModal(f)}
-                              aria-label={`Edit ${f.label}`}
-                              title="Edit field"
-                              style={iconBtn}
-                            >
-                              <Pencil size={14} />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(f)}
-                              disabled={deletingId === f.id}
-                              aria-label={`Delete ${f.label}`}
-                              title="Delete field"
-                              style={{ ...iconBtn, color: "var(--danger-color, #ef4444)" }}
-                            >
-                              {deletingId === f.id ? <Loader size={14} className="spin" /> : <Trash2 size={14} />}
-                            </button>
-                          </div>
-                        </td>
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                  <table className="stable-table" style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", tableLayout: "fixed" }}>
+                    <thead>
+                      <tr style={{ background: "#23262d", display: "table", width: "100%", tableLayout: "fixed" }}>
+                        <th style={{ ...th, width: "88px" }}>Order</th>
+                        <th style={th}>Label</th>
+                        <th style={th}>Type</th>
+                        <th style={th}>Key</th>
+                        <th style={th}>Options</th>
+                        <th style={th}>Required</th>
+                        <th style={{ ...th, textAlign: "right" }}></th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <SortableContext items={fields.map((field) => String(field.id))} strategy={verticalListSortingStrategy}>
+                      <tbody style={{ display: "block", maxHeight: "clamp(280px, calc(100vh - 430px), 720px)", overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}>
+                        {fields.map((field, index) => (
+                          <SortableLeadFieldRow
+                            key={field.id}
+                            field={field}
+                            index={index}
+                            total={fields.length}
+                            reordering={reordering}
+                            onMove={handleMoveField}
+                            onEdit={openEditModal}
+                            onDelete={handleDelete}
+                            onToggleRequired={handleToggleRequired}
+                            deletingId={deletingId}
+                          />
+                        ))}
+                      </tbody>
+                    </SortableContext>
+                  </table>
+                </DndContext>
               </div>
             </TopScrollSync>
           </div>

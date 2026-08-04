@@ -16,6 +16,7 @@ import { SUB_BRAND_IDS, subBrandShortLabel } from '../utils/travelSubBrand';
 import CallifiedLeadCallDialog from '../components/CallifiedLeadCallDialog';
 import CallifiedCallDetailsDrawer from '../components/CallifiedCallDetailsDrawer';
 import CallifiedCallStatusDrawer from '../components/CallifiedCallStatusDrawer';
+import CsvImportExportToolbar from '../components/wellness/CsvImportExportToolbar';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
 // #600  wellness vertical replaces the generic CRM source taxonomy with one
@@ -47,6 +48,7 @@ const WELLNESS_SOURCE_OPTIONS = [
 const INDIAN_MOBILE_RE = /^(?:\+?91)?[6-9]\d{9}$/;
 const FIELD_LIMITS = { name: 191, email: 191, company: 191, title: 200, phone: 20 };
 const LEADS_PAGE_SIZE_OPTIONS = [25, 50, 100];
+const LEADS_AUTO_REFRESH_MS = 15000;
 const sourceBadgeStyle = {
   padding: '0.25rem 0.75rem',
   borderRadius: '999px',
@@ -243,7 +245,7 @@ const Leads = () => {
       setLeads(rows);
       return rows;
     } catch {
-      notify.error('Failed to load leads');
+      if (!background) notify.error('Failed to load leads');
       return [];
     } finally {
       if (!background) setLoading(false);
@@ -483,6 +485,34 @@ const Leads = () => {
         .then(res => setTmcPaidByEmail(res?.byEmail || {}))
         .catch(() => setTmcPaidByEmail({}));
     }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let stopped = false;
+    let inFlight = false;
+
+    const refreshVisibleLeads = async () => {
+      if (stopped || inFlight) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      inFlight = true;
+      try {
+        await fetchLeads({ background: true });
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId = window.setInterval(refreshVisibleLeads, LEADS_AUTO_REFRESH_MS);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshVisibleLeads();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // #600  load wellness service catalogue + clinic locations only when the
@@ -1326,6 +1356,20 @@ const Leads = () => {
           <button type="button" className="btn-secondary" onClick={refreshAll} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
             <RefreshCw size={15} /> Refresh
           </button>
+
+          {isGeneric && (
+            <CsvImportExportToolbar
+              entity="contacts"
+              label="Leads"
+              formats={['csv', 'xlsx']}
+              endpoints={{
+                export: '/api/csv/contacts/export.csv',
+                template: '/api/csv/contacts/template.csv',
+                meta: '/api/csv/contacts',
+                import: '/api/csv/contacts/import.csv',
+              }}
+            />
+          )}
 
           {isGeneric && callifiedConfigured && (
             <>
@@ -2316,3 +2360,6 @@ const chipActiveStyle = {
 const chipCountStyle = { fontSize: 11, fontWeight: 600, opacity: 0.8, marginLeft: 2 };
 
 export default Leads;
+
+
+

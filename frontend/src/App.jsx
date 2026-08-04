@@ -302,16 +302,12 @@ const TravelPoiPendingApprovalQueue = lazy(
 // QuoteTemplates admin page (frontend/src/pages/travel/QuoteTemplates.jsx,
 // commit 8fb23237). Sibling to ItineraryTemplates above. Without this lazy
 // import + Route below, the page is unreachable from the running app.
-const TravelQuoteTemplates = lazy(
-  () => import("./pages/travel/QuoteTemplates"),
-);
+const TravelQuoteTemplates = lazy(() => import("./pages/travel/QuoteTemplates"));
 // S55 (TRAVEL_BIG_SCOPE_BACKLOG)  App.jsx route registration for the S54
 // CancellationPolicies admin page (frontend/src/pages/travel/CancellationPolicies.jsx,
 // commit 4823b160). Sibling to QuoteTemplates above; both are travel admin
 // CRUD surfaces that mirror the QuotesAdmin / InvoicesAdmin pattern.
-const TravelCancellationPolicies = lazy(
-  () => import("./pages/travel/CancellationPolicies"),
-);
+const TravelCancellationPolicies = lazy(() => import("./pages/travel/CancellationPolicies"));
 const TravelPipeline = lazy(() => import("./pages/travel/TravelPipeline"));
 const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
@@ -2885,14 +2881,7 @@ export default function App() {
                   logged-in travel-tenant user; write gates (canWrite for
                   POST/PATCH; Delete for ADMIN-only) live inside the page,
                   mirroring the QuotesAdmin / InvoicesAdmin convention. */}
-                      <Route
-                        path="travel/quote-templates"
-                        element={
-                          <TravelOnly>
-                            <TravelQuoteTemplates />
-                          </TravelOnly>
-                        }
-                      />
+                      <Route path="travel/quote-templates" element={<TravelOnly><TravelQuoteTemplates /></TravelOnly>} />
                       {/* S55 (TRAVEL_BIG_SCOPE_BACKLOG)  CancellationPolicies
                   admin route registration. SUT page commit 4823b160 (S54).
                   Sits adjacent to QuoteTemplates because both are tenant-
@@ -2902,14 +2891,7 @@ export default function App() {
                   logged-in travel-tenant user; write gates (canWrite for
                   POST/PATCH; Delete for ADMIN-only) live inside the page,
                   mirroring the QuotesAdmin / InvoicesAdmin convention. */}
-                      <Route
-                        path="travel/cancellation-policies"
-                        element={
-                          <TravelOnly>
-                            <TravelCancellationPolicies />
-                          </TravelOnly>
-                        }
-                      />
+                      <Route path="travel/cancellation-policies" element={<TravelOnly><TravelCancellationPolicies /></TravelOnly>} />
                       <Route
                         path="travel/rfu/customers/:contactId"
                         element={
@@ -3415,3 +3397,4 @@ export default function App() {
     </ThemeContext.Provider>
   );
 }
+

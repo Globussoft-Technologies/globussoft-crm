@@ -39,11 +39,16 @@ export default function Resources() {
 
     try {
       const q = new URLSearchParams();
-      q.set('limit', String(PAGE_SIZE));
-      if (offset > 0) q.set('offset', String(offset));
+      if (offset > 0) {
+        q.set('limit', String(PAGE_SIZE));
+        q.set('offset', String(offset));
+      }
+      const resourceUrl = q.toString()
+        ? `/api/wellness/resources?${q.toString()}`
+        : '/api/wellness/resources';
 
       const [r, l] = await Promise.all([
-        fetchApi(`/api/wellness/resources?${q.toString()}`).catch(() => []),
+        fetchApi(resourceUrl).catch(() => []),
         fetchApi('/api/wellness/locations').catch(() => []),
       ]);
 
@@ -157,7 +162,7 @@ export default function Resources() {
               Editing <strong>{form.name}</strong>
             </div>
           )}
-          <input placeholder="Name - e.g. Laser Room 1" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
+          <input placeholder="Name — e.g. Laser Room 1" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
           <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} style={inputStyle}>
             {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
@@ -177,7 +182,7 @@ export default function Resources() {
       )}
 
       {loading ? (
-        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading...</div>
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading…</div>
       ) : visibleResources.length === 0 ? (
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
           No resources yet. Add a treatment room or machine to surface it in the Calendar's booking modal.

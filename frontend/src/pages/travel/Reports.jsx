@@ -120,11 +120,6 @@ export default function TravelReports() {
             cursor: exporting ? "default" : "pointer", minWidth: 148,
             background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)", color: "#fff", border: "none",
             boxShadow: "0 10px 24px rgba(37, 99, 235, 0.22)", opacity: exporting ? 0.72 : 1,
-            display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 16px",
-            borderRadius: 999, fontWeight: 700, fontSize: 13, letterSpacing: 0.2,
-            cursor: exporting ? "default" : "pointer", minWidth: 148,
-            background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)", color: "#fff", border: "none",
-            boxShadow: "0 10px 24px rgba(37, 99, 235, 0.22)", opacity: exporting ? 0.72 : 1,
           }}
           aria-label="Download this report as PDF"
         >

@@ -1250,7 +1250,7 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
       const itineraryRevenue = Object.values(d.itineraries.amountByStatus || {}).reduce((sum, value) => sum + Number(value || 0), 0);
       const quoteRevenue = Object.entries(d.quotes.amountByStatus || {}).reduce((sum, [status, amount]) => sum + (isAcceptedQuoteStatus(status) ? Number(amount || 0) : 0), 0);
       const collected = (d.agentProductivity?.payments || []).reduce((sum, row) => sum + Number(row.amount || 0), 0);
-      summaryCards([
+      kpiTable([
         ["Itinerary Revenue", inr(itineraryRevenue)],
         ["Accepted Quote Value", inr(quoteRevenue)],
         ["Collected", inr(collected)],

@@ -80,9 +80,12 @@ export default function Waitlist() {
       if (filter !== 'all') q.set('status', filter);
       if (dateFrom) q.set('from', dateFrom);
       if (dateTo) q.set('to', dateTo);
-      q.set('limit', String(WAITLIST_BATCH_SIZE));
-      if (offset > 0) q.set('offset', String(offset));
-      const w = await fetchApi(`/api/wellness/waitlist?${q.toString()}`);
+      if (offset > 0) {
+        q.set('limit', String(WAITLIST_BATCH_SIZE));
+        q.set('offset', String(offset));
+      }
+      const query = q.toString();
+      const w = await fetchApi(query ? `/api/wellness/waitlist?${query}` : '/api/wellness/waitlist');
       const batch = Array.isArray(w) ? w : [];
       setItems((prev) => (replace ? batch : [...prev, ...batch]));
       setHasMore(batch.length === WAITLIST_BATCH_SIZE);
@@ -310,7 +313,7 @@ export default function Waitlist() {
       </Modal>
 
       {loading ? (
-        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading...</div>
+        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading…</div>
       ) : items.length === 0 ? (
         <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
           <UserPlus size={28} style={{ opacity: 0.5, marginBottom: '0.5rem' }} />

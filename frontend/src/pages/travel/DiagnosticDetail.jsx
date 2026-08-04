@@ -678,28 +678,6 @@ export default function DiagnosticDetail() {
             )}
             <button
               type="button"
-              onClick={() => setShareOpen((open) => !open)}
-              title="Open the share panel"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "6px 10px",
-                borderRadius: 6,
-                fontWeight: 600,
-                fontSize: 13,
-                background: "var(--surface-color)",
-                color: "var(--primary-color)",
-                border: "1px solid var(--primary-color)",
-                whiteSpace: "nowrap",
-                cursor: "pointer",
-              }}
-            >
-              <Share2 size={14} aria-hidden />
-              {shareOpen ? "Hide share panel" : "Share report"}
-            </button>
-            <button
-              type="button"
               onClick={() => regenReportPdf()}
               disabled={pdfBusy}
               title="Build the branded report PDF from this diagnostic"

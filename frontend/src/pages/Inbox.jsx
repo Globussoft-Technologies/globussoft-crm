@@ -217,7 +217,10 @@ export default function Inbox() {
       loadingMore: !reset && page > 1,
     }));
     const pageSize = emailPagination.limit;
-    const data = await fetchApi(`${inboxPath}${inboxPath.includes("?") ? "&" : "?"}page=${page}&limit=${pageSize}`);
+    const pageUrl = page > 1
+      ? `${inboxPath}${inboxPath.includes("?") ? "&" : "?"}page=${page}&limit=${pageSize}`
+      : inboxPath;
+    const data = await fetchApi(pageUrl);
     const rows = extractPagedRows(data, "emails");
     const pagination = extractPagination(data, page, pageSize, rows);
     setEmails((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
@@ -238,7 +241,10 @@ export default function Inbox() {
       loadingMore: !reset && page > 1,
     }));
     const pageSize = callPagination.limit;
-    const data = await fetchApi(`/api/communications/calls?page=${page}&limit=${pageSize}`);
+    const pageUrl = page > 1
+      ? `/api/communications/calls?page=${page}&limit=${pageSize}`
+      : '/api/communications/calls';
+    const data = await fetchApi(pageUrl);
     const rows = extractPagedRows(data, "calls");
     const pagination = extractPagination(data, page, pageSize, rows);
     setCalls((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
@@ -259,7 +265,10 @@ export default function Inbox() {
       loadingMore: !reset && page > 1,
     }));
     const pageSize = smsPagination.limit;
-    const data = await fetchApi(`/api/sms/messages?page=${page}&limit=${pageSize}`, { silent: true })
+    const pageUrl = page > 1
+      ? `/api/sms/messages?page=${page}&limit=${pageSize}`
+      : '/api/sms/messages';
+    const data = await fetchApi(pageUrl, { silent: true })
       .catch(() => ({ messages: [], pagination: { page, limit: pageSize, total: 0, hasMore: false } }));
     const rows = extractPagedRows(data, "messages");
     const pagination = extractPagination(data, page, pageSize, rows);
@@ -281,7 +290,10 @@ export default function Inbox() {
       loadingMore: !reset && page > 1,
     }));
     const pageSize = waPagination.limit;
-    const data = await fetchApi(`/api/whatsapp/messages?page=${page}&limit=${pageSize}`, { silent: true })
+    const pageUrl = page > 1
+      ? `/api/whatsapp/messages?page=${page}&limit=${pageSize}`
+      : '/api/whatsapp/messages';
+    const data = await fetchApi(pageUrl, { silent: true })
       .catch(() => ({ messages: [], pagination: { page, limit: pageSize, total: 0, hasMore: false } }));
     const rows = extractPagedRows(data, "messages");
     const pagination = extractPagination(data, page, pageSize, rows);

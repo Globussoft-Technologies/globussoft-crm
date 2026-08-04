@@ -1,5 +1,6 @@
-import React, {
+import {
   useState,
+  useContext,
   useEffect,
   useRef,
   useMemo,
@@ -22,6 +23,9 @@ import {
   HeartPulse,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { AuthContext } from "../App";
+import { useActiveSubBrand } from "../utils/subBrand";
+import { filterSidebarPages } from "../utils/sidebarSearch";
 import { fetchApi } from "../utils/api";
 import { SEARCH_DEBOUNCE_MS } from "../utils/timing";
 import { formatMoney } from "../utils/money";
@@ -308,6 +312,9 @@ export default function Omnibar() {
   const inputRef = useRef(null);
   const containerRef = useRef(null);
   const navigate = useNavigate();
+  const { tenant } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
+
 
   // Pull the user's accessible pages once so the "Pages" section can match
   // sidebar items locally — no server round-trip per keystroke. The same
@@ -410,16 +417,25 @@ export default function Omnibar() {
 
   // Client-side page match. The catalog is small (~70 entries) so a linear
   // scan + sort per keystroke is cheap.
+  const visiblePagesIndex = useMemo(
+    () =>
+      filterSidebarPages(pagesIndex, {
+        vertical: tenant?.vertical || null,
+        activeSubBrand,
+      }),
+    [pagesIndex, tenant?.vertical, activeSubBrand],
+  );
+
   const pageMatches = useMemo(() => {
-    if (query.length < 2 || !Array.isArray(pagesIndex)) return [];
+    if (query.length < 2 || !Array.isArray(visiblePagesIndex)) return [];
     const scored = [];
-    for (const p of pagesIndex) {
+    for (const p of visiblePagesIndex) {
       const score = scorePageMatch(p, query);
       if (score >= 0) scored.push({ page: p, score });
     }
     scored.sort((a, b) => a.score - b.score);
     return scored.slice(0, 8).map((s) => s.page);
-  }, [query, pagesIndex]);
+  }, [query, visiblePagesIndex]);
 
   // Merge pages (client) + backend results into a single resultSet that the
   // section table iterates over.
@@ -751,3 +767,5 @@ export default function Omnibar() {
     </div>
   );
 }
+
+

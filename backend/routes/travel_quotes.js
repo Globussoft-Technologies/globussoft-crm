@@ -58,7 +58,11 @@ const { fetchDestinationImageBuffer } = require("../lib/destinationImage");
 const { mintShareToken } = require("../lib/quoteShareToken");
 const waWebClient = require("../services/whatsappWebClient");
 const { sendEmail } = require("../lib/emailSender");
-const { pickMarkup, mapCategoryToScope, composeQuoteBreakdown } = require("../lib/travelPricing");
+const {
+  pickMarkup,
+  mapCategoryToScope,
+  composeQuoteBreakdown,
+} = require("../lib/travelPricing");
 const {
   computeGstForLines,
   isInterstateSupply,
@@ -77,7 +81,14 @@ const ratehawkClient = require("../services/ratehawkClient");
 const bookingExpediaClient = require("../services/bookingExpediaClient");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
-const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
+const VALID_LINE_TYPES = [
+  "hotel",
+  "flight",
+  "transport",
+  "visa",
+  "service",
+  "other",
+];
 // G020 (PRD §3.2 FR-3.2.3) — dimension drives how the line's quantity
 // renders in the quote PDF (e.g. "₹15,000 per pax × 4 pax = ₹60,000" when
 // dimension="perPax"). Null is accepted by the validator (back-compat
@@ -163,10 +174,7 @@ async function recomputeQuoteTotal(quoteId, tenantId) {
     select: { amount: true },
   });
   if (lines.length === 0) return;
-  const total = lines.reduce(
-    (acc, l) => acc + Number(l.amount || 0),
-    0,
-  );
+  const total = lines.reduce((acc, l) => acc + Number(l.amount || 0), 0);
   await prisma.travelQuote.update({
     where: { id: quoteId },
     data: { totalAmount: total },
@@ -182,7 +190,8 @@ function hydrateQuotePdfPricing(quote) {
     const amount = Number(line.amount || 0);
     const quantity = Number(line.quantity || 0) || 1;
     const unitPrice = Number(line.unitPrice || 0);
-    const taxPercent = line.taxPercent == null ? 0 : Number(line.taxPercent) || 0;
+    const taxPercent =
+      line.taxPercent == null ? 0 : Number(line.taxPercent) || 0;
     subtotal += amount;
     gstAmount += round2((amount * taxPercent) / 100);
     return {
@@ -213,7 +222,6 @@ function assertValidStatus(s) {
   }
 }
 
-
 function parseSubBrandAccessList(raw) {
   if (!raw) return null;
   try {
@@ -226,29 +234,34 @@ function parseSubBrandAccessList(raw) {
 
 function userCanAccessSubBrandValue(user, subBrand) {
   if (!user) return false;
-  if (String(user.role || '').toUpperCase() === 'ADMIN') return true;
+  if (String(user.role || "").toUpperCase() === "ADMIN") return true;
   const access = parseSubBrandAccessList(user.subBrandAccess);
   if (access === null) return true;
   return access.includes(subBrand);
 }
 
 async function quoteCreatorMap(tenantId, quoteIds) {
-  const ids = [...new Set((quoteIds || []).map((id) => Number(id)).filter(Number.isFinite))];
+  const ids = [
+    ...new Set(
+      (quoteIds || []).map((id) => Number(id)).filter(Number.isFinite),
+    ),
+  ];
   if (!ids.length || !prisma.auditLog?.findMany) return new Map();
   const rows = await prisma.auditLog.findMany({
     where: {
       tenantId,
-      entity: 'TravelQuote',
-      action: 'CREATE',
+      entity: "TravelQuote",
+      action: "CREATE",
       entityId: { in: ids },
       userId: { not: null },
     },
     select: { entityId: true, userId: true, createdAt: true },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
   const byQuote = new Map();
   for (const row of rows || []) {
-    if (row.entityId == null || row.userId == null || byQuote.has(row.entityId)) continue;
+    if (row.entityId == null || row.userId == null || byQuote.has(row.entityId))
+      continue;
     byQuote.set(row.entityId, row.userId);
   }
   return byQuote;
@@ -256,7 +269,8 @@ async function quoteCreatorMap(tenantId, quoteIds) {
 
 async function quoteTeamUserIdsForManager(tenantId, manager, subBrands) {
   const scopedBrands = [...new Set((subBrands || []).filter(Boolean))];
-  if (!scopedBrands.length || !prisma.user?.findMany) return new Set([manager.id]);
+  if (!scopedBrands.length || !prisma.user?.findMany)
+    return new Set([manager.id]);
   const users = await prisma.user.findMany({
     where: { tenantId, deactivatedAt: null },
     select: { id: true, role: true, subBrandAccess: true },
@@ -264,8 +278,9 @@ async function quoteTeamUserIdsForManager(tenantId, manager, subBrands) {
   const ids = new Set([manager.id]);
   for (const user of users || []) {
     if (!user?.id) continue;
-    if (String(user.role || '').toUpperCase() === 'ADMIN') continue;
-    if (scopedBrands.some((brand) => userCanAccessSubBrandValue(user, brand))) ids.add(user.id);
+    if (String(user.role || "").toUpperCase() === "ADMIN") continue;
+    if (scopedBrands.some((brand) => userCanAccessSubBrandValue(user, brand)))
+      ids.add(user.id);
   }
   return ids;
 }
@@ -275,27 +290,49 @@ async function quoteVisibilityContext(req, allowed = undefined) {
     where: { id: req.user.userId },
     select: { id: true, role: true, subBrandAccess: true },
   });
-  const role = String(user?.role || req.user.role || 'USER').toUpperCase();
+  const role = String(user?.role || req.user.role || "USER").toUpperCase();
   return {
     userId: req.user.userId,
     tenantId: req.travelTenant.id,
     role,
     user: user || { id: req.user.userId, role, subBrandAccess: null },
-    allowed: allowed === undefined ? await getSubBrandAccessSet(req.user.userId) : allowed,
+    allowed:
+      allowed === undefined
+        ? await getSubBrandAccessSet(req.user.userId)
+        : allowed,
   };
 }
 
 async function filterQuotesByRoleVisibility(req, quotes, allowed = undefined) {
   if (!Array.isArray(quotes) || quotes.length === 0) return [];
   const ctx = await quoteVisibilityContext(req, allowed);
-  if (ctx.role === 'ADMIN') return quotes;
+  if (ctx.role === "ADMIN" || req.user?.isOwner) return quotes;
 
-  const creatorByQuote = await quoteCreatorMap(ctx.tenantId, quotes.map((q) => q.id));
-  if (ctx.role === 'MANAGER') {
-    const teamIds = await quoteTeamUserIdsForManager(ctx.tenantId, ctx.user, quotes.map((q) => q.subBrand));
+  let creatorByQuote = new Map();
+  try {
+    creatorByQuote = await quoteCreatorMap(
+      ctx.tenantId,
+      quotes.map((q) => q.id),
+    );
+  } catch (err) {
+    console.warn("[travel-quotes] creator-map fallback:", err.message);
+  }
+
+  if (ctx.role === "MANAGER") {
+    let teamIds = new Set([ctx.userId]);
+    try {
+      teamIds = await quoteTeamUserIdsForManager(
+        ctx.tenantId,
+        ctx.user,
+        quotes.map((q) => q.subBrand),
+      );
+    } catch (err) {
+      console.warn("[travel-quotes] manager-team fallback:", err.message);
+    }
     return quotes.filter((quote) => {
       const creatorId = creatorByQuote.get(quote.id);
-      const assigneeId = quote.assignedToUserId == null ? null : Number(quote.assignedToUserId);
+      const assigneeId =
+        quote.assignedToUserId == null ? null : Number(quote.assignedToUserId);
       if (assigneeId != null && teamIds.has(assigneeId)) return true;
       if (creatorId == null) return true; // legacy quote without creator audit: preserve existing sub-brand visibility
       return teamIds.has(creatorId);
@@ -304,11 +341,69 @@ async function filterQuotesByRoleVisibility(req, quotes, allowed = undefined) {
 
   return quotes.filter((quote) => {
     const creatorId = creatorByQuote.get(quote.id);
-    const assigneeId = quote.assignedToUserId == null ? null : Number(quote.assignedToUserId);
-    if (assigneeId != null && Number(assigneeId) === Number(ctx.userId)) return true;
+    const assigneeId =
+      quote.assignedToUserId == null ? null : Number(quote.assignedToUserId);
+    if (assigneeId != null && Number(assigneeId) === Number(ctx.userId))
+      return true;
     if (creatorId == null) return true; // legacy quote without creator audit: preserve existing sub-brand visibility
     return Number(creatorId) === Number(ctx.userId);
   });
+}
+
+async function hydrateTravelQuoteListRows(req, quotes) {
+  if (!Array.isArray(quotes) || quotes.length === 0) return [];
+
+  const contactIds = [
+    ...new Set(
+      quotes.map((quote) => Number(quote.contactId)).filter(Number.isFinite),
+    ),
+  ];
+  const assigneeIds = [
+    ...new Set(
+      quotes
+        .map((quote) =>
+          quote.assignedToUserId == null
+            ? null
+            : Number(quote.assignedToUserId),
+        )
+        .filter(Number.isFinite),
+    ),
+  ];
+
+  const [contacts, assignees] = await Promise.all([
+    contactIds.length
+      ? prisma.contact.findMany({
+          where: { tenantId: req.travelTenant.id, id: { in: contactIds } },
+          select: { id: true, name: true },
+        })
+      : Promise.resolve([]),
+    assigneeIds.length
+      ? prisma.user.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            deactivatedAt: null,
+            id: { in: assigneeIds },
+          },
+          select: { id: true, name: true, email: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const contactsById = new Map(
+    (contacts || []).map((contact) => [contact.id, contact]),
+  );
+  const assigneesById = new Map(
+    (assignees || []).map((user) => [user.id, user]),
+  );
+
+  return quotes.map((quote) => ({
+    ...quote,
+    contact: contactsById.get(Number(quote.contactId)) || null,
+    assignedToUser:
+      quote.assignedToUserId == null
+        ? null
+        : assigneesById.get(Number(quote.assignedToUserId)) || null,
+  }));
 }
 
 async function canSeeQuoteByRoleVisibility(req, quote, allowed = undefined) {
@@ -316,7 +411,6 @@ async function canSeeQuoteByRoleVisibility(req, quote, allowed = undefined) {
   const visible = await filterQuotesByRoleVisibility(req, [quote], allowed);
   return visible.length === 1;
 }
-
 
 async function validateQuoteAssignee(req, quote, assignedToUserId) {
   if (assignedToUserId == null || assignedToUserId === "") return null;
@@ -328,8 +422,18 @@ async function validateQuoteAssignee(req, quote, assignedToUserId) {
     throw e;
   }
   const assignee = await prisma.user.findFirst({
-    where: { id: assigneeId, tenantId: req.travelTenant.id, deactivatedAt: null },
-    select: { id: true, name: true, email: true, role: true, subBrandAccess: true },
+    where: {
+      id: assigneeId,
+      tenantId: req.travelTenant.id,
+      deactivatedAt: null,
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      subBrandAccess: true,
+    },
   });
   if (!assignee) {
     const e = new Error("Assignee not found in this tenant or is inactive");
@@ -344,13 +448,15 @@ async function validateQuoteAssignee(req, quote, assignedToUserId) {
     throw e;
   }
   if (!userCanAccessSubBrandValue(assignee, quote.subBrand)) {
-    const e = new Error("Assignee does not have access to this quote sub-brand");
+    const e = new Error(
+      "Assignee does not have access to this quote sub-brand",
+    );
     e.status = 400;
     e.code = "ASSIGNEE_SUB_BRAND_DENIED";
     throw e;
   }
   return assignee;
-}/**
+} /**
  * Parse + validate a validUntil date. Accepts ISO 8601 strings or
  * anything Date can swallow; rejects unparseable input and any date
  * earlier than today (midnight comparison so "today" is still valid).
@@ -396,8 +502,6 @@ function parseTripDate(input) {
   }
   return d;
 }
-
-
 
 // ─── PRD §4.1 diagnostic-first guard (gap A9a) ───────────────────────
 //
@@ -485,39 +589,50 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
     const allowed = await getSubBrandAccessSet(req.user.userId);
     if (allowed) {
       where.subBrand = where.subBrand
-        ? canAccessSubBrand(allowed, where.subBrand) ? where.subBrand : "__none__"
+        ? canAccessSubBrand(allowed, where.subBrand)
+          ? where.subBrand
+          : "__none__"
         : { in: [...allowed] };
     }
 
     const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
     const skip = parseInt(req.query.offset, 10) || 0;
 
-    const isSummary = req.query.fields === "summary";
-    const findManyArgs = {
+    const allScopedQuotes = await prisma.travelQuote.findMany({
       where,
       orderBy: [{ createdAt: "desc" }],
-    };
-    if (isSummary) {
-      // Slim projection from the registry, plus assignedToUserId which is
-      // needed for role-visibility filtering below. It is stripped before
-      // the response is sent so the slim shape contract stays clean.
-      findManyArgs.select = {
-        ...listProjection("TravelQuote", false),
+      select: {
+        id: true,
+        tenantId: true,
+        subBrand: true,
+        contactId: true,
+        status: true,
+        totalAmount: true,
+        currency: true,
         assignedToUserId: true,
-      };
-    } else {
-      // Full-shape path: join the contact name so the admin list can render
-      // the customer name instead of a bare contactId.
-      findManyArgs.include = { contact: { select: { id: true, name: true } }, assignedToUser: { select: { id: true, name: true, email: true } } };
-    }
-    const allScopedQuotes = await prisma.travelQuote.findMany(findManyArgs);
-    const visibleQuotes = await filterQuotesByRoleVisibility(req, allScopedQuotes, allowed);
-    const quotes = isSummary
-      ? visibleQuotes.slice(skip, skip + take).map(({ assignedToUserId, ...rest }) => rest)
-      : visibleQuotes.slice(skip, skip + take);
-    res.json({ quotes, total: visibleQuotes.length, limit: take, offset: skip });
+        validUntil: true,
+        createdAt: true,
+      },
+    });
+    const hydratedQuotes = await hydrateTravelQuoteListRows(
+      req,
+      allScopedQuotes,
+    );
+    const visibleQuotes = await filterQuotesByRoleVisibility(
+      req,
+      hydratedQuotes,
+      allowed,
+    );
+    const quotes = visibleQuotes.slice(skip, skip + take);
+    res.json({
+      quotes,
+      total: visibleQuotes.length,
+      limit: take,
+      offset: skip,
+    });
   } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    if (e.status)
+      return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-quotes] list error:", e.message);
     res.status(500).json({ error: "Failed to list quotes" });
   }
@@ -547,53 +662,71 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
 //
 // IMPORTANT: this route MUST be declared BEFORE GET /:id so Express
 // doesn't match "expired" as a numeric :id (which would 400 INVALID_ID).
-router.get("/quotes/expired", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const limitRaw = parseInt(req.query.limit, 10);
-    const limit = Number.isFinite(limitRaw) && limitRaw > 0
-      ? Math.min(limitRaw, 200)
-      : 50;
+router.get(
+  "/quotes/expired",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const limitRaw = parseInt(req.query.limit, 10);
+      const limit =
+        Number.isFinite(limitRaw) && limitRaw > 0
+          ? Math.min(limitRaw, 200)
+          : 50;
 
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    // Empty access set = caller has no sub-brand grants; return [] rather
-    // than 403 so dashboard tiles render cleanly for not-yet-onboarded
-    // operators.
-    if (allowed instanceof Set && allowed.size === 0) {
-      return res.json({ quotes: [], count: 0 });
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      // Empty access set = caller has no sub-brand grants; return [] rather
+      // than 403 so dashboard tiles render cleanly for not-yet-onboarded
+      // operators.
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json({ quotes: [], count: 0 });
+      }
+
+      const requestedSubBrand = req.query.subBrand
+        ? String(req.query.subBrand)
+        : null;
+      if (requestedSubBrand) assertValidSubBrand(requestedSubBrand);
+      if (requestedSubBrand && !canAccessSubBrand(allowed, requestedSubBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        status: { in: ["Draft", "Sent"] },
+        validUntil: { lt: new Date() },
+      };
+      if (requestedSubBrand) {
+        where.subBrand = requestedSubBrand;
+      } else if (allowed instanceof Set) {
+        where.subBrand = { in: Array.from(allowed) };
+      }
+
+      const quotes = await prisma.travelQuote.findMany({
+        where,
+        orderBy: [{ validUntil: "asc" }, { id: "asc" }],
+        include: {
+          contact: { select: { id: true, name: true } },
+          assignedToUser: { select: { id: true, name: true, email: true } },
+        },
+      });
+      const visibleQuotes = await filterQuotesByRoleVisibility(
+        req,
+        quotes,
+        allowed,
+      );
+      const page = visibleQuotes.slice(0, limit);
+
+      res.json({ quotes: page, count: page.length });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] expired list error:", e.message);
+      res.status(500).json({ error: "Failed to list expired quotes" });
     }
-
-    const requestedSubBrand = req.query.subBrand ? String(req.query.subBrand) : null;
-    if (requestedSubBrand) assertValidSubBrand(requestedSubBrand);
-    if (requestedSubBrand && !canAccessSubBrand(allowed, requestedSubBrand)) {
-      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
-    }
-
-    const where = {
-      tenantId: req.travelTenant.id,
-      status: { in: ["Draft", "Sent"] },
-      validUntil: { lt: new Date() },
-    };
-    if (requestedSubBrand) {
-      where.subBrand = requestedSubBrand;
-    } else if (allowed instanceof Set) {
-      where.subBrand = { in: Array.from(allowed) };
-    }
-
-    const quotes = await prisma.travelQuote.findMany({
-      where,
-      orderBy: [{ validUntil: "asc" }, { id: "asc" }],
-      include: { contact: { select: { id: true, name: true } }, assignedToUser: { select: { id: true, name: true, email: true } } },
-    });
-    const visibleQuotes = await filterQuotesByRoleVisibility(req, quotes, allowed);
-    const page = visibleQuotes.slice(0, limit);
-
-    res.json({ quotes: page, count: page.length });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-quotes] expired list error:", e.message);
-    res.status(500).json({ error: "Failed to list expired quotes" });
-  }
-});
+  },
+);
 
 // GET /api/travel/quotes/expired-summary — any verified token (tenant + sub-brand-scoped).
 //
@@ -645,142 +778,155 @@ router.get("/quotes/expired", verifyToken, requireTravelTenant, async (req, res)
 // IMPORTANT: this route MUST be declared BEFORE GET /:id so Express
 // doesn't match "expired-summary" as a numeric :id (which would 400
 // INVALID_ID).
-router.get("/quotes/expired-summary", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-    const zeroed = () => ({
-      total: 0,
-      totalValue: 0,
-      bySubBrand: {},
-      byAgeRange: {
+router.get(
+  "/quotes/expired-summary",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const round2 = (n) =>
+        Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+      const zeroed = () => ({
+        total: 0,
+        totalValue: 0,
+        bySubBrand: {},
+        byAgeRange: {
+          "0-7d": { count: 0, value: 0 },
+          "8-30d": { count: 0, value: 0 },
+          "31-90d": { count: 0, value: 0 },
+          "90+d": { count: 0, value: 0 },
+        },
+        topCustomers: [],
+        generatedAt: new Date().toISOString(),
+      });
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      // Empty access set → zeroed shape (not 403).
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json(zeroed());
+      }
+
+      const now = new Date();
+      const where = {
+        tenantId: req.travelTenant.id,
+        status: { in: ["Draft", "Sent"] },
+        validUntil: { lt: now },
+      };
+      if (allowed instanceof Set) {
+        where.subBrand = { in: [...allowed] };
+      }
+
+      const scopedQuotes = await prisma.travelQuote.findMany({
+        where,
+        select: {
+          id: true,
+          subBrand: true,
+          assignedToUserId: true,
+          contactId: true,
+          totalAmount: true,
+          validUntil: true,
+        },
+      });
+      const quotes = await filterQuotesByRoleVisibility(
+        req,
+        scopedQuotes,
+        allowed,
+      );
+
+      if (quotes.length === 0) {
+        return res.json(zeroed());
+      }
+
+      const bySubBrand = {};
+      const byAgeRange = {
         "0-7d": { count: 0, value: 0 },
         "8-30d": { count: 0, value: 0 },
         "31-90d": { count: 0, value: 0 },
         "90+d": { count: 0, value: 0 },
-      },
-      topCustomers: [],
-      generatedAt: new Date().toISOString(),
-    });
+      };
+      const perContact = new Map();
+      let total = 0;
+      let totalValue = 0;
+      const nowMs = now.getTime();
 
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    // Empty access set → zeroed shape (not 403).
-    if (allowed instanceof Set && allowed.size === 0) {
-      return res.json(zeroed());
-    }
+      for (const q of quotes) {
+        // Defensive: skip rows whose validUntil failed Prisma's lt filter
+        // (shouldn't happen, but the test mock returns whatever it likes).
+        if (!q.validUntil) continue;
+        const vu =
+          q.validUntil instanceof Date ? q.validUntil : new Date(q.validUntil);
+        if (Number.isNaN(vu.getTime()) || vu.getTime() >= nowMs) continue;
 
-    const now = new Date();
-    const where = {
-      tenantId: req.travelTenant.id,
-      status: { in: ["Draft", "Sent"] },
-      validUntil: { lt: now },
-    };
-    if (allowed instanceof Set) {
-      where.subBrand = { in: [...allowed] };
-    }
+        const amt = Number(q.totalAmount);
+        const safeAmt = Number.isFinite(amt) ? amt : 0;
 
-    const scopedQuotes = await prisma.travelQuote.findMany({
-      where,
-      select: {
-        id: true,
-        subBrand: true,
-        assignedToUserId: true,
-        contactId: true,
-        totalAmount: true,
-        validUntil: true,
-      },
-    });
-    const quotes = await filterQuotesByRoleVisibility(req, scopedQuotes, allowed);
+        total += 1;
+        totalValue += safeAmt;
 
-    if (quotes.length === 0) {
-      return res.json(zeroed());
-    }
+        // bySubBrand: null subBrand → "_tenant" (matches /quotes/stats shape).
+        const sbKey = q.subBrand ? String(q.subBrand) : "_tenant";
+        if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0, value: 0 };
+        bySubBrand[sbKey].count += 1;
+        bySubBrand[sbKey].value += safeAmt;
 
-    const bySubBrand = {};
-    const byAgeRange = {
-      "0-7d": { count: 0, value: 0 },
-      "8-30d": { count: 0, value: 0 },
-      "31-90d": { count: 0, value: 0 },
-      "90+d": { count: 0, value: 0 },
-    };
-    const perContact = new Map();
-    let total = 0;
-    let totalValue = 0;
-    const nowMs = now.getTime();
+        // byAgeRange: how long ago did it expire (in days).
+        const ageDays = Math.floor((nowMs - vu.getTime()) / 86_400_000);
+        let bucket;
+        if (ageDays <= 7) bucket = "0-7d";
+        else if (ageDays <= 30) bucket = "8-30d";
+        else if (ageDays <= 90) bucket = "31-90d";
+        else bucket = "90+d";
+        byAgeRange[bucket].count += 1;
+        byAgeRange[bucket].value += safeAmt;
 
-    for (const q of quotes) {
-      // Defensive: skip rows whose validUntil failed Prisma's lt filter
-      // (shouldn't happen, but the test mock returns whatever it likes).
-      if (!q.validUntil) continue;
-      const vu = q.validUntil instanceof Date ? q.validUntil : new Date(q.validUntil);
-      if (Number.isNaN(vu.getTime()) || vu.getTime() >= nowMs) continue;
-
-      const amt = Number(q.totalAmount);
-      const safeAmt = Number.isFinite(amt) ? amt : 0;
-
-      total += 1;
-      totalValue += safeAmt;
-
-      // bySubBrand: null subBrand → "_tenant" (matches /quotes/stats shape).
-      const sbKey = q.subBrand ? String(q.subBrand) : "_tenant";
-      if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0, value: 0 };
-      bySubBrand[sbKey].count += 1;
-      bySubBrand[sbKey].value += safeAmt;
-
-      // byAgeRange: how long ago did it expire (in days).
-      const ageDays = Math.floor((nowMs - vu.getTime()) / 86_400_000);
-      let bucket;
-      if (ageDays <= 7) bucket = "0-7d";
-      else if (ageDays <= 30) bucket = "8-30d";
-      else if (ageDays <= 90) bucket = "31-90d";
-      else bucket = "90+d";
-      byAgeRange[bucket].count += 1;
-      byAgeRange[bucket].value += safeAmt;
-
-      // perContact tally for topCustomers.
-      if (q.contactId != null) {
-        const cid = q.contactId;
-        if (!perContact.has(cid)) perContact.set(cid, { contactId: cid, count: 0, totalValue: 0 });
-        const entry = perContact.get(cid);
-        entry.count += 1;
-        entry.totalValue += safeAmt;
+        // perContact tally for topCustomers.
+        if (q.contactId != null) {
+          const cid = q.contactId;
+          if (!perContact.has(cid))
+            perContact.set(cid, { contactId: cid, count: 0, totalValue: 0 });
+          const entry = perContact.get(cid);
+          entry.count += 1;
+          entry.totalValue += safeAmt;
+        }
       }
-    }
 
-    // Round per-bucket sums.
-    for (const sb of Object.keys(bySubBrand)) {
-      bySubBrand[sb].value = round2(bySubBrand[sb].value);
-    }
-    for (const ar of Object.keys(byAgeRange)) {
-      byAgeRange[ar].value = round2(byAgeRange[ar].value);
-    }
+      // Round per-bucket sums.
+      for (const sb of Object.keys(bySubBrand)) {
+        bySubBrand[sb].value = round2(bySubBrand[sb].value);
+      }
+      for (const ar of Object.keys(byAgeRange)) {
+        byAgeRange[ar].value = round2(byAgeRange[ar].value);
+      }
 
-    // topCustomers: sort desc by count (tie-break by totalValue desc), top 5.
-    const topCustomers = [...perContact.values()]
-      .sort((a, b) => {
-        if (b.count !== a.count) return b.count - a.count;
-        return b.totalValue - a.totalValue;
-      })
-      .slice(0, 5)
-      .map((c) => ({
-        contactId: c.contactId,
-        count: c.count,
-        totalValue: round2(c.totalValue),
-      }));
+      // topCustomers: sort desc by count (tie-break by totalValue desc), top 5.
+      const topCustomers = [...perContact.values()]
+        .sort((a, b) => {
+          if (b.count !== a.count) return b.count - a.count;
+          return b.totalValue - a.totalValue;
+        })
+        .slice(0, 5)
+        .map((c) => ({
+          contactId: c.contactId,
+          count: c.count,
+          totalValue: round2(c.totalValue),
+        }));
 
-    res.json({
-      total,
-      totalValue: round2(totalValue),
-      bySubBrand,
-      byAgeRange,
-      topCustomers,
-      generatedAt: now.toISOString(),
-    });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-quotes] expired-summary error:", e.message);
-    res.status(500).json({ error: "Failed to summarise expired quotes" });
-  }
-});
+      res.json({
+        total,
+        totalValue: round2(totalValue),
+        bySubBrand,
+        byAgeRange,
+        topCustomers,
+        generatedAt: now.toISOString(),
+      });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] expired-summary error:", e.message);
+      res.status(500).json({ error: "Failed to summarise expired quotes" });
+    }
+  },
+);
 
 // GET /api/travel/quotes/analytics — any verified token (tenant + sub-brand scoped).
 //
@@ -814,86 +960,97 @@ router.get("/quotes/expired-summary", verifyToken, requireTravelTenant, async (r
 // === Route ordering ===
 // IMPORTANT: this route MUST be declared BEFORE GET /:id so Express
 // doesn't match "analytics" as a numeric :id (which would 400 INVALID_ID).
-router.get("/quotes/analytics", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const where = { tenantId: req.travelTenant.id };
+router.get(
+  "/quotes/analytics",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
 
-    if (req.query.subBrand) {
-      assertValidSubBrand(String(req.query.subBrand));
-      where.subBrand = String(req.query.subBrand);
-    }
+      if (req.query.subBrand) {
+        assertValidSubBrand(String(req.query.subBrand));
+        where.subBrand = String(req.query.subBrand);
+      }
 
-    if (req.query.from || req.query.to) {
-      const createdAt = {};
-      if (req.query.from) {
-        const fromDate = new Date(String(req.query.from));
-        if (Number.isNaN(fromDate.getTime())) {
+      if (req.query.from || req.query.to) {
+        const createdAt = {};
+        if (req.query.from) {
+          const fromDate = new Date(String(req.query.from));
+          if (Number.isNaN(fromDate.getTime())) {
+            return res.status(400).json({
+              error: "from must be a parseable date",
+              code: "INVALID_FROM",
+            });
+          }
+          createdAt.gte = fromDate;
+        }
+        if (req.query.to) {
+          const toDate = new Date(String(req.query.to));
+          if (Number.isNaN(toDate.getTime())) {
+            return res.status(400).json({
+              error: "to must be a parseable date",
+              code: "INVALID_TO",
+            });
+          }
+          createdAt.lte = toDate;
+        }
+        if (
+          createdAt.gte &&
+          createdAt.lte &&
+          createdAt.gte.getTime() > createdAt.lte.getTime()
+        ) {
           return res.status(400).json({
-            error: "from must be a parseable date",
-            code: "INVALID_FROM",
+            error: "from must be <= to",
+            code: "INVALID_RANGE",
           });
         }
-        createdAt.gte = fromDate;
+        where.createdAt = createdAt;
       }
-      if (req.query.to) {
-        const toDate = new Date(String(req.query.to));
-        if (Number.isNaN(toDate.getTime())) {
-          return res.status(400).json({
-            error: "to must be a parseable date",
-            code: "INVALID_TO",
-          });
-        }
-        createdAt.lte = toDate;
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      // Empty access set → all-zeros rollup (not 403). Matches the
+      // expired-list behaviour.
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json(computeQuoteAnalytics([]));
       }
-      if (
-        createdAt.gte && createdAt.lte
-        && createdAt.gte.getTime() > createdAt.lte.getTime()
-      ) {
-        return res.status(400).json({
-          error: "from must be <= to",
-          code: "INVALID_RANGE",
-        });
+      if (allowed instanceof Set) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
       }
-      where.createdAt = createdAt;
-    }
 
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    // Empty access set → all-zeros rollup (not 403). Matches the
-    // expired-list behaviour.
-    if (allowed instanceof Set && allowed.size === 0) {
-      return res.json(computeQuoteAnalytics([]));
-    }
-    if (allowed instanceof Set) {
-      where.subBrand = where.subBrand
-        ? canAccessSubBrand(allowed, where.subBrand)
-          ? where.subBrand
-          : "__none__"
-        : { in: [...allowed] };
-    }
+      const quotes = await prisma.travelQuote.findMany({
+        where,
+        select: {
+          id: true,
+          subBrand: true,
+          assignedToUserId: true,
+          status: true,
+          totalAmount: true,
+          currency: true,
+          validUntil: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+      const visibleQuotes = await filterQuotesByRoleVisibility(
+        req,
+        quotes,
+        allowed,
+      );
 
-    const quotes = await prisma.travelQuote.findMany({
-      where,
-      select: {
-        id: true,
-        subBrand: true,
-        assignedToUserId: true,
-        status: true,
-        totalAmount: true,
-        currency: true,
-        validUntil: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
-    const visibleQuotes = await filterQuotesByRoleVisibility(req, quotes, allowed);
-
-    res.json(computeQuoteAnalytics(visibleQuotes));
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-quotes] analytics error:", e.message);
-    res.status(500).json({ error: "Failed to compute analytics" });
-  }
-});
+      res.json(computeQuoteAnalytics(visibleQuotes));
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] analytics error:", e.message);
+      res.status(500).json({ error: "Failed to compute analytics" });
+    }
+  },
+);
 
 // GET /api/travel/quotes/by-month — any verified token (tenant + sub-brand scoped).
 //
@@ -959,203 +1116,229 @@ router.get("/quotes/analytics", verifyToken, requireTravelTenant, async (req, re
 //
 // Route ordering: declared BEFORE GET /:id so Express doesn't try to
 // parse "by-month" as a numeric :id (which would 400 INVALID_ID).
-router.get("/quotes/by-month", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
-    const skip = parseInt(req.query.offset, 10) || 0;
-    const statusFilter = req.query.status ? String(req.query.status) : null;
-    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+router.get(
+  "/quotes/by-month",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const statusFilter = req.query.status ? String(req.query.status) : null;
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "month:asc";
 
-    if (statusFilter) {
-      try {
-        assertValidStatus(statusFilter);
-      } catch (e) {
-        return res.status(e.status || 400).json({ error: e.message, code: e.code });
-      }
-    }
-
-    // YYYY-MM validation — same regex slice 15 uses. Bucket labels we
-    // emit follow this exact shape so callers passing month-tokens to
-    // from/to should already be using it.
-    const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
-    const fromRaw = req.query.from ? String(req.query.from) : null;
-    const toRaw = req.query.to ? String(req.query.to) : null;
-    if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
-      return res.status(400).json({
-        error: "from must be in YYYY-MM format",
-        code: "INVALID_MONTH_FORMAT",
-      });
-    }
-    if (toRaw !== null && !MONTH_RE.test(toRaw)) {
-      return res.status(400).json({
-        error: "to must be in YYYY-MM format",
-        code: "INVALID_MONTH_FORMAT",
-      });
-    }
-
-    const VALID_ORDER_BY = new Set([
-      "month:asc",
-      "month:desc",
-      "totalValue:asc",
-      "totalValue:desc",
-      "quoteCount:asc",
-      "quoteCount:desc",
-      "acceptedCount:asc",
-      "acceptedCount:desc",
-    ]);
-    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
-
-    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
-    // /quotes list handler — empty access set → all-zeros rollup (not
-    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
-    // operators.
-    const where = { tenantId: req.travelTenant.id };
-    if (statusFilter) where.status = statusFilter;
-
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (allowed instanceof Set && allowed.size === 0) {
-      return res.json({
-        months: [],
-        totalMonths: 0,
-        grandQuoteCount: 0,
-        grandTotalValue: 0,
-        grandAcceptedValue: 0,
-        limit: take,
-        offset: skip,
-      });
-    }
-    if (allowed instanceof Set) {
-      where.subBrand = { in: [...allowed] };
-    }
-
-    // No DB-level pagination — aggregation runs in-process so we can
-    // bucket by UTC YYYY-MM. Input size bound is the same as
-    // /quotes/analytics (low thousands at platinum scale).
-    const scopedQuotes = await prisma.travelQuote.findMany({
-      where,
-      select: {
-        id: true,
-        subBrand: true,
-        assignedToUserId: true,
-        status: true,
-        totalAmount: true,
-        createdAt: true,
-      },
-    });
-    const quotes = await filterQuotesByRoleVisibility(req, scopedQuotes, allowed);
-
-    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-
-    // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts/sums }.
-    // Quotes with null/invalid createdAt go into "unknown" so counts
-    // stay accurate. Null/invalid totalAmount contributes 0.
-    const byMonth = new Map();
-    for (const q of quotes) {
-      let monthKey = "unknown";
-      if (q.createdAt) {
-        const dt = new Date(q.createdAt);
-        if (!Number.isNaN(dt.getTime())) {
-          const yyyy = dt.getUTCFullYear();
-          const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
-          monthKey = `${yyyy}-${mm}`;
+      if (statusFilter) {
+        try {
+          assertValidStatus(statusFilter);
+        } catch (e) {
+          return res
+            .status(e.status || 400)
+            .json({ error: e.message, code: e.code });
         }
       }
 
-      let row = byMonth.get(monthKey);
-      if (!row) {
-        row = {
-          month: monthKey,
-          quoteCount: 0,
-          totalValue: 0,
-          draftCount: 0,
-          sentCount: 0,
-          acceptedCount: 0,
-          rejectedCount: 0,
-          acceptedValue: 0,
-        };
-        byMonth.set(monthKey, row);
+      // YYYY-MM validation — same regex slice 15 uses. Bucket labels we
+      // emit follow this exact shape so callers passing month-tokens to
+      // from/to should already be using it.
+      const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !MONTH_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
+      }
+      if (toRaw !== null && !MONTH_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-MM format",
+          code: "INVALID_MONTH_FORMAT",
+        });
       }
 
-      row.quoteCount += 1;
-      const amt = Number(q.totalAmount);
-      const safeAmt = Number.isFinite(amt) ? amt : 0;
-      row.totalValue += safeAmt;
+      const VALID_ORDER_BY = new Set([
+        "month:asc",
+        "month:desc",
+        "totalValue:asc",
+        "totalValue:desc",
+        "quoteCount:asc",
+        "quoteCount:desc",
+        "acceptedCount:asc",
+        "acceptedCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
 
-      switch (q.status) {
-        case "Draft": row.draftCount += 1; break;
-        case "Sent": row.sentCount += 1; break;
-        case "Accepted":
-          row.acceptedCount += 1;
-          row.acceptedValue += safeAmt;
-          break;
-        case "Rejected": row.rejectedCount += 1; break;
-        default: break;
+      // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+      // /quotes list handler — empty access set → all-zeros rollup (not
+      // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+      // operators.
+      const where = { tenantId: req.travelTenant.id };
+      if (statusFilter) where.status = statusFilter;
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json({
+          months: [],
+          totalMonths: 0,
+          grandQuoteCount: 0,
+          grandTotalValue: 0,
+          grandAcceptedValue: 0,
+          limit: take,
+          offset: skip,
+        });
       }
-    }
-
-    // Finalise rounding on per-row sums.
-    let months = [...byMonth.values()].map((r) => ({
-      ...r,
-      totalValue: round2(r.totalValue),
-      acceptedValue: round2(r.acceptedValue),
-    }));
-
-    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
-    // either bound is set (they have no comparable month token); when
-    // no bounds are set, "unknown" stays so the count surface remains
-    // complete. Mirrors slice 15's posture.
-    if (fromRaw !== null) {
-      months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
-    }
-    if (toRaw !== null) {
-      months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
-    }
-
-    // Sort. "month" sorts lexicographically on YYYY-MM which is also
-    // chronological. "unknown" sorts last in asc / first in desc by
-    // virtue of being lexicographically > "9999-12" — acceptable for
-    // a defensive fallback bucket that should rarely appear.
-    const [field, dir] = orderBy.split(":");
-    const mult = dir === "asc" ? 1 : -1;
-    months.sort((a, b) => {
-      if (field === "month") {
-        if (a.month < b.month) return -1 * mult;
-        if (a.month > b.month) return 1 * mult;
-        return 0;
+      if (allowed instanceof Set) {
+        where.subBrand = { in: [...allowed] };
       }
-      return ((a[field] || 0) - (b[field] || 0)) * mult;
-    });
 
-    const totalMonths = months.length;
-    const grandQuoteCount = months.reduce(
-      (acc, r) => acc + (Number(r.quoteCount) || 0),
-      0,
-    );
-    const grandTotalValue = round2(
-      months.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
-    );
-    const grandAcceptedValue = round2(
-      months.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
-    );
+      // No DB-level pagination — aggregation runs in-process so we can
+      // bucket by UTC YYYY-MM. Input size bound is the same as
+      // /quotes/analytics (low thousands at platinum scale).
+      const scopedQuotes = await prisma.travelQuote.findMany({
+        where,
+        select: {
+          id: true,
+          subBrand: true,
+          assignedToUserId: true,
+          status: true,
+          totalAmount: true,
+          createdAt: true,
+        },
+      });
+      const quotes = await filterQuotesByRoleVisibility(
+        req,
+        scopedQuotes,
+        allowed,
+      );
 
-    // Pagination applied AFTER aggregation + sort + filter, same as slice 15.
-    const paged = months.slice(skip, skip + take);
+      const round2 = (n) =>
+        Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
-    res.json({
-      months: paged,
-      totalMonths,
-      grandQuoteCount,
-      grandTotalValue,
-      grandAcceptedValue,
-      limit: take,
-      offset: skip,
-    });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-quotes] by-month error:", e.message);
-    res.status(500).json({ error: "Failed to compute monthly rollup" });
-  }
-});
+      // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts/sums }.
+      // Quotes with null/invalid createdAt go into "unknown" so counts
+      // stay accurate. Null/invalid totalAmount contributes 0.
+      const byMonth = new Map();
+      for (const q of quotes) {
+        let monthKey = "unknown";
+        if (q.createdAt) {
+          const dt = new Date(q.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+            monthKey = `${yyyy}-${mm}`;
+          }
+        }
+
+        let row = byMonth.get(monthKey);
+        if (!row) {
+          row = {
+            month: monthKey,
+            quoteCount: 0,
+            totalValue: 0,
+            draftCount: 0,
+            sentCount: 0,
+            acceptedCount: 0,
+            rejectedCount: 0,
+            acceptedValue: 0,
+          };
+          byMonth.set(monthKey, row);
+        }
+
+        row.quoteCount += 1;
+        const amt = Number(q.totalAmount);
+        const safeAmt = Number.isFinite(amt) ? amt : 0;
+        row.totalValue += safeAmt;
+
+        switch (q.status) {
+          case "Draft":
+            row.draftCount += 1;
+            break;
+          case "Sent":
+            row.sentCount += 1;
+            break;
+          case "Accepted":
+            row.acceptedCount += 1;
+            row.acceptedValue += safeAmt;
+            break;
+          case "Rejected":
+            row.rejectedCount += 1;
+            break;
+          default:
+            break;
+        }
+      }
+
+      // Finalise rounding on per-row sums.
+      let months = [...byMonth.values()].map((r) => ({
+        ...r,
+        totalValue: round2(r.totalValue),
+        acceptedValue: round2(r.acceptedValue),
+      }));
+
+      // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+      // either bound is set (they have no comparable month token); when
+      // no bounds are set, "unknown" stays so the count surface remains
+      // complete. Mirrors slice 15's posture.
+      if (fromRaw !== null) {
+        months = months.filter(
+          (r) => r.month !== "unknown" && r.month >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        months = months.filter(
+          (r) => r.month !== "unknown" && r.month <= toRaw,
+        );
+      }
+
+      // Sort. "month" sorts lexicographically on YYYY-MM which is also
+      // chronological. "unknown" sorts last in asc / first in desc by
+      // virtue of being lexicographically > "9999-12" — acceptable for
+      // a defensive fallback bucket that should rarely appear.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      months.sort((a, b) => {
+        if (field === "month") {
+          if (a.month < b.month) return -1 * mult;
+          if (a.month > b.month) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalMonths = months.length;
+      const grandQuoteCount = months.reduce(
+        (acc, r) => acc + (Number(r.quoteCount) || 0),
+        0,
+      );
+      const grandTotalValue = round2(
+        months.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+      );
+      const grandAcceptedValue = round2(
+        months.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+      );
+
+      // Pagination applied AFTER aggregation + sort + filter, same as slice 15.
+      const paged = months.slice(skip, skip + take);
+
+      res.json({
+        months: paged,
+        totalMonths,
+        grandQuoteCount,
+        grandTotalValue,
+        grandAcceptedValue,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] by-month error:", e.message);
+      res.status(500).json({ error: "Failed to compute monthly rollup" });
+    }
+  },
+);
 
 // GET /api/travel/quotes/by-quarter — any verified token (tenant + sub-brand scoped).
 //
@@ -1220,203 +1403,231 @@ router.get("/quotes/by-month", verifyToken, requireTravelTenant, async (req, res
 //
 // Route ordering: declared BEFORE GET /:id so Express doesn't try to
 // parse "by-quarter" as a numeric :id (which would 400 INVALID_ID).
-router.get("/quotes/by-quarter", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
-    const skip = parseInt(req.query.offset, 10) || 0;
-    const statusFilter = req.query.status ? String(req.query.status) : null;
-    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "quarter:asc";
+router.get(
+  "/quotes/by-quarter",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 12, 40);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const statusFilter = req.query.status ? String(req.query.status) : null;
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "quarter:asc";
 
-    if (statusFilter) {
-      try {
-        assertValidStatus(statusFilter);
-      } catch (e) {
-        return res.status(e.status || 400).json({ error: e.message, code: e.code });
-      }
-    }
-
-    // YYYY-Qn validation — same regex #905 slice 16 uses. Bucket labels we
-    // emit follow this exact shape so callers passing quarter-tokens to
-    // from/to should already be using it. Anything else is a 400
-    // INVALID_QUARTER_FORMAT.
-    const QUARTER_RE = /^\d{4}-Q[1-4]$/;
-    const fromRaw = req.query.from ? String(req.query.from) : null;
-    const toRaw = req.query.to ? String(req.query.to) : null;
-    if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
-      return res.status(400).json({
-        error: "from must be in YYYY-Qn format",
-        code: "INVALID_QUARTER_FORMAT",
-      });
-    }
-    if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
-      return res.status(400).json({
-        error: "to must be in YYYY-Qn format",
-        code: "INVALID_QUARTER_FORMAT",
-      });
-    }
-
-    const VALID_ORDER_BY = new Set([
-      "quarter:asc",
-      "quarter:desc",
-      "totalValue:asc",
-      "totalValue:desc",
-      "quoteCount:asc",
-      "quoteCount:desc",
-      "acceptedCount:asc",
-      "acceptedCount:desc",
-    ]);
-    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "quarter:asc";
-
-    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
-    // /quotes list handler — empty access set → all-zeros rollup (not
-    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
-    // operators.
-    const where = { tenantId: req.travelTenant.id };
-    if (statusFilter) where.status = statusFilter;
-
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (allowed instanceof Set && allowed.size === 0) {
-      return res.json({
-        quarters: [],
-        totalQuarters: 0,
-        grandQuoteCount: 0,
-        grandTotalValue: 0,
-        grandAcceptedValue: 0,
-        limit: take,
-        offset: skip,
-      });
-    }
-    if (allowed instanceof Set) {
-      where.subBrand = { in: [...allowed] };
-    }
-
-    // No DB-level pagination — aggregation runs in-process so we can
-    // bucket by UTC YYYY-Qn. Input size bound is the same as
-    // /quotes/analytics + by-month (low thousands at platinum scale).
-    const scopedQuotes = await prisma.travelQuote.findMany({
-      where,
-      select: {
-        id: true,
-        subBrand: true,
-        assignedToUserId: true,
-        status: true,
-        totalAmount: true,
-        createdAt: true,
-      },
-    });
-    const quotes = await filterQuotesByRoleVisibility(req, scopedQuotes, allowed);
-
-    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-
-    // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { ...row counts/sums }.
-    // Quotes with null/invalid createdAt go into "unknown" so counts
-    // stay accurate. Null/invalid totalAmount contributes 0.
-    const byQuarter = new Map();
-    for (const q of quotes) {
-      let quarterKey = "unknown";
-      if (q.createdAt) {
-        const dt = new Date(q.createdAt);
-        if (!Number.isNaN(dt.getTime())) {
-          const yyyy = dt.getUTCFullYear();
-          const qn = Math.floor(dt.getUTCMonth() / 3) + 1;
-          quarterKey = `${yyyy}-Q${qn}`;
+      if (statusFilter) {
+        try {
+          assertValidStatus(statusFilter);
+        } catch (e) {
+          return res
+            .status(e.status || 400)
+            .json({ error: e.message, code: e.code });
         }
       }
 
-      let row = byQuarter.get(quarterKey);
-      if (!row) {
-        row = {
-          quarter: quarterKey,
-          quoteCount: 0,
-          totalValue: 0,
-          draftCount: 0,
-          sentCount: 0,
-          acceptedCount: 0,
-          rejectedCount: 0,
-          acceptedValue: 0,
-        };
-        byQuarter.set(quarterKey, row);
+      // YYYY-Qn validation — same regex #905 slice 16 uses. Bucket labels we
+      // emit follow this exact shape so callers passing quarter-tokens to
+      // from/to should already be using it. Anything else is a 400
+      // INVALID_QUARTER_FORMAT.
+      const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !QUARTER_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
+      }
+      if (toRaw !== null && !QUARTER_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY-Qn format",
+          code: "INVALID_QUARTER_FORMAT",
+        });
       }
 
-      row.quoteCount += 1;
-      const amt = Number(q.totalAmount);
-      const safeAmt = Number.isFinite(amt) ? amt : 0;
-      row.totalValue += safeAmt;
+      const VALID_ORDER_BY = new Set([
+        "quarter:asc",
+        "quarter:desc",
+        "totalValue:asc",
+        "totalValue:desc",
+        "quoteCount:asc",
+        "quoteCount:desc",
+        "acceptedCount:asc",
+        "acceptedCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw)
+        ? orderByRaw
+        : "quarter:asc";
 
-      switch (q.status) {
-        case "Draft": row.draftCount += 1; break;
-        case "Sent": row.sentCount += 1; break;
-        case "Accepted":
-          row.acceptedCount += 1;
-          row.acceptedValue += safeAmt;
-          break;
-        case "Rejected": row.rejectedCount += 1; break;
-        default: break;
+      // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+      // /quotes list handler — empty access set → all-zeros rollup (not
+      // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+      // operators.
+      const where = { tenantId: req.travelTenant.id };
+      if (statusFilter) where.status = statusFilter;
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json({
+          quarters: [],
+          totalQuarters: 0,
+          grandQuoteCount: 0,
+          grandTotalValue: 0,
+          grandAcceptedValue: 0,
+          limit: take,
+          offset: skip,
+        });
       }
-    }
-
-    // Finalise rounding on per-row sums.
-    let quarters = [...byQuarter.values()].map((r) => ({
-      ...r,
-      totalValue: round2(r.totalValue),
-      acceptedValue: round2(r.acceptedValue),
-    }));
-
-    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
-    // either bound is set (no comparable token); when no bounds are set,
-    // "unknown" stays so the count surface remains complete.
-    if (fromRaw !== null) {
-      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter >= fromRaw);
-    }
-    if (toRaw !== null) {
-      quarters = quarters.filter((r) => r.quarter !== "unknown" && r.quarter <= toRaw);
-    }
-
-    // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
-    // chronological (Q1<Q2<Q3<Q4 sorts correctly as ASCII). "unknown"
-    // lexicographically > "9999-Q4" so it sorts last in asc / first in
-    // desc — acceptable for a defensive fallback bucket.
-    const [field, dir] = orderBy.split(":");
-    const mult = dir === "asc" ? 1 : -1;
-    quarters.sort((a, b) => {
-      if (field === "quarter") {
-        if (a.quarter < b.quarter) return -1 * mult;
-        if (a.quarter > b.quarter) return 1 * mult;
-        return 0;
+      if (allowed instanceof Set) {
+        where.subBrand = { in: [...allowed] };
       }
-      return ((a[field] || 0) - (b[field] || 0)) * mult;
-    });
 
-    const totalQuarters = quarters.length;
-    const grandQuoteCount = quarters.reduce(
-      (acc, r) => acc + (Number(r.quoteCount) || 0),
-      0,
-    );
-    const grandTotalValue = round2(
-      quarters.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
-    );
-    const grandAcceptedValue = round2(
-      quarters.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
-    );
+      // No DB-level pagination — aggregation runs in-process so we can
+      // bucket by UTC YYYY-Qn. Input size bound is the same as
+      // /quotes/analytics + by-month (low thousands at platinum scale).
+      const scopedQuotes = await prisma.travelQuote.findMany({
+        where,
+        select: {
+          id: true,
+          subBrand: true,
+          assignedToUserId: true,
+          status: true,
+          totalAmount: true,
+          createdAt: true,
+        },
+      });
+      const quotes = await filterQuotesByRoleVisibility(
+        req,
+        scopedQuotes,
+        allowed,
+      );
 
-    // Pagination applied AFTER aggregation + sort + filter, same as slice 16.
-    const paged = quarters.slice(skip, skip + take);
+      const round2 = (n) =>
+        Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
-    res.json({
-      quarters: paged,
-      totalQuarters,
-      grandQuoteCount,
-      grandTotalValue,
-      grandAcceptedValue,
-      limit: take,
-      offset: skip,
-    });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-quotes] by-quarter error:", e.message);
-    res.status(500).json({ error: "Failed to compute quarterly rollup" });
-  }
-});
+      // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { ...row counts/sums }.
+      // Quotes with null/invalid createdAt go into "unknown" so counts
+      // stay accurate. Null/invalid totalAmount contributes 0.
+      const byQuarter = new Map();
+      for (const q of quotes) {
+        let quarterKey = "unknown";
+        if (q.createdAt) {
+          const dt = new Date(q.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            const yyyy = dt.getUTCFullYear();
+            const qn = Math.floor(dt.getUTCMonth() / 3) + 1;
+            quarterKey = `${yyyy}-Q${qn}`;
+          }
+        }
+
+        let row = byQuarter.get(quarterKey);
+        if (!row) {
+          row = {
+            quarter: quarterKey,
+            quoteCount: 0,
+            totalValue: 0,
+            draftCount: 0,
+            sentCount: 0,
+            acceptedCount: 0,
+            rejectedCount: 0,
+            acceptedValue: 0,
+          };
+          byQuarter.set(quarterKey, row);
+        }
+
+        row.quoteCount += 1;
+        const amt = Number(q.totalAmount);
+        const safeAmt = Number.isFinite(amt) ? amt : 0;
+        row.totalValue += safeAmt;
+
+        switch (q.status) {
+          case "Draft":
+            row.draftCount += 1;
+            break;
+          case "Sent":
+            row.sentCount += 1;
+            break;
+          case "Accepted":
+            row.acceptedCount += 1;
+            row.acceptedValue += safeAmt;
+            break;
+          case "Rejected":
+            row.rejectedCount += 1;
+            break;
+          default:
+            break;
+        }
+      }
+
+      // Finalise rounding on per-row sums.
+      let quarters = [...byQuarter.values()].map((r) => ({
+        ...r,
+        totalValue: round2(r.totalValue),
+        acceptedValue: round2(r.acceptedValue),
+      }));
+
+      // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+      // either bound is set (no comparable token); when no bounds are set,
+      // "unknown" stays so the count surface remains complete.
+      if (fromRaw !== null) {
+        quarters = quarters.filter(
+          (r) => r.quarter !== "unknown" && r.quarter >= fromRaw,
+        );
+      }
+      if (toRaw !== null) {
+        quarters = quarters.filter(
+          (r) => r.quarter !== "unknown" && r.quarter <= toRaw,
+        );
+      }
+
+      // Sort. "quarter" sorts lexicographically on YYYY-Qn which is also
+      // chronological (Q1<Q2<Q3<Q4 sorts correctly as ASCII). "unknown"
+      // lexicographically > "9999-Q4" so it sorts last in asc / first in
+      // desc — acceptable for a defensive fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      quarters.sort((a, b) => {
+        if (field === "quarter") {
+          if (a.quarter < b.quarter) return -1 * mult;
+          if (a.quarter > b.quarter) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalQuarters = quarters.length;
+      const grandQuoteCount = quarters.reduce(
+        (acc, r) => acc + (Number(r.quoteCount) || 0),
+        0,
+      );
+      const grandTotalValue = round2(
+        quarters.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+      );
+      const grandAcceptedValue = round2(
+        quarters.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+      );
+
+      // Pagination applied AFTER aggregation + sort + filter, same as slice 16.
+      const paged = quarters.slice(skip, skip + take);
+
+      res.json({
+        quarters: paged,
+        totalQuarters,
+        grandQuoteCount,
+        grandTotalValue,
+        grandAcceptedValue,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] by-quarter error:", e.message);
+      res.status(500).json({ error: "Failed to compute quarterly rollup" });
+    }
+  },
+);
 
 // GET /api/travel/quotes/by-year — any verified token (tenant + sub-brand scoped).
 //
@@ -1481,202 +1692,224 @@ router.get("/quotes/by-quarter", verifyToken, requireTravelTenant, async (req, r
 //
 // Route ordering: declared BEFORE GET /:id so Express doesn't try to
 // parse "by-year" as a numeric :id (which would 400 INVALID_ID).
-router.get("/quotes/by-year", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
-    const skip = parseInt(req.query.offset, 10) || 0;
-    const statusFilter = req.query.status ? String(req.query.status) : null;
-    const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "year:asc";
+router.get(
+  "/quotes/by-year",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const take = Math.min(parseInt(req.query.limit, 10) || 10, 30);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const statusFilter = req.query.status ? String(req.query.status) : null;
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "year:asc";
 
-    if (statusFilter) {
-      try {
-        assertValidStatus(statusFilter);
-      } catch (e) {
-        return res.status(e.status || 400).json({ error: e.message, code: e.code });
-      }
-    }
-
-    // YYYY validation — bucket labels we emit follow this exact shape so
-    // callers passing year-tokens to from/to should already be using it.
-    // Anything else is a 400 INVALID_YEAR_FORMAT.
-    const YEAR_RE = /^\d{4}$/;
-    const fromRaw = req.query.from ? String(req.query.from) : null;
-    const toRaw = req.query.to ? String(req.query.to) : null;
-    if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
-      return res.status(400).json({
-        error: "from must be in YYYY format",
-        code: "INVALID_YEAR_FORMAT",
-      });
-    }
-    if (toRaw !== null && !YEAR_RE.test(toRaw)) {
-      return res.status(400).json({
-        error: "to must be in YYYY format",
-        code: "INVALID_YEAR_FORMAT",
-      });
-    }
-
-    const VALID_ORDER_BY = new Set([
-      "year:asc",
-      "year:desc",
-      "totalValue:asc",
-      "totalValue:desc",
-      "quoteCount:asc",
-      "quoteCount:desc",
-      "acceptedCount:asc",
-      "acceptedCount:desc",
-    ]);
-    const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
-
-    // Build the tenant-scoped where. Sub-brand narrowing mirrors the
-    // /quotes list handler — empty access set → all-zeros rollup (not
-    // 403) so the dashboard tile renders cleanly for not-yet-onboarded
-    // operators.
-    const where = { tenantId: req.travelTenant.id };
-    if (statusFilter) where.status = statusFilter;
-
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (allowed instanceof Set && allowed.size === 0) {
-      return res.json({
-        years: [],
-        totalYears: 0,
-        grandQuoteCount: 0,
-        grandTotalValue: 0,
-        grandAcceptedValue: 0,
-        limit: take,
-        offset: skip,
-      });
-    }
-    if (allowed instanceof Set) {
-      where.subBrand = { in: [...allowed] };
-    }
-
-    // No DB-level pagination — aggregation runs in-process so we can
-    // bucket by UTC YYYY. Input size bound is the same as
-    // /quotes/analytics + by-month + by-quarter (low thousands at
-    // platinum scale).
-    const scopedQuotes = await prisma.travelQuote.findMany({
-      where,
-      select: {
-        id: true,
-        subBrand: true,
-        assignedToUserId: true,
-        status: true,
-        totalAmount: true,
-        createdAt: true,
-      },
-    });
-    const quotes = await filterQuotesByRoleVisibility(req, scopedQuotes, allowed);
-
-    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-
-    // Aggregate per-UTC-year. Map "YYYY" → { ...row counts/sums }.
-    // Quotes with null/invalid createdAt go into "unknown" so counts
-    // stay accurate. Null/invalid totalAmount contributes 0.
-    const byYear = new Map();
-    for (const q of quotes) {
-      let yearKey = "unknown";
-      if (q.createdAt) {
-        const dt = new Date(q.createdAt);
-        if (!Number.isNaN(dt.getTime())) {
-          yearKey = String(dt.getUTCFullYear());
+      if (statusFilter) {
+        try {
+          assertValidStatus(statusFilter);
+        } catch (e) {
+          return res
+            .status(e.status || 400)
+            .json({ error: e.message, code: e.code });
         }
       }
 
-      let row = byYear.get(yearKey);
-      if (!row) {
-        row = {
-          year: yearKey,
-          quoteCount: 0,
-          totalValue: 0,
-          draftCount: 0,
-          sentCount: 0,
-          acceptedCount: 0,
-          rejectedCount: 0,
-          acceptedValue: 0,
-        };
-        byYear.set(yearKey, row);
+      // YYYY validation — bucket labels we emit follow this exact shape so
+      // callers passing year-tokens to from/to should already be using it.
+      // Anything else is a 400 INVALID_YEAR_FORMAT.
+      const YEAR_RE = /^\d{4}$/;
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw !== null && !YEAR_RE.test(fromRaw)) {
+        return res.status(400).json({
+          error: "from must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
+      }
+      if (toRaw !== null && !YEAR_RE.test(toRaw)) {
+        return res.status(400).json({
+          error: "to must be in YYYY format",
+          code: "INVALID_YEAR_FORMAT",
+        });
       }
 
-      row.quoteCount += 1;
-      const amt = Number(q.totalAmount);
-      const safeAmt = Number.isFinite(amt) ? amt : 0;
-      row.totalValue += safeAmt;
+      const VALID_ORDER_BY = new Set([
+        "year:asc",
+        "year:desc",
+        "totalValue:asc",
+        "totalValue:desc",
+        "quoteCount:asc",
+        "quoteCount:desc",
+        "acceptedCount:asc",
+        "acceptedCount:desc",
+      ]);
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
 
-      switch (q.status) {
-        case "Draft": row.draftCount += 1; break;
-        case "Sent": row.sentCount += 1; break;
-        case "Accepted":
-          row.acceptedCount += 1;
-          row.acceptedValue += safeAmt;
-          break;
-        case "Rejected": row.rejectedCount += 1; break;
-        default: break;
+      // Build the tenant-scoped where. Sub-brand narrowing mirrors the
+      // /quotes list handler — empty access set → all-zeros rollup (not
+      // 403) so the dashboard tile renders cleanly for not-yet-onboarded
+      // operators.
+      const where = { tenantId: req.travelTenant.id };
+      if (statusFilter) where.status = statusFilter;
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json({
+          years: [],
+          totalYears: 0,
+          grandQuoteCount: 0,
+          grandTotalValue: 0,
+          grandAcceptedValue: 0,
+          limit: take,
+          offset: skip,
+        });
       }
-    }
-
-    // Finalise rounding on per-row sums.
-    let years = [...byYear.values()].map((r) => ({
-      ...r,
-      totalValue: round2(r.totalValue),
-      acceptedValue: round2(r.acceptedValue),
-    }));
-
-    // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
-    // either bound is set (no comparable token); when no bounds are set,
-    // "unknown" stays so the count surface remains complete.
-    if (fromRaw !== null) {
-      years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
-    }
-    if (toRaw !== null) {
-      years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
-    }
-
-    // Sort. "year" sorts lexicographically on YYYY which is also
-    // chronological (4-digit zero-padded years sort correctly as ASCII).
-    // "unknown" lexicographically > "9999" so it sorts last in asc /
-    // first in desc — acceptable for a defensive fallback bucket.
-    const [field, dir] = orderBy.split(":");
-    const mult = dir === "asc" ? 1 : -1;
-    years.sort((a, b) => {
-      if (field === "year") {
-        if (a.year < b.year) return -1 * mult;
-        if (a.year > b.year) return 1 * mult;
-        return 0;
+      if (allowed instanceof Set) {
+        where.subBrand = { in: [...allowed] };
       }
-      return ((a[field] || 0) - (b[field] || 0)) * mult;
-    });
 
-    const totalYears = years.length;
-    const grandQuoteCount = years.reduce(
-      (acc, r) => acc + (Number(r.quoteCount) || 0),
-      0,
-    );
-    const grandTotalValue = round2(
-      years.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
-    );
-    const grandAcceptedValue = round2(
-      years.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
-    );
+      // No DB-level pagination — aggregation runs in-process so we can
+      // bucket by UTC YYYY. Input size bound is the same as
+      // /quotes/analytics + by-month + by-quarter (low thousands at
+      // platinum scale).
+      const scopedQuotes = await prisma.travelQuote.findMany({
+        where,
+        select: {
+          id: true,
+          subBrand: true,
+          assignedToUserId: true,
+          status: true,
+          totalAmount: true,
+          createdAt: true,
+        },
+      });
+      const quotes = await filterQuotesByRoleVisibility(
+        req,
+        scopedQuotes,
+        allowed,
+      );
 
-    // Pagination applied AFTER aggregation + sort + filter, same as
-    // slices 16 + 17.
-    const paged = years.slice(skip, skip + take);
+      const round2 = (n) =>
+        Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
-    res.json({
-      years: paged,
-      totalYears,
-      grandQuoteCount,
-      grandTotalValue,
-      grandAcceptedValue,
-      limit: take,
-      offset: skip,
-    });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-quotes] by-year error:", e.message);
-    res.status(500).json({ error: "Failed to compute annual rollup" });
-  }
-});
+      // Aggregate per-UTC-year. Map "YYYY" → { ...row counts/sums }.
+      // Quotes with null/invalid createdAt go into "unknown" so counts
+      // stay accurate. Null/invalid totalAmount contributes 0.
+      const byYear = new Map();
+      for (const q of quotes) {
+        let yearKey = "unknown";
+        if (q.createdAt) {
+          const dt = new Date(q.createdAt);
+          if (!Number.isNaN(dt.getTime())) {
+            yearKey = String(dt.getUTCFullYear());
+          }
+        }
+
+        let row = byYear.get(yearKey);
+        if (!row) {
+          row = {
+            year: yearKey,
+            quoteCount: 0,
+            totalValue: 0,
+            draftCount: 0,
+            sentCount: 0,
+            acceptedCount: 0,
+            rejectedCount: 0,
+            acceptedValue: 0,
+          };
+          byYear.set(yearKey, row);
+        }
+
+        row.quoteCount += 1;
+        const amt = Number(q.totalAmount);
+        const safeAmt = Number.isFinite(amt) ? amt : 0;
+        row.totalValue += safeAmt;
+
+        switch (q.status) {
+          case "Draft":
+            row.draftCount += 1;
+            break;
+          case "Sent":
+            row.sentCount += 1;
+            break;
+          case "Accepted":
+            row.acceptedCount += 1;
+            row.acceptedValue += safeAmt;
+            break;
+          case "Rejected":
+            row.rejectedCount += 1;
+            break;
+          default:
+            break;
+        }
+      }
+
+      // Finalise rounding on per-row sums.
+      let years = [...byYear.values()].map((r) => ({
+        ...r,
+        totalValue: round2(r.totalValue),
+        acceptedValue: round2(r.acceptedValue),
+      }));
+
+      // Apply ?from / ?to bucket filter. "unknown" rows are excluded when
+      // either bound is set (no comparable token); when no bounds are set,
+      // "unknown" stays so the count surface remains complete.
+      if (fromRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
+      }
+      if (toRaw !== null) {
+        years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
+      }
+
+      // Sort. "year" sorts lexicographically on YYYY which is also
+      // chronological (4-digit zero-padded years sort correctly as ASCII).
+      // "unknown" lexicographically > "9999" so it sorts last in asc /
+      // first in desc — acceptable for a defensive fallback bucket.
+      const [field, dir] = orderBy.split(":");
+      const mult = dir === "asc" ? 1 : -1;
+      years.sort((a, b) => {
+        if (field === "year") {
+          if (a.year < b.year) return -1 * mult;
+          if (a.year > b.year) return 1 * mult;
+          return 0;
+        }
+        return ((a[field] || 0) - (b[field] || 0)) * mult;
+      });
+
+      const totalYears = years.length;
+      const grandQuoteCount = years.reduce(
+        (acc, r) => acc + (Number(r.quoteCount) || 0),
+        0,
+      );
+      const grandTotalValue = round2(
+        years.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0),
+      );
+      const grandAcceptedValue = round2(
+        years.reduce((acc, r) => acc + (Number(r.acceptedValue) || 0), 0),
+      );
+
+      // Pagination applied AFTER aggregation + sort + filter, same as
+      // slices 16 + 17.
+      const paged = years.slice(skip, skip + take);
+
+      res.json({
+        years: paged,
+        totalYears,
+        grandQuoteCount,
+        grandTotalValue,
+        grandAcceptedValue,
+        limit: take,
+        offset: skip,
+      });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] by-year error:", e.message);
+      res.status(500).json({ error: "Failed to compute annual rollup" });
+    }
+  },
+);
 
 // ============================================================================
 // GET /api/travel/quotes/stats — tenant-wide TravelQuote rollup
@@ -1726,158 +1959,169 @@ router.get("/quotes/by-year", verifyToken, requireTravelTenant, async (req, res)
 // Route ordering: declared BEFORE GET /:id so Express doesn't try to parse
 // "stats" as a numeric :id (which would 400 INVALID_ID).
 // ============================================================================
-router.get("/quotes/stats", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const where = { tenantId: req.travelTenant.id };
+router.get(
+  "/quotes/stats",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
 
-    // Optional ISO date bounds on createdAt.
-    const fromRaw = req.query.from ? String(req.query.from) : null;
-    const toRaw = req.query.to ? String(req.query.to) : null;
-    if (fromRaw) {
-      const d = new Date(fromRaw);
-      if (Number.isNaN(d.getTime())) {
-        return res.status(400).json({
-          error: "from must be a valid ISO date",
-          code: "INVALID_DATE",
-        });
+      // Optional ISO date bounds on createdAt.
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
       }
-      where.createdAt = Object.assign(where.createdAt || {}, { gte: d });
-    }
-    if (toRaw) {
-      const d = new Date(toRaw);
-      if (Number.isNaN(d.getTime())) {
-        return res.status(400).json({
-          error: "to must be a valid ISO date",
-          code: "INVALID_DATE",
-        });
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
       }
-      where.createdAt = Object.assign(where.createdAt || {}, { lte: d });
-    }
 
-    // Sub-brand narrowing — empty access set → zeroed shape (not 403).
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    const zeroed = {
-      total: 0,
-      byStatus: {
+      // Sub-brand narrowing — empty access set → zeroed shape (not 403).
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      const zeroed = {
+        total: 0,
+        byStatus: {
+          Draft: { count: 0, totalValue: 0 },
+          Sent: { count: 0, totalValue: 0 },
+          Accepted: { count: 0, totalValue: 0 },
+          Rejected: { count: 0, totalValue: 0 },
+        },
+        bySubBrand: {},
+        grandTotalValue: 0,
+        grandAcceptedValue: 0,
+        acceptanceRate: null,
+        expiredCount: 0,
+        lastUpdatedAt: null,
+      };
+
+      if (allowed instanceof Set && allowed.size === 0) {
+        return res.json(zeroed);
+      }
+      if (allowed instanceof Set) {
+        where.subBrand = { in: [...allowed] };
+      }
+
+      const scopedQuotes = await prisma.travelQuote.findMany({
+        where,
+        select: {
+          id: true,
+          subBrand: true,
+          assignedToUserId: true,
+          status: true,
+          totalAmount: true,
+          validUntil: true,
+          updatedAt: true,
+        },
+      });
+      const quotes = await filterQuotesByRoleVisibility(
+        req,
+        scopedQuotes,
+        allowed,
+      );
+
+      if (quotes.length === 0) {
+        return res.json(zeroed);
+      }
+
+      const round2 = (n) =>
+        Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+      const now = Date.now();
+
+      const byStatus = {
         Draft: { count: 0, totalValue: 0 },
         Sent: { count: 0, totalValue: 0 },
         Accepted: { count: 0, totalValue: 0 },
         Rejected: { count: 0, totalValue: 0 },
-      },
-      bySubBrand: {},
-      grandTotalValue: 0,
-      grandAcceptedValue: 0,
-      acceptanceRate: null,
-      expiredCount: 0,
-      lastUpdatedAt: null,
-    };
+      };
+      const bySubBrand = {};
+      let grandTotalValue = 0;
+      let grandAcceptedValue = 0;
+      let expiredCount = 0;
+      let lastUpdatedAt = null;
 
-    if (allowed instanceof Set && allowed.size === 0) {
-      return res.json(zeroed);
-    }
-    if (allowed instanceof Set) {
-      where.subBrand = { in: [...allowed] };
-    }
+      for (const q of quotes) {
+        const amt = Number(q.totalAmount);
+        const safeAmt = Number.isFinite(amt) ? amt : 0;
+        grandTotalValue += safeAmt;
 
-    const scopedQuotes = await prisma.travelQuote.findMany({
-      where,
-      select: {
-        id: true,
-        subBrand: true,
-        assignedToUserId: true,
-        status: true,
-        totalAmount: true,
-        validUntil: true,
-        updatedAt: true,
-      },
-    });
-    const quotes = await filterQuotesByRoleVisibility(req, scopedQuotes, allowed);
+        if (byStatus[q.status]) {
+          byStatus[q.status].count += 1;
+          byStatus[q.status].totalValue += safeAmt;
+        }
 
-    if (quotes.length === 0) {
-      return res.json(zeroed);
-    }
+        if (q.status === "Accepted") {
+          grandAcceptedValue += safeAmt;
+        }
 
-    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-    const now = Date.now();
+        // expiredCount: non-terminal status AND validUntil past.
+        if ((q.status === "Draft" || q.status === "Sent") && q.validUntil) {
+          const vu =
+            q.validUntil instanceof Date
+              ? q.validUntil
+              : new Date(q.validUntil);
+          if (!Number.isNaN(vu.getTime()) && vu.getTime() < now) {
+            expiredCount += 1;
+          }
+        }
 
-    const byStatus = {
-      Draft: { count: 0, totalValue: 0 },
-      Sent: { count: 0, totalValue: 0 },
-      Accepted: { count: 0, totalValue: 0 },
-      Rejected: { count: 0, totalValue: 0 },
-    };
-    const bySubBrand = {};
-    let grandTotalValue = 0;
-    let grandAcceptedValue = 0;
-    let expiredCount = 0;
-    let lastUpdatedAt = null;
+        // bySubBrand: defensively coalesce null → "_tenant" to match
+        // /suppliers/stats shape.
+        const sbKey = q.subBrand ? String(q.subBrand) : "_tenant";
+        if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
+        bySubBrand[sbKey].count += 1;
 
-    for (const q of quotes) {
-      const amt = Number(q.totalAmount);
-      const safeAmt = Number.isFinite(amt) ? amt : 0;
-      grandTotalValue += safeAmt;
-
-      if (byStatus[q.status]) {
-        byStatus[q.status].count += 1;
-        byStatus[q.status].totalValue += safeAmt;
-      }
-
-      if (q.status === "Accepted") {
-        grandAcceptedValue += safeAmt;
-      }
-
-      // expiredCount: non-terminal status AND validUntil past.
-      if (
-        (q.status === "Draft" || q.status === "Sent")
-        && q.validUntil
-      ) {
-        const vu = q.validUntil instanceof Date ? q.validUntil : new Date(q.validUntil);
-        if (!Number.isNaN(vu.getTime()) && vu.getTime() < now) {
-          expiredCount += 1;
+        const ts =
+          q.updatedAt instanceof Date ? q.updatedAt : new Date(q.updatedAt);
+        if (!Number.isNaN(ts.getTime())) {
+          if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
         }
       }
 
-      // bySubBrand: defensively coalesce null → "_tenant" to match
-      // /suppliers/stats shape.
-      const sbKey = q.subBrand ? String(q.subBrand) : "_tenant";
-      if (!bySubBrand[sbKey]) bySubBrand[sbKey] = { count: 0 };
-      bySubBrand[sbKey].count += 1;
-
-      const ts = q.updatedAt instanceof Date ? q.updatedAt : new Date(q.updatedAt);
-      if (!Number.isNaN(ts.getTime())) {
-        if (!lastUpdatedAt || ts > lastUpdatedAt) lastUpdatedAt = ts;
+      // Round per-status sums.
+      for (const s of Object.keys(byStatus)) {
+        byStatus[s].totalValue = round2(byStatus[s].totalValue);
       }
+
+      // acceptanceRate: accepted / (accepted + rejected); null if denom=0.
+      const acceptedCount = byStatus.Accepted.count;
+      const rejectedCount = byStatus.Rejected.count;
+      const terminalCount = acceptedCount + rejectedCount;
+      const acceptanceRate =
+        terminalCount > 0 ? round2(acceptedCount / terminalCount) : null;
+
+      res.json({
+        total: quotes.length,
+        byStatus,
+        bySubBrand,
+        grandTotalValue: round2(grandTotalValue),
+        grandAcceptedValue: round2(grandAcceptedValue),
+        acceptanceRate,
+        expiredCount,
+        lastUpdatedAt: lastUpdatedAt ? lastUpdatedAt.toISOString() : null,
+      });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] stats error:", e.message);
+      res.status(500).json({ error: "Failed to summarise quotes" });
     }
-
-    // Round per-status sums.
-    for (const s of Object.keys(byStatus)) {
-      byStatus[s].totalValue = round2(byStatus[s].totalValue);
-    }
-
-    // acceptanceRate: accepted / (accepted + rejected); null if denom=0.
-    const acceptedCount = byStatus.Accepted.count;
-    const rejectedCount = byStatus.Rejected.count;
-    const terminalCount = acceptedCount + rejectedCount;
-    const acceptanceRate = terminalCount > 0
-      ? round2(acceptedCount / terminalCount)
-      : null;
-
-    res.json({
-      total: quotes.length,
-      byStatus,
-      bySubBrand,
-      grandTotalValue: round2(grandTotalValue),
-      grandAcceptedValue: round2(grandAcceptedValue),
-      acceptanceRate,
-      expiredCount,
-      lastUpdatedAt: lastUpdatedAt ? lastUpdatedAt.toISOString() : null,
-    });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-quotes] stats error:", e.message);
-    res.status(500).json({ error: "Failed to summarise quotes" });
-  }
-});
+  },
+);
 
 // POST /api/travel/quotes/bulk-decline-expired — ADMIN | MANAGER.
 //
@@ -1943,7 +2187,9 @@ router.post(
         try {
           assertValidSubBrand(body.subBrand);
         } catch (e) {
-          return res.status(e.status || 400).json({ error: e.message, code: e.code });
+          return res
+            .status(e.status || 400)
+            .json({ error: e.message, code: e.code });
         }
         subBrandScope = body.subBrand;
       }
@@ -1997,7 +2243,11 @@ router.post(
           status: true,
         },
       });
-      const doomed = await filterQuotesByRoleVisibility(req, scopedDoomed, allowed);
+      const doomed = await filterQuotesByRoleVisibility(
+        req,
+        scopedDoomed,
+        allowed,
+      );
 
       if (doomed.length === 0) {
         return res.status(200).json({
@@ -2045,7 +2295,8 @@ router.post(
         subBrand: subBrandScope,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] bulk-decline-expired error:", e.message);
       res.status(500).json({ error: "Failed to bulk-decline expired quotes" });
     }
@@ -2062,25 +2313,38 @@ router.put(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
       const quote = await prisma.travelQuote.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!quote) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
       if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
-      const previousAssignedToUserId = quote.assignedToUserId == null ? null : Number(quote.assignedToUserId);
-      const assignee = await validateQuoteAssignee(req, quote, req.body?.assignedToUserId);
+      const previousAssignedToUserId =
+        quote.assignedToUserId == null ? null : Number(quote.assignedToUserId);
+      const assignee = await validateQuoteAssignee(
+        req,
+        quote,
+        req.body?.assignedToUserId,
+      );
       const assignedToUserId = assignee ? assignee.id : null;
 
       const updated = await prisma.travelQuote.update({
@@ -2109,40 +2373,55 @@ router.put(
 
       res.json({ quote: updated });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] assignment error:", e.message);
       res.status(500).json({ error: "Failed to assign quote" });
     }
   },
 );
 // GET /api/travel/quotes/:id
-router.get("/quotes/:id", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
-    }
-    const quote = await prisma.travelQuote.findFirst({
-      where: { id, tenantId: req.travelTenant.id },
-    });
-    if (!quote) {
-      return res.status(404).json({ error: "Quote not found", code: "NOT_FOUND" });
-    }
+router.get(
+  "/quotes/:id",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!quote) {
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "NOT_FOUND" });
+      }
 
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (!canAccessSubBrand(allowed, quote.subBrand)) {
-      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "NOT_FOUND" });
+      }
+      res.json(quote);
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] get error:", e.message);
+      res.status(500).json({ error: "Failed to get quote" });
     }
-    if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
-      return res.status(404).json({ error: "Quote not found", code: "NOT_FOUND" });
-    }
-    res.json(quote);
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-quotes] get error:", e.message);
-    res.status(500).json({ error: "Failed to get quote" });
-  }
-});
+  },
+);
 
 // POST /api/travel/quotes — ADMIN/MANAGER only.
 // Required: contactId, totalAmount, currency.
@@ -2156,8 +2435,14 @@ router.post(
   async (req, res) => {
     try {
       const {
-        contactId, totalAmount, currency,
-        subBrand, status, validUntil, tripDate, quoteMode,
+        contactId,
+        totalAmount,
+        currency,
+        subBrand,
+        status,
+        validUntil,
+        tripDate,
+        quoteMode,
       } = req.body || {};
 
       if (contactId == null || totalAmount == null || !currency) {
@@ -2199,7 +2484,9 @@ router.post(
       const targetSubBrand = subBrand || "tmc";
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, targetSubBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
       // NOTE: the §4.1 diagnostic-first guard is intentionally DISABLED for
@@ -2220,7 +2507,9 @@ router.post(
           throw visaComplexCaseError();
         }
       }
-      const effectiveQuoteMode = complexVisaCase ? "manual" : requestedQuoteMode;
+      const effectiveQuoteMode = complexVisaCase
+        ? "manual"
+        : requestedQuoteMode;
 
       const created = await prisma.travelQuote.create({
         data: {
@@ -2265,7 +2554,8 @@ router.post(
       }
       res.status(201).json(created);
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] create error:", e.message);
       res.status(500).json({ error: "Failed to create quote" });
     }
@@ -2282,33 +2572,51 @@ router.put(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
       const existing = await prisma.travelQuote.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!existing) {
-        return res.status(404).json({ error: "Quote not found", code: "NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, existing.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
       if (!(await canSeeQuoteByRoleVisibility(req, existing, allowed))) {
-        return res.status(404).json({ error: "Quote not found", code: "NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "NOT_FOUND" });
       }
 
       const data = {};
       const {
-        contactId, totalAmount, currency,
-        subBrand, status, validUntil, tripDate,
+        contactId,
+        totalAmount,
+        currency,
+        subBrand,
+        status,
+        validUntil,
+        tripDate,
       } = req.body || {};
 
       if (contactId !== undefined) {
         const ci = parseInt(contactId, 10);
         if (!Number.isFinite(ci)) {
-          return res.status(400).json({ error: "contactId must be a number", code: "INVALID_CONTACT_ID" });
+          return res
+            .status(400)
+            .json({
+              error: "contactId must be a number",
+              code: "INVALID_CONTACT_ID",
+            });
         }
         data.contactId = ci;
       }
@@ -2321,7 +2629,12 @@ router.put(
       if (subBrand !== undefined) {
         assertValidSubBrand(subBrand);
         if (!canAccessSubBrand(allowed, subBrand)) {
-          return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+          return res
+            .status(403)
+            .json({
+              error: "Sub-brand access denied",
+              code: "SUB_BRAND_DENIED",
+            });
         }
         data.subBrand = subBrand;
       }
@@ -2333,7 +2646,9 @@ router.put(
       }
 
       if (Object.keys(data).length === 0) {
-        return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+        return res
+          .status(400)
+          .json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
       }
 
       const updated = await prisma.travelQuote.update({
@@ -2352,7 +2667,8 @@ router.put(
 
       res.json(updated);
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] update error:", e.message);
       res.status(500).json({ error: "Failed to update quote" });
     }
@@ -2372,21 +2688,29 @@ router.delete(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
       const existing = await prisma.travelQuote.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!existing) {
-        return res.status(404).json({ error: "Quote not found", code: "NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, existing.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
       if (!(await canSeeQuoteByRoleVisibility(req, existing, allowed))) {
-        return res.status(404).json({ error: "Quote not found", code: "NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "NOT_FOUND" });
       }
 
       // Audit BEFORE delete so the entityId still resolves cleanly and
@@ -2409,7 +2733,8 @@ router.delete(
       await prisma.travelQuote.delete({ where: { id } });
       res.status(204).end();
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] delete error:", e.message);
       res.status(500).json({ error: "Failed to delete quote" });
     }
@@ -2445,7 +2770,9 @@ async function loadParentQuote(req, res, quoteId) {
   }
   const allowed = await getSubBrandAccessSet(req.user.userId);
   if (!canAccessSubBrand(allowed, quote.subBrand)) {
-    res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    res
+      .status(403)
+      .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
     return null;
   }
   if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
@@ -2472,7 +2799,8 @@ router.get(
       });
       res.json({ lines, total: lines.length });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] list lines error:", e.message);
       res.status(500).json({ error: "Failed to list quote lines" });
     }
@@ -2495,13 +2823,27 @@ router.post(
       if (!quote) return;
 
       const {
-        lineType, description, quantity, unitPrice,
-        currency, supplierId, sortOrder, notes,
+        lineType,
+        description,
+        quantity,
+        unitPrice,
+        currency,
+        supplierId,
+        sortOrder,
+        notes,
         // G020 — new optional fields
-        hsnSac, taxPercent, discountPercent, dimension, isAddOn,
+        hsnSac,
+        taxPercent,
+        discountPercent,
+        dimension,
+        isAddOn,
       } = req.body || {};
 
-      if (!description || typeof description !== "string" || !description.trim()) {
+      if (
+        !description ||
+        typeof description !== "string" ||
+        !description.trim()
+      ) {
         return res.status(400).json({
           error: "description is required",
           code: "MISSING_FIELDS",
@@ -2538,10 +2880,12 @@ router.post(
           currency: currency ? String(currency) : quote.currency,
           supplierId: supplierIdInt,
           sortOrder: Number.isFinite(parseInt(sortOrder, 10))
-            ? parseInt(sortOrder, 10) : 0,
+            ? parseInt(sortOrder, 10)
+            : 0,
           notes: notes ? String(notes) : null,
           // G020 additive nullable fields
-          hsnSac: hsnSac == null || hsnSac === "" ? null : String(hsnSac).trim(),
+          hsnSac:
+            hsnSac == null || hsnSac === "" ? null : String(hsnSac).trim(),
           taxPercent: taxPct,
           discountPercent: discPct,
           dimension: dimension == null || dimension === "" ? null : dimension,
@@ -2566,7 +2910,8 @@ router.post(
 
       res.status(201).json(created);
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] create line error:", e.message);
       res.status(500).json({ error: "Failed to create line" });
     }
@@ -2584,7 +2929,9 @@ router.put(
       const quoteId = parseInt(req.params.id, 10);
       const lineId = parseInt(req.params.lineId, 10);
       if (!Number.isFinite(lineId)) {
-        return res.status(400).json({ error: "lineId must be a number", code: "INVALID_LINE_ID" });
+        return res
+          .status(400)
+          .json({ error: "lineId must be a number", code: "INVALID_LINE_ID" });
       }
       const quote = await loadParentQuote(req, res, quoteId);
       if (!quote) return;
@@ -2593,15 +2940,27 @@ router.put(
         where: { id: lineId, quoteId, tenantId: req.travelTenant.id },
       });
       if (!existing) {
-        return res.status(404).json({ error: "Line not found", code: "LINE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Line not found", code: "LINE_NOT_FOUND" });
       }
 
       const data = {};
       const {
-        lineType, description, quantity, unitPrice,
-        currency, supplierId, sortOrder, notes,
+        lineType,
+        description,
+        quantity,
+        unitPrice,
+        currency,
+        supplierId,
+        sortOrder,
+        notes,
         // G020 — new optional fields
-        hsnSac, taxPercent, discountPercent, dimension, isAddOn,
+        hsnSac,
+        taxPercent,
+        discountPercent,
+        dimension,
+        isAddOn,
       } = req.body || {};
 
       if (lineType !== undefined) {
@@ -2610,7 +2969,8 @@ router.put(
       }
       if (dimension !== undefined) {
         assertValidDimension(dimension);
-        data.dimension = dimension === null || dimension === "" ? null : dimension;
+        data.dimension =
+          dimension === null || dimension === "" ? null : dimension;
       }
       if (description !== undefined) {
         if (typeof description !== "string" || !description.trim()) {
@@ -2621,12 +2981,14 @@ router.put(
         }
         data.description = description.trim();
       }
-      const nextQty = quantity !== undefined
-        ? parsePositiveInt(quantity, "quantity", existing.quantity)
-        : existing.quantity;
-      const nextUnit = unitPrice !== undefined
-        ? parsePositiveDecimal(unitPrice, "unitPrice")
-        : Number(existing.unitPrice);
+      const nextQty =
+        quantity !== undefined
+          ? parsePositiveInt(quantity, "quantity", existing.quantity)
+          : existing.quantity;
+      const nextUnit =
+        unitPrice !== undefined
+          ? parsePositiveDecimal(unitPrice, "unitPrice")
+          : Number(existing.unitPrice);
       if (quantity !== undefined) data.quantity = nextQty;
       if (unitPrice !== undefined) data.unitPrice = nextUnit;
       // Recompute amount whenever either qty or unitPrice changed.
@@ -2658,11 +3020,13 @@ router.put(
         }
         data.sortOrder = so;
       }
-      if (notes !== undefined) data.notes = notes === null ? null : String(notes);
+      if (notes !== undefined)
+        data.notes = notes === null ? null : String(notes);
 
       // G020 — additive nullable line extension fields.
       if (hsnSac !== undefined) {
-        data.hsnSac = hsnSac == null || hsnSac === "" ? null : String(hsnSac).trim();
+        data.hsnSac =
+          hsnSac == null || hsnSac === "" ? null : String(hsnSac).trim();
       }
       if (taxPercent !== undefined) {
         data.taxPercent = parsePercent(taxPercent, "taxPercent");
@@ -2675,7 +3039,9 @@ router.put(
       }
 
       if (Object.keys(data).length === 0) {
-        return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+        return res
+          .status(400)
+          .json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
       }
 
       const updated = await prisma.travelQuoteLine.update({
@@ -2696,7 +3062,8 @@ router.put(
 
       res.json(updated);
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] update line error:", e.message);
       res.status(500).json({ error: "Failed to update line" });
     }
@@ -2714,7 +3081,9 @@ router.delete(
       const quoteId = parseInt(req.params.id, 10);
       const lineId = parseInt(req.params.lineId, 10);
       if (!Number.isFinite(lineId)) {
-        return res.status(400).json({ error: "lineId must be a number", code: "INVALID_LINE_ID" });
+        return res
+          .status(400)
+          .json({ error: "lineId must be a number", code: "INVALID_LINE_ID" });
       }
       const quote = await loadParentQuote(req, res, quoteId);
       if (!quote) return;
@@ -2723,7 +3092,9 @@ router.delete(
         where: { id: lineId, quoteId, tenantId: req.travelTenant.id },
       });
       if (!existing) {
-        return res.status(404).json({ error: "Line not found", code: "LINE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Line not found", code: "LINE_NOT_FOUND" });
       }
 
       await writeAudit(
@@ -2732,7 +3103,11 @@ router.delete(
         lineId,
         req.user.userId,
         req.travelTenant.id,
-        { quoteId, lineType: existing.lineType, amount: String(existing.amount) },
+        {
+          quoteId,
+          lineType: existing.lineType,
+          amount: String(existing.amount),
+        },
       );
 
       await prisma.travelQuoteLine.delete({ where: { id: lineId } });
@@ -2740,7 +3115,8 @@ router.delete(
 
       res.status(204).end();
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] delete line error:", e.message);
       res.status(500).json({ error: "Failed to delete line" });
     }
@@ -2768,39 +3144,66 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
       const source = await prisma.travelQuote.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!source) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, source.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
       if (!(await canSeeQuoteByRoleVisibility(req, source, allowed))) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
-      const { subBrand: subBrandOverride, contactId: contactIdOverride } = req.body || {};
+      const { subBrand: subBrandOverride, contactId: contactIdOverride } =
+        req.body || {};
 
       let targetSubBrand = source.subBrand;
-      if (subBrandOverride !== undefined && subBrandOverride !== null && subBrandOverride !== "") {
+      if (
+        subBrandOverride !== undefined &&
+        subBrandOverride !== null &&
+        subBrandOverride !== ""
+      ) {
         assertValidSubBrand(subBrandOverride);
         if (!canAccessSubBrand(allowed, subBrandOverride)) {
-          return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+          return res
+            .status(403)
+            .json({
+              error: "Sub-brand access denied",
+              code: "SUB_BRAND_DENIED",
+            });
         }
         targetSubBrand = subBrandOverride;
       }
 
       let targetContactId = source.contactId;
-      if (contactIdOverride !== undefined && contactIdOverride !== null && contactIdOverride !== "") {
+      if (
+        contactIdOverride !== undefined &&
+        contactIdOverride !== null &&
+        contactIdOverride !== ""
+      ) {
         const ci = parseInt(contactIdOverride, 10);
         if (!Number.isFinite(ci)) {
-          return res.status(400).json({ error: "contactId must be a number", code: "INVALID_CONTACT_ID" });
+          return res
+            .status(400)
+            .json({
+              error: "contactId must be a number",
+              code: "INVALID_CONTACT_ID",
+            });
         }
         targetContactId = ci;
       }
@@ -2810,9 +3213,10 @@ router.post(
       // can simply call ?marginPercent=10) or the body (POST friendlier).
       // Body wins when both are supplied. parsePercent normalises null/""
       // → null which keeps the legacy raw-clone behaviour.
-      const rawMargin = (req.body && req.body.marginPercent != null
-        ? req.body.marginPercent
-        : req.query && req.query.marginPercent);
+      const rawMargin =
+        req.body && req.body.marginPercent != null
+          ? req.body.marginPercent
+          : req.query && req.query.marginPercent;
       const marginPercent = parsePercent(rawMargin, "marginPercent");
       const markupFactor = marginPercent == null ? 1 : 1 + marginPercent / 100;
 
@@ -2901,7 +3305,8 @@ router.post(
 
       res.status(201).json(created);
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] duplicate error:", e.message);
       res.status(500).json({ error: "Failed to duplicate quote" });
     }
@@ -2915,18 +3320,25 @@ router.post(
 function deriveQuoteDestination(lines) {
   const cities = [];
   for (const l of lines || []) {
-    if ((l.lineType === "hotel" || l.lineType === "accommodation") && l.description) {
+    if (
+      (l.lineType === "hotel" || l.lineType === "accommodation") &&
+      l.description
+    ) {
       const m = /,\s*([^—-]+?)\s*(?:—|-|$)/.exec(l.description);
       const c = m && m[1] ? m[1].trim() : null;
       if (c && !cities.includes(c)) cities.push(c);
     }
   }
-  if (cities.length) return { photoCity: cities[0], caption: cities.join(" · "), cities };
+  if (cities.length)
+    return { photoCity: cities[0], caption: cities.join(" · "), cities };
   for (const l of lines || []) {
     if (l.lineType === "flight" && l.description) {
       // Flight descriptions read "Airline FL Origin → Dest (Class)".
       const m = /(?:→|->)\s*([A-Za-z .]+?)\s*(?:\(|\[|$)/.exec(l.description);
-      if (m && m[1]) { const c = m[1].trim(); return { photoCity: c, caption: c, cities: [c] }; }
+      if (m && m[1]) {
+        const c = m[1].trim();
+        return { photoCity: c, caption: c, cities: [c] };
+      }
     }
   }
   return null;
@@ -2951,21 +3363,29 @@ router.get(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
       const quote = await prisma.travelQuote.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!quote) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
       if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       // The PDF renderer reads line items off quote.lines — fetch + attach them
@@ -2990,23 +3410,38 @@ router.get(
         try {
           heroBuffer = await fetchDestinationImageBuffer(heroDest.photoCity);
         } catch (imgErr) {
-          console.warn("[travel-quotes] hero image fetch failed (non-fatal):", imgErr && imgErr.message);
+          console.warn(
+            "[travel-quotes] hero image fetch failed (non-fatal):",
+            imgErr && imgErr.message,
+          );
         }
-        const wmCity = (heroDest.cities && heroDest.cities[1]) || heroDest.photoCity;
+        const wmCity =
+          (heroDest.cities && heroDest.cities[1]) || heroDest.photoCity;
         try {
-          watermarkBuffer = wmCity === heroDest.photoCity
-            ? heroBuffer // reuse — avoids a second identical fetch
-            : await fetchDestinationImageBuffer(wmCity);
+          watermarkBuffer =
+            wmCity === heroDest.photoCity
+              ? heroBuffer // reuse — avoids a second identical fetch
+              : await fetchDestinationImageBuffer(wmCity);
         } catch (imgErr) {
-          console.warn("[travel-quotes] watermark image fetch failed (non-fatal):", imgErr && imgErr.message);
+          console.warn(
+            "[travel-quotes] watermark image fetch failed (non-fatal):",
+            imgErr && imgErr.message,
+          );
         }
       }
 
       let pdfBuffer;
       try {
-        pdfBuffer = await generateTravelQuotePdf(quote, { heroBuffer, heroCaption, watermarkBuffer });
+        pdfBuffer = await generateTravelQuotePdf(quote, {
+          heroBuffer,
+          heroCaption,
+          watermarkBuffer,
+        });
       } catch (renderErr) {
-        console.error("[travel-quotes] PDF render error:", renderErr && renderErr.message);
+        console.error(
+          "[travel-quotes] PDF render error:",
+          renderErr && renderErr.message,
+        );
         return res.status(500).json({
           error: "Failed to render quote PDF",
           code: "PDF_RENDER_FAILED",
@@ -3034,7 +3469,8 @@ router.get(
       );
       res.status(200).end(pdfBuffer);
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] pdf error:", e.message);
       res.status(500).json({ error: "Failed to generate quote PDF" });
     }
@@ -3086,21 +3522,29 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
       const quote = await prisma.travelQuote.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!quote) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
       if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       // Idempotency check (AC-6.11): if an invoice already references
@@ -3199,13 +3643,18 @@ router.post(
         const linkedPayments = [];
         for (const p of advancePayments) {
           let meta = {};
-          try { meta = JSON.parse(p.metadata || "{}"); } catch (_) {}
+          try {
+            meta = JSON.parse(p.metadata || "{}");
+          } catch (_) {}
           if (meta.type !== "travel-quote-advance" || p.invoiceId) continue;
           await prisma.payment.update({
             where: { id: p.id },
             data: {
               invoiceId: created.id,
-              metadata: JSON.stringify({ ...meta, travelInvoiceId: created.id }),
+              metadata: JSON.stringify({
+                ...meta,
+                travelInvoiceId: created.id,
+              }),
             },
           });
           linkedPayments.push(p);
@@ -3226,7 +3675,8 @@ router.post(
             .catch(() => ({ _sum: { amount: 0 } }));
           const totalPaid = Number(paidAgg._sum.amount || 0);
           const totalDue = Number(created.totalAmount || 0);
-          const invoiceStatus = totalDue > 0 && totalPaid >= totalDue ? "Paid" : "Partial";
+          const invoiceStatus =
+            totalDue > 0 && totalPaid >= totalDue ? "Paid" : "Partial";
           if (invoiceStatus !== created.status) {
             await prisma.travelInvoice.update({
               where: { id: created.id },
@@ -3238,7 +3688,10 @@ router.post(
           }
         }
       } catch (e) {
-        console.error("[travel-quotes] carry-over quote advance payments failed (non-fatal):", e.message);
+        console.error(
+          "[travel-quotes] carry-over quote advance payments failed (non-fatal):",
+          e.message,
+        );
       }
 
       // Audit the source-side conversion. The newly-created invoice
@@ -3281,7 +3734,8 @@ router.post(
         linesCloned: sourceLines.length,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] convert-to-invoice error:", e.message);
       res.status(500).json({ error: "Failed to convert quote to invoice" });
     }
@@ -3319,21 +3773,29 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
       const quote = await prisma.travelQuote.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!quote) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
       if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       // Idempotent accept: already-Accepted short-circuits with 200.
@@ -3376,7 +3838,8 @@ router.post(
 
       res.status(200).json({ quote: updated });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] accept error:", e.message);
       res.status(500).json({ error: "Failed to accept quote" });
     }
@@ -3406,7 +3869,9 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
 
       // Reason is optional but if provided must be a string ≤1000 chars.
@@ -3430,15 +3895,21 @@ router.post(
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!quote) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
       if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       if (quote.status === "Rejected") {
@@ -3479,7 +3950,8 @@ router.post(
 
       res.status(200).json({ quote: updated, reason });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] decline error:", e.message);
       res.status(500).json({ error: "Failed to decline quote" });
     }
@@ -3527,8 +3999,8 @@ router.get(
       // creation. Manual line totals (GET /:id/lines) and tax math
       // (GET /:id/tax-preview) stay open — manual quotes need both.
       if (
-        quote.subBrand === "visasure"
-        && (await findComplexVisaCase(req.travelTenant.id, quote.contactId))
+        quote.subBrand === "visasure" &&
+        (await findComplexVisaCase(req.travelTenant.id, quote.contactId))
       ) {
         throw visaComplexCaseError();
       }
@@ -3566,7 +4038,8 @@ router.get(
         currency: quote.currency,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] pricing-preview error:", e.message);
       res.status(500).json({ error: "Failed to compute pricing preview" });
     }
@@ -3777,7 +4250,8 @@ router.get(
         hsnSummary,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] tax-preview error:", e.message);
       res.status(500).json({ error: "Failed to compute tax preview" });
     }
@@ -3817,12 +4291,18 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
 
       const body = req.body || {};
-      const hasDays = body.days !== undefined && body.days !== null && body.days !== "";
-      const hasAbs = body.newValidUntil !== undefined && body.newValidUntil !== null && body.newValidUntil !== "";
+      const hasDays =
+        body.days !== undefined && body.days !== null && body.days !== "";
+      const hasAbs =
+        body.newValidUntil !== undefined &&
+        body.newValidUntil !== null &&
+        body.newValidUntil !== "";
 
       // Exactly one of days / newValidUntil required.
       if (hasDays === hasAbs) {
@@ -3870,15 +4350,21 @@ router.post(
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!quote) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
       if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
-        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       // Transition guard: only Draft or Sent can be extended.
@@ -3895,7 +4381,9 @@ router.post(
       let newValidUntil;
       if (extensionMode === "days") {
         const now = Date.now();
-        const existingMs = quote.validUntil ? new Date(quote.validUntil).getTime() : 0;
+        const existingMs = quote.validUntil
+          ? new Date(quote.validUntil).getTime()
+          : 0;
         const base = Math.max(existingMs, now);
         newValidUntil = new Date(base + parsedDays * 24 * 60 * 60 * 1000);
       } else {
@@ -3927,7 +4415,8 @@ router.post(
 
       res.status(200).json({ quote: updated, extensionMode, days: parsedDays });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] extend error:", e.message);
       res.status(500).json({ error: "Failed to extend quote" });
     }
@@ -3982,9 +4471,10 @@ router.get(
       if (!quote) return;
 
       const limitRaw = parseInt(req.query.limit, 10);
-      const limit = Number.isFinite(limitRaw) && limitRaw > 0
-        ? Math.min(limitRaw, 500)
-        : 100;
+      const limit =
+        Number.isFinite(limitRaw) && limitRaw > 0
+          ? Math.min(limitRaw, 500)
+          : 100;
 
       // Quote-entity audit rows: direct entityId match.
       const quoteRows = await prisma.auditLog.findMany({
@@ -4066,7 +4556,8 @@ router.get(
         entries,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] audit-trail error:", e.message);
       res.status(500).json({ error: "Failed to load audit trail" });
     }
@@ -4180,7 +4671,9 @@ router.post(
       try {
         assertValidSubBrand(subBrand);
       } catch (e) {
-        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+        return res
+          .status(e.status || 400)
+          .json({ error: e.message, code: e.code });
       }
 
       const destination = body.destination;
@@ -4220,9 +4713,10 @@ router.post(
       );
 
       // Provider selection: caller may pin a subset; default to all.
-      let providers = Array.isArray(body.providers) && body.providers.length > 0
-        ? body.providers
-        : KNOWN_PROVIDERS;
+      let providers =
+        Array.isArray(body.providers) && body.providers.length > 0
+          ? body.providers
+          : KNOWN_PROVIDERS;
       providers = providers.filter((p) => KNOWN_PROVIDERS.includes(p));
       if (providers.length === 0) {
         return res.status(400).json({
@@ -4363,7 +4857,8 @@ router.post(
         rankedAt: new Date().toISOString(),
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] unified-search error:", e.message);
       res.status(500).json({ error: "Failed to run unified search" });
     }
@@ -4377,98 +4872,136 @@ router.post(
 // Returns the public link (/p/quote/<token>, served by the existing
 // travel_quotes_public view/accept/reject/counter flow) so the operator can
 // also paste it manually. Promotes a Draft quote to Sent. channel="auto".
-router.post("/quotes/:id/share", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
-    }
-    const quote = await prisma.travelQuote.findFirst({
-      where: { id, tenantId: req.travelTenant.id },
-      select: { id: true, subBrand: true, contactId: true, status: true, currency: true, totalAmount: true },
-    });
-    if (!quote) return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (!canAccessSubBrand(allowed, quote.subBrand)) {
-      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
-    }
+router.post(
+  "/quotes/:id/share",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: {
+          id: true,
+          subBrand: true,
+          contactId: true,
+          status: true,
+          currency: true,
+          totalAmount: true,
+        },
+      });
+      if (!quote)
+        return res
+          .status(404)
+          .json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
 
-    const expiryDays = parseInt((req.body || {}).expiryDays, 10);
-    const token = mintShareToken({
-      quoteId: id,
-      tenantId: req.travelTenant.id,
-      expiresInDays: Number.isFinite(expiryDays) ? expiryDays : undefined,
-    });
-    const portalBase = (
-      String((req.body || {}).frontendBase || "").replace(/\/+$/, "") ||
-      String((req.headers && req.headers.origin) || "").replace(/\/+$/, "") ||
-      process.env.PUBLIC_BASE_URL ||
-      "https://crm.globusdemos.com"
-    );
-    const shareUrl = `${portalBase}/p/quote/${token}`;
+      const expiryDays = parseInt((req.body || {}).expiryDays, 10);
+      const token = mintShareToken({
+        quoteId: id,
+        tenantId: req.travelTenant.id,
+        expiresInDays: Number.isFinite(expiryDays) ? expiryDays : undefined,
+      });
+      const portalBase =
+        String((req.body || {}).frontendBase || "").replace(/\/+$/, "") ||
+        String((req.headers && req.headers.origin) || "").replace(/\/+$/, "") ||
+        process.env.PUBLIC_BASE_URL ||
+        "https://crm.globusdemos.com";
+      const shareUrl = `${portalBase}/p/quote/${token}`;
 
-    // Promote draft → sent so the public link isn't a "not yet ready" state.
-    const promote = quote.status === "Draft";
-    if (promote) {
-      await prisma.travelQuote.update({ where: { id }, data: { status: "Sent" } }).catch(() => {});
-    }
+      // Promote draft → sent so the public link isn't a "not yet ready" state.
+      const promote = quote.status === "Draft";
+      if (promote) {
+        await prisma.travelQuote
+          .update({ where: { id }, data: { status: "Sent" } })
+          .catch(() => {});
+      }
 
-    // Deliver to the contact: email if present, WhatsApp if a phone is on file.
-    let emailStatus = "SKIPPED";
-    let whatsappStatus = "SKIPPED";
-    const channelsUsed = [];
-    if (quote.contactId) {
-      const contact = await prisma.contact
-        .findFirst({ where: { id: quote.contactId, tenantId: req.travelTenant.id }, select: { id: true, name: true, email: true, phone: true } })
-        .catch(() => null);
-      if (contact) {
-        const cur = quote.currency || "INR";
-        const amt = quote.totalAmount != null ? `${cur} ${Number(quote.totalAmount).toLocaleString("en-IN")}` : "";
-        const name = contact.name || "there";
-        if (contact.email) {
-          const r = await sendEmail({
-            to: contact.email,
-            subject: `Your travel quote${amt ? ` — ${amt}` : ""}`,
-            text: `Hi ${name},\n\nYour travel quote is ready${amt ? ` (${amt})` : ""}. View it here:\n${shareUrl}\n\nYou can accept it right from that page.\n\nThank you.`,
-            html:
-              `<p>Hi ${name},</p>` +
-              `<p>Your travel quote is ready${amt ? ` (${amt})` : ""}.</p>` +
-              `<p><a href="${shareUrl}" target="_blank" rel="noopener noreferrer">View and accept your quote</a></p>` +
-              `<p>Thank you.</p>`,
-          }).catch(() => ({ sent: false }));
-          emailStatus = r && r.sent ? "SENT" : "SKIPPED";
-          if (r && r.sent) channelsUsed.push("email");
-        }
-        if (contact.phone) {
-          const r = await waWebClient.sendBestEffort({
-            tenantId: req.travelTenant.id,
-            subBrand: quote.subBrand,
-            toPhone: contact.phone,
-            contactId: contact.id,
-            fallbackText: `Hi ${name}! Your travel quote is ready${amt ? ` (${amt})` : ""}. View + accept here: ${shareUrl}`,
-          }).catch(() => ({ sent: false, status: "FAILED" }));
-          whatsappStatus = (r && r.status) || "FAILED";
-          if (r && r.sent === true) channelsUsed.push("whatsapp");
+      // Deliver to the contact: email if present, WhatsApp if a phone is on file.
+      let emailStatus = "SKIPPED";
+      let whatsappStatus = "SKIPPED";
+      const channelsUsed = [];
+      if (quote.contactId) {
+        const contact = await prisma.contact
+          .findFirst({
+            where: { id: quote.contactId, tenantId: req.travelTenant.id },
+            select: { id: true, name: true, email: true, phone: true },
+          })
+          .catch(() => null);
+        if (contact) {
+          const cur = quote.currency || "INR";
+          const amt =
+            quote.totalAmount != null
+              ? `${cur} ${Number(quote.totalAmount).toLocaleString("en-IN")}`
+              : "";
+          const name = contact.name || "there";
+          if (contact.email) {
+            const r = await sendEmail({
+              to: contact.email,
+              subject: `Your travel quote${amt ? ` — ${amt}` : ""}`,
+              text: `Hi ${name},\n\nYour travel quote is ready${amt ? ` (${amt})` : ""}. View it here:\n${shareUrl}\n\nYou can accept it right from that page.\n\nThank you.`,
+              html:
+                `<p>Hi ${name},</p>` +
+                `<p>Your travel quote is ready${amt ? ` (${amt})` : ""}.</p>` +
+                `<p><a href="${shareUrl}" target="_blank" rel="noopener noreferrer">View and accept your quote</a></p>` +
+                `<p>Thank you.</p>`,
+            }).catch(() => ({ sent: false }));
+            emailStatus = r && r.sent ? "SENT" : "SKIPPED";
+            if (r && r.sent) channelsUsed.push("email");
+          }
+          if (contact.phone) {
+            const r = await waWebClient
+              .sendBestEffort({
+                tenantId: req.travelTenant.id,
+                subBrand: quote.subBrand,
+                toPhone: contact.phone,
+                contactId: contact.id,
+                fallbackText: `Hi ${name}! Your travel quote is ready${amt ? ` (${amt})` : ""}. View + accept here: ${shareUrl}`,
+              })
+              .catch(() => ({ sent: false, status: "FAILED" }));
+            whatsappStatus = (r && r.status) || "FAILED";
+            if (r && r.sent === true) channelsUsed.push("whatsapp");
+          }
         }
       }
+
+      writeAudit(
+        "TravelQuote",
+        "QUOTE_SHARE",
+        id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          subBrand: quote.subBrand,
+          channel: channelsUsed.join("+") || "none",
+        },
+      ).catch(() => {});
+
+      res.json({
+        shareToken: token,
+        shareUrl,
+        email: emailStatus,
+        whatsapp: whatsappStatus,
+        channel: channelsUsed.length ? channelsUsed.join("+") : "none",
+        status: promote ? "Sent" : quote.status,
+      });
+    } catch (e) {
+      console.error("[travel-quotes] share error:", e.message);
+      res
+        .status(500)
+        .json({ error: "Failed to share quote", code: "SHARE_FAILED" });
     }
-
-    writeAudit("TravelQuote", "QUOTE_SHARE", id, req.user.userId, req.travelTenant.id, {
-      subBrand: quote.subBrand, channel: channelsUsed.join("+") || "none",
-    }).catch(() => {});
-
-    res.json({
-      shareToken: token,
-      shareUrl,
-      email: emailStatus,
-      whatsapp: whatsappStatus,
-      channel: channelsUsed.length ? channelsUsed.join("+") : "none",
-      status: promote ? "Sent" : quote.status,
-    });
-  } catch (e) {
-    console.error("[travel-quotes] share error:", e.message);
-    res.status(500).json({ error: "Failed to share quote", code: "SHARE_FAILED" });
-  }
-});
+  },
+);
 
 module.exports = router;

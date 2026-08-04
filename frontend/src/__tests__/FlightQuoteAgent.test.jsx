@@ -140,6 +140,14 @@ describe("<FlightQuoteAgent />", () => {
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
   });
 
+  it("renders clean flight search hints without decorative symbols", () => {
+    renderPage();
+    expect(screen.getByPlaceholderText("From city or code")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("To city or code")).toBeInTheDocument();
+    expect(screen.getByText("Option 1: enter a fare to preview")).toBeInTheDocument();
+
+  });
+
   it("fetches contacts and markup rules on mount", async () => {
     renderPage();
     uploadScreenshot();
@@ -154,6 +162,16 @@ describe("<FlightQuoteAgent />", () => {
       expect(within(contactSelect).getByText(/Asha Verma/)).toBeInTheDocument();
       expect(within(contactSelect).getByText(/Bilal Khan/)).toBeInTheDocument();
     });
+  });
+
+  it("search button updates the inline summary without firing a toast", () => {
+    renderPage();
+    fireEvent.change(screen.getByLabelText("Flight from"), { target: { value: "BLR" } });
+    fireEvent.change(screen.getByLabelText("Flight to"), { target: { value: "DEL" } });
+    fireEvent.change(screen.getByLabelText("Flight date"), { target: { value: "05/08/26" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Search$/i }));
+    expect(screen.getByText(/Searching BLR -> DEL on 05\/08\/26/i)).toBeInTheDocument();
+    expect(notifyInfo).not.toHaveBeenCalled();
   });
 
   it("adds and removes option rows", () => {

@@ -318,9 +318,9 @@ function buildFlightOfferImageSvg({
     <g transform="translate(0,${index * 154})">
       <rect x="0" y="0" width="1060" height="136" rx="22" fill="#F9FAFB" stroke="#E2E8F0"/>
       <text x="26" y="36" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="800" fill="#111827">${escapeXml(option.airline || `Option ${index + 1}`)}</text>
-      <text x="26" y="60" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="600" fill="#6B7280">${escapeXml([option.flightNumber, option.cabinClass].filter(Boolean).join(" • ") || "Flight details")}</text>
+      <text x="26" y="60" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="600" fill="#6B7280">${escapeXml([option.flightNumber, option.cabinClass].filter(Boolean).join(" ï¿½ ") || "Flight details")}</text>
       <text x="26" y="88" font-family="Inter, Arial, sans-serif" font-size="14" fill="#374151">${escapeXml([option.from, option.to].filter(Boolean).join(" -> ") || "Route on request")}</text>
-      <text x="26" y="112" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6B7280">${escapeXml([option.departAt, option.arriveAt].filter(Boolean).join("  •  ") || "Timing on request")}</text>
+      <text x="26" y="112" font-family="Inter, Arial, sans-serif" font-size="13" fill="#6B7280">${escapeXml([option.departAt, option.arriveAt].filter(Boolean).join("  ï¿½  ") || "Timing on request")}</text>
       <text x="1038" y="60" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="800" fill="#111827">${escapeXml(formatCurrency(option.total, currency))}</text>
       <text x="1038" y="84" text-anchor="end" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="700" fill="#10B981">Final quoted price</text>
     </g>
@@ -347,7 +347,7 @@ function buildFlightOfferImageSvg({
   <rect x="48" y="176" width="1104" height="40" fill="#FFFFFF"/>
   <text x="80" y="102" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700" fill="#E0F2FE" opacity="0.95">Flight offer quotation</text>
   <text x="80" y="148" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="800" fill="#FFFFFF">${escapeXml(routeLabel || "Flight quotation")}</text>
-  <text x="80" y="178" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="600" fill="#E2E8F0">${escapeXml(contactName || "Customer")} · ${escapeXml(tripModeLabel || "One way")} · ${escapeXml(travelDate || "Date on request")}</text>
+  <text x="80" y="178" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="600" fill="#E2E8F0">${escapeXml(contactName || "Customer")} ï¿½ ${escapeXml(tripModeLabel || "One way")} ï¿½ ${escapeXml(travelDate || "Date on request")}</text>
   <rect x="876" y="86" width="236" height="50" rx="25" fill="#0F9D58"/>
   <text x="994" y="118" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="800" fill="#FFFFFF">${escapeXml(subBrandLabel || "FINAL PRICE ONLY")}</text>
   <g transform="translate(80,258)">
@@ -525,7 +525,6 @@ export default function FlightQuoteAgent() {
       return;
     }
     setSearchSummary(`Searching ${flightSearch.from} -> ${flightSearch.to} on ${flightSearch.date} (${flightSearch.cabinClass}).`);
-    notify.info("Flight search prepared for the quote workspace.");
   };
 
 
@@ -554,7 +553,7 @@ export default function FlightQuoteAgent() {
 
       const nextQuote = {
         id: String(Date.now()),
-        title: `${selectedContact?.name || "Customer"} · ${options[0].route.from || "Flight"} -> ${options[0].route.to || "route"}`,
+        title: `${selectedContact?.name || "Customer"} ï¿½ ${options[0].route.from || "Flight"} -> ${options[0].route.to || "route"}`,
         customer: selectedContact?.name || `Contact #${contactId}`,
         totalWithMarkup: response?.totalWithMarkup ?? response?.items?.[0]?.totalWithMarkup ?? "",
         currency: response?.currency || currency,
@@ -609,7 +608,7 @@ export default function FlightQuoteAgent() {
             <option value="">Select contact...</option>
             {filteredContacts.map((contact) => (
               <option key={contact.id} value={contact.id}>
-                {contact.name}{contact.phone ? ` · ${contact.phone}` : ""}
+                {contact.name}{contact.phone ? ` ï¿½ ${contact.phone}` : ""}
               </option>
             ))}
           </select>
@@ -646,14 +645,14 @@ export default function FlightQuoteAgent() {
         <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 150px), 1fr))", marginTop: 14 }}>
           <input
             aria-label="Flight from"
-            placeholder="From — city or code"
+            placeholder="From city or code"
             value={flightSearch.from}
             onChange={(e) => setFlightSearch((prev) => ({ ...prev, from: e.target.value }))}
             style={fieldStyle}
           />
           <input
             aria-label="Flight to"
-            placeholder="To — city or code"
+            placeholder="To city or code"
             value={flightSearch.to}
             onChange={(e) => setFlightSearch((prev) => ({ ...prev, to: e.target.value }))}
             style={fieldStyle}
@@ -834,10 +833,10 @@ export default function FlightQuoteAgent() {
             <div style={{ fontWeight: 700, color: "var(--text-primary)" }}>{previewLabel}</div>
             {flightOptions.map((_, index) => (
               <div key={`preview-row-${index}`} style={{ marginTop: 6 }}>
-                • Option {index + 1}: enter a fare to preview
+                Option {index + 1}: enter a fare to preview
               </div>
             ))}
-            <div style={{ marginTop: 6 }}>Preview only - the server recomputes markup on submit.</div>
+            <div style={{ marginTop: 6 }}>Preview only. The server recomputes markup on submit.</div>
           </div>
         </div>
       </section>
@@ -891,7 +890,7 @@ export default function FlightQuoteAgent() {
                           <Send size={14} aria-hidden /> Send
                         </a>
                       ) : (
-                        <span style={{ color: "var(--text-tertiary)" }}>—</span>
+                        <span style={{ color: "var(--text-tertiary)" }}>ï¿½</span>
                       )}
                     </td>
                   </tr>

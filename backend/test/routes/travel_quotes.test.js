@@ -53,6 +53,8 @@ prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ id: 7, role: 'ADMIN', subBrandAccess: null });
 prisma.user.findFirst = vi.fn().mockResolvedValue(null);
 prisma.user.findMany = vi.fn().mockResolvedValue([]);
+prisma.contact = prisma.contact || {};
+prisma.contact.findMany = vi.fn();
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   create: vi.fn().mockResolvedValue({ id: 1 }),
@@ -127,6 +129,17 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset().mockResolvedValue({ id: 7, role: 'ADMIN', subBrandAccess: null });
   prisma.user.findFirst.mockReset().mockResolvedValue(null);
   prisma.user.findMany.mockReset().mockResolvedValue([]);
+  prisma.contact.findMany.mockReset().mockImplementation(async ({ where } = {}) => {
+    const ids = Array.isArray(where?.id?.in) ? where.id.in : [];
+    const byId = {
+      5: { id: 5, name: 'Alice Smith' },
+      6: { id: 6, name: 'Bob Jones' },
+      7: { id: 7, name: 'Carol White' },
+      8: { id: 8, name: 'Dan Brown' },
+      99: { id: 99, name: 'RFU Client' },
+    };
+    return ids.map((id) => byId[id]).filter(Boolean);
+  });
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.auditLog.findMany.mockReset().mockResolvedValue([]);
@@ -299,14 +312,29 @@ describe('GET /api/travel/quotes', () => {
     expect(res.body.quotes).toHaveLength(1);
     expect(res.body.quotes[0]).toMatchObject({ contactId: 5, contact: { id: 5, name: 'Alice Smith' } });
     // The where clause MUST include tenantId from req.user.tenantId and the
-    // full-shape path MUST join the contact name.
+    // list query now hydrates contact/assignee rows separately so the
+    // frontend keeps seeing the same response shape without the brittle
+    // relation join.
     expect(prisma.travelQuote.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ tenantId: 1 }),
-        include: {
-          contact: { select: { id: true, name: true } },
-          assignedToUser: { select: { id: true, name: true, email: true } },
-        },
+        select: expect.objectContaining({
+          id: true,
+          tenantId: true,
+          subBrand: true,
+          contactId: true,
+          status: true,
+          totalAmount: true,
+          currency: true,
+          assignedToUserId: true,
+          validUntil: true,
+          createdAt: true,
+        }),
+      }),
+    );
+    expect(prisma.contact.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: 1 }),
       }),
     );
   });

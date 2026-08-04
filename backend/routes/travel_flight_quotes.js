@@ -1,4 +1,4 @@
-﻿// Travel CRM — Flight Quotation plugin endpoint.
+// Travel CRM — Flight Quotation plugin endpoint.
 //
 // PRD_FLIGHT_PLUGIN_CHROME_EXTENSION FR-5 + FR-6. The CRM-side receiver for
 // the (separate-repo) Chrome flight plugin: the plugin scrapes a fare off an
@@ -47,6 +47,7 @@ const { verifyToken } = require("../middleware/auth");
 const { uploadImageMultiple, validateImages } = require("../middleware/uploadHandler");
 const prisma = require("../lib/prisma");
 const { pickMarkup } = require("../lib/travelPricing");
+const flightOfferImageExtraction = require("../services/flightOfferImageExtractionLLM");
 const hotelOfferImageExtraction = require("../services/hotelOfferImageExtractionLLM");
 const {
   requireTravelTenant,
@@ -85,6 +86,18 @@ function uploadHotelScreenshotsOrReject(req, res, next) {
     return res.status(500).json({ error: "Upload error", code: "UPLOAD_FAILED" });
   });
 }
+router.post("/extract-prices", verifyToken, requireTravelTenant, uploadHotelScreenshotsOrReject, validateImages, async (req, res) => {
+  try {
+    const files = Array.isArray(req.files) ? req.files : [];
+    const tripType = typeof req.body?.tripType === "string" ? req.body.tripType.trim().toLowerCase() : null;
+    const result = await flightOfferImageExtraction.extractFlightOfferPricing({ files, tripType });
+    return res.status(200).json(result);
+  } catch (e) {
+    console.error("[flight-plugin] flight extract error:", e.message);
+    res.status(500).json({ error: "Failed to extract flight prices" });
+  }
+});
+
 router.post("/extract-hotel-prices", verifyToken, requireTravelTenant, uploadHotelScreenshotsOrReject, validateImages, async (req, res) => {
   try {
     const files = Array.isArray(req.files) ? req.files : [];

@@ -983,7 +983,7 @@ function TmcRevenueDetail({ rows = [], onOpenTrip, title = "TMC revenue source d
             {rows.slice(0, 50).map((row) => (
               <tr key={row.id} style={{ ...trStyle, cursor: "pointer" }} onClick={() => onOpenTrip(row.id)} title="Open trip detail">
                 <td style={td}><span style={linkLike}>{row.tripCode || `Trip #${row.id}`}</span><div style={mutedSmall}>{row.destination || "-"}</div></td>
-                <td style={td}>{row.schoolName || (row.schoolContactId ? `Contact #${row.schoolContactId}` : "-")}</td>
+                <td style={td}>{row.schoolName || (row.schoolId ? `School #${row.schoolId}` : "-")}</td>
                 <td style={td}>{humanizeKey(row.status)}</td>
                 <td style={tdRight}>{row.participants || 0}</td>
                 <td style={tdRight}>{money(row.pricePerStudent || 0)}</td>
@@ -1002,10 +1002,10 @@ function TmcRevenueDetail({ rows = [], onOpenTrip, title = "TMC revenue source d
 function TmcSchoolDetail({ rows = [], onOpenTrip }) {
   const bySchool = new Map();
   for (const row of rows) {
-    const key = row.schoolContactId || row.schoolName || "unknown";
+    const key = row.schoolId || row.schoolName || "unknown";
     const current = bySchool.get(key) || {
       key,
-      schoolName: row.schoolName || (row.schoolContactId ? `Contact #${row.schoolContactId}` : "Unknown school"),
+      schoolName: row.schoolName || (row.schoolId ? `School #${row.schoolId}` : "Unknown school"),
       trips: 0,
       participants: 0,
       revenue: 0,

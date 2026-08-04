@@ -498,7 +498,13 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
       orderBy: [{ createdAt: "desc" }],
     };
     if (isSummary) {
-      findManyArgs.select = listProjection("TravelQuote", false);
+      // Slim projection from the registry, plus assignedToUserId which is
+      // needed for role-visibility filtering below. It is stripped before
+      // the response is sent so the slim shape contract stays clean.
+      findManyArgs.select = {
+        ...listProjection("TravelQuote", false),
+        assignedToUserId: true,
+      };
     } else {
       // Full-shape path: join the contact name so the admin list can render
       // the customer name instead of a bare contactId.
@@ -506,7 +512,9 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
     }
     const allScopedQuotes = await prisma.travelQuote.findMany(findManyArgs);
     const visibleQuotes = await filterQuotesByRoleVisibility(req, allScopedQuotes, allowed);
-    const quotes = visibleQuotes.slice(skip, skip + take);
+    const quotes = isSummary
+      ? visibleQuotes.slice(skip, skip + take).map(({ assignedToUserId, ...rest }) => rest)
+      : visibleQuotes.slice(skip, skip + take);
     res.json({ quotes, total: visibleQuotes.length, limit: take, offset: skip });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });

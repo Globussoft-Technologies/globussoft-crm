@@ -591,7 +591,10 @@ async function buildTmcReport(tenantId, dateRange = null) {
           tripCode: trip.tripCode || null,
           destination: trip.destination,
           status: trip.status,
-          schoolContactId: trip.schoolContactId || null,
+          // Expose a non-PII school identifier; the actual Contact FK is kept
+          // server-side for aggregation/counting but is not shipped in the
+          // report payload (FR-3.5 no-PII-in-list-reports).
+          schoolId: trip.schoolContactId || null,
           schoolName: schoolById.get(trip.schoolContactId)?.name || schoolById.get(trip.schoolContactId)?.email || null,
           departDate: trip.departDate,
           returnDate: trip.returnDate,
@@ -1066,7 +1069,7 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
       ], (d.revenue.rows || []).map((r) => [
         r.tripCode || `Trip #${r.id}`,
         r.destination || "-",
-        r.schoolName || (r.schoolContactId ? `Contact #${r.schoolContactId}` : "-"),
+        r.schoolName || (r.schoolId ? `School #${r.schoolId}` : "-"),
         reportHumanize(r.status),
         String(r.participants || 0),
         inr(r.pricePerStudent || 0),

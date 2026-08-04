@@ -111,8 +111,10 @@ describe('curriculumCsvParser — header errors', () => {
     ]);
   });
 
-  test('case 2c: ALLOWED_CURRICULA export pins the canonical 4 values', () => {
-    expect(ALLOWED_CURRICULA).toEqual(['CBSE', 'ICSE', 'IB', 'Cambridge']);
+  test('case 2c: ALLOWED_CURRICULA export pins the canonical 6 values', () => {
+    expect(ALLOWED_CURRICULA).toEqual([
+      'CBSE', 'ICSE', 'IB', 'Cambridge', 'IGCSE', 'State Board',
+    ]);
   });
 });
 

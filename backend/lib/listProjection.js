@@ -174,14 +174,15 @@ const PROJECTIONS = Object.freeze({
     status: true,
     totalAmount: true,
     currency: true,
-    assignedToUserId: true,
-    assignedToUser: { select: { id: true, name: true, email: true } },
     validUntil: true,    // expiry-sort UI needs this
     createdAt: true,
     // Contact name is the operator-visible headline for a quote row. The bare
     // contactId is kept for backwards-compat/detail navigation; name is joined
     // here so list callers don't need a second fetch to render the customer.
     contact: { select: { id: true, name: true } },
+    // Intentionally DROPPED: assignedToUserId / assignedToUser. Assignment is
+    // visible on the detail endpoint and full-shape list; the slim summary
+    // projection used by picker/dashboard tiles should not carry it.
   }),
 
   TravelInvoice: Object.freeze({

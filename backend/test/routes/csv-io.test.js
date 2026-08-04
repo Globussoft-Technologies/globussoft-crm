@@ -1,4 +1,4 @@
-﻿// @ts-check
+// @ts-check
 /**
  * Unit tests for backend/routes/csv_io.js — generic CSV import/export contract.
  *
@@ -181,7 +181,7 @@ describe('GET /api/csv/contacts/export.csv', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/csv/);
-    expect(res.headers['content-disposition']).toMatch(/contacts-export\.csv/);
+    expect(res.headers['content-disposition']).toMatch(/contacts-export-\d{4}-\d{2}-\d{2}\.csv/);
     const body = res.body.toString('utf8');
     expect(body).toMatch(/id,name,email,phone,company,title,status,source,createdAt/);
     expect(body).toMatch(/Rajesh Sharma/);

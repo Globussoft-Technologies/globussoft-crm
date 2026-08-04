@@ -985,7 +985,7 @@ function TmcRevenueDetail({ rows = [], onOpenTrip, title = "TMC revenue source d
                 <td style={td}><span style={linkLike}>{row.tripCode || `Trip #${row.id}`}</span><div style={mutedSmall}>{row.destination || "-"}</div></td>
                 <td style={td}>{row.schoolName || (row.schoolId ? `School #${row.schoolId}` : "-")}</td>
                 <td style={td}>{humanizeKey(row.status)}</td>
-                <td style={tdRight}>{row.participants || 0}</td>
+                <td style={tdRight}>{row.pax || 0}</td>
                 <td style={tdRight}>{money(row.pricePerStudent || 0)}</td>
                 <td style={tdRight}>{money(row.revenue || 0)}</td>
                 <td style={td}>{formatReportDate(row.departDate)} - {formatReportDate(row.returnDate)}</td>
@@ -1007,12 +1007,12 @@ function TmcSchoolDetail({ rows = [], onOpenTrip }) {
       key,
       schoolName: row.schoolName || (row.schoolId ? `School #${row.schoolId}` : "Unknown school"),
       trips: 0,
-      participants: 0,
+      pax: 0,
       revenue: 0,
       lastTripId: row.id,
     };
     current.trips += 1;
-    current.participants += Number(row.participants || 0);
+    current.pax += Number(row.pax || 0);
     current.revenue += Number(row.revenue || 0);
     current.lastTripId = row.id;
     bySchool.set(key, current);
@@ -1034,7 +1034,7 @@ function TmcSchoolDetail({ rows = [], onOpenTrip }) {
               <tr key={school.key} style={{ ...trStyle, cursor: "pointer" }} onClick={() => onOpenTrip(school.lastTripId)} title="Open latest trip detail">
                 <td style={td}><span style={linkLike}>{school.schoolName}</span></td>
                 <td style={tdRight}>{school.trips}</td>
-                <td style={tdRight}>{school.participants}</td>
+                <td style={tdRight}>{school.pax}</td>
                 <td style={tdRight}>{money(school.revenue)}</td>
                 <td style={td}>{school.trips >= 2 ? "Repeat school" : "First trip"}</td>
               </tr>

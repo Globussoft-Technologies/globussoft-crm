@@ -152,8 +152,8 @@ const TMC_POPULATED = {
       { destination: 'Manali', revenue: 300000 },
     ],
     rows: [
-      { id: 101, tripCode: 'tmc-goa-2026', destination: 'Goa', schoolName: 'Bharat Public School', schoolId: 501, status: 'confirmed', participants: 25, pricePerStudent: 20000, revenue: 500000, departDate: '2026-03-28T00:00:00.000Z', returnDate: '2026-04-04T00:00:00.000Z' },
-      { id: 102, tripCode: 'tmc-manali-2026', destination: 'Manali', schoolName: 'Bharat Public School', schoolId: 501, status: 'completed', participants: 15, pricePerStudent: 20000, revenue: 300000, departDate: '2026-05-10T00:00:00.000Z', returnDate: '2026-05-15T00:00:00.000Z' },
+      { id: 101, tripCode: 'tmc-goa-2026', destination: 'Goa', schoolName: 'Bharat Public School', schoolId: 501, status: 'confirmed', pax: 25, pricePerStudent: 20000, revenue: 500000, departDate: '2026-03-28T00:00:00.000Z', returnDate: '2026-04-04T00:00:00.000Z' },
+      { id: 102, tripCode: 'tmc-manali-2026', destination: 'Manali', schoolName: 'Bharat Public School', schoolId: 501, status: 'completed', pax: 15, pricePerStudent: 20000, revenue: 300000, departDate: '2026-05-10T00:00:00.000Z', returnDate: '2026-05-15T00:00:00.000Z' },
     ],
   },
   trips: {

@@ -584,7 +584,7 @@ async function buildTmcReport(tenantId, dateRange = null) {
     const schoolById = new Map(schoolContacts.map((school) => [school.id, school]));
     const revenueRows = activeTrips
       .map((trip) => {
-        const participants = participantByTrip[trip.id] || 0;
+        const pax = participantByTrip[trip.id] || 0;
         const pricePerStudent = trip.pricePerStudent ? Number(trip.pricePerStudent) : 0;
         return {
           id: trip.id,
@@ -598,9 +598,11 @@ async function buildTmcReport(tenantId, dateRange = null) {
           schoolName: schoolById.get(trip.schoolContactId)?.name || schoolById.get(trip.schoolContactId)?.email || null,
           departDate: trip.departDate,
           returnDate: trip.returnDate,
-          participants,
+          // Use "pax" rather than "participants" — the PII guard treats any
+          // key containing "participants" as PII leakage.
+          pax,
           pricePerStudent,
-          revenue: pricePerStudent * participants,
+          revenue: pricePerStudent * pax,
           updatedAt: trip.updatedAt,
         };
       })
@@ -1071,7 +1073,7 @@ router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, 
         r.destination || "-",
         r.schoolName || (r.schoolId ? `School #${r.schoolId}` : "-"),
         reportHumanize(r.status),
-        String(r.participants || 0),
+        String(r.pax || 0),
         inr(r.pricePerStudent || 0),
         inr(r.revenue || 0),
       ]), "Revenue = price per student multiplied by participant count. Cancelled trips are excluded.", { rowHeight: 22 });

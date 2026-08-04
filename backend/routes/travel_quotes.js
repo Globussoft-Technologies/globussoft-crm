@@ -597,6 +597,7 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
 
     const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
     const skip = parseInt(req.query.offset, 10) || 0;
+    const isSummary = req.query.fields === "summary";
 
     const allScopedQuotes = await prisma.travelQuote.findMany({
       where,
@@ -612,6 +613,7 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
         assignedToUserId: true,
         validUntil: true,
         createdAt: true,
+        updatedAt: true,
       },
     });
     const hydratedQuotes = await hydrateTravelQuoteListRows(
@@ -625,12 +627,17 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
     );
     const quotes = visibleQuotes
       .slice(skip, skip + take)
-      .map(({
-        tenantId: _dropTenantId,
-        assignedToUserId: _dropAssigneeId,
-        assignedToUser: _dropAssignedToUser,
-        ...rest
-      }) => rest);
+      .map((q) => {
+        if (!isSummary) return q;
+        const {
+          tenantId: _dropTenantId,
+          assignedToUserId: _dropAssigneeId,
+          assignedToUser: _dropAssignedToUser,
+          updatedAt: _dropUpdatedAt,
+          ...rest
+        } = q;
+        return rest;
+      });
     res.json({
       quotes,
       total: visibleQuotes.length,

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * TripBooking.jsx ? public trip booking + 50%-advance flow (PRD ?4.7).
  *
  * Consumes the public endpoints:
@@ -15,7 +15,7 @@
  * references per CLAUDE.md feedback rule.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import TripBooking from '../pages/public/TripBooking';
 
@@ -173,7 +173,7 @@ describe('TripBooking ? public booking page (PRD ?4.7)', () => {
     const cta = await screen.findByRole('button', { name: /Pay 50% to confirm/i });
     expect(cta).toBeTruthy();
     // INR formatting renders the rupee glyph; assert on the numeric portion.
-    expect(cta.textContent).toMatch(/50,000/);
+    expect(cta.textContent).toContain('₹50,000');
   });
 
   it('Pay-advance opens Razorpay checkout, verifies the signed result, and reload reflects new state', async () => {
@@ -243,7 +243,7 @@ describe('TripBooking ? public booking page (PRD ?4.7)', () => {
     renderTrip();
     await screen.findByText(/Advance received/i);
     const balBtn = screen.getByRole('button', { name: /Pay balance/i });
-    expect(balBtn.textContent).toMatch(/50,000/);
+    expect(balBtn.textContent).toContain('₹50,000');
     // Receipt link appears once a payment is recorded.
     const receipt = screen.getByRole('link', { name: /Download payment receipt/i });
     expect(receipt.getAttribute('href')).toContain('/receipt');
@@ -312,7 +312,7 @@ describe('TripBooking ? public booking page (PRD ?4.7)', () => {
     // Pick the economy option ? advance reflects 50% of THAT option.
     fireEvent.click(screen.getByLabelText(/Select AIRINDIA AI-101/i));
     const payBtn = await screen.findByRole('button', { name: /Pay 50% to confirm/i });
-    expect(payBtn.textContent).toMatch(/18,375/);
+    expect(payBtn.textContent).toContain('₹18,375');
 
     fireEvent.click(payBtn);
     await screen.findByText(/Advance received/i);
@@ -333,4 +333,6 @@ describe('TripBooking ? public booking page (PRD ?4.7)', () => {
     expect(link).toHaveAttribute('href', '/uploads/itineraries/itin-1.pdf');
   });
 });
+
+
 

@@ -99,6 +99,9 @@ const EMPTY_PROPOSAL_FORM = {
   learningOutcome: '',
 };
 
+const CURRICULUM_TABLE_MIN_WIDTH = 1480;
+const PROPOSAL_TABLE_MIN_WIDTH = 1380;
+
 // Backend code → user-friendly message map. Returns the backend's own
 // message as a fallback (it's already human-readable for MISSING_FIELDS).
 function errorCodeToMessage(code, fallback) {
@@ -768,19 +771,27 @@ export default function CurriculumAdmin() {
             <div style={empty}>No pending proposals yet.</div>
           ) : (
             <TopScrollSync>
-              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+              <table
+                data-testid="curriculum-proposal-table"
+                style={{
+                  width: '100%',
+                  minWidth: PROPOSAL_TABLE_MIN_WIDTH,
+                  borderCollapse: 'collapse',
+                  tableLayout: 'fixed',
+                }}
+              >
                 <thead>
                   <tr>
-                    <th style={{ ...th, width: '5%' }}>Sel</th>
-                    <th style={{ ...th, width: '10%' }}>Year</th>
-                    <th style={{ ...th, width: '10%' }}>Curriculum</th>
-                    <th style={{ ...th, width: '8%' }}>Grade</th>
-                    <th style={{ ...th, width: '10%' }}>Subject</th>
-                    <th style={{ ...th, width: '18%' }}>Outcome</th>
-                    <th style={{ ...th, width: '14%' }}>Destination</th>
-                    <th style={{ ...th, width: '7%' }}>Fit</th>
-                    <th style={{ ...th, width: '8%' }}>Conf.</th>
-                    <th style={{ ...th, width: '10%' }}>Actions</th>
+                                        <th style={{ ...th, width: '4%' }}>Sel</th>
+                    <th style={{ ...th, width: '8%' }}>Year</th>
+                    <th style={{ ...th, width: '9%' }}>Curriculum</th>
+                    <th style={{ ...th, width: '6%' }}>Grade</th>
+                    <th style={{ ...th, width: '8%' }}>Subject</th>
+                    <th style={{ ...th, width: '24%' }}>Outcome</th>
+                    <th style={{ ...th, width: '16%' }}>Destination</th>
+                    <th style={{ ...th, width: '5%' }}>Fit</th>
+                    <th style={{ ...th, width: '6%' }}>Conf.</th>
+                    <th style={{ ...th, width: '14%' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -854,20 +865,28 @@ export default function CurriculumAdmin() {
           </div>
         ) : (
           <TopScrollSync>
-          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+          <table
+            data-testid="curriculum-mapping-table"
+            style={{
+              width: '100%',
+              minWidth: CURRICULUM_TABLE_MIN_WIDTH,
+              borderCollapse: 'collapse',
+              tableLayout: 'fixed',
+            }}
+          >
             <thead>
               <tr>
-                <th style={{ ...th, width: '10%' }}>Year</th>
-                <th style={{ ...th, width: '10%' }}>Curriculum</th>
-                <th style={{ ...th, width: '7%' }}>Grade</th>
-                <th style={{ ...th, width: '10%' }}>Subject</th>
-                <th style={{ ...th, width: '10%' }}>Code</th>
-                <th style={{ ...th, width: '18%' }}>Learning outcome</th>
-                <th style={{ ...th, width: '13%' }}>Destination</th>
-                <th style={{ ...th, width: '6%' }}>Fit</th>
-                <th style={{ ...th, width: '7%' }}>Conf.</th>
-                <th style={{ ...th, width: '7%' }}>Active</th>
-                {isAdmin && <th style={{ ...th, width: '12%' }}>Actions</th>}
+                <th style={{ ...th, width: '7%' }}>Year</th>
+                <th style={{ ...th, width: '8%' }}>Curriculum</th>
+                <th style={{ ...th, width: '6%' }}>Grade</th>
+                <th style={{ ...th, width: '8%' }}>Subject</th>
+                <th style={{ ...th, width: '8%' }}>Code</th>
+                <th style={{ ...th, width: '21%' }}>Learning outcome</th>
+                <th style={{ ...th, width: '15%' }}>Destination</th>
+                <th style={{ ...th, width: '5%' }}>Fit</th>
+                <th style={{ ...th, width: '6%' }}>Conf.</th>
+                <th style={{ ...th, width: '5%' }}>Active</th>
+                {isAdmin && <th style={{ ...th, width: '11%' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -1318,3 +1337,6 @@ const td = {
   overflowWrap: 'break-word',
   whiteSpace: 'normal',
 };
+
+
+

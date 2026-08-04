@@ -219,7 +219,7 @@ export default function TripBooking() {
           currency: order.currency,
           order_id: order.orderId,
           name: itin.tenantName || "Travel Stall",
-          description: `${kind === "balance" ? "Balance payment" : "Advance payment"} ? ${itin.destination || "Trip"}`,
+          description: `${kind === "balance" ? "Balance payment" : "Advance payment"} — ${itin.destination || "Trip"}`,
           // PRD ?4.7 ? redirect-based methods (Netbanking, UPI intent, some
           // 3DS cards) cannot finish inside the modal. Razorpay will POST the
           // payment response to the callback_url (despite callback_method: "get").
@@ -385,7 +385,6 @@ export default function TripBooking() {
             {flightOptions.map((item) => {
               const checked = String(selectedId) === String(item.id);
               const details = flightDetails(item);
-              const isRoundTrip = isRoundTripFlight(item);
               return (
                 <li key={item.id}>
                   <label
@@ -535,7 +534,7 @@ function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance, optionsMode, adv
             style={{ ...primaryBtn, opacity: paying ? 0.6 : 1, cursor: paying ? "wait" : "pointer" }}
           >
             <CreditCard size={16} aria-hidden />
-            {paying ? "Processing?" : `Pay balance ? ${fmtMoneyCompact(itin.balanceDue, itin.currency)}`}
+            {paying ? "Processing…" : `Pay balance ${fmtMoneyCompact(itin.balanceDue, itin.currency)}`}
           </button>
         )}
         {itin.balanceDue > 0 && !itin.onlinePaymentEnabled && (
@@ -555,7 +554,7 @@ function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance, optionsMode, adv
   // already, but the branch is harmless).
   // Online pay is only offered when the agency has configured its own payment
   // gateway (itin.onlinePaymentEnabled). Otherwise the advisor arranges payment
-  // offline ? we never route customer money through the platform account.
+  // offline — we never route customer money through the platform account.
   if (!itin.onlinePaymentEnabled) {
     return (
       <div style={infoBox} role="status">
@@ -576,10 +575,10 @@ function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance, optionsMode, adv
     >
       <CreditCard size={16} aria-hidden />
       {paying
-        ? "Processing?"
+        ? "Processing…"
         : optionsMode && advanceAmount == null
           ? "Select an option to continue"
-          : `Pay ${Math.round((itin.advanceRatio || 0) * 100)}% to confirm ? ${fmtMoneyCompact(advanceAmount, itin.currency)}`}
+          : `Pay ${Math.round((itin.advanceRatio || 0) * 100)}% to confirm ${fmtMoneyCompact(advanceAmount, itin.currency)}`}
     </button>
   );
 }
@@ -687,7 +686,7 @@ function flightDetails(item) {
 }
 
 function fmtMoney(n, currency = "INR") {
-  if (n == null) return "?";
+  if (n == null) return "—";
   try {
     return new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
   } catch {
@@ -697,8 +696,8 @@ function fmtMoney(n, currency = "INR") {
 
 // Compact form for buttons: "?50,000" not "?50,000.00".
 function fmtMoneyCompact(n, currency = "INR") {
-  if (n == null) return "?";
-  if (currency === "INR") return `?${Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+  if (n == null) return "—";
+  if (currency === "INR") return `₹${Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
   return fmtMoney(n, currency);
 }
 
@@ -778,5 +777,7 @@ const fineprint = {
   textAlign: "center", color: "#7a8294",
   fontSize: 12, marginTop: 14,
 };
+
+
 
 

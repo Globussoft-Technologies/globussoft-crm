@@ -1961,8 +1961,6 @@ export default function QuoteBuilder() {
         animation: "fadeIn 0.4s ease-out",
       }}
     >
-      <HotelOfferImageGenerator />
-
       <header
         style={{
           display: "flex",
@@ -2136,6 +2134,8 @@ export default function QuoteBuilder() {
           </div>
         )}
       </header>
+
+      <HotelOfferImageGenerator />
 
       <section style={heroPanel} aria-label="Quote builder summary">
         <div>
@@ -4712,3 +4712,5 @@ const totalsRow = {
 };
 const totalsLabel = { color: "var(--text-secondary)" };
 const totalsValue = { color: "var(--text-primary)", fontFamily: "monospace" };
+
+

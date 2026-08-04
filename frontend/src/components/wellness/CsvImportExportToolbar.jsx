@@ -61,13 +61,14 @@ export default function CsvImportExportToolbar({
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const exportMenuRef = useRef(null);
   const displayLabel = label || ENTITY_LABELS[entity] || entity;
+  const safeEndpoints = endpoints || {};
 
-  const exportUrl = endpoints.export || `/api/wellness/csv/${entity}/export`;
-  const templateUrl = endpoints.template || `/api/wellness/csv/${entity}/template`;
-  const metaUrl = endpoints.meta || `/api/wellness/csv/${entity}`;
-  const importUrl = endpoints.import || `/api/wellness/csv/${entity}/import`;
-  const importAsyncUrl = endpoints.importAsync || `/api/wellness/csv/${entity}/import/async`;
-  const jobUrl = endpoints.job || ((jobId) => `/api/wellness/csv/jobs/${jobId}`);
+  const exportUrl = safeEndpoints.export || `/api/wellness/csv/${entity}/export`;
+  const templateUrl = safeEndpoints.template || `/api/wellness/csv/${entity}/template`;
+  const metaUrl = safeEndpoints.meta || `/api/wellness/csv/${entity}`;
+  const importUrl = safeEndpoints.import || `/api/wellness/csv/${entity}/import`;
+  const importAsyncUrl = safeEndpoints.importAsync || `/api/wellness/csv/${entity}/import/async`;
+  const jobUrl = safeEndpoints.job || ((jobId) => `/api/wellness/csv/jobs/${jobId}`);
 
   const buildQueryString = (extra = {}) => {
     const parts = [];

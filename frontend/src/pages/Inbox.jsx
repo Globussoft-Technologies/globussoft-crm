@@ -127,6 +127,106 @@ export default function Inbox() {
       ? "/api/communications/inbox"
       : `/api/communications/inbox?folder=${emailFolder}`;
 
+  const didInitialLoadRef = useRef(false);
+
+  const loadEmailsPage = async ({ page = 1, reset = false } = {}) => {
+    if ((page > 1 && !emailPagination.hasMore) || emailPagination.loading || emailPagination.loadingMore) return;
+    setEmailPagination((prev) => ({
+      ...prev,
+      loading: reset || page === 1,
+      loadingMore: !reset && page > 1,
+    }));
+    const pageSize = emailPagination.limit;
+    const pageUrl = page > 1
+      ? `${inboxPath}${inboxPath.includes("?") ? "&" : "?"}page=${page}&limit=${pageSize}`
+      : inboxPath;
+    const data = await fetchApi(pageUrl);
+    const rows = extractPagedRows(data, "emails");
+    const pagination = extractPagination(data, page, pageSize, rows);
+    setEmails((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
+    setEmailPagination((prev) => ({
+      ...prev,
+      ...pagination,
+      loading: false,
+      loadingMore: false,
+    }));
+    return rows;
+  };
+
+  const loadCallsPage = async ({ page = 1, reset = false } = {}) => {
+    if ((page > 1 && !callPagination.hasMore) || callPagination.loading || callPagination.loadingMore) return;
+    setCallPagination((prev) => ({
+      ...prev,
+      loading: reset || page === 1,
+      loadingMore: !reset && page > 1,
+    }));
+    const pageSize = callPagination.limit;
+    const pageUrl = page > 1
+      ? `/api/communications/calls?page=${page}&limit=${pageSize}`
+      : '/api/communications/calls';
+    const data = await fetchApi(pageUrl);
+    const rows = extractPagedRows(data, "calls");
+    const pagination = extractPagination(data, page, pageSize, rows);
+    setCalls((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
+    setCallPagination((prev) => ({
+      ...prev,
+      ...pagination,
+      loading: false,
+      loadingMore: false,
+    }));
+    return rows;
+  };
+
+  const loadSmsPage = async ({ page = 1, reset = false } = {}) => {
+    if ((page > 1 && !smsPagination.hasMore) || smsPagination.loading || smsPagination.loadingMore) return;
+    setSmsPagination((prev) => ({
+      ...prev,
+      loading: reset || page === 1,
+      loadingMore: !reset && page > 1,
+    }));
+    const pageSize = smsPagination.limit;
+    const pageUrl = page > 1
+      ? `/api/sms/messages?page=${page}&limit=${pageSize}`
+      : '/api/sms/messages';
+    const data = await fetchApi(pageUrl, { silent: true })
+      .catch(() => ({ messages: [], pagination: { page, limit: pageSize, total: 0, hasMore: false } }));
+    const rows = extractPagedRows(data, "messages");
+    const pagination = extractPagination(data, page, pageSize, rows);
+    setSmsMessages((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
+    setSmsPagination((prev) => ({
+      ...prev,
+      ...pagination,
+      loading: false,
+      loadingMore: false,
+    }));
+    return rows;
+  };
+
+  const loadWaPage = async ({ page = 1, reset = false } = {}) => {
+    if ((page > 1 && !waPagination.hasMore) || waPagination.loading || waPagination.loadingMore) return;
+    setWaPagination((prev) => ({
+      ...prev,
+      loading: reset || page === 1,
+      loadingMore: !reset && page > 1,
+    }));
+    const pageSize = waPagination.limit;
+    const pageUrl = page > 1
+      ? `/api/whatsapp/messages?page=${page}&limit=${pageSize}`
+      : '/api/whatsapp/messages';
+    const data = await fetchApi(pageUrl, { silent: true })
+      .catch(() => ({ messages: [], pagination: { page, limit: pageSize, total: 0, hasMore: false } }));
+    const rows = extractPagedRows(data, "messages");
+    const pagination = extractPagination(data, page, pageSize, rows);
+    setWaMessages((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
+    setWaPagination((prev) => ({
+      ...prev,
+      ...pagination,
+      loading: false,
+      loadingMore: false,
+    }));
+    return rows;
+  };
+
   useEffect(() => {
     Promise.all([
       fetchApi(inboxPath),

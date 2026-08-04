@@ -1,5 +1,5 @@
 /**
- * TripBooking.jsx — public trip booking + 50%-advance flow (PRD §4.7).
+ * TripBooking.jsx ? public trip booking + 50%-advance flow (PRD ?4.7).
  *
  * Consumes the public endpoints:
  *   GET  /api/travel/itineraries/public/:shareToken
@@ -60,13 +60,13 @@ const FULLY_PAID_ITINERARY = {
   onlinePaymentEnabled: true,
 };
 
-// Flight quick-quote: alternative options the customer picks ONE of, no fixed
+// Flight itinerary options: alternative options the customer picks ONE of, no fixed
 // total yet (optionsMode). Each flight carries timing/class/baggage in detailsJson.
 const OPTIONS_ITINERARY = {
   shareToken: 'tok-opt-flight-1234567890',
   tenantName: 'Travel Stall Demo',
   subBrand: 'travelstall',
-  destination: 'DEL→JED flights',
+  destination: 'DEL?JED flights',
   startDate: null,
   endDate: null,
   status: 'sent',
@@ -82,12 +82,12 @@ const OPTIONS_ITINERARY = {
   items: [
     {
       id: 11, itemType: 'flight', position: 0, totalPrice: 36750,
-      description: 'AIRINDIA AI-101 DEL→JED (Economy)',
+      description: 'AIRINDIA AI-101 DEL?JED (Economy)',
       detailsJson: JSON.stringify({ fareClass: 'Economy', departAt: '2026-08-02T18:10:00', arriveAt: '2026-08-02T23:10:00', baggage: '30kg' }),
     },
     {
       id: 12, itemType: 'flight', position: 1, totalPrice: 52500,
-      description: 'AIRINDIA AI-202 DEL→JED (Premium Economy)',
+      description: 'AIRINDIA AI-202 DEL?JED (Premium Economy)',
       detailsJson: JSON.stringify({ fareClass: 'Premium Economy', departAt: '2026-08-02T20:00:00', arriveAt: '2026-08-03T01:00:00', baggage: '40kg' }),
     },
   ],
@@ -134,7 +134,7 @@ function renderTrip(token = SENT_ITINERARY.shareToken) {
   );
 }
 
-describe('TripBooking — public booking page (PRD §4.7)', () => {
+describe('TripBooking ? public booking page (PRD ?4.7)', () => {
   it('fetches and renders the itinerary on mount', async () => {
     fetchSpy.mockImplementation((url) => {
       if (url.startsWith('/api/travel/itineraries/public/')) return ok(SENT_ITINERARY);
@@ -182,7 +182,7 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     fetchSpy.mockImplementation((url, opts) => {
       if (url.startsWith('/api/travel/itineraries/public/') && !opts) {
         getCalls += 1;
-        // First load = sent; after pay → advance_paid.
+        // First load = sent; after pay ? advance_paid.
         return ok(getCalls === 1 ? SENT_ITINERARY : ADVANCE_PAID_ITINERARY);
       }
       if (opts?.method === 'POST' && url.endsWith('/create-payment-order')) {
@@ -211,7 +211,7 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     const payBtn = await screen.findByRole('button', { name: /Pay 50% to confirm/i });
     fireEvent.click(payBtn);
 
-    // Re-fetch after a verified payment → advance-paid state renders.
+    // Re-fetch after a verified payment ? advance-paid state renders.
     await screen.findByText(/Advance received/i);
     expect(screen.getByText(/Your trip is confirmed/i)).toBeTruthy();
 
@@ -230,7 +230,7 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     expect(vbody.razorpay_payment_id).toBe('pay_test_1');
     expect(vbody.razorpay_signature).toBe('sig_test_1');
 
-    // No demo record-advance-payment call — the dummy path is gone.
+    // No demo record-advance-payment call ? the dummy path is gone.
     const demoCall = fetchSpy.mock.calls.find((c) => c[0].endsWith('/record-advance-payment'));
     expect(demoCall).toBeUndefined();
   });
@@ -276,7 +276,7 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     expect(screen.getByText(/not configured/i)).toBeTruthy();
     // Still on the form (no advance-received success state).
     expect(screen.queryByText(/Advance received/i)).toBeNull();
-    // GET only called once (the initial load — no reload on pay-error).
+    // GET only called once (the initial load ? no reload on pay-error).
     expect(getCalls).toBe(1);
   });
 
@@ -309,7 +309,7 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     const preBtn = screen.getByRole('button', { name: /Select an option to continue/i });
     expect(preBtn).toBeDisabled();
 
-    // Pick the economy option → advance reflects 50% of THAT option.
+    // Pick the economy option ? advance reflects 50% of THAT option.
     fireEvent.click(screen.getByLabelText(/Select AIRINDIA AI-101/i));
     const payBtn = await screen.findByRole('button', { name: /Pay 50% to confirm/i });
     expect(payBtn.textContent).toMatch(/18,375/);
@@ -333,3 +333,4 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     expect(link).toHaveAttribute('href', '/uploads/itineraries/itin-1.pdf');
   });
 });
+

@@ -1,4 +1,4 @@
-// WhatsApp Threads â€” agent inbox for 2-way WhatsApp messaging.
+// WhatsApp Threads — agent inbox for 2-way WhatsApp messaging.
 //
 // Wave 2 Agent KK companion to the backend's /api/whatsapp/threads + /opt-outs
 // endpoints. Implements:
@@ -11,16 +11,16 @@
 //
 // Lives under /wellness/whatsapp because the audit-call gap was wellness-
 // vertical-shaped (clinics on Meta Cloud API), but the routes themselves
-// are tenant-agnostic â€” adding a generic /whatsapp link later is one line.
+// are tenant-agnostic — adding a generic /whatsapp link later is one line.
 
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { io as socketIO } from 'socket.io-client';
 import { AuthContext } from '../../App';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
-// â”€â”€ WhatsApp transport swap â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// -- WhatsApp transport swap ----------------------------------------------
 // The Meta Cloud API EmbeddedSignup connection panel is COMMENTED OUT (kept on
-// disk, not removed) â€” wellness now uses the SAME WhatsApp Web (QR-scan)
+// disk, not removed) — wellness now uses the SAME WhatsApp Web (QR-scan)
 // connect/send engine as the travel vertical, via WhatsAppWebConnect +
 // /api/whatsapp-web/*. To revert to Meta, restore the import + the panel below.
 // import WhatsAppEmbeddedSignup from '../../components/WhatsAppEmbeddedSignup';
@@ -36,7 +36,7 @@ export default function WhatsAppThreads() {
   // Tenant ADMIN can: edit the assign dropdown, see Manage / Disconnect
   // buttons in the status bar, see the "+ New" composer button, and access
   // the Templates page. MANAGER + below see read-only state. Backend RBAC
-  // gates the destructive routes too â€” this is the cosmetic mirror.
+  // gates the destructive routes too — this is the cosmetic mirror.
   const { user: currentUser } = useContext(AuthContext) || {};
   const isAdmin = currentUser?.role === 'ADMIN';
   const [threads, setThreads] = useState([]);
@@ -53,8 +53,8 @@ export default function WhatsAppThreads() {
   // Renders as a WhatsApp-style quoted preview above the composer; nulled
   // when sent or when the user dismisses via the X button.
   const [replyToMsg, setReplyToMsg] = useState(null);
-  // Unblock reason modal state â€” replaces the browser-native window.prompt
-  // which looked off-theme. The modal collects the DPDP Â§11 audit reason
+  // Unblock reason modal state — replaces the browser-native window.prompt
+  // which looked off-theme. The modal collects the DPDP §11 audit reason
   // (min 10 chars) before calling DELETE /opt-outs/:id.
   const [unblockOpen, setUnblockOpen] = useState(false);
   const [unblockReason, setUnblockReason] = useState('');
@@ -63,7 +63,7 @@ export default function WhatsAppThreads() {
   const messagesEndRef = useRef(null);
   const lastAutoScrollThreadRef = useRef(null);
 
-  // â”€â”€â”€ "New message" composer state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- "New message" composer state --------------------------
   // Modal-driven outbound-first send. Hits POST /api/whatsapp/send
   // with { to, body }. If the recipient hasn't messaged in 24h the
   // Errors are surfaced in `newError`.
@@ -74,14 +74,14 @@ export default function WhatsAppThreads() {
   const [newSending, setNewSending] = useState(false);
   const [newError, setNewError] = useState(null);
 
-  // Staff list (for the assign dropdown) â€” fetched once on mount.
+  // Staff list (for the assign dropdown) — fetched once on mount.
   // Renders as a dropdown that replaces the single-purpose "Assign to me"
   // button, so the operator can hand a thread off to any teammate.
   const [staff, setStaff] = useState([]);
 
-  // Inline rename state â€” when the user clicks the pencil next to the contact
-  // name, this flips on and a small input box appears. Save â†’ POST to the
-  // rename-contact route â†’ re-fetch detail.
+  // Inline rename state — when the user clicks the pencil next to the contact
+  // name, this flips on and a small input box appears. Save -> POST to the
+  // rename-contact route -> re-fetch detail.
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [renameSaving, setRenameSaving] = useState(false);
@@ -93,7 +93,7 @@ export default function WhatsAppThreads() {
   const [selectedTemplateName, setSelectedTemplateName] = useState('');
   const [templateParams, setTemplateParams] = useState([]); // string[]
 
-  // â”€â”€â”€ Contacts + Patients with phone numbers â€” for the contact picker
+  // --- Contacts + Patients with phone numbers — for the contact picker
   //     in the New Message modal. Fetched once on mount so the dropdown
   //     can filter client-side as the user types. Combines two sources
   //     so a wellness operator picks from both lead/customer contacts
@@ -104,7 +104,7 @@ export default function WhatsAppThreads() {
 
   // Track the lastMessageAt of the currently-selected thread between
   // loadList calls so we can detect "a new message arrived on the open
-  // thread" purely from polling â€” without depending on the socket event.
+  // thread" purely from polling — without depending on the socket event.
   // This is the safety net that makes real-time work even when the
   // socket is dropped / the backend hasn't been restarted with the fix.
   const lastSelectedMessageAtRef = useRef(null);
@@ -112,11 +112,11 @@ export default function WhatsAppThreads() {
   // see the latest value without recreating themselves. Declared up here
   // because both loadList AND the socket effect need to read it.
   const selectedIdRef = useRef(null);
-  // Generation counters to discard stale async results (Â§5.5 race guard).
+  // Generation counters to discard stale async results (§5.5 race guard).
   const listGenRef = useRef(0);
   const detailGenRef = useRef(0);
 
-  // â”€â”€â”€ Older-message pagination (infinite scroll-up) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Older-message pagination (infinite scroll-up) ----------
   // GET /threads/:id only ever returns the newest 50 messages. Every
   // "refresh" fetch (polling, socket events, post-action reloads) also
   // hits that same un-paginated endpoint, so a naive setDetail(fresh)
@@ -163,12 +163,12 @@ export default function WhatsAppThreads() {
     setLoadingOlderMessages(false);
   };
 
-  // â”€â”€â”€ Load thread list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Load thread list --------------------------------------
   const loadList = async () => {
     const gen = ++listGenRef.current;
     setLoadingList(true);
     try {
-      // "Blocked" isn't a thread status â€” it lists the tenant's opt-out
+      // "Blocked" isn't a thread status — it lists the tenant's opt-out
       // (blocked) numbers. Fetch from /opt-outs and map each row into the
       // thread-shaped object the left rail already knows how to render. The
       // `_blocked` marker drives the red pill + click-to-open behaviour.
@@ -199,9 +199,9 @@ export default function WhatsAppThreads() {
       const fresh = Array.isArray(data?.threads) ? data.threads : [];
       setThreads(fresh);
 
-      // â”€â”€ Detect new message on the open thread â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // -- Detect new message on the open thread --------------
       // If the lastMessageAt on the open thread advanced since the
-      // last poll, a new message landed â€” show a toast so the user
+      // last poll, a new message landed — show a toast so the user
       // notices even before scrolling. The detail refetch itself
       // happens in the parallel 10s polling effect.
       const selId = selectedIdRef.current;
@@ -228,7 +228,7 @@ export default function WhatsAppThreads() {
 
   // Open the conversation behind a blocked number (rows in the Blocked list
   // are opt-out records, not threads, so their id can't be loaded directly).
-  // Look the thread up by phone and select it if one exists â€” that opens the
+  // Look the thread up by phone and select it if one exists — that opens the
   // right pane where an admin can Unblock. If the number was blocked without
   // ever messaging, there's no thread to show.
   const openBlockedThread = async (phone) => {
@@ -249,7 +249,7 @@ export default function WhatsAppThreads() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, unreadOnly, q]);
 
-  // â”€â”€â”€ Tick state for live "just now / 1m / 2m" timestamp updates â”€â”€â”€
+  // --- Tick state for live "just now / 1m / 2m" timestamp updates ---
   // The `timeAgo()` helper reads Date.now() at render time. Without a
   // periodic re-render the thread badge would freeze on whatever value
   // it had when the list was last fetched. A cheap 30-second tick keeps
@@ -267,24 +267,24 @@ export default function WhatsAppThreads() {
     return () => clearInterval(id);
   }, []);
 
-  // â”€â”€â”€ Browser desktop-notification permission â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Browser desktop-notification permission ----------------
   // Asked once on mount. The user must explicitly grant; we never nag.
   // Used in the socket handler below to alert when a message arrives
   // even if the operator is on another tab or another app.
   useEffect(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) return;
     if (Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => { /* ignore â€” user denied */ });
+      Notification.requestPermission().catch(() => { /* ignore — user denied */ });
     }
   }, []);
 
-  // â”€â”€â”€ Aggressive safety-net polling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Aggressive safety-net polling --------------------------
   // The socket is the IDEAL real-time channel, but it depends on the
   // backend mount order being correct + the network being stable. To
-  // make the UX bulletproof â€” even if the socket is completely broken
-  // â€” we poll BOTH the list AND the open detail every 10 seconds.
+  // make the UX bulletproof — even if the socket is completely broken
+  // — we poll BOTH the list AND the open detail every 10 seconds.
   // Worst-case lag for a new message becoming visible: ~10 seconds.
-  // Cost: two lightweight GETs per user per 10s â€” negligible.
+  // Cost: two lightweight GETs per user per 10s — negligible.
   useEffect(() => {
     const id = setInterval(() => {
       loadList();
@@ -300,14 +300,14 @@ export default function WhatsAppThreads() {
               setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
             }
           })
-          .catch(() => { /* swallow â€” next tick retries */ });
+          .catch(() => { /* swallow — next tick retries */ });
       }
     }, 10_000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, unreadOnly, q]);
 
-  // â”€â”€â”€ Load staff list for assign dropdown (once on mount) â”€â”€â”€
+  // --- Load staff list for assign dropdown (once on mount) ---
   useEffect(() => {
     (async () => {
       try {
@@ -315,12 +315,12 @@ export default function WhatsAppThreads() {
         const list = Array.isArray(data) ? data : Array.isArray(data?.users) ? data.users : [];
         setStaff(list);
       } catch {
-        /* non-fatal â€” dropdown just stays empty */
+        /* non-fatal — dropdown just stays empty */
       }
     })();
   }, []);
 
-  // â”€â”€â”€ Load APPROVED templates for the picker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Load APPROVED templates for the picker -----------------
   // Only APPROVED templates can be sent. PENDING/REJECTED are filtered out.
   useEffect(() => {
     (async () => {
@@ -329,12 +329,12 @@ export default function WhatsAppThreads() {
         const list = Array.isArray(data) ? data : Array.isArray(data?.templates) ? data.templates : [];
         setTemplates(list.filter((t) => t.status === 'APPROVED'));
       } catch {
-        /* non-fatal â€” picker just stays empty */
+        /* non-fatal — picker just stays empty */
       }
     })();
   }, []);
 
-  // â”€â”€â”€ Load contacts + patients with phones (for the New Message
+  // --- Load contacts + patients with phones (for the New Message
   //     contact picker). Two parallel fetches; combine + dedupe by
   //     phone. We tag the source so the dropdown can show whether a
   //     row is a contact or a patient (helpful in wellness mode).
@@ -355,8 +355,8 @@ export default function WhatsAppThreads() {
         for (const p of list) {
           if (p.phone && p.name) opts.push({ id: `p-${p.id}`, name: p.name, phone: p.phone, source: 'patient' });
         }
-      } catch { /* non-fatal â€” generic CRM tenants don't have patients */ }
-      // Dedupe by phone â€” if same number exists in both contacts + patients,
+      } catch { /* non-fatal — generic CRM tenants don't have patients */ }
+      // Dedupe by phone — if same number exists in both contacts + patients,
       // prefer the patient label since wellness is the primary context here.
       const seen = new Map();
       for (const o of opts) {
@@ -367,14 +367,14 @@ export default function WhatsAppThreads() {
     return () => { cancelled = true; };
   }, []);
 
-  // â”€â”€â”€ Real-time Socket.IO push for inbound messages + delivery
+  // --- Real-time Socket.IO push for inbound messages + delivery
   //     status updates. The backend's whatsapp_webhook handler emits to
   //     room `tenant:<tenantId>` on every new inbound + status change;
   //     this hook joins the room and refreshes the list / detail when
   //     events fire. Falls back to manual refresh if the socket fails.
   //
   //     We deliberately use `selectedIdRef` instead of `selectedId` in
-  //     the event handlers â€” closures over React state capture the value
+  //     the event handlers — closures over React state capture the value
   //     at subscribe time, so a stale `selectedId` would always be 0/null
   //     in the listener. The ref reads the latest value on every fire.
   //     (The ref itself is declared higher up so loadList can use it too.)
@@ -384,7 +384,7 @@ export default function WhatsAppThreads() {
     const tenantId = currentUser?.tenantId;
     if (!tenantId) return undefined;
 
-    // socket.io-client defaults to same-origin when no URL is passed â€”
+    // socket.io-client defaults to same-origin when no URL is passed —
     // works for both local dev (Vite proxy) and prod (same domain).
     const socket = socketIO({
       // withCredentials lets cookie-based session info travel if used;
@@ -395,7 +395,7 @@ export default function WhatsAppThreads() {
 
     const joinRoom = () => socket.emit('join_room', `tenant:${tenantId}`);
     socket.on('connect', joinRoom);
-    // Reconnects re-fire `connect` â†’ room is re-joined automatically.
+    // Reconnects re-fire `connect` -> room is re-joined automatically.
 
     socket.on('whatsapp:received', (payload) => {
       if (!payload || payload.tenantId !== tenantId) return;
@@ -412,12 +412,12 @@ export default function WhatsAppThreads() {
             if (gen === detailGenRef.current && selectedIdRef.current === payload.threadId) {
               setDetail((prev) => mergeDetailPreservingOlder(prev, fresh, selectedIdRef.current));
             }
-          } catch { /* swallow â€” manual refresh still works */ }
+          } catch { /* swallow — manual refresh still works */ }
         })();
       }
 
-      // â”€â”€ User-visible alert layer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      // In-app toast â€” useful even when the WhatsApp tab IS focused
+      // -- User-visible alert layer ------------------------------
+      // In-app toast — useful even when the WhatsApp tab IS focused
       // so the operator notices the new message without scanning the
       // thread list. Capped at first 80 chars of body so a long inbound
       // doesn't blow up the toast container.
@@ -427,7 +427,7 @@ export default function WhatsAppThreads() {
         notify.info(`New WhatsApp from ${senderLabel}: ${bodyPreview}`);
       } catch { /* notify can throw on early-unmount; swallow */ }
 
-      // Browser desktop notification â€” fires even when the tab isn't
+      // Browser desktop notification — fires even when the tab isn't
       // focused / on another app. Only attempts if the user previously
       // granted permission (the mount-time request); we never re-ask.
       // Skip if the page is already visible to avoid double-notification
@@ -439,7 +439,7 @@ export default function WhatsAppThreads() {
         document.visibilityState !== 'visible'
       ) {
         try {
-          const n = new Notification(`WhatsApp Â· ${senderLabel}`, {
+          const n = new Notification(`WhatsApp · ${senderLabel}`, {
             body: bodyPreview,
             // Tag groups multiple notifications from the same sender so
             // a burst of 5 messages doesn't stack into 5 system alerts.
@@ -472,7 +472,7 @@ export default function WhatsAppThreads() {
 
     socket.on('whatsapp:reaction', (payload) => {
       if (!payload || payload.tenantId !== tenantId) return;
-      // Customer reacted to a message â€” refresh the open detail so
+      // Customer reacted to a message — refresh the open detail so
       // the new reaction pill renders without a manual refresh.
       if (selectedIdRef.current && selectedIdRef.current === payload.threadId) {
         (async () => {
@@ -502,8 +502,8 @@ export default function WhatsAppThreads() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.tenantId]);
 
-  // Detect placeholder count in a template body â€” used to render the
-  // right number of param inputs. {{1}}, {{2}} â€¦ {{N}}.
+  // Detect placeholder count in a template body — used to render the
+  // right number of param inputs. {{1}}, {{2}} ... {{N}}.
   const countPlaceholders = (body) => {
     if (!body) return 0;
     const matches = body.match(/\{\{\d+\}\}/g) || [];
@@ -521,10 +521,10 @@ export default function WhatsAppThreads() {
     setTemplateParams(Array(n).fill(''));
   }, [selectedTemplateName, templates]);
 
-  // â”€â”€â”€ Load detail when selection changes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Load detail when selection changes --------------------
   useEffect(() => {
     // Reset inline rename state whenever the user picks a different
-    // thread â€” stale rename input shouldn't bleed into the new selection.
+    // thread — stale rename input shouldn't bleed into the new selection.
     setRenaming(false);
     setRenameValue('');
     if (!selectedId) {
@@ -563,14 +563,14 @@ export default function WhatsAppThreads() {
       }
       if (!cancelled) setLoadingDetail(false);
     })();
-    // â”€â”€ Full-history backfill (fire-and-forget) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // -- Full-history backfill (fire-and-forget) ----------------------
     // The CRM's DB only ever has whatever the bulk import pulled (last ~25
     // messages/chat, to keep linking fast). The first time an operator opens
     // a thread, pull that ONE chat's complete WhatsApp Web history in the
-    // background â€” same as WhatsApp Web itself lazy-loading as you scroll â€”
+    // background — same as WhatsApp Web itself lazy-loading as you scroll —
     // then refresh hasMoreMessages so scroll-up pagination can reach it.
     // Silent on failure (WA disconnected, thread already fully synced, a
-    // second open already in flight) â€” this is a best-effort enhancement,
+    // second open already in flight) — this is a best-effort enhancement,
     // not required for the thread to be usable.
     (async () => {
       try {
@@ -580,7 +580,7 @@ export default function WhatsAppThreads() {
           body: JSON.stringify({}),
         });
         if (!cancelled && result?.added > 0 && selectedIdRef.current === selectedId) {
-          // New older messages landed in the DB â€” refresh hasMoreMessages so
+          // New older messages landed in the DB — refresh hasMoreMessages so
           // the scroll-up pagination in ThreadDetail.jsx can reach them. Only
           // refresh the flag (not the visible messages), so the operator's
           // current scroll position + read state don't jump around.
@@ -589,7 +589,7 @@ export default function WhatsAppThreads() {
             setHasMoreMessages(!!fresh?.hasMoreMessages);
           }
         }
-      } catch { /* best-effort â€” thread stays usable with whatever was already imported */ }
+      } catch { /* best-effort — thread stays usable with whatever was already imported */ }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -625,7 +625,7 @@ export default function WhatsAppThreads() {
     lastAutoScrollThreadRef.current = selectedId;
   }, [selectedId, newestMessageId]);
 
-  // â”€â”€â”€ Actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Actions ----------------------------------------------
   const handleSearch = (e) => {
     e.preventDefault();
     loadList();
@@ -634,7 +634,7 @@ export default function WhatsAppThreads() {
   const sendReply = async () => {
     if (!detail?.thread || !reply.trim() || sending) return;
     if (detail.optedOut) {
-      notify.error('Contact has opted out â€” replies are blocked.');
+      notify.error('Contact has opted out — replies are blocked.');
       return;
     }
     setSending(true);
@@ -664,7 +664,7 @@ export default function WhatsAppThreads() {
     } catch (err) {
       const msg = err?.message || '';
       if (msg.includes('CONTACT_OPTED_OUT')) {
-        notify.error('Contact has opted out â€” replies are blocked.');
+        notify.error('Contact has opted out — replies are blocked.');
       } else {
         notify.error(msg || 'Failed to send.');
       }
@@ -672,7 +672,7 @@ export default function WhatsAppThreads() {
     setSending(false);
   };
 
-  // â”€â”€â”€ Outbound-first send (modal) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Outbound-first send (modal) ---------------------------
   //
   // Two paths: free-form text (24h-window rule) OR approved template
   // (works any time, any number). useTemplate toggle switches between them.
@@ -737,13 +737,13 @@ export default function WhatsAppThreads() {
     setNewSending(false);
   };
 
-  // Generic assignment â€” works for self-assign AND cross-assign (backend
+  // Generic assignment — works for self-assign AND cross-assign (backend
   // RBAC-gates cross-assign to ADMIN/MANAGER; self-assign open to all roles).
   // Pass null to unassign.
   //
   // NOTE per CLAUDE.md "Standing rules" + backend route comment: the global
   // stripDangerous middleware deletes req.body.userId on every request, so
-  // the field MUST be `targetUserId` â€” `userId` is silently dropped to null
+  // the field MUST be `targetUserId` — `userId` is silently dropped to null
   // and the backend would unassign instead of rejecting bad input.
   const assignToUser = async (targetUserId) => {
     if (!detail?.thread) return;
@@ -760,7 +760,7 @@ export default function WhatsAppThreads() {
     }
   };
 
-  // Rename contact â€” adds a friendly name to the phone number. Creates a new
+  // Rename contact — adds a friendly name to the phone number. Creates a new
   // Contact row if none exists, otherwise updates the existing one.
   const startRename = () => {
     const currentName =
@@ -815,7 +815,7 @@ export default function WhatsAppThreads() {
     }
   };
 
-  // Delete the whole conversation (thread + all messages). Irreversible â€”
+  // Delete the whole conversation (thread + all messages). Irreversible —
   // backend is ADMIN-only. After delete we drop the selection so the right
   // pane returns to the empty-state and refresh the list.
   const deleteThread = async () => {
@@ -854,7 +854,7 @@ export default function WhatsAppThreads() {
     }
   };
 
-  // â”€â”€â”€ Right-click context menu on message bubbles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Right-click context menu on message bubbles ------------
   // Stores { x, y, message } when open; null when closed. Closed on
   // outside-click / Escape / after any action. Replaces the previous
   // hover-button which was fragile (cursor leaving the bubble closed
@@ -878,7 +878,7 @@ export default function WhatsAppThreads() {
     };
   }, [ctxMenu]);
 
-  // Reply â€” WhatsApp-style. The replied-to message renders as a small
+  // Reply — WhatsApp-style. The replied-to message renders as a small
   // bordered preview ABOVE the textarea, with an X to dismiss. When
   // the reply sends, the quote is prepended to the body so the customer
   // sees the context. (True Meta threaded reply via `context.message_id`
@@ -888,7 +888,7 @@ export default function WhatsAppThreads() {
     setReplyToMsg(msg);
   };
 
-  // Forward â€” open the New Message modal pre-filled with the message body.
+  // Forward — open the New Message modal pre-filled with the message body.
   // Operator picks a recipient and sends.
   const forwardMessage = (msg) => {
     if (!msg) return;
@@ -899,7 +899,7 @@ export default function WhatsAppThreads() {
     setShowNewModal(true);
   };
 
-  // React â€” emoji reactions via Meta Cloud API
+  // React — emoji reactions via Meta Cloud API
   // (POST /messages with type: "reaction"). Backend exposes this as
   // POST /api/whatsapp/messages/:id/react with body { emoji }.
   const reactToMessage = async (msg, emoji) => {
@@ -921,7 +921,7 @@ export default function WhatsAppThreads() {
     }
   };
 
-  // â”€â”€â”€ Delete message (soft-delete, "Delete for me") â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Delete message (soft-delete, "Delete for me") ----------
   const deleteMessage = async (messageId) => {
     if (!messageId) return;
     const ok = await notify.confirm('Delete this message from your side?');
@@ -939,7 +939,7 @@ export default function WhatsAppThreads() {
     }
   };
 
-  // â”€â”€â”€ Send media (paperclip in composer) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Send media (paperclip in composer) ---------------------
   // Uploads the file via multipart/form-data to the backend, which
   // stores it in S3 and forwards to Meta as image/video/audio/document
   // based on MIME type. We use a hidden file input + a paperclip
@@ -952,11 +952,11 @@ export default function WhatsAppThreads() {
     e.target.value = ''; // reset so picking the same file twice still fires onChange
     if (!file || !detail?.thread) return;
     if (detail.optedOut) {
-      notify.error('Contact has opted out â€” cannot send media.');
+      notify.error('Contact has opted out — cannot send media.');
       return;
     }
     if (file.size > 16 * 1024 * 1024) {
-      notify.error('File too large â€” Meta WhatsApp limit is 16 MB.');
+      notify.error('File too large — Meta WhatsApp limit is 16 MB.');
       return;
     }
     setUploadingMedia(true);
@@ -992,7 +992,7 @@ export default function WhatsAppThreads() {
     setUploadingMedia(false);
   };
 
-  // Unblock â€” opens a themed modal that collects the DPDP Â§11 audit
+  // Unblock — opens a themed modal that collects the DPDP §11 audit
   // reason (min 10 chars) before calling DELETE /api/whatsapp/opt-outs/:id.
   // Backend RBAC: admin-only. Submit handler lives in `submitUnblock`.
   const unblockContact = () => {
@@ -1009,7 +1009,7 @@ export default function WhatsAppThreads() {
     setUnblockError(null);
     const trimmed = unblockReason.trim();
     if (trimmed.length < 10) {
-      setUnblockError('Reason must be at least 10 characters (DPDP Â§11 audit requirement).');
+      setUnblockError('Reason must be at least 10 characters (DPDP §11 audit requirement).');
       return;
     }
     if (!detail?.optedOut?.id) {
@@ -1036,7 +1036,7 @@ export default function WhatsAppThreads() {
   const optOutContact = async () => {
     if (!detail?.thread) return;
     if (!await notify.confirm(
-      `Block ${detail.thread.contactPhone}? This prevents your tenant from sending any further WhatsApp messages to this number, and the recipient cannot reach you either. Treated as a DPDP/TRAI compliance opt-out â€” captured in audit log. You can unblock from WhatsApp â†’ Blocked Numbers later.`
+      `Block ${detail.thread.contactPhone}? This prevents your tenant from sending any further WhatsApp messages to this number, and the recipient cannot reach you either. Treated as a DPDP/TRAI compliance opt-out — captured in audit log. You can unblock from WhatsApp -> Blocked Numbers later.`
     )) return;
     try {
       await fetchApi('/api/whatsapp/opt-outs', {
@@ -1050,7 +1050,7 @@ export default function WhatsAppThreads() {
     }
   };
 
-  // â”€â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // --- Render ---------------------------------------------
   const filteredThreads = useMemo(() => threads, [threads]);
 
   const contextValue = {
@@ -1162,7 +1162,7 @@ export default function WhatsAppThreads() {
         height: '100%', minHeight: 0,
         animation: 'fadeIn 0.4s ease-out',
       }}>
-        {/* WhatsApp Web (QR-scan) connection bar â€” replaces the Meta Cloud API
+        {/* WhatsApp Web (QR-scan) connection bar — replaces the Meta Cloud API
             EmbeddedSignup panel (commented out above). Scan the QR from your
             phone to link a number; sends/receives then flow over WhatsApp Web.
             Legacy Meta panel preserved for reference:

@@ -197,6 +197,10 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
     expect(screen.queryByRole('button', { name: /Download PDF/i })).toBeNull();
   });
 
+  it('renders the hotel offer image generator at the top of the page', async () => {
+    renderPage();
+    expect(await screen.findByRole('heading', { name: /Hotel offer image generator/i })).toBeInTheDocument();
+  });
   it('NEW mode: no GET to quotes/:id fires on mount; Add-line disabled until save', async () => {
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });

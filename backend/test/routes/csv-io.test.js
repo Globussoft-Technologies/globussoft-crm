@@ -1,4 +1,4 @@
-// @ts-check
+﻿// @ts-check
 /**
  * Unit tests for backend/routes/csv_io.js — generic CSV import/export contract.
  *
@@ -54,6 +54,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
+const { toXlsxBuffer } = requireCJS('../../lib/csvIO');
 
 // Patch auth middleware BEFORE the router is required. The route's
 // destructured `verifyToken` / `verifyRole` references capture whatever
@@ -194,6 +195,96 @@ describe('GET /api/csv/contacts/export.csv', () => {
     const res = await request(makeApp({ role: 'USER' })).get('/api/csv/contacts/export.csv');
     expect(res.status).toBe(403);
     expect(prisma.contact.findMany).not.toHaveBeenCalled();
+  });
+
+});
+describe('GET /api/csv/contacts/export.csv?format=xlsx', () => {
+  test('exports contacts as XLSX with spreadsheet content headers', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      {
+        id: 10,
+        name: 'Rajesh Sharma',
+        email: 'rajesh@example.com',
+        phone: '+919876543210',
+        company: 'NovaCrest Technologies',
+        title: 'Owner',
+        status: 'Lead',
+        source: 'website',
+        createdAt: new Date('2026-07-23T08:00:00.000Z'),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/csv/contacts/export.csv?format=xlsx')
+      .buffer(true)
+      .parse(bufferParser);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/spreadsheetml/);
+    expect(res.headers['content-disposition']).toMatch(/contacts-export-.*\.xlsx/);
+    expect(res.body.slice(0, 2).toString('utf8')).toBe('PK');
+    expect(prisma.contact.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ tenantId: 1, deletedAt: null }) }),
+    );
+  });
+});
+
+describe('GET /api/csv/contacts/template.csv?format=xlsx', () => {
+  test('returns the XLSX template variant', async () => {
+    const res = await request(makeApp())
+      .get('/api/csv/contacts/template.csv?format=xlsx')
+      .buffer(true)
+      .parse(bufferParser);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/spreadsheetml/);
+    expect(res.headers['content-disposition']).toMatch(/contacts-template\.xlsx/);
+    expect(res.body.slice(0, 2).toString('utf8')).toBe('PK');
+  });
+});
+
+describe('POST /api/csv/contacts/import.csv with XLSX', () => {
+  test('imports a workbook uploaded as .xlsx', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 99 });
+
+    const workbook = toXlsxBuffer(
+      ['name', 'email', 'phone', 'company', 'title', 'status', 'source'],
+      [
+        {
+          name: 'Jane Doe',
+          email: 'jane@example.com',
+          phone: '+919876543210',
+          company: 'Acme Health',
+          title: 'Owner',
+          status: 'Lead',
+          source: 'website',
+        },
+      ],
+      'Contacts Import',
+    );
+
+    const res = await request(makeApp())
+      .post('/api/csv/contacts/import.csv')
+      .attach('file', workbook, {
+        filename: 'contacts.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0 });
+    expect(res.body.errors).toEqual([]);
+    expect(prisma.contact.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          name: 'Jane Doe',
+          email: 'jane@example.com',
+          status: 'Lead',
+          source: 'website',
+          tenantId: 1,
+        }),
+      }),
+    );
   });
 });
 // ─── Services export ───────────────────────────────────────────────
@@ -566,4 +657,6 @@ describe('RBAC + errorReport query flag', () => {
     expect(body).toMatch(/missing name/i);
   });
 });
+
+
 

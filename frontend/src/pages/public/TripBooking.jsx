@@ -1,4 +1,4 @@
-// Public Travel Stall trip booking page (PRD §4.7 — 50%-advance flow).
+﻿// Public Travel Stall trip booking page (PRD ?4.7 ? 50%-advance flow).
 //
 // Lives at /trip/:shareToken (no auth). The advisor sends the lead a
 // shareToken URL via WhatsApp/email; the lead lands here, reviews the
@@ -12,7 +12,7 @@
 // Q9 / payment-provider creds land). The "Pay" button POSTs to the
 // record-advance endpoint with a generated reference; the page then
 // re-fetches and shows the advance-paid state. The button label says
-// "Pay" so the demo reflects the production UX — when the gateway
+// "Pay" so the demo reflects the production UX ? when the gateway
 // wires in, this page only needs the button onClick swapped for the
 // gateway's payment-intent helper.
 //
@@ -36,19 +36,19 @@ const ITEM_ICON = {
   insurance: ShieldCheck,
 };
 
-// A flight quote's destination is a route ("DEL→JED flights") that resolves to
+// A flight quote's destination is a route ("DEL?JED flights") that resolves to
 // no photo. Map the arrival airport to its city so the hero/side-rails still
 // get real destination visuals. Falls back to the raw string for anything else.
 //
 // Kept broad on purpose: the backend airport resolver (lib/airportResolver.js +
 // the airport-iata LLM task) can turn ANY free-text place into an IATA code, so
 // the arrival airport here can be far beyond the headline metros. This list
-// mirrors that reach — all Indian airports the resolver knows plus the common
-// Gulf/international ones — so the hero photo shows for real routes instead of
+// mirrors that reach ? all Indian airports the resolver knows plus the common
+// Gulf/international ones ? so the hero photo shows for real routes instead of
 // degrading to the bare gradient. Anything still unmapped falls through to the
 // themed gradient (graceful, never broken). Keep IATA codes UPPERCASE.
 const IATA_CITY = {
-  // ── India: metros + tier-2/3 (incl. Deoghar DGH, the case that regressed) ──
+  // -- India: metros + tier-2/3 (incl. Deoghar DGH, the case that regressed) --
   DEL: "Delhi", BOM: "Mumbai", BLR: "Bangalore", MAA: "Chennai", HYD: "Hyderabad",
   CCU: "Kolkata", COK: "Kochi", GOI: "Goa", AMD: "Ahmedabad", PNQ: "Pune",
   JAI: "Jaipur", LKO: "Lucknow", CCJ: "Kozhikode", TRV: "Thiruvananthapuram",
@@ -60,11 +60,11 @@ const IATA_CITY = {
   BDQ: "Vadodara", VGA: "Vijayawada", TIR: "Tirupati", HBX: "Hubli",
   IXM: "Madurai", CJB: "Coimbatore", TRZ: "Tiruchirappalli", IXA: "Agartala",
   GAY: "Gaya", DED: "Dehradun", IXL: "Leh", DIB: "Dibrugarh", IMF: "Imphal",
-  // ── Gulf / Middle East (RFU Umrah + leisure) ──
+  // -- Gulf / Middle East (RFU Umrah + leisure) --
   JED: "Jeddah", MED: "Medina", RUH: "Riyadh", DMM: "Dammam", DXB: "Dubai",
   AUH: "Abu Dhabi", SHJ: "Sharjah", DOH: "Doha", MCT: "Muscat", KWI: "Kuwait City",
   BAH: "Manama", AMM: "Amman", CAI: "Cairo",
-  // ── Common international ──
+  // -- Common international --
   SIN: "Singapore", BKK: "Bangkok", KUL: "Kuala Lumpur", LHR: "London",
   CDG: "Paris", JFK: "New York", HND: "Tokyo", NRT: "Tokyo", CMB: "Colombo",
   KTM: "Kathmandu", MLE: "Maldives", DPS: "Bali", HKG: "Hong Kong",
@@ -82,7 +82,7 @@ function photoDestinationFor(destination) {
 
 // Lazily inject the Razorpay checkout SDK once. Resolves true when
 // window.Razorpay is available, false if the script fails to load (offline /
-// blocked). Idempotent — re-uses the already-loaded global on repeat calls.
+// blocked). Idempotent ? re-uses the already-loaded global on repeat calls.
 const RAZORPAY_SDK_SRC = "https://checkout.razorpay.com/v1/checkout.js";
 function loadRazorpayScript() {
   return new Promise((resolve) => {
@@ -181,12 +181,12 @@ export default function TripBooking() {
     }
   };
 
-  // PRD §4.7 — real Razorpay checkout (advance OR balance). Flow:
-  //   1. POST create-payment-order → server mints a Razorpay order using the
+  // PRD ?4.7 ? real Razorpay checkout (advance OR balance). Flow:
+  //   1. POST create-payment-order ? server mints a Razorpay order using the
   //      platform keys from env and returns { orderId, amount, currency, keyId }.
   //   2. Open the Razorpay checkout modal with that order.
   //   3. On success the modal returns a signed { order_id, payment_id,
-  //      signature }; POST verify-payment → server validates the signature +
+  //      signature }; POST verify-payment ? server validates the signature +
   //      refetches the captured amount + advances the itinerary state.
   //   4. Re-fetch to show the new paid state.
   const startPayment = async (kind, itineraryItemId) => {
@@ -219,8 +219,8 @@ export default function TripBooking() {
           currency: order.currency,
           order_id: order.orderId,
           name: itin.tenantName || "Travel Stall",
-          description: `${kind === "balance" ? "Balance payment" : "Advance payment"} — ${itin.destination || "Trip"}`,
-          // PRD §4.7 — redirect-based methods (Netbanking, UPI intent, some
+          description: `${kind === "balance" ? "Balance payment" : "Advance payment"} ? ${itin.destination || "Trip"}`,
+          // PRD ?4.7 ? redirect-based methods (Netbanking, UPI intent, some
           // 3DS cards) cannot finish inside the modal. Razorpay will POST the
           // payment response to the callback_url (despite callback_method: "get").
           // Point directly to the backend verify-payment endpoint; it handles the
@@ -252,7 +252,7 @@ export default function TripBooking() {
             }
           },
           modal: {
-            // User closed the modal without paying — soft cancel, no error toast.
+            // User closed the modal without paying ? soft cancel, no error toast.
             ondismiss: () => reject(new Error("__cancelled__")),
           },
           theme: { color: "#C89A4E" },
@@ -274,7 +274,7 @@ export default function TripBooking() {
   const payAdvance = () => startPayment("advance", itin?.optionsMode ? selectedId : undefined);
   const payBalance = () => startPayment("balance");
 
-  if (loading) return <Shell><p style={{ color: "#5a6275" }}>Loading your trip…</p></Shell>;
+  if (loading) return <Shell><p style={{ color: "#5a6275" }}>Loading your trip?</p></Shell>;
   if (loadError) {
     return (
       <Shell>
@@ -301,7 +301,7 @@ export default function TripBooking() {
   const displayAdvance = optionsMode
     ? (selected ? Math.round(Number(selected.totalPrice) * (itin.advanceRatio || 0) * 100) / 100 : null)
     : itin.advanceDue;
-  // Flight quotes' destination is a route ("DEL→JED flights") with no photo —
+  // Flight quotes' destination is a route ("DEL?JED flights") with no photo ?
   // resolve the arrival city so the hero/rails still show real visuals.
   const photoDest = photoDestinationFor(itin.destination);
   const hasDates = !!(itin.startDate || itin.endDate);
@@ -311,38 +311,38 @@ export default function TripBooking() {
       {/* Culture photos filling the wide side gutters on desktop (Wikipedia,
           keyless). Hidden on narrow screens; never overlaps the card. */}
       <DestinationSideRails destination={itin.destination} photoDestination={photoDest} />
-      {/* Destination hero — themed gradient + cultural motif + real photo,
+      {/* Destination hero ? themed gradient + cultural motif + real photo,
           all auto-swapping with the destination. */}
       <DestinationHero destination={itin.destination} photoDestination={photoDest}>
         {hasDates && (
           <>
             <Calendar size={14} aria-hidden style={{ verticalAlign: -2, marginRight: 4 }} />
             {fmtDate(itin.startDate)} &mdash; {fmtDate(itin.endDate)}
-            {" · "}
+            {" ? "}
           </>
         )}
         <StatusBadge status={itin.status} />
       </DestinationHero>
 
-      {/* Travel dates — editable before payment, locked (read-only) after. */}
+      {/* Travel dates ? editable before payment, locked (read-only) after. */}
       <section aria-labelledby="dates-heading" style={datesCard}>
         <h2 id="dates-heading" style={{ ...sectionHeading, marginTop: 0 }}>
           <Calendar size={16} aria-hidden style={{ verticalAlign: -3, marginRight: 6 }} />
           Your travel dates
         </h2>
         {(itin.status === "advance_paid" || itin.status === "fully_paid") ? (
-          /* Locked after payment — show confirmed dates, prompt advisor contact for changes */
+          /* Locked after payment ? show confirmed dates, prompt advisor contact for changes */
           <div>
             <p style={{ fontSize: 13, color: "#1e8449", margin: "0 0 8px", fontWeight: 500 }}>
-              ✓ Dates confirmed and locked with your booking.
+              ? Dates confirmed and locked with your booking.
             </p>
             {hasDates ? (
               <p style={{ fontSize: 14, color: "#1a1f2e", margin: 0 }}>
-                {fmtDate(itin.startDate)}{itin.endDate ? ` — ${fmtDate(itin.endDate)}` : ""}
+                {fmtDate(itin.startDate)}{itin.endDate ? ` ? ${fmtDate(itin.endDate)}` : ""}
               </p>
             ) : (
               <p style={{ fontSize: 13, color: "#5a6275", margin: 0 }}>
-                No dates set — contact your advisor to confirm travel dates.
+                No dates set ? contact your advisor to confirm travel dates.
               </p>
             )}
             <p style={{ fontSize: 12, color: "#5a6275", margin: "8px 0 0" }}>
@@ -367,7 +367,7 @@ export default function TripBooking() {
                 <input type="date" value={endInput} min={startInput || undefined} onChange={(e) => { setEndInput(e.target.value); setDatesSaved(false); }} style={dateInput} aria-label="Preferred end date" />
               </label>
               <button type="button" onClick={saveDates} disabled={savingDates || datesSaved} style={{ ...secondaryBtn, opacity: savingDates || datesSaved ? 0.6 : 1 }}>
-                {datesSaved ? "Dates saved ✓" : savingDates ? "Saving…" : "Save dates"}
+                {datesSaved ? "Dates saved ?" : savingDates ? "Saving?" : "Save dates"}
               </button>
             </div>
             {datesError && <p style={{ fontSize: 12, color: "#b3261e", margin: "8px 0 0" }}>{datesError}</p>}
@@ -406,7 +406,7 @@ export default function TripBooking() {
                     <Plane size={18} aria-hidden style={{ color: "#122647", flexShrink: 0, marginTop: 1 }} />
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 600 }}>{item.description}</div>
-                      {details.length > 0 && <div style={detailMeta}>{details.join("  ·  ")}</div>}
+                      {details.length > 0 && <div style={detailMeta}>{details.join("  ?  ")}</div>}
                     </div>
                     {item.totalPrice != null && (
                       <div style={{ fontWeight: 700, color: "#122647", whiteSpace: "nowrap" }}>
@@ -434,7 +434,7 @@ export default function TripBooking() {
                     <div style={{ fontSize: 12, color: "#7a8294", textTransform: "uppercase", letterSpacing: 0.5 }}>
                       {item.itemType}
                     </div>
-                    {details.length > 0 && <div style={detailMeta}>{details.join("  ·  ")}</div>}
+                    {details.length > 0 && <div style={detailMeta}>{details.join("  ?  ")}</div>}
                   </div>
                   {item.totalPrice != null && (
                     <div style={{ fontWeight: 600, color: "#122647" }}>
@@ -457,7 +457,7 @@ export default function TripBooking() {
         />
         <Line
           label={`Advance (${Math.round((itin.advanceRatio || 0) * 100)}%)`}
-          value={displayAdvance != null ? fmtMoney(displayAdvance, itin.currency) : "—"}
+          value={displayAdvance != null ? fmtMoney(displayAdvance, itin.currency) : "?"}
         />
         {itin.advancePaid > 0 && (
           <Line label="Paid so far" value={fmtMoney(itin.advancePaid, itin.currency)} positive />
@@ -509,7 +509,7 @@ export default function TripBooking() {
   );
 }
 
-// ─── Payment CTA (state-machine) ─────────────────────────────────────
+// --- Payment CTA (state-machine) -------------------------------------
 
 function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance, optionsMode, advanceAmount, payDisabled }) {
   if (itin.status === "fully_paid") {
@@ -535,7 +535,7 @@ function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance, optionsMode, adv
             style={{ ...primaryBtn, opacity: paying ? 0.6 : 1, cursor: paying ? "wait" : "pointer" }}
           >
             <CreditCard size={16} aria-hidden />
-            {paying ? "Processing…" : `Pay balance · ${fmtMoneyCompact(itin.balanceDue, itin.currency)}`}
+            {paying ? "Processing?" : `Pay balance ? ${fmtMoneyCompact(itin.balanceDue, itin.currency)}`}
           </button>
         )}
         {itin.balanceDue > 0 && !itin.onlinePaymentEnabled && (
@@ -555,7 +555,7 @@ function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance, optionsMode, adv
   // already, but the branch is harmless).
   // Online pay is only offered when the agency has configured its own payment
   // gateway (itin.onlinePaymentEnabled). Otherwise the advisor arranges payment
-  // offline — we never route customer money through the platform account.
+  // offline ? we never route customer money through the platform account.
   if (!itin.onlinePaymentEnabled) {
     return (
       <div style={infoBox} role="status">
@@ -576,15 +576,15 @@ function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance, optionsMode, adv
     >
       <CreditCard size={16} aria-hidden />
       {paying
-        ? "Processing…"
+        ? "Processing?"
         : optionsMode && advanceAmount == null
           ? "Select an option to continue"
-          : `Pay ${Math.round((itin.advanceRatio || 0) * 100)}% to confirm · ${fmtMoneyCompact(advanceAmount, itin.currency)}`}
+          : `Pay ${Math.round((itin.advanceRatio || 0) * 100)}% to confirm ? ${fmtMoneyCompact(advanceAmount, itin.currency)}`}
     </button>
   );
 }
 
-// ─── Shell + helpers ─────────────────────────────────────────────────
+// --- Shell + helpers -------------------------------------------------
 
 function Shell({ children, tenantName }) {
   return (
@@ -634,9 +634,9 @@ function Line({ label, value, bold, positive }) {
 }
 
 function fmtDate(d) {
-  if (!d) return "—";
+  if (!d) return "?";
   const dt = new Date(d);
-  if (!Number.isFinite(dt.getTime())) return "—";
+  if (!Number.isFinite(dt.getTime())) return "?";
   return dt.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
@@ -664,7 +664,7 @@ function flightQuoteData(item) {
 
 function isRoundTripFlight(item) {
   const d = flightQuoteData(item);
-  // This presentation is exclusively for paired Flight quick-quote options.
+  // This presentation is exclusively for paired flight itinerary options.
   // Other itinerary flight items retain their existing customer-facing labels.
   return d.source === "agent-quick-quote" && Boolean(d.returnLeg);
 }
@@ -681,13 +681,13 @@ function flightDetails(item) {
   if (d.source === "agent-quick-quote" && d.returnLeg) {
     const r = d.returnLeg;
     const returnDep = fmtDateTime(r.departAt);
-    parts.push(`Return: ${r.airline || ""}${r.flightNumber ? ` ${r.flightNumber}` : ""} ${r.route?.from || ""}→${r.route?.to || ""}${returnDep ? `, ${returnDep}` : ""}`.trim());
+    parts.push(`Return: ${r.airline || ""}${r.flightNumber ? ` ${r.flightNumber}` : ""} ${r.route?.from || ""}?${r.route?.to || ""}${returnDep ? `, ${returnDep}` : ""}`.trim());
   }
   return parts;
 }
 
 function fmtMoney(n, currency = "INR") {
-  if (n == null) return "—";
+  if (n == null) return "?";
   try {
     return new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
   } catch {
@@ -695,14 +695,14 @@ function fmtMoney(n, currency = "INR") {
   }
 }
 
-// Compact form for buttons: "₹50,000" not "₹50,000.00".
+// Compact form for buttons: "?50,000" not "?50,000.00".
 function fmtMoneyCompact(n, currency = "INR") {
-  if (n == null) return "—";
-  if (currency === "INR") return `₹${Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+  if (n == null) return "?";
+  if (currency === "INR") return `?${Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
   return fmtMoney(n, currency);
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────
+// --- Styles ----------------------------------------------------------
 // Travel Stall theme (PRD Q22 placeholder): navy #122647 + warm gold
 // #C89A4E on cream #fbf7f0. Matches TravelStallQuiz.jsx.
 
@@ -778,3 +778,5 @@ const fineprint = {
   textAlign: "center", color: "#7a8294",
   fontSize: 12, marginTop: 14,
 };
+
+

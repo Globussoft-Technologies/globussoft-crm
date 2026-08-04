@@ -91,7 +91,7 @@
  * ServiceCategories / ProductCategories flat-path convention.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -111,9 +111,23 @@ const notifyObj = {
   success: notifySuccess,
   confirm: notifyConfirm,
 };
+let intersectionCallback = null;
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
+
+class MockIntersectionObserver {
+  constructor(callback) {
+    intersectionCallback = callback;
+  }
+  observe() {}
+  disconnect() {}
+  unobserve() {}
+}
+
+beforeEach(() => {
+  global.IntersectionObserver = MockIntersectionObserver;
+});
 
 import Drugs from '../pages/wellness/Drugs';
 
@@ -156,16 +170,58 @@ const LEGACY_SYRUP = {
   notes: '',
   isActive: false,
 };
+const PAGE2_DRUG_A = {
+  id: 904,
+  name: 'Dolo 650',
+  genericName: 'Paracetamol',
+  dosageForm: 'tablet',
+  strengthValue: '650',
+  strengthUnit: 'mg',
+  defaultDosage: '1 tablet',
+  defaultFrequency: 'as needed',
+  defaultDuration: '3 days',
+  notes: '',
+  isActive: true,
+};
+const PAGE2_DRUG_B = {
+  id: 905,
+  name: 'Losartan',
+  genericName: 'Losartan',
+  dosageForm: 'tablet',
+  strengthValue: '50',
+  strengthUnit: 'mg',
+  defaultDosage: '1 tablet',
+  defaultFrequency: 'once daily',
+  defaultDuration: 'ongoing',
+  notes: '',
+  isActive: true,
+};
+
+function makeDrugsResponse(items, total = items.length, hasMore = false) {
+  return {
+    items,
+    total,
+    hasMore,
+    page: 1,
+    limit: 8,
+  };
+}
 
 function installFetchMock({
-  drugs = [CROCIN, COMBIFLAM, LEGACY_SYRUP],
+  page1 = [CROCIN, COMBIFLAM, LEGACY_SYRUP],
+  page2 = [PAGE2_DRUG_A, PAGE2_DRUG_B],
   drugsPromise = null,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
-    if (/^\/api\/wellness\/drugs(\?q=.*)?$/.test(url) && method === 'GET') {
+    if (/^\/api\/wellness\/drugs(\?.*)?$/.test(url) && method === 'GET') {
       if (drugsPromise) return drugsPromise;
-      return Promise.resolve(drugs);
+      const parsed = new URL(url, 'http://localhost');
+      const page = parsed.searchParams.get('page') || '1';
+      const response = page === '2'
+        ? makeDrugsResponse(page2, page1.length + page2.length, false)
+        : makeDrugsResponse(page1, page1.length + page2.length, page2.length > 0);
+      return Promise.resolve(response);
     }
     if (/^\/api\/wellness\/drugs(\/\d+)?$/.test(url)) {
       // POST / PUT / DELETE — resolve so submit / delete paths complete.
@@ -190,6 +246,11 @@ beforeEach(() => {
   notifyInfo.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockImplementation(() => Promise.resolve(true));
+  intersectionCallback = null;
+});
+
+afterEach(() => {
+  delete global.IntersectionObserver;
 });
 
 describe('<Drugs /> — page chrome', () => {
@@ -219,7 +280,7 @@ describe('<Drugs /> — page chrome', () => {
     installFetchMock({ drugsPromise: new Promise(() => {}) });
     renderPage();
     expect(
-      await screen.findByText(/^Loading catalogue…$/),
+      await screen.findByText(/^Loading catalogue\.\.\.$/),
     ).toBeInTheDocument();
   });
 });
@@ -229,7 +290,7 @@ describe('<Drugs /> — mount fetch + list render', () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/drugs');
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/drugs?page=1&limit=8');
     });
     expect(await screen.findByText('Crocin 500')).toBeInTheDocument();
     expect(screen.getByText('Combiflam')).toBeInTheDocument();
@@ -237,7 +298,7 @@ describe('<Drugs /> — mount fetch + list render', () => {
   });
 
   it('renders the empty-state copy when GET resolves to []', async () => {
-    installFetchMock({ drugs: [] });
+    installFetchMock({ page1: [] });
     renderPage();
     expect(
       await screen.findByText(/^No drugs match\.$/),
@@ -264,6 +325,25 @@ describe('<Drugs /> — mount fetch + list render', () => {
     expect(screen.getAllByText(/^Active$/).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/^Inactive$/)).toBeInTheDocument();
   });
+
+  it('loads the next page when the infinite-scroll sentinel enters view', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Crocin 500')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      intersectionCallback?.([{ isIntersecting: true }]);
+    });
+
+    await waitFor(() => {
+      expect(
+        fetchApiMock.mock.calls.some(([u]) => u === '/api/wellness/drugs?page=2&limit=8'),
+      ).toBe(true);
+    });
+    expect(await screen.findByText('Dolo 650')).toBeInTheDocument();
+  });
 });
 
 describe('<Drugs /> — search re-fetch', () => {
@@ -280,7 +360,7 @@ describe('<Drugs /> — search re-fetch', () => {
     fireEvent.keyDown(searchInput, { key: 'Enter' });
     await waitFor(() => {
       const searchCall = fetchApiMock.mock.calls.find(
-        ([u]) => u === '/api/wellness/drugs?q=paracetamol',
+        ([u]) => u === '/api/wellness/drugs?page=1&limit=8&q=paracetamol',
       );
       expect(searchCall).toBeTruthy();
     });
@@ -367,7 +447,7 @@ describe('<Drugs /> — create POST', () => {
     // After create, list refetches → at least 2 GETs total.
     const getCalls = fetchApiMock.mock.calls.filter(
       ([u, opts]) =>
-        /^\/api\/wellness\/drugs(\?q=.*)?$/.test(u) &&
+        /^\/api\/wellness\/drugs\?/.test(u) &&
         (opts?.method || 'GET') === 'GET',
     );
     expect(getCalls.length).toBeGreaterThanOrEqual(2);

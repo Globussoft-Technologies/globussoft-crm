@@ -393,7 +393,7 @@ export default function DiagnosticDetail() {
     }
   };
 
-  const regenReportPdf = async () => {
+  const regenReportPdf = async ({ successMessage = "Report PDF generated" } = {}) => {
     setPdfBusy(true);
     try {
       const res = await fetchApi(`/api/travel/diagnostics/${diagId}/report-pdf/regen`, {
@@ -403,7 +403,7 @@ export default function DiagnosticDetail() {
       if (res?.reportPdfUrl) {
         const normalized = normalizeDiagnosticPdfUrl(res.reportPdfUrl);
         setDiag((d) => (d ? { ...d, reportPdfUrl: normalized } : d));
-        notify.success("Report PDF generated");
+        notify.success(successMessage);
         const blob = await fetchDiagnosticPdfBlob(normalized);
         downloadBlob(blob, getDiagnosticPdfFilename(normalized));
       } else {
@@ -678,45 +678,30 @@ export default function DiagnosticDetail() {
             )}
             <button
               type="button"
-              onClick={() => setShareOpen((open) => !open)}
-              title="Open the share panel"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "6px 10px",
-                borderRadius: 6,
-                fontWeight: 600,
-                fontSize: 13,
-                background: "var(--surface-color)",
-                color: "var(--primary-color)",
-                border: "1px solid var(--primary-color)",
-                whiteSpace: "nowrap",
-                cursor: "pointer",
-              }}
-            >
-              <Share2 size={14} aria-hidden />
-              {shareOpen ? "Hide share panel" : "Share report"}
-            </button>
-            <button
-              type="button"
-              onClick={regenReportPdf}
+              onClick={() => regenReportPdf()}
               disabled={pdfBusy}
               title="Build the branded report PDF from this diagnostic"
               style={{
-                ...pdfLink,
-                background: "none",
-                border: "1px solid var(--border-color, #2a2a2a)",
+                ...reportSecondaryBtn,
                 cursor: pdfBusy ? "not-allowed" : "pointer",
                 opacity: pdfBusy ? 0.6 : 1,
               }}
             >
-              <RefreshCw size={14} aria-hidden />{" "}
+              <RefreshCw size={15} aria-hidden />
               {pdfBusy
                 ? "Generating..."
                 : diag.reportPdfUrl
                   ? "Regenerate PDF"
                   : "Generate report PDF"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShareOpen((open) => !open)}
+              title="Open the share panel"
+              style={reportGhostBtn}
+            >
+              <Share2 size={15} aria-hidden />
+              {shareOpen ? "Hide share panel" : "Share report"}
             </button>
           </div>
         </div>
@@ -1510,6 +1495,95 @@ const shareCode = {
   background: "var(--bg-color)",
   fontSize: 12,
   wordBreak: "break-all",
+};
+const reportActionsCard = {
+  marginTop: 14,
+  padding: 18,
+  borderRadius: 16,
+  border: "1px solid color-mix(in srgb, var(--primary-color) 24%, var(--border-color))",
+  background: "linear-gradient(135deg, color-mix(in srgb, var(--primary-color) 12%, var(--surface-color)) 0%, var(--surface-color) 58%, color-mix(in srgb, var(--accent-color, var(--primary-color)) 8%, var(--surface-color)) 100%)",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 18,
+  alignItems: "center",
+  justifyContent: "space-between",
+};
+const reportEyebrow = {
+  ...kvLabel,
+  color: "var(--primary-color)",
+};
+const reportTitleRow = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 10,
+  alignItems: "center",
+};
+const reportHelperText = {
+  margin: 0,
+  color: "var(--text-secondary)",
+  fontSize: 13,
+  lineHeight: 1.5,
+  maxWidth: 560,
+};
+const reportPillBase = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "4px 10px",
+  borderRadius: 999,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.3,
+  whiteSpace: "nowrap",
+};
+const reportReadyPill = {
+  ...reportPillBase,
+  background: "rgba(47, 122, 77, 0.14)",
+  color: "#2F7A4D",
+  border: "1px solid rgba(47, 122, 77, 0.32)",
+};
+const reportDraftPill = {
+  ...reportPillBase,
+  background: "rgba(200, 154, 78, 0.16)",
+  color: "#9A6F2E",
+  border: "1px solid rgba(154, 111, 46, 0.3)",
+};
+const reportActionsRow = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 10,
+  alignItems: "center",
+  justifyContent: "flex-end",
+};
+const reportButtonBase = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  minHeight: 42,
+  padding: "9px 14px",
+  borderRadius: 999,
+  fontWeight: 700,
+  fontSize: 13,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+};
+const reportPrimaryLink = {
+  ...reportButtonBase,
+  background: "var(--primary-color, var(--accent-color))",
+  color: "#fff",
+  border: "1px solid transparent",
+};
+const reportSecondaryBtn = {
+  ...reportButtonBase,
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-color)",
+};
+const reportGhostBtn = {
+  ...reportButtonBase,
+  background: "transparent",
+  color: "var(--primary-color)",
+  border: "1px dashed color-mix(in srgb, var(--primary-color) 44%, var(--border-color))",
+  cursor: "pointer",
 };
 const pdfLink = {
   marginLeft: "auto",

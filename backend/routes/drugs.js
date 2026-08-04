@@ -54,7 +54,10 @@ router.get("/", readGate, async (req, res) => {
       ];
     }
 
+    const wantsPagination = req.query.page !== undefined || req.query.limit !== undefined;
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const skip = wantsPagination ? (page - 1) * limit : 0;
 
     // ?fields=summary → slim shape for typeahead callers. Drops heavy free-text
     // `notes` (@db.Text — admin-only contraindications / scheduling info) and
@@ -76,10 +79,22 @@ router.get("/", readGate, async (req, res) => {
     const items = await prisma.drug.findMany({
       where,
       orderBy: [{ name: "asc" }],
-      take: limit,
+      take: wantsPagination ? limit : undefined,
+      skip: wantsPagination ? skip : undefined,
       ...(select ? { select } : {}),
     });
-    res.json(items);
+    if (!wantsPagination) {
+      return res.json(items);
+    }
+
+    const total = await prisma.drug.count({ where });
+    return res.json({
+      items,
+      page,
+      limit,
+      total,
+      hasMore: page * limit < total,
+    });
   } catch (e) {
     console.error("[drugs] list error:", e.message);
     res.status(500).json({ error: "Failed to list drugs" });

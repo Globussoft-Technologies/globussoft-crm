@@ -115,9 +115,11 @@ export default function TravelReports() {
           onClick={downloadPdf}
           disabled={exporting}
           style={{
-            display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px",
-            borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: exporting ? "default" : "pointer",
-            background: "var(--primary-color, var(--accent-color))", color: "#fff", border: "none", opacity: exporting ? 0.7 : 1,
+            display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 16px",
+            borderRadius: 999, fontWeight: 700, fontSize: 13, letterSpacing: 0.2,
+            cursor: exporting ? "default" : "pointer", minWidth: 148,
+            background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)", color: "#fff", border: "none",
+            boxShadow: "0 10px 24px rgba(37, 99, 235, 0.22)", opacity: exporting ? 0.72 : 1,
           }}
           aria-label="Download this report as PDF"
         >

@@ -26,18 +26,88 @@ function slugify(value, fallback = 'landing-site') {
   return String(value || fallback).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 50) || fallback;
 }
 
+function mapLandingSiteRow(page) {
+  if (!page) return null;
+  return {
+    ...page,
+    sectorKey: sectorKeyFromTemplateType(page.templateType),
+    sectorLabel: sectorLabelFromTemplateType(page.templateType),
+  };
+}
+
 router.get('/', verifyToken, async (req, res) => {
   try {
-    const pages = await prisma.landingPage.findMany({
-      where: { tenantId: req.user.tenantId, templateType: { startsWith: GENERIC_PREFIX } },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, title: true, slug: true, status: true, visits: true, submissions: true, templateType: true, description: true, createdAt: true, updatedAt: true, publishedAt: true, isFeatured: true },
+    const pageParam = Number.parseInt(req.query.page, 10);
+    const limitParam = Number.parseInt(req.query.limit, 10);
+    const paginated = Number.isFinite(pageParam) || Number.isFinite(limitParam);
+    const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
+    const limit = Math.min(Math.max(Number.isFinite(limitParam) && limitParam > 0 ? limitParam : 12, 1), 50);
+    const createdAfter = req.query.createdAfter ? new Date(String(req.query.createdAfter)) : null;
+    const createdBefore = req.query.createdBefore ? new Date(String(req.query.createdBefore)) : null;
+    const createdAt = {};
+    if (createdAfter && !Number.isNaN(createdAfter.getTime())) createdAt.gte = createdAfter;
+    if (createdBefore && !Number.isNaN(createdBefore.getTime())) createdAt.lte = createdBefore;
+
+    const baseWhere = {
+      tenantId: req.user.tenantId,
+      templateType: { startsWith: GENERIC_PREFIX },
+      ...(Object.keys(createdAt).length ? { createdAt } : {}),
+    };
+    const select = {
+      id: true,
+      title: true,
+      slug: true,
+      status: true,
+      visits: true,
+      submissions: true,
+      templateType: true,
+      description: true,
+      createdAt: true,
+      updatedAt: true,
+      publishedAt: true,
+      isFeatured: true,
+    };
+
+    const pinnedRow = await prisma.landingPage.findFirst({
+      where: { ...baseWhere, status: 'PUBLISHED' },
+      orderBy: [{ publishedAt: 'desc' }, { updatedAt: 'desc' }, { createdAt: 'desc' }],
+      select,
     });
-    res.json(pages.map((page) => ({
-      ...page,
-      sectorKey: sectorKeyFromTemplateType(page.templateType),
-      sectorLabel: sectorLabelFromTemplateType(page.templateType),
-    })));
+
+    if (!paginated) {
+      const pages = await prisma.landingPage.findMany({
+        where: baseWhere,
+        orderBy: { createdAt: 'desc' },
+        select,
+      });
+      const list = pinnedRow ? pages.filter((pageRow) => pageRow.id !== pinnedRow.id) : pages;
+      const ordered = pinnedRow ? [pinnedRow, ...list] : list;
+      return res.json(ordered.map(mapLandingSiteRow));
+    }
+
+    const listWhere = pinnedRow
+      ? { ...baseWhere, id: { not: pinnedRow.id } }
+      : baseWhere;
+    const skip = (page - 1) * limit;
+    const [total, pages] = await Promise.all([
+      prisma.landingPage.count({ where: listWhere }),
+      prisma.landingPage.findMany({
+        where: listWhere,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select,
+      }),
+    ]);
+
+    return res.json({
+      pages: pages.map(mapLandingSiteRow),
+      pinnedPage: mapLandingSiteRow(pinnedRow),
+      page,
+      limit,
+      total,
+      hasMore: skip + pages.length < total,
+    });
   } catch (err) {
     console.error('[landing-sites] list failed:', err);
     res.status(500).json({ error: 'Failed to fetch landing sites' });

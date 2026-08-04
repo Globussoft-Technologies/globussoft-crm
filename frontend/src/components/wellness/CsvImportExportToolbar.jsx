@@ -1,23 +1,24 @@
-// Issue #816 — Reusable CSV Import / Export toolbar for wellness list pages.
-//
+﻿
+// Issue #816 - Reusable CSV import / export toolbar for wellness list pages.
+
 // Renders two header-level buttons:
-//   ⬇ Export CSV  →  GET /api/wellness/csv/:entity/export?<filters>
+//   Export CSV -> GET /api/wellness/csv/:entity/export<filters>
 //                    Downloads the filtered current view as CSV.
-//   ⬆ Import CSV  →  opens a modal with: template download, file picker,
+//   Import CSV -> opens a modal with: template download, file picker,
 //                    client-side preview, validation, error report.
-//
+
 // Props:
-//   entity     — string (services | packages | products | customers | bookings)
-//   filters    — object whose keys become querystring params on /export.
+//   entity     - string (services | packages | products | customers | bookings)
+//   filters    - object whose keys become querystring params on /export.
 //                Mirrors whatever the parent page already filters by.
-//   label      — optional plain-English entity label for the modal header
+//   label      - optional plain-English entity label for the modal header
 //                (defaults to titlecased entity name).
-//   onImported — optional () => void callback fired AFTER a successful sync
+//   onImported - optional () => void callback fired AFTER a successful sync
 //                import completes, so the parent can refresh its list.
-//
+
 // Auth: piggy-backs on fetchApi's Bearer-token plumbing. Export uses a manual
-// fetch to honour the Authorization header on the blob download; the
-// "<a href=…>" path would skip the header and 401.
+// fetch to honor the Authorization header on the blob download; the
+// "<a href=...>" path would skip the header and 401.
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -48,7 +49,7 @@ export default function CsvImportExportToolbar({
   // becomes a dropdown and the Import modal offers both template formats.
   // Other entities keep the default single-CSV UX.
   formats = ["csv"],
-  // Optional endpoint overrides — Patients routes to the new
+  // Optional endpoint overrides - Patients routes to the new
   // /api/wellness/patients/{export,import-template} routes that understand
   // the source/gender/tags/dates filters; other entities stay on the
   // generic /api/wellness/csv/:entity/{export,template} pipeline.
@@ -60,13 +61,14 @@ export default function CsvImportExportToolbar({
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const exportMenuRef = useRef(null);
   const displayLabel = label || ENTITY_LABELS[entity] || entity;
+  const safeEndpoints = endpoints || {};
 
-  const exportUrl = endpoints?.export || `/api/wellness/csv/${entity}/export`;
-  const templateUrl = endpoints?.template || `/api/wellness/csv/${entity}/template`;
-  const metaUrl = endpoints?.meta || `/api/wellness/csv/${entity}`;
-  const importUrl = endpoints?.import || `/api/wellness/csv/${entity}/import`;
-  const importAsyncUrl = endpoints?.importAsync || `/api/wellness/csv/${entity}/import/async`;
-  const jobUrl = endpoints?.job || ((jobId) => `/api/wellness/csv/jobs/${jobId}`);
+  const exportUrl = safeEndpoints.export || `/api/wellness/csv/${entity}/export`;
+  const templateUrl = safeEndpoints.template || `/api/wellness/csv/${entity}/template`;
+  const metaUrl = safeEndpoints.meta || `/api/wellness/csv/${entity}`;
+  const importUrl = safeEndpoints.import || `/api/wellness/csv/${entity}/import`;
+  const importAsyncUrl = safeEndpoints.importAsync || `/api/wellness/csv/${entity}/import/async`;
+  const jobUrl = safeEndpoints.job || ((jobId) => `/api/wellness/csv/jobs/${jobId}`);
 
   const buildQueryString = (extra = {}) => {
     const parts = [];
@@ -82,7 +84,7 @@ export default function CsvImportExportToolbar({
         parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
       }
     }
-    return parts.length ? `?${parts.join("&")}` : "";
+    return parts.length ? `${parts.join("&")}` : "";
   };
 
   const doExport = async (format = "csv") => {
@@ -103,7 +105,7 @@ export default function CsvImportExportToolbar({
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      const ext = FORMAT_META[format]?.ext || "csv";
+      const ext = FORMAT_META[format].ext || "csv";
       a.download = `${entity}-${new Date().toISOString().slice(0, 10)}.${ext}`;
       document.body.appendChild(a);
       a.click();
@@ -145,7 +147,7 @@ export default function CsvImportExportToolbar({
               aria-label={`Export ${displayLabel}`}
               style={secondaryBtnStyle}
             >
-              <Download size={14} /> {exporting ? "Exporting…" : "Export"}
+              <Download size={14} /> {exporting ? "Exporting..." : "Export"}
               <ChevronDown size={12} style={{ marginLeft: "0.15rem" }} />
             </button>
             {exportMenuOpen && (
@@ -162,7 +164,7 @@ export default function CsvImportExportToolbar({
                     onClick={() => doExport(f)}
                     style={dropdownItemStyle}
                   >
-                    {FORMAT_META[f]?.label || f.toUpperCase()}
+                    {FORMAT_META[f].label || f.toUpperCase()}
                   </button>
                 ))}
               </div>
@@ -176,7 +178,7 @@ export default function CsvImportExportToolbar({
             aria-label={`Export ${displayLabel} as CSV`}
             style={secondaryBtnStyle}
           >
-            <Download size={14} /> {exporting ? "Exporting…" : "Export CSV"}
+            <Download size={14} /> {exporting ? "Exporting..." : "Export CSV"}
           </button>
         )}
         <button
@@ -202,7 +204,7 @@ export default function CsvImportExportToolbar({
           onClose={() => setShowImport(false)}
           onImported={(result) => {
             // Only refresh the parent's list if at least one row landed.
-            if (onImported && (result?.inserted || result?.imported || result?.updated)) onImported(result);
+            if (onImported && (result.inserted || result.imported || result.updated)) onImported(result);
           }}
         />
       )}
@@ -210,7 +212,7 @@ export default function CsvImportExportToolbar({
   );
 }
 
-// ── Import modal ──────────────────────────────────────────────────
+// -- Import modal --------------------------------------------------
 
 function ImportModal({
   entity,
@@ -244,15 +246,15 @@ function ImportModal({
         setExpectedHeaders(meta.headers || []);
         if (meta.thresholds) setThresholds(meta.thresholds);
       })
-      .catch(() => { /* gate denied — submit will show the real error */ });
+      .catch(() => { /* gate denied - submit will show the real error */ });
   }, [entity, metaUrl]);
 
   const downloadTemplate = async (format = "csv") => {
     try {
       const token = getAuthToken();
       const base = templateUrl || `/api/wellness/csv/${entity}/template`;
-      // Multi-format template endpoints accept ?format=csv|xlsx. The legacy
-      // single-format endpoint ignores the param (always returns CSV) — fine.
+      // Multi-format template endpoints accept format=csv|xlsx. The legacy
+      // single-format endpoint ignores the param (always returns CSV) - fine.
       const url = formats.length > 1 ? `${base}?format=${encodeURIComponent(format)}` : base;
       const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -265,7 +267,7 @@ function ImportModal({
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      const ext = FORMAT_META[format]?.ext || "csv";
+      const ext = FORMAT_META[format].ext || "csv";
       a.download = `${entity}-template.${ext}`;
       document.body.appendChild(a);
       a.click();
@@ -284,7 +286,7 @@ function ImportModal({
     setPreviewRows([]);
     setPreviewHeaders([]);
     if (!f) return;
-    // XLSX is binary — we don't ship a SheetJS bundle to the client just for
+    // XLSX is binary - we don't ship a SheetJS bundle to the client just for
     // preview. The header + per-row validation still runs server-side on
     // submit, and any errors come back in the result.errors[] envelope.
     const looksXlsx = /\.xlsx$/i.test(f.name || "")
@@ -315,8 +317,8 @@ function ImportModal({
     const tooLong = previewRows.length === 10 && file.size > 100 * 1024; // heuristic; the row count is properly checked server-side
 
     const useAsync = tooBig || tooLong;
-    const endpoint = useAsync
-      ? (importAsyncUrl || `/api/wellness/csv/${entity}/import/async`)
+    const endpoint = useAsync ?
+      (importAsyncUrl || `/api/wellness/csv/${entity}/import/async`)
       : (importUrl || `/api/wellness/csv/${entity}/import`);
 
     try {
@@ -336,15 +338,15 @@ function ImportModal({
       }
       if (useAsync) {
         setJobId(body.jobId);
-        notify.info("Large file queued — you'll be emailed when it finishes.");
+        notify.info("Large file queued - you'll be emailed when it finishes.");
       } else {
         setResult(body);
         if (body.inserted || body.updated) {
           notify.success(
-            `Imported: ${body.inserted} new, ${body.updated} updated${body.errors?.length ? `, ${body.errors.length} errors` : ""}`,
+            `Imported: ${body.inserted} new, ${body.updated} updated${body.errors.length ? `, ${body.errors.length} errors` : ""}`,
           );
           onImported(body);
-        } else if (body.errors?.length) {
+        } else if (body.errors.length) {
           notify.error(`Import had ${body.errors.length} row error(s).`);
         }
       }
@@ -366,7 +368,7 @@ function ImportModal({
       if (j.status === "done" || j.status === "failed") {
         setResult(j.result || { errors: [{ row: 0, column: "(job)", value: "", message: j.error || "Job failed" }], inserted: 0, updated: 0, skipped: 0 });
         setJobId(null);
-        if (j.status === "done" && (j.result?.inserted || j.result?.updated)) onImported(j.result);
+        if (j.status === "done" && (j.result.inserted || j.result.updated)) onImported(j.result);
       }
     };
     const id = setInterval(tick, 1500);
@@ -375,14 +377,14 @@ function ImportModal({
   }, [jobId, jobUrl, onImported]);
 
   const downloadErrorReport = () => {
-    if (!result?.errors?.length) return;
+    if (!result.errors.length) return;
     const headers = ["row", "column", "value", "message"];
     const lines = [headers.join(",")];
     for (const e of result.errors) {
       const cells = headers.map((h) => csvCell(e[h]));
       lines.push(cells.join(","));
     }
-    const blob = new Blob(["﻿" + lines.join("\r\n") + "\r\n"], { type: "text/csv;charset=utf-8" });
+    const blob = new Blob(["" + lines.join("\r\n") + "\r\n"], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `${entity}-import-errors-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -396,7 +398,7 @@ function ImportModal({
   // viewport, not to an ancestor with backdrop-filter / transform / filter.
   // PageHeader's `.glass` class applies backdrop-filter, which would
   // otherwise contain `position: fixed` inside the header's bounding box
-  // — the modal's `inset: 0` would cover only the header rectangle, the
+  // - the modal's `inset: 0` would cover only the header rectangle, the
   // dark backdrop wouldn't span the page, and the Cancel / Confirm buttons
   // would sit over the search-bar row and have their clicks intercepted.
   // (#1120)
@@ -458,7 +460,7 @@ function ImportModal({
 
         <p style={{ color: "var(--text-secondary)", marginBottom: "1rem" }}>
           Upload a {formats.length > 1 ? "CSV or Excel (XLSX) file" : "CSV"} with these columns:{" "}
-          <code style={{ fontSize: "0.85em" }}>{expectedHeaders.join(", ") || "(loading…)"}</code>.
+          <code style={{ fontSize: "0.85em" }}>{expectedHeaders.join(", ") || "(loading...)"}</code>.
           Extra columns are ignored. Files over {Math.round(thresholds.bytes / (1024 * 1024))}MB or {thresholds.rows.toLocaleString()} rows are processed in the background and emailed when done.
         </p>
 
@@ -470,7 +472,7 @@ function ImportModal({
               onClick={() => downloadTemplate(f)}
               style={linkBtnStyle}
             >
-              <FileText size={14} /> Download {FORMAT_META[f]?.label || f.toUpperCase()} template
+              <FileText size={14} /> Download {FORMAT_META[f].label || f.toUpperCase()} template
             </button>
           ))}
         </div>
@@ -482,13 +484,13 @@ function ImportModal({
             accept={formats.length > 1
               ? ".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               : ".csv,text/csv"}
-            onChange={(e) => handleFile(e.target.files?.[0] || null)}
+            onChange={(e) => handleFile(e.target.files[0] || null)}
             style={{ width: "100%" }}
             aria-label={formats.length > 1 ? "Select CSV or Excel file" : "Select CSV file"}
           />
           {file && /\.xlsx$/i.test(file.name || "") && !result && (
             <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", marginTop: "0.4rem" }}>
-              Excel file selected — column + row validation runs on the server when you click Confirm.
+              Excel file selected - column + row validation runs on the server when you click Confirm.
             </p>
           )}
         </div>
@@ -515,7 +517,7 @@ function ImportModal({
                   {previewRows.map((r, i) => (
                     <tr key={i}>
                       {previewHeaders.map((h) => (
-                        <td key={h} style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{String(r[h] ?? "")}</td>
+                        <td key={h} style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{String(r[h] || "")}</td>
                       ))}
                     </tr>
                   ))}
@@ -527,12 +529,12 @@ function ImportModal({
 
         {result && (
           <div style={{ marginBottom: "1rem" }}>
-            <div role="status" style={{ ...alertStyle, background: result.errors?.length ? "rgba(245,158,11,0.15)" : "rgba(16,185,129,0.15)", borderColor: result.errors?.length ? "#f59e0b" : "#10b981" }}>
+            <div role="status" style={{ ...alertStyle, background: result.errors.length ? "rgba(245,158,11,0.15)" : "rgba(16,185,129,0.15)", borderColor: result.errors.length ? "#f59e0b" : "#10b981" }}>
               <CheckCircle2 size={16} style={{ verticalAlign: "middle", marginRight: 6 }} />
-              Inserted <strong>{result.inserted ?? result.imported ?? 0}</strong>, updated <strong>{result.updated ?? 0}</strong>, skipped <strong>{result.skipped ?? 0}</strong>{result.errors?.length ? `, errors ${result.errors.length}` : ""}
+              Inserted <strong>{result.inserted ?? result.imported ?? 0}</strong>, updated <strong>{result.updated ?? 0}</strong>, skipped <strong>{result.skipped ?? 0}</strong>{result.errors.length ? `, errors ${result.errors.length}` : ""}
             </div>
 
-            {result.errors?.length > 0 && (
+            {result.errors.length > 0 && (
               <>
                 <h3 style={{ fontSize: "0.95rem", margin: "0.6rem 0 0.4rem" }}>Row-level errors</h3>
                 <div style={{ maxHeight: 240, overflow: "auto", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 6 }}>
@@ -549,14 +551,14 @@ function ImportModal({
                         <tr key={i}>
                           <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{e.row}</td>
                           <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{e.column}</td>
-                          <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{String(e.value ?? "")}</td>
+                          <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{String(e.value || "")}</td>
                           <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{e.message}</td>
                         </tr>
                       ))}
                       {result.errors.length > 200 && (
                         <tr>
                           <td colSpan={4} style={{ padding: "0.4rem", color: "var(--text-secondary)", textAlign: "center" }}>
-                            … {result.errors.length - 200} more — download the error report for the full list.
+                            ... {result.errors.length - 200} more - download the error report for the full list.
                           </td>
                         </tr>
                       )}
@@ -588,7 +590,7 @@ function ImportModal({
               onClick={doImport}
               style={{ ...primaryBtnStyle, opacity: !file || submitting || previewError ? 0.5 : 1 }}
             >
-              {submitting ? "Importing…" : "Confirm import"}
+              {submitting ? "Importing..." : "Confirm import"}
             </button>
           )}
         </div>
@@ -598,7 +600,7 @@ function ImportModal({
   );
 }
 
-// ── Inline tiny CSV utilities for the preview pane ───────────────
+// -- Inline tiny CSV utilities for the preview pane ---------------
 //
 // Mirrors backend/lib/csvIO.js's parse contract for the bits we need on the
 // client (header detection + first-10-row preview). Kept self-contained so
@@ -655,7 +657,7 @@ function csvCell(value) {
   return s;
 }
 
-// ── Styles ─────────────────────────────────────────────────────────
+// -- Styles ---------------------------------------------------------
 
 const secondaryBtnStyle = {
   display: "inline-flex",

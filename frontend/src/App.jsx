@@ -45,7 +45,7 @@ const Marketing = lazy(() => import("./pages/Marketing"));
 const Reports = lazy(() => import("./pages/Reports"));
 const AgentReports = lazy(() => import("./pages/AgentReports"));
 const Settings = lazy(() => import("./pages/Settings"));
-// G009 (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.7) Ã¢â‚¬â€ admin page for per-channel
+// G009 (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.7)  admin page for per-channel
 // enable/disable toggles + cooldowns + Meta form-ID routing mappings.
 // ADMIN-only via RoleGuard at the route declaration below.
 const LeadCapture = lazy(() => import("./pages/settings/LeadCapture"));
@@ -53,44 +53,72 @@ const LeadFields = lazy(() => import("./pages/settings/LeadFields"));
 const UserSettings = lazy(() => import("./pages/UserSettings"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
-// Super Admin Portal Ã¢â‚¬â€ fully separate auth system (env-based credentials,
+// Super Admin Portal  fully separate auth system (env-based credentials,
 // no User/tenant table). See middleware/superAdminAuth.js on the backend
 // for the full contract. SuperAdminLayout manages its own auth redirect
 // (checks localStorage superAdminToken) rather than the app's AuthContext.
-const SuperAdminLogin = lazy(() => import("./pages/superadmin/SuperAdminLogin"));
-const SuperAdminLayout = lazy(() => import("./pages/superadmin/SuperAdminLayout"));
-const SuperAdminCronMaintenance = lazy(() => import("./pages/superadmin/SuperAdminCronMaintenance"));
-const SuperAdminCronAnalytics = lazy(() => import("./pages/superadmin/SuperAdminCronAnalytics"));
-const SuperAdminApiAnalytics = lazy(() => import("./pages/superadmin/SuperAdminApiAnalytics"));
-const TravelCustomerPortal = lazy(() => import("./pages/travel/TravelCustomerPortal"));
-const PublicTripMicrosite = lazy(() => import("./pages/travel/PublicTripMicrosite"));
-// Public itinerary share page (no auth) Ã¢â‚¬â€ the advisor's "Share link" opens
+const SuperAdminLogin = lazy(
+  () => import("./pages/superadmin/SuperAdminLogin"),
+);
+const SuperAdminLayout = lazy(
+  () => import("./pages/superadmin/SuperAdminLayout"),
+);
+const SuperAdminCronMaintenance = lazy(
+  () => import("./pages/superadmin/SuperAdminCronMaintenance"),
+);
+const SuperAdminCronAnalytics = lazy(
+  () => import("./pages/superadmin/SuperAdminCronAnalytics"),
+);
+const SuperAdminApiAnalytics = lazy(
+  () => import("./pages/superadmin/SuperAdminApiAnalytics"),
+);
+const TravelCustomerPortal = lazy(
+  () => import("./pages/travel/TravelCustomerPortal"),
+);
+const PublicTripMicrosite = lazy(
+  () => import("./pages/travel/PublicTripMicrosite"),
+);
+// Public itinerary share page (no auth)  the advisor's "Share link" opens
 // /p/itinerary/:shareToken here. Backed by GET /api/travel/itineraries/public/:shareToken.
 const TripBooking = lazy(() => import("./pages/public/TripBooking"));
-const LandingSiteResolver = lazy(() => import("./pages/public/LandingSiteResolver"));
-const TravelKycCallback = lazy(() => import("./pages/travel/TravelKycCallback"));
-// PRD Ã‚Â§3.1 / slice T9 Ã¢â‚¬â€ public no-auth TMC readiness diagnostic.
+const LandingSiteResolver = lazy(
+  () => import("./pages/public/LandingSiteResolver"),
+);
+const TravelKycCallback = lazy(
+  () => import("./pages/travel/TravelKycCallback"),
+);
+// PRD 3.1 / slice T9  public no-auth TMC readiness diagnostic.
 const TmcReadiness = lazy(() => import("./pages/public/TmcReadiness"));
-// PRD Ã‚Â§3.5 / slice T10 Ã¢â‚¬â€ public 10-section readiness report page.
-const TmcReadinessReport = lazy(() => import("./pages/public/TmcReadinessReport"));
-// PRD_TRAVEL_QUOTE_BUILDER Ã‚Â§3.7 / slice C9 Ã¢â‚¬â€ public quote-accept landing.
-const QuoteAcceptLanding = lazy(() => import("./pages/public/QuoteAcceptLanding"));
+// PRD 3.5 / slice T10  public 10-section readiness report page.
+const TmcReadinessReport = lazy(
+  () => import("./pages/public/TmcReadinessReport"),
+);
+// PRD_TRAVEL_QUOTE_BUILDER 3.7 / slice C9  public quote-accept landing.
+const QuoteAcceptLanding = lazy(
+  () => import("./pages/public/QuoteAcceptLanding"),
+);
 const TravelReview = lazy(() => import("./pages/public/TravelReview"));
-const InvoicePaymentSuccess = lazy(() => import("./pages/public/InvoicePaymentSuccess"));
-const ItineraryPaymentSuccess = lazy(() => import("./pages/public/ItineraryPaymentSuccess"));
-// Public flyer share/embed viewer Ã¢â‚¬â€ /p/flyer/:slug?t=<jwt>[&embed=1].
+const InvoicePaymentSuccess = lazy(
+  () => import("./pages/public/InvoicePaymentSuccess"),
+);
+const ItineraryPaymentSuccess = lazy(
+  () => import("./pages/public/ItineraryPaymentSuccess"),
+);
+// Public flyer share/embed viewer  /p/flyer/:slug?t=<jwt>[&embed=1].
 const FlyerView = lazy(() => import("./pages/public/FlyerView"));
-// Public marketing landing page entry point Ã¢â‚¬â€ /trips. Resolves the
+// Public marketing landing page entry point  /trips. Resolves the
 // admin-selected featured LandingPage via /api/landing-pages/public/
 // featured and forwards the browser to /p/<slug>. When no page is
 // featured yet, falls back to the hardcoded TripsLanding (Japan).
-// No auth Ã¢â‚¬â€ renders outside the AuthContext shell.
+// No auth  renders outside the AuthContext shell.
 const TripsResolver = lazy(() => import("./pages/public/TripsResolver"));
-// Cross-vertical staff attendance dashboard Ã¢â‚¬â€ visible to wellness + travel
+// Cross-vertical staff attendance dashboard  visible to wellness + travel
 // tenants. Backend (/api/attendance/list + /summary) is role-gated to
 // ADMIN/MANAGER; per-row edit/delete is ADMIN-only.
 const AttendanceDashboard = lazy(() => import("./pages/AttendanceDashboard"));
-const WellnessAttendanceCalendar = lazy(() => import("./pages/wellness/AttendanceCalendar"));
+const WellnessAttendanceCalendar = lazy(
+  () => import("./pages/wellness/AttendanceCalendar"),
+);
 const Marketplace = lazy(() => import("./pages/Marketplace"));
 const CPQ = lazy(() => import("./pages/CPQ"));
 const CustomObjects = lazy(() => import("./pages/CustomObjects"));
@@ -132,36 +160,36 @@ const Signatures = lazy(() => import("./pages/Signatures"));
 const KnowledgeBase = lazy(() => import("./pages/KnowledgeBase"));
 const Currencies = lazy(() => import("./pages/Currencies"));
 const FieldPermissions = lazy(() => import("./pages/FieldPermissions"));
-// Per-sub-brand BrandKit admin UI Ã¢â‚¬â€ consumes /api/brand-kits CRUD
+// Per-sub-brand BrandKit admin UI  consumes /api/brand-kits CRUD
 // (backend route commit e4783e0). Operator manages logo / colors / font /
 // tagline per (subBrand, version) with one-active-per-sub-brand semantics.
 const BrandKits = lazy(() => import("./pages/admin/BrandKits"));
-// RateHawk hotel-search admin UI Ã¢â‚¬â€ consumes /api/ratehawk (backend route
+// RateHawk hotel-search admin UI  consumes /api/ratehawk (backend route
 // commit be67789, tick #103). Operator searches RateHawk hotel inventory
 // + sees cap utilisation; stub-mode banner surfaces while Q19 cred-blocked.
 const RateHawkSearch = lazy(() => import("./pages/admin/RateHawkSearch"));
-// Booking.com / Expedia hotel-search admin UI Ã¢â‚¬â€ consumes /api/booking-expedia
+// Booking.com / Expedia hotel-search admin UI  consumes /api/booking-expedia
 // (backend route commit bb33cbe, tick #105). 4th and FINAL cap-consumer UI.
 // Phase 2 deferred-by-design: Expedia returns 503 EXPEDIA_NOT_YET_ENABLED
 // until DC-4 flips; Booking.com (Phase 1) is stub-mode until Q-cluster B6/C
 // cred swap lands. Page mounts in a Phase-2-pending state by default.
-const BookingExpediaSearch = lazy(() =>
-  import("./pages/admin/BookingExpediaSearch"),
+const BookingExpediaSearch = lazy(
+  () => import("./pages/admin/BookingExpediaSearch"),
 );
-// CSP violations operator-inspect Ã¢â‚¬â€ slice 4 of #917, consumes slice-3 GET /api/csp/violations.
+// CSP violations operator-inspect  slice 4 of #917, consumes slice-3 GET /api/csp/violations.
 const CSPViolations = lazy(() => import("./pages/admin/CSPViolations"));
-// Voyagr (OJR) per-site API key admin Ã¢â‚¬â€ slice C1 of TRAVEL_CODEABLE_BACKLOG.
+// Voyagr (OJR) per-site API key admin  slice C1 of TRAVEL_CODEABLE_BACKLOG.
 // ADMIN-only; provisions per-sub-brand API keys consumed by /api/v1/voyagr.
 const VoyagrApiKeys = lazy(() => import("./pages/admin/VoyagrApiKeys"));
-// Public status page Ã¢â‚¬â€ /status (PRD_STATUS_PAGE.md).
+// Public status page  /status (PRD_STATUS_PAGE.md).
 const StatusPage = lazy(() => import("./pages/StatusPage"));
 // Admin incident-management surface for the status page.
 const StatusAdmin = lazy(() => import("./pages/admin/StatusAdmin"));
-// Embed allowlist admin Ã¢â‚¬â€ S128 of TRAVEL_BIG_SCOPE_BACKLOG. ADMIN-only;
+// Embed allowlist admin  S128 of TRAVEL_BIG_SCOPE_BACKLOG. ADMIN-only;
 // sets Tenant.embedAllowlistJson which controls per-tenant iframe
 // frame-ancestors enforcement (S38/S39/S66/S129 chain).
 const EmbedAllowlist = lazy(() => import("./pages/admin/EmbedAllowlist"));
-// PRD Gap Ã‚Â§1.5 / Ã‚Â§1.6 Ã¢â‚¬â€ admin pages for commission profiles + per-staff
+// PRD Gap 1.5 / 1.6  admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
 const CommissionData = lazy(() => import("./pages/CommissionData"));
@@ -204,54 +232,78 @@ const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));
 const PaymentFailed = lazy(() => import("./pages/PaymentFailed"));
 // React landing page renderer test page (for QA validation during migration)
 const TestReactLandingPage = lazy(() => import("./pages/TestReactLandingPage"));
-// Parity verification tool Ã¢â‚¬â€ automated regression detection
-const ParityVerificationTool = lazy(() => import("./pages/ParityVerificationTool"));
-// Phase 2 validation suite Ã¢â‚¬â€ builder round-trip, schema compatibility, routes
-const Phase2ValidationSuite = lazy(() => import("./pages/Phase2ValidationSuite"));
-// Landing-page marketing funnel: email check Ã¢â€ â€™ register Ã¢â€ â€™ plan selection Ã¢â€ â€™ Razorpay Ã¢â€ â€™ success.
+// Parity verification tool  automated regression detection
+const ParityVerificationTool = lazy(
+  () => import("./pages/ParityVerificationTool"),
+);
+// Phase 2 validation suite  builder round-trip, schema compatibility, routes
+const Phase2ValidationSuite = lazy(
+  () => import("./pages/Phase2ValidationSuite"),
+);
+// Landing-page marketing funnel: email check ?? ? register ?? ? plan selection ?? ? Razorpay ?? ? success.
 const GetStarted = lazy(() => import("./pages/GetStarted"));
 const RegisterSuccess = lazy(() => import("./pages/RegisterSuccess"));
 // Self-service customer registration. Creates a User with userType='CUSTOMER'
-// Ã¢â‚¬â€ distinct from the wellness patient portal (OTP-based, /wellness/portal).
+//  distinct from the wellness patient portal (OTP-based, /wellness/portal).
 const CustomerRegister = lazy(() => import("./pages/CustomerRegister"));
-// Travel vertical (Day 1 scaffolding Ã¢â‚¬â€ Phase 1 pages land per docs/TRAVEL_CRM_PRD.md Ã‚Â§7)
+// Travel vertical (Day 1 scaffolding  Phase 1 pages land per docs/TRAVEL_CRM_PRD.md 7)
 const TravelDashboard = lazy(() => import("./pages/travel/Dashboard"));
 const TravelDiagnostics = lazy(() => import("./pages/travel/Diagnostics"));
-const TravelDiagnosticWizard = lazy(() => import("./pages/travel/DiagnosticWizard"));
-const TravelDiagnosticBuilder = lazy(() => import("./pages/travel/DiagnosticBuilder"));
-const TravelDiagnosticDetail = lazy(() => import("./pages/travel/DiagnosticDetail"));
-// T16 Ã¢â‚¬â€ dedicated TMC catalogue admin (extracts the Promote-to-active sub-panel
+const TravelDiagnosticWizard = lazy(
+  () => import("./pages/travel/DiagnosticWizard"),
+);
+const TravelDiagnosticBuilder = lazy(
+  () => import("./pages/travel/DiagnosticBuilder"),
+);
+const TravelDiagnosticDetail = lazy(
+  () => import("./pages/travel/DiagnosticDetail"),
+);
+// T16  dedicated TMC catalogue admin (extracts the Promote-to-active sub-panel
 // from DiagnosticBuilder's EngineWeights tab into a first-class page).
-const TravelTmcCatalogueAdmin = lazy(() => import("./pages/travel/TmcCatalogueAdmin"));
+const TravelTmcCatalogueAdmin = lazy(
+  () => import("./pages/travel/TmcCatalogueAdmin"),
+);
 const TravelItineraries = lazy(() => import("./pages/travel/Itineraries"));
 const TravelTrips = lazy(() => import("./pages/travel/Trips"));
 const TravelTripDetail = lazy(() => import("./pages/travel/TripDetail"));
-const TravelWebCheckinQueue = lazy(() => import("./pages/travel/WebCheckinQueue"));
-const TravelAutomationHealth = lazy(() => import("./pages/travel/AutomationHealth"));
-// Slice C2 Ã¢â‚¬â€ Passport OCR verification queue (ADMIN+MANAGER). PRD_PASSPORT_OCR Ã‚Â§5.4.
-const TravelPassportVerificationQueue = lazy(() => import("./pages/travel/PassportVerificationQueue"));
+const TravelWebCheckinQueue = lazy(
+  () => import("./pages/travel/WebCheckinQueue"),
+);
+const TravelAutomationHealth = lazy(
+  () => import("./pages/travel/AutomationHealth"),
+);
+// Slice C2  Passport OCR verification queue (ADMIN+MANAGER). PRD_PASSPORT_OCR 5.4.
+const TravelPassportVerificationQueue = lazy(
+  () => import("./pages/travel/PassportVerificationQueue"),
+);
 const TravelCostMaster = lazy(() => import("./pages/travel/CostMaster"));
-// Arc 2 Travel Gap #907 slice 5/N Ã¢â‚¬â€ SightseeingMaster wire-in. SUT page
+// Arc 2 Travel Gap #907 slice 5/N  SightseeingMaster wire-in. SUT page
 // shipped slice 3 (ca052d20); this lazy import + Route below register the
 // admin-facing CRUD surface. Framed as "the 6th category in Cost Master"
 // per #907, so placed adjacent to TravelCostMaster.
-const TravelSightseeingMaster = lazy(() => import("./pages/travel/SightseeingMaster"));
-// Arc 2 Travel Gap #907 slice 8/N Ã¢â‚¬â€ ItineraryTemplates wire-in. SUT page
+const TravelSightseeingMaster = lazy(
+  () => import("./pages/travel/SightseeingMaster"),
+);
+// Arc 2 Travel Gap #907 slice 8/N  ItineraryTemplates wire-in. SUT page
 // shipped slice 7 (f8768836); this lazy import + Route below register the
 // admin-facing CRUD surface for reusable itinerary templates.
-const TravelItineraryTemplates = lazy(() => import("./pages/travel/ItineraryTemplates"));
-// S99 (TRAVEL_BIG_SCOPE_BACKLOG) Ã¢â‚¬â€ POI rep-suggested pending-approval queue
+const TravelItineraryTemplates = lazy(
+  () => import("./pages/travel/ItineraryTemplates"),
+);
+// S99 (TRAVEL_BIG_SCOPE_BACKLOG)  POI rep-suggested pending-approval queue
 // wire-in. SUT page shipped S12 (PoiPendingApprovalQueue.jsx). ADMIN-only
-// surface Ã¢â‚¬â€ backend RBAC enforces; frontend RoleGuard mirrors so non-ADMIN
+// surface  backend RBAC enforces; frontend RoleGuard mirrors so non-ADMIN
 // roles hit a friendly access-denied surface rather than a 403 from the
 // queue fetch. Backend route mounted S98 (commit 37d9ce40).
-const TravelPoiPendingApprovalQueue = lazy(() => import("./pages/travel/PoiPendingApprovalQueue"));
-// S49 (TRAVEL_BIG_SCOPE_BACKLOG) Ã¢â‚¬â€ App.jsx route registration for the S31
+const TravelPoiPendingApprovalQueue = lazy(
+  () => import("./pages/travel/PoiPendingApprovalQueue"),
+);
+// S49 (TRAVEL_BIG_SCOPE_BACKLOG)  App.jsx route registration for the S31
 // QuoteTemplates admin page (frontend/src/pages/travel/QuoteTemplates.jsx,
 // commit 8fb23237). Sibling to ItineraryTemplates above. Without this lazy
 // import + Route below, the page is unreachable from the running app.
 const TravelQuoteTemplates = lazy(() => import("./pages/travel/QuoteTemplates"));
-// S55 (TRAVEL_BIG_SCOPE_BACKLOG) Ã¢â‚¬â€ App.jsx route registration for the S54
+// S55 (TRAVEL_BIG_SCOPE_BACKLOG)  App.jsx route registration for the S54
 // CancellationPolicies admin page (frontend/src/pages/travel/CancellationPolicies.jsx,
 // commit 4823b160). Sibling to QuoteTemplates above; both are travel admin
 // CRUD surfaces that mirror the QuotesAdmin / InvoicesAdmin pattern.
@@ -261,116 +313,169 @@ const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
 const TravelPnlReport = lazy(() => import("./pages/travel/PnlReport"));
 const TravelReviews = lazy(() => import("./pages/travel/Reviews"));
-const TravelRfuCustomerProfile = lazy(() => import("./pages/travel/RfuCustomerProfile"));
+const TravelRfuCustomerProfile = lazy(
+  () => import("./pages/travel/RfuCustomerProfile"),
+);
 const TravelSuppliers = lazy(() => import("./pages/travel/Suppliers"));
-const TravelSuppliersAdmin = lazy(() => import("./pages/travel/SuppliersAdmin"));
-// PRD_TRAVEL_SUPPLIER_MASTER G035/G036 Ã¢â‚¬â€ Supplier PO ledger UI.
-const TravelPurchaseOrders = lazy(() => import("./pages/travel/PurchaseOrders"));
-// PRD_TRAVEL_SUPPLIER_MASTER G045 (FR-3.1.e, FR-3.5.a, FR-3.5.b) Ã¢â‚¬â€
+const TravelSuppliersAdmin = lazy(
+  () => import("./pages/travel/SuppliersAdmin"),
+);
+// PRD_TRAVEL_SUPPLIER_MASTER G035/G036  Supplier PO ledger UI.
+const TravelPurchaseOrders = lazy(
+  () => import("./pages/travel/PurchaseOrders"),
+);
+// PRD_TRAVEL_SUPPLIER_MASTER G045 (FR-3.1.e, FR-3.5.a, FR-3.5.b)
 // per-supplier commission ledger landing at /travel/suppliers/:id/commissions.
-const TravelSupplierCommissions = lazy(() => import("./pages/travel/SupplierCommissions"));
-// PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 (FR-3.3.c, FR-3.4.a-c) Ã¢â‚¬â€
+const TravelSupplierCommissions = lazy(
+  () => import("./pages/travel/SupplierCommissions"),
+);
+// PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 (FR-3.3.c, FR-3.4.a-c)
 // per-supplier statement reconciliation + invoice-PDF uploads, lands at
 // /travel/suppliers/:id/reconcile.
-const TravelSupplierReconciliation = lazy(() => import("./pages/travel/SupplierReconciliation"));
+const TravelSupplierReconciliation = lazy(
+  () => import("./pages/travel/SupplierReconciliation"),
+);
 const TravelQuotesAdmin = lazy(() => import("./pages/travel/QuotesAdmin"));
-// Arc 2 #900 slice 2 Ã¢â‚¬â€ operator-facing single-quote builder (line items +
+// Arc 2 #900 slice 2  operator-facing single-quote builder (line items +
 // totals panel + Save/Send/Duplicate/Download-PDF action cluster). Distinct
 // from TravelQuotesAdmin which is the CRUD list. PRD:
-// docs/PRD_TRAVEL_QUOTE_BUILDER.md Ã‚Â§3. RoleGuard allow=[ADMIN,MANAGER]
+// docs/PRD_TRAVEL_QUOTE_BUILDER.md 3. RoleGuard allow=[ADMIN,MANAGER]
 // mirrors backend write RBAC.
 const TravelQuoteBuilder = lazy(() => import("./pages/travel/QuoteBuilder"));
-// G019 Ã¢â‚¬â€ operator-facing counter-offer review surface.
-const TravelQuoteCounterReview = lazy(() => import("./pages/travel/QuoteCounterReview"));
-// PRD Ã‚Â§7 page plan Ã¢â‚¬â€ Flight quick-quote (in-CRM fallback for the not-yet-built
+// G019  operator-facing counter-offer review surface.
+const TravelQuoteCounterReview = lazy(
+  () => import("./pages/travel/QuoteCounterReview"),
+);
+// PRD 7 page plan  Flight offer image studio (new feature alongside the existing quick-quote
 // Chrome flight plugin). Advisor manually enters up to 4 flight options;
 // markup applies server-side (POST /api/v1/flight-plugin/agent-quotes) and
-// the result panel surfaces the branded PDF + WhatsApp share. No RoleGuard Ã¢â‚¬â€
+// the result panel surfaces the branded PDF + WhatsApp share. No RoleGuard
 // backend gates on travel tenant + sub-brand access; any travel operator may
 // raise a quick quote (view-by-default convention like QuotesAdmin).
-const TravelFlightQuoteAgent = lazy(() => import("./pages/travel/FlightQuoteAgent"));
+const TravelFlightQuoteAgent = lazy(
+  () => import("./pages/travel/FlightQuoteAgent"),
+);
+const TravelFlightOfferImageGenerator = lazy(
+  () => import("./pages/travel/FlightOfferImageGenerator"),
+);
 const TravelInvoicesAdmin = lazy(() => import("./pages/travel/InvoicesAdmin"));
-// Arc 2 #901 slice 7 frontend consumer Ã¢â‚¬â€ cross-invoice payment-milestone
+// Arc 2 #901 slice 7 frontend consumer  cross-invoice payment-milestone
 // dashboard. Consumes /api/travel/payment-schedules/upcoming (backend commit
 // e4832fee). Operator surface for upcoming/overdue milestones across all
 // travel invoices; complements the per-invoice schedule view on InvoicesAdmin.
-const TravelMilestoneTracker = lazy(() => import("./pages/travel/MilestoneTracker"));
-// Arc 2 #903 frontend consumer Ã¢â‚¬â€ cross-supplier Payables (A/P) review page.
+const TravelMilestoneTracker = lazy(
+  () => import("./pages/travel/MilestoneTracker"),
+);
+// Arc 2 #903 frontend consumer  cross-supplier Payables (A/P) review page.
 // Aggregates every TravelSupplierPayable across every supplier into one
 // operator-facing month-end review surface; complements the per-supplier
 // expand panel on SuppliersAdmin (slice 4). Placeholder fan-out fetch today;
 // will swap to GET /api/travel/payables once slice 6 ships the consolidating
 // endpoint (shipped page commit 2a0b00ab).
 const TravelPayables = lazy(() => import("./pages/travel/Payables"));
-// PRD_TRAVEL_BILLING G022 (FR-3.5.e) Ã¢â‚¬â€ supplier-payable batch ops surface.
+// PRD_TRAVEL_BILLING G022 (FR-3.5.e)  supplier-payable batch ops surface.
 // CRUD + state-machine ops for bundling N payables into one bank-transfer
 // run with a CSV export. Consumes /api/travel/payable-batches (backend route
 // travel_payable_batches.js).
-const TravelPayableBatches = lazy(() => import("./pages/travel/PayableBatches"));
-// PRD_TRAVEL_BILLING G024 (FR-3.6.c) Ã¢â‚¬â€ settlement-timeline Gantt view.
+const TravelPayableBatches = lazy(
+  () => import("./pages/travel/PayableBatches"),
+);
+// PRD_TRAVEL_BILLING G024 (FR-3.6.c)  settlement-timeline Gantt view.
 // Inflow (payment schedules) + outflow (supplier payables) on a single
 // horizontal axis. Consumes /api/travel/settlements/timeline.
-const TravelSettlementGantt = lazy(() => import("./pages/travel/SettlementGantt"));
-// Q9 Ã¢â‚¬â€ travel WhatsApp dispatch log (Wati transport). Read-only list of the
+const TravelSettlementGantt = lazy(
+  () => import("./pages/travel/SettlementGantt"),
+);
+// Q9  travel WhatsApp dispatch log (Wati transport). Read-only list of the
 // WhatsAppMessage rows backend/services/watiClient.js persists (OTPs,
 // reminders, itinerary shares, boarding-pass deliveries). Consumes the
-// existing tenant-scoped GET /api/whatsapp/messages Ã¢â‚¬â€ no new backend
+// existing tenant-scoped GET /api/whatsapp/messages  no new backend
 // surface. Travel-only; the wellness/generic WhatsApp surfaces are separate.
 const TravelWhatsAppLog = lazy(() => import("./pages/travel/WhatsAppLog"));
-// Q9 Ã¢â‚¬â€ travel 2-way WhatsApp chat (Wati). Clone of the wellness agent inbox
+// Q9  travel 2-way WhatsApp chat (Wati). Clone of the wellness agent inbox
 // with sends routed via POST /api/travel/whatsapp/send (watiClient) and
 // inbound delivered by the Wati webhook through the same socket events.
 // The wellness page + its Meta Cloud transport are untouched.
 const TravelWhatsAppChat = lazy(() => import("./pages/travel/WhatsAppChat"));
-// Q9 Ã¢â‚¬â€ read-only Wati template library (templates are authored/approved in
+// Q9  read-only Wati template library (templates are authored/approved in
 // the Wati dashboard). Target of the chat sub-components' templatesPath.
-const TravelWhatsAppTemplates = lazy(() => import("./pages/travel/WhatsAppTemplates"));
-// #905 slice 3 frontend consumer Ã¢â‚¬â€ TravelCommissionProfile CRUD admin.
+const TravelWhatsAppTemplates = lazy(
+  () => import("./pages/travel/WhatsAppTemplates"),
+);
+// #905 slice 3 frontend consumer  TravelCommissionProfile CRUD admin.
 // Consumes /api/travel/commission-profiles (backend slice 2 b5042743). GET
 // is verifyToken-only (any role can view); POST/PUT gated to ADMIN+MANAGER
-// and DELETE gated to ADMIN Ã¢â‚¬â€ mirrored client-side via canWrite + Delete
+// and DELETE gated to ADMIN  mirrored client-side via canWrite + Delete
 // button gates inside the page. Shipped page commit 6c2805f9.
-const TravelCommissionProfilesAdmin = lazy(() => import("./pages/travel/CommissionProfilesAdmin"));
-const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
-const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
-const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
-const TravelItineraryEditor = lazy(() => import("./pages/travel/ItineraryEditor"));
+const TravelCommissionProfilesAdmin = lazy(
+  () => import("./pages/travel/CommissionProfilesAdmin"),
+);
+const TravelReligiousPackets = lazy(
+  () => import("./pages/travel/ReligiousPackets"),
+);
+const TravelTmcMicrositePreview = lazy(
+  () => import("./pages/travel/TmcMicrositePreview"),
+);
+const TravelItineraryDetail = lazy(
+  () => import("./pages/travel/ItineraryDetail"),
+);
+const TravelItineraryEditor = lazy(
+  () => import("./pages/travel/ItineraryEditor"),
+);
 const TravelLeadDetail = lazy(() => import("./pages/travel/LeadDetail"));
-// Arc 2 #904 slice Ã¢â‚¬â€ InboundLeads admin page (STUB consumer). Operator-facing
+// Arc 2 #904 slice  InboundLeads admin page (STUB consumer). Operator-facing
 // list of inbound leads ingested via POST /api/travel/inbound/leads/:channel
 // (slice 1 webhook scaffold 8b562b0b + slice 4 HMAC/spam verification
 // 5bd46b2e). The dedicated GET listing endpoint is deferred to a future
-// slice Ã¢â‚¬â€ page currently fetches /api/contacts?limit=100 and filters
+// slice  page currently fetches /api/contacts?limit=100 and filters
 // client-side for `source.startsWith('inbound:')`. Convert-to-Lead button
 // hands off to /leads/:contactId. Shipped page commit 56f549f7.
 const TravelInboundLeads = lazy(() => import("./pages/travel/InboundLeads"));
-// Phase 3 Visa Sure scaffolding (cluster B3) Ã¢â‚¬â€ placeholder shells only.
-// Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md Ã‚Â§5 + Ã‚Â§9.
+// Phase 3 Visa Sure scaffolding (cluster B3)  placeholder shells only.
+// Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md 5 + 9.
 const TravelVisaDashboard = lazy(() => import("./pages/travel/visa/Dashboard"));
-const TravelVisaApplications = lazy(() => import("./pages/travel/visa/Applications"));
-const TravelVisaChecklists = lazy(() => import("./pages/travel/visa/Checklists"));
-const TravelVisaAdvisorDashboard = lazy(() => import("./pages/travel/visa/AdvisorDashboard"));
+const TravelVisaApplications = lazy(
+  () => import("./pages/travel/visa/Applications"),
+);
+const TravelVisaChecklists = lazy(
+  () => import("./pages/travel/visa/Checklists"),
+);
+const TravelVisaAdvisorDashboard = lazy(
+  () => import("./pages/travel/visa/AdvisorDashboard"),
+);
 const TravelVisaReports = lazy(() => import("./pages/travel/visa/Reports"));
 // Phase 3 Visa Sure embassy-rules admin (tick #178, consumes /api/embassy-rules
 // from backend commit 05587ac7). ADMIN-only mutation gate; route wrapped in
 // RoleGuard allow=["ADMIN"] mirroring backend POST/PUT/DELETE RBAC.
-const TravelVisaEmbassyRulesAdmin = lazy(() => import("./pages/travel/visa/EmbassyRulesAdmin"));
-// G107 Ã¢â‚¬â€ Visa Sure rejection-recovery program admin (PRD_VISA_SURE_PHASE_3 Ã‚Â§FR-7).
-const TravelVisaRecoveryProgram = lazy(() => import("./pages/travel/visa/RecoveryProgram"));
+const TravelVisaEmbassyRulesAdmin = lazy(
+  () => import("./pages/travel/visa/EmbassyRulesAdmin"),
+);
+// G107  Visa Sure rejection-recovery program admin (PRD_VISA_SURE_PHASE_3 FR-7).
+const TravelVisaRecoveryProgram = lazy(
+  () => import("./pages/travel/visa/RecoveryProgram"),
+);
 // Phase 1 TMC curriculum-mappings admin (tick #181, consumes /api/travel-curriculum
-// from backend commit 6d5919a8 Ã¢â‚¬â€ tick #180). ADMIN-only mutation gate;
+// from backend commit 6d5919a8  tick #180). ADMIN-only mutation gate;
 // route wrapped in RoleGuard allow=["ADMIN"] mirroring backend
-// POST/PUT/DELETE RBAC. School-trip pitch-deck mappings (curriculum Ãƒâ€”
-// grade Ãƒâ€” subject Ã¢â€ â€™ destination) consumed by the diagnostic engine.
-const TravelCurriculumAdmin = lazy(() => import("./pages/travel/CurriculumAdmin"));
-// TMC school term calendar admin Ã¢â‚¬â€ term/holiday/exam windows for trip scheduling.
-const TravelSchoolTermCalendar = lazy(() => import("./pages/travel/SchoolTermCalendar"));
-// Brochure Engine Ã¢â‚¬â€ wraps the vendored agentic-orchcrm engine. Page
+// POST/PUT/DELETE RBAC. School-trip pitch-deck mappings (curriculum
+// grade  subject ?? ? destination) consumed by the diagnostic engine.
+const TravelCurriculumAdmin = lazy(
+  () => import("./pages/travel/CurriculumAdmin"),
+);
+// TMC school term calendar admin  term/holiday/exam windows for trip scheduling.
+const TravelSchoolTermCalendar = lazy(
+  () => import("./pages/travel/SchoolTermCalendar"),
+);
+// Brochure Engine  wraps the vendored agentic-orchcrm engine. Page
 // consumes /api/travel/brochures/* (POST runs, GET runs/:id, SSE stream,
 // list / archive). Gated by marketing.read in the sidebar + per-route.
-const TravelBrochureEngine = lazy(() => import("./pages/travel/BrochureEngine"));
-// Phase 2 Travel Stall operator landing (TS21) Ã¢â‚¬â€ scaffold shell.
-const TravelStallDashboard = lazy(() => import("./pages/travel/TravelStallDashboard"));
+const TravelBrochureEngine = lazy(
+  () => import("./pages/travel/BrochureEngine"),
+);
+// Phase 2 Travel Stall operator landing (TS21)  scaffold shell.
+const TravelStallDashboard = lazy(
+  () => import("./pages/travel/TravelStallDashboard"),
+);
 // Wellness vertical
 const WellnessOwnerDashboard = lazy(
   () => import("./pages/wellness/OwnerDashboard"),
@@ -385,36 +490,52 @@ const WellnessPatientDetail = lazy(
 const WellnessServices = lazy(() => import("./pages/wellness/Services"));
 const WellnessLocations = lazy(() => import("./pages/wellness/Locations"));
 const WellnessMemberships = lazy(() => import("./pages/wellness/Memberships"));
-// Unified CSV import / export hub Ã¢â‚¬â€ single dropdown picks the entity then
+// Unified CSV import / export hub  single dropdown picks the entity then
 // delegates to the existing CsvImportExportToolbar component.
 const DataImportExport = lazy(() => import("./pages/DataImportExport"));
-// Wave 7 Agent A Ã¢â‚¬â€ ServiceCategory + Drug catalogue (PRD Gap Ã‚Â§10 #1 + #2)
-const WellnessServiceCategories = lazy(() => import("./pages/wellness/ServiceCategories"));
+// Wave 7 Agent A  ServiceCategory + Drug catalogue (PRD Gap 10 #1 + #2)
+const WellnessServiceCategories = lazy(
+  () => import("./pages/wellness/ServiceCategories"),
+);
 const WellnessDrugs = lazy(() => import("./pages/wellness/Drugs"));
-// Wave 11 Agent FF Ã¢â‚¬â€ Wallet + Gift Cards + Coupons + Cashback rules
-// (4 admin/manager-gated pages under /wellness/* Ã¢â‚¬â€ see RoleGuard wrap below).
+// Wave 11 Agent FF  Wallet + Gift Cards + Coupons + Cashback rules
+// (4 admin/manager-gated pages under /wellness/*  see RoleGuard wrap below).
 const WellnessWallet = lazy(() => import("./pages/wellness/Wallet"));
 const WellnessGiftCards = lazy(() => import("./pages/wellness/GiftCards"));
-const WellnessBuyGiftCards = lazy(() => import("./pages/wellness/BuyGiftCards"));
-// Customer-facing transaction history Ã¢â‚¬â€ surfaced in the sidebar only for
+const WellnessBuyGiftCards = lazy(
+  () => import("./pages/wellness/BuyGiftCards"),
+);
+// Customer-facing transaction history  surfaced in the sidebar only for
 // customer-tier roles (USER / CUSTOMER) via the `customerOnly` catalog flag.
-const WellnessMyTransactions = lazy(() => import("./pages/wellness/MyTransactions"));
+const WellnessMyTransactions = lazy(
+  () => import("./pages/wellness/MyTransactions"),
+);
 const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
-const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
-// Marketing QR Generator Ã¢â‚¬â€ create downloadable QR codes for clinic public pages/offers.
+const WellnessCashbackRules = lazy(
+  () => import("./pages/wellness/CashbackRules"),
+);
+// Marketing QR Generator  create downloadable QR codes for clinic public pages/offers.
 const WellnessQRGenerator = lazy(() => import("./pages/wellness/QRGenerator"));
-const WellnessEventsHistory = lazy(() => import("./pages/wellness/EventsHistory"));
+const WellnessEventsHistory = lazy(
+  () => import("./pages/wellness/EventsHistory"),
+);
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
-const WellnessBookAppointment = lazy(() => import("./pages/wellness/BookAppointment"));
-const WellnessAppointments = lazy(() => import("./pages/wellness/Appointments"));
-const WellnessMyAppointments = lazy(() => import("./pages/wellness/MyAppointments"));
+const WellnessBookAppointment = lazy(
+  () => import("./pages/wellness/BookAppointment"),
+);
+const WellnessAppointments = lazy(
+  () => import("./pages/wellness/Appointments"),
+);
+const WellnessMyAppointments = lazy(
+  () => import("./pages/wellness/MyAppointments"),
+);
 const WellnessMyBookings = lazy(() => import("./pages/wellness/MyBookings"));
 const WellnessReports = lazy(() => import("./pages/wellness/Reports"));
 const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
 const WellnessPrescriptions = lazy(
   () => import("./pages/wellness/Prescriptions"),
 );
-// Staff-authed self-view of own Rx Ã¢â‚¬â€ granted via `my_prescriptions.read`.
+// Staff-authed self-view of own Rx  granted via `my_prescriptions.read`.
 // Companion to the patient portal's prescriptions tab for staff users who
 // are ALSO patients at this clinic.
 const WellnessMyPrescriptions = lazy(
@@ -438,37 +559,51 @@ const WellnessWaitlist = lazy(() => import("./pages/wellness/Waitlist"));
 // Inventory is implemented as a tab inside PatientDetail; this stub explains
 // that and links to the patient list.
 const WellnessInventory = lazy(() => import("./pages/wellness/Inventory"));
-// Wave 11 Agent HH Ã¢â‚¬â€ Inventory backbone admin pages (categories, products, vendors,
+// Wave 11 Agent HH  Inventory backbone admin pages (categories, products, vendors,
 // receipts, adjustments, auto-consumption rules). All ADMIN/MANAGER-only.
-const WellnessProductCategories = lazy(() => import("./pages/wellness/ProductCategories"));
+const WellnessProductCategories = lazy(
+  () => import("./pages/wellness/ProductCategories"),
+);
 const WellnessProducts = lazy(() => import("./pages/wellness/Products"));
 const WellnessVendors = lazy(() => import("./pages/wellness/Vendors"));
-const WellnessInventoryReceipts = lazy(() => import("./pages/wellness/InventoryReceipts"));
-const WellnessInventoryAdjustments = lazy(() => import("./pages/wellness/InventoryAdjustments"));
-const WellnessAutoConsumptionRules = lazy(() => import("./pages/wellness/AutoConsumptionRules"));
-// Wave 11 Agent GG Ã¢â‚¬â€ Resource availability admin pages (rooms / machines /
+const WellnessInventoryReceipts = lazy(
+  () => import("./pages/wellness/InventoryReceipts"),
+);
+const WellnessInventoryAdjustments = lazy(
+  () => import("./pages/wellness/InventoryAdjustments"),
+);
+const WellnessAutoConsumptionRules = lazy(
+  () => import("./pages/wellness/AutoConsumptionRules"),
+);
+// Wave 11 Agent GG  Resource availability admin pages (rooms / machines /
 // holidays / per-doctor working hours). All ADMIN/MANAGER-only.
 const WellnessResources = lazy(() => import("./pages/wellness/Resources"));
 const WellnessHolidays = lazy(() => import("./pages/wellness/Holidays"));
-const WellnessWorkingHours = lazy(() => import("./pages/wellness/WorkingHoursEditor"));
+const WellnessWorkingHours = lazy(
+  () => import("./pages/wellness/WorkingHoursEditor"),
+);
 // Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox).
-const WellnessWhatsAppThreads = lazy(() => import("./pages/wellness/WhatsAppThreads"));
-const WellnessWhatsAppTemplates = lazy(() => import("./pages/wellness/WhatsAppTemplates"));
-// Wave 2 Agent JJ Ã¢â‚¬â€ Staff Attendance + Leave Management. Open to all roles
+const WellnessWhatsAppThreads = lazy(
+  () => import("./pages/wellness/WhatsAppThreads"),
+);
+const WellnessWhatsAppTemplates = lazy(
+  () => import("./pages/wellness/WhatsAppTemplates"),
+);
+// Wave 2 Agent JJ  Staff Attendance + Leave Management. Open to all roles
 // (everyone needs to clock in/out + manage their own leave); manager+
 // surfaces appear inline based on AuthContext.role.
 const WellnessAttendance = lazy(() => import("./pages/wellness/Attendance"));
 const WellnessLeave = lazy(() => import("./pages/wellness/Leave"));
-// Wave 2 Agent II Ã¢â‚¬â€ POS / Cash Register / Shift / Sale MVP UI.
+// Wave 2 Agent II  POS / Cash Register / Shift / Sale MVP UI.
 const WellnessPointOfSale = lazy(() => import("./pages/wellness/PointOfSale"));
-// Public customer-facing survey page (no admin chrome Ã¢â‚¬â€ see /survey/:id route below)
+// Public customer-facing survey page (no admin chrome  see /survey/:id route below)
 const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
-// v3.7.17 Ã¢â‚¬â€ token-based respondent landing page (the email link target).
+// v3.7.17  token-based respondent landing page (the email link target).
 // Renders the survey form (legacy NPS/CSAT or new multi-question types)
 // and posts answers back to the matching /respond endpoint.
 const SurveyRespond = lazy(() => import("./pages/SurveyRespond"));
 // Public signer-facing e-signature landing page (the email link target).
-// Token-protected, no admin chrome Ã¢â‚¬â€ renders a PDF preview + signature pad.
+// Token-protected, no admin chrome  renders a PDF preview + signature pad.
 const SignDocument = lazy(() => import("./pages/SignDocument"));
 // Public customer-facing knowledge-base article view (no auth, no admin chrome).
 // Replaces the raw-JSON backend response that the KB "View" button used to open.
@@ -483,26 +618,26 @@ export const ThemeContext = createContext();
 
 // Issue #207/#214/#216: wellness staff carry RBAC role=USER + an orthogonal
 // `wellnessRole` (doctor/professional/telecaller/helper/stylist). The Owner
-// Dashboard at /wellness exposes org-wide P&L (Ã¢â€šÂ¹12L) and is for ADMIN/MANAGER
-// only Ã¢â‚¬â€ clinical and operational staff need their own landing page so they
+// Dashboard at /wellness exposes org-wide P&L (?12L) and is for ADMIN/MANAGER
+// only  clinical and operational staff need their own landing page so they
 // don't see financial KPIs they shouldn't see. Login.jsx routes correctly on
 // fresh login; this helper covers refresh / `/` / GenericOnly bounces where
 // the URL would otherwise resolve to /wellness Owner Dashboard for everyone.
 function wellnessLandingFor(user) {
-  if (!user) return '/home';
-  if (user.role === 'ADMIN' || user.role === 'MANAGER') return '/wellness';
+  if (!user) return "/home";
+  if (user.role === "ADMIN" || user.role === "MANAGER") return "/wellness";
   switch (user.wellnessRole) {
-    case 'owner':
-    case 'manager':
-    case 'admin':
-      return '/wellness';
+    case "owner":
+    case "manager":
+    case "admin":
+      return "/wellness";
     default:
       // Everyone else (doctor / professional / telecaller / helper /
       // plain users) lands on the role-aware /home widget dashboard.
       // /home renders only the widgets and quick-actions the user has
       // permission for, so it's always the right starting surface even
       // when the user has zero wellness clinical permissions.
-      return '/home';
+      return "/home";
   }
 }
 
@@ -514,17 +649,18 @@ function wellnessLandingFor(user) {
 // EXCEPTION: a configured value of "/dashboard" is the system-wide ADMIN
 // default (and the implicit fallback for any role missing an explicit
 // landingPath). For non-generic verticals (wellness, travel) that's wrong
-// Ã¢â‚¬â€ those verticals have their own home surfaces, not the Enterprise
+//  those verticals have their own home surfaces, not the Enterprise
 // Overview. We override the generic default; any explicitly-customised
 // non-default path (e.g. /home, /wellness/calendar, /travel/leads) still
 // wins.
 function landingFor(user, tenant) {
-  const configured = user?.landingPath || user?.primaryRole?.landingPath || null;
-  const isGenericDefault = !configured || configured === '/dashboard';
+  const configured =
+    user?.landingPath || user?.primaryRole?.landingPath || null;
+  const isGenericDefault = !configured || configured === "/dashboard";
   if (isGenericDefault) {
-    if (tenant?.vertical === 'wellness') return wellnessLandingFor(user);
-    if (tenant?.vertical === 'travel') return '/travel';
-    return '/dashboard';
+    if (tenant?.vertical === "wellness") return wellnessLandingFor(user);
+    if (tenant?.vertical === "travel") return "/travel";
+    return "/dashboard";
   }
   return configured;
 }
@@ -536,23 +672,25 @@ function landingFor(user, tenant) {
 // back to the supplied default.
 function landingWithHandoff(fallback) {
   try {
-    const next = new URLSearchParams(window.location.search).get('next');
-    if (next && next.startsWith('/') && !next.startsWith('//')) {
+    const next = new URLSearchParams(window.location.search).get("next");
+    if (next && next.startsWith("/") && !next.startsWith("//")) {
       return decodeURIComponent(next);
     }
-  } catch (_e) { /* fall through */ }
+  } catch (_e) {
+    /* fall through */
+  }
   return fallback;
 }
 
 // Detect whether the URL carries marketing-site handoff params. When yes,
-// /customer/register should ALWAYS render its form Ã¢â‚¬â€ even if there's an
-// existing session Ã¢â‚¬â€ because the user explicitly came in to create a new
+// /customer/register should ALWAYS render its form  even if there's an
+// existing session  because the user explicitly came in to create a new
 // customer account (often distinct from whatever stale admin/staff session
 // happens to be lingering in their browser).
 function hasMarketingHandoff() {
   try {
     const p = new URLSearchParams(window.location.search);
-    return !!(p.get('tenantSlug') && p.get('next'));
+    return !!(p.get("tenantSlug") && p.get("next"));
   } catch (_e) {
     return false;
   }
@@ -560,17 +698,17 @@ function hasMarketingHandoff() {
 
 // Route guard: bounces wellness tenants away from generic-CRM-only pages.
 // The generic Enterprise Overview, deal pipeline, forecasting, etc. don't apply
-// to a clinic Ã¢â‚¬â€ wellness has its own /wellness Owner Dashboard. Without this
+// to a clinic  wellness has its own /wellness Owner Dashboard. Without this
 // guard, typing /dashboard in the URL bar (or following a stale bookmark) would
 // surface "Pipeline Analytics" + "Recent Deals" panels that confuse the user.
 // #207/#214: route to a role-aware wellness landing rather than the org-wide
-// Owner Dashboard so doctors / telecallers / helpers don't see Ã¢â€šÂ¹12L P&L.
+// Owner Dashboard so doctors / telecallers / helpers don't see ?12L P&L.
 function GenericOnly({ children }) {
   const { tenant, user } = useContext(AuthContext);
-  if (tenant?.vertical === 'wellness') {
+  if (tenant?.vertical === "wellness") {
     return <Navigate to={landingFor(user, tenant)} replace />;
   }
-  if (tenant?.vertical === 'travel') {
+  if (tenant?.vertical === "travel") {
     return <Navigate to="/travel/pipeline" replace />;
   }
   return children;
@@ -578,7 +716,7 @@ function GenericOnly({ children }) {
 
 function GenericOrWellnessOnly({ children }) {
   const { tenant, user } = useContext(AuthContext);
-  if (tenant?.vertical === 'travel') {
+  if (tenant?.vertical === "travel") {
     return <Navigate to={landingFor(user, tenant)} replace />;
   }
   return children;
@@ -592,7 +730,7 @@ function GenericOrWellnessOnly({ children }) {
 function WellnessOwnerOnly({ children }) {
   const { user, tenant } = useContext(AuthContext);
   const target = landingFor(user, tenant);
-  if (target !== '/wellness') {
+  if (target !== "/wellness") {
     return <Navigate to={target} replace />;
   }
   return children;
@@ -600,7 +738,7 @@ function WellnessOwnerOnly({ children }) {
 
 // #325: mirror of GenericOnly for the wellness vertical. Generic CRM tenants
 // (e.g. admin@globussoft.com on the Default Org) were able to navigate to
-// /wellness URLs even though wellness is a separate tenant Ã¢â‚¬â€ the pages would
+// /wellness URLs even though wellness is a separate tenant  the pages would
 // load but show empty/cross-tenant data. Bounce them to the generic dashboard.
 // A stricter RBAC check at the API level still applies; this guard is just to
 // stop the URL bar from rendering a misleading wellness UI on non-wellness
@@ -625,7 +763,7 @@ function TravelOnly({ children }) {
 }
 
 // Back-compat redirect: older notifications linked to /travel/quotes/:id (which
-// never had a route Ã¢â€ â€™ 404). Send those to the Quote Builder for that quote so
+// never had a route ?? ? 404). Send those to the Quote Builder for that quote so
 // already-sent notifications resolve correctly without a DB backfill.
 function QuoteIdRedirect() {
   const { id } = useParams();
@@ -635,14 +773,14 @@ function QuoteIdRedirect() {
 // /home is the role-aware widget dashboard for non-admin users. Admins
 // already have their tenant's primary dashboard (Owner Dashboard at
 // /wellness on wellness tenants, Enterprise Overview at /dashboard on
-// generic) which covers the same ground Ã¢â‚¬â€ so bounce admins away rather
+// generic) which covers the same ground  so bounce admins away rather
 // than rendering a near-duplicate landing page. The sidebar already hides
 // the Home link for admins; this guard handles direct-URL / bookmarked
 // visits.
 function HomeForNonAdmin({ children }) {
   const { user, tenant } = useContext(AuthContext);
-  if (user?.role === 'ADMIN') {
-    const target = tenant?.vertical === 'wellness' ? '/wellness' : '/dashboard';
+  if (user?.role === "ADMIN") {
+    const target = tenant?.vertical === "wellness" ? "/wellness" : "/dashboard";
     return <Navigate to={target} replace />;
   }
   return children;
@@ -691,7 +829,7 @@ export default function App() {
   // from a stolen disk image. We do a one-time migration of any legacy
   // localStorage token from a pre-fix build so users don't get punted to
   // /login on first deploy. The XSS-can-still-read-it caveat is documented
-  // in utils/api.js Ã¢â‚¬â€ the real fix is httpOnly cookies (TODOS.md wishlist).
+  // in utils/api.js  the real fix is httpOnly cookies (TODOS.md wishlist).
   const [token, setTokenState] = useState(() => {
     let initial = getAuthToken();
     if (!initial) {
@@ -708,7 +846,7 @@ export default function App() {
     }
     return initial || null;
   });
-  // setToken accepts an optional `opts` object Ã¢â‚¬â€ currently only `remember`,
+  // setToken accepts an optional `opts` object  currently only `remember`,
   // which the Login form passes from its "Keep me signed in" checkbox. When
   // set, the token is mirrored to localStorage so deep links opened in new
   // tabs can rehydrate without forcing a re-login. See utils/api.js for the
@@ -726,7 +864,9 @@ export default function App() {
   const [theme, setTheme] = useState(() => {
     const stored = localStorage.getItem("theme");
     if (stored) return stored;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
   });
   const [subscription, setSubscription] = useState(null);
   const [daysRemaining, setDaysRemaining] = useState(null);
@@ -755,7 +895,7 @@ export default function App() {
     async function validateSession() {
       if (!token) {
         if (!cancelled) {
-          // No token means no authenticated session Ã¢â‚¬â€ clear any stale identity
+          // No token means no authenticated session  clear any stale identity
           // from localStorage so the UI can't show a user from a previous
           // account while the route table routes an unauthenticated visitor.
           setUser(null);
@@ -830,7 +970,7 @@ export default function App() {
       const fetchSubscriptionStatus = async () => {
         try {
           const data = await fetch("/api/subscriptions/status", {
-            headers: { "Authorization": `Bearer ${token}` }
+            headers: { Authorization: `Bearer ${token}` },
           }).then((res) => res.json());
           setSubscription(data);
           setDaysRemaining(data.daysRemaining || 0);
@@ -876,14 +1016,14 @@ export default function App() {
   // the vertical CSS files (wellness.css, travel.css, index.css).  The sidebar,
   // buttons, focus rings, active-nav indicators, and every other element that
   // reads var(--primary-color) or var(--accent-color) will pick up the tenant's
-  // chosen color automatically Ã¢â‚¬â€ in both light and dark modes.
-  // tenant.brandColor remains untouched Ã¢â‚¬â€ it drives sidebar section labels only.
+  // chosen color automatically  in both light and dark modes.
+  // tenant.brandColor remains untouched  it drives sidebar section labels only.
   // When cleared, removes the inline custom properties so the vertical CSS
   // defaults take back over with no residual stale values.
   useEffect(() => {
     const raw = tenant?.themeColor || "";
     const valid = /^#[0-9a-fA-F]{6}$/.test(raw);
-    // Inject onto document.body Ã¢â‚¬â€ body carries data-vertical="wellness", so
+    // Inject onto document.body  body carries data-vertical="wellness", so
     // inline styles here beat the [data-vertical="wellness"] CSS class rules
     // (same element: inline > class in the cascade, no specificity fight).
     const el = document.body;
@@ -931,8 +1071,14 @@ export default function App() {
       const peachR = Math.round(r + (255 - r) * 0.4);
       const peachG = Math.round(g + (255 - g) * 0.4);
       const peachB = Math.round(b + (255 - b) * 0.4);
-      el.style.setProperty("--accent-peach", `#${toHex(peachR)}${toHex(peachG)}${toHex(peachB)}`);
-      el.style.setProperty("--accent-peach-hover", `#${darken(peachR)}${darken(peachG)}${darken(peachB)}`);
+      el.style.setProperty(
+        "--accent-peach",
+        `#${toHex(peachR)}${toHex(peachG)}${toHex(peachB)}`,
+      );
+      el.style.setProperty(
+        "--accent-peach-hover",
+        `#${darken(peachR)}${darken(peachG)}${darken(peachB)}`,
+      );
     } else {
       el.style.removeProperty("--accent-color");
       el.style.removeProperty("--accent-hover");
@@ -952,7 +1098,7 @@ export default function App() {
   // (Chrome/Edge 111+, Safari 18+) so the swap is a GPU-composited crossfade
   // instead of a sharp snap. The browser captures the page as a screenshot,
   // applies the new theme synchronously inside the callback, then fades the
-  // old screenshot out over the new state Ã¢â‚¬â€ entirely on the compositor, no
+  // old screenshot out over the new state  entirely on the compositor, no
   // main-thread work. flushSync forces React to commit the setState before
   // the callback returns, otherwise the API would crossfade the OLD state
   // with itself (the React update would land after the screenshot was
@@ -978,7 +1124,7 @@ export default function App() {
   // #529 / #530: stable callback reference. Prior shape created a new fn
   // on every App render, which (combined with the inline AuthContext
   // value object below) made every consumer's useEffect re-run on every
-  // App render Ã¢â‚¬â€ Sidebar's count-fetcher fired a flurry of duplicate HTTP
+  // App render  Sidebar's count-fetcher fired a flurry of duplicate HTTP
   // calls + a fresh socket on each cycle. Hoisted ABOVE the `loading`
   // early-return so the hook count stays consistent across renders
   // (rules-of-hooks).
@@ -996,7 +1142,7 @@ export default function App() {
       localStorage.setItem("tenant", JSON.stringify(tenantArg));
       // Set data-vertical synchronously here (not just in the useEffect that
       // fires after re-render) so navigation immediately following login sees
-      // the correct attribute Ã¢â‚¬â€ the React state update + useEffect cycle is
+      // the correct attribute  the React state update + useEffect cycle is
       // async and tests / route guards landing on /wellness can otherwise read
       // body[data-vertical="generic"] for one frame.
       const v = tenantArg.vertical || "generic";
@@ -1021,7 +1167,7 @@ export default function App() {
   // (and re-fire mount effects) on every App render. State setters from
   // useState are stable by React contract; loginWithToken is now a stable
   // useCallback. The remaining inputs (user/token/tenant/loading) are real
-  // state Ã¢â‚¬â€ when one genuinely changes, all consumers SHOULD update.
+  // state  when one genuinely changes, all consumers SHOULD update.
   const authValue = useMemo(
     () => ({
       user,
@@ -1064,796 +1210,1300 @@ export default function App() {
       <AuthContext.Provider value={authValue}>
         <NotifyProvider>
           <ActiveSubBrandProvider>
-          <BrowserRouter>
-            <RouteErrorBoundary>
-              <Suspense
-                fallback={
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "center",
-                      alignItems: "center",
-                      height: "100vh",
-                      color: "var(--text-primary)",
-                    }}
-                  >
-                    Loading...
-                  </div>
-                }
-              >
-                <Routes>
-                  <Route
-                    path="/login"
-                    element={
-                      // Same handoff treatment as /customer/register Ã¢â‚¬â€ when
-                      // the marketing-site link is present, let the user
-                      // sign in as whoever they actually came in to be (the
-                      // pre-filled customer email is rarely the same as the
-                      // stale admin/staff session their browser holds).
-                      (!token || hasMarketingHandoff()) ? (
-                        <Login />
-                      ) : (
-                        <Navigate to={landingWithHandoff(landingFor(user, tenant))} replace />
-                      )
-                    }
-                  />
-                  <Route
-                    path="/signup"
-                    element={
-                      !token ? (
-                        <Signup />
-                      ) : (
-                        <Navigate to={landingFor(user, tenant)} replace />
-                      )
-                    }
-                  />
-                  <Route
-                    path="/customer/register"
-                    element={
-                      // Always show the form when the URL carries a marketing
-                      // handoff Ã¢â‚¬â€ even if there's an existing session Ã¢â‚¬â€ so
-                      // users coming from Dr. Haror's checkout can register a
-                      // new customer account regardless of whatever stale
-                      // staff/admin session their browser is holding.
-                      (!token || hasMarketingHandoff())
-                        ? <CustomerRegister />
-                        : <Navigate to={landingWithHandoff("/home")} replace />
-                    }
-                  />
-                  <Route path="/sso/return" element={<SsoReturn />} />
-                  <Route path="/reset-password" element={<ResetPassword />} />
-                  <Route path="/pricing" element={<Pricing />} />
-                  {/* Public status page Ã¢â‚¬â€ no auth (PRD_STATUS_PAGE.md). */}
-                  <Route path="/status" element={<StatusPage />} />
-                  <Route path="/payment-success" element={<PaymentSuccess />} />
-                  <Route path="/payment-failed" element={<PaymentFailed />} />
-                  <Route
-                    path="/get-started"
-                    element={!token ? <GetStarted /> : <Navigate to={landingFor(user, tenant)} replace />}
-                  />
-                  <Route path="/register-success" element={<RegisterSuccess />} />
-                  <Route path="/terms-and-conditions" element={<LegalPage page="terms-and-conditions" />} />
-                  <Route path="/privacy-policy" element={<LegalPage page="privacy-policy" />} />
-                  <Route path="/deleted-account-policy" element={<LegalPage page="deleted-account-policy" />} />
-                  <Route path="/portal" element={<Portal />} />
-                  {/* Super Admin Portal Ã¢â‚¬â€ deliberately outside the regular
+            <BrowserRouter>
+              <RouteErrorBoundary>
+                <Suspense
+                  fallback={
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "center",
+                        alignItems: "center",
+                        height: "100vh",
+                        color: "var(--text-primary)",
+                      }}
+                    >
+                      Loading...
+                    </div>
+                  }
+                >
+                  <Routes>
+                    <Route
+                      path="/login"
+                      element={
+                        // Same handoff treatment as /customer/register  when
+                        // the marketing-site link is present, let the user
+                        // sign in as whoever they actually came in to be (the
+                        // pre-filled customer email is rarely the same as the
+                        // stale admin/staff session their browser holds).
+                        !token || hasMarketingHandoff() ? (
+                          <Login />
+                        ) : (
+                          <Navigate
+                            to={landingWithHandoff(landingFor(user, tenant))}
+                            replace
+                          />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/signup"
+                      element={
+                        !token ? (
+                          <Signup />
+                        ) : (
+                          <Navigate to={landingFor(user, tenant)} replace />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/customer/register"
+                      element={
+                        // Always show the form when the URL carries a marketing
+                        // handoff  even if there's an existing session  so
+                        // users coming from Dr. Haror's checkout can register a
+                        // new customer account regardless of whatever stale
+                        // staff/admin session their browser is holding.
+                        !token || hasMarketingHandoff() ? (
+                          <CustomerRegister />
+                        ) : (
+                          <Navigate to={landingWithHandoff("/home")} replace />
+                        )
+                      }
+                    />
+                    <Route path="/sso/return" element={<SsoReturn />} />
+                    <Route path="/reset-password" element={<ResetPassword />} />
+                    <Route path="/pricing" element={<Pricing />} />
+                    {/* Public status page  no auth (PRD_STATUS_PAGE.md). */}
+                    <Route path="/status" element={<StatusPage />} />
+                    <Route
+                      path="/payment-success"
+                      element={<PaymentSuccess />}
+                    />
+                    <Route path="/payment-failed" element={<PaymentFailed />} />
+                    <Route
+                      path="/get-started"
+                      element={
+                        !token ? (
+                          <GetStarted />
+                        ) : (
+                          <Navigate to={landingFor(user, tenant)} replace />
+                        )
+                      }
+                    />
+                    <Route
+                      path="/register-success"
+                      element={<RegisterSuccess />}
+                    />
+                    <Route
+                      path="/terms-and-conditions"
+                      element={<LegalPage page="terms-and-conditions" />}
+                    />
+                    <Route
+                      path="/privacy-policy"
+                      element={<LegalPage page="privacy-policy" />}
+                    />
+                    <Route
+                      path="/deleted-account-policy"
+                      element={<LegalPage page="deleted-account-policy" />}
+                    />
+                    <Route path="/portal" element={<Portal />} />
+                    {/* Super Admin Portal  deliberately outside the regular
                       token/user/tenant auth gating above; it manages its own
                       session via localStorage superAdminToken. */}
-                  <Route path="/super-admin/login" element={<SuperAdminLogin />} />
-                  <Route path="/super-admin" element={<SuperAdminLayout />}>
-                    <Route index element={<Navigate to="/super-admin/cron" replace />} />
-                    <Route path="cron" element={<SuperAdminCronMaintenance />} />
-                    <Route path="cron-analytics" element={<SuperAdminCronAnalytics />} />
-                    <Route path="api-analytics" element={<SuperAdminApiAnalytics />} />
-                  </Route>
-                  {/* Travel customer portal Ã¢â‚¬â€ end-user (Contact) login + dashboard
-                      + DigiLocker / Aadhaar verification (PRD Ã‚Â§4.5 extended).
+                    <Route
+                      path="/super-admin/login"
+                      element={<SuperAdminLogin />}
+                    />
+                    <Route path="/super-admin" element={<SuperAdminLayout />}>
+                      <Route
+                        index
+                        element={<Navigate to="/super-admin/cron" replace />}
+                      />
+                      <Route
+                        path="cron"
+                        element={<SuperAdminCronMaintenance />}
+                      />
+                      <Route
+                        path="cron-analytics"
+                        element={<SuperAdminCronAnalytics />}
+                      />
+                      <Route
+                        path="api-analytics"
+                        element={<SuperAdminApiAnalytics />}
+                      />
+                    </Route>
+                    {/* Travel customer portal  end-user (Contact) login + dashboard
+                      + DigiLocker / Aadhaar verification (PRD 4.5 extended).
                       Distinct from /portal (Knowledge Base) + /wellness/portal
                       (wellness patient OTP). Travel-tenant scoped on the
                       backend via requireTravelPortalTenant. */}
-                  {/* Wildcard: TravelCustomerPortal handles its own sub-paths
-                      (/login, /bookings, etc.) internally Ã¢â‚¬â€ must stay /* or
+                    {/* Wildcard: TravelCustomerPortal handles its own sub-paths
+                      (/login, /bookings, etc.) internally  must stay /* or
                       those sub-routes 404. The more-specific kyc/callback route
                       below still wins via React Router's specificity ranking. */}
-                  <Route path="/travel/portal/*" element={<TravelCustomerPortal />} />
-                  {/* Public TMC trip microsite (parent/teacher, no login) +
+                    <Route
+                      path="/travel/portal/*"
+                      element={<TravelCustomerPortal />}
+                    />
+                    {/* Public TMC trip microsite (parent/teacher, no login) +
                       the DigiLocker/Aadhaar OAuth callback landing pages.
-                      All three are public Ã¢â‚¬â€ server openPath allowlist covers
+                      All three are public  server openPath allowlist covers
                       the backend. The two callback routes catch DigiLocker's
                       ?code&state redirect and complete verification. */}
-                  <Route path="/p/tripmicrosite/:publicUuid" element={<PublicTripMicrosite />} />
-                  {/* Public itinerary share link (no auth). The advisor's
+                    <Route
+                      path="/p/tripmicrosite/:publicUuid"
+                      element={<PublicTripMicrosite />}
+                    />
+                    {/* Public itinerary share link (no auth). The advisor's
                       "Share link" generates /p/itinerary/:shareToken; the lead
                       reviews the itinerary + pays the 50% advance here without
                       logging in. Backend openPath: /travel/itineraries/public. */}
-                  <Route path="/p/itinerary/:shareToken" element={<TripBooking />} />
-                  {/* Razorpay standard-checkout callback for itinerary
+                    <Route
+                      path="/p/itinerary/:shareToken"
+                      element={<TripBooking />}
+                    />
+                    {/* Razorpay standard-checkout callback for itinerary
                       redirect-based payment methods (Netbanking, UPI intent,
                       3DS cards). The modal handler covers non-redirect cards. */}
-                  <Route path="/p/itinerary/:shareToken/payment-success" element={<ItineraryPaymentSuccess />} />
-                  {/* PRD Ã‚Â§3.1 / slice T9 Ã¢â‚¬â€ public 12-Q readiness diagnostic. */}
-                  <Route path="/p/tmc/readiness" element={<TmcReadiness />} />
-                  {/* PRD Ã‚Â§3.5 / slice T10 Ã¢â‚¬â€ public 10-section readiness report. */}
-                  <Route path="/p/tmc/report/:slug" element={<TmcReadinessReport />} />
-                  {/* PRD_TRAVEL_QUOTE_BUILDER Ã‚Â§3.7 / slice C9 Ã¢â‚¬â€ customer-accept landing. */}
-                  <Route path="/p/quote/:shareToken" element={<QuoteAcceptLanding />} />
-                  {/* Public post-trip review (no auth; token in path). */}
-                  <Route path="/p/review/:token" element={<TravelReview />} />
-                  {/* Razorpay payment-link callback Ã¢â‚¬â€ shown after customer pays. */}
-                  <Route path="/p/payment/success" element={<InvoicePaymentSuccess />} />
-                  {/* Public flyer share + iframe-embed viewer (no auth; JWT in ?t=). */}
-                  <Route path="/p/flyer/:slug" element={<FlyerView />} />
-                  {/* Dynamic /trips entry point Ã¢â‚¬â€ resolves to the admin-
+                    <Route
+                      path="/p/itinerary/:shareToken/payment-success"
+                      element={<ItineraryPaymentSuccess />}
+                    />
+                    {/* PRD 3.1 / slice T9  public 12-Q readiness diagnostic. */}
+                    <Route path="/p/tmc/readiness" element={<TmcReadiness />} />
+                    {/* PRD 3.5 / slice T10  public 10-section readiness report. */}
+                    <Route
+                      path="/p/tmc/report/:slug"
+                      element={<TmcReadinessReport />}
+                    />
+                    {/* PRD_TRAVEL_QUOTE_BUILDER 3.7 / slice C9  customer-accept landing. */}
+                    <Route
+                      path="/p/quote/:shareToken"
+                      element={<QuoteAcceptLanding />}
+                    />
+                    {/* Public post-trip review (no auth; token in path). */}
+                    <Route path="/p/review/:token" element={<TravelReview />} />
+                    {/* Razorpay payment-link callback  shown after customer pays. */}
+                    <Route
+                      path="/p/payment/success"
+                      element={<InvoicePaymentSuccess />}
+                    />
+                    {/* Public flyer share + iframe-embed viewer (no auth; JWT in ?t=). */}
+                    <Route path="/p/flyer/:slug" element={<FlyerView />} />
+                    {/* Dynamic /trips entry point  resolves to the admin-
                       selected featured LandingPage via the public
                       /api/landing-pages/public/featured endpoint and
                       forwards the browser to /p/<slug>. Falls back to the
                       hardcoded Japan TripsLanding if no page is featured
                       yet (lazy-imported by the resolver). */}
-                  <Route path="/trips" element={<TripsResolver />} />
-                  <Route path="/landing-sites/:slug" element={<LandingSiteResolver />} />
-                  {/* React landing page renderer test Ã¢â‚¬â€ accessible during migration
+                    <Route path="/trips" element={<TripsResolver />} />
+                    <Route
+                      path="/landing-sites/:slug"
+                      element={<LandingSiteResolver />}
+                    />
+                    {/* React landing page renderer test  accessible during migration
                       for QA to validate React output against HTML renderer.
                       Usage: /test/react-landing-page?id=123 or ?slug=my-slug
                       This route will be removed after migration is complete. */}
-                  <Route path="/test/react-landing-page" element={<TestReactLandingPage />} />
-                  {/* Parity verification tool Ã¢â‚¬â€ automated regression detection.
+                    <Route
+                      path="/test/react-landing-page"
+                      element={<TestReactLandingPage />}
+                    />
+                    {/* Parity verification tool  automated regression detection.
                       Usage: /test/parity?id=123 or ?slug=my-slug
                       Compares DOM structure, text, images, links, buttons, forms.
                       This route will be removed after Phase 1 validation. */}
-                  <Route path="/test/parity" element={<ParityVerificationTool />} />
-                  {/* Phase 2 validation suite Ã¢â‚¬â€ builder round-trip, schema, routes.
+                    <Route
+                      path="/test/parity"
+                      element={<ParityVerificationTool />}
+                    />
+                    {/* Phase 2 validation suite  builder round-trip, schema, routes.
                       Usage: /test/phase2
                       Tests: builder workflows, all JSON schemas, route behavior.
                       This route will be removed after Phase 2 validation. */}
-                  <Route path="/test/phase2" element={<Phase2ValidationSuite />} />
-                  <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
-                  <Route path="/travel/portal/kyc/callback" element={<TravelKycCallback flow="portal" />} />
-                  <Route
-                    path="/book/:slug"
-                    element={<WellnessPublicBooking />}
-                  />
-                  {/* #208: wellness patient portal lives under /wellness/portal so it
+                    <Route
+                      path="/test/phase2"
+                      element={<Phase2ValidationSuite />}
+                    />
+                    <Route
+                      path="/travel/kyc/callback"
+                      element={<TravelKycCallback flow="microsite" />}
+                    />
+                    <Route
+                      path="/travel/portal/kyc/callback"
+                      element={<TravelKycCallback flow="portal" />}
+                    />
+                    <Route
+                      path="/book/:slug"
+                      element={<WellnessPublicBooking />}
+                    />
+                    {/* #208: wellness patient portal lives under /wellness/portal so it
                 inherits the wellness theme + namespace. The generic /portal route
                 above stays as the Knowledge Base / customer portal for non-wellness
                 tenants. /patient-portal kept as a back-compat alias. */}
-                  <Route
-                    path="/wellness/portal"
-                    element={<WellnessPatientPortal />}
-                  />
-                  <Route
-                    path="/wellness/portal/login"
-                    element={<WellnessPatientPortal />}
-                  />
-                  <Route
-                    path="/patient-portal"
-                    element={<WellnessPatientPortal />}
-                  />
-                  {/* #184: customer-facing survey landing page from SMS Ã¢â‚¬â€ no auth, no admin chrome */}
-                  <Route path="/survey/:id" element={<SurveyPublic />} />
-                  {/* v3.7.17 Ã¢â‚¬â€ token-based respondent landing page. The
+                    <Route
+                      path="/wellness/portal"
+                      element={<WellnessPatientPortal />}
+                    />
+                    <Route
+                      path="/wellness/portal/login"
+                      element={<WellnessPatientPortal />}
+                    />
+                    <Route
+                      path="/patient-portal"
+                      element={<WellnessPatientPortal />}
+                    />
+                    {/* #184: customer-facing survey landing page from SMS  no auth, no admin chrome */}
+                    <Route path="/survey/:id" element={<SurveyPublic />} />
+                    {/* v3.7.17  token-based respondent landing page. The
                       Send-Survey email link points here. */}
-                  <Route path="/surveys/respond/:token" element={<SurveyRespond />} />
-                  <Route path="/sign/:token" element={<SignDocument />} />
-                  {/* Public knowledge-base article view (no auth). Replaces the raw
+                    <Route
+                      path="/surveys/respond/:token"
+                      element={<SurveyRespond />}
+                    />
+                    <Route path="/sign/:token" element={<SignDocument />} />
+                    {/* Public knowledge-base article view (no auth). Replaces the raw
                       backend JSON URL that the KB "View" button used to open. */}
-                  <Route
-                    path="/kb/:tenantSlug/:slug"
-                    element={<KbArticleView />}
-                  />
-                  {/* Landing page for unauthenticated visitors; authenticated users
+                    <Route
+                      path="/kb/:tenantSlug/:slug"
+                      element={<KbArticleView />}
+                    />
+                    {/* Landing page for unauthenticated visitors; authenticated users
                 route to their per-role landingPath. The marketing Landing page
                 links to /login and /signup in its navbar, hero, and footer. */}
-                  <Route
-                    path="/"
-                    element={
-                      !token ? (
-                        <Landing />
-                      ) : (
-                        <Navigate to={landingFor(user, tenant)} replace />
-                      )
-                    }
-                  />
-                  <Route
-                    path="/*"
-                    element={token ? <Layout /> : <Navigate to="/login" />}
-                  >
                     <Route
-                      path="dashboard"
+                      path="/"
                       element={
-                        <GenericOnly>
-                          <Dashboard />
-                        </GenericOnly>
+                        !token ? (
+                          <Landing />
+                        ) : (
+                          <Navigate to={landingFor(user, tenant)} replace />
+                        )
                       }
                     />
-                    {/* /home Ã¢â‚¬â€ role-aware widget dashboard for non-admin
+                    <Route
+                      path="/*"
+                      element={token ? <Layout /> : <Navigate to="/login" />}
+                    >
+                      <Route
+                        path="dashboard"
+                        element={
+                          <GenericOnly>
+                            <Dashboard />
+                          </GenericOnly>
+                        }
+                      />
+                      {/* /home  role-aware widget dashboard for non-admin
                         roles. Admins are bounced to /wellness (wellness
                         tenants) or /dashboard (generic) since the Owner
                         Dashboard covers the same ground. Widgets filter
                         by permission server-side via /api/widgets/me. */}
-                    <Route
-                      path="home"
-                      element={
-                        <HomeForNonAdmin>
-                          <Home />
-                        </HomeForNonAdmin>
-                      }
-                    />
-                          {/* Wellness vertical â€” gated by WellnessOnly so generic-CRM
+                      <Route
+                        path="home"
+                        element={
+                          <HomeForNonAdmin>
+                            <Home />
+                          </HomeForNonAdmin>
+                        }
+                      />
+                      {/* Wellness vertical — gated by WellnessOnly so generic-CRM
                         tenants can't surface wellness pages by URL (#325). */}
-                    <Route path="wellness" element={<WellnessOnly><WellnessOwnerOnly><WellnessOwnerDashboard /></WellnessOwnerOnly></WellnessOnly>} />
-                    <Route path="wellness/recommendations" element={<WellnessOnly><WellnessRecommendations /></WellnessOnly>} />
-                    <Route path="wellness/patients" element={<WellnessOnly><WellnessPatients /></WellnessOnly>} />
-                    <Route path="wellness/patients/:id" element={<WellnessOnly><WellnessPatientDetail /></WellnessOnly>} />
-                    <Route path="wellness/services" element={<WellnessOnly><WellnessServices /></WellnessOnly>} />
-                    {/* Wave 7 Agent A â€” ServiceCategory + Drug admin pages (admin/manager) */}
-                    {/* Wave 7 Agent A â€” ServiceCategory + Drug admin pages. Gated
-                        by permissions that mirror the page catalog's entries â€” any
+                      <Route
+                        path="wellness"
+                        element={
+                          <WellnessOnly>
+                            <WellnessOwnerOnly>
+                              <WellnessOwnerDashboard />
+                            </WellnessOwnerOnly>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/recommendations"
+                        element={
+                          <WellnessOnly>
+                            <WellnessRecommendations />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/patients"
+                        element={
+                          <WellnessOnly>
+                            <WellnessPatients />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/patients/:id"
+                        element={
+                          <WellnessOnly>
+                            <WellnessPatientDetail />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/services"
+                        element={
+                          <WellnessOnly>
+                            <WellnessServices />
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Wave 7 Agent A — ServiceCategory + Drug admin pages (admin/manager) */}
+                      {/* Wave 7 Agent A — ServiceCategory + Drug admin pages. Gated
+                        by permissions that mirror the page catalog's entries — any
                         role granted `services.write` / `prescriptions.write` passes
                         (no hardcoded ADMIN/MANAGER allowlist). */}
-                    <Route path="wellness/service-categories" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'services', action: 'read' }}
-                          feature="Service Categories"
-                          lockedInPlace
-                        >
-                          <WellnessServiceCategories />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/drugs" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'prescriptions', action: 'read' }}
-                          feature="Drug catalogue"
-                          lockedInPlace
-                        >
-                          <WellnessDrugs />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/visits" element={<WellnessOnly><WellnessVisits /></WellnessOnly>} />
-                    {/* Prescriptions list â€” tenant-wide, with patient filter +
+                      <Route
+                        path="wellness/service-categories"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "services",
+                                action: "read",
+                              }}
+                              feature="Service Categories"
+                              lockedInPlace
+                            >
+                              <WellnessServiceCategories />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/drugs"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "prescriptions",
+                                action: "read",
+                              }}
+                              feature="Drug catalogue"
+                              lockedInPlace
+                            >
+                              <WellnessDrugs />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/visits"
+                        element={
+                          <WellnessOnly>
+                            <WellnessVisits />
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Prescriptions list — tenant-wide, with patient filter +
                         per-row PDF download. Gated on prescriptions.read via
                         the page catalog (Sidebar) AND the page-level RoleGuard
                         here (route protection). Backend PDF endpoint inherits
                         the same RBAC + tenant scope. */}
-                    <Route path="wellness/prescriptions" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'prescriptions', action: 'read' }}
-                          feature="Prescriptions"
-                          lockedInPlace
-                        >
-                          <WellnessPrescriptions />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    {/* Staff-authed self-view of own Rx. Sidebar surfacing comes
+                      <Route
+                        path="wellness/prescriptions"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "prescriptions",
+                                action: "read",
+                              }}
+                              feature="Prescriptions"
+                              lockedInPlace
+                            >
+                              <WellnessPrescriptions />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Staff-authed self-view of own Rx. Sidebar surfacing comes
                         from the page catalog entry (gated on my_prescriptions.read).
                         Backend `/api/wellness/my-prescriptions[/:id/pdf]` is gated
                         on the same permission + scoped to req.user.userId's linked
                         Patient row. */}
-                    <Route path="wellness/my-prescriptions" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'my_prescriptions', action: 'read' }}
-                          feature="My Prescriptions"
-                          lockedInPlace
-                        >
-                          <WellnessMyPrescriptions />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/locations" element={<WellnessOnly><WellnessLocations /></WellnessOnly>} />
-                    {/* Wave 11 Agent EE: Memberships catalog */}
-                    <Route path="wellness/memberships" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'services', action: 'read' }}
-                          feature="Memberships"
-                          lockedInPlace
-                        >
-                          <WellnessMemberships />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback */}
-                    <Route path="wellness/wallet" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'patient_wallets', action: 'read' }}
-                          feature="Wallet ledger"
-                          lockedInPlace
-                        >
-                          <WellnessWallet />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/giftcards" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'gift_cards', action: 'read' }}
-                          feature="Gift Cards"
-                          lockedInPlace
-                        >
-                          <WellnessGiftCards />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    {/* Customer-facing storefront â€” any authenticated user
+                      <Route
+                        path="wellness/my-prescriptions"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "my_prescriptions",
+                                action: "read",
+                              }}
+                              feature="My Prescriptions"
+                              lockedInPlace
+                            >
+                              <WellnessMyPrescriptions />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/locations"
+                        element={
+                          <WellnessOnly>
+                            <WellnessLocations />
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Wave 11 Agent EE: Memberships catalog */}
+                      <Route
+                        path="wellness/memberships"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "services",
+                                action: "read",
+                              }}
+                              feature="Memberships"
+                              lockedInPlace
+                            >
+                              <WellnessMemberships />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback */}
+                      <Route
+                        path="wellness/wallet"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "patient_wallets",
+                                action: "read",
+                              }}
+                              feature="Wallet ledger"
+                              lockedInPlace
+                            >
+                              <WellnessWallet />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/giftcards"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "gift_cards",
+                                action: "read",
+                              }}
+                              feature="Gift Cards"
+                              lockedInPlace
+                            >
+                              <WellnessGiftCards />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Customer-facing storefront — any authenticated user
                         can browse + buy. Gift card value lands on the chosen
                         patient's wallet on Razorpay payment success. */}
-                    <Route path="wellness/buy-giftcards" element={
-                      <WellnessOnly>
-                        <WellnessBuyGiftCards />
-                      </WellnessOnly>
-                    } />
-                    {/* Customer-facing transaction history. Like Buy Gift Cards,
+                      <Route
+                        path="wellness/buy-giftcards"
+                        element={
+                          <WellnessOnly>
+                            <WellnessBuyGiftCards />
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Customer-facing transaction history. Like Buy Gift Cards,
                         any authenticated wellness user can open it; the data is
                         scoped server-side to the caller's own Patient. The sidebar
                         entry is gated to customer-tier roles via the customerOnly
                         page-catalog flag. */}
-                    <Route path="wellness/my-transactions" element={
-                      <WellnessOnly>
-                        <WellnessMyTransactions />
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/coupons" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'marketing', action: 'read' }}
-                          feature="Coupons"
-                          lockedInPlace
-                        >
-                          <WellnessCoupons />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/cashback-rules" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'marketing', action: 'read' }}
-                          feature="Cashback rules"
-                          lockedInPlace
-                        >
-                          <WellnessCashbackRules />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    {/* QR Generator â€” marketing tool for downloadable QR codes. */}
-                    <Route path="wellness/qr-generator" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'marketing', action: 'read' }}
-                          feature="QR Generator"
-                          lockedInPlace
-                        >
-                          <WellnessQRGenerator />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    {/* Events History â€” read-only list of QR codes grouped by event. */}
-                    <Route path="wellness/events-history" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'marketing', action: 'read' }}
-                          feature="Events History"
-                          lockedInPlace
-                        >
-                          <WellnessEventsHistory />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
-                    <Route path="wellness/appointments" element={<WellnessOnly><WellnessAppointments /></WellnessOnly>} />
-                    <Route path="wellness/my-appointments" element={<WellnessOnly><WellnessMyAppointments /></WellnessOnly>} />
-                    <Route path="wellness/my-bookings" element={<WellnessOnly><WellnessMyBookings /></WellnessOnly>} />
-                    <Route path="wellness/book-appointment" element={<WellnessOnly><WellnessBookAppointment /></WellnessOnly>} />
-                    {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
-                    <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
-                    <Route path="wellness/whatsapp/templates" element={<WellnessOnly><WellnessWhatsAppTemplates /></WellnessOnly>} />
-                    <Route path="wellness/reports" element={<WellnessOnly><WellnessReports /></WellnessOnly>} />
-                    <Route path="wellness/telecaller" element={<WellnessOnly><WellnessTelecallerQueue /></WellnessOnly>} />
-                    {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}
-                    <Route path="telecaller" element={<Navigate to="/wellness/telecaller" replace />} />
-                    {/* #406: stale-URL aliases. Older docs / QA prompts reference
+                      <Route
+                        path="wellness/my-transactions"
+                        element={
+                          <WellnessOnly>
+                            <WellnessMyTransactions />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/coupons"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "marketing",
+                                action: "read",
+                              }}
+                              feature="Coupons"
+                              lockedInPlace
+                            >
+                              <WellnessCoupons />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/cashback-rules"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "marketing",
+                                action: "read",
+                              }}
+                              feature="Cashback rules"
+                              lockedInPlace
+                            >
+                              <WellnessCashbackRules />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* QR Generator — marketing tool for downloadable QR codes. */}
+                      <Route
+                        path="wellness/qr-generator"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "marketing",
+                                action: "read",
+                              }}
+                              feature="QR Generator"
+                              lockedInPlace
+                            >
+                              <WellnessQRGenerator />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Events History — read-only list of QR codes grouped by event. */}
+                      <Route
+                        path="wellness/events-history"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "marketing",
+                                action: "read",
+                              }}
+                              feature="Events History"
+                              lockedInPlace
+                            >
+                              <WellnessEventsHistory />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/calendar"
+                        element={
+                          <WellnessOnly>
+                            <WellnessCalendar />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/appointments"
+                        element={
+                          <WellnessOnly>
+                            <WellnessAppointments />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/my-appointments"
+                        element={
+                          <WellnessOnly>
+                            <WellnessMyAppointments />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/my-bookings"
+                        element={
+                          <WellnessOnly>
+                            <WellnessMyBookings />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/book-appointment"
+                        element={
+                          <WellnessOnly>
+                            <WellnessBookAppointment />
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
+                      <Route
+                        path="wellness/whatsapp"
+                        element={
+                          <WellnessOnly>
+                            <WellnessWhatsAppThreads />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/whatsapp/templates"
+                        element={
+                          <WellnessOnly>
+                            <WellnessWhatsAppTemplates />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/reports"
+                        element={
+                          <WellnessOnly>
+                            <WellnessReports />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/telecaller"
+                        element={
+                          <WellnessOnly>
+                            <WellnessTelecallerQueue />
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* #183: alias for users who land on /telecaller (no /wellness prefix). */}
+                      <Route
+                        path="telecaller"
+                        element={<Navigate to="/wellness/telecaller" replace />}
+                      />
+                      {/* #406: stale-URL aliases. Older docs / QA prompts reference
                         /wellness/service-catalog + /wellness/telecaller-queue;
                         canonical routes are /wellness/services + /wellness/telecaller.
                         Mirrors the #183 alias pattern above so deep links from old
                         docs / bookmarks still land on the right page. */}
-                    <Route path="wellness/service-catalog" element={<Navigate to="/wellness/services" replace />} />
-                    <Route path="wellness/telecaller-queue" element={<Navigate to="/wellness/telecaller" replace />} />
-                    <Route path="wellness/per-location" element={<WellnessOnly><WellnessPerLocation /></WellnessOnly>} />
-                    <Route path="wellness/loyalty" element={<WellnessOnly><WellnessLoyalty /></WellnessOnly>} />
-                    <Route path="wellness/waitlist" element={<WellnessOnly><WellnessWaitlist /></WellnessOnly>} />
-                    <Route path="wellness/inventory" element={<WellnessOnly><WellnessInventory /></WellnessOnly>} />
-                    {/* Wave 11 Agent HH â€” Inventory backbone admin pages. All
+                      <Route
+                        path="wellness/service-catalog"
+                        element={<Navigate to="/wellness/services" replace />}
+                      />
+                      <Route
+                        path="wellness/telecaller-queue"
+                        element={<Navigate to="/wellness/telecaller" replace />}
+                      />
+                      <Route
+                        path="wellness/per-location"
+                        element={
+                          <WellnessOnly>
+                            <WellnessPerLocation />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/loyalty"
+                        element={
+                          <WellnessOnly>
+                            <WellnessLoyalty />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/waitlist"
+                        element={
+                          <WellnessOnly>
+                            <WellnessWaitlist />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/inventory"
+                        element={
+                          <WellnessOnly>
+                            <WellnessInventory />
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Wave 11 Agent HH — Inventory backbone admin pages. All
                         6 pages gated on `inventory.read` for sidebar + page-mount
                         visibility (matches the page catalog). The create / edit
                         / delete actions inside each page are gated separately at
                         the backend route level (.write / .update / .delete /
-                        .manage in routes/inventory.js) â€” a read-only role sees
+                        .manage in routes/inventory.js) — a read-only role sees
                         the page in read-only mode; the action buttons should
                         hide themselves based on per-action permission checks
                         via usePermissions(). */}
-                    <Route path="wellness/product-categories" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'products', action: 'read' }}
-                          feature="Product categories"
-                          lockedInPlace
-                        >
-                          <WellnessProductCategories />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/products" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'products', action: 'read' }}
-                          feature="Products"
-                          lockedInPlace
-                        >
-                          <WellnessProducts />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/vendors" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'inventory', action: 'read' }}
-                          feature="Vendors"
-                          lockedInPlace
-                        >
-                          <WellnessVendors />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/inventory-receipts" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'inventory', action: 'read' }}
-                          feature="Inventory receipts"
-                          lockedInPlace
-                        >
-                          <WellnessInventoryReceipts />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/inventory-adjustments" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'inventory', action: 'read' }}
-                          feature="Inventory adjustments"
-                          lockedInPlace
-                        >
-                          <WellnessInventoryAdjustments />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/auto-consumption-rules" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'products', action: 'manage' }}
-                          feature="Auto-consumption rules"
-                          lockedInPlace
-                        >
-                          <WellnessAutoConsumptionRules />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    {/* Wave 11 Agent GG â€” Resource availability admin pages.
+                      <Route
+                        path="wellness/product-categories"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "products",
+                                action: "read",
+                              }}
+                              feature="Product categories"
+                              lockedInPlace
+                            >
+                              <WellnessProductCategories />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/products"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "products",
+                                action: "read",
+                              }}
+                              feature="Products"
+                              lockedInPlace
+                            >
+                              <WellnessProducts />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/vendors"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "inventory",
+                                action: "read",
+                              }}
+                              feature="Vendors"
+                              lockedInPlace
+                            >
+                              <WellnessVendors />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/inventory-receipts"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "inventory",
+                                action: "read",
+                              }}
+                              feature="Inventory receipts"
+                              lockedInPlace
+                            >
+                              <WellnessInventoryReceipts />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/inventory-adjustments"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "inventory",
+                                action: "read",
+                              }}
+                              feature="Inventory adjustments"
+                              lockedInPlace
+                            >
+                              <WellnessInventoryAdjustments />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/auto-consumption-rules"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "products",
+                                action: "manage",
+                              }}
+                              feature="Auto-consumption rules"
+                              lockedInPlace
+                            >
+                              <WellnessAutoConsumptionRules />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Wave 11 Agent GG — Resource availability admin pages.
                         Gated on settings.read (matches page catalog). The
                         booking-conflict gate runs on every POST/PUT visit. */}
-                    <Route path="wellness/resources" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'settings', action: 'read' }}
-                          feature="Resources"
-                          lockedInPlace
-                        >
-                          <WellnessResources />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/holidays" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'settings', action: 'read' }}
-                          feature="Holidays"
-                          lockedInPlace
-                        >
-                          <WellnessHolidays />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    <Route path="wellness/working-hours" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'settings', action: 'read' }}
-                          feature="Working hours"
-                          lockedInPlace
-                        >
-                          <WellnessWorkingHours />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    {/* Wave 2 Agent JJ â€” Staff Attendance + Leave Management. */}
-                    <Route path="wellness/attendance" element={<WellnessOnly><WellnessAttendance /></WellnessOnly>} />
-                    {/* Admin/Manager attendance dashboard â€” KPI tiles + all-staff
+                      <Route
+                        path="wellness/resources"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "settings",
+                                action: "read",
+                              }}
+                              feature="Resources"
+                              lockedInPlace
+                            >
+                              <WellnessResources />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/holidays"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "settings",
+                                action: "read",
+                              }}
+                              feature="Holidays"
+                              lockedInPlace
+                            >
+                              <WellnessHolidays />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/working-hours"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "settings",
+                                action: "read",
+                              }}
+                              feature="Working hours"
+                              lockedInPlace
+                            >
+                              <WellnessWorkingHours />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Wave 2 Agent JJ — Staff Attendance + Leave Management. */}
+                      <Route
+                        path="wellness/attendance"
+                        element={
+                          <WellnessOnly>
+                            <WellnessAttendance />
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Admin/Manager attendance dashboard — KPI tiles + all-staff
                         list + admin-only edit/delete. Mounted under both wellness
                         and travel since both verticals have staff that punch in/out.
                         Page itself reads tenant from AuthContext and uses the same
                         /api/attendance/* routes; no per-vertical branching needed. */}
-                    <Route path="wellness/attendance-dashboard" element={<WellnessOnly><AttendanceDashboard /></WellnessOnly>} />
-                    <Route path="wellness/attendance/calendar" element={<WellnessOnly><WellnessAttendanceCalendar /></WellnessOnly>} />
-                    <Route path="travel/attendance" element={<AttendanceDashboard />} />
-                    <Route path="wellness/leave" element={<WellnessOnly><WellnessLeave /></WellnessOnly>} />
-                    {/* Wave 2 Agent II â€” POS / Cash Register / Shift / Sale.
+                      <Route
+                        path="wellness/attendance-dashboard"
+                        element={
+                          <WellnessOnly>
+                            <AttendanceDashboard />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="wellness/attendance/calendar"
+                        element={
+                          <WellnessOnly>
+                            <WellnessAttendanceCalendar />
+                          </WellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/attendance"
+                        element={<AttendanceDashboard />}
+                      />
+                      <Route
+                        path="wellness/leave"
+                        element={
+                          <WellnessOnly>
+                            <WellnessLeave />
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* Wave 2 Agent II — POS / Cash Register / Shift / Sale.
                         Backend is wellness-vertical-gated + role
                         ADMIN/MANAGER/doctor/professional/telecaller/helper.
                         Frontend allows the wider operational bucket (everyone
                         except plain USER) so a cashier user can ring sales. */}
-                    <Route path="wellness/pos" element={
-                      <WellnessOnly>
-                        <RoleGuard
-                          requiredPermission={{ module: 'pos', action: 'read' }}
-                          feature="Point of Sale"
-                          lockedInPlace
-                        >
-                          <WellnessPointOfSale />
-                        </RoleGuard>
-                      </WellnessOnly>
-                    } />
-                    {/* #309: /wellness/invoices used to render a blank page (no
+                      <Route
+                        path="wellness/pos"
+                        element={
+                          <WellnessOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "pos",
+                                action: "read",
+                              }}
+                              feature="Point of Sale"
+                              lockedInPlace
+                            >
+                              <WellnessPointOfSale />
+                            </RoleGuard>
+                          </WellnessOnly>
+                        }
+                      />
+                      {/* #309: /wellness/invoices used to render a blank page (no
                         route binding). Wellness shares the generic CRM Invoices
-                        UI â€” alias the prefixed URL to the canonical /invoices
+                        UI — alias the prefixed URL to the canonical /invoices
                         route so the sidebar link, deep links from emails, and
                         bookmarks all resolve. Mirrors the /wellness/inventory
                         fix from #305. */}
-                    <Route
-                      path="wellness/invoices"
-                      element={<Navigate to="/invoices" replace />}
-                    />
-                    <Route path="contacts" element={<Contacts />} />
-                    <Route path="contacts/:id" element={<ContactDetail />} />
-                    <Route
-                      path="pipeline"
-                      element={
-                        <GenericOnly>
-                          <Pipeline />
-                        </GenericOnly>
-                      }
-                    />
-                    <Route path="inbox" element={<Inbox />} />
-                    <Route
-                      path="marketing"
-                      element={
-                        <RoleGuard
-                          allow={["ADMIN", "MANAGER"]}
-                          feature="Marketing"
-                          roles="manager (or admin)"
-                          lockedInPlace
-                        >
-                          <Marketing />
-                        </RoleGuard>
-                      }
-                    />
-                    {/* Generic CRM reports Ã¢â‚¬â€ vertical-gated so travel/wellness
+                      <Route
+                        path="wellness/invoices"
+                        element={<Navigate to="/invoices" replace />}
+                      />
+                      <Route path="contacts" element={<Contacts />} />
+                      <Route path="contacts/:id" element={<ContactDetail />} />
+                      <Route
+                        path="pipeline"
+                        element={
+                          <GenericOnly>
+                            <Pipeline />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route path="inbox" element={<Inbox />} />
+                      <Route
+                        path="marketing"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN", "MANAGER"]}
+                            feature="Marketing"
+                            roles="manager (or admin)"
+                            lockedInPlace
+                          >
+                            <Marketing />
+                          </RoleGuard>
+                        }
+                      />
+                      {/* Generic CRM reports  vertical-gated so travel/wellness
                         tenants use their own /travel/reports | /wellness/reports
                         (the generic deal-stage chart + "Globussoft CRM" PDF don't
                         fit those verticals). */}
-                    <Route path="reports" element={<GenericOnly><Reports /></GenericOnly>} />
-                    <Route path="agent-reports" element={<GenericOnly><AgentReports /></GenericOnly>} />
-                    <Route path="workflows" element={<Workflows />} />
-                    <Route path="developer" element={<Developer />} />
-                    <Route
-                      path="billing"
-                      element={<Navigate to="/invoices" />}
-                    />
-                    <Route path="cpq" element={<CPQ />} />
-                    <Route path="marketplace" element={<Marketplace />} />
-                    <Route
-                      path="channels"
-                      element={
-                        <RoleGuard allow={["ADMIN"]} message="Channels requires admin access.">
-                          <Channels />
-                        </RoleGuard>
-                      }
-                    />
-                    <Route path="landing-pages" element={<TravelOnly><LandingPages /></TravelOnly>} />
-                    <Route path="landing-sites" element={<GenericOrWellnessOnly><LandingSites /></GenericOrWellnessOnly>} />
-                    <Route
-                      path="landing-sites/builder/:id"
-                      element={<GenericOrWellnessOnly><LandingPageBuilder /></GenericOrWellnessOnly>}
-                    />
-                    <Route
-                      path="landing-pages/builder/:id"
-                      element={<TravelOnly><LandingPageBuilder /></TravelOnly>}
-                    />
-                    <Route path="objects" element={<CustomObjects />} />
-                    <Route
-                      path="objects/:entityName"
-                      element={<CustomObjectView />}
-                    />
-                    <Route path="sequences" element={<GenericOnly><Sequences /></GenericOnly>} />
-                    <Route
-                      path="sequences/:id/builder"
-                      element={<GenericOnly><SequenceBuilder /></GenericOnly>}
-                    />
-                    <Route
-                      path="settings"
-                      element={
-                        <RoleGuard allow={["ADMIN"]} message="Settings requires admin access.">
-                          <Settings />
-                        </RoleGuard>
-                      }
-                    />
-                    {/* Manage Subscription Plans Ã¢â‚¬â€ Owner-only catalog editor.
+                      <Route
+                        path="reports"
+                        element={
+                          <GenericOnly>
+                            <Reports />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="agent-reports"
+                        element={
+                          <GenericOnly>
+                            <AgentReports />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route path="workflows" element={<Workflows />} />
+                      <Route path="developer" element={<Developer />} />
+                      <Route
+                        path="billing"
+                        element={<Navigate to="/invoices" />}
+                      />
+                      <Route path="cpq" element={<CPQ />} />
+                      <Route path="marketplace" element={<Marketplace />} />
+                      <Route
+                        path="channels"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="Channels requires admin access."
+                          >
+                            <Channels />
+                          </RoleGuard>
+                        }
+                      />
+                      <Route
+                        path="landing-pages"
+                        element={
+                          <TravelOnly>
+                            <LandingPages />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="landing-sites"
+                        element={
+                          <GenericOrWellnessOnly>
+                            <LandingSites />
+                          </GenericOrWellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="landing-sites/builder/:id"
+                        element={
+                          <GenericOrWellnessOnly>
+                            <LandingPageBuilder />
+                          </GenericOrWellnessOnly>
+                        }
+                      />
+                      <Route
+                        path="landing-pages/builder/:id"
+                        element={
+                          <TravelOnly>
+                            <LandingPageBuilder />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route path="objects" element={<CustomObjects />} />
+                      <Route
+                        path="objects/:entityName"
+                        element={<CustomObjectView />}
+                      />
+                      <Route
+                        path="sequences"
+                        element={
+                          <GenericOnly>
+                            <Sequences />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="sequences/:id/builder"
+                        element={
+                          <GenericOnly>
+                            <SequenceBuilder />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="settings"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="Settings requires admin access."
+                          >
+                            <Settings />
+                          </RoleGuard>
+                        }
+                      />
+                      {/* Manage Subscription Plans  Owner-only catalog editor.
                         The page itself gates render on usePermissions().isOwner,
                         so no RoleGuard wrap (RoleGuard reads user.role which is
                         ADMIN/MANAGER/USER; OWNER lives on the isOwner flag). */}
-                    <Route path="manage-plans" element={<ManagePlans />} />
-                    <Route
-                      path="data-import-export"
-                      element={
-                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Import / Export requires admin or manager access.">
-                          <DataImportExport />
-                        </RoleGuard>
-                      }
-                    />
-                    <Route path="expenses" element={<Expenses />} />
-                    <Route path="contracts" element={<GenericOnly><Contracts /></GenericOnly>} />
-                    <Route path="estimates" element={<Estimates />} />
-                    <Route path="invoices" element={<Invoices />} />
-                    <Route path="tickets" element={<Tickets />} />
-                    <Route path="tasks" element={<Tasks />} />
-                    <Route path="lead-scoring" element={<LeadScoring />} />
-                    <Route path="projects" element={<Projects />} />
-                    <Route path="clients" element={<Clients />} />
-                    <Route path="leads" element={<Leads />} />
-                    <Route
-                      path="converted-leads"
-                      element={<ConvertedLeads />}
-                    />
-                    <Route
-                      path="callified-data"
-                      element={<CallifiedData />}
-                    />
-                    <Route
-                      path="staff"
-                      element={
-                        <RoleGuard allow={["ADMIN"]} message="Staff requires admin access.">
-                          <Staff />
-                        </RoleGuard>
-                      }
-                    />
-                    {/* Per-target user permission view. Route is auth-only;
+                      <Route path="manage-plans" element={<ManagePlans />} />
+                      <Route
+                        path="data-import-export"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN", "MANAGER"]}
+                            message="Import / Export requires admin or manager access."
+                          >
+                            <DataImportExport />
+                          </RoleGuard>
+                        }
+                      />
+                      <Route path="expenses" element={<Expenses />} />
+                      <Route
+                        path="contracts"
+                        element={
+                          <GenericOnly>
+                            <Contracts />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route path="estimates" element={<Estimates />} />
+                      <Route path="invoices" element={<Invoices />} />
+                      <Route path="tickets" element={<Tickets />} />
+                      <Route path="tasks" element={<Tasks />} />
+                      <Route path="lead-scoring" element={<LeadScoring />} />
+                      <Route path="projects" element={<Projects />} />
+                      <Route path="clients" element={<Clients />} />
+                      <Route path="leads" element={<Leads />} />
+                      <Route
+                        path="converted-leads"
+                        element={<ConvertedLeads />}
+                      />
+                      <Route
+                        path="callified-data"
+                        element={<CallifiedData />}
+                      />
+                      <Route
+                        path="staff"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="Staff requires admin access."
+                          >
+                            <Staff />
+                          </RoleGuard>
+                        }
+                      />
+                      {/* Per-target user permission view. Route is auth-only;
                         the page rechecks roles.read so non-admin admins
                         with the RBAC grant can also reach it, and so a
                         cross-tenant userId hits the backend's tenant guard
                         rather than a frontend allow-list. */}
-                    <Route
-                      path="staff/:userId/permissions"
-                      element={<StaffPermissions />}
-                    />
-                    <Route path="profile" element={<Profile />} />
-                    <Route path="profile/2fa" element={<Profile2FA />} />
-                    {/* RBAC: every authed user can view their own effective
+                      <Route
+                        path="staff/:userId/permissions"
+                        element={<StaffPermissions />}
+                      />
+                      <Route path="profile" element={<Profile />} />
+                      <Route path="profile/2fa" element={<Profile2FA />} />
+                      {/* RBAC: every authed user can view their own effective
                         permissions. Page is read-only and not gated. */}
-                    <Route path="profile/permissions" element={<MyPermissions />} />
-                    {/* RBAC: role + permission admin. Route is auth-only; the
+                      <Route
+                        path="profile/permissions"
+                        element={<MyPermissions />}
+                      />
+                      {/* RBAC: role + permission admin. Route is auth-only; the
                         page renders <AccessDenied /> for users without
                         roles.read so non-ADMIN admins with the RBAC grant can
                         still reach it. */}
-                    <Route path="settings/roles" element={<RolesAdmin />} />
-                    {/* G009 Ã¢â‚¬â€ Multi-channel Lead Capture admin (FR-3.7). */}
-                    <Route
-                      path="settings/lead-capture"
-                      element={
-                        <RoleGuard allow={["ADMIN"]} message="Lead Capture settings require admin access.">
-                          <LeadCapture />
-                        </RoleGuard>
-                      }
-                    />
-                    {/* Lead custom fields Ã¢â‚¬â€ generic vertical only; LeadFields.jsx
+                      <Route path="settings/roles" element={<RolesAdmin />} />
+                      {/* G009  Multi-channel Lead Capture admin (FR-3.7). */}
+                      <Route
+                        path="settings/lead-capture"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="Lead Capture settings require admin access."
+                          >
+                            <LeadCapture />
+                          </RoleGuard>
+                        }
+                      />
+                      {/* Lead custom fields  generic vertical only; LeadFields.jsx
                         itself redirects away for wellness/travel tenants. */}
-                    <Route
-                      path="settings/lead-fields"
-                      element={
-                        <RoleGuard allow={["ADMIN"]} message="Lead Fields settings require admin access.">
-                          <LeadFields />
-                        </RoleGuard>
-                      }
-                    />
-                    <Route path="notification-settings" element={<UserSettings />} />
-                    {/* #589: Audit Log is ADMIN-only (mirrors Sidebar's
+                      <Route
+                        path="settings/lead-fields"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="Lead Fields settings require admin access."
+                          >
+                            <LeadFields />
+                          </RoleGuard>
+                        }
+                      />
+                      <Route
+                        path="notification-settings"
+                        element={<UserSettings />}
+                      />
+                      {/* #589: Audit Log is ADMIN-only (mirrors Sidebar's
                         adminOnly visibility + the "System Admin Required"
                         toast text). Pre-fix, USER + MANAGER navigation to
                         /audit-log rendered the full Audit Log shell (KPI
                         cards, entity/action/user/date filters) before a
-                        toast surfaced Ã¢â‚¬â€ leaking the existence of the audit
+                        toast surfaced  leaking the existence of the audit
                         pipeline, tracked entities, and the role-name. The
                         backend route at /api/audit-viewer allows MANAGER too,
                         but the more-restrictive frontend gate prevents the
                         info-disclosure render. */}
-                    <Route
-                      path="audit-log"
-                      element={
-                        <RoleGuard allow={["ADMIN"]} message="Audit Log requires admin access.">
-                          <AuditLog />
-                        </RoleGuard>
-                      }
-                    />
-                    <Route path="privacy" element={<Privacy />} />
-                    <Route path="calendar-sync" element={<CalendarSync />} />
-                    <Route path="gmail" element={<GmailInbox />} />
-                    <Route
-                      path="pipelines"
-                      element={
-                        <GenericOnly>
-                          <Pipelines />
-                        </GenericOnly>
-                      }
-                    />
-                    <Route
-                      path="forecasting"
-                      element={
-                        <GenericOnly>
-                          <Forecasting />
-                        </GenericOnly>
-                      }
-                    />
-                    <Route path="dashboards" element={<GenericOnly><Dashboards /></GenericOnly>} />
-                    <Route path="custom-reports" element={<GenericOnly><CustomReports /></GenericOnly>} />
-                    <Route path="booking-pages" element={<BookingPages />} />
-                    <Route path="signatures" element={<Signatures />} />
-                    <Route path="knowledge-base" element={<KnowledgeBase />} />
-                    <Route path="currencies" element={<Currencies />} />
-                    <Route
-                      path="field-permissions"
-                      element={
-                        <RoleGuard allow={["ADMIN"]} message="Field Permissions requires admin access.">
-                          <FieldPermissions />
-                        </RoleGuard>
-                      }
-                    />
-                    {/* Per-sub-brand BrandKit admin UI. ADMIN-only mirrors the
+                      <Route
+                        path="audit-log"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="Audit Log requires admin access."
+                          >
+                            <AuditLog />
+                          </RoleGuard>
+                        }
+                      />
+                      <Route path="privacy" element={<Privacy />} />
+                      <Route path="calendar-sync" element={<CalendarSync />} />
+                      <Route path="gmail" element={<GmailInbox />} />
+                      <Route
+                        path="pipelines"
+                        element={
+                          <GenericOnly>
+                            <Pipelines />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="forecasting"
+                        element={
+                          <GenericOnly>
+                            <Forecasting />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="dashboards"
+                        element={
+                          <GenericOnly>
+                            <Dashboards />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="custom-reports"
+                        element={
+                          <GenericOnly>
+                            <CustomReports />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route path="booking-pages" element={<BookingPages />} />
+                      <Route path="signatures" element={<Signatures />} />
+                      <Route
+                        path="knowledge-base"
+                        element={<KnowledgeBase />}
+                      />
+                      <Route path="currencies" element={<Currencies />} />
+                      <Route
+                        path="field-permissions"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="Field Permissions requires admin access."
+                          >
+                            <FieldPermissions />
+                          </RoleGuard>
+                        }
+                      />
+                      {/* Per-sub-brand BrandKit admin UI. ADMIN-only mirrors the
                         backend gate (verifyRole(['ADMIN']) on POST/PUT/DELETE in
                         backend/routes/brand_kits.js commit e4783e0). */}
-                    <Route
-                      path="admin/brand-kits"
-                      element={
-                        <TravelOnly>
-                          <RoleGuard allow={["ADMIN"]} message="Brand Kits requires admin access.">
-                            <BrandKits />
-                          </RoleGuard>
-                        </TravelOnly>
-                      }
-                    />
-                    {/* RateHawk hotel-search admin UI. ADMIN + MANAGER (operator
+                      <Route
+                        path="admin/brand-kits"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              allow={["ADMIN"]}
+                              message="Brand Kits requires admin access."
+                            >
+                              <BrandKits />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      {/* RateHawk hotel-search admin UI. ADMIN + MANAGER (operator
                         search, not tenant-config). Consumes /api/ratehawk
                         (backend route commit be67789). Cap-status endpoint is
                         ADMIN-only on the backend; MANAGER gets a 403 there which
                         is swallowed silently (no pill renders). Search works
                         for both roles. Stub-mode banner surfaces until Q19
                         (RateHawk partner onboarding) cred swap lands. */}
-                    <Route
-                      path="admin/ratehawk-search"
-                      element={
-                        <TravelOnly>
-                          <RoleGuard
-                            requiredPermission={{ module: "suppliers", action: "read" }}
-                            feature="RateHawk Search"
-                            message="RateHawk Search requires the 'suppliers.read' permission."
-                          >
-                            <RateHawkSearch />
-                          </RoleGuard>
-                        </TravelOnly>
-                      }
-                    />
-                    {/* Booking.com / Expedia hotel-search admin UI. ADMIN +
+                      <Route
+                        path="admin/ratehawk-search"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "suppliers",
+                                action: "read",
+                              }}
+                              feature="RateHawk Search"
+                              message="RateHawk Search requires the 'suppliers.read' permission."
+                            >
+                              <RateHawkSearch />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Booking.com / Expedia hotel-search admin UI. ADMIN +
                         MANAGER (operator search, not tenant-config). Consumes
                         /api/booking-expedia (backend route commit bb33cbe,
                         tick #105). Cap-status endpoint is ADMIN-only on the
@@ -1865,378 +2515,886 @@ export default function App() {
                         stub-mode pending Q-cluster B6/C cred swap. The page
                         renders a Phase-2-pending banner by default with a
                         "Show form anyway" toggle for QA. */}
-                    <Route
-                      path="admin/booking-expedia-search"
-                      element={
-                        <TravelOnly>
+                      <Route
+                        path="admin/booking-expedia-search"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "suppliers",
+                                action: "read",
+                              }}
+                              feature="Booking / Expedia Search"
+                              message="Booking / Expedia Search requires the 'suppliers.read' permission."
+                            >
+                              <BookingExpediaSearch />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="admin/csp-violations"
+                        element={<CSPViolations />}
+                      />
+                      {/* Slice C1  Voyagr per-site API key admin. ADMIN-only. */}
+                      <Route
+                        path="admin/voyagr-api-keys"
+                        element={
                           <RoleGuard
-                            requiredPermission={{ module: "suppliers", action: "read" }}
-                            feature="Booking / Expedia Search"
-                            message="Booking / Expedia Search requires the 'suppliers.read' permission."
+                            requiredPermission={{
+                              module: "integrations",
+                              action: "manage",
+                            }}
+                            feature="Voyagr API Keys"
+                            message="Voyagr API Keys requires the 'integrations.manage' permission."
                           >
-                            <BookingExpediaSearch />
+                            <VoyagrApiKeys />
                           </RoleGuard>
-                        </TravelOnly>
-                      }
-                    />
-                    <Route path="admin/csp-violations" element={<CSPViolations />} />
-                    {/* Slice C1 Ã¢â‚¬â€ Voyagr per-site API key admin. ADMIN-only. */}
-                    <Route path="admin/voyagr-api-keys" element={<RoleGuard requiredPermission={{ module: "integrations", action: "manage" }} feature="Voyagr API Keys" message="Voyagr API Keys requires the 'integrations.manage' permission."><VoyagrApiKeys /></RoleGuard>} />
-                    {/* S128 Ã¢â‚¬â€ Embed allowlist admin (sets Tenant.embedAllowlistJson). ADMIN-only. */}
-                    <Route path="admin/embed-allowlist" element={<RoleGuard allow={["ADMIN"]} message="Embed Allowlist requires admin access."><EmbedAllowlist /></RoleGuard>} />
-                    {/* PRD_STATUS_PAGE.md Ã¢â‚¬â€ incident management for the public status page. */}
-                    <Route path="admin/status" element={<RoleGuard allow={["ADMIN"]} message="Status management requires admin access."><StatusAdmin /></RoleGuard>} />
-                    {/* PRD Gap Ã‚Â§1.5 / Ã‚Â§1.6 */}
-                    <Route
-                      path="commission-profiles"
-                      element={
-                        <RoleGuard allow={["ADMIN"]} message="Commission Profiles requires admin access.">
-                          <CommissionProfiles />
-                        </RoleGuard>
-                      }
-                    />
-                    <Route
-                      path="commission-data"
-                      element={
-                        <GenericOnly>
-                          <RoleGuard allow={["ADMIN"]} message="Commission Data requires admin access.">
-                            <CommissionData />
+                        }
+                      />
+                      {/* S128  Embed allowlist admin (sets Tenant.embedAllowlistJson). ADMIN-only. */}
+                      <Route
+                        path="admin/embed-allowlist"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="Embed Allowlist requires admin access."
+                          >
+                            <EmbedAllowlist />
                           </RoleGuard>
-                        </GenericOnly>
-                      }
-                    />
-                    <Route
-                      path="revenue-goals"
-                      element={
-                        <RoleGuard allow={["ADMIN", "MANAGER", "USER"]} message="Revenue Goals requires staff access.">
-                          <RevenueGoals />
-                        </RoleGuard>
-                      }
-                    />
-                    <Route path="lead-routing" element={<LeadRouting />} />
-                    <Route path="territories" element={<Territories />} />
-                    <Route
-                      path="quotas"
-                      element={
-                        <GenericOnly>
-                          <Quotas />
-                        </GenericOnly>
-                      }
-                    />
-                    <Route
-                      path="win-loss"
-                      element={
-                        <GenericOnly>
-                          <WinLoss />
-                        </GenericOnly>
-                      }
-                    />
-                    <Route path="ab-tests" element={<AbTests />} />
-                    <Route path="web-visitors" element={<GenericOnly><WebVisitors /></GenericOnly>} />
-                    <Route path="chatbots" element={<Chatbots />} />
-                    <Route path="approvals" element={<Approvals />} />
-                    <Route
-                      path="document-templates"
-                      element={<DocumentTemplates />}
-                    />
-                    <Route path="surveys" element={<Surveys />} />
-                    <Route path="payments" element={<Payments />} />
-                    <Route
-                      path="deal-insights"
-                      element={
-                        <GenericOnly>
-                          <DealInsights />
-                        </GenericOnly>
-                      }
-                    />
-                    <Route path="shared-inbox" element={<SharedInbox />} />
-                    <Route path="sla" element={<SLA />} />
-                    <Route path="live-chat" element={<LiveChat />} />
-                    <Route path="playbooks" element={<Playbooks />} />
-                    <Route
-                      path="document-tracking"
-                      element={<GenericOnly><DocumentTracking /></GenericOnly>}
-                    />
-                    <Route
-                      path="industry-templates"
-                      element={<GenericOnly><IndustryTemplates /></GenericOnly>}
-                    />
-                    <Route path="social" element={<Social />} />
-                    <Route path="sandbox" element={<Sandbox />} />
-                    <Route
-                      path="funnel"
-                      element={
-                        <GenericOnly>
-                          <Funnel />
-                        </GenericOnly>
-                      }
-                    />
-                    <Route path="zapier" element={<Zapier />} />
-                    {/* #522: Live Call Monitor removed Ã¢â‚¬â€ live-call surfaces are owned
+                        }
+                      />
+                      {/* PRD_STATUS_PAGE.md  incident management for the public status page. */}
+                      <Route
+                        path="admin/status"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="Status management requires admin access."
+                          >
+                            <StatusAdmin />
+                          </RoleGuard>
+                        }
+                      />
+                      {/* PRD Gap 1.5 / 1.6 */}
+                      <Route
+                        path="commission-profiles"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN"]}
+                            message="Commission Profiles requires admin access."
+                          >
+                            <CommissionProfiles />
+                          </RoleGuard>
+                        }
+                      />
+                      <Route
+                        path="commission-data"
+                        element={
+                          <GenericOnly>
+                            <RoleGuard
+                              allow={["ADMIN"]}
+                              message="Commission Data requires admin access."
+                            >
+                              <CommissionData />
+                            </RoleGuard>
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="revenue-goals"
+                        element={
+                          <RoleGuard
+                            allow={["ADMIN", "MANAGER", "USER"]}
+                            message="Revenue Goals requires staff access."
+                          >
+                            <RevenueGoals />
+                          </RoleGuard>
+                        }
+                      />
+                      <Route path="lead-routing" element={<LeadRouting />} />
+                      <Route path="territories" element={<Territories />} />
+                      <Route
+                        path="quotas"
+                        element={
+                          <GenericOnly>
+                            <Quotas />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="win-loss"
+                        element={
+                          <GenericOnly>
+                            <WinLoss />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route path="ab-tests" element={<AbTests />} />
+                      <Route
+                        path="web-visitors"
+                        element={
+                          <GenericOnly>
+                            <WebVisitors />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route path="chatbots" element={<Chatbots />} />
+                      <Route path="approvals" element={<Approvals />} />
+                      <Route
+                        path="document-templates"
+                        element={<DocumentTemplates />}
+                      />
+                      <Route path="surveys" element={<Surveys />} />
+                      <Route path="payments" element={<Payments />} />
+                      <Route
+                        path="deal-insights"
+                        element={
+                          <GenericOnly>
+                            <DealInsights />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route path="shared-inbox" element={<SharedInbox />} />
+                      <Route path="sla" element={<SLA />} />
+                      <Route path="live-chat" element={<LiveChat />} />
+                      <Route path="playbooks" element={<Playbooks />} />
+                      <Route
+                        path="document-tracking"
+                        element={
+                          <GenericOnly>
+                            <DocumentTracking />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route
+                        path="industry-templates"
+                        element={
+                          <GenericOnly>
+                            <IndustryTemplates />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route path="social" element={<Social />} />
+                      <Route path="sandbox" element={<Sandbox />} />
+                      <Route
+                        path="funnel"
+                        element={
+                          <GenericOnly>
+                            <Funnel />
+                          </GenericOnly>
+                        }
+                      />
+                      <Route path="zapier" element={<Zapier />} />
+                      {/* #522: Live Call Monitor removed  live-call surfaces are owned
                         by sister product Callified.ai (CRM ingests calls via
                         /api/v1/external/calls but does not render live-monitoring UI). */}
-                    {/* #303: bare /calendar previously rendered a blank <main>. Wellness
+                      {/* #303: bare /calendar previously rendered a blank <main>. Wellness
                   tenants get bounced to their themed calendar; everyone else sees
                   the calendar-sync page (which is the closest generic equivalent). */}
-                    <Route path="calendar" element={<CalendarRedirect />} />
+                      <Route path="calendar" element={<CalendarRedirect />} />
 
-                    {/* Travel vertical Ã¢â‚¬â€ Day 1 scaffolding. Gated by TravelOnly
+                      {/* Travel vertical — Day 1 scaffolding. Gated by TravelOnly
                   so generic + wellness tenants get bounced to /dashboard
                   rather than rendering empty travel UI. Phase 1 sub-pages
                   (diagnostics, itineraries, trips, visa, suppliers) mount
-                  under /travel/* per docs/TRAVEL_CRM_PRD.md Ã‚Â§7. */}
-              <Route path="travel" element={<TravelOnly><TravelDashboard /></TravelOnly>} />
-              <Route path="travel/diagnostics" element={<TravelOnly><TravelDiagnostics /></TravelOnly>} />
-              <Route path="travel/diagnostics/new" element={<TravelOnly><TravelDiagnosticWizard /></TravelOnly>} />
-              <Route path="travel/diagnostics/banks/new" element={<TravelOnly><TravelDiagnosticBuilder /></TravelOnly>} />
-              <Route path="travel/diagnostics/:id" element={<TravelOnly><TravelDiagnosticDetail /></TravelOnly>} />
-              <Route path="travel/itineraries" element={<TravelOnly><TravelItineraries /></TravelOnly>} />
-              <Route path="travel/pipeline" element={<TravelOnly><TravelPipeline /></TravelOnly>} />
-              <Route path="travel/trips" element={<TravelOnly><TravelTrips /></TravelOnly>} />
-              <Route path="travel/trips/:id" element={<TravelOnly><TravelTripDetail /></TravelOnly>} />
-              {/* #912 Ã¢â‚¬â€ canonical kebab-case path matches sibling travel routes
+                  under /travel/* per docs/TRAVEL_CRM_PRD.md 7. */}
+                      <Route
+                        path="travel"
+                        element={
+                          <TravelOnly>
+                            <TravelDashboard />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/diagnostics"
+                        element={
+                          <TravelOnly>
+                            <TravelDiagnostics />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/diagnostics/new"
+                        element={
+                          <TravelOnly>
+                            <TravelDiagnosticWizard />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/diagnostics/banks/new"
+                        element={
+                          <TravelOnly>
+                            <TravelDiagnosticBuilder />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/diagnostics/:id"
+                        element={
+                          <TravelOnly>
+                            <TravelDiagnosticDetail />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/itineraries"
+                        element={
+                          <TravelOnly>
+                            <TravelItineraries />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/pipeline"
+                        element={
+                          <TravelOnly>
+                            <TravelPipeline />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/trips"
+                        element={
+                          <TravelOnly>
+                            <TravelTrips />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/trips/:id"
+                        element={
+                          <TravelOnly>
+                            <TravelTripDetail />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* #912  canonical kebab-case path matches sibling travel routes
                   (cost-master, pricing-rules, religious-packets). The unhyphenated
                   alias stays registered so existing bookmarks / sidebar links keep working. */}
-              <Route path="travel/web-checkins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
-              <Route path="travel/webcheckins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
-              <Route path="travel/automation-health" element={<TravelOnly><TravelAutomationHealth /></TravelOnly>} />
-              {/* Slice C2 Ã¢â‚¬â€ Passport OCR verification queue. Backend route gates
+                      <Route
+                        path="travel/web-checkins"
+                        element={
+                          <TravelOnly>
+                            <TravelWebCheckinQueue />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/webcheckins"
+                        element={
+                          <TravelOnly>
+                            <TravelWebCheckinQueue />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/automation-health"
+                        element={
+                          <TravelOnly>
+                            <TravelAutomationHealth />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Slice C2  Passport OCR verification queue. Backend route gates
                   ADMIN+MANAGER; frontend RoleGuard mirrors so non-privileged
                   users hit a friendly access-denied surface rather than the
                   503 / 403 on the queue fetch. */}
-              <Route path="travel/passport-verification" element={
-                <TravelOnly>
-                  <RoleGuard
-                    requiredPermission={{ module: "passport", action: "manage" }}
-                    feature="Passport"
-                    message="Passport requires the 'passport.manage' permission."
-                  >
-                    <TravelPassportVerificationQueue />
-                  </RoleGuard>
-                </TravelOnly>
-              } />
-              <Route path="travel/cost-master" element={<TravelOnly><TravelCostMaster /></TravelOnly>} />
-              {/* Arc 2 Travel Gap #907 slice 5/N Ã¢â‚¬â€ SightseeingMaster admin
+                      <Route
+                        path="travel/passport-verification"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "passport",
+                                action: "manage",
+                              }}
+                              feature="Passport"
+                              message="Passport requires the 'passport.manage' permission."
+                            >
+                              <TravelPassportVerificationQueue />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/cost-master"
+                        element={
+                          <TravelOnly>
+                            <TravelCostMaster />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Arc 2 Travel Gap #907 slice 5/N  SightseeingMaster admin
                   CRUD surface. Adjacent to cost-master per #907's "6th
                   category in Cost Master" framing. SUT page commit ca052d20. */}
-              <Route path="travel/sightseeing" element={<TravelOnly><TravelSightseeingMaster /></TravelOnly>} />
-              {/* Arc 2 Travel Gap #907 slice 8/N Ã¢â‚¬â€ ItineraryTemplates admin
+                      <Route
+                        path="travel/sightseeing"
+                        element={
+                          <TravelOnly>
+                            <TravelSightseeingMaster />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Arc 2 Travel Gap #907 slice 8/N  ItineraryTemplates admin
                   CRUD surface. Adjacent to sightseeing because both are #907
                   admin pages. SUT page commit f8768836. */}
-              <Route path="travel/itinerary-templates" element={<TravelOnly><TravelItineraryTemplates /></TravelOnly>} />
-              {/* S99 (TRAVEL_BIG_SCOPE_BACKLOG) Ã¢â‚¬â€ POI rep-suggested
-                  pending-approval queue. ADMIN-only Ã¢â‚¬â€ backend RBAC enforces
+                      <Route
+                        path="travel/itinerary-templates"
+                        element={
+                          <TravelOnly>
+                            <TravelItineraryTemplates />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* S99 (TRAVEL_BIG_SCOPE_BACKLOG)  POI rep-suggested
+                  pending-approval queue. ADMIN-only  backend RBAC enforces
                   on /api/travel/pois/pending + approve + reject, frontend
                   RoleGuard mirrors to surface an access-denied panel for
                   non-ADMIN roles rather than the route's 403. SUT page
                   shipped S12; backend mount S98 (commit 37d9ce40). */}
-              <Route path="travel/pois/pending" element={
-                <TravelOnly>
-                  <RoleGuard
-                    requiredPermission={{ module: "pois", action: "manage" }}
-                    feature="POI Approvals"
-                    message="POI approval queue requires the 'pois.manage' permission."
-                  >
-                    <TravelPoiPendingApprovalQueue />
-                  </RoleGuard>
-                </TravelOnly>
-              } />
-              {/* S49 (TRAVEL_BIG_SCOPE_BACKLOG) Ã¢â‚¬â€ QuoteTemplates admin
+                      <Route
+                        path="travel/pois/pending"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "pois",
+                                action: "manage",
+                              }}
+                              feature="POI Approvals"
+                              message="POI approval queue requires the 'pois.manage' permission."
+                            >
+                              <TravelPoiPendingApprovalQueue />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      {/* S49 (TRAVEL_BIG_SCOPE_BACKLOG)  QuoteTemplates admin
                   route registration. SUT page commit 8fb23237 (S31). Sits
                   adjacent to ItineraryTemplates because both are reusable-
                   template admin surfaces. Backend route mounted as
                   /api/travel/quote-templates (S48, commit 32630ec1).
-                  No RoleGuard wrap Ã¢â‚¬â€ page is view-by-default for any
+                  No RoleGuard wrap  page is view-by-default for any
                   logged-in travel-tenant user; write gates (canWrite for
                   POST/PATCH; Delete for ADMIN-only) live inside the page,
                   mirroring the QuotesAdmin / InvoicesAdmin convention. */}
-              <Route path="travel/quote-templates" element={<TravelOnly><TravelQuoteTemplates /></TravelOnly>} />
-              {/* S55 (TRAVEL_BIG_SCOPE_BACKLOG) Ã¢â‚¬â€ CancellationPolicies
+                      <Route path="travel/quote-templates" element={<TravelOnly><TravelQuoteTemplates /></TravelOnly>} />
+                      {/* S55 (TRAVEL_BIG_SCOPE_BACKLOG)  CancellationPolicies
                   admin route registration. SUT page commit 4823b160 (S54).
                   Sits adjacent to QuoteTemplates because both are tenant-
                   policy admin CRUD surfaces. Backend route mounted as
                   /api/travel/cancellation-policies (S53, commit 7e6a98b1).
-                  No RoleGuard wrap Ã¢â‚¬â€ page is view-by-default for any
+                  No RoleGuard wrap  page is view-by-default for any
                   logged-in travel-tenant user; write gates (canWrite for
                   POST/PATCH; Delete for ADMIN-only) live inside the page,
                   mirroring the QuotesAdmin / InvoicesAdmin convention. */}
-              <Route path="travel/cancellation-policies" element={<TravelOnly><TravelCancellationPolicies /></TravelOnly>} />
-              <Route path="travel/rfu/customers/:contactId" element={<TravelOnly><TravelRfuCustomerProfile /></TravelOnly>} />
-              <Route path="travel/pricing-rules" element={<TravelOnly><TravelPricingRules /></TravelOnly>} />
-              <Route path="travel/reports" element={<TravelOnly><TravelReports /></TravelOnly>} />
-              <Route path="travel/reports/pnl" element={<TravelOnly><TravelPnlReport /></TravelOnly>} />
-              <Route path="travel/reviews" element={<TravelOnly><TravelReviews /></TravelOnly>} />
-              <Route path="travel/suppliers" element={<TravelOnly><TravelSuppliers /></TravelOnly>} />
-              <Route path="travel/suppliers-admin" element={<TravelOnly><TravelSuppliersAdmin /></TravelOnly>} />
-              {/* PRD_TRAVEL_SUPPLIER_MASTER G035/G036 Ã¢â‚¬â€ Supplier PO ledger */}
-              <Route path="travel/purchase-orders" element={<TravelOnly><TravelPurchaseOrders /></TravelOnly>} />
-              {/* PRD_TRAVEL_SUPPLIER_MASTER G045 Ã¢â‚¬â€ per-supplier commission ledger */}
-              <Route path="travel/suppliers/:id/commissions" element={<TravelOnly><TravelSupplierCommissions /></TravelOnly>} />
-              {/* PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 Ã¢â‚¬â€ per-supplier statement
+                      <Route path="travel/cancellation-policies" element={<TravelOnly><TravelCancellationPolicies /></TravelOnly>} />
+                      <Route
+                        path="travel/rfu/customers/:contactId"
+                        element={
+                          <TravelOnly>
+                            <TravelRfuCustomerProfile />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/pricing-rules"
+                        element={
+                          <TravelOnly>
+                            <TravelPricingRules />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/reports"
+                        element={
+                          <TravelOnly>
+                            <TravelReports />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/reports/pnl"
+                        element={
+                          <TravelOnly>
+                            <TravelPnlReport />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/reviews"
+                        element={
+                          <TravelOnly>
+                            <TravelReviews />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/suppliers"
+                        element={
+                          <TravelOnly>
+                            <TravelSuppliers />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/suppliers-admin"
+                        element={
+                          <TravelOnly>
+                            <TravelSuppliersAdmin />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* PRD_TRAVEL_SUPPLIER_MASTER G035/G036 Ã¢â‚¬â€ Supplier PO ledger */}
+                      <Route
+                        path="travel/purchase-orders"
+                        element={
+                          <TravelOnly>
+                            <TravelPurchaseOrders />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* PRD_TRAVEL_SUPPLIER_MASTER G045 Ã¢â‚¬â€ per-supplier commission ledger */}
+                      <Route
+                        path="travel/suppliers/:id/commissions"
+                        element={
+                          <TravelOnly>
+                            <TravelSupplierCommissions />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 Ã¢â‚¬â€ per-supplier statement
                   reconciliation + invoice-PDF uploads. */}
-              <Route path="travel/suppliers/:id/reconcile" element={<TravelOnly><TravelSupplierReconciliation /></TravelOnly>} />
-              <Route path="travel/quotes-admin" element={<TravelOnly><TravelQuotesAdmin /></TravelOnly>} />
-              {/* Arc 2 #900 slice 2 Ã¢â‚¬â€ Quote Builder (line-items composition).
+                      <Route
+                        path="travel/suppliers/:id/reconcile"
+                        element={
+                          <TravelOnly>
+                            <TravelSupplierReconciliation />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/quotes-admin"
+                        element={
+                          <TravelOnly>
+                            <TravelQuotesAdmin />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Arc 2 #900 slice 2  Quote Builder (line-items composition).
                   Optional :id param (`/builder` = new; `/builder/:id` = edit).
                   RoleGuard allow=[ADMIN,MANAGER] mirrors backend write RBAC. */}
-              <Route path="travel/quotes/builder" element={<TravelOnly><RoleGuard requiredPermission={{ module: "quotes", action: "write" }} feature="Quote Builder" message="Quote Builder requires the 'quotes.write' permission."><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
-              <Route path="travel/quotes/builder/:id" element={<TravelOnly><RoleGuard requiredPermission={{ module: "quotes", action: "write" }} feature="Quote Builder" message="Quote Builder requires the 'quotes.write' permission."><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
-              {/* G019 Ã¢â‚¬â€ operator-facing counter-offer review (side-by-side
+                      <Route
+                        path="travel/quotes/builder"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "quotes",
+                                action: "write",
+                              }}
+                              feature="Quote Builder"
+                              message="Quote Builder requires the 'quotes.write' permission."
+                            >
+                              <TravelQuoteBuilder />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/quotes/builder/:id"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "quotes",
+                                action: "write",
+                              }}
+                              feature="Quote Builder"
+                              message="Quote Builder requires the 'quotes.write' permission."
+                            >
+                              <TravelQuoteBuilder />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      {/* G019  operator-facing counter-offer review (side-by-side
                   ours vs customer counter). Accept / Reject / Counter back. */}
-              <Route path="travel/quotes/:id/counter-review" element={<TravelOnly><RoleGuard requiredPermission={{ module: "quotes", action: "write" }} feature="Counter Review" message="Counter Review requires the 'quotes.write' permission."><TravelQuoteCounterReview /></RoleGuard></TravelOnly>} />
-              {/* Back-compat: old notifications linked /travel/quotes/:id (no route
-                  Ã¢â€ â€™ 404). Redirect to the Quote Builder. More-specific routes above
+                      <Route
+                        path="travel/quotes/:id/counter-review"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "quotes",
+                                action: "write",
+                              }}
+                              feature="Counter Review"
+                              message="Counter Review requires the 'quotes.write' permission."
+                            >
+                              <TravelQuoteCounterReview />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Back-compat: old notifications linked /travel/quotes/:id (no route
+                  ?? ? 404). Redirect to the Quote Builder. More-specific routes above
                   (/builder, /:id/counter-review) still win via route ranking. */}
-              <Route path="travel/quotes/:id" element={<TravelOnly><QuoteIdRedirect /></TravelOnly>} />
-              {/* PRD Ã‚Â§7 Ã¢â‚¬â€ Flight quick-quote (FlightQuoteAgent). Manual
-                  fallback for the Chrome flight plugin: up to 4 options,
-                  server-side markup, branded PDF + WhatsApp share. */}
-              <Route path="travel/flights/quote" element={<TravelOnly><TravelFlightQuoteAgent /></TravelOnly>} />
-              <Route path="travel/invoices-admin" element={<TravelOnly><TravelInvoicesAdmin /></TravelOnly>} />
-              {/* PRD_TRAVEL_BILLING G022 (FR-3.5.e) Ã¢â‚¬â€ supplier-payable batch
+                      <Route
+                        path="travel/quotes/:id"
+                        element={
+                          <TravelOnly>
+                            <QuoteIdRedirect />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* PRD 7  Flight quick-quote fallback for the Chrome flight plugin.
+                  Manual quote flow stays on /travel/flights/quote. */}
+                      <Route
+                        path="travel/flights/quote"
+                        element={
+                          <TravelOnly>
+                            <TravelFlightQuoteAgent />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/flight-offer-image"
+                        element={
+                          <TravelOnly>
+                            <TravelFlightOfferImageGenerator />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/invoices-admin"
+                        element={
+                          <TravelOnly>
+                            <TravelInvoicesAdmin />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* PRD_TRAVEL_BILLING G022 (FR-3.5.e)  supplier-payable batch
                   ops surface. Lists / approves / sends / settles batches +
                   bank-friendly CSV export. */}
-              <Route path="travel/payable-batches" element={<TravelOnly><TravelPayableBatches /></TravelOnly>} />
-              {/* PRD_TRAVEL_BILLING G024 (FR-3.6.c) Ã¢â‚¬â€ settlement-timeline
+                      <Route
+                        path="travel/payable-batches"
+                        element={
+                          <TravelOnly>
+                            <TravelPayableBatches />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* PRD_TRAVEL_BILLING G024 (FR-3.6.c)  settlement-timeline
                   Gantt view (inflow + outflow on one date axis). */}
-              <Route path="travel/settlements/gantt" element={<TravelOnly><TravelSettlementGantt /></TravelOnly>} />
-              {/* Arc 2 #901 slice 7 Ã¢â‚¬â€ cross-invoice milestone dashboard.
+                      <Route
+                        path="travel/settlements/gantt"
+                        element={
+                          <TravelOnly>
+                            <TravelSettlementGantt />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Arc 2 #901 slice 7  cross-invoice milestone dashboard.
                   Operator-facing aggregate of upcoming/overdue payment
                   milestones across all travel invoices. */}
-              <Route path="travel/milestones" element={<TravelOnly><TravelMilestoneTracker /></TravelOnly>} />
-              {/* Q9 Ã¢â‚¬â€ travel 2-way WhatsApp chat (Wati transport). The sidebar
+                      <Route
+                        path="travel/milestones"
+                        element={
+                          <TravelOnly>
+                            <TravelMilestoneTracker />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Q9  travel 2-way WhatsApp chat (Wati transport). The sidebar
                   WhatsApp item lands here; the read-only dispatch log moved to
                   the /log sub-path (linked from the chat's status strip).
                   TravelOnly bounces wellness/generic tenants on both. */}
-              <Route path="travel/whatsapp" element={<TravelOnly><TravelWhatsAppChat /></TravelOnly>} />
-              <Route path="travel/whatsapp/log" element={<TravelOnly><TravelWhatsAppLog /></TravelOnly>} />
-              <Route path="travel/whatsapp/templates" element={<TravelOnly><TravelWhatsAppTemplates /></TravelOnly>} />
-              {/* Arc 2 #903 Ã¢â‚¬â€ cross-supplier A/P review (all payables across
+                      <Route
+                        path="travel/whatsapp"
+                        element={
+                          <TravelOnly>
+                            <TravelWhatsAppChat />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/whatsapp/log"
+                        element={
+                          <TravelOnly>
+                            <TravelWhatsAppLog />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/whatsapp/templates"
+                        element={
+                          <TravelOnly>
+                            <TravelWhatsAppTemplates />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Arc 2 #903  cross-supplier A/P review (all payables across
                   all suppliers in one table, distinct from per-supplier expand
                   on SuppliersAdmin). Placeholder client-side fan-out fetch
                   until slice 6 consolidating endpoint ships. */}
-              <Route path="travel/payables" element={<TravelOnly><TravelPayables /></TravelOnly>} />
-              {/* #905 slice 3 Ã¢â‚¬â€ TravelCommissionProfile CRUD admin. Backend
+                      <Route
+                        path="travel/payables"
+                        element={
+                          <TravelOnly>
+                            <TravelPayables />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* #905 slice 3  TravelCommissionProfile CRUD admin. Backend
                   GET is verifyToken-only (any role can view); write gates are
                   enforced client-side via canWrite (ADMIN/MANAGER) and the
                   Delete button (ADMIN-only) inside the page. No RoleGuard
                   wrap mirrors the MilestoneTracker / Payables pattern. */}
-              <Route path="travel/commission-profiles" element={<TravelOnly><TravelCommissionProfilesAdmin /></TravelOnly>} />
-              <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
-              <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
-              {/* T16 Ã¢â‚¬â€ dedicated TMC catalogue admin page; the
+                      <Route
+                        path="travel/commission-profiles"
+                        element={
+                          <TravelOnly>
+                            <TravelCommissionProfilesAdmin />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/religious-packets"
+                        element={
+                          <TravelOnly>
+                            <TravelReligiousPackets />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/tmc/microsite-preview"
+                        element={
+                          <TravelOnly>
+                            <TravelTmcMicrositePreview />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* T16  dedicated TMC catalogue admin page; the
                   Promote-to-active surface is also retained as a sub-panel
                   inside DiagnosticBuilder's EngineWeights tab for now. */}
-              <Route path="travel/tmc/catalogue" element={<TravelOnly><TravelTmcCatalogueAdmin /></TravelOnly>} />
-              <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />
-              <Route path="travel/itineraries/:id/edit" element={<TravelOnly><TravelItineraryEditor /></TravelOnly>} />
-              <Route path="travel/leads/:contactId" element={<TravelOnly><TravelLeadDetail /></TravelOnly>} />
-              {/* Arc 2 #904 slice Ã¢â‚¬â€ InboundLeads admin (STUB client-side
+                      <Route
+                        path="travel/tmc/catalogue"
+                        element={
+                          <TravelOnly>
+                            <TravelTmcCatalogueAdmin />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/itineraries/:id"
+                        element={
+                          <TravelOnly>
+                            <TravelItineraryDetail />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/itineraries/:id/edit"
+                        element={
+                          <TravelOnly>
+                            <TravelItineraryEditor />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/leads/:contactId"
+                        element={
+                          <TravelOnly>
+                            <TravelLeadDetail />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Arc 2 #904 slice  InboundLeads admin (STUB client-side
                   filter pending dedicated GET endpoint). Operator surface
                   for inbound webhook-ingested leads (Voyagr / web form /
                   WhatsApp / ads / adsgpt / metaads / manual). No RoleGuard
-                  wrap Ã¢â‚¬â€ page is view-by-default and Convert-to-Lead routes
+                  wrap  page is view-by-default and Convert-to-Lead routes
                   to /leads/:contactId which carries its own gates. */}
-              <Route path="travel/inbound-leads" element={<TravelOnly><TravelInboundLeads /></TravelOnly>} />
-              {/* Phase 3 Visa Sure scaffolding (cluster B3) Ã¢â‚¬â€ placeholder shells.
+                      <Route
+                        path="travel/inbound-leads"
+                        element={
+                          <TravelOnly>
+                            <TravelInboundLeads />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Phase 3 Visa Sure scaffolding (cluster B3)  placeholder shells.
                   Real implementation gated on product calls in
-                  docs/PRD_VISA_SURE_PHASE_3.md Ã‚Â§5 + Ã‚Â§9. */}
-              <Route path="travel/visa" element={<TravelOnly><TravelVisaDashboard /></TravelOnly>} />
-              <Route path="travel/visa/applications" element={<TravelOnly><TravelVisaApplications /></TravelOnly>} />
-              {/* Phase 3 FR-4 advisor dashboard Ã¢â‚¬â€ per-application drilldown
+                  docs/PRD_VISA_SURE_PHASE_3.md 5 + 9. */}
+                      <Route
+                        path="travel/visa"
+                        element={
+                          <TravelOnly>
+                            <TravelVisaDashboard />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/visa/applications"
+                        element={
+                          <TravelOnly>
+                            <TravelVisaApplications />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Phase 3 FR-4 advisor dashboard  per-application drilldown
                   from the Applications list. SHELL only; backend GET
-                  /api/travel/visa/applications/:id (PRD Ã‚Â§3 FR-5) pending. */}
-              <Route path="travel/visa/applications/:applicationId" element={<TravelOnly><TravelVisaAdvisorDashboard /></TravelOnly>} />
-              <Route path="travel/visa/checklists" element={<TravelOnly><TravelVisaChecklists /></TravelOnly>} />
-              {/* Phase 3 FR-7 analytics SHELL (V16-V18) Ã¢â‚¬â€ backend
+                  /api/travel/visa/applications/:id (PRD 3 FR-5) pending. */}
+                      <Route
+                        path="travel/visa/applications/:applicationId"
+                        element={
+                          <TravelOnly>
+                            <TravelVisaAdvisorDashboard />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel/visa/checklists"
+                        element={
+                          <TravelOnly>
+                            <TravelVisaChecklists />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Phase 3 FR-7 analytics SHELL (V16-V18)  backend
                   /api/travel/reports/visa wiring pending (cluster B3). */}
-              <Route path="travel/visa/reports" element={<TravelOnly><TravelVisaReports /></TravelOnly>} />
-              {/* Phase 3 Visa Sure embassy-rules admin (tick #178) Ã¢â‚¬â€ consumes
+                      <Route
+                        path="travel/visa/reports"
+                        element={
+                          <TravelOnly>
+                            <TravelVisaReports />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Phase 3 Visa Sure embassy-rules admin (tick #178)  consumes
                   /api/embassy-rules CRUD shipped tick #175 (commit 05587ac7).
                   ADMIN-only per backend POST/PUT/DELETE gates. */}
-              <Route path="travel/visa/embassy-rules" element={
-                <TravelOnly>
-                  <RoleGuard
-                    requiredPermission={{ module: "visa", action: "manage" }}
-                    feature="Embassy Rules"
-                    message="Embassy Rules admin requires the 'visa.manage' permission."
-                  >
-                    <TravelVisaEmbassyRulesAdmin />
-                  </RoleGuard>
-                </TravelOnly>
-              } />
-              {/* G107 Ã¢â‚¬â€ Visa Sure rejection-recovery program admin (PRD Ã‚Â§FR-7).
+                      <Route
+                        path="travel/visa/embassy-rules"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "visa",
+                                action: "manage",
+                              }}
+                              feature="Embassy Rules"
+                              message="Embassy Rules admin requires the 'visa.manage' permission."
+                            >
+                              <TravelVisaEmbassyRulesAdmin />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      {/* G107  Visa Sure rejection-recovery program admin (PRD FR-7).
                   ADMIN+MANAGER CRUD backend; non-write roles see read-only cards. */}
-              <Route path="travel/visa/recovery-programs" element={
-                <TravelOnly>
-                  <TravelVisaRecoveryProgram />
-                </TravelOnly>
-              } />
-              {/* Phase 1 TMC curriculum-mappings admin (tick #181) Ã¢â‚¬â€ consumes
+                      <Route
+                        path="travel/visa/recovery-programs"
+                        element={
+                          <TravelOnly>
+                            <TravelVisaRecoveryProgram />
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Phase 1 TMC curriculum-mappings admin (tick #181)  consumes
                   /api/travel-curriculum CRUD shipped tick #180 (commit 6d5919a8).
                   ADMIN-only per backend POST/PUT/DELETE gates. TMC vertical
                   (school-trip pitch deck), NOT under Visa Sure. */}
-              <Route path="travel/curriculum-mappings" element={
-                <TravelOnly>
-                  <RoleGuard
-                    requiredPermission={{ module: "curriculum", action: "delete" }}
-                    feature="Curriculum Mappings"
-                    message="Curriculum Mappings admin requires the 'curriculum.delete' permission."
-                  >
-                    <TravelCurriculumAdmin />
-                  </RoleGuard>
-                </TravelOnly>
-              } />
-              {/* TMC school term calendar admin Ã¢â‚¬â€ ADMIN-only per backend gates. */}
-              <Route path="travel/school-terms" element={
-                <TravelOnly>
-                  <RoleGuard
-                    requiredPermission={{ module: "school_terms", action: "delete" }}
-                    feature="School Term Calendar"
-                    message="School Term Calendar requires the 'school_terms.delete' permission."
-                  >
-                    <TravelSchoolTermCalendar />
-                  </RoleGuard>
-                </TravelOnly>
-              } />
-              {/* Brochure Engine — agentic-orchcrm integration. AI orchestration
+                      <Route
+                        path="travel/curriculum-mappings"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "curriculum",
+                                action: "delete",
+                              }}
+                              feature="Curriculum Mappings"
+                              message="Curriculum Mappings admin requires the 'curriculum.delete' permission."
+                            >
+                              <TravelCurriculumAdmin />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      {/* TMC school term calendar admin  ADMIN-only per backend gates. */}
+                      <Route
+                        path="travel/school-terms"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "school_terms",
+                                action: "delete",
+                              }}
+                              feature="School Term Calendar"
+                              message="School Term Calendar requires the 'school_terms.delete' permission."
+                            >
+                              <TravelSchoolTermCalendar />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      {/* Brochure Engine ? agentic-orchcrm integration. AI orchestration
                   engine that turns a brief into a multi-page A4 travel brochure
                   PDF. Marketing-read gated for parity with the sidebar entry. */}
-              <Route path="travel/brochures" element={
-                <TravelOnly>
-                  <RoleGuard
-                    requiredPermission={{ module: "marketing", action: "read" }}
-                    feature="Brochure Engine"
-                    message="Brochure Engine requires the 'marketing.read' permission."
-                  >
-                    <TravelBrochureEngine />
-                  </RoleGuard>
-                </TravelOnly>
-              } />
-              <Route path="travel-stall" element={
-                <TravelOnly>
-                  <RoleGuard
-                    requiredPermission={{ module: "reports", action: "read" }}
-                    feature="Travel Stall Dashboard"
-                    message="Travel Stall Dashboard requires the 'reports.read' permission."
-                  >
-                    <TravelStallDashboard />
-                  </RoleGuard>
-                </TravelOnly>
-              } />
-                    {/* #341: catch-all for unmapped or wrong-prefix URLs. Renders
+                      <Route
+                        path="travel/brochures"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "marketing",
+                                action: "read",
+                              }}
+                              feature="Brochure Engine"
+                              message="Brochure Engine requires the 'marketing.read' permission."
+                            >
+                              <TravelBrochureEngine />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
+                        path="travel-stall"
+                        element={
+                          <TravelOnly>
+                            <RoleGuard
+                              requiredPermission={{
+                                module: "reports",
+                                action: "read",
+                              }}
+                              feature="Travel Stall Dashboard"
+                              message="Travel Stall Dashboard requires the 'reports.read' permission."
+                            >
+                              <TravelStallDashboard />
+                            </RoleGuard>
+                          </TravelOnly>
+                        }
+                      />
+                      {/* #341: catch-all for unmapped or wrong-prefix URLs. Renders
                   inside the layout chrome so the user keeps the sidebar +
                   header. Pre-fix the SPA returned a blank <main>; now we
                   show a real 404 with a path suggestion when applicable. */}
-                    <Route path="*" element={<NotFound />} />
-                  </Route>
-                </Routes>
-              </Suspense>
-            </RouteErrorBoundary>
-          </BrowserRouter>
+                      <Route path="*" element={<NotFound />} />
+                    </Route>
+                  </Routes>
+                </Suspense>
+              </RouteErrorBoundary>
+            </BrowserRouter>
           </ActiveSubBrandProvider>
         </NotifyProvider>
       </AuthContext.Provider>
     </ThemeContext.Provider>
   );
 }
+

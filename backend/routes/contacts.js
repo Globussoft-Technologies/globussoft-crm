@@ -8,6 +8,7 @@ const { writeAudit, diffFields } = require("../lib/audit");
 const { markFirstResponseIfNeeded } = require("../lib/leadSla");
 const { normalizePhone, computeDuplicateGroupKey, findDuplicateContactFull } = require("../utils/deduplication");
 const { notify } = require('../lib/notificationService');
+const { notifyAdminsOfNewLead } = require('../lib/leadNotifications');
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed but was never called from any route; rules saved via the
 // FieldPermissions UI had zero effect on read/write payloads. Default
@@ -652,9 +653,25 @@ router.post('/', async (req, res) => {
       }
     }
 
-    const contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
+    let restoredSoftDeletedContact = false;
+    let contact = null;
+    if (normalised.email) {
+      const deletedContact = await prisma.contact.findUnique({
+        where: { email_tenantId: { email: normalised.email, tenantId: req.user.tenantId } },
+      });
+      if (deletedContact?.deletedAt) {
+        contact = await prisma.contact.update({
+          where: { id: deletedContact.id },
+          data: { ...normalised, tenantId: req.user.tenantId, status: normalised.status || "Lead", deletedAt: null },
+        });
+        restoredSoftDeletedContact = true;
+      }
+    }
+    if (!contact) {
+      contact = await prisma.contact.create({ data: { ...normalised, tenantId: req.user.tenantId } });
+    }
     // Generic-vertical-only Lead custom fields — best-effort, after the
-    // primary create already succeeded (see writeLeadCustomFieldValues).
+    // primary create/restore already succeeded (see writeLeadCustomFieldValues).
     await writeLeadCustomFieldValues(contact.id, req.user.tenantId, customFields);
     try { const { emitEvent } = require('../lib/eventBus'); await emitEvent('contact.created', { contactId: contact.id, name: contact.name, email: contact.email, userId: req.user.userId }, req.user.tenantId, req.io); } catch (_e) { /* event bus optional */ }
     // [GP-CRM integration] Fire lead.new to registered webhooks (e.g. GlobusPhone)
@@ -674,10 +691,11 @@ router.post('/', async (req, res) => {
           tenantId: req.user.tenantId,
         }, req.user.tenantId);
       } catch (_e) { /* webhook delivery is fire-and-forget */ }
+      await notifyAdminsOfNewLead({ tenantId: req.user.tenantId, contact, io: req.io });
     }
-    // #179: audit row for new contact.
-    await writeAudit('Contact', 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
-    res.status(201).json(contact);
+    // #179: audit row for new/restored contact.
+    await writeAudit('Contact', restoredSoftDeletedContact ? 'RESTORE' : 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
+    res.status(restoredSoftDeletedContact ? 200 : 201).json(restoredSoftDeletedContact ? { ...contact, restored: true } : contact);
   } catch (err) {
     // #178: duplicate email should be 409 Conflict, not 500.
     // #165: validation-class Prisma errors (string-too-long, FK miss, …) are

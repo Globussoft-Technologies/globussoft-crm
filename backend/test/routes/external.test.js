@@ -128,6 +128,17 @@ Module._cache[leadSlaPath] = {
   },
 };
 
+const notifyAdminsOfNewLeadMock = vi.fn().mockResolvedValue([]);
+const leadNotificationsPath = requireCJS.resolve("../../lib/leadNotifications.js");
+Module._cache[leadNotificationsPath] = {
+  id: leadNotificationsPath,
+  filename: leadNotificationsPath,
+  loaded: true,
+  exports: {
+    notifyAdminsOfNewLead: notifyAdminsOfNewLeadMock,
+  },
+};
+
 // ── Patch middleware/externalAuth as a configurable pass-through ───────
 //
 // The tests need to control req.tenantId / req.tenant / req.apiKey
@@ -259,6 +270,7 @@ beforeEach(() => {
     userId: 11,
     reason: "matched cat=injectables",
   });
+  notifyAdminsOfNewLeadMock.mockReset().mockResolvedValue([]);
   computeFirstResponseDueAtMock.mockReset().mockResolvedValue({
     dueAt: new Date("2026-06-01T10:05:00Z"),
     tier: "high",
@@ -575,8 +587,70 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     expect(aArgs.contactId).toBe(555);
     expect(aArgs.tenantId).toBe(7);
     expect(aArgs.description).toContain("Asked about hydrafacial pricing");
+    expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 7,
+      contact: createdContact,
+    }));
   });
 
+  test("soft-deleted same email is restored so re-registered external lead is visible", async () => {
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 74,
+      reasons: [],
+    });
+    const deletedContact = {
+      id: 889,
+      name: "Deleted Lead",
+      email: "restore-ext@example.com",
+      phone: "+919900112244",
+      status: "Lead",
+      source: "old-source",
+      aiScore: 10,
+      assignedToId: null,
+      tenantId: 7,
+      deletedAt: new Date("2026-08-01T10:00:00Z"),
+      createdAt: new Date(),
+    };
+    const restoredContact = {
+      ...deletedContact,
+      name: "External Restored Lead",
+      source: "website-form",
+      firstTouchSource: "website-form",
+      aiScore: 74,
+      deletedAt: null,
+    };
+    prisma.contact.findFirst.mockResolvedValueOnce(deletedContact);
+    prisma.contact.update.mockResolvedValueOnce(restoredContact);
+
+    const app = makeApp();
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "External Restored Lead",
+      phone: "+919900112244",
+      email: "restore-ext@example.com",
+      source: "website-form",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 889, _deduped: true, deletedAt: null });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 889 },
+      data: expect.objectContaining({
+        name: "External Restored Lead",
+        email: "restore-ext@example.com",
+        status: "Lead",
+        source: "website-form",
+        firstTouchSource: "website-form",
+        deletedAt: null,
+      }),
+    });
+    expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 7,
+      contact: restoredContact,
+    }));
+
+  });
   test("default Callified campaign is auto-assigned for new Lead when tenant has callifiedAutoCampaignId", async () => {
     classifyLeadMock.mockResolvedValueOnce({
       isJunk: false,
@@ -780,6 +854,8 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     const aArgs = prisma.activity.create.mock.calls[0][0].data;
     expect(aArgs.type).toBe("JunkFilter");
     expect(aArgs.description).toContain("junk-filter");
+    // Junk lead should not notify admins.
+    expect(notifyAdminsOfNewLeadMock).not.toHaveBeenCalled();
   });
 });
 

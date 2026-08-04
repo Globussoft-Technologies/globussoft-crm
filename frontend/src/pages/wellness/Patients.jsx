@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Search,
@@ -30,7 +30,7 @@ import FilterModal from "./patients/FilterModal";
 import PatientCreateModal from "./patients/PatientCreateModal";
 import BulkTagModal from "./patients/BulkTagModal";
 
-// Read multi-select list from a URLSearchParams instance — accepts either
+// Read multi-select list from a URLSearchParams instance â€” accepts either
 // repeated entries or comma-joined; serializes back as a single
 // comma-joined value to keep the URL short.
 function readListParam(params, key) {
@@ -54,7 +54,7 @@ export default function Patients() {
   const notify = useNotify();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // ── URL-driven state ────────────────────────────────────────────────
+  // â”€â”€ URL-driven state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const q = searchParams.get("q") || "";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
   const sourceFilter = readListParam(searchParams, "source");
@@ -63,7 +63,7 @@ export default function Patients() {
   const addedFrom = searchParams.get("addedFrom") || "";
   const addedTo = searchParams.get("addedTo") || "";
 
-  // Update URL helper — preserves keys we don't touch.
+  // Update URL helper â€” preserves keys we don't touch.
   const updateParams = (patch, options = {}) => {
     const next = new URLSearchParams(searchParams);
     for (const [k, v] of Object.entries(patch)) {
@@ -79,13 +79,13 @@ export default function Patients() {
     setSearchParams(next, options);
   };
 
-  // ── Page-local state ────────────────────────────────────────────────
+  // â”€â”€ Page-local state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // `q` and `page` are URL-driven (declared above from `searchParams`);
-  // do NOT shadow them with local useState — the search bar and pager
+  // do NOT shadow them with local useState â€” the search bar and pager
   // both call setQ/setPage defined below as URL writers.
   const [patients, setPatients] = useState([]);
   const [total, setTotal] = useState(0);
-  // Pagination — backend at /api/wellness/patients accepts ?limit (cap 200)
+  // Pagination â€” backend at /api/wellness/patients accepts ?limit (cap 200)
   // + ?offset and returns { patients, total }. `pageSize` stays local
   // (not in URL) so the dropdown choice persists per-tab without polluting
   // shareable links. `page` itself lives in the URL via setPage below.
@@ -134,6 +134,19 @@ export default function Patients() {
   useEffect(() => { qRef.current = q; }, [q]);
   const reqIdRef = useRef(0);
   const didMountRef = useRef(false);
+  const buildListParams = (currentQ, currentPage = page, currentPageSize = pageSize) => {
+    const params = new URLSearchParams();
+    if (currentQ) params.set("q", currentQ);
+    if (sourceFilter.length) params.set("source", sourceFilter.join(","));
+    if (genderFilter.length) params.set("gender", genderFilter.join(","));
+    if (tagFilter.length) params.set("tags", tagFilter.join(","));
+    if (addedFrom) params.set("addedFrom", addedFrom);
+    if (addedTo) params.set("addedTo", addedTo);
+    params.set("limit", String(currentPageSize));
+    params.set("offset", String(Math.max(0, (currentPage - 1) * currentPageSize)));
+    return params;
+  };
+
 
   const load = (currentQ, currentPage = page, currentPageSize = pageSize) => {
     const myReqId = ++reqIdRef.current;
@@ -141,10 +154,7 @@ export default function Patients() {
     // Backend at /api/wellness/patients accepts ?limit (cap 200) + ?offset and
     // returns { patients, total }. Wire the URL to the current page-size
     // selection so changing the dropdown actually re-fetches a sliced window.
-    const params = new URLSearchParams();
-    if (currentQ) params.set("q", currentQ);
-    params.set("limit", String(currentPageSize));
-    params.set("offset", String(Math.max(0, (currentPage - 1) * currentPageSize)));
+    const params = buildListParams(currentQ, currentPage, currentPageSize);
     const url = `/api/wellness/patients?${params.toString()}`;
     fetchApi(url)
       .then((d) => {
@@ -163,7 +173,7 @@ export default function Patients() {
       });
   };
 
-  // Snap back to page 1 whenever the search query OR page-size changes —
+  // Snap back to page 1 whenever the search query OR page-size changes â€”
   // otherwise typing into the search box with `page=5` selected would
   // request offset=200 on a result set that may only have 3 matches and
   // render an empty table even though matches exist.
@@ -181,15 +191,25 @@ export default function Patients() {
   useEffect(() => {
     if (!didMountRef.current) {
       didMountRef.current = true;
-      load("", page, pageSize);
+      load(qRef.current, page, pageSize);
       return;
     }
-    // #548: standardised on SEARCH_DEBOUNCE_MS (300ms) — was 250ms; pen-test
+    // #548: standardised on SEARCH_DEBOUNCE_MS (300ms) â€” was 250ms; pen-test
     // flagged drift between Patients (250) and Omnibar (300). One source of
     // truth in utils/timing.js.
     const t = setTimeout(() => load(qRef.current, page, pageSize), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [q, reloadTick, page, pageSize]);
+  }, [
+    q,
+    reloadTick,
+    page,
+    pageSize,
+    sourceFilter.join(","),
+    genderFilter.join(","),
+    tagFilter.join(","),
+    addedFrom,
+    addedTo,
+  ]);
 
   useEffect(() => {
     fetchApi("/api/wellness/locations").then(setLocations).catch(() => setLocations([]));
@@ -237,10 +257,10 @@ export default function Patients() {
     }
   };
 
-  // ── Filter mutators (URL-driven) ─────────────────────────────────
+  // â”€â”€ Filter mutators (URL-driven) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // The filter modal batches all filter changes into a single
   // updateParams call via its `onApply` hook, so per-field setters are
-  // no longer needed at the page level — only `setQ` (search bar) and
+  // no longer needed at the page level â€” only `setQ` (search bar) and
   // `setPage` (pagination buttons) remain.
   const setQ = (val) => updateParams({ q: val, page: 1 });
   const setPage = (val) => updateParams({ page: val });
@@ -248,7 +268,7 @@ export default function Patients() {
   const activeFilterCount =
     sourceFilter.length + genderFilter.length + tagFilter.length + (addedFrom ? 1 : 0) + (addedTo ? 1 : 0);
 
-  // ── Row selection ─────────────────────────────────────────────────
+  // â”€â”€ Row selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const toggleRow = (id) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -273,7 +293,7 @@ export default function Patients() {
   };
   const clearSelection = () => setSelected(new Set());
 
-  // ── Bulk operations ──────────────────────────────────────────────
+  // â”€â”€ Bulk operations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const bulkAddTag = async (tag) => {
     const ids = Array.from(selected);
     if (!ids.length) return;
@@ -291,7 +311,7 @@ export default function Patients() {
     const ids = Array.from(selected);
     if (!ids.length) return;
     try {
-      // Raw fetch (not fetchApi) — fetchApi short-circuits every DELETE
+      // Raw fetch (not fetchApi) â€” fetchApi short-circuits every DELETE
       // response to `true` so we'd lose the actual `removed` count from
       // the response body.
       const token = getAuthToken();
@@ -314,7 +334,7 @@ export default function Patients() {
     } catch (_err) { /* toasted */ }
   };
 
-  // ── Bulk export of selected rows (CSV/XLSX) ──────────────────────
+  // â”€â”€ Bulk export of selected rows (CSV/XLSX) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [bulkExportMenuOpen, setBulkExportMenuOpen] = useState(false);
   const bulkExportMenuRef = useRef(null);
   useEffect(() => {
@@ -358,8 +378,8 @@ export default function Patients() {
     }
   };
 
-  // ── Filters object passed to CsvImportExportToolbar (so its export
-  //    + import always respects the active filters + search). ──────
+  // â”€â”€ Filters object passed to CsvImportExportToolbar (so its export
+  //    + import always respects the active filters + search). â”€â”€â”€â”€â”€â”€
   const toolbarFilters = useMemo(
     () => ({
       q: q || undefined,
@@ -369,7 +389,7 @@ export default function Patients() {
       addedFrom: addedFrom || undefined,
       addedTo: addedTo || undefined,
     }),
-    [q, sourceFilter, genderFilter, tagFilter, addedFrom, addedTo],
+    [q, sourceFilter.join(","), genderFilter.join(","), tagFilter.join(","), addedFrom, addedTo],
   );
 
   return (
@@ -460,7 +480,7 @@ export default function Patients() {
         {/* Icon-inside-input pattern: the <input> itself is the visible
             bar. The wellness theme already styles inputs with a border +
             bg + focus glow (see [wellness.css](theme/wellness.css)
-            input/input:focus rules), so we let it own the appearance —
+            input/input:focus rules), so we let it own the appearance â€”
             no outer wrapper border, no double-shell. The magnifying
             glass and clear button are absolute-positioned inside the
             relative wrapper. */}
@@ -479,7 +499,7 @@ export default function Patients() {
             aria-hidden
           />
           <input
-            placeholder="Search by name, phone, or email…"
+            placeholder="Search by name, phone, or emailâ€¦"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             style={{
@@ -682,7 +702,7 @@ export default function Patients() {
         </div>
       )}
 
-      {loading && <div>Loading…</div>}
+      {loading && <div>Loadingâ€¦</div>}
 
       {!loading && (
         <div className="glass" style={{ padding: 0, overflow: "visible" }}>
@@ -705,7 +725,7 @@ export default function Patients() {
                 <th style={{ ...thStyle, width: "10%" }}>Gender</th>
                 <th style={{ ...thStyle, width: "14%" }}>Source</th>
                 <th style={{ ...thStyle, width: "12%" }}>Added</th>
-                {/* Fixed px width — 6% was too narrow on a typical viewport
+                {/* Fixed px width â€” 6% was too narrow on a typical viewport
                     (~65px), truncating the "ACTIONS" header to "ACTIO..." and
                     clipping the Edit/Delete icons. The clipped icon fragments
                     rendered as visual "..." after the icons. overflow:visible
@@ -745,8 +765,8 @@ export default function Patients() {
                       </span>
                     )}
                   </td>
-                  <td style={tdStyle}>{p.gender || "—"}</td>
-                  <td style={tdStyle}>{p.source || "—"}</td>
+                  <td style={tdStyle}>{p.gender || "â€”"}</td>
+                  <td style={tdStyle}>{p.source || "â€”"}</td>
                   <td style={tdStyle}>
                     {formatDate(p.createdAt)}
                   </td>
@@ -852,7 +872,7 @@ export default function Patients() {
   );
 }
 
-// ── Styles ──────────────────────────────────────────────────────────
+// â”€â”€ Styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const thStyle = {
   textAlign: "left",
   padding: "0.75rem 1rem",
@@ -921,7 +941,7 @@ const dropdownItemStyle = {
   fontSize: "0.85rem",
 };
 
-// ── Primary (teal) dropdown button styles ──────────────────────────
+// â”€â”€ Primary (teal) dropdown button styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Per the wellness-theme standing rule, primary CTAs read from
 // --primary-color (teal in wellness; falls back to --accent-color in
 // generic). This keeps the "Add" button on-brand in both verticals.

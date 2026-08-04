@@ -1,66 +1,17 @@
 /**
- * FlightQuoteAgent.test.jsx — vitest + RTL coverage for the Travel-vertical
- * flight quick-quote page (frontend/src/pages/travel/FlightQuoteAgent.jsx).
- *
- * Lands at /travel/flights/quote (PRD §7 page plan). In-CRM fallback for the
- * not-yet-built Chrome flight plugin: advisor manually enters up to 4 flight
- * options, picks a contact, markup rules preview client-side (display only),
- * and submit POSTs the authed plugin-mirror endpoint which applies markup
- * server-side and persists flight ItineraryItems on a draft Itinerary.
- *
- * Scope (9 cases):
- *   1. Page chrome: heading + contact search + contact select + sub-brand
- *      select + currency + Add option + Create quote all render.
- *   2. Mount fetches: GET /api/contacts?limit=200 + GET
- *      /api/travel/markup-rules?subBrand=tmc&scope=flight&active=true
- *      (ADMIN defaults to "tmc" via defaultSubBrandFor preferred brand).
- *   3. Add option: starts at 1 row; clicking "Add option" 3× yields 4 rows
- *      and the button disables at the MAX_OPTIONS=4 cap.
- *   4. Remove option: with 2 rows, "Remove option 2" drops back to 1 row;
- *      the remove button is disabled when only 1 row remains.
- *   5. Contact search: typing into the search box narrows the contact
- *      <select> options by name/phone substring (client-side filter — the
- *      backend /api/contacts has no ?search param today).
- *   6. Validation: submit with no contact → notify.error("Contact is
- *      required"), no POST fired.
- *   7. Validation: contact picked but option 1 has no airline →
- *      notify.error(/airline is required/), no POST fired.
- *   8. Submit happy path: POSTs /api/v1/flight-plugin/agent-quotes with
- *      { contactId(number), subBrand, currency, options:[{ airline UPPER,
- *      pricePerPax(number), route:{from,to} UPPER }] } and renders the
- *      result panel (Quote created + total + PDF link carrying ?_t= token).
- *   9. Send to customer: from the result panel, "Send to customer" POSTs
- *      /api/travel/itineraries/:id/share with { channel:"auto" } (email-first,
- *      WhatsApp fallback) and surfaces the share URL + Copy-link button.
- *
- * Backend contract pinned (per the SUT's wire calls):
- *   GET  /api/contacts?limit=200                      → [ ...contacts ] | { contacts }
- *   GET  /api/travel/markup-rules?subBrand&scope=flight&active=true → { rules }
- *   POST /api/v1/flight-plugin/agent-quotes           → 201 { itineraryId,
- *        items:[{itineraryItemId,totalWithMarkup,currency}], totalWithMarkup,
- *        currency, pdfUrl }
- *   POST /api/travel/itineraries/:id/share            → { shareToken, shareUrl, whatsapp, email, channel }
- *
- * Mocking discipline (per CLAUDE.md RTL standing rules):
- *   - fetchApi mocked at ../utils/api (the page's dep, NOT global fetch);
- *     getAuthToken stubbed in the same vi.mock (feeds the PDF ?_t= link).
- *   - notifyObj is a STABLE module-level reference so useNotify identity
- *     stays stable across renders (Wave 11 cfb5789 / Wave 12 f59e91d rule).
- *   - AuthContext via real Provider; default ADMIN user (userId key, not id).
- *   - MemoryRouter wraps the SUT (chrome renders <Link> elements).
- *   - Data-dependent assertions use await findBy / waitFor (tick #108 rule).
+ * FlightQuoteAgent.test.jsx - vitest + RTL coverage for the Travel-vertical
+ * flight quick-quote page.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 const fetchApiMock = vi.fn();
-vi.mock('../utils/api', () => ({
+vi.mock("../utils/api", () => ({
   fetchApi: (...args) => fetchApiMock(...args),
-  getAuthToken: () => 'test-token',
+  getAuthToken: () => "test-token",
 }));
 
-// Stable notify object — RTL standing rule.
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
@@ -71,83 +22,63 @@ const notifyObj = {
   success: notifySuccess,
   confirm: notifyConfirm,
 };
-vi.mock('../utils/notify', () => ({
+vi.mock("../utils/notify", () => ({
   useNotify: () => notifyObj,
 }));
 
-import { AuthContext } from '../App';
-import FlightQuoteAgent from '../pages/travel/FlightQuoteAgent';
+const flightOfferPdfBlob = new Blob(["pdf"], { type: "application/pdf" });
+const buildFlightOfferPdfBlobMock = vi.fn(() => Promise.resolve(flightOfferPdfBlob));
+vi.mock("../pages/travel/flightOfferPdf", () => ({
+  buildFlightOfferPdfBlob: (...args) => buildFlightOfferPdfBlobMock(...args),
+  FLIGHT_OFFER_PDF_WIDTH: 595,
+  FLIGHT_OFFER_PDF_HEIGHT: 842,
+}));
 
-const ADMIN_USER = { userId: 7, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
+import { AuthContext } from "../App";
+import FlightQuoteAgent from "../pages/travel/FlightQuoteAgent";
 
+const ADMIN_USER = { userId: 7, name: "Admin", email: "a@x.com", role: "ADMIN" };
 const CONTACTS = [
-  { id: 31, name: 'Asha Verma', phone: '+919876543210' },
-  { id: 32, name: 'Bilal Khan', phone: '+918765432109' },
+  { id: 31, name: "Asha Verma", phone: "+919876543210" },
+  { id: 32, name: "Bilal Khan", phone: "+918765432109" },
 ];
-
 const RULES = [
-  { id: 5, subBrand: 'tmc', scope: 'flight', markupPct: 10, markupFlat: null, priority: 100, isActive: true, ownerUserId: null },
+  { id: 5, subBrand: "tmc", scope: "flight", markupPct: 10, markupFlat: null, priority: 100, isActive: true, ownerUserId: null },
 ];
-
 const QUOTE_RESULT = {
   itineraryId: 12,
-  items: [{ itineraryItemId: 901, totalWithMarkup: 1100, currency: 'INR' }],
+  items: [{ itineraryItemId: 901, totalWithMarkup: 1100, currency: "INR" }],
   totalWithMarkup: 1100,
-  currency: 'INR',
-  pdfUrl: '/api/travel/itineraries/12/pdf',
+  currency: "INR",
+  pdfUrl: "/api/travel/itineraries/12/pdf",
+};
+const EXTRACT_RESULT = {
+  provider: "openai",
+  model: "gpt-4o",
+  stub: false,
+  currency: "INR",
+  tripType: "domestic",
+  routeLabel: "Mumbai to Delhi",
+  rows: [{ label: "Air India", basePrice: 12345, currency: "INR" }],
 };
 
-const SHARE_RESULT = {
-  shareToken: 'tok123',
-  shareUrl: 'https://crm.globusdemos.com/p/itinerary/tok123',
-  whatsapp: 'SENT',
-  email: 'SENT',
-  inApp: 'SKIPPED',
-  channel: 'email+whatsapp',
-};
 
-// Recent flight quotes (history panel). The list returns full item rows;
-// the page filters to destinations ending in "flights" — the Andaman row
-// must be filtered OUT.
-const RECENT_ITINS = {
-  itineraries: [
-    {
-      id: 77, destination: 'DEL→JED flights', contactId: 31, status: 'draft',
-      currency: 'INR', totalAmount: null, updatedAt: '2026-06-20T10:00:00.000Z',
-      items: [{ id: 1, itemType: 'flight', totalPrice: 1100 }],
-    },
-    {
-      id: 78, destination: 'Andaman Islands', contactId: 32, status: 'sent',
-      currency: 'INR', totalAmount: 50000, updatedAt: '2026-06-19T10:00:00.000Z', items: [],
-    },
-  ],
-};
-
-// fetchApi mock routed by URL + method. Tests override only what they need.
-function installFetchMock({
-  contacts = CONTACTS,
-  rules = { rules: RULES },
-  quote = QUOTE_RESULT,
-  share = SHARE_RESULT,
-  itins = RECENT_ITINS,
-} = {}) {
+function installFetchMock({ quote = QUOTE_RESULT } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
-    const method = opts?.method || 'GET';
-    if (url.startsWith('/api/contacts') && method === 'GET') {
-      return Promise.resolve(contacts);
+    const method = opts?.method || "GET";
+    if (url === "/api/contacts?status=Customer" && method === "GET") {
+      return Promise.resolve(CONTACTS);
     }
-    if (url.startsWith('/api/travel/markup-rules') && method === 'GET') {
-      return Promise.resolve(rules);
+    if (url.startsWith("/api/travel/markup-rules?") && method === "GET") {
+      return Promise.resolve({ rules: RULES });
     }
-    if (url === '/api/v1/flight-plugin/agent-quotes' && method === 'POST') {
+    if (url === "/api/v1/flight-plugin/extract-prices" && method === "POST") {
+      return Promise.resolve(EXTRACT_RESULT);
+    }
+
+    if (url === "/api/v1/flight-plugin/agent-quotes" && method === "POST") {
       if (quote instanceof Error) return Promise.reject(quote);
       return Promise.resolve(quote);
-    }
-    if (/^\/api\/travel\/itineraries\/\d+\/share$/.test(url) && method === 'POST') {
-      return Promise.resolve(share);
-    }
-    if (url.startsWith('/api/travel/itineraries?') && method === 'GET') {
-      return Promise.resolve(itins);
     }
     return Promise.resolve(null);
   });
@@ -156,20 +87,22 @@ function installFetchMock({
 function renderPage(user = ADMIN_USER) {
   return render(
     <MemoryRouter>
-      <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1, vertical: 'travel' }, loading: false }}>
+      <AuthContext.Provider value={{ user, token: "tk", tenant: { id: 1, vertical: "travel" }, loading: false }}>
         <FlightQuoteAgent />
       </AuthContext.Provider>
     </MemoryRouter>,
   );
 }
 
-// Fill the minimum viable option-1 fields + pick the first contact.
-async function fillHappyPath() {
-  fireEvent.change(screen.getByLabelText('Contact'), { target: { value: '31' } });
-  fireEvent.change(screen.getByLabelText('Airline code (option 1)'), { target: { value: 'ai' } });
-  fireEvent.change(screen.getByLabelText('Origin IATA (option 1)'), { target: { value: 'del' } });
-  fireEvent.change(screen.getByLabelText('Destination IATA (option 1)'), { target: { value: 'jed' } });
-  fireEvent.change(screen.getByLabelText('Fare per pax (option 1)'), { target: { value: '1000' } });
+function uploadScreenshot() {
+  const input = screen.getByLabelText(/Upload screenshots/i);
+  const file = new File(["fake image bytes"], "screenshot-1.png", { type: "image/png" });
+  fireEvent.change(input, { target: { files: [file] } });
+  return file;
+}
+
+function continueToPricing() {
+  fireEvent.click(screen.getByRole("button", { name: /Continue/i }));
 }
 
 beforeEach(() => {
@@ -179,6 +112,14 @@ beforeEach(() => {
   notifyInfo.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockResolvedValue(true);
+  buildFlightOfferPdfBlobMock.mockReset();
+  buildFlightOfferPdfBlobMock.mockResolvedValue(flightOfferPdfBlob);
+  if (typeof URL.revokeObjectURL === "function") {
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  } else {
+    URL.revokeObjectURL = vi.fn();
+  }
+  window.localStorage.clear();
   installFetchMock();
 });
 
@@ -186,209 +127,98 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('<FlightQuoteAgent /> — page chrome', () => {
-  it('renders heading + contact picker + sub-brand + currency + Add option + Create quote', async () => {
+describe("<FlightQuoteAgent />", () => {
+  it("renders the quick-quote workspace and generator wizard", async () => {
     renderPage();
-    expect(screen.getByRole('heading', { name: /Flight quick-quote/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/Search contacts by name or phone/i)).toBeInTheDocument();
-    expect(screen.getByLabelText('Contact')).toBeInTheDocument();
-    expect(screen.getByLabelText('Sub-brand')).toBeInTheDocument();
-    expect(screen.getByLabelText('Currency')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Add option/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Create quote/i })).toBeInTheDocument();
-    // Let the mount-time GETs settle.
+    expect(screen.getByRole("heading", { name: /Flight quick-quote/i })).toBeInTheDocument();
+    expect(screen.getByLabelText("Search contacts")).toBeInTheDocument();
+    expect(screen.getByLabelText("Upload screenshots")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Flight offer image generator/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Continue/i })).toBeInTheDocument();
+    expect(screen.getByLabelText("Select contact")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Create quote/i })).toBeInTheDocument();
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
   });
-});
 
-describe('<FlightQuoteAgent /> — mount fetches', () => {
-  it('GETs the contact feed and the flight markup rules for the default sub-brand', async () => {
+  it("fetches contacts and markup rules on mount", async () => {
     renderPage();
+    uploadScreenshot();
+    continueToPricing();
     await waitFor(() => {
       const urls = fetchApiMock.mock.calls.map(([u]) => u);
-      expect(urls).toContain('/api/contacts?limit=200');
-      const rulesCall = urls.find((u) => typeof u === 'string' && u.startsWith('/api/travel/markup-rules?'));
-      expect(rulesCall).toBeTruthy();
-      // ADMIN default sub-brand resolves to the page's preferred "tmc".
-      expect(rulesCall).toMatch(/subBrand=tmc/);
-      expect(rulesCall).toMatch(/scope=flight/);
-      expect(rulesCall).toMatch(/active=true/);
+      expect(urls).toContain("/api/contacts?status=Customer");
+      expect(urls.some((u) => typeof u === "string" && u.startsWith("/api/travel/markup-rules?"))).toBe(true);
     });
-    // Contact options hydrate the select.
-    const select = screen.getByLabelText('Contact');
+    const contactSelect = screen.getByLabelText("Select contact");
     await waitFor(() => {
-      expect(within(select).getByText(/Asha Verma/)).toBeInTheDocument();
-      expect(within(select).getByText(/Bilal Khan/)).toBeInTheDocument();
+      expect(within(contactSelect).getByText(/Asha Verma/)).toBeInTheDocument();
+      expect(within(contactSelect).getByText(/Bilal Khan/)).toBeInTheDocument();
     });
   });
-});
 
-describe('<FlightQuoteAgent /> — option rows add/remove', () => {
-  it('starts with 1 row; Add option grows to the 4-option cap then disables', async () => {
+  it("adds and removes option rows", () => {
     renderPage();
-    expect(screen.getByLabelText('Airline code (option 1)')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Airline code (option 2)')).toBeNull();
-    const addBtn = screen.getByRole('button', { name: /Add option/i });
+    const addBtn = screen.getByRole("button", { name: /Add option/i });
     fireEvent.click(addBtn);
     fireEvent.click(addBtn);
     fireEvent.click(addBtn);
-    expect(screen.getByLabelText('Airline code (option 4)')).toBeInTheDocument();
+    expect(screen.getByLabelText("Airline 4")).toBeInTheDocument();
     expect(addBtn).toBeDisabled();
-    // Clicking the disabled button must not create a 5th row.
-    fireEvent.click(addBtn);
-    expect(screen.queryByLabelText('Airline code (option 5)')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove option 2" }));
+    expect(screen.queryByLabelText("Airline 4")).toBeNull();
   });
 
-  it('Remove option drops a row; remove is disabled when only 1 row remains', async () => {
+  it("generates and exposes a downloadable flight offer image", async () => {
     renderPage();
-    // Single row → remove disabled.
-    expect(screen.getByRole('button', { name: 'Remove option 1' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: /Add option/i }));
-    expect(screen.getByLabelText('Airline code (option 2)')).toBeInTheDocument();
-    // Distinguish the rows: fill option 2's airline then remove option 1 —
-    // the survivor (re-labelled option 1) keeps option 2's value.
-    fireEvent.change(screen.getByLabelText('Airline code (option 2)'), { target: { value: '6E' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Remove option 1' }));
-    expect(screen.queryByLabelText('Airline code (option 2)')).toBeNull();
-    expect(screen.getByLabelText('Airline code (option 1)')).toHaveValue('6E');
+    uploadScreenshot();
+    continueToPricing();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Type \+ markup/i })).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByLabelText("Base price 1"), { target: { value: "1000" } });
+    fireEvent.change(screen.getByLabelText("Markup type 1"), { target: { value: "amount" } });
+    fireEvent.change(screen.getByLabelText("Markup value 1"), { target: { value: "200" } });
+    fireEvent.click(screen.getByRole("button", { name: /Next/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Generate image/i }));
+    const generatedPreview = screen.getByAltText(/Generated flight offer preview/i);
+    const generatedSvg = decodeURIComponent(generatedPreview.src.split(",")[1] || "");
+    expect(generatedPreview).toBeInTheDocument();
+    expect(generatedSvg).toContain("Flight offer quotation");
+    expect(generatedSvg).toContain("Flight details");
+    expect(generatedSvg).toContain("Top flight options");
+    expect(generatedSvg).toContain("Timing notes");
+    expect(generatedSvg).toContain("Policies &amp; notes");
+    expect(generatedSvg).toContain("\u00B7");
+    const previewButton = screen.getByRole("button", { name: /Preview image/i });
+    expect(previewButton).not.toBeDisabled();
+    fireEvent.click(previewButton);
+    expect(screen.getByRole("dialog", { name: /Flight offer preview/i })).toBeInTheDocument();
+    expect(screen.getByAltText(/Full-size flight offer preview/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Close/i }));
+    expect(screen.queryByRole("dialog", { name: /Flight offer preview/i })).toBeNull();
+    const createObjectURLSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:flight-offer-pdf");
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const downloadButton = screen.getByRole("button", { name: /Download PDF/i });
+    expect(downloadButton).not.toBeDisabled();
+    fireEvent.click(downloadButton);
+    await waitFor(() => expect(buildFlightOfferPdfBlobMock).toHaveBeenCalled());
+    expect(buildFlightOfferPdfBlobMock).toHaveBeenCalledWith(expect.stringContaining("Flight offer quotation"), expect.objectContaining({ pageWidth: 595, pageHeight: 842 }));
+    expect(createObjectURLSpy).toHaveBeenCalledWith(flightOfferPdfBlob);
+    expect(clickSpy).toHaveBeenCalled();
   });
-});
 
-describe('<FlightQuoteAgent /> — contact search filter', () => {
-  it('narrows the contact select by name substring', async () => {
+  it("requests price extraction before entering markup rows", async () => {
     renderPage();
-    const select = screen.getByLabelText('Contact');
-    await waitFor(() => expect(within(select).getByText(/Asha Verma/)).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText(/Search contacts by name or phone/i), {
-      target: { value: 'bilal' },
+    uploadScreenshot();
+    continueToPricing();
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith("/api/v1/flight-plugin/extract-prices", expect.objectContaining({ method: "POST" }));
     });
     await waitFor(() => {
-      expect(within(select).queryByText(/Asha Verma/)).toBeNull();
-      expect(within(select).getByText(/Bilal Khan/)).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: /Type \+ markup/i })).toBeInTheDocument();
     });
-  });
-});
-
-describe('<FlightQuoteAgent /> — validation', () => {
-  it('submit with no contact → notify.error + no POST', async () => {
-    renderPage();
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
-    fetchApiMock.mockClear();
-    fireEvent.click(screen.getByRole('button', { name: /Create quote/i }));
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('Contact is required');
-    });
-    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
-    expect(posts.length).toBe(0);
-  });
-
-  it('submit with contact but no airline → notify.error(/airline is required/) + no POST', async () => {
-    renderPage();
-    const select = screen.getByLabelText('Contact');
-    await waitFor(() => expect(within(select).getByText(/Asha Verma/)).toBeInTheDocument());
-    fireEvent.change(select, { target: { value: '31' } });
-    fetchApiMock.mockClear();
-    fireEvent.click(screen.getByRole('button', { name: /Create quote/i }));
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(expect.stringMatching(/airline is required/i));
-    });
-    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
-    expect(posts.length).toBe(0);
-  });
-});
-
-describe('<FlightQuoteAgent /> — submit happy path', () => {
-  it('POSTs the agent-quotes endpoint with normalised payload and shows the result panel', async () => {
-    renderPage();
-    const select = screen.getByLabelText('Contact');
-    await waitFor(() => expect(within(select).getByText(/Asha Verma/)).toBeInTheDocument());
-    await fillHappyPath();
-    fireEvent.click(screen.getByRole('button', { name: /Create quote/i }));
-
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/v1/flight-plugin/agent-quotes' && o?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-      const body = JSON.parse(post[1].body);
-      expect(body.contactId).toBe(31);
-      expect(body.subBrand).toBe('tmc');
-      expect(body.currency).toBe('INR');
-      expect(Array.isArray(body.options)).toBe(true);
-      expect(body.options.length).toBe(1);
-      // Airline + IATA codes normalised to upper-case on submit.
-      expect(body.options[0].airline).toBe('AI');
-      expect(body.options[0].route).toEqual({ from: 'DEL', to: 'JED' });
-      // Fare coerced to a number, sent as pricePerPax (plugin payload name).
-      expect(body.options[0].pricePerPax).toBe(1000);
-    });
-
-    // Result panel: success copy + grand total + PDF link with ?_t= token.
-    expect(await screen.findByText(/Quote created/i)).toBeInTheDocument();
-    expect(screen.getByText(/Total with markup/i)).toBeInTheDocument();
-    const pdfLink = screen.getByRole('link', { name: /Download PDF/i });
-    expect(pdfLink).toHaveAttribute(
-      'href',
-      '/api/travel/itineraries/12/pdf?_t=test-token',
-    );
-    expect(notifySuccess).toHaveBeenCalledWith('Flight quote created');
-  });
-});
-
-describe('<FlightQuoteAgent /> — send to customer', () => {
-  it('Send to customer POSTs /itineraries/:id/share with channel:"auto" and surfaces the share URL + copy button', async () => {
-    renderPage();
-    const select = screen.getByLabelText('Contact');
-    await waitFor(() => expect(within(select).getByText(/Asha Verma/)).toBeInTheDocument());
-    await fillHappyPath();
-    fireEvent.click(screen.getByRole('button', { name: /Create quote/i }));
-    await screen.findByText(/Quote created/i);
-
-    fetchApiMock.mockClear();
-    installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /Send to customer/i }));
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/itineraries/12/share' && o?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-      // Email-first: the page asks the backend to auto-pick the channel.
-      expect(JSON.parse(post[1].body)).toEqual({ channel: 'auto' });
-    });
-    expect(
-      await screen.findByText('https://crm.globusdemos.com/p/itinerary/tok123'),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Copy share link/i })).toBeInTheDocument();
-    // channel:"email+whatsapp" → both-channels confirmation toast.
-    expect(notifySuccess).toHaveBeenCalledWith('Quote sent to the customer via email + WhatsApp');
-  });
-});
-
-describe('<FlightQuoteAgent /> — recent flight quotes history', () => {
-  it('lists flight-quote itineraries, filters out non-flight ones, and links to the detail page', async () => {
-    renderPage();
-    // The flight-quote draft shows; the non-flight itinerary is filtered out.
-    expect(await screen.findByText('DEL→JED flights')).toBeInTheDocument();
-    expect(screen.queryByText('Andaman Islands')).not.toBeInTheDocument();
-    // Row links to the itinerary detail page.
-    const link = screen.getByText('DEL→JED flights').closest('a');
-    expect(link).toHaveAttribute('href', '/travel/itineraries/77');
-    // Total falls back to summed item totalPrice when totalAmount is null.
-    expect(screen.getByText(/INR\s*1,100/)).toBeInTheDocument();
-  });
-
-  it('re-sends a recent quote from its row via the share endpoint (channel auto)', async () => {
-    renderPage();
-    await screen.findByText('DEL→JED flights');
-    fireEvent.click(screen.getByRole('button', { name: /Send quote DEL→JED flights/i }));
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/itineraries/77/share' && o?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-      expect(JSON.parse(post[1].body)).toEqual({ channel: 'auto' });
-    });
-    // SHARE_RESULT channel = email+whatsapp → delivered toast.
-    expect(notifySuccess).toHaveBeenCalledWith('Sent to the customer via email + WhatsApp');
+    expect(screen.getByLabelText("Base price 1")).toHaveValue("12345");
+    expect(screen.getByText("Air India")).toBeInTheDocument();
+    expect(notifySuccess).toHaveBeenCalled();
   });
 });

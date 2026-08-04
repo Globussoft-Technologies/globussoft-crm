@@ -626,6 +626,22 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 
+
+  describe('Travel vertical ? Flight Offer Image hidden', () => {
+    it('does not render /travel/flight-offer-image link under travel (reused by quick-quote)', () => {
+      // The route stays mounted in App.jsx, but the sidebar surface is hidden
+      // because Flight quick-quote now owns the shared implementation.
+      const cases = ['USER', 'MANAGER', 'ADMIN'];
+      cases.forEach((role) => {
+        const { unmount } = renderSidebar({ vertical: 'travel', role });
+        const link = Array.from(document.querySelectorAll('a'))
+          .find((a) => a.getAttribute('href') === '/travel/flight-offer-image');
+        expect(link).toBeFalsy();
+        unmount();
+      });
+    });
+  });
+
   describe('Brand header', () => {
     it('renders the tenant name in the header', () => {
       renderSidebar({ tenantName: 'Globussoft Enterprise', vertical: 'generic' });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from "react";
 
 // Wraps a horizontally-scrollable table with a second, slim scrollbar
 // pinned to the TOP of the table (in addition to the browser's native one
@@ -14,7 +14,12 @@ import { useEffect, useRef, useState } from 'react';
 // an explicit `scrollWidth` only if you already compute it for other reasons
 // (e.g. it also drives the table's own minWidth) and want to skip the extra
 // measurement.
-const TopScrollSync = ({ scrollWidth, children, disabled = false, forceScrollbar = false }) => {
+const TopScrollSync = ({
+  scrollWidth,
+  children,
+  disabled = false,
+  forceScrollbar = false,
+}) => {
   const topRef = useRef(null);
   const bottomRef = useRef(null);
   const syncingFrom = useRef(null);
@@ -27,37 +32,46 @@ const TopScrollSync = ({ scrollWidth, children, disabled = false, forceScrollbar
     if (!top || !bottom) return undefined;
 
     const onTopScroll = () => {
-      if (syncingFrom.current === 'bottom') return;
-      syncingFrom.current = 'top';
+      if (syncingFrom.current === "bottom") return;
+      syncingFrom.current = "top";
       bottom.scrollLeft = top.scrollLeft;
       syncingFrom.current = null;
     };
     const onBottomScroll = () => {
-      if (syncingFrom.current === 'top') return;
-      syncingFrom.current = 'bottom';
+      if (syncingFrom.current === "top") return;
+      syncingFrom.current = "bottom";
       top.scrollLeft = bottom.scrollLeft;
       syncingFrom.current = null;
     };
 
-    top.addEventListener('scroll', onTopScroll);
-    bottom.addEventListener('scroll', onBottomScroll);
+    top.addEventListener("scroll", onTopScroll);
+    bottom.addEventListener("scroll", onBottomScroll);
     return () => {
-      top.removeEventListener('scroll', onTopScroll);
-      bottom.removeEventListener('scroll', onBottomScroll);
+      top.removeEventListener("scroll", onTopScroll);
+      bottom.removeEventListener("scroll", onBottomScroll);
     };
   }, []);
 
   useEffect(() => {
     if (scrollWidth !== undefined) return undefined;
     const bottom = bottomRef.current;
-    if (!bottom || typeof ResizeObserver === 'undefined') return undefined;
-    const measure = () => {
-      setMeasuredWidth(Math.max(
-        bottom.scrollWidth,
-        bottom.firstElementChild ? bottom.firstElementChild.scrollWidth : 0,
-      ));
-      setClientWidth(bottom.clientWidth);
-    };
+    if (!bottom || typeof ResizeObserver === "undefined") return undefined;
+    // Usually `bottom.scrollWidth` alone is enough â€” the wrapped table
+    // overflows this div directly, so the div's own scrollWidth captures
+    // it. But tables that manage their own horizontal overflow (e.g. the
+    // `.stable-table` mobile rule sets `display:block; overflow-x:auto`
+    // directly on the <table>) clip their content one level deeper â€” the
+    // overflow never reaches this wrapper, so its scrollWidth reads equal
+    // to its clientWidth even though the table's own content is wider.
+    // Taking the max of both catches that case without affecting the
+    // normal case (where they're already equal).
+    const measure = () =>
+      setMeasuredWidth(
+        Math.max(
+          bottom.scrollWidth,
+          bottom.firstElementChild ? bottom.firstElementChild.scrollWidth : 0,
+        ),
+      );
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(bottom);
@@ -65,24 +79,52 @@ const TopScrollSync = ({ scrollWidth, children, disabled = false, forceScrollbar
     return () => ro.disconnect();
   });
 
-  const spacerWidth = scrollWidth !== undefined ? scrollWidth : `${measuredWidth}px`;
-  const explicitScrollWidth = typeof scrollWidth === 'number' ? scrollWidth : Number.parseFloat(scrollWidth);
-  const hasHorizontalOverflow = scrollWidth !== undefined
-    ? Number.isFinite(explicitScrollWidth) && explicitScrollWidth > clientWidth + 1
-    : measuredWidth > clientWidth + 1;
+  const spacerWidth =
+    scrollWidth !== undefined ? scrollWidth : `${measuredWidth}px`;
+  const explicitScrollWidth =
+    typeof scrollWidth === "number"
+      ? scrollWidth
+      : Number.parseFloat(scrollWidth);
+  const hasHorizontalOverflow =
+    scrollWidth !== undefined
+      ? Number.isFinite(explicitScrollWidth) &&
+        explicitScrollWidth > clientWidth + 1
+      : measuredWidth > clientWidth + 1;
 
   if (disabled) {
-    return <div className="top-scroll-sync top-scroll-sync--disabled">{children}</div>;
+    return (
+      <div className="top-scroll-sync top-scroll-sync--disabled">
+        {children}
+      </div>
+    );
   }
 
   return (
     <div className="top-scroll-sync">
-      {(forceScrollbar || hasHorizontalOverflow) ? (
-        <div ref={topRef} className="top-scroll-sync__top" style={{ overflowX: forceScrollbar ? 'scroll' : 'auto', overflowY: 'hidden', height: '16px', minWidth: 0, maxWidth: '100%' }}>
-          <div style={{ width: spacerWidth, height: '1px' }} />
+      {forceScrollbar || hasHorizontalOverflow ? (
+        <div
+          ref={topRef}
+          className="top-scroll-sync__top"
+          style={{
+            overflowX: forceScrollbar ? "scroll" : "auto",
+            overflowY: "hidden",
+            height: "16px",
+            minWidth: 0,
+            maxWidth: "100%",
+          }}
+        >
+          <div style={{ width: spacerWidth, height: "1px" }} />
         </div>
       ) : null}
-      <div ref={bottomRef} className="top-scroll-sync__bottom" style={{ overflowX: forceScrollbar ? 'scroll' : 'auto', minWidth: 0, maxWidth: '100%' }}>
+      <div
+        ref={bottomRef}
+        className="top-scroll-sync__bottom"
+        style={{
+          overflowX: forceScrollbar ? "scroll" : "auto",
+          minWidth: 0,
+          maxWidth: "100%",
+        }}
+      >
         {children}
       </div>
     </div>

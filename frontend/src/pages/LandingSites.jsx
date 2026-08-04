@@ -1,4 +1,4 @@
-﻿import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -773,7 +773,7 @@ export default function LandingSites() {
 
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.1rem' }}>
 
-              Pick a sector, describe the campaign, and weÃ¢â‚¬â„¢ll draft a public landing site you can edit in the builder.
+              Pick a sector, describe the campaign, and we?ll draft a public landing site you can edit in the builder.
 
             </p>
 

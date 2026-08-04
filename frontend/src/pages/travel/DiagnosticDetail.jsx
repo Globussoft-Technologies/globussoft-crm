@@ -55,7 +55,7 @@ import {
   ChevronLeft, ClipboardCheck, RefreshCw, FileText, Send, Copy, Share2,
   AlertTriangle, Sparkles, CheckCircle, XCircle, Eye, EyeOff, UserCheck,
 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 
@@ -181,16 +181,27 @@ function formatAnswer(value) {
 
 // Back-compat: older diagnostics may store either /uploads/diagnostics/... or
 // /api/uploads/diagnostics/... depending on when the PDF was generated.
-// Normalize both forms to the public /uploads/diagnostics/... path.
+// Normalize both forms to the canonical /api/uploads/diagnostics/... path.
 function normalizeDiagnosticPdfUrl(url) {
   if (!url || typeof url !== "string") return url;
-  if (url.startsWith("/api/uploads/diagnostics/")) {
-    return `/uploads/diagnostics/${url.slice("/api/uploads/diagnostics/".length)}`;
-  }
   if (url.startsWith("/uploads/diagnostics/")) {
+    return `/api${url}`;
+  }
+  if (url.startsWith("/api/uploads/diagnostics/")) {
     return url;
   }
   return url;
+}
+
+function getDiagnosticPdfFilename(url, fallback = "diagnostic-report.pdf") {
+  if (!url || typeof url !== "string") return fallback;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.pathname.split("/").filter(Boolean).pop() || fallback;
+  } catch {
+    const cleaned = url.split("?")[0].split("#")[0];
+    return cleaned.split("/").filter(Boolean).pop() || fallback;
+  }
 }
 
 export default function DiagnosticDetail() {
@@ -210,6 +221,7 @@ export default function DiagnosticDetail() {
 
   const [regenInFlight, setRegenInFlight] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfDownloadBusy, setPdfDownloadBusy] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [shareInfo, setShareInfo] = useState(null);
@@ -336,6 +348,51 @@ export default function DiagnosticDetail() {
     }
   };
 
+  const fetchDiagnosticPdfBlob = async (url) => {
+    const normalized = normalizeDiagnosticPdfUrl(url);
+    const token = typeof getAuthToken === "function" ? getAuthToken() : null;
+    const res = await fetch(normalized, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body?.error) detail = body.error;
+      } catch {
+        // ignore non-JSON error bodies
+      }
+      throw new Error(detail);
+    }
+    return res.blob();
+  };
+
+  const downloadBlob = (blob, filename) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  };
+
+  const downloadReportPdf = async () => {
+    const url = normalizeDiagnosticPdfUrl(diag?.reportPdfUrl);
+    if (!url) {
+      notify.error("No report PDF is available yet.");
+      return;
+    }
+    setPdfDownloadBusy(true);
+    try {
+      const blob = await fetchDiagnosticPdfBlob(url);
+      downloadBlob(blob, getDiagnosticPdfFilename(url));
+    } finally {
+      setPdfDownloadBusy(false);
+    }
+  };
+
   const regenReportPdf = async () => {
     setPdfBusy(true);
     try {
@@ -347,7 +404,8 @@ export default function DiagnosticDetail() {
         const normalized = normalizeDiagnosticPdfUrl(res.reportPdfUrl);
         setDiag((d) => (d ? { ...d, reportPdfUrl: normalized } : d));
         notify.success("Report PDF generated");
-        window.open(normalized, "_blank", "noopener,noreferrer");
+        const blob = await fetchDiagnosticPdfBlob(normalized);
+        downloadBlob(blob, getDiagnosticPdfFilename(normalized));
       } else {
         notify.error("PDF generation returned no URL");
       }
@@ -604,14 +662,19 @@ export default function DiagnosticDetail() {
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {diag.reportPdfUrl && (
-              <a
-                href={normalizeDiagnosticPdfUrl(diag.reportPdfUrl)}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={pdfLink}
+              <button
+                type="button"
+                onClick={downloadReportPdf}
+                disabled={pdfDownloadBusy}
+                style={{
+                  ...pdfLink,
+                  cursor: pdfDownloadBusy ? "not-allowed" : "pointer",
+                  opacity: pdfDownloadBusy ? 0.7 : 1,
+                  background: "none",
+                }}
               >
-                <FileText size={14} aria-hidden /> Download report PDF
-              </a>
+                <FileText size={14} aria-hidden /> {pdfDownloadBusy ? "Downloading..." : "Download report PDF"}
+              </button>
             )}
             <button
               type="button"

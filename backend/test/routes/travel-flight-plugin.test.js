@@ -25,6 +25,9 @@ const { mockExtractFlightOfferPricing, mockExtractHotelOfferPricing } = vi.hoist
   const uploadModule = hoistedRequire('../../middleware/uploadHandler');
   uploadModule.uploadImageMultiple = (req, _res, next) => {
     req.files = [{ buffer: Buffer.from('png'), mimetype: 'image/png', originalname: 'shot.png' }];
+    // Simulate multer's text-field parsing so req.body contains multipart fields
+    // (the real middleware populates this; tests bypass multer via this mock).
+    req.body = { tripType: 'domestic' };
     next();
   };
   uploadModule.validateImages = (_req, _res, next) => next();

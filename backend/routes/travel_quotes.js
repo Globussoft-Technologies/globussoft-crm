@@ -623,7 +623,9 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
       hydratedQuotes,
       allowed,
     );
-    const quotes = visibleQuotes.slice(skip, skip + take);
+    const quotes = visibleQuotes
+      .slice(skip, skip + take)
+      .map(({ tenantId: _dropTenantId, assignedToUserId: _dropAssigneeId, ...rest }) => rest);
     res.json({
       quotes,
       total: visibleQuotes.length,

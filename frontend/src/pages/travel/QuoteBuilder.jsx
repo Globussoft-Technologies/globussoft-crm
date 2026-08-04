@@ -26,12 +26,20 @@
 //     verify token). Once Q9 lands, wire the modal's confirm handler to
 //     POST /api/travel/quotes/:id/send (route to be added in a later
 //     slice) and remove the STUB marker.
-//   - Issue 11: pricing preview is now auto-fetched when a saved quote
-//     has lines and a trip date is set. The backend returns a worked-example
-//     breakdown per line: base amount → season multiplier → markup → final.
-//     A manual "Refresh breakdown" button is still available. Strictly
-//     informational — Save Draft persists the operator-entered grandTotal.
-//     Empty markupApplied[] renders a "No markup rules apply" hint.
+//   - Slice 8 (THIS commit): "Calculate with markups" action button +
+//     dismissable preview panel. Reads GET /api/travel/quotes/:id/
+//     pricing-preview (slice 5 endpoint at commit 91a7b931) and renders
+//     the per-rule markup breakdown alongside subtotal + new total.
+//     Strictly informational — Save Draft still persists the pre-markup
+//     grandTotal. A disclaimer ("Preview only — apply markup permanently
+//     on Send") sits near the panel so operators don't conflate the
+//     preview total with the persisted one. Button disabled when:
+//       (a) quote is NEW (no saved id — endpoint requires :id), or
+//       (b) the quote has zero visible lines (nothing to compute).
+//     Empty markupApplied[] renders a "No markup rules apply for this
+//     sub-brand" hint instead of an empty list. Error path: 4xx/5xx →
+//     notify.error using the standard err.body.error / err.message
+//     pattern that the other actions already follow.
 //
 // Backend contracts (all live as of f7203b8e):
 //   GET    /api/travel/quotes/:id                    → 200 { id, contactId, ... }
@@ -85,7 +93,7 @@
 //     row pickers in the table (single fetch, not per-row).
 
 import { useEffect, useState, useContext, useCallback, useMemo } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown, Plane, Hotel, Search, Car, LayoutTemplate, CreditCard, CheckCircle } from "lucide-react";
 import { FlightResultsBoard, HotelResultsGrid, TransferResultsList, SuggestedItinerary } from "../../components/TravelSearchResults";
 import TopScrollSync from "../../components/TopScrollSync";
@@ -171,6 +179,9 @@ function countTemplateLines(linesJson) {
 
 export default function QuoteBuilder() {
   const { id: routeId } = useParams();
+  const location = useLocation();
+  const backTo = location.state?.backTo || null;
+  const backLabel = location.state?.backLabel || "Back";
   const isEdit = !!routeId;
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
@@ -194,9 +205,6 @@ export default function QuoteBuilder() {
   const [currency, setCurrency] = useState("INR");
   const [subBrand, setSubBrand] = useState("tmc");
   const [validUntil, setValidUntil] = useState("");
-  // Issue 11 — trip date anchors TravelSeasonCalendar multiplier selection
-  // for the pricing preview / worked-example breakdown.
-  const [tripDate, setTripDate] = useState("");
   const [discountPct, setDiscountPct] = useState(0);
   const [taxPct, setTaxPct] = useState(0);
 
@@ -439,7 +447,6 @@ export default function QuoteBuilder() {
         setCurrency(q.currency || "INR");
         setSubBrand(q.subBrand || "tmc");
         setValidUntil(q.validUntil ? String(q.validUntil).slice(0, 10) : "");
-        setTripDate(q.tripDate ? String(q.tripDate).slice(0, 10) : "");
         if (q.advancePaidAmount != null) {
           setPaymentInfo({
             amount: Number(q.advancePaidAmount),
@@ -1019,7 +1026,6 @@ export default function QuoteBuilder() {
       status: status || "Draft",
       subBrand: subBrand || "tmc",
       validUntil: validUntil || null,
-      tripDate: tripDate || null,
     };
   };
 
@@ -1241,17 +1247,20 @@ export default function QuoteBuilder() {
     }
   };
 
-  // Issue 11 — auto-fetch the worked-example pricing preview whenever the
-  // quote is saved, lines change, or the trip date changes. Debounced so
-  // inline line edits don't spam the backend.
-  const visibleLinesSignature = useMemo(
-    () => visibleLines.map((l) => `${l.id || l.key || "new"}:${Number(l.amount || 0).toFixed(2)}:${l.lineType || "other"}`).join("|"),
-    [visibleLines],
-  );
-
-  const fetchPricingPreview = useCallback(async () => {
-    if (!quoteId || visibleLines.length === 0) {
-      setPricingPreview(null);
+  // Slice 8: GET the markup-aware pricing preview from the backend and
+  // stash it in `pricingPreview`. The endpoint requires a persisted quote
+  // (button is disabled in NEW mode) and is informational only — the
+  // preview total does NOT feed back into Save Draft's payload. The
+  // separate disclaimer near the panel reinforces this for operators.
+  // Fail-soft: 4xx/5xx errors do NOT surface a toast (Issue 11); they simply
+  // leave the panel closed so the operator isn't blocked while editing.
+  const handlePricingPreview = async () => {
+    if (!quoteId) {
+      notify.error("Save the quote first before calculating with markups");
+      return;
+    }
+    if (visibleLines.length === 0) {
+      notify.error("Add at least one line before calculating with markups");
       return;
     }
     setPreviewLoading(true);
@@ -1260,31 +1269,32 @@ export default function QuoteBuilder() {
       if (resp && typeof resp === "object") {
         setPricingPreview({
           baseSubtotal: Number(resp.baseSubtotal) || 0,
+          seasonMultiplier: Number(resp.seasonMultiplier) || 1,
+          matchedSeasonName: resp.matchedSeasonName || "",
           subtotal: Number(resp.subtotal) || 0,
           total: Number(resp.total) || 0,
           currency: resp.currency || currency || "INR",
-          tripDate: resp.tripDate || null,
-          matchedSeasonName: resp.matchedSeasonName || null,
-          seasonMultiplier: resp.seasonMultiplier ?? 1,
           markupApplied: Array.isArray(resp.markupApplied) ? resp.markupApplied : [],
           lines: Array.isArray(resp.lines) ? resp.lines : [],
         });
       }
-    } catch (err) {
-      // Fail softly — the preview is informational; don't block the operator.
-      console.error("Pricing preview failed", err);
+    } catch {
+      // Fail-soft: pricing preview is informational; a backend error should
+      // not block the operator with a toast while they are still editing.
     } finally {
       setPreviewLoading(false);
     }
-  }, [quoteId, visibleLines.length, currency]);
-
-  useEffect(() => {
-    if (!quoteId) return;
-    const t = setTimeout(() => fetchPricingPreview(), 600);
-    return () => clearTimeout(t);
-  }, [quoteId, tripDate, visibleLinesSignature, fetchPricingPreview]);
+  };
 
   const dismissPricingPreview = () => setPricingPreview(null);
+
+  // Auto-fetch pricing preview in edit mode once persisted lines have loaded.
+  useEffect(() => {
+    if (!quoteId || loading || previewLoading || pricingPreview) return;
+    if (persistedLines.length === 0 && draftLines.length === 0) return;
+    handlePricingPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteId, loading, persistedLines.length, draftLines.length]);
 
   // Slice 11: Accept / Decline workflow endpoints (POST
   // /api/travel/quotes/:id/{accept,decline}). Dedicated semantic
@@ -1550,6 +1560,11 @@ export default function QuoteBuilder() {
         }}
       >
         <div>
+          {backTo && (
+            <Link to={backTo} style={{ ...secondaryBtn, textDecoration: "none", marginBottom: 10 }}>
+              {backLabel}
+            </Link>
+          )}
           <h1
             style={{
               display: "flex",
@@ -1649,14 +1664,20 @@ export default function QuoteBuilder() {
             </button>
             <button
               type="button"
-              onClick={fetchPricingPreview}
+              onClick={handlePricingPreview}
               disabled={!quoteId || visibleLines.length === 0 || previewLoading}
               style={secondaryBtn}
-              title="Refresh pricing breakdown"
+              title={
+                !quoteId
+                  ? "Save first"
+                  : visibleLines.length === 0
+                    ? "Add a line first"
+                    : "Calculate subtotal + markup-rule preview"
+              }
               aria-label="Refresh pricing breakdown"
             >
               <TrendingUp size={14} />{" "}
-              {previewLoading ? "Calculating…" : "Refresh breakdown"}
+              {previewLoading ? "Calculating…" : "Refresh pricing breakdown"}
             </button>
             <button
               type="button"
@@ -1939,17 +1960,6 @@ export default function QuoteBuilder() {
             onChange={(e) => setValidUntil(e.target.value)}
             style={inputStyle}
             aria-label="Valid until"
-          />
-        </label>
-        <label style={fieldLabel}>
-          Trip Date
-          <input
-            type="date"
-            value={tripDate}
-            onChange={(e) => setTripDate(e.target.value)}
-            style={inputStyle}
-            aria-label="Trip date"
-            title="Used to pick the season multiplier in the pricing breakdown"
           />
         </label>
       </section>
@@ -2270,13 +2280,6 @@ export default function QuoteBuilder() {
                         const lineBreakdown = pricingPreview?.lines?.find?.((l) => l.lineId === it.id);
                         if (!lineBreakdown) return fmt(lineAmount(it));
                         const tipId = `markup-tip-${it.id ?? it.key}`;
-                        const badgeText =
-                          lineBreakdown.markupAmount != null && lineBreakdown.markupAmount !== 0
-                            ? `+${fmt(lineBreakdown.markupAmount)}`
-                            : "0 markup";
-                        const titleText = lineBreakdown.matchedSeasonName
-                          ? `Base ${fmt(lineBreakdown.baseAmount)} → season ×${lineBreakdown.seasonMultiplier} (${lineBreakdown.matchedSeasonName}) → total ${fmt(lineBreakdown.finalAmount)}`
-                          : `Base ${fmt(lineBreakdown.baseAmount)} → total ${fmt(lineBreakdown.finalAmount)}`;
                         return (
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                             {fmt(lineAmount(it))}
@@ -2284,7 +2287,6 @@ export default function QuoteBuilder() {
                               role="img"
                               aria-label="Markup breakdown available"
                               aria-describedby={tipId}
-                              title={titleText}
                               style={{
                                 cursor: "help",
                                 fontSize: 11,
@@ -2294,44 +2296,23 @@ export default function QuoteBuilder() {
                                 padding: "1px 5px",
                                 fontWeight: 500,
                                 userSelect: "none",
-                                minWidth: "3ch",
-                                textAlign: "center",
                               }}
                               tabIndex={0}
-                              onFocus={(e) => {
-                                const tooltip = e.currentTarget.parentElement.querySelector(`[id="${tipId}"]`);
-                                tooltip?.removeAttribute("hidden");
-                              }}
-                              onBlur={(e) => {
-                                const tooltip = e.currentTarget.parentElement.querySelector(`[id="${tipId}"]`);
-                                tooltip?.setAttribute("hidden", "");
-                              }}
-                              onMouseEnter={(e) => {
-                                const tooltip = e.currentTarget.parentElement.querySelector(`[id="${tipId}"]`);
-                                tooltip?.removeAttribute("hidden");
-                              }}
-                              onMouseLeave={(e) => {
-                                // Don't hide immediately; let the user move into the tooltip.
-                                setTimeout(() => {
-                                  const tooltip = e.currentTarget.parentElement.querySelector(`[id="${tipId}"]`);
-                                  if (tooltip && !tooltip.matches(":hover")) {
-                                    tooltip.setAttribute("hidden", "");
-                                  }
-                                }, 100);
-                              }}
+                              onFocus={(e) => e.currentTarget.nextSibling?.removeAttribute("hidden")}
+                              onBlur={(e) => e.currentTarget.nextSibling?.setAttribute("hidden", "")}
+                              onMouseEnter={(e) => e.currentTarget.nextSibling?.removeAttribute("hidden")}
+                              onMouseLeave={(e) => e.currentTarget.nextSibling?.setAttribute("hidden", "")}
                             >
-                              {badgeText}
+                              markup ▸
                             </span>
                             <span
                               id={tipId}
                               role="tooltip"
                               hidden
-                              onMouseEnter={(e) => e.currentTarget.removeAttribute("hidden")}
-                              onMouseLeave={(e) => e.currentTarget.setAttribute("hidden", "")}
                               style={{
                                 position: "absolute",
                                 zIndex: 999,
-                                top: "calc(100% + 6px)",
+                                bottom: "calc(100% + 6px)",
                                 right: 0,
                                 background: "var(--glass-bg, rgba(255,255,255,0.97))",
                                 border: "1px solid var(--border-color, #ddd)",
@@ -2345,21 +2326,21 @@ export default function QuoteBuilder() {
                               }}
                             >
                               <div style={{ fontWeight: 600, marginBottom: 4 }}>Pricing breakdown</div>
-                              <div>Base: {fmt(lineBreakdown.baseAmount)}</div>
+                              <div>Base rate: {lineBreakdown.currency} {fmt(lineBreakdown.baseRate)}</div>
                               {lineBreakdown.seasonMultiplier != null && lineBreakdown.seasonMultiplier !== 1 && (
                                 <div>
                                   Season ×{lineBreakdown.seasonMultiplier}
                                   {lineBreakdown.matchedSeasonName ? ` (${lineBreakdown.matchedSeasonName})` : ""}
                                 </div>
                               )}
-                              <div>After season: {fmt(lineBreakdown.seasonAmount)}</div>
+                              <div>Subtotal: {lineBreakdown.currency} {fmt(lineBreakdown.subtotal)}</div>
                               {lineBreakdown.markupAmount != null && lineBreakdown.markupAmount !== 0 && (
                                 <div style={{ color: "var(--primary-color, var(--accent-color))" }}>
-                                  Markup: +{fmt(lineBreakdown.markupAmount)}
+                                  Markup: +{lineBreakdown.currency} {fmt(lineBreakdown.markupAmount)}
                                 </div>
                               )}
                               <div style={{ fontWeight: 600, borderTop: "1px solid var(--border-color, #ddd)", marginTop: 4, paddingTop: 4 }}>
-                                Total: {fmt(lineBreakdown.finalAmount)}
+                                Total: {lineBreakdown.currency} {fmt(lineBreakdown.grandTotal)}
                               </div>
                             </span>
                           </span>
@@ -2603,18 +2584,16 @@ export default function QuoteBuilder() {
                 {pricingPreview.currency} {fmt(pricingPreview.baseSubtotal)}
               </span>
             </div>
+            {pricingPreview.seasonMultiplier > 1 && pricingPreview.matchedSeasonName && (
+              <div style={totalsRow}>
+                <span style={totalsLabel}>Season</span>
+                <span style={totalsValue} aria-label="Pricing preview season">
+                  ×{pricingPreview.seasonMultiplier} ({pricingPreview.matchedSeasonName})
+                </span>
+              </div>
+            )}
             <div style={totalsRow}>
-              <span style={totalsLabel}>Season</span>
-              <span style={totalsValue} aria-label="Pricing preview season">
-                {pricingPreview.seasonMultiplier && pricingPreview.seasonMultiplier !== 1
-                  ? `×${pricingPreview.seasonMultiplier}${pricingPreview.matchedSeasonName ? ` (${pricingPreview.matchedSeasonName})` : ""}`
-                  : pricingPreview.tripDate
-                    ? "No season matched"
-                    : "Set trip date to apply seasons"}
-              </span>
-            </div>
-            <div style={totalsRow}>
-              <span style={totalsLabel}>After season</span>
+              <span style={totalsLabel}>Subtotal</span>
               <span style={totalsValue} aria-label="Pricing preview subtotal">
                 {pricingPreview.currency} {fmt(pricingPreview.subtotal)}
               </span>

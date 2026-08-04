@@ -210,10 +210,10 @@ function installFetchMock({
   });
 }
 
-function renderPage(user = ADMIN_USER) {
+function renderPage(user = ADMIN_USER, initialEntries = ['/travel/trips']) {
   const value = { user, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false };
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <AuthContext.Provider value={value}>
         <Trips />
       </AuthContext.Provider>
@@ -236,6 +236,19 @@ afterEach(() => {
 });
 
 describe('<Trips /> — page chrome', () => {
+  it('shows Back to reports when opened from Reports and preserves the status query', async () => {
+    renderPage(ADMIN_USER, ['/travel/trips?status=confirmed&from=reports']);
+    expect(screen.getByRole('link', { name: /Back to reports/i })).toHaveAttribute('href', '/travel/reports');
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string'
+        && u.includes('status=confirmed')
+        && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
   it('renders heading "TMC Trips" + filter bar + "New Trip" CTA', async () => {
     renderPage();
     expect(

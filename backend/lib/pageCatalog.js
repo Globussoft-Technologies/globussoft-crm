@@ -653,6 +653,10 @@ const PAGE_CATALOG = [
     label: 'Commission Profiles',
     description: 'Per-role / per-service commission rules',
     category: 'Admin',
+    // Wellness-only legacy admin surface. Travel has its own distinct
+    // `/travel/commission-profiles` page, so leaving this untagged makes
+    // the omnibar "Pages" section show BOTH results on travel tenants.
+    vertical: 'wellness',
     requiredPermissions: [{ module: 'staff', action: 'manage' }],
   },
   {
@@ -1558,4 +1562,3 @@ module.exports = {
   getAccessiblePages,
   canAccessPath,
 };
-

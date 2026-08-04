@@ -22,7 +22,7 @@
  * (supplierId, internal notes) that we DO NOT want surfacing to the customer.
  * For now, the schema's line model is shared between the two surfaces, so
  * the route layer redacts at projection time — only customer-relevant fields
- * are sent (description, quantity, unitPrice, amount, currency, sortOrder).
+ * are sent (description, quantity, customer-facing unitPrice/amount, currency, sortOrder).
  *
  * Status-transition guards mirror the operator-side accept/decline:
  *   - Customer actions only allowed on quotes in Draft or Sent status.
@@ -81,7 +81,6 @@ const { getFrontendUrlFromRequest } = require('../lib/requestOrigin');
 // Best-effort customer delivery of the advance-payment link (email + WhatsApp).
 const { sendEmail } = require('../lib/emailSender');
 const waWebClient = require('../services/whatsappWebClient');
-const { composeQuoteBreakdown } = require('../lib/travelPricing');
 
 // Advance share we ask the customer to pay on accept to confirm the booking.
 const ADVANCE_PCT = 0.5; // 50%
@@ -351,21 +350,45 @@ async function loadQuoteByShareToken(shareToken) {
 
 /**
  * Project a quote + lines into the customer-visible envelope. Strips
- * operator-only fields (supplierId, internal notes, margin %, tenantId).
- * Adds the Issue 11 worked-example pricing breakdown so customers can see
- * base → season → markup → final.
+ * operator-only fields (supplierId, internal notes, margin %, tenantId) and
+ * sends only customer-facing prices. If the saved quote total includes pricing
+ * adjustments that are not reflected in raw line rows, distribute that total
+ * across visible lines proportionally so the share page never exposes an
+ * internal markup/season calculation.
  */
-function customerEnvelope(quote, contact, breakdown) {
-  const lines = (quote.lines || []).map((l) => ({
-    id: l.id,
-    lineType: l.lineType,
-    description: l.description,
-    quantity: l.quantity,
-    unitPrice: l.unitPrice,
-    amount: l.amount,
-    currency: l.currency,
-    sortOrder: l.sortOrder,
-  }));
+function customerEnvelope(quote, contact) {
+  const rawLines = quote.lines || [];
+  const quoteTotal = Number(quote.totalAmount);
+  const rawSubtotal = rawLines.reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+  let roundingCarry = Number.isFinite(quoteTotal) ? Math.round(quoteTotal * 100) / 100 : 0;
+  const shouldDistributeTotal = Number.isFinite(quoteTotal)
+    && quoteTotal > 0
+    && rawSubtotal > 0
+    && Math.abs(quoteTotal - rawSubtotal) > 0.01;
+
+  const lines = rawLines.map((l, index) => {
+    const rawAmount = Number(l.amount) || 0;
+    let amount = rawAmount;
+    if (shouldDistributeTotal) {
+      const isLast = index === rawLines.length - 1;
+      amount = isLast
+        ? roundingCarry
+        : Math.round(((rawAmount / rawSubtotal) * quoteTotal) * 100) / 100;
+      roundingCarry = Math.round((roundingCarry - amount) * 100) / 100;
+    }
+    const quantity = Number(l.quantity) || 1;
+    const unitPrice = Math.round((amount / quantity) * 100) / 100;
+    return {
+      id: l.id,
+      lineType: l.lineType,
+      description: l.description,
+      quantity: l.quantity,
+      unitPrice,
+      amount,
+      currency: l.currency,
+      sortOrder: l.sortOrder,
+    };
+  });
   return {
     quote: {
       id: quote.id,
@@ -374,18 +397,15 @@ function customerEnvelope(quote, contact, breakdown) {
       totalAmount: quote.totalAmount,
       currency: quote.currency,
       validUntil: quote.validUntil,
-      tripDate: quote.tripDate || null,
       createdAt: quote.createdAt,
       updatedAt: quote.updatedAt,
     },
     lines,
-    breakdown: breakdown || null,
     customer: contact
       ? { name: contact.name || contact.email || '' }
       : null,
   };
 }
-
 // ---------------------------------------------------------------------------
 // S32 — FX-rate lock helpers
 // ---------------------------------------------------------------------------
@@ -659,26 +679,6 @@ router.get('/quote/:shareToken', async (req, res) => {
       // Non-fatal — render without customer name
     }
 
-    // Issue 11 — load active seasons + markup rules and compose the same
-    // worked-example breakdown shown to operators.
-    let breakdown = null;
-    try {
-      const [seasons, rules] = await Promise.all([
-        prisma.travelSeasonCalendar.findMany({
-          where: { tenantId: quote.tenantId, subBrand: quote.subBrand },
-          orderBy: { id: 'asc' },
-        }),
-        prisma.travelMarkupRule.findMany({
-          where: { tenantId: quote.tenantId, subBrand: quote.subBrand, isActive: true },
-          orderBy: [{ priority: 'asc' }, { id: 'asc' }],
-        }),
-      ]);
-      breakdown = composeQuoteBreakdown(quote, quote.lines || [], seasons, rules);
-    } catch (e) {
-      // Fail-soft — the envelope is still useful without the breakdown.
-      console.error('[travel-quotes-public] breakdown error (non-fatal):', e.message);
-    }
-
     // G124 — DOCUMENT_VIEW audit row for the customer-facing share-token
     // landing. Anonymous viewer (no JWT) → userId=null + actorType=customer.
     // Captures the contact email (if resolvable) + IP + UA + truncated share
@@ -696,7 +696,7 @@ router.get('/quote/:shareToken', async (req, res) => {
       extra: { subBrand: quote.subBrand, status: quote.status },
     });
 
-    return res.json(customerEnvelope(quote, contact, breakdown));
+    return res.json(customerEnvelope(quote, contact));
   } catch (e) {
     console.error('[travel-quotes-public] GET error:', e.message);
     return res.status(500).json({ error: 'Failed to load quote', code: 'INTERNAL_ERROR' });
@@ -761,12 +761,12 @@ router.post('/quote/:shareToken/accept', async (req, res) => {
     // null (additive-nullable schema permits this).
     const quoteUpdateExtras = fxLock
       ? {
-          fxRateSnapshot: fxLock.rate != null ? fxLock.rate : null,
-          fxRateSourceCurrency: fxLock.sourceCurrency || null,
-          fxRateTargetCurrency: fxLock.targetCurrency || null,
-          fxRateLockedAt: fxLock.lockedAt ? new Date(fxLock.lockedAt) : null,
-          fxRateExpiresAt: fxLock.expiresAt ? new Date(fxLock.expiresAt) : null,
-        }
+        fxRateSnapshot: fxLock.rate != null ? fxLock.rate : null,
+        fxRateSourceCurrency: fxLock.sourceCurrency || null,
+        fxRateTargetCurrency: fxLock.targetCurrency || null,
+        fxRateLockedAt: fxLock.lockedAt ? new Date(fxLock.lockedAt) : null,
+        fxRateExpiresAt: fxLock.expiresAt ? new Date(fxLock.expiresAt) : null,
+      }
       : undefined;
 
     const { updated, statusBefore } = await applyCustomerTransition({

@@ -254,6 +254,7 @@ model Tenant {
   // RESOLVED 2026-05-24). 100-200 starter rows seeded by GS; TMC academic
   // team validates + extends over 6-week window.
   curriculumMappings                  TravelCurriculumMapping[]
+  curriculumMappingProposals           TravelCurriculumProposal[]
   // TMC school term/holiday/exam windows for trip scheduling. Baseline seeded;
   // each school's actual dates captured by asking them (no public API exists).
   travelSchoolTerms                   TravelSchoolTerm[]
@@ -666,6 +667,7 @@ model User {
   // Travel vertical — TMC curriculum-mapping advisor authorship
   // (PRD_TMC_CURRICULUM_MAPPING PC-1 RESOLVED 2026-05-24).
   curriculumMappingsCreated TravelCurriculumMapping[] @relation("CurriculumMappingCreator")
+  assignedTravelQuotes TravelQuote[] @relation("TravelQuoteAssignee")
 
   // Generic-vertical-only "Customize table" column-visibility picker —
   // personal per-user preference, not shared with teammates.
@@ -7378,6 +7380,8 @@ model TravelQuote {
   // unmarked clones (or non-clone source quotes) leave them null.
   clonedFromQuoteId    Int?
   appliedMarkupPercent Decimal?              @db.Decimal(5, 2)
+  assignedToUserId     Int?
+  assignedToUser       User?                 @relation("TravelQuoteAssignee", fields: [assignedToUserId], references: [id], onDelete: SetNull)
   // Advance payment transaction references — stored for refund tracking.
   //   advancePlinkId:   Razorpay payment-link ID (plink_XXXX) created on quote accept.
   //   advancePaymentId: Razorpay payment ID (pay_XXXX) populated when the customer pays.
@@ -7392,6 +7396,7 @@ model TravelQuote {
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
+  @@index([tenantId, assignedToUserId])
 }
 
 // Slice C9 — TravelQuoteSnapshot — immutable version history rows.
@@ -8253,60 +8258,108 @@ model BrandKit {
 /// free-text destinationLabel fallback for advisor-suggested destinations not
 /// yet in the catalogue.
 model TravelCurriculumMapping {
-  id               Int     @id @default(autoincrement())
-  tenantId         Int
-  // Curriculum standard: 'CBSE' | 'ICSE' | 'IB' | 'Cambridge' (PC-2 — V1
+  id                  Int      @id @default(autoincrement())
+  tenantId            Int
+  // Academic-year versioning (e.g. "2026-27"). Nullable so legacy rows keep
+  // working unchanged and remain eligible as a fallback when a tenant has not
+  // versioned its library yet.
+  academicYear        String?  @db.VarChar(32)
+  // Curriculum standard: 'CBSE' | 'ICSE' | 'IB' | 'Cambridge' (PC-2 ? V1
   // ships CBSE + ICSE only; IB + Cambridge enabled but rows unseeded).
-  // VarChar(32) tightened from default(191) for MySQL key-byte budget — see
+  // VarChar(32) tightened from default(191) for MySQL key-byte budget ? see
   // @@unique key-budget note below.
-  curriculum       String  @db.VarChar(32)
-  // Grade level — free-text since formats differ across curricula:
+  curriculum          String   @db.VarChar(32)
+  // Grade level ? free-text since formats differ across curricula:
   // CBSE/ICSE use 'Class 9', 'Class 10'; IB uses 'IB Year 1', 'IB Year 2';
   // Cambridge uses 'IGCSE Year 10', etc. VarChar(32) for key-byte budget.
-  grade            String  @db.VarChar(32)
-  // Subject — e.g. 'Geography', 'History', 'Biology', 'Physics'.
+  grade               String   @db.VarChar(32)
+  // Subject ? e.g. 'Geography', 'History', 'Biology', 'Physics'.
   // VarChar(64) for key-byte budget.
-  subject          String  @db.VarChar(64)
-  // Specific learning outcome the trip teaches (PC-3 — fine grain). Bounded
+  subject             String   @db.VarChar(64)
+  // Optional curriculum-library code / strand identifier from the board's own
+  // taxonomy, e.g. "CBSE-HIS-9-3" or an internal learning-outcome code.
+  learningOutcomeCode String?  @db.VarChar(64)
+  // Specific learning outcome the trip teaches (PC-3 ? fine grain). Bounded
   // VARCHAR (not Text) so it can participate in the composite @@unique below;
   // 300 chars is enough for a concise outcome statement like "Plate tectonics
   // + landform formation". Use fitRationale (@db.Text) for long-form notes.
-  // Tightened from 500 → 300 for MySQL key-byte budget (see @@unique below).
-  learningOutcome  String? @db.VarChar(300)
-  // PC-5 — optional FK to TMC's TravelTrip catalogue (TmcTrip). When the
+  learningOutcome     String?  @db.VarChar(300)
+  // PC-5 ? optional FK to TMC's TravelTrip catalogue (TmcTrip). When the
   // recommended destination exists as a trip template, link to it. Otherwise
   // leave null and use destinationLabel as a free-text fallback. FK omitted
   // here (Int? only, no @relation) to keep the model unbound from cascade
-  // semantics — the route layer resolves TmcTrip on read.
-  destinationId    Int?
-  // PC-5 — free-text destination fallback (e.g. "Italy + Iceland", "Mussoorie
+  // semantics ? the route layer resolves TmcTrip on read.
+  destinationId       Int?
+  // PC-5 ? free-text destination fallback (e.g. "Italy + Iceland", "Mussoorie
   // + Dehradun"). Required when destinationId is null.
-  destinationLabel String?
-  // PC-4 — human-judged 1-100 fit score for V1 (50 = no opinion yet).
+  destinationLabel    String?
+  // Normalized destination identity used for many-to-many uniqueness across
+  // academic years. Filled by the route layer from destinationId/label.
+  destinationKey      String   @default("") @db.VarChar(191)
+  // PC-4 ? human-judged 1-100 fit score for V1 (50 = no opinion yet).
   // Rule-based pre-filter scoring is Phase 2.
-  fitScore         Int?    @default(50)
+  fitScore            Int?     @default(50)
+  // Confidence carried over from AI / heuristic proposal generation or manual
+  // reviewer judgement. Nullable to preserve legacy rows verbatim.
+  confidenceScore     Int?     @default(50)
+  // Origin marker ? manual / heuristic / ai / imported. Keeps the review flow
+  // additive and auditable without changing the diagnostic engine contract.
+  mappingSource       String   @default("manual") @db.VarChar(32)
   // Advisor's free-text explanation of why this destination fits this outcome.
-  fitRationale     String? @db.Text
+  fitRationale        String?  @db.Text
   // Soft-disable a mapping without deleting (preserves history).
-  isActive         Boolean @default(true)
+  isActive            Boolean  @default(true)
+  // Review metadata populated when a proposal becomes an approved mapping.
+  approvedAt          DateTime?
+  approvedById        Int?
   // Authoring advisor (academic-team member or GS template author).
-  createdById      Int?
-  createdBy        User?   @relation("CurriculumMappingCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdById         Int?
+  createdBy           User?    @relation("CurriculumMappingCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Block duplicate rows for the same (tenant, curriculum, grade, subject,
-  // outcome) combination — advisors should edit existing rows, not duplicate.
-  // Key-byte budget: 8 (Int) + 32*4 + 32*4 + 64*4 + 300*4 = 1720 bytes,
-  // well under MySQL's 3072-byte utf8mb4 limit. Tick #178's 500-char
-  // learningOutcome overflowed the budget (4300 bytes) — tick #179 triage.
-  @@unique([tenantId, curriculum, grade, subject, learningOutcome])
+  // Many-to-many support: the same learning outcome can now map to multiple
+  // destinations, versioned per academic year. destinationKey makes the tuple
+  // deterministic whether the row references a TmcTrip id or only a label.
+  @@unique([tenantId, academicYear, curriculum, grade, subject, learningOutcome, destinationKey])
   // Diagnostic-engine lookup path: "given a student's curriculum+grade+subject,
   // surface candidate destinations sorted by fitScore."
   @@index([curriculum, grade, subject])
-  @@index([tenantId, isActive])
+  @@index([tenantId, academicYear, isActive])
+}
+
+model TravelCurriculumProposal {
+  id                  Int      @id @default(autoincrement())
+  tenantId            Int
+  academicYear        String?  @db.VarChar(32)
+  curriculum          String   @db.VarChar(32)
+  grade               String   @db.VarChar(32)
+  subject             String   @db.VarChar(64)
+  learningOutcomeCode String?  @db.VarChar(64)
+  learningOutcome     String   @db.VarChar(300)
+  destinationId       Int?
+  destinationLabel    String?
+  destinationKey      String   @default("") @db.VarChar(191)
+  confidenceScore     Int      @default(50)
+  fitScore            Int?     @default(50)
+  fitRationale        String?  @db.Text
+  proposalSource      String   @default("heuristic") @db.VarChar(32)
+  reviewStatus        String   @default("pending") @db.VarChar(32)
+  reviewNotes         String?  @db.Text
+  approvedMappingId   Int?
+  createdById         Int?
+  reviewedById        Int?
+  reviewedAt          DateTime?
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, academicYear, curriculum, grade, subject, learningOutcome, destinationKey])
+  @@index([tenantId, reviewStatus, confidenceScore])
+  @@index([tenantId, academicYear, curriculum, grade, subject])
 }
 
 model PatientTag {
@@ -8351,6 +8404,19 @@ model TravelCommissionProfile {
   tenantId    Int      @default(1)
   name        String // operator-facing label, e.g. "Standard 5%"
   subBrand    String? // optional sub-brand restriction (tmc/rfu/travelstall/visasure)
+  // Free-form travel category scope (e.g. "Umrah" / "Family" / "Visa").
+  // Nullable = applies across all categories.
+  category    String?
+  // Optional assignee scope. When set, this profile is intended for deals /
+  // contacts owned by that staff user (mirrors Contact.assignedToId).
+  agentUserId Int?
+  // Optional validity window. Null bounds mean open-ended.
+  validFrom   DateTime?
+  validTo     DateTime?
+  // Configurable commission release timing for the ledger surface.
+  // on_booking         -> release when the deal is won / booked.
+  // on_trip_completion -> release only after the trip completes.
+  releaseMode String   @default("on_booking")
   profileType String // flat_percent | tiered | per_pax_flat | hybrid
   profileJson String   @db.Text // JSON serialization of profile shape
   isActive    Boolean  @default(true)
@@ -8361,6 +8427,10 @@ model TravelCommissionProfile {
 
   @@index([tenantId])
   @@index([tenantId, subBrand])
+  @@index([tenantId, category])
+  @@index([tenantId, agentUserId])
+  @@index([tenantId, validFrom, validTo])
+  @@index([tenantId, releaseMode])
   @@index([tenantId, isActive])
 }
 

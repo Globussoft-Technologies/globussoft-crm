@@ -259,6 +259,7 @@ const TravelCancellationPolicies = lazy(() => import("./pages/travel/Cancellatio
 const TravelPipeline = lazy(() => import("./pages/travel/TravelPipeline"));
 const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
+const TravelPnlReport = lazy(() => import("./pages/travel/PnlReport"));
 const TravelReviews = lazy(() => import("./pages/travel/Reviews"));
 const TravelRfuCustomerProfile = lazy(() => import("./pages/travel/RfuCustomerProfile"));
 const TravelSuppliers = lazy(() => import("./pages/travel/Suppliers"));
@@ -2063,6 +2064,7 @@ export default function App() {
               <Route path="travel/rfu/customers/:contactId" element={<TravelOnly><TravelRfuCustomerProfile /></TravelOnly>} />
               <Route path="travel/pricing-rules" element={<TravelOnly><TravelPricingRules /></TravelOnly>} />
               <Route path="travel/reports" element={<TravelOnly><TravelReports /></TravelOnly>} />
+              <Route path="travel/reports/pnl" element={<TravelOnly><TravelPnlReport /></TravelOnly>} />
               <Route path="travel/reviews" element={<TravelOnly><TravelReviews /></TravelOnly>} />
               <Route path="travel/suppliers" element={<TravelOnly><TravelSuppliers /></TravelOnly>} />
               <Route path="travel/suppliers-admin" element={<TravelOnly><TravelSuppliersAdmin /></TravelOnly>} />

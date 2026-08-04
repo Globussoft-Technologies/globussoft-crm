@@ -7087,6 +7087,43 @@ router.post(
   },
 );
 
+function parsePaymentMetadata(metadata) {
+  try { return JSON.parse(metadata || "{}"); } catch (_e) { return {}; }
+}
+
+function isSuccessfulPaymentStatus(status) {
+  return ["SUCCESS", "PAID", "paid", "success"].includes(String(status || ""));
+}
+
+function isPaymentLinkedToTravelInvoice(payment, meta, invoiceId) {
+  return (
+    (meta.type === "travel-payment-schedule" && payment.invoiceId === invoiceId) ||
+    ((meta.kind === "travel-milestone" || meta.kind === "travel-invoice") && Number(meta.travelInvoiceId) === invoiceId) ||
+    (meta.type === "travel-quote-advance" && Number(meta.travelInvoiceId) === invoiceId)
+  );
+}
+
+async function successfulTravelInvoicePaymentTotal(tenantId, invoiceId) {
+  try {
+    const candidates = await prisma.payment.findMany({
+      where: {
+        tenantId,
+        OR: [
+          { invoiceId },
+          { metadata: { contains: `\"travelInvoiceId\":${invoiceId}` } },
+        ],
+      },
+      select: { id: true, invoiceId: true, amount: true, status: true, metadata: true },
+    });
+    return candidates
+      .map((pmt) => ({ pmt, meta: parsePaymentMetadata(pmt.metadata) }))
+      .filter(({ pmt, meta }) => isSuccessfulPaymentStatus(pmt.status) && isPaymentLinkedToTravelInvoice(pmt, meta, invoiceId))
+      .reduce((sum, { pmt }) => sum + Number(pmt.amount || 0), 0);
+  } catch (_e) {
+    return 0;
+  }
+}
+
 // ============================================================================
 // POST /api/travel/invoices/:id/payment-link — generate a hosted "click & pay"
 // link for the WHOLE travel invoice's outstanding balance. Parity with the
@@ -7115,24 +7152,30 @@ router.post(
           .json({ error: "Invoice has no payable amount.", code: "NO_AMOUNT" });
       }
 
-      // Outstanding = total − already-received across milestones (fail-soft to total).
+      // Outstanding = total minus money already captured for this travel invoice.
+      // Milestone rows are authoritative when present, but direct travel-invoice
+      // and quote-advance links may have no milestones at all, so also subtract
+      // successful Payment rows linked by travelInvoiceId. Use max() to avoid
+      // double-counting when a payment also updated a milestone row.
       let outstanding = total;
       try {
-        const schedules = await prisma.travelPaymentSchedule.findMany({
-          where: { invoiceId: invoice.id, tenantId: req.travelTenant.id },
-          select: { receivedAmount: true, status: true, expectedAmount: true },
-        });
-        if (schedules.length > 0) {
-          const received = schedules.reduce((sum, r) => {
-            const got = r.receivedAmount != null
-              ? Number(r.receivedAmount)
-              : r.status === "paid"
-                ? Number(r.expectedAmount || 0)
-                : 0;
-            return sum + got;
-          }, 0);
-          outstanding = Math.max(0, total - received);
-        }
+        const [schedules, paymentReceived] = await Promise.all([
+          prisma.travelPaymentSchedule.findMany({
+            where: { invoiceId: invoice.id, tenantId: req.travelTenant.id },
+            select: { receivedAmount: true, status: true, expectedAmount: true },
+          }),
+          successfulTravelInvoicePaymentTotal(req.travelTenant.id, invoice.id),
+        ]);
+        const scheduleReceived = schedules.reduce((sum, r) => {
+          const got = r.receivedAmount != null
+            ? Number(r.receivedAmount)
+            : r.status === "paid"
+              ? Number(r.expectedAmount || 0)
+              : 0;
+          return sum + got;
+        }, 0);
+        const alreadyReceived = Math.max(scheduleReceived, paymentReceived);
+        outstanding = round2(Math.max(0, total - alreadyReceived));
       } catch { /* fall back to full total */ }
 
       if (!(outstanding > 0)) {
@@ -7262,16 +7305,12 @@ router.get(
         });
         payments = candidates
           .map((p) => {
-            let m = {};
-            try { m = JSON.parse(p.metadata || "{}"); } catch { m = {}; }
+            const m = parsePaymentMetadata(p.metadata);
             return { p, m };
           })
           .filter(
             ({ p, m }) =>
-              (m.type === "travel-payment-schedule" && p.invoiceId === invoice.id) ||
-              ((m.kind === "travel-milestone" || m.kind === "travel-invoice") &&
-                Number(m.travelInvoiceId) === invoice.id) ||
-              (m.type === "travel-quote-advance" && Number(m.travelInvoiceId) === invoice.id),
+              isPaymentLinkedToTravelInvoice(p, m, invoice.id),
           )
           .map(({ p, m }) => ({
             id: p.id,
@@ -7289,7 +7328,7 @@ router.get(
 
       const total = Number(invoice.totalAmount || 0);
       const totalReceived = payments
-        .filter((p) => p.status === "SUCCESS")
+        .filter((p) => isSuccessfulPaymentStatus(p.status))
         .reduce((sum, p) => sum + Number(p.amount || 0), 0);
       const outstanding = Math.max(0, total - totalReceived);
 

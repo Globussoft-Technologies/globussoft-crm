@@ -213,7 +213,144 @@ function assertValidStatus(s) {
   }
 }
 
-/**
+
+function parseSubBrandAccessList(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = Array.isArray(raw) ? raw : JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : null;
+  } catch (_e) {
+    return [];
+  }
+}
+
+function userCanAccessSubBrandValue(user, subBrand) {
+  if (!user) return false;
+  if (String(user.role || '').toUpperCase() === 'ADMIN') return true;
+  const access = parseSubBrandAccessList(user.subBrandAccess);
+  if (access === null) return true;
+  return access.includes(subBrand);
+}
+
+async function quoteCreatorMap(tenantId, quoteIds) {
+  const ids = [...new Set((quoteIds || []).map((id) => Number(id)).filter(Number.isFinite))];
+  if (!ids.length || !prisma.auditLog?.findMany) return new Map();
+  const rows = await prisma.auditLog.findMany({
+    where: {
+      tenantId,
+      entity: 'TravelQuote',
+      action: 'CREATE',
+      entityId: { in: ids },
+      userId: { not: null },
+    },
+    select: { entityId: true, userId: true, createdAt: true },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
+  const byQuote = new Map();
+  for (const row of rows || []) {
+    if (row.entityId == null || row.userId == null || byQuote.has(row.entityId)) continue;
+    byQuote.set(row.entityId, row.userId);
+  }
+  return byQuote;
+}
+
+async function quoteTeamUserIdsForManager(tenantId, manager, subBrands) {
+  const scopedBrands = [...new Set((subBrands || []).filter(Boolean))];
+  if (!scopedBrands.length || !prisma.user?.findMany) return new Set([manager.id]);
+  const users = await prisma.user.findMany({
+    where: { tenantId, deactivatedAt: null },
+    select: { id: true, role: true, subBrandAccess: true },
+  });
+  const ids = new Set([manager.id]);
+  for (const user of users || []) {
+    if (!user?.id) continue;
+    if (String(user.role || '').toUpperCase() === 'ADMIN') continue;
+    if (scopedBrands.some((brand) => userCanAccessSubBrandValue(user, brand))) ids.add(user.id);
+  }
+  return ids;
+}
+
+async function quoteVisibilityContext(req, allowed = undefined) {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.userId },
+    select: { id: true, role: true, subBrandAccess: true },
+  });
+  const role = String(user?.role || req.user.role || 'USER').toUpperCase();
+  return {
+    userId: req.user.userId,
+    tenantId: req.travelTenant.id,
+    role,
+    user: user || { id: req.user.userId, role, subBrandAccess: null },
+    allowed: allowed === undefined ? await getSubBrandAccessSet(req.user.userId) : allowed,
+  };
+}
+
+async function filterQuotesByRoleVisibility(req, quotes, allowed = undefined) {
+  if (!Array.isArray(quotes) || quotes.length === 0) return [];
+  const ctx = await quoteVisibilityContext(req, allowed);
+  if (ctx.role === 'ADMIN') return quotes;
+
+  const creatorByQuote = await quoteCreatorMap(ctx.tenantId, quotes.map((q) => q.id));
+  if (ctx.role === 'MANAGER') {
+    const teamIds = await quoteTeamUserIdsForManager(ctx.tenantId, ctx.user, quotes.map((q) => q.subBrand));
+    return quotes.filter((quote) => {
+      const creatorId = creatorByQuote.get(quote.id);
+      const assigneeId = quote.assignedToUserId == null ? null : Number(quote.assignedToUserId);
+      if (assigneeId != null && teamIds.has(assigneeId)) return true;
+      if (creatorId == null) return true; // legacy quote without creator audit: preserve existing sub-brand visibility
+      return teamIds.has(creatorId);
+    });
+  }
+
+  return quotes.filter((quote) => {
+    const creatorId = creatorByQuote.get(quote.id);
+    const assigneeId = quote.assignedToUserId == null ? null : Number(quote.assignedToUserId);
+    if (assigneeId != null && Number(assigneeId) === Number(ctx.userId)) return true;
+    if (creatorId == null) return true; // legacy quote without creator audit: preserve existing sub-brand visibility
+    return Number(creatorId) === Number(ctx.userId);
+  });
+}
+
+async function canSeeQuoteByRoleVisibility(req, quote, allowed = undefined) {
+  if (!quote) return false;
+  const visible = await filterQuotesByRoleVisibility(req, [quote], allowed);
+  return visible.length === 1;
+}
+
+
+async function validateQuoteAssignee(req, quote, assignedToUserId) {
+  if (assignedToUserId == null || assignedToUserId === "") return null;
+  const assigneeId = parseInt(assignedToUserId, 10);
+  if (!Number.isFinite(assigneeId) || assigneeId <= 0) {
+    const e = new Error("assignedToUserId must be a positive user id or null");
+    e.status = 400;
+    e.code = "INVALID_ASSIGNEE";
+    throw e;
+  }
+  const assignee = await prisma.user.findFirst({
+    where: { id: assigneeId, tenantId: req.travelTenant.id, deactivatedAt: null },
+    select: { id: true, name: true, email: true, role: true, subBrandAccess: true },
+  });
+  if (!assignee) {
+    const e = new Error("Assignee not found in this tenant or is inactive");
+    e.status = 404;
+    e.code = "ASSIGNEE_NOT_FOUND";
+    throw e;
+  }
+  if (String(assignee.role || "").toUpperCase() === "ADMIN") {
+    const e = new Error("Assign quotes to an agent or manager, not an admin");
+    e.status = 400;
+    e.code = "INVALID_ASSIGNEE_ROLE";
+    throw e;
+  }
+  if (!userCanAccessSubBrandValue(assignee, quote.subBrand)) {
+    const e = new Error("Assignee does not have access to this quote sub-brand");
+    e.status = 400;
+    e.code = "ASSIGNEE_SUB_BRAND_DENIED";
+    throw e;
+  }
+  return assignee;
+}/**
  * Parse + validate a validUntil date. Accepts ISO 8601 strings or
  * anything Date can swallow; rejects unparseable input and any date
  * earlier than today (midnight comparison so "today" is still valid).
@@ -359,21 +496,18 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
     const findManyArgs = {
       where,
       orderBy: [{ createdAt: "desc" }],
-      take,
-      skip,
     };
     if (isSummary) {
       findManyArgs.select = listProjection("TravelQuote", false);
     } else {
       // Full-shape path: join the contact name so the admin list can render
       // the customer name instead of a bare contactId.
-      findManyArgs.include = { contact: { select: { id: true, name: true } } };
+      findManyArgs.include = { contact: { select: { id: true, name: true } }, assignedToUser: { select: { id: true, name: true, email: true } } };
     }
-    const [quotes, total] = await Promise.all([
-      prisma.travelQuote.findMany(findManyArgs),
-      prisma.travelQuote.count({ where }),
-    ]);
-    res.json({ quotes, total, limit: take, offset: skip });
+    const allScopedQuotes = await prisma.travelQuote.findMany(findManyArgs);
+    const visibleQuotes = await filterQuotesByRoleVisibility(req, allScopedQuotes, allowed);
+    const quotes = visibleQuotes.slice(skip, skip + take);
+    res.json({ quotes, total: visibleQuotes.length, limit: take, offset: skip });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-quotes] list error:", e.message);
@@ -420,23 +554,32 @@ router.get("/quotes/expired", verifyToken, requireTravelTenant, async (req, res)
       return res.json({ quotes: [], count: 0 });
     }
 
+    const requestedSubBrand = req.query.subBrand ? String(req.query.subBrand) : null;
+    if (requestedSubBrand) assertValidSubBrand(requestedSubBrand);
+    if (requestedSubBrand && !canAccessSubBrand(allowed, requestedSubBrand)) {
+      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+
     const where = {
       tenantId: req.travelTenant.id,
       status: { in: ["Draft", "Sent"] },
       validUntil: { lt: new Date() },
     };
-    // If allowed is a Set (not "all"), filter to those sub-brands.
-    if (allowed instanceof Set) {
+    if (requestedSubBrand) {
+      where.subBrand = requestedSubBrand;
+    } else if (allowed instanceof Set) {
       where.subBrand = { in: Array.from(allowed) };
     }
 
     const quotes = await prisma.travelQuote.findMany({
       where,
       orderBy: [{ validUntil: "asc" }, { id: "asc" }],
-      take: limit,
+      include: { contact: { select: { id: true, name: true } }, assignedToUser: { select: { id: true, name: true, email: true } } },
     });
+    const visibleQuotes = await filterQuotesByRoleVisibility(req, quotes, allowed);
+    const page = visibleQuotes.slice(0, limit);
 
-    res.json({ quotes, count: quotes.length });
+    res.json({ quotes: page, count: page.length });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-quotes] expired list error:", e.message);
@@ -527,16 +670,18 @@ router.get("/quotes/expired-summary", verifyToken, requireTravelTenant, async (r
       where.subBrand = { in: [...allowed] };
     }
 
-    const quotes = await prisma.travelQuote.findMany({
+    const scopedQuotes = await prisma.travelQuote.findMany({
       where,
       select: {
         id: true,
         subBrand: true,
+        assignedToUserId: true,
         contactId: true,
         totalAmount: true,
         validUntil: true,
       },
     });
+    const quotes = await filterQuotesByRoleVisibility(req, scopedQuotes, allowed);
 
     if (quotes.length === 0) {
       return res.json(zeroed());
@@ -723,6 +868,7 @@ router.get("/quotes/analytics", verifyToken, requireTravelTenant, async (req, re
       select: {
         id: true,
         subBrand: true,
+        assignedToUserId: true,
         status: true,
         totalAmount: true,
         currency: true,
@@ -731,8 +877,9 @@ router.get("/quotes/analytics", verifyToken, requireTravelTenant, async (req, re
         updatedAt: true,
       },
     });
+    const visibleQuotes = await filterQuotesByRoleVisibility(req, quotes, allowed);
 
-    res.json(computeQuoteAnalytics(quotes));
+    res.json(computeQuoteAnalytics(visibleQuotes));
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-quotes] analytics error:", e.message);
@@ -876,15 +1023,18 @@ router.get("/quotes/by-month", verifyToken, requireTravelTenant, async (req, res
     // No DB-level pagination — aggregation runs in-process so we can
     // bucket by UTC YYYY-MM. Input size bound is the same as
     // /quotes/analytics (low thousands at platinum scale).
-    const quotes = await prisma.travelQuote.findMany({
+    const scopedQuotes = await prisma.travelQuote.findMany({
       where,
       select: {
         id: true,
+        subBrand: true,
+        assignedToUserId: true,
         status: true,
         totalAmount: true,
         createdAt: true,
       },
     });
+    const quotes = await filterQuotesByRoleVisibility(req, scopedQuotes, allowed);
 
     const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
@@ -1135,15 +1285,18 @@ router.get("/quotes/by-quarter", verifyToken, requireTravelTenant, async (req, r
     // No DB-level pagination — aggregation runs in-process so we can
     // bucket by UTC YYYY-Qn. Input size bound is the same as
     // /quotes/analytics + by-month (low thousands at platinum scale).
-    const quotes = await prisma.travelQuote.findMany({
+    const scopedQuotes = await prisma.travelQuote.findMany({
       where,
       select: {
         id: true,
+        subBrand: true,
+        assignedToUserId: true,
         status: true,
         totalAmount: true,
         createdAt: true,
       },
     });
+    const quotes = await filterQuotesByRoleVisibility(req, scopedQuotes, allowed);
 
     const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
@@ -1393,15 +1546,18 @@ router.get("/quotes/by-year", verifyToken, requireTravelTenant, async (req, res)
     // bucket by UTC YYYY. Input size bound is the same as
     // /quotes/analytics + by-month + by-quarter (low thousands at
     // platinum scale).
-    const quotes = await prisma.travelQuote.findMany({
+    const scopedQuotes = await prisma.travelQuote.findMany({
       where,
       select: {
         id: true,
+        subBrand: true,
+        assignedToUserId: true,
         status: true,
         totalAmount: true,
         createdAt: true,
       },
     });
+    const quotes = await filterQuotesByRoleVisibility(req, scopedQuotes, allowed);
 
     const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
@@ -1615,17 +1771,19 @@ router.get("/quotes/stats", verifyToken, requireTravelTenant, async (req, res) =
       where.subBrand = { in: [...allowed] };
     }
 
-    const quotes = await prisma.travelQuote.findMany({
+    const scopedQuotes = await prisma.travelQuote.findMany({
       where,
       select: {
         id: true,
         subBrand: true,
+        assignedToUserId: true,
         status: true,
         totalAmount: true,
         validUntil: true,
         updatedAt: true,
       },
     });
+    const quotes = await filterQuotesByRoleVisibility(req, scopedQuotes, allowed);
 
     if (quotes.length === 0) {
       return res.json(zeroed);
@@ -1821,15 +1979,17 @@ router.post(
 
       // Load the doomed rows BEFORE the flip so each audit entry carries
       // its previousStatus + per-row context.
-      const doomed = await prisma.travelQuote.findMany({
+      const scopedDoomed = await prisma.travelQuote.findMany({
         where,
         select: {
           id: true,
           subBrand: true,
+          assignedToUserId: true,
           contactId: true,
           status: true,
         },
       });
+      const doomed = await filterQuotesByRoleVisibility(req, scopedDoomed, allowed);
 
       if (doomed.length === 0) {
         return res.status(200).json({
@@ -1884,6 +2044,69 @@ router.post(
   },
 );
 
+// PUT /api/travel/quotes/:id/assignment — hand a quote over to an agent/manager.
+router.put(
+  "/quotes/:id/assignment",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("quotes", "update"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const quote = await prisma.travelQuote.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!quote) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, quote.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
+
+      const previousAssignedToUserId = quote.assignedToUserId == null ? null : Number(quote.assignedToUserId);
+      const assignee = await validateQuoteAssignee(req, quote, req.body?.assignedToUserId);
+      const assignedToUserId = assignee ? assignee.id : null;
+
+      const updated = await prisma.travelQuote.update({
+        where: { id: quote.id },
+        data: { assignedToUserId },
+        include: {
+          contact: { select: { id: true, name: true } },
+          assignedToUser: { select: { id: true, name: true, email: true } },
+        },
+      });
+
+      await writeAudit(
+        "TravelQuote",
+        "TRAVEL_QUOTE_ASSIGNED",
+        quote.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          quoteId: quote.id,
+          subBrand: quote.subBrand,
+          previousAssignedToUserId,
+          assignedToUserId,
+          assignedToName: assignee?.name || assignee?.email || null,
+        },
+      );
+
+      res.json({ quote: updated });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] assignment error:", e.message);
+      res.status(500).json({ error: "Failed to assign quote" });
+    }
+  },
+);
 // GET /api/travel/quotes/:id
 router.get("/quotes/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {
@@ -1901,6 +2124,9 @@ router.get("/quotes/:id", verifyToken, requireTravelTenant, async (req, res) => 
     const allowed = await getSubBrandAccessSet(req.user.userId);
     if (!canAccessSubBrand(allowed, quote.subBrand)) {
       return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+    if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
+      return res.status(404).json({ error: "Quote not found", code: "NOT_FOUND" });
     }
     res.json(quote);
   } catch (e) {
@@ -2061,6 +2287,9 @@ router.put(
       if (!canAccessSubBrand(allowed, existing.subBrand)) {
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
+      if (!(await canSeeQuoteByRoleVisibility(req, existing, allowed))) {
+        return res.status(404).json({ error: "Quote not found", code: "NOT_FOUND" });
+      }
 
       const data = {};
       const {
@@ -2148,6 +2377,9 @@ router.delete(
       if (!canAccessSubBrand(allowed, existing.subBrand)) {
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
+      if (!(await canSeeQuoteByRoleVisibility(req, existing, allowed))) {
+        return res.status(404).json({ error: "Quote not found", code: "NOT_FOUND" });
+      }
 
       // Audit BEFORE delete so the entityId still resolves cleanly and
       // the audit row records the intent regardless of whether the
@@ -2206,6 +2438,10 @@ async function loadParentQuote(req, res, quoteId) {
   const allowed = await getSubBrandAccessSet(req.user.userId);
   if (!canAccessSubBrand(allowed, quote.subBrand)) {
     res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    return null;
+  }
+  if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
+    res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
     return null;
   }
   return quote;
@@ -2537,6 +2773,9 @@ router.post(
       if (!canAccessSubBrand(allowed, source.subBrand)) {
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
+      if (!(await canSeeQuoteByRoleVisibility(req, source, allowed))) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
 
       const { subBrand: subBrandOverride, contactId: contactIdOverride } = req.body || {};
 
@@ -2717,6 +2956,9 @@ router.get(
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
+      if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
 
       // The PDF renderer reads line items off quote.lines — fetch + attach them
       // (findFirst above does not include the relation, so without this the PDF
@@ -2848,6 +3090,9 @@ router.post(
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       // Idempotency check (AC-6.11): if an invoice already references
@@ -3079,6 +3324,9 @@ router.post(
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
+      if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+      }
 
       // Idempotent accept: already-Accepted short-circuits with 200.
       if (quote.status === "Accepted") {
@@ -3180,6 +3428,9 @@ router.post(
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       if (quote.status === "Rejected") {
@@ -3617,6 +3868,9 @@ router.post(
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      if (!(await canSeeQuoteByRoleVisibility(req, quote, allowed))) {
+        return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
       }
 
       // Transition guard: only Draft or Sent can be extended.

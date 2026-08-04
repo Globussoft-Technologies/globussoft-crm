@@ -64,27 +64,6 @@ async function downloadCsv(notify, url, filename) {
     notify.error(e.message || "Failed to export");
   }
 }
-async function downloadTemplate(notify, url, filenameBase, format) {
-  try {
-    const ext = format === "xlsx" ? "xlsx" : "csv";
-    const label = format === "xlsx" ? "Excel template" : "CSV template";
-    const res = await fetch(`${url}?format=${ext}`, {
-      headers: { Authorization: `Bearer ${getAuthToken()}` },
-    });
-    if (!res.ok) throw new Error(`Failed to download ${label.toLowerCase()}`);
-    const blob = await res.blob();
-    const objUrl = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = objUrl;
-    a.download = `${filenameBase}.${ext}`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(objUrl);
-  } catch (e) {
-    notify.error(e.message || `Failed to download ${format} template`);
-  }
-}
 async function uploadCsv(notify, url, file, onDone) {
   // FormData upload (not raw text body) so both CSV and binary XLSX files
   // work — the backend's multer middleware already accepts either via
@@ -109,6 +88,47 @@ async function uploadCsv(notify, url, file, onDone) {
   onDone?.();
 }
 
+function downloadBlob(blob, filename) {
+  const objUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objUrl);
+}
+
+function csvCell(value) {
+  const str = value == null ? "" : String(value);
+  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+
+function downloadCsvTemplate(filename, headers, rows) {
+  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+  downloadBlob(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }), filename);
+}
+
+async function downloadXlsxTemplate(filename, sheetName, headers, rows) {
+  const XLSX = await import("xlsx");
+  const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+  const buffer = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+  downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), filename);
+}
+
+const SEASON_TEMPLATE_HEADERS = ["subBrand", "seasonName", "startDate", "endDate", "multiplier"];
+const SEASON_TEMPLATE_ROWS = [
+  ["tmc", "summer-peak", "2026-05-01", "2026-06-15", "1.25"],
+  ["rfu", "ramadan-peak", "2026-03-01", "2026-04-15", "2.00"],
+];
+const MARKUP_TEMPLATE_HEADERS = ["subBrand", "scope", "matchKeyJson", "markupPct", "markupFlat", "priority", "isActive"];
+const MARKUP_TEMPLATE_ROWS = [
+  ["rfu", "hotel", '{"destination":"Dubai"}', "0.15", "", "10", "true"],
+  ["tmc", "transport", '{"vehicleType":"coach"}', "", "500", "20", "true"],
+];
+
 const SUB_BRANDS = [
   { value: "tmc", label: "TMC" },
   { value: "rfu", label: "RFU" },
@@ -121,14 +141,6 @@ const SCOPES = [
   { value: "transport", label: "Transport" },
   { value: "package", label: "Package" },
 ];
-const OTHER_OPTION = "__other__";
-const MATCH_KEY_FIELDS = [
-  { value: "city", label: "City" },
-  { value: "route", label: "Route" },
-  { value: "country", label: "Country" },
-  { value: "supplier", label: "Supplier" },
-  { value: "package", label: "Package" },
-];
 
 // Render a date column as YYYY-MM-DD without the time noise.
 function fmtDate(d) {
@@ -136,32 +148,6 @@ function fmtDate(d) {
   const dt = new Date(d);
   if (!Number.isFinite(dt.getTime())) return "";
   return dt.toISOString().slice(0, 10);
-}
-
-function matchKeyToForm(matchKeyJson) {
-  try {
-    const parsed = JSON.parse(matchKeyJson || "{}");
-    const [key, value] = Object.entries(parsed || {})[0] || ["city", ""];
-    const knownKey = MATCH_KEY_FIELDS.some((f) => f.value === key) ? key : "city";
-    return { matchKeyField: knownKey, matchKeyValue: value == null ? "" : String(value), matchKeyOtherValue: "" };
-  } catch {
-    return { matchKeyField: "city", matchKeyValue: "", matchKeyOtherValue: "" };
-  }
-}
-
-function formToMatchKeyJson(form, value = form.matchKeyValue) {
-  return JSON.stringify({ [form.matchKeyField]: value.trim() });
-}
-
-function formatMatchKey(matchKeyJson) {
-  try {
-    const parsed = JSON.parse(matchKeyJson || "{}");
-    const [key, value] = Object.entries(parsed || {})[0] || [];
-    if (!key) return "";
-    return `${key}: ${value}`;
-  } catch {
-    return matchKeyJson || "";
-  }
 }
 
 export default function PricingRules() {
@@ -207,6 +193,7 @@ function SeasonsSection() {
   const blankForm = { subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), seasonName: "", startDate: "", endDate: "", multiplier: "" };
   const [form, setForm] = useState(blankForm);
   const fileRef = useRef(null);
+
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
@@ -281,8 +268,20 @@ function SeasonsSection() {
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
     return downloadCsv(notify, `/api/travel/seasons/export.csv?${qs.toString()}`, "travel-seasons.csv");
   };
-  const downloadImportTemplate = (format) =>
-    downloadTemplate(notify, "/api/travel/seasons/import-template", "travel-seasons-template", format);
+  const downloadSeasonTemplate = async (format) => {
+    try {
+      if (format === "xlsx") {
+        await downloadXlsxTemplate("travel-seasons-template.xlsx", "Seasons", SEASON_TEMPLATE_HEADERS, SEASON_TEMPLATE_ROWS);
+      } else {
+        downloadCsvTemplate("travel-seasons-template.csv", SEASON_TEMPLATE_HEADERS, SEASON_TEMPLATE_ROWS);
+      }
+      notify.success(`Downloaded season template (${format.toUpperCase()})`);
+    } catch (e) {
+      notify.error(e?.message || "Failed to download season template");
+    }
+  };
+
+
   const importCsv = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -307,10 +306,10 @@ function SeasonsSection() {
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
             <Download size={14} /> Export CSV
           </button>
-          <button type="button" onClick={() => downloadImportTemplate("csv")} style={secondaryBtn}>
+          <button type="button" onClick={() => downloadSeasonTemplate("csv")} style={secondaryBtn}>
             <Download size={14} /> Download CSV Template
           </button>
-          <button type="button" onClick={() => downloadImportTemplate("xlsx")} style={secondaryBtn}>
+          <button type="button" onClick={() => downloadSeasonTemplate("xlsx")} style={secondaryBtn}>
             <Download size={14} /> Download Excel Template
           </button>
           <button
@@ -420,14 +419,10 @@ function SeasonsSection() {
         ) : seasons.length === 0 ? (
           <div style={empty}>No seasons yet. Add one above.</div>
         ) : (
-          <div
-            data-testid="pricing-rules-seasons-scroll"
-            style={{ maxHeight: "60vh", overflowY: "auto", overflowX: "hidden" }}
-          >
-          <TopScrollSync disabled>
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
-              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
+              <tr>
                 <th style={th}>Sub-brand</th>
                 <th style={th}>Name</th>
                 <th style={th}>Start</th>
@@ -457,7 +452,6 @@ function SeasonsSection() {
             </tbody>
           </table>
           </TopScrollSync>
-          </div>
         )}
       </div>
     </section>
@@ -475,7 +469,6 @@ function MarkupRulesSection() {
   const myBrands = accessibleSubBrands(user);
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [rules, setRules] = useState([]);
-  const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterSubBrand, setFilterSubBrand] = useState("");
   const [filterScope, setFilterScope] = useState("");
@@ -483,33 +476,34 @@ function MarkupRulesSection() {
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const blankForm = {
-    subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), scope: "hotel",
-    matchKeyField: "city", matchKeyValue: "", matchKeyOtherValue: "",
+    subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), scope: "hotel", matchField: "city", matchValue: "",
     markupType: "pct", markupValue: "", priority: "",
   };
   const [form, setForm] = useState(blankForm);
   const fileRef = useRef(null);
-  const supplierChoices = [...new Set(
-    suppliers
-      .filter((supplier) => !form.subBrand || supplier.subBrand === form.subBrand)
-      .map((supplier) => supplier.name)
-      .filter(Boolean),
-  )].sort((a, b) => a.localeCompare(b));
-  const normalizedMatchValue = form.matchKeyField === "supplier"
-    && form.matchKeyValue
-    && !supplierChoices.includes(form.matchKeyValue)
-    ? OTHER_OPTION
-    : form.matchKeyValue;
-  const fallbackSupplierValue = form.matchKeyValue === OTHER_OPTION ? "" : form.matchKeyValue;
-  const effectiveMatchValue = form.matchKeyField === "supplier" && normalizedMatchValue === OTHER_OPTION
-    ? (form.matchKeyOtherValue || fallbackSupplierValue)
-    : form.matchKeyValue;
+  const [suppliers, setSuppliers] = useState([]);
 
+  // Fetch supplier names when the markup-rule form is open and the match
+  // field is "supplier". Used to populate the match-value dropdown.
   useEffect(() => {
-    fetchApi("/api/travel/suppliers?limit=500&fields=summary")
-      .then((res) => setSuppliers(Array.isArray(res?.suppliers) ? res.suppliers : []))
-      .catch(() => setSuppliers([]));
-  }, []);
+    if (!adding && editingId == null) return;
+    if (form.matchField !== "supplier" || !form.subBrand) {
+      setSuppliers([]);
+      return;
+    }
+    let cancelled = false;
+    fetchApi(`/api/travel/suppliers?fields=summary&subBrand=${encodeURIComponent(form.subBrand)}`)
+      .then((res) => {
+        if (!cancelled) setSuppliers(Array.isArray(res?.suppliers) ? res.suppliers : []);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          notify.error(e?.body?.error || "Failed to load suppliers");
+          setSuppliers([]);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [adding, editingId, form.matchField, form.subBrand]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = () => {
     setLoading(true);
@@ -524,22 +518,38 @@ function MarkupRulesSection() {
   };
   useEffect(load, [filterSubBrand, filterScope, filterActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const parseMatchKey = (json) => {
+    try {
+      const obj = JSON.parse(json || "{}");
+      const keys = Object.keys(obj);
+      if (keys.length === 1) {
+        const key = keys[0];
+        return { matchField: key, matchValue: String(obj[key]) };
+      }
+    } catch { /* fall through */ }
+    return { matchField: "", matchValue: "" };
+  };
+
   const startEdit = (r) => {
     setEditingId(r.id);
     setAdding(false);
+    const { matchField, matchValue } = parseMatchKey(r.matchKeyJson);
     setForm({
       subBrand: r.subBrand,
       scope: r.scope,
-      ...matchKeyToForm(r.matchKeyJson),
+      matchField,
+      matchValue,
       markupType: r.markupPct != null ? "pct" : "flat",
       markupValue: r.markupPct != null ? String(r.markupPct) : (r.markupFlat != null ? String(r.markupFlat) : ""),
-      priority: r.priority == null ? "" : String(r.priority),
+      priority: String(r.priority ?? ""),
     });
   };
   const cancelEdit = () => { setEditingId(null); setAdding(false); setForm(blankForm); };
 
   const save = async () => {
-    if (!effectiveMatchValue.trim() || !form.markupValue) {
+    const matchField = (form.matchField || "").trim();
+    const matchValue = (form.matchValue || "").trim();
+    if (!matchField || !matchValue || !form.markupValue) {
       notify.error("match key and markup value required");
       return;
     }
@@ -550,9 +560,11 @@ function MarkupRulesSection() {
       return;
     }
 
+    const matchKeyJson = JSON.stringify({ [matchField]: matchValue });
+
     const body = {
       scope: form.scope,
-      matchKeyJson: formToMatchKeyJson(form, effectiveMatchValue),
+      matchKeyJson,
       priority: parseInt(form.priority || "100", 10),
       // backend enforces "exactly one of markupPct / markupFlat" — send the
       // chosen field set + the other explicitly nulled so editing one to the
@@ -594,7 +606,13 @@ function MarkupRulesSection() {
   };
 
   const remove = async (r) => {
-    if (!window.confirm(`Delete markup rule (${r.scope} / ${r.subBrand}, priority ${r.priority})?`)) return;
+    const ok = await notify.confirm({
+      title: "Delete markup rule",
+      message: `Delete markup rule (${r.scope} / ${r.subBrand}, priority ${r.priority})?`,
+      confirmText: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/travel/markup-rules/${r.id}`, { method: "DELETE" });
       notify.success("Markup rule deleted");
@@ -610,6 +628,16 @@ function MarkupRulesSection() {
     return "—";
   };
 
+  const formatMatchKey = (json) => {
+    const { matchField, matchValue } = parseMatchKey(json);
+    if (matchField) return `${matchField}: ${matchValue}`;
+    try {
+      const obj = JSON.parse(json || "{}");
+      if (Object.keys(obj).length === 0) return "{}";
+    } catch { /* fall through */ }
+    return json || "";
+  };
+
   const showForm = adding || editingId != null;
 
   const exportCsv = () => {
@@ -618,8 +646,18 @@ function MarkupRulesSection() {
     if (filterScope) qs.set("scope", filterScope);
     return downloadCsv(notify, `/api/travel/markup-rules/export.csv?${qs.toString()}`, "travel-markup-rules.csv");
   };
-  const downloadImportTemplate = (format) =>
-    downloadTemplate(notify, "/api/travel/markup-rules/import-template", "travel-markup-rules-template", format);
+  const downloadMarkupTemplate = async (format) => {
+    try {
+      if (format === "xlsx") {
+        await downloadXlsxTemplate("travel-markup-rules-template.xlsx", "Markup Rules", MARKUP_TEMPLATE_HEADERS, MARKUP_TEMPLATE_ROWS);
+      } else {
+        downloadCsvTemplate("travel-markup-rules-template.csv", MARKUP_TEMPLATE_HEADERS, MARKUP_TEMPLATE_ROWS);
+      }
+      notify.success(`Downloaded markup template (${format.toUpperCase()})`);
+    } catch (e) {
+      notify.error(e?.message || "Failed to download markup template");
+    }
+  };
   const importCsv = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -644,10 +682,10 @@ function MarkupRulesSection() {
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
             <Download size={14} /> Export CSV
           </button>
-          <button type="button" onClick={() => downloadImportTemplate("csv")} style={secondaryBtn}>
+          <button type="button" onClick={() => downloadMarkupTemplate("csv")} style={secondaryBtn}>
             <Download size={14} /> Download CSV Template
           </button>
-          <button type="button" onClick={() => downloadImportTemplate("xlsx")} style={secondaryBtn}>
+          <button type="button" onClick={() => downloadMarkupTemplate("xlsx")} style={secondaryBtn}>
             <Download size={14} /> Download Excel Template
           </button>
           <button
@@ -751,42 +789,34 @@ function MarkupRulesSection() {
               aria-label="Priority"
             />
           </div>
-          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "minmax(min(100%, 160px), 220px) 1fr", marginTop: 8 }}>
+          <div style={{ display: "grid", gap: 8, marginTop: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))" }}>
             <select
-              value={form.matchKeyField}
-              onChange={(e) => setForm({ ...form, matchKeyField: e.target.value, matchKeyValue: "", matchKeyOtherValue: "" })}
+              value={form.matchField}
+              onChange={(e) => setForm({ ...form, matchField: e.target.value, matchValue: "" })}
               style={input}
               aria-label="Match field"
             >
-              {MATCH_KEY_FIELDS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+              <option value="city">City</option>
+              <option value="route">Route</option>
+              <option value="supplier">Supplier</option>
+              <option value="destination">Destination</option>
+              <option value="vehicleType">Vehicle type</option>
             </select>
-            {form.matchKeyField === "supplier" ? (
-              <div style={{ display: "grid", gap: 8, gridTemplateColumns: normalizedMatchValue === OTHER_OPTION ? "1fr 1fr" : "1fr" }}>
-                <select
-                  value={normalizedMatchValue}
-                  onChange={(e) => setForm({ ...form, matchKeyValue: e.target.value, matchKeyOtherValue: e.target.value === OTHER_OPTION ? form.matchKeyOtherValue : "" })}
-                  style={input}
-                  aria-label="Match supplier"
-                >
-                  <option value="">Select supplier</option>
-                  {supplierChoices.map((name) => <option key={name} value={name}>{name}</option>)}
-                  <option value={OTHER_OPTION}>Other</option>
-                </select>
-                {normalizedMatchValue === OTHER_OPTION && (
-                  <input
-                    placeholder="Enter supplier name"
-                    value={form.matchKeyOtherValue || fallbackSupplierValue}
-                    onChange={(e) => setForm({ ...form, matchKeyOtherValue: e.target.value })}
-                    style={input}
-                    aria-label="Match supplier name"
-                  />
-                )}
-              </div>
+            {form.matchField === "supplier" ? (
+              <select
+                value={form.matchValue}
+                onChange={(e) => setForm({ ...form, matchValue: e.target.value })}
+                style={input}
+                aria-label="Match supplier"
+              >
+                <option value="">Select supplier</option>
+                {suppliers.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+              </select>
             ) : (
               <input
-                placeholder="e.g. Makkah or DEL-JED"
-                value={form.matchKeyValue}
-                onChange={(e) => setForm({ ...form, matchKeyValue: e.target.value })}
+                placeholder="Match value"
+                value={form.matchValue}
+                onChange={(e) => setForm({ ...form, matchValue: e.target.value })}
                 style={input}
                 aria-label="Match value"
               />
@@ -809,14 +839,10 @@ function MarkupRulesSection() {
         ) : rules.length === 0 ? (
           <div style={empty}>No markup rules yet. Add one above.</div>
         ) : (
-          <div
-            data-testid="pricing-rules-markup-scroll"
-            style={{ maxHeight: "60vh", overflowY: "auto", overflowX: "hidden" }}
-          >
-          <TopScrollSync disabled>
+          <TopScrollSync>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
-              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
+              <tr>
                 <th style={th}>Sub-brand</th>
                 <th style={th}>Scope</th>
                 <th style={th}>Match key</th>
@@ -831,7 +857,7 @@ function MarkupRulesSection() {
                 <tr key={r.id} style={{ ...trStyle, opacity: r.isActive ? 1 : 0.5 }}>
                   <td style={td}><span style={brandBadge}>{r.subBrand}</span></td>
                   <td style={td}>{r.scope}</td>
-                  <td style={td}><code style={{ fontSize: 11 }}>{formatMatchKey(r.matchKeyJson)}</code></td>
+                  <td style={td}>{formatMatchKey(r.matchKeyJson)}</td>
                   <td style={td}>{formatMarkup(r)}</td>
                   <td style={td}>{r.priority}</td>
                   <td style={td}>
@@ -854,7 +880,6 @@ function MarkupRulesSection() {
             </tbody>
           </table>
           </TopScrollSync>
-          </div>
         )}
       </div>
     </section>
@@ -905,9 +930,6 @@ const input = {
 };
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const th = {
-  position: "sticky",
-  top: 0,
-  zIndex: 10,
   textAlign: "left", padding: "10px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",

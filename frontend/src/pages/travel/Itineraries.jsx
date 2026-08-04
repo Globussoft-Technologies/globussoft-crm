@@ -11,8 +11,8 @@
 // itinerary without first completing the diagnostic. Itineraries can
 // still be drafted from a Deal page once the Day 7 Deal-extension CTA lands.
 
-import { useContext, useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useContext, useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield, Plus, X,
   Sparkles, AlertTriangle, Trash2, Train, Bus, Car, Camera, Utensils, Search,
@@ -53,6 +53,8 @@ const STATUSES = [
   { value: "sent", label: "Sent" },
   { value: "revised", label: "Revised" },
   { value: "accepted", label: "Accepted" },
+  { value: "advance_paid", label: "Advance paid" },
+  { value: "fully_paid", label: "Fully paid" },
   { value: "rejected", label: "Rejected" },
   { value: "expired", label: "Expired" },
 ];
@@ -143,7 +145,6 @@ const EMPTY_FORM = {
 };
 
 const CURRENCIES = ["INR", "USD", "EUR"];
-const PAGE_SIZE = 10;
 
 // Geocode cache: city name → { lat, lng } resolved via Nominatim (same OSM
 // data-source as our map tiles — no API key required, free to use).
@@ -282,6 +283,7 @@ function TierBadge({ tier }) {
 export default function Itineraries() {
   const notify = useNotify();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
   // Sub-brands this user may create itineraries under. Single-brand users
@@ -291,12 +293,14 @@ export default function Itineraries() {
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [subBrand, setSubBrand] = useState("");
-  const [status, setStatus] = useState("");
   const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
   const [total, setTotal] = useState(0);
+  const initialQuery = new URLSearchParams(location.search);
+  const openedFromReports = initialQuery.get("source") === "reports";
+  const reportsBackTo = "/travel/reports";
+  const itinerariesListPath = `${location.pathname}${location.search}`;
+  const [subBrand, setSubBrand] = useState(openedFromReports ? (initialQuery.get("subBrand") || "") : "");
+  const [status, setStatus] = useState(openedFromReports ? (initialQuery.get("status") || "") : "");
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
@@ -315,12 +319,6 @@ export default function Itineraries() {
   // selected itinerary's items on a Leaflet+OSM canvas. Re-clicking the
   // same row's Map button clears the selection (toggle).
   const [selectedItineraryId, setSelectedItineraryId] = useState(null);
-  const tableScrollRef = useRef(null);
-  const itemsRef = useRef([]);
-  const loadingRef = useRef(true);
-  const loadingMoreRef = useRef(false);
-  const offsetRef = useRef(0);
-  const hasMoreRef = useRef(true);
   const selectedItinerary = useMemo(
     () => (selectedItineraryId
       ? items.find((it) => it.id === selectedItineraryId)
@@ -339,26 +337,6 @@ export default function Itineraries() {
       return dest.includes(q) || contact.includes(q);
     });
   }, [items, searchQuery]);
-
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
-
-  useEffect(() => {
-    loadingRef.current = loading;
-  }, [loading]);
-
-  useEffect(() => {
-    loadingMoreRef.current = loadingMore;
-  }, [loadingMore]);
-
-  useEffect(() => {
-    offsetRef.current = offset;
-  }, [offset]);
-
-  useEffect(() => {
-    hasMoreRef.current = hasMore;
-  }, [hasMore]);
   // Items array passed to MapPreview. When the itinerary has geocoded items
   // those are used directly. When there are none we geocode the destination
   // city names via Nominatim (same OSM data used for tiles) and show those
@@ -643,77 +621,45 @@ export default function Itineraries() {
     }
   };
 
-  const load = useCallback(async ({ reset = false } = {}) => {
-    const startOffset = reset ? 0 : offsetRef.current;
+  const LIMIT = 10;
+  const hasMore = items.length < total;
 
-    if (reset) {
-      setLoading(true);
-      setLoadingMore(false);
-      setItems([]);
-      itemsRef.current = [];
-      setTotal(0);
-      setOffset(0);
-      setHasMore(true);
-      offsetRef.current = 0;
-      hasMoreRef.current = true;
-      if (tableScrollRef.current) {
-        tableScrollRef.current.scrollTop = 0;
-      }
-    } else {
-      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
-      setLoadingMore(true);
-    }
-
+  const load = (append = false, nextOffset = 0) => {
+    setLoading(true);
     const qs = new URLSearchParams();
     if (subBrand) qs.set("subBrand", subBrand);
     if (status) qs.set("status", status);
-    qs.set("limit", String(PAGE_SIZE));
-    qs.set("offset", String(startOffset));
+    qs.set("limit", String(LIMIT));
+    qs.set("offset", String(nextOffset));
+    fetchApi(`/api/travel/itineraries?${qs.toString()}`)
+      .then((res) => {
+        const nextItems = Array.isArray(res?.itineraries) ? res.itineraries : [];
+        setItems(append ? (prev) => [...prev, ...nextItems] : nextItems);
+        setTotal(typeof res?.total === "number" ? res.total : nextItems.length);
+        setOffset(nextOffset);
+      })
+      .catch((e) => {
+        notify.error(e?.body?.error || "Failed to load itineraries");
+        if (!append) {
+          setItems([]);
+          setTotal(0);
+          setOffset(0);
+        }
+      })
+      .finally(() => setLoading(false));
+  };
 
-    try {
-      const res = await fetchApi(`/api/travel/itineraries?${qs.toString()}`);
-      const rows = Array.isArray(res?.itineraries) ? res.itineraries : [];
-      const totalCount = Number.isFinite(Number(res?.total)) ? Number(res.total) : rows.length;
-      const nextItems = reset ? rows : [...itemsRef.current, ...rows];
-      const nextOffset = startOffset + rows.length;
-      const nextHasMore = Number.isFinite(totalCount)
-        ? nextOffset < totalCount
-        : rows.length === PAGE_SIZE;
+  const loadMore = () => {
+    if (loading || !hasMore) return;
+    load(true, offset + LIMIT);
+  };
 
-      itemsRef.current = nextItems;
-      setItems(nextItems);
-      setTotal(totalCount);
-      setOffset(nextOffset);
-      setHasMore(nextHasMore);
-      offsetRef.current = nextOffset;
-      hasMoreRef.current = nextHasMore;
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to load itineraries");
-      setItems([]);
-      itemsRef.current = [];
-      setTotal(0);
-      setHasMore(false);
-      setOffset(0);
-      offsetRef.current = 0;
-      hasMoreRef.current = false;
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  }, [subBrand, status, notify]);
+  const resetAndLoad = () => {
+    setOffset(0);
+    load(false, 0);
+  };
 
-  useEffect(() => {
-    load({ reset: true });
-  }, [load]);
-
-  const handleTableScroll = useCallback((e) => {
-    const el = e.currentTarget;
-    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
-    const threshold = 72;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
-      load({ reset: false });
-    }
-  }, [load]);
+  useEffect(resetAndLoad, [subBrand, status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close drawer on Escape
   useEffect(() => {
@@ -782,10 +728,10 @@ export default function Itineraries() {
         border: "1px solid var(--border-color)", marginBottom: 16,
       }}>
         <Filter size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
-        <select value={subBrand} onChange={(e) => { setSubBrand(e.target.value); }} style={selectStyle} aria-label="Filter by sub-brand">
+        <select value={subBrand} onChange={(e) => setSubBrand(e.target.value)} style={selectStyle} aria-label="Filter by sub-brand">
           {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <select value={status} onChange={(e) => { setStatus(e.target.value); }} style={selectStyle} aria-label="Filter by status">
+        <select value={status} onChange={(e) => setStatus(e.target.value)} style={selectStyle} aria-label="Filter by status">
           {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
         <div style={{ position: "relative", display: "flex", alignItems: "center", flex: "1 1 180px", minWidth: 160, maxWidth: 320 }}>
@@ -818,7 +764,7 @@ export default function Itineraries() {
             </button>
           )}
         </div>
-        <button type="button" onClick={load} style={refreshBtn} aria-label="Reload list">Refresh</button>
+        <button type="button" onClick={resetAndLoad} style={refreshBtn} aria-label="Reload list">Refresh</button>
       </div>
 
       {/* S81 — selected-itinerary map panel. Shown only when the operator
@@ -872,10 +818,20 @@ export default function Itineraries() {
         </div>
       )}
 
-      <div style={{
-        background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)",
-      }}>
+      <div
+        data-testid="itineraries-scroll-area"
+        onScroll={(e) => {
+          const { scrollTop, clientHeight, scrollHeight } = e.currentTarget;
+          if (scrollTop + clientHeight >= scrollHeight - 80) {
+            loadMore();
+          }
+        }}
+        style={{
+          background: "var(--surface-color)", borderRadius: 8,
+          border: "1px solid var(--border-color)", overflow: "auto",
+          maxHeight: 480,
+        }}
+      >
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : items.length === 0 ? (
@@ -888,19 +844,9 @@ export default function Itineraries() {
             No itineraries match &ldquo;{searchQuery}&rdquo;.
           </div>
         ) : (
-          <div
-            ref={tableScrollRef}
-            data-testid="itineraries-scroll-area"
-            onScroll={handleTableScroll}
-            style={{
-              maxHeight: "60vh",
-              overflowY: "auto",
-              overflowX: "hidden",
-            }}
-          >
-            <TopScrollSync scrollWidth="1000px">
-            <table style={{ width: "100%", minWidth: "1000px", borderCollapse: "collapse" }}>
-            <thead style={{position: "sticky", top: 0,background: "#fff",zIndex: 10,}}>
+          <TopScrollSync scrollWidth="1000px">
+          <table style={{ width: "100%", minWidth: "1000px", borderCollapse: "collapse" }}>
+            <thead>
               <tr>
                 <th style={th}>Destination</th>
                 <th style={th}>Sub-brand</th>
@@ -927,7 +873,15 @@ export default function Itineraries() {
                 return (
                   <tr
                     key={it.id}
-                    onClick={() => navigate(`/travel/itineraries/${it.id}`)}
+                    onClick={() => {
+                      if (openedFromReports) {
+                        navigate(`/travel/itineraries/${it.id}`, {
+                          state: { backTo: itinerariesListPath, backLabel: "Back to report results" },
+                        });
+                      } else {
+                        navigate(`/travel/itineraries/${it.id}`);
+                      }
+                    }}
                     style={{ borderTop: "1px solid var(--border-light)", cursor: "pointer" }}
                     aria-label={`Open itinerary ${it.destination}`}
                   >
@@ -1049,21 +1003,7 @@ export default function Itineraries() {
               })}
             </tbody>
           </table>
-          {total > 0 && (
-            <div style={{ padding: "12px 0", textAlign: "center", color: "var(--text-secondary)", fontSize: 12 }}>
-              {hasMore ? "Scroll to load more itineraries." : "You've reached the end of the itineraries."}
-            </div>
-          )}
           </TopScrollSync>
-          <div style={{ paddingTop: 12 }}>
-            {loadingMore && (
-              <div style={empty}>Loading more&hellip;</div>
-            )}
-            {!loadingMore && hasMore && (
-              <div aria-hidden="true" style={{ height: 1 }} data-testid="itineraries-scroll-sentinel" />
-            )}
-          </div>
-          </div>
         )}
       </div>
 

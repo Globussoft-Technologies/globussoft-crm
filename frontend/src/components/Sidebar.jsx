@@ -1463,8 +1463,10 @@ function renderWellnessNav({
 
   // Group accessible pages by category for ordered rendering.
   const byCategory = {};
+  const hiddenSidebarPaths = new Set(["/wellness/whatsapp"]);
   for (const page of accessiblePages) {
     if (!page || !page.category || !page.path) continue;
+    if (hiddenSidebarPaths.has(page.path)) continue;
     if (page.hideForAdminTier && isAdmin) continue;
     // customerOnly pages (e.g. Buy Gift Cards storefront) only surface to
     // customer-tier roles (USER / CUSTOMER). Admin / manager / staff don't
@@ -2100,7 +2102,6 @@ function renderTravelNav({
 
       <Section label="Customer comms">
         <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
-        <Link to="/travel/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
         <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
         <Link to="/calendar-sync" icon={Calendar} label="Calendar" requiredPermission={{ module: "integrations", action: "read" }} />
       </Section>

@@ -53,7 +53,7 @@
  * Sure).
  */
 import { useContext, useEffect, useState } from 'react';
-import { GraduationCap, Plus, Edit2, Trash2, X, AlertTriangle } from 'lucide-react';
+import { GraduationCap, Plus, Edit2, Trash2, X, AlertTriangle, Sparkles } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
@@ -76,15 +76,27 @@ const CURRICULUM_SUGGESTIONS = [
 ];
 
 const EMPTY_FORM = {
+  academicYear: '',
   curriculum: '',
   grade: '',
   subject: '',
+  learningOutcomeCode: '',
   learningOutcome: '',
   destinationId: '',
   destinationLabel: '',
   fitScore: 50,
+  confidenceScore: 50,
   fitRationale: '',
   isActive: true,
+};
+
+const EMPTY_PROPOSAL_FORM = {
+  academicYear: '',
+  curriculum: '',
+  grade: '',
+  subject: '',
+  learningOutcomeCode: '',
+  learningOutcome: '',
 };
 
 // Backend code → user-friendly message map. Returns the backend's own
@@ -99,6 +111,8 @@ function errorCodeToMessage(code, fallback) {
       return 'Fit score must be a whole number between 1 and 100';
     case 'INVALID_DESTINATION_ID':
       return 'Destination id must be a whole number';
+    case 'INVALID_CONFIDENCE_SCORE':
+      return 'Confidence score must be a whole number between 0 and 100';
     case 'MISSING_FIELDS':
       return fallback || 'Curriculum, grade, and subject are required';
     case 'EMPTY_BODY':
@@ -146,10 +160,19 @@ export default function CurriculumAdmin() {
   const [loadError, setLoadError] = useState('');
 
   // Filter state.
+  const [filterAcademicYear, setFilterAcademicYear] = useState('');
   const [filterCurriculum, setFilterCurriculum] = useState('');
   const [filterGrade, setFilterGrade] = useState('');
   const [filterSubject, setFilterSubject] = useState('');
   const [filterIsActive, setFilterIsActive] = useState('all'); // all | true | false
+
+  const [proposalPanelOpen, setProposalPanelOpen] = useState(false);
+  const [proposals, setProposals] = useState([]);
+  const [proposalLoading, setProposalLoading] = useState(false);
+  const [proposalError, setProposalError] = useState('');
+  const [proposalForm, setProposalForm] = useState(EMPTY_PROPOSAL_FORM);
+  const [proposalSubmitting, setProposalSubmitting] = useState(false);
+  const [selectedProposalIds, setSelectedProposalIds] = useState([]);
 
   // Modal state.
   const [modalOpen, setModalOpen] = useState(false);
@@ -160,6 +183,7 @@ export default function CurriculumAdmin() {
 
   const buildQuery = () => {
     const qs = new URLSearchParams();
+    if (filterAcademicYear.trim()) qs.set('academicYear', filterAcademicYear.trim());
     if (filterCurriculum.trim()) qs.set('curriculum', filterCurriculum.trim());
     if (filterGrade.trim()) qs.set('grade', filterGrade.trim());
     if (filterSubject.trim()) qs.set('subject', filterSubject.trim());
@@ -188,7 +212,7 @@ export default function CurriculumAdmin() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterCurriculum, filterGrade, filterSubject, filterIsActive]);
+  }, [filterAcademicYear, filterCurriculum, filterGrade, filterSubject, filterIsActive]);
 
   const openCreate = () => {
     setEditingId(null);
@@ -200,13 +224,16 @@ export default function CurriculumAdmin() {
   const openEdit = (m) => {
     setEditingId(m.id);
     setForm({
+      academicYear: m.academicYear || '',
       curriculum: m.curriculum || '',
       grade: m.grade || '',
       subject: m.subject || '',
+      learningOutcomeCode: m.learningOutcomeCode || '',
       learningOutcome: m.learningOutcome || '',
       destinationId: m.destinationId == null ? '' : String(m.destinationId),
       destinationLabel: m.destinationLabel || '',
       fitScore: m.fitScore == null ? 50 : m.fitScore,
+      confidenceScore: m.confidenceScore == null ? 50 : m.confidenceScore,
       fitRationale: m.fitRationale || '',
       isActive: m.isActive !== false,
     });
@@ -274,14 +301,26 @@ export default function CurriculumAdmin() {
       destinationId = idNum;
     }
 
+    const confidenceScoreNum = Number(form.confidenceScore);
+    if (!Number.isInteger(confidenceScoreNum) || confidenceScoreNum < 0 || confidenceScoreNum > 100) {
+      setFormError({
+        field: 'confidenceScore',
+        message: 'Confidence score must be a whole number between 0 and 100',
+      });
+      return;
+    }
+
     const body = {
+      academicYear: (form.academicYear || '').trim() || null,
       curriculum,
       grade,
       subject,
+      learningOutcomeCode: (form.learningOutcomeCode || '').trim() || null,
       learningOutcome: learningOutcome || null,
       destinationId,
       destinationLabel: (form.destinationLabel || '').trim() || null,
       fitScore: fitScoreNum,
+      confidenceScore: confidenceScoreNum,
       fitRationale: (form.fitRationale || '').trim() || null,
       isActive: Boolean(form.isActive),
     };
@@ -311,6 +350,9 @@ export default function CurriculumAdmin() {
           break;
         case 'INVALID_DESTINATION_ID':
           field = 'destinationId';
+          break;
+        case 'INVALID_CONFIDENCE_SCORE':
+          field = 'confidenceScore';
           break;
         case 'MISSING_FIELDS':
           field = null;
@@ -348,6 +390,122 @@ export default function CurriculumAdmin() {
         const userMsg = errorCodeToMessage(code, err?.message || 'Delete failed');
         notify.error(userMsg);
       });
+  };
+
+  const loadProposals = async () => {
+    setProposalLoading(true);
+    setProposalError('');
+    try {
+      const res = await fetchApi('/api/travel-curriculum/proposals?reviewStatus=pending');
+      setProposals(Array.isArray(res?.proposals) ? res.proposals : []);
+    } catch (e) {
+      setProposalError(e?.message || 'Failed to load curriculum proposals');
+      setProposals([]);
+    } finally {
+      setProposalLoading(false);
+    }
+  };
+
+  const toggleProposalPanel = async () => {
+    const next = !proposalPanelOpen;
+    setProposalPanelOpen(next);
+    if (next) await loadProposals();
+  };
+
+  const submitProposalGeneration = async (e) => {
+    e.preventDefault();
+    setProposalError('');
+    const curriculum = proposalForm.curriculum.trim();
+    const grade = proposalForm.grade.trim();
+    const subject = proposalForm.subject.trim();
+    const learningOutcome = proposalForm.learningOutcome.trim();
+    if (!curriculum || !grade || !subject || !learningOutcome) {
+      setProposalError('Curriculum, grade, subject, and learning outcome are required for proposal generation.');
+      return;
+    }
+    setProposalSubmitting(true);
+    try {
+      await fetchApi('/api/travel-curriculum/proposals/generate', {
+        method: 'POST',
+        body: JSON.stringify({
+          academicYear: proposalForm.academicYear.trim() || null,
+          curriculum,
+          grade,
+          subject,
+          learningOutcomeCode: proposalForm.learningOutcomeCode.trim() || null,
+          learningOutcome,
+        }),
+        silent: true,
+      });
+      notify.success('Curriculum proposals generated');
+      setProposalForm(EMPTY_PROPOSAL_FORM);
+      await loadProposals();
+    } catch (err) {
+      const msg = err?.data?.error || err?.message || 'Proposal generation failed';
+      setProposalError(msg);
+      notify.error(msg);
+    } finally {
+      setProposalSubmitting(false);
+    }
+  };
+
+  const approveProposal = async (id) => {
+    try {
+      await fetchApi(`/api/travel-curriculum/proposals/${id}/approve`, { method: 'POST', silent: true });
+      notify.success('Proposal approved');
+      setSelectedProposalIds((prev) => prev.filter((value) => value !== id));
+      await Promise.all([load(), loadProposals()]);
+    } catch (err) {
+      notify.error(err?.data?.error || err?.message || 'Approve failed');
+    }
+  };
+
+  const rejectProposal = async (id) => {
+    try {
+      await fetchApi(`/api/travel-curriculum/proposals/${id}/reject`, { method: 'POST', silent: true });
+      notify.success('Proposal rejected');
+      setSelectedProposalIds((prev) => prev.filter((value) => value !== id));
+      await loadProposals();
+    } catch (err) {
+      notify.error(err?.data?.error || err?.message || 'Reject failed');
+    }
+  };
+
+  const bulkApproveSelected = async () => {
+    if (selectedProposalIds.length === 0) return;
+    try {
+      await fetchApi('/api/travel-curriculum/proposals/bulk-approve', {
+        method: 'POST',
+        body: JSON.stringify({ ids: selectedProposalIds }),
+        silent: true,
+      });
+      notify.success('Selected proposals approved');
+      setSelectedProposalIds([]);
+      await Promise.all([load(), loadProposals()]);
+    } catch (err) {
+      notify.error(err?.data?.error || err?.message || 'Bulk approve failed');
+    }
+  };
+
+  const bulkApproveHighConfidence = async () => {
+    try {
+      await fetchApi('/api/travel-curriculum/proposals/bulk-approve', {
+        method: 'POST',
+        body: JSON.stringify({ minConfidence: 80 }),
+        silent: true,
+      });
+      notify.success('High-confidence proposals approved');
+      setSelectedProposalIds([]);
+      await Promise.all([load(), loadProposals()]);
+    } catch (err) {
+      notify.error(err?.data?.error || err?.message || 'Bulk approve failed');
+    }
+  };
+
+  const toggleProposalSelection = (id) => {
+    setSelectedProposalIds((prev) => (
+      prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id]
+    ));
   };
 
   return (
@@ -407,17 +565,28 @@ export default function CurriculumAdmin() {
             recommendation surface for advisors pitching to school decision-makers.
           </p>
         </div>
-        {isAdmin && (
-          <button
-            type="button"
-            onClick={openCreate}
-            style={primaryBtn}
-            aria-label="Create a new curriculum mapping"
-            data-testid="curriculum-mapping-new"
-          >
-            <Plus size={14} /> New Mapping
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={toggleProposalPanel}
+              style={refreshBtn}
+            >
+              <Sparkles size={14} /> {proposalPanelOpen ? 'Hide Proposal Review' : 'Open Proposal Review'}
+            </button>
+          )}
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={openCreate}
+              style={primaryBtn}
+              aria-label="Create a new curriculum mapping"
+              data-testid="curriculum-mapping-new"
+            >
+              <Plus size={14} /> New Mapping
+            </button>
+          )}
+        </div>
       </header>
 
       <div
@@ -433,6 +602,16 @@ export default function CurriculumAdmin() {
           marginBottom: 16,
         }}
       >
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
+          Academic year
+          <input
+            type="text"
+            value={filterAcademicYear}
+            onChange={(e) => setFilterAcademicYear(e.target.value)}
+            placeholder="e.g. 2026-27"
+            style={{ ...inputStyle, minWidth: 110 }}
+          />
+        </label>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
           Curriculum
           <select
@@ -488,6 +667,167 @@ export default function CurriculumAdmin() {
         </label>
       </div>
 
+      {proposalPanelOpen && (
+        <div
+          style={{
+            background: 'var(--surface-color)',
+            borderRadius: 8,
+            border: '1px solid var(--border-color)',
+            padding: 16,
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+            <div>
+              <h2 style={{ margin: 0, marginBottom: 4, fontSize: 18 }}>Proposal Review</h2>
+              <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 13 }}>
+                Generate suggestions, review confidence scores, and bulk-approve strong mappings.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" onClick={bulkApproveHighConfidence} style={refreshBtn}>
+                Approve 80%+
+              </button>
+              <button type="button" onClick={bulkApproveSelected} style={primaryBtn} disabled={selectedProposalIds.length === 0}>
+                Approve selected
+              </button>
+            </div>
+          </div>
+
+          <form
+            onSubmit={submitProposalGeneration}
+            style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}
+          >
+            <label style={fieldLabel}>
+              Academic year
+              <input
+                type="text"
+                value={proposalForm.academicYear}
+                onChange={(e) => setProposalForm({ ...proposalForm, academicYear: e.target.value })}
+                placeholder="2026-27"
+                style={inputStyle}
+              />
+            </label>
+            <label style={fieldLabel}>
+              Curriculum
+              <input
+                type="text"
+                value={proposalForm.curriculum}
+                onChange={(e) => setProposalForm({ ...proposalForm, curriculum: e.target.value })}
+                style={inputStyle}
+              />
+            </label>
+            <label style={fieldLabel}>
+              Grade
+              <input
+                type="text"
+                value={proposalForm.grade}
+                onChange={(e) => setProposalForm({ ...proposalForm, grade: e.target.value })}
+                style={inputStyle}
+              />
+            </label>
+            <label style={fieldLabel}>
+              Subject
+              <input
+                type="text"
+                value={proposalForm.subject}
+                onChange={(e) => setProposalForm({ ...proposalForm, subject: e.target.value })}
+                style={inputStyle}
+              />
+            </label>
+            <label style={fieldLabel}>
+              Outcome code
+              <input
+                type="text"
+                value={proposalForm.learningOutcomeCode}
+                onChange={(e) => setProposalForm({ ...proposalForm, learningOutcomeCode: e.target.value })}
+                style={inputStyle}
+              />
+            </label>
+            <label style={{ ...fieldLabel, gridColumn: '1 / -1' }}>
+              Learning outcome
+              <textarea
+                value={proposalForm.learningOutcome}
+                onChange={(e) => setProposalForm({ ...proposalForm, learningOutcome: e.target.value })}
+                rows={3}
+                style={inputStyle}
+              />
+            </label>
+            <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end' }}>
+              <button type="submit" style={primaryBtn} disabled={proposalSubmitting}>
+                {proposalSubmitting ? 'Generating...' : 'Generate proposals'}
+              </button>
+            </div>
+          </form>
+
+          {proposalError && <div role="alert" style={errorBanner}>{proposalError}</div>}
+
+          {proposalLoading ? (
+            <div style={empty}>Loading proposals...</div>
+          ) : proposals.length === 0 ? (
+            <div style={empty}>No pending proposals yet.</div>
+          ) : (
+            <TopScrollSync>
+              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...th, width: '5%' }}>Sel</th>
+                    <th style={{ ...th, width: '10%' }}>Year</th>
+                    <th style={{ ...th, width: '10%' }}>Curriculum</th>
+                    <th style={{ ...th, width: '8%' }}>Grade</th>
+                    <th style={{ ...th, width: '10%' }}>Subject</th>
+                    <th style={{ ...th, width: '18%' }}>Outcome</th>
+                    <th style={{ ...th, width: '14%' }}>Destination</th>
+                    <th style={{ ...th, width: '7%' }}>Fit</th>
+                    <th style={{ ...th, width: '8%' }}>Conf.</th>
+                    <th style={{ ...th, width: '10%' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {proposals.map((proposal) => (
+                    <tr key={proposal.id} style={{ borderTop: '1px solid var(--border-light)' }}>
+                      <td style={td}>
+                        <input
+                          type="checkbox"
+                          checked={selectedProposalIds.includes(proposal.id)}
+                          onChange={() => toggleProposalSelection(proposal.id)}
+                        />
+                      </td>
+                      <td style={td}>{proposal.academicYear || <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span>}</td>
+                      <td style={td}>{proposal.curriculum}</td>
+                      <td style={td}>{proposal.grade}</td>
+                      <td style={td}>{proposal.subject}</td>
+                      <td style={td} title={proposal.learningOutcome || ''}>{truncate(proposal.learningOutcome, 70)}</td>
+                      <td style={td}>
+                        {proposal.destinationLabel || (proposal.destinationId != null
+                          ? `#${proposal.destinationId}`
+                          : <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span>)}
+                      </td>
+                      <td style={td}><FitScoreBadge score={proposal.fitScore} /></td>
+                      <td style={td}>{proposal.confidenceScore == null ? <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span> : `${proposal.confidenceScore}%`}</td>
+                      <td style={td}>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <button type="button" style={iconActionBtn} onClick={() => approveProposal(proposal.id)}>
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            style={{ ...iconActionBtn, color: '#A8323F', borderColor: 'rgba(168,50,63,0.4)' }}
+                            onClick={() => rejectProposal(proposal.id)}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </TopScrollSync>
+          )}
+        </div>
+      )}
+
       {loadError && (
         <div role="alert" style={errorBanner}>
           <AlertTriangle size={16} /> {loadError}
@@ -513,30 +853,31 @@ export default function CurriculumAdmin() {
             with &ldquo;New Mapping&rdquo; or clear the filters to widen the search.
           </div>
         ) : (
-          <div
-            data-testid="curriculum-admin-table-scroll"
-            style={{ maxHeight: '60vh', overflowY: 'auto', overflowX: 'hidden' }}
-          >
-          <TopScrollSync disabled>
+          <TopScrollSync>
           <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
-              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
-                <th style={{ ...th, width: '12%' }}>Curriculum</th>
-                <th style={{ ...th, width: '6%' }}>Grade</th>
+              <tr>
+                <th style={{ ...th, width: '10%' }}>Year</th>
+                <th style={{ ...th, width: '10%' }}>Curriculum</th>
+                <th style={{ ...th, width: '7%' }}>Grade</th>
                 <th style={{ ...th, width: '10%' }}>Subject</th>
-                <th style={{ ...th, width: '20%' }}>Learning outcome</th>
-                <th style={{ ...th, width: '18%' }}>Destination</th>
-                <th style={{ ...th, width: '8%' }}>Fit</th>
-                <th style={{ ...th, width: '8%' }}>Active</th>
-                {isAdmin && <th style={{ ...th, width: '18%' }}>Actions</th>}
+                <th style={{ ...th, width: '10%' }}>Code</th>
+                <th style={{ ...th, width: '18%' }}>Learning outcome</th>
+                <th style={{ ...th, width: '13%' }}>Destination</th>
+                <th style={{ ...th, width: '6%' }}>Fit</th>
+                <th style={{ ...th, width: '7%' }}>Conf.</th>
+                <th style={{ ...th, width: '7%' }}>Active</th>
+                {isAdmin && <th style={{ ...th, width: '12%' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
               {mappings.map((m) => (
                 <tr key={m.id} style={{ borderTop: '1px solid var(--border-light)' }} data-testid={`curriculum-mapping-row-${m.id}`}>
+                  <td style={td}>{m.academicYear || <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span>}</td>
                   <td style={td}><strong>{m.curriculum}</strong></td>
                   <td style={td}>{m.grade}</td>
                   <td style={td}>{m.subject}</td>
+                  <td style={td}>{m.learningOutcomeCode || <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span>}</td>
                   <td style={td} title={m.learningOutcome || ''}>
                     {m.learningOutcome
                       ? truncate(m.learningOutcome, 80)
@@ -548,6 +889,7 @@ export default function CurriculumAdmin() {
                       : <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span>)}
                   </td>
                   <td style={td}><FitScoreBadge score={m.fitScore} /></td>
+                  <td style={td}>{m.confidenceScore == null ? <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span> : `${m.confidenceScore}%`}</td>
                   <td style={td}>
                     {m.isActive ? 'Yes' : <span style={{ color: 'var(--text-secondary)' }}>No</span>}
                   </td>
@@ -580,7 +922,6 @@ export default function CurriculumAdmin() {
             </tbody>
           </table>
           </TopScrollSync>
-          </div>
         )}
       </div>
 
@@ -627,6 +968,17 @@ export default function CurriculumAdmin() {
             )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label style={fieldLabel}>
+                Academic year
+                <input
+                  type="text"
+                  value={form.academicYear}
+                  onChange={(e) => setForm({ ...form, academicYear: e.target.value })}
+                  placeholder="e.g. 2026-27"
+                  style={inputStyle}
+                />
+              </label>
+
               <label style={fieldLabel}>
                 Curriculum
                 <input
@@ -680,6 +1032,17 @@ export default function CurriculumAdmin() {
                 {formError?.field === 'subject' && (
                   <span style={fieldErrorText} role="alert">{formError.message}</span>
                 )}
+              </label>
+
+              <label style={fieldLabel}>
+                Learning outcome code
+                <input
+                  type="text"
+                  value={form.learningOutcomeCode}
+                  onChange={(e) => setForm({ ...form, learningOutcomeCode: e.target.value })}
+                  placeholder="e.g. CBSE-HIS-9-3"
+                  style={inputStyle}
+                />
               </label>
 
               <label style={fieldLabel}>
@@ -756,6 +1119,23 @@ export default function CurriculumAdmin() {
                   and destination. 80+ surfaces as &ldquo;strong fit&rdquo; in the pitch UI.
                 </span>
                 {formError?.field === 'fitScore' && (
+                  <span style={fieldErrorText} role="alert">{formError.message}</span>
+                )}
+              </label>
+
+              <label style={fieldLabel}>
+                Confidence score (0-100)
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={form.confidenceScore}
+                  onChange={(e) => setForm({ ...form, confidenceScore: e.target.value === '' ? '' : Number(e.target.value) })}
+                  aria-invalid={formError?.field === 'confidenceScore' ? 'true' : undefined}
+                  style={inputStyle}
+                />
+                {formError?.field === 'confidenceScore' && (
                   <span style={fieldErrorText} role="alert">{formError.message}</span>
                 )}
               </label>
@@ -920,9 +1300,6 @@ const empty = {
 };
 
 const th = {
-  position: 'sticky',
-  top: 0,
-  zIndex: 10,
   textAlign: 'left',
   padding: '10px 12px',
   fontSize: 12,

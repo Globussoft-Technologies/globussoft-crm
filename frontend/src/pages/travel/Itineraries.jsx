@@ -666,6 +666,8 @@ export default function Itineraries() {
     const startOffset = reset ? 0 : offsetRef.current;
 
     if (reset) {
+      loadingRef.current = true;
+      loadingMoreRef.current = false;
       setLoading(true);
       setLoadingMore(false);
       setItems([]);
@@ -681,6 +683,7 @@ export default function Itineraries() {
       }
     } else {
       if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      loadingMoreRef.current = true;
       setLoadingMore(true);
     }
     const qs = new URLSearchParams();
@@ -718,6 +721,8 @@ export default function Itineraries() {
         hasMoreRef.current = false;
       }
     } finally {
+      loadingRef.current = false;
+      loadingMoreRef.current = false;
       setLoading(false);
       setLoadingMore(false);
     }

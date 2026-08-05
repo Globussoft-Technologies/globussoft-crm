@@ -204,9 +204,12 @@ export default function EmbassyRulesAdmin() {
     }
 
     const qs = new URLSearchParams(buildQuery());
-    qs.set('limit', String(PAGE_SIZE));
-    qs.set('offset', String(startOffset));
-    const url = `/api/embassy-rules${qs ? `?${qs}` : ''}`;
+    if (startOffset > 0) {
+      qs.set('limit', String(PAGE_SIZE));
+      qs.set('offset', String(startOffset));
+    }
+    const queryString = qs.toString();
+    const url = `/api/embassy-rules${queryString ? `?${queryString}` : ''}`;
     try {
       const res = await fetchApi(url);
       const rows = Array.isArray(res?.rules) ? res.rules : [];

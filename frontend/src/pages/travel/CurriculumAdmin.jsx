@@ -241,9 +241,12 @@ export default function CurriculumAdmin() {
     }
 
     const qs = new URLSearchParams(buildQuery());
-    qs.set('limit', String(PAGE_SIZE));
-    qs.set('offset', String(startOffset));
-    const url = `/api/travel-curriculum${qs ? `?${qs}` : ''}`;
+    if (startOffset > 0) {
+      qs.set('limit', String(PAGE_SIZE));
+      qs.set('offset', String(startOffset));
+    }
+    const queryString = qs.toString();
+    const url = `/api/travel-curriculum${queryString ? `?${queryString}` : ''}`;
     try {
       const res = await fetchApi(url);
       const rows = Array.isArray(res?.mappings) ? res.mappings : [];
@@ -940,7 +943,7 @@ export default function CurriculumAdmin() {
             style={{ maxHeight: '60vh', overflowY: 'auto', overflowX: 'hidden' }}
           >
           <TopScrollSync disabled>
-          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+          <table data-testid="curriculum-mapping-table" style={{ width: '100%', minWidth: '1480px', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
                 <th style={{ ...th, width: '10%' }}>Year</th>

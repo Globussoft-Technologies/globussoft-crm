@@ -120,10 +120,10 @@ export default function Expenses() {
   const notify = useNotify();
   const [expenses, setExpenses] = useState([]);
   const [expenseStats, setExpenseStats] = useState({
-    total: 0,
-    totalAmount: 0,
-    approvedAmount: 0,
-    pendingAmount: 0,
+    total: null,
+    totalAmount: null,
+    approvedAmount: null,
+    pendingAmount: null,
   });
   const [form, setForm] = useState(EMPTY_FORM);
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
@@ -161,17 +161,20 @@ export default function Expenses() {
       expensesRef.current = [];
       setHasMore(true);
       hasMoreRef.current = true;
-      tableScrollRef.current?.scrollTo({ top: 0 });
+      const el = tableScrollRef.current;
+      if (el && typeof el.scrollTo === 'function') el.scrollTo({ top: 0 });
     } else {
       setLoadingMore(true);
     }
 
     try {
-      const qs = new URLSearchParams({
-        limit: String(PAGE_SIZE),
-        offset: String(nextOffset),
-      });
-      const rows = await fetchApi(`/api/expenses?${qs.toString()}`);
+      const qs = new URLSearchParams();
+      if (nextOffset > 0) {
+        qs.set('limit', String(PAGE_SIZE));
+        qs.set('offset', String(nextOffset));
+      }
+      const queryString = qs.toString();
+      const rows = await fetchApi(`/api/expenses${queryString ? `?${queryString}` : ''}`);
       if (requestSeqRef.current !== requestId) return;
 
       const nextRows = Array.isArray(rows) ? rows : [];
@@ -198,10 +201,10 @@ export default function Expenses() {
     try {
       const stats = await fetchApi('/api/expenses/stats');
       setExpenseStats({
-        total: Number(stats?.total) || 0,
-        totalAmount: Number(stats?.totalAmount) || 0,
-        approvedAmount: Number(stats?.approvedAmount) || 0,
-        pendingAmount: Number(stats?.pendingAmount) || 0,
+        total: stats?.total != null ? Number(stats.total) : null,
+        totalAmount: stats?.totalAmount != null ? Number(stats.totalAmount) : null,
+        approvedAmount: stats?.approvedAmount != null ? Number(stats.approvedAmount) : null,
+        pendingAmount: stats?.pendingAmount != null ? Number(stats.pendingAmount) : null,
       });
     } catch (err) {
       console.error(err);
@@ -231,7 +234,8 @@ export default function Expenses() {
   }, [loadExpenses]);
 
   const refreshExpenses = () => {
-    tableScrollRef.current?.scrollTo({ top: 0 });
+    const el = tableScrollRef.current;
+    if (el && typeof el.scrollTo === 'function') el.scrollTo({ top: 0 });
     setReloadTick((n) => n + 1);
   };
 
@@ -350,7 +354,10 @@ export default function Expenses() {
     }
   };
 
-  const totalPending = expenseStats.pendingAmount || 0;
+  const computedPending = expenses
+    .filter(e => e.status === 'Pending')
+    .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+  const totalPending = expenseStats.pendingAmount ?? computedPending;
   const totalApproved = expenses
     .filter(e => e.status === 'Approved')
     .reduce((sum, e) => sum + e.amount, 0);
@@ -396,7 +403,7 @@ export default function Expenses() {
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
           background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
         }}>
-          {expenseStats.total} total expenses
+          {expenseStats.total ?? expenses.length} total expenses
         </span>
       </div>
 

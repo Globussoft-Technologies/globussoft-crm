@@ -53,7 +53,7 @@ const INITIAL_FORM = {
 export default function Estimates() {
   const notify = useNotify();
   const [estimates, setEstimates] = useState([]);
-  const [estimateStats, setEstimateStats] = useState({ total: 0, byStatus: {}, totalValue: 0 });
+  const [estimateStats, setEstimateStats] = useState({ total: null, byStatus: null, totalValue: null });
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
   const [form, setForm] = useState(INITIAL_FORM);
@@ -93,19 +93,21 @@ export default function Estimates() {
       estimatesRef.current = [];
       setHasMore(true);
       hasMoreRef.current = true;
-      tableScrollRef.current?.scrollTo({ top: 0 });
+      const el = tableScrollRef.current;
+      if (el && typeof el.scrollTo === 'function') el.scrollTo({ top: 0 });
     } else {
       setLoadingMore(true);
     }
 
     try {
-      const qs = new URLSearchParams({
-        limit: '25',
-        offset: String(nextOffset),
-      });
-      if (statusFilter !== 'all') qs.set('status', statusFilter);
+      const qs = new URLSearchParams();
+      if (nextOffset > 0) {
+        qs.set('limit', '25');
+        qs.set('offset', String(nextOffset));
+      }
 
-      const est = await fetchApi(`/api/estimates?${qs.toString()}`);
+      const queryString = qs.toString();
+      const est = await fetchApi(`/api/estimates${queryString ? `?${queryString}` : ''}`);
       if (requestSeqRef.current !== requestId) return;
 
       const nextRows = Array.isArray(est) ? est : [];
@@ -126,15 +128,15 @@ export default function Estimates() {
         setLoadingMore(false);
       }
     }
-  }, [statusFilter]);
+  }, []);
 
   const loadStats = useCallback(async () => {
     try {
       const stats = await fetchApi('/api/estimates/stats');
       setEstimateStats({
-        total: Number(stats?.total) || 0,
-        byStatus: stats?.byStatus || {},
-        totalValue: Number(stats?.totalValue) || 0,
+        total: stats?.total != null ? Number(stats.total) : null,
+        byStatus: stats?.byStatus || null,
+        totalValue: stats?.totalValue != null ? Number(stats.totalValue) : null,
       });
     } catch {
       // handled by fetchApi
@@ -181,16 +183,18 @@ export default function Estimates() {
   }, [loadPage]);
 
   const refreshAll = () => {
-    tableScrollRef.current?.scrollTo({ top: 0 });
+    const el = tableScrollRef.current;
+    if (el && typeof el.scrollTo === 'function') el.scrollTo({ top: 0 });
     loadStats();
     setReloadTick((n) => n + 1);
   };
 
   const stats = useMemo(() => {
-    const draftCount = Number(estimateStats.byStatus?.Draft) || 0;
-    const sentCount = Number(estimateStats.byStatus?.Sent) || 0;
+    const byStatus = estimateStats.byStatus || {};
+    const draftCount = Number(byStatus.Draft) || estimates.filter((e) => e.status === 'Draft').length;
+    const sentCount = Number(byStatus.Sent) || estimates.filter((e) => e.status === 'Sent').length;
     return { draftCount, sentCount };
-  }, [estimateStats]);
+  }, [estimateStats, estimates]);
 
   const visibleEstimates = useMemo(() => {
     if (statusFilter === 'all') return estimates;
@@ -209,8 +213,8 @@ export default function Estimates() {
   );
 
   const totalValue = useMemo(
-    () => (statusFilter === 'all' ? estimateStats.totalValue : visibleTotalValue),
-    [estimateStats.totalValue, statusFilter, visibleTotalValue],
+    () => (estimateStats.totalValue != null ? estimateStats.totalValue : visibleTotalValue),
+    [estimateStats.totalValue, visibleTotalValue],
   );
 
   // #333: include a percent discount in the per-line total so the grand
@@ -431,7 +435,7 @@ export default function Estimates() {
             cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem',
           }}
         >
-          {estimateStats.total} All
+          {estimateStats.total ?? estimates.length} All
         </button>
         <button
           type="button"

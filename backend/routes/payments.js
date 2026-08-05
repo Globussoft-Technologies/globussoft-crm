@@ -717,13 +717,14 @@ router.post(
           }
         }
 
-        // TMC instalment pay-link: notes.kind = 'tmc-instalment'.
+        // TMC instalment payment: legacy links use notes.kind = 'tmc-instalment';
+        // dynamic Checkout orders use notes.kind = 'travel-trip-installment'.
         // Marks the TripInstalmentPayment row paid/partial.
         // Two lookup strategies:
         //  A) notes.instalmentId — set on new links after the paymentLink.js fix.
         //  B) paymentLinkUrl match — for old links where instalmentId was missing
         //     from notes; the stored short_url matches TripInstalmentPayment.paymentLinkUrl.
-        if (notes && notes.kind === 'tmc-instalment') {
+        if (notes && (notes.kind === 'tmc-instalment' || notes.kind === 'travel-trip-installment')) {
           try {
             const paidPaise = paymentEnt && paymentEnt.amount;
             const paidMajor = paidPaise != null ? paidPaise / 100 : null;

@@ -561,6 +561,9 @@ model User {
   // in the Staff Directory; cleared back to null on Reactivate. Reversible
   // alternative to DELETE so the row stays in the directory + audit trail.
   deactivatedAt DateTime?
+  // Session invalidation counter. Increment when an admin deactivates a user
+  // or resets a password so old JWTs stop working on the next request.
+  sessionVersion Int @default(0)
 
   // PRD_TRAVEL_MULTICHANNEL_LEADS G008 (FR-3.3.5) — soft "step away" flag
   // that the lead-router consults before assigning an inbound lead. Defaults
@@ -5765,6 +5768,12 @@ model Role {
   isSystem    Boolean  @default(false) // ADMIN, CUSTOMER, OWNER — immutable key
   isActive    Boolean  @default(true)
   userType    String   @default("STAFF") // which user type this role applies to
+  // Role-level data scope for routes that distinguish own/team/all data.
+  dataScope   String   @default("ALL") // OWN | TEAM | ALL
+  // Travel vertical only: JSON array of sub-brand codes this role can act on.
+  // Null means unrestricted, [] means deny-all, and role assignment unions
+  // the scopes across all roles the user holds.
+  subBrandScopeJson String? @db.Text
   // Post-login landing route for users with this role. Null falls back to
   // tenant-vertical default (/wellness or /dashboard). Set per-role from the
   // Roles & Permissions admin UI so adding a new role becomes a config

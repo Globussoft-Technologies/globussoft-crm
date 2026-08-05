@@ -733,6 +733,7 @@ const travelVisaAnalyticsRoutes = require("./routes/travel_visa_analytics");
 const travelVisaRoutes = require("./routes/travel_visa");
 const travelItinerariesRoutes = require("./routes/travel_itineraries");
 const travelTripsRoutes = require("./routes/travel_trips");
+const travelPaymentPortalRoutes = require("./routes/travel_payment_portal");
 const travelCostMasterRoutes = require("./routes/travel_cost_master");
 const travelSuppliersRoutes = require("./routes/travel_suppliers");
 // PRD_TRAVEL_SUPPLIER_MASTER G035/G036/G037 — supplier PO ledger + state
@@ -950,6 +951,7 @@ app.use("/api", (req, res, next) => {
     "/travel/microsites/public",
     "/travel/diagnostics/public",
     "/travel/itineraries/public",
+    "/travel/payment-portal",
     "/travel/destination-photos/public",
     "/travel/reviews/public",
     "/travel/inbound/leads",
@@ -1303,6 +1305,7 @@ app.use("/api/travel/visa", travelVisaRoutes);
 app.use("/api/travel", travelReviewsRoutes); // literal /reviews paths — mount before parametric itinerary routes
 app.use("/api/travel", travelItinerariesRoutes);
 app.use("/api/travel", travelTripsRoutes);
+app.use("/api/travel", travelPaymentPortalRoutes);
 // Slice C2 — passport OCR upload + verification queue (stub-mode pending PC-1).
 app.use("/api/travel/passport", require("./routes/travel_passport"));
 app.use("/api/travel", travelCostMasterRoutes);

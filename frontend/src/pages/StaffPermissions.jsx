@@ -4,6 +4,7 @@ import { ArrowLeft, ShieldCheck } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { usePermissions } from '../hooks/usePermissions';
 import AccessDenied from '../components/AccessDenied';
+import { SUB_BRAND_LABEL } from '../utils/travelSubBrand';
 
 // Per-target user permission view at /staff/:userId/permissions.
 //
@@ -69,6 +70,11 @@ export default function StaffPermissions() {
   const isOwnerTarget = data?.isOwner;
   const permissions = data?.permissions || [];
   const roles = data?.roles || [];
+  const primaryRole = data?.primaryRole;
+  const roleDataScope = primaryRole?.dataScope || 'ALL';
+  const roleSubBrandScope = Array.isArray(primaryRole?.subBrandScope)
+    ? primaryRole.subBrandScope
+    : [];
   const grouped = groupByModule(permissions);
 
   return (
@@ -149,12 +155,20 @@ export default function StaffPermissions() {
           marginBottom: '1.5rem',
         }}
       >
-        <Card label="Account">{target?.email || '—'}</Card>
+        <Card label="Account">{target?.email || '-'}</Card>
         <Card label="User type">{data?.userType || target?.userType || 'STAFF'}</Card>
-        <Card label="Legacy role">{target?.role || '—'}</Card>
+        <Card label="Legacy role">{target?.role || '-'}</Card>
+        <Card label="Primary role">{primaryRole?.name || primaryRole?.key || '-'}</Card>
+        <Card label="Data scope">{roleDataScope}</Card>
+        <Card label="Sub-brand scope">
+          {roleSubBrandScope.length
+            ? roleSubBrandScope.map((id) => SUB_BRAND_LABEL[id] || id).join(', ')
+            : 'All travel sub-brands'}
+        </Card>
         {target?.wellnessRole && (
           <Card label="Wellness role">{target.wellnessRole}</Card>
         )}
+
         {target?.deactivatedAt && (
           <Card label="Status">
             <span style={{ color: '#ef4444', fontWeight: 600 }}>Inactive</span>

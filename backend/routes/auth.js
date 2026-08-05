@@ -14,6 +14,7 @@ const phoneOtp = require("../lib/phoneOtp");
 const { registerLimiter, otpRequestLimiter, otpVerifyLimiter } = require("../middleware/apiRateLimiters");
 const { writeAudit } = require("../lib/audit");
 const { resolvePrimaryRole } = require("../lib/roleResolution");
+const { getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
 // Module-object require so vi.mock-style replacement of the exports at
 // test time is observable here (the destructured form captures function
@@ -576,7 +577,7 @@ router.post("/register", registerLimiter, async (req, res) => {
 
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic" });
+    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic", sessionVersion: user.sessionVersion || 0 });
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.status(201).json({
       token,
@@ -681,7 +682,7 @@ router.post("/signup", registerLimiter, async (req, res) => {
 
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic" });
+    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic", sessionVersion: user.sessionVersion || 0 });
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.status(201).json({
       token,
@@ -867,8 +868,9 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
       vertical: user.tenant?.vertical || "generic",
       userType: 'CUSTOMER',
       isOwner: false,
+      sessionVersion: user.sessionVersion || 0,
     };
-    const token = signSessionToken(jwtPayload);
+    const token = signSessionToken({ ...jwtPayload, sessionVersion: user.sessionVersion || 0 });
 
     res.status(201).json({
       token,
@@ -955,7 +957,7 @@ router.post("/login", async (req, res) => {
     // Frontend must POST /api/auth/2fa/verify with { tempToken, code } to complete login.
     if (user.twoFactorEnabled) {
       const tempToken = jwt.sign(
-        { userId: user.id, awaiting2FA: true },
+        { userId: user.id, awaiting2FA: true, sessionVersion: user.sessionVersion || 0 },
         JWT_SECRET,
         { expiresIn: '5m' }
       );
@@ -976,6 +978,7 @@ router.post("/login", async (req, res) => {
       vertical: user.tenant?.vertical || "generic",
       userType: user.userType || 'STAFF',
       isOwner: user.userType === 'OWNER',
+      sessionVersion: user.sessionVersion || 0,
     };
     const token = signSessionToken(jwtPayload);
 
@@ -991,6 +994,8 @@ router.post("/login", async (req, res) => {
     // its configured landingPath on login. Falls back gracefully through
     // UserRole join → legacy User.role string → null (vertical default).
     const primaryRole = await resolvePrimaryRole({ id: user.id, role: user.role, tenantId });
+    const roleSubBrandAccess = await getSubBrandAccessSet(user.id);
+
 
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.json({
@@ -1008,7 +1013,7 @@ router.post("/login", async (req, res) => {
         // render only the brands this user may activate; the authoritative gate
         // stays server-side (travelGuards.getSubBrandAccessSet). Null = full
         // access (admins / unset). Harmless extra field for non-travel clients.
-        subBrandAccess: user.subBrandAccess || null,
+        subBrandAccess: roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
         // #1123 — include profilePicture so the header avatar matches the
         // /me payload after re-login. Without this the frontend persists a
         // user object missing profilePicture, falls back to initials, and
@@ -1157,7 +1162,7 @@ router.post("/reset-password", async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     const targetUser = await prisma.user.update({
       where: { id: entry.userId },
-      data: { password: hashedPassword },
+      data: { password: hashedPassword, sessionVersion: { increment: 1 } },
       select: { id: true, email: true, tenantId: true },
     });
     // Token already consumed (marked used / removed) by consumeResetToken above.
@@ -1223,9 +1228,11 @@ router.get("/me", verifyToken, async (req, res) => {
     // Carry primaryRole + landingPath on /me so a page-refresh restores the
     // same routing context the login response gave us.
     const primaryRole = await resolvePrimaryRole({ id: user.id, role: user.role, tenantId: user.tenantId });
+    const roleSubBrandAccess = await getSubBrandAccessSet(user.id);
 
     res.json({
       ...user,
+      subBrandAccess: roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
       tenantId: undefined, // hide raw FK; client should use user.tenant.id
       primaryRole,
       landingPath: primaryRole?.landingPath || null,
@@ -1283,6 +1290,8 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
       role: user.role,
       tenantId: req.user.tenantId,
     });
+    const roleSubBrandAccess = await getSubBrandAccessSet(user.id);
+
 
     res.json({
       isOwner: false,
@@ -1291,6 +1300,7 @@ router.get("/me/permissions", verifyToken, async (req, res) => {
       permissions: permissionArray,
       primaryRole,
       landingPath: primaryRole?.landingPath || null,
+      subBrandAccess: roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
     });
   } catch (_error) {
     console.error("[auth/me/permissions] error:", _error);
@@ -1344,12 +1354,13 @@ router.put("/me", verifyToken, async (req, res) => {
       if (!isMatch) return res.status(400).json({ error: "Current password is incorrect" });
 
       updateData.password = await bcrypt.hash(newPassword, 10);
+      updateData.sessionVersion = { increment: 1 };
     }
 
     const updatedUser = await prisma.user.update({
       where: { id: req.user.userId },
       data: updateData,
-      select: { id: true, name: true, email: true, role: true, profilePicture: true, createdAt: true }
+      select: { id: true, name: true, email: true, role: true, profilePicture: true, createdAt: true, sessionVersion: true }
     });
 
     // #179: audit profile changes. CRITICAL: never include the password value

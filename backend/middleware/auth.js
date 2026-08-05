@@ -67,6 +67,32 @@ const verifyToken = async (req, res, next) => {
     // These fields are set during login and included in the JWT
     verified.isOwner = verified.isOwner === true; // Ensure boolean
     verified.userType = verified.userType || 'STAFF'; // Default to STAFF for backward compat
+
+    // Load the live account state so deactivated users and stale session
+    // versions stop immediately even if their JWT has not expired yet.
+    try {
+      const liveUser = await prisma.user.findUnique({
+        where: { id: verified.userId },
+        select: { deactivatedAt: true, sessionVersion: true },
+      });
+      if (!liveUser) {
+        return unauthorized(res, "Invalid Authentication Token");
+      }
+      if (liveUser.deactivatedAt) {
+        return unauthorized(res, "Account deactivated. Please contact your administrator.");
+      }
+      if (verified.sessionVersion !== undefined && verified.sessionVersion !== null) {
+        const tokenVersion = Number(verified.sessionVersion);
+        const liveVersion = Number(liveUser.sessionVersion || 0);
+        if (Number.isFinite(tokenVersion) && tokenVersion !== liveVersion) {
+          return unauthorized(res, "Session expired, please log in again");
+        }
+      }
+    } catch (dbErr) {
+      console.error("[auth] session-state lookup failed:", dbErr && dbErr.message);
+      return unauthorized(res, "Authentication required");
+    }
+
     // Block awaiting2FA temp tokens from accessing protected resources
     if (verified.awaiting2FA === true) {
       return unauthorized(res, "Two-factor authentication required. Complete 2FA verification first.");

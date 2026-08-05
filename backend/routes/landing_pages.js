@@ -1,10 +1,20 @@
-﻿const express = require("express");
+const express = require("express");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const multer = require("multer");
 const { verifyToken } = require("../middleware/auth");
-const { renderPage } = require("../services/landingPageRenderer");
+const { renderPage } = require("../services/landingPageRenderer");
+function publicFeaturedVerticalWhere(vertical) {
+  const key = String(vertical || "").trim().toLowerCase();
+  if (key !== "travel") return {};
+  return {
+    OR: [
+      { subBrand: { in: ["tmc", "rfu", "travelstall", "visasure"] } },
+      { templateType: { in: ["wanderlux-v1", "educational-trip-v1", "religious-tour-v1", "family-trip-v1", "luxury-tour-v1", "travel-premium-v1"] } },
+    ],
+  };
+}
 const landingPageGeneratorLLM = require("../services/landingPageGeneratorLLM");
 const { uploadFile } = require("../services/s3Service");
 const { snapshotSafe, VERSION_SOURCES } = require("../lib/landingPageVersions");
@@ -600,7 +610,7 @@ router.get("/public/featured", async (req, res) => {
     const rawSubBrand = typeof req.query.subBrand === "string" && req.query.subBrand.length > 0
       ? req.query.subBrand
       : undefined;
-    const where = { isFeatured: true, status: "PUBLISHED" };
+    const where = { isFeatured: true, status: "PUBLISHED", ...publicFeaturedVerticalWhere(req.query.vertical) };
     if (rawSubBrand === "none") {
       where.subBrand = null;
     } else if (rawSubBrand) {
@@ -639,7 +649,7 @@ router.get("/public/featured-html", async (req, res) => {
     const rawSubBrand = typeof req.query.subBrand === "string" && req.query.subBrand.length > 0
       ? req.query.subBrand
       : undefined;
-    const where = { isFeatured: true, status: "PUBLISHED" };
+    const where = { isFeatured: true, status: "PUBLISHED", ...publicFeaturedVerticalWhere(req.query.vertical) };
     if (rawSubBrand === "none") {
       where.subBrand = null;
     } else if (rawSubBrand) {
@@ -650,8 +660,7 @@ router.get("/public/featured-html", async (req, res) => {
       orderBy: { featuredAt: "desc" },
     });
     if (!page) return res.status(404).json({ error: "No featured page.", code: "NO_FEATURED_PAGE" });
-    const { renderPage } = require("../services/landingPageRenderer");
-    const html = renderPage(page);
+        const html = renderPage(page);
     res.set("Content-Type", "text/html");
     return res.send(html);
   } catch (err) {

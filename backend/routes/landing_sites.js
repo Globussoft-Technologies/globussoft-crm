@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const prisma = require('../lib/prisma');
 const { verifyToken } = require('../middleware/auth');
 const { snapshotSafe, VERSION_SOURCES } = require('../lib/landingPageVersions');
@@ -8,6 +8,30 @@ const { normalizeSectorKey, SECTORS } = require('../services/landingSitePrompts'
 const router = express.Router();
 const GENERIC_PREFIX = 'generic-site-';
 
+
+function landingSiteVerticalWhere(vertical) {
+  const key = String(vertical || "").trim().toLowerCase();
+  if (key === "generic") {
+    return {
+      templateType: { startsWith: GENERIC_PREFIX },
+      NOT: [
+        { templateType: { startsWith: "generic-site-health" } },
+        { templateType: { startsWith: "generic-site-hospital" } },
+        { templateType: { startsWith: "generic-site-fitness" } },
+      ],
+    };
+  }
+  if (key === "wellness") {
+    return {
+      OR: [
+        { templateType: { startsWith: "generic-site-health" } },
+        { templateType: { startsWith: "generic-site-hospital" } },
+        { templateType: { startsWith: "generic-site-fitness" } },
+      ],
+    };
+  }
+  return { templateType: { startsWith: GENERIC_PREFIX } };
+}
 function isGenericPage(page) {
   return Boolean(page && typeof page.templateType === 'string' && page.templateType.startsWith(GENERIC_PREFIX));
 }
@@ -200,7 +224,7 @@ router.get('/public/:slug', async (req, res) => {
   try {
     const slug = String(req.params.slug || '').trim();
     if (!slug) return res.status(400).json({ error: 'Slug is required' });
-    const page = await prisma.landingPage.findFirst({ where: { slug, status: 'PUBLISHED', templateType: { startsWith: GENERIC_PREFIX } } });
+    const page = await prisma.landingPage.findFirst({ where: { slug, status: 'PUBLISHED', ...landingSiteVerticalWhere(req.query.vertical) } });
     if (!page) return res.status(404).json({ error: 'Landing site not found', code: 'LANDING_SITE_NOT_FOUND' });
     res.json(page);
   } catch (err) {

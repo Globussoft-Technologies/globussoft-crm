@@ -1548,13 +1548,19 @@ export default function QuoteBuilder() {
       for (const row of rows) {
         const savedTaxPercent = row?.taxPercent == null ? 0 : Number(row.taxPercent) || 0;
         if (savedTaxPercent == targetTaxPercent) continue;
+        const parsedNotes = parseLineNotesPayload(row?.notes);
+        const nextLinkMeta = mergeLineLinkMeta(
+          row?.linkMeta || parsedNotes.linkMeta,
+          previewById.get(row.id) || null,
+          row?.supplierId,
+        );
         try {
           await fetchApi(`/api/travel/quotes/${id}/lines/${row.id}`, {
             method: "PUT",
             body: JSON.stringify({
               taxPercent: targetTaxPercent,
               ...(parsedNotes.visibleNotes ? { notes: parsedNotes.visibleNotes } : {}),
-              ...(hasLinkMeta ? { linkMeta: nextLinkMeta } : {}),
+              ...(nextLinkMeta ? { linkMeta: nextLinkMeta } : {}),
             }),
           });
         } catch { /* keep saving the quote even if one line tax sync fails */ }

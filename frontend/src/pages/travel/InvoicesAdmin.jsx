@@ -54,7 +54,6 @@ import { useActiveSubBrand } from "../../utils/subBrand";
 // Branding Wave 4 G102: per-sub-brand brand-kit lookup for primary CTA tint.
 import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 import { AuthContext } from "../../App";
-import TopScrollSync from "../../components/TopScrollSync";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -117,6 +116,8 @@ const EMPTY_FORM = {
   quoteId: "",
   subBrand: "tmc",
 };
+
+const PAGE_SIZE = 50;
 
 // Tomorrow as default for the dueDate date picker. Backend accepts any
 // parseable date (back-dated invoices are legitimate ops) so this is a
@@ -185,6 +186,13 @@ export default function InvoicesAdmin() {
   const [invoices, setInvoices] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const invoicesRef = useRef([]);
+  const offsetRef = useRef(0);
+  const loadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
   // #1051 — resolve contactId -> { name, email } so the CONTACT column renders
   // a human-readable name instead of "#<id>". Backend list-GET doesn't include
   // the contact relation, so we batch-fetch unique IDs after the invoices land.
@@ -261,27 +269,65 @@ export default function InvoicesAdmin() {
   const [voidReason, setVoidReason] = useState("");
   const [voiding, setVoiding] = useState(false);
 
-  const load = () => {
-    setLoading(true);
+  const load = ({ reset = true } = {}) => {
+    if (reset) {
+      offsetRef.current = 0;
+      invoicesRef.current = [];
+      hasMoreRef.current = true;
+      setInvoices([]);
+      setHasMore(true);
+      setLoading(true);
+      loadingRef.current = true;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+      loadingMoreRef.current = true;
+    }
+
     const qs = new URLSearchParams();
     if (subBrand) qs.set("subBrand", subBrand);
     if (status) qs.set("status", status);
     if (contactIdFilter.trim()) qs.set("contactId", contactIdFilter.trim());
     if (quoteIdFilter.trim()) qs.set("quoteId", quoteIdFilter.trim());
+    const startOffset = reset ? 0 : offsetRef.current;
+    if (startOffset > 0) {
+      qs.set("limit", String(PAGE_SIZE));
+      qs.set("offset", String(startOffset));
+    }
     const url = `/api/travel/invoices${qs.toString() ? `?${qs.toString()}` : ""}`;
     fetchApi(url)
       .then((d) => {
         const rows = Array.isArray(d?.invoices) ? d.invoices : [];
-        setInvoices(rows);
-        setTotal(Number.isFinite(d?.total) ? d.total : 0);
+        const nextRows = reset ? rows : [...invoicesRef.current, ...rows];
+        const totalRows = Number.isFinite(d?.total) ? d.total : nextRows.length;
+        invoicesRef.current = nextRows;
+        offsetRef.current = startOffset + rows.length;
+        hasMoreRef.current = offsetRef.current < totalRows;
+        setInvoices(nextRows);
+        setTotal(totalRows);
+        setHasMore(hasMoreRef.current);
         setPermissionDenied(false);
       })
       .catch((err) => {
-        setInvoices([]);
-        setTotal(0);
-        setPermissionDenied(err?.status === 403);
+        if (reset) {
+          invoicesRef.current = [];
+          offsetRef.current = 0;
+          hasMoreRef.current = false;
+          setInvoices([]);
+          setTotal(0);
+          setHasMore(false);
+          setPermissionDenied(err?.status === 403);
+        }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (reset) {
+          setLoading(false);
+          loadingRef.current = false;
+        } else {
+          setLoadingMore(false);
+          loadingMoreRef.current = false;
+        }
+      });
   };
 
   // Sync the global sub-brand selector into the local filter state so the
@@ -290,7 +336,17 @@ export default function InvoicesAdmin() {
     setSubBrand(activeSubBrand || "");
   }, [activeSubBrand]);
 
-  useEffect(load, [subBrand, status, contactIdFilter, quoteIdFilter]);
+  useEffect(() => {
+    load({ reset: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subBrand, status, contactIdFilter, quoteIdFilter]);
+
+  const handleTableScroll = (e) => {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 180) {
+      load({ reset: false });
+    }
+  };
 
   // Load the tenant's contacts once for the customer dropdown.
   useEffect(() => {
@@ -782,7 +838,7 @@ export default function InvoicesAdmin() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
       <header
         style={{
           display: "flex",
@@ -1082,13 +1138,13 @@ export default function InvoicesAdmin() {
 
       <div
         className="glass"
-        style={{ padding: 0, overflow: "visible" }}
+        onScroll={handleTableScroll}
+        style={tableFrame}
       >
-        {loading ? (
+        {loading && invoices.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", minWidth: 1700, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                 <th style={th}>Invoice #</th>
@@ -1307,10 +1363,25 @@ export default function InvoicesAdmin() {
                 </tr>
               )}
             </tbody>
+            {loadingMore && (
+              <tfoot>
+                <tr>
+                  <td colSpan={canWrite ? 9 : 8} style={{ ...td, textAlign: "center", color: "var(--text-secondary)" }}>
+                    Loading more&hellip;
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
-          </TopScrollSync>
         )}
       </div>
+
+      {total > 0 && (
+        <div style={{ marginTop: 12, color: "var(--text-secondary)", fontSize: 13 }}>
+          Showing {Math.min(invoices.length, total).toLocaleString()} of {total.toLocaleString()}
+          {!hasMore ? " - end of table" : ""}
+        </div>
+      )}
 
       {/* S56 — Void-confirmation modal.
           Renders the cancel-preview panel BEFORE the operator commits
@@ -1468,8 +1539,8 @@ export default function InvoicesAdmin() {
                 {(!historyData.milestones || historyData.milestones.length === 0) ? (
                   <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>No milestones on this invoice.</div>
                 ) : (
-                  <TopScrollSync>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <div style={miniTableFrame}>
+                  <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr>
                         <th style={miniTh}>#</th>
@@ -1493,7 +1564,7 @@ export default function InvoicesAdmin() {
                       ))}
                     </tbody>
                   </table>
-                  </TopScrollSync>
+                  </div>
                 )}
 
                 {/* Payments / transactions */}
@@ -1501,8 +1572,8 @@ export default function InvoicesAdmin() {
                 {(!historyData.payments || historyData.payments.length === 0) ? (
                   <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>No payments recorded yet.</div>
                 ) : (
-                  <TopScrollSync>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <div style={miniTableFrame}>
+                  <table style={{ width: "100%", minWidth: 620, borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr>
                         <th style={miniTh}>Date</th>
@@ -1524,7 +1595,7 @@ export default function InvoicesAdmin() {
                       ))}
                     </tbody>
                   </table>
-                  </TopScrollSync>
+                  </div>
                 )}
               </>
             )}
@@ -1539,10 +1610,29 @@ export default function InvoicesAdmin() {
   );
 }
 
-const miniTh = { textAlign: "left", padding: "6px 8px", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--text-secondary)", fontWeight: 600 };
+const miniTh = {
+  textAlign: "left",
+  padding: "6px 8px",
+  fontSize: 11,
+  textTransform: "uppercase",
+  letterSpacing: 0.4,
+  color: "var(--text-secondary)",
+  fontWeight: 600,
+  background: "var(--modal-bg, var(--bg-color))",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
+};
 const miniThRight = { ...miniTh, textAlign: "right" };
 const miniTd = { padding: "6px 8px", color: "var(--text-primary)" };
 const miniTdRight = { ...miniTd, textAlign: "right" };
+const miniTableFrame = {
+  overflow: "auto",
+  maxHeight: 260,
+  border: "1px solid var(--border-color)",
+  borderRadius: 8,
+};
 
 const th = {
   textAlign: "left",
@@ -1552,10 +1642,21 @@ const th = {
   letterSpacing: 0.5,
   color: "var(--text-secondary)",
   borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)",
+  background: "var(--modal-bg, var(--bg-color))",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
   fontWeight: 600,
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
+const tableFrame = {
+  padding: 0,
+  overflow: "auto",
+  height: "calc(100vh - 330px)",
+  minHeight: 560,
+  maxHeight: 780,
+};
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const inputStyle = {
   padding: "8px 10px",

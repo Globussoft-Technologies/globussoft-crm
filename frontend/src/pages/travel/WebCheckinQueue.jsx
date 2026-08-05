@@ -243,7 +243,7 @@ export default function WebCheckinQueue() {
   const toIdx = Math.min(offset + rows.length, total);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1400, margin: "0 auto" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box" }}>
       {openedFromReports ? (
         <Link to="/travel/reports" style={backLinkStyle}>
           <ArrowLeft size={15} aria-hidden /> Back to reports
@@ -308,7 +308,9 @@ export default function WebCheckinQueue() {
         style={{
           background: "var(--surface-color)", borderRadius: 8,
           border: "1px solid var(--border-color)", overflow: "auto",
-          maxHeight: 600,
+          height: "calc(100vh - 300px)",
+          minHeight: 620,
+          maxHeight: 780,
         }}
       >
         {loading ? (
@@ -319,7 +321,7 @@ export default function WebCheckinQueue() {
             flights are accepted.
           </div>
         ) : (
-          <table className="stable-table webcheckins-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+          <table className="stable-table webcheckins-table" style={{ width: "100%", minWidth: 1700, borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
               <col style={{ width: "130px" }} />
               <col style={{ width: "96px" }} />
@@ -548,10 +550,13 @@ const empty = {
   color: "var(--text-secondary)", fontSize: 14,
 };
 const th = {
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
   textAlign: "left", padding: "12px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
-  background: "var(--bg-color)", backgroundColor: "var(--bg-color)",
+  background: "var(--modal-bg, var(--bg-color))", backgroundColor: "var(--modal-bg, var(--bg-color))",
   backgroundClip: "padding-box",
   boxShadow: "inset 0 -1px 0 var(--border-color)",
   whiteSpace: "nowrap", fontWeight: 600,

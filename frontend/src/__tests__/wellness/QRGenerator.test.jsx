@@ -190,6 +190,41 @@ describe('QRGenerator', () => {
     });
   });
 
+  it('loads more generated QRs when the selected event list is scrolled', async () => {
+    mockEvents = [
+      {
+        id: 1,
+        name: 'Large Event',
+        createdAt: new Date().toISOString(),
+        qrs: Array.from({ length: 12 }, (_, index) => ({
+          id: index + 1,
+          name: `QR ${index + 1}`,
+          text: `https://example.com/${index + 1}`,
+          size: 256,
+          fgColor: '#000000',
+          bgColor: '#ffffff',
+          errorLevel: 'M',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })),
+      },
+    ];
+
+    renderPage();
+    expect(await screen.findByText('QR 10')).toBeInTheDocument();
+    expect(screen.queryByText('QR 11')).not.toBeInTheDocument();
+
+    const list = screen.getByTestId('generated-qr-list');
+    Object.defineProperty(list, 'scrollTop', { value: 1000, configurable: true });
+    Object.defineProperty(list, 'clientHeight', { value: 300, configurable: true });
+    Object.defineProperty(list, 'scrollHeight', { value: 1000, configurable: true });
+    fireEvent.scroll(list);
+
+    await waitFor(() => {
+      expect(screen.getByText('QR 11')).toBeInTheDocument();
+    });
+  });
+
   it('adds a generated QR to the selected event', async () => {
     renderPage();
     createEvent('Membership Drive');

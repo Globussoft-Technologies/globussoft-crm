@@ -1,12 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BarChart3, TrendingUp, Stethoscope, MapPin, IndianRupee, Download, Loader2 } from 'lucide-react';
+import { BarChart3, TrendingUp, Stethoscope, MapPin, Download, Loader2 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
 import { formatPercent } from '../../utils/percent';
 import Avatar from '../../components/Avatar';
 import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
-import TopScrollSync from '../../components/TopScrollSync';
 
 const TABS = [
   { key: 'pnl', label: 'P&L by Service', icon: BarChart3 },
@@ -32,26 +31,161 @@ const EXPORT_BASENAMES = {
   att: 'attribution',
 };
 
+const REPORT_PAGE_SIZE = 10;
+
+function getRowKey(tab, row) {
+  if (tab === 'att') return row?.source || JSON.stringify(row);
+  return row?.id ?? JSON.stringify(row);
+}
+
+const TABLE_CARD_STYLE = {
+  padding: 0,
+  overflow: 'hidden',
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  borderRadius: '16px',
+};
+
+const TABLE_SCROLL_STYLE = {
+  overflow: 'auto',
+  minHeight: 0,
+  maxHeight: 'calc(100vh - 360px)',
+};
+
+const STICKY_TH_STYLE = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 2,
+  background: 'var(--surface-color)',
+  backdropFilter: 'blur(10px)',
+};
+
+function ReportTableShell({ scrollRef, sentinelRef, loadingMore, hasMore, children }) {
+  return (
+    <div className="glass" style={TABLE_CARD_STYLE}>
+      <div ref={scrollRef} style={TABLE_SCROLL_STYLE}>
+        {children}
+        <div ref={sentinelRef} aria-hidden="true" style={{ height: '1px' }} />
+        {loadingMore && (
+          <div style={{ textAlign: 'center', padding: '0.9rem 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+            Loading more report rows...
+          </div>
+        )}
+        {!hasMore && (
+          <div style={{ textAlign: 'center', padding: '0.5rem 0 0', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+            End of results
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Reports() {
   const navigate = useNavigate();
   const [tab, setTab] = useState('pnl');
-  // Reports require a window — opt out of "All time" and default to last30
+  // Reports require a window â€” opt out of "All time" and default to last30
   // (matches the prior 30-day default).
   const [filter, setFilter] = useState({ preset: 'last30', start: '', end: '' });
   const [from, to] = resolveDateRangeYmd(filter);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  // #227: a single in-flight flag covers all export buttons — clicking one
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  // #227: a single in-flight flag covers all export buttons â€” clicking one
   // disables the others for the same tab while we wait, mirroring the UX of
   // the prescription-PDF button in PatientDetail.jsx.
   const [exporting, setExporting] = useState(null); // 'csv' | 'xlsx' | 'pdf' | null
   const [exportError, setExportError] = useState(null);
+  const scrollContainerRef = useRef(null);
+  const sentinelRef = useRef(null);
+  const requestSeqRef = useRef(0);
+  const cursorRef = useRef(null);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
 
-  const load = () => {
-    if (!from || !to) return; // 'custom' preset with no dates yet — skip fetch
+  const resetReportState = () => {
+    cursorRef.current = null;
+    loadingRef.current = true;
+    loadingMoreRef.current = false;
+    hasMoreRef.current = true;
+    setData(null);
     setLoading(true);
-    const url = `${ENDPOINTS[tab]}?from=${from}T00:00:00&to=${to}T23:59:59`;
-    fetchApi(url).then(setData).catch(() => setData(null)).finally(() => setLoading(false));
+    setLoadingMore(false);
+    setHasMore(true);
+  };
+
+  const handleTabChange = (nextTab) => {
+    if (nextTab === tab) return;
+    requestSeqRef.current += 1;
+    resetReportState();
+    setTab(nextTab);
+  };
+
+  const load = ({ reset = false } = {}) => {
+    if (!from || !to) return; // 'custom' preset with no dates yet â€” skip fetch
+    const requestId = ++requestSeqRef.current;
+    if (reset) {
+      resetReportState();
+    } else {
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+    }
+
+    const params = new URLSearchParams({
+      from: `${from}T00:00:00`,
+      to: `${to}T23:59:59`,
+      limit: String(REPORT_PAGE_SIZE),
+    });
+    if (!reset && cursorRef.current) params.set('cursor', cursorRef.current);
+
+    fetchApi(`${ENDPOINTS[tab]}?${params.toString()}`)
+      .then((response) => {
+        if (requestId !== requestSeqRef.current) return;
+        const rows = Array.isArray(response?.rows) ? response.rows : [];
+        const pagination = response?.pagination || {
+          limit: REPORT_PAGE_SIZE,
+          total: rows.length,
+          hasMore: rows.length === REPORT_PAGE_SIZE,
+          nextCursor: null,
+        };
+        const nextCursor = typeof pagination.nextCursor === 'string' ? pagination.nextCursor : null;
+        const hasMore = !!pagination.hasMore;
+        cursorRef.current = nextCursor;
+        hasMoreRef.current = hasMore;
+        setHasMore(hasMore);
+        setData((current) => {
+          const existingRows = reset ? [] : (Array.isArray(current?.rows) ? current.rows : []);
+          const mergedRows = Array.from(
+            new Map([...existingRows, ...rows].map((row) => [getRowKey(tab, row), row])).values(),
+          );
+          return {
+            ...response,
+            rows: mergedRows,
+            pagination: {
+              ...pagination,
+              nextCursor,
+              hasMore,
+            },
+          };
+        });
+      })
+      .catch(() => {
+        if (requestId !== requestSeqRef.current) return;
+        if (reset) setData(null);
+        cursorRef.current = null;
+        hasMoreRef.current = false;
+        setHasMore(false);
+      })
+      .finally(() => {
+        if (requestId !== requestSeqRef.current) return;
+        loadingRef.current = false;
+        loadingMoreRef.current = false;
+        setLoading(false);
+        setLoadingMore(false);
+      });
   };
   // #433: debounce the date-range driven re-fetch. Pre-fix every keystroke
   // in the From/To input (`type=date`) refired `load()`; typing a full
@@ -59,14 +193,31 @@ export default function Reports() {
   // racy state transitions. tab changes still fire immediately (debounce
   // only the date side); the cleanup function cancels the timer so a new
   // keystroke restarts the wait.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     // tab changes have no debounce-worthy spam pattern (single click)
-    const t = setTimeout(load, 350);
+    const t = setTimeout(() => load({ reset: true }), 350);
     return () => clearTimeout(t);
   }, [tab, from, to]);
 
-  // #227: export downloader. We use raw fetch so we can stream the binary
-  // body into a blob URL — fetchApi assumes JSON. Same pattern used by the
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (loading || loadingMore || !hasMore) return undefined;
+    const node = sentinelRef.current;
+    const root = scrollContainerRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return undefined;
+
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      load({ reset: false });
+    }, { root, rootMargin: '300px 0px' });
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [loading, loadingMore, hasMore, tab, from, to]);
+// #227: export downloader. We use raw fetch so we can stream the binary
+  // body into a blob URL â€” fetchApi assumes JSON. Same pattern used by the
   // RxDetailModal "Download PDF" button in PatientDetail.jsx.
   const downloadExport = async (format) => {
     if (!from || !to) {
@@ -97,7 +248,7 @@ export default function Reports() {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      // Same 60s revoke as the Rx download — gives the browser time to
+      // Same 60s revoke as the Rx download â€” gives the browser time to
       // actually persist the file before we drop the reference.
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     } catch (err) {
@@ -114,7 +265,7 @@ export default function Reports() {
           <BarChart3 size={24} /> Reports
         </h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Profit, contribution, and team performance — filterable by date.
+          Profit, contribution, and team performance â€” filterable by date.
         </p>
       </header>
 
@@ -122,7 +273,7 @@ export default function Reports() {
         {TABS.map((t) => {
           const Icon = t.icon;
           return (
-            <button key={t.key} onClick={() => setTab(t.key)}
+            <button key={t.key} onClick={() => handleTabChange(t.key)}
               style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 1rem',
                 background: tab === t.key ? 'var(--accent-color)' : 'transparent',
                 color: tab === t.key ? '#fff' : 'var(--text-primary)',
@@ -135,7 +286,7 @@ export default function Reports() {
         <DateRangeFilter value={filter} onChange={setFilter} label={null} includeAllOption={false} />
       </div>
 
-      {/* #227: export bar — both buttons disabled while either is in flight, and
+      {/* #227: export bar â€” both buttons disabled while either is in flight, and
           while the JSON load is still in flight (no point exporting an empty
           tab the user hasn't seen yet). */}
       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginBottom: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -183,10 +334,43 @@ export default function Reports() {
       </div>
 
       {loading && <div>Loading…</div>}
-      {!loading && data && tab === 'pnl' && <PnlTable data={data} onNavigate={navigate} />}
-      {!loading && data && tab === 'pro' && <ProTable data={data} />}
-      {!loading && data && tab === 'loc' && <LocTable data={data} />}
-      {!loading && data && tab === 'att' && <AttTable data={data} />}
+      {!loading && data && tab === 'pnl' && (
+        <PnlTable
+          data={data}
+          onNavigate={navigate}
+          scrollRef={scrollContainerRef}
+          sentinelRef={sentinelRef}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+        />
+      )}
+      {!loading && data && tab === 'pro' && (
+        <ProTable
+          data={data}
+          scrollRef={scrollContainerRef}
+          sentinelRef={sentinelRef}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+        />
+      )}
+      {!loading && data && tab === 'loc' && (
+        <LocTable
+          data={data}
+          scrollRef={scrollContainerRef}
+          sentinelRef={sentinelRef}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+        />
+      )}
+      {!loading && data && tab === 'att' && (
+        <AttTable
+          data={data}
+          scrollRef={scrollContainerRef}
+          sentinelRef={sentinelRef}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+        />
+      )}
       {!loading && !data && <div className="glass" style={{ padding: '2rem', textAlign: 'center' }}>No data.</div>}
       <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
     </div>
@@ -209,13 +393,13 @@ function Totals({ items, onVisitsClick }) {
   );
 }
 
-function PnlTable({ data, onNavigate }) {
+function PnlTable({ data, onNavigate, scrollRef, sentinelRef, loadingMore, hasMore }) {
   const colWidths = ['25%', '18%', '10%', '10%', '12%', '12%', '13%'];
   const headers = ['Service', 'Category', 'Tier', 'Visits', 'Revenue', 'Product cost', 'Contribution'];
   const totals = data?.totals || { visits: 0, revenue: 0, productCost: 0, contribution: 0 };
   const rows = Array.isArray(data?.rows) ? data.rows : [];
   const servicesSummary = Array.isArray(data?.servicesSummary) ? data.servicesSummary : [];
-  const servicesCount = servicesSummary.length;
+  const servicesCount = Number.isFinite(data?.pagination?.total) ? data.pagination.total : servicesSummary.length;
 
   return (
     <>
@@ -226,13 +410,14 @@ function PnlTable({ data, onNavigate }) {
         { label: 'Contribution', value: formatMoney(totals.contribution || 0) },
         { label: 'Services', value: (servicesCount || 0).toLocaleString('en-IN') },
       ]} onVisitsClick={() => onNavigate && onNavigate('/wellness/visits')} />
-      <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
-        <TopScrollSync>
+      <ReportTableShell scrollRef={scrollRef} sentinelRef={sentinelRef} loadingMore={loadingMore} hasMore={hasMore}>
         <table style={tableStyle}>
           <colgroup>
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
           </colgroup>
-          <thead><tr>{headers.map((h, i) => <th key={h} style={{ ...th, width: colWidths[i], textAlign: i > 2 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+          <thead>
+            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: i > 2 ? 'right' : 'left' }}>{h}</th>)}</tr>
+          </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id}>
@@ -254,13 +439,12 @@ function PnlTable({ data, onNavigate }) {
             {rows.length === 0 && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No services with revenue in this window.</td></tr>}
           </tbody>
         </table>
-        </TopScrollSync>
-      </div>
+      </ReportTableShell>
     </>
   );
 }
 
-function ProTable({ data }) {
+function ProTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
   const colWidths = ['40%', '20%', '20%', '20%'];
   const headers = ['Staff', 'Role', 'Visits', 'Revenue'];
   const totals = data?.totals || { visits: 0, revenue: 0 };
@@ -272,20 +456,21 @@ function ProTable({ data }) {
         { label: 'Visits', value: (totals.visits || 0).toLocaleString('en-IN') },
         { label: 'Revenue', value: formatMoney(totals.revenue || 0) },
       ]} />
-      <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
-        <TopScrollSync>
+      <ReportTableShell scrollRef={scrollRef} sentinelRef={sentinelRef} loadingMore={loadingMore} hasMore={hasMore}>
         <table style={tableStyle}>
           <colgroup>
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
           </colgroup>
           {/* #236: drop the orthogonal RBAC role column (it always says USER for
               doctors/professionals/etc) and surface wellnessRole as the primary
-              "Role" instead — that's the meaningful one for clinics. */}
-          <thead><tr>{headers.map((h, i) => <th key={h} style={{ ...th, width: colWidths[i], textAlign: i > 1 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+              "Role" instead â€” that's the meaningful one for clinics. */}
+          <thead>
+            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: i > 1 ? 'right' : 'left' }}>{h}</th>)}</tr>
+          </thead>
           <tbody>
             {/* #637: per-practitioner avatar with hashed colour so each name
                 is visually distinct in the staff column. The colour is
-                deterministic — same name → same swatch across pages. */}
+                deterministic â€” same name â†’ same swatch across pages. */}
             {rows.map((r) => (
               <tr key={r.id}>
                 <td style={{ ...td, width: colWidths[0] }}>
@@ -294,26 +479,29 @@ function ProTable({ data }) {
                     <span>{r.name}</span>
                   </span>
                 </td>
-                <td style={{ ...td, width: colWidths[1], textTransform: 'capitalize' }}>{r.wellnessRole || r.role || '—'}</td>
+                <td style={{ ...td, width: colWidths[1], textTransform: 'capitalize' }}>{r.wellnessRole || r.role || 'â€”'}</td>
                 <td style={{ ...tdR, width: colWidths[2] }}>{r.visits}</td>
                 <td style={{ ...tdR, width: colWidths[3] }}>{formatMoney(r.revenue)}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        </TopScrollSync>
-      </div>
+      </ReportTableShell>
     </>
   );
 }
 
-function LocTable({ data }) {
+function LocTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
   const colWidths = ['20%', '18%', '13%', '13%', '18%', '18%'];
   const headers = ['Location', 'City', 'Patients', 'Visits', 'Revenue', 'Status'];
   const totals = data?.totals || { visits: 0, revenue: 0 };
   const rows = Array.isArray(data?.rows) ? data.rows : [];
-  const activeCount = rows.filter((r) => r.isActive).length;
-  const inactiveCount = rows.filter((r) => !r.isActive).length;
+  const activeCount = Number.isFinite(data?.locationSummary?.activeCount)
+    ? data.locationSummary.activeCount
+    : rows.filter((r) => r.isActive).length;
+  const inactiveCount = Number.isFinite(data?.locationSummary?.inactiveCount)
+    ? data.locationSummary.inactiveCount
+    : rows.filter((r) => !r.isActive).length;
 
   return (
     <>
@@ -343,13 +531,14 @@ function LocTable({ data }) {
         { label: 'Visits', value: (totals.visits || 0).toLocaleString('en-IN') },
         { label: 'Revenue', value: formatMoney(totals.revenue || 0) },
       ]} />
-      <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
-        <TopScrollSync>
+      <ReportTableShell scrollRef={scrollRef} sentinelRef={sentinelRef} loadingMore={loadingMore} hasMore={hasMore}>
         <table style={tableStyle}>
           <colgroup>
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
           </colgroup>
-          <thead><tr>{headers.map((h, i) => <th key={h} style={{ ...th, width: colWidths[i], textAlign: (i > 1 && i < 5) ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+          <thead>
+            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: (i > 1 && i < 5) ? 'right' : 'left' }}>{h}</th>)}</tr>
+          </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.id}>
@@ -363,14 +552,13 @@ function LocTable({ data }) {
             ))}
           </tbody>
         </table>
-        </TopScrollSync>
-      </div>
+      </ReportTableShell>
     </>
   );
 }
 
-function AttTable({ data }) {
-  // #156: defensive defaults — if the API ever returns a partial response (e.g.
+function AttTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
+  // #156: defensive defaults â€” if the API ever returns a partial response (e.g.
   // missing totals or rows), render "No data" instead of crashing the whole page
   // on `undefined.toLocaleString()`. Reproducer wasn't found in dry-runs, but
   // the cost of guarding is zero.
@@ -387,13 +575,14 @@ function AttTable({ data }) {
         { label: 'Qualified', value: (totals.qualified || 0).toLocaleString('en-IN') },
         { label: 'Revenue', value: formatMoney(totals.revenue || 0) },
       ]} />
-      <div className="glass" style={{ padding: 0, overflow: 'visible' }}>
-        <TopScrollSync>
+      <ReportTableShell scrollRef={scrollRef} sentinelRef={sentinelRef} loadingMore={loadingMore} hasMore={hasMore}>
         <table style={tableStyle}>
           <colgroup>
             {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
           </colgroup>
-          <thead><tr>{headers.map((h, i) => <th key={h} style={{ ...th, width: colWidths[i], textAlign: i > 0 ? 'right' : 'left' }}>{h}</th>)}</tr></thead>
+          <thead>
+            <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: i > 0 ? 'right' : 'left' }}>{h}</th>)}</tr>
+          </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.source}>
@@ -408,8 +597,7 @@ function AttTable({ data }) {
             {rows.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: 'var(--text-secondary)' }}>No leads in this window.</td></tr>}
           </tbody>
         </table>
-        </TopScrollSync>
-      </div>
+      </ReportTableShell>
     </>
   );
 }
@@ -419,11 +607,11 @@ const tableStyle = { width: '100%', borderCollapse: 'collapse', tableLayout: 'fi
 const th = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', textOverflow: 'ellipsis' };
 const td = { padding: '0.65rem 1rem', fontSize: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)', overflow: 'hidden', textOverflow: 'ellipsis', wordBreak: 'break-word' };
 // #602: right-aligned cells are always numeric / currency / count in this
-// page's report tables. Forbid mid-number wrap (`₹1,2\n34,567` breaks
+// page's report tables. Forbid mid-number wrap (`â‚¹1,2\n34,567` breaks
 // copy-paste + CSV alignment) and use tabular-nums so digit columns line up.
 // wordBreak overrides the inherited break-word from `td`.
 const tdR = { ...td, textAlign: 'right', whiteSpace: 'nowrap', wordBreak: 'normal', fontVariantNumeric: 'tabular-nums' };
-// #227: export buttons sit next to the date picker — wait state shows a
+// #227: export buttons sit next to the date picker â€” wait state shows a
 // spinner and dims the button without removing it from the layout.
 const exportBtn = (busy) => ({
   display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
@@ -433,3 +621,6 @@ const exportBtn = (busy) => ({
   borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.8rem',
   cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.7 : 1,
 });
+
+
+

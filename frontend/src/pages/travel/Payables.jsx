@@ -45,7 +45,7 @@
 // yet deployed on this stack), notify.error + render the empty state
 // rather than crashing.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Wallet, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -54,7 +54,6 @@ import { formatMoney } from "../../utils/money";
 import { useActiveSubBrand } from "../../utils/subBrand";
 // Branding Wave 4 G102: per-sub-brand brand-kit lookup for active-chip tint.
 import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
-import TopScrollSync from "../../components/TopScrollSync";
 
 const STATUS_CHIPS = [
   { value: "", label: "All" },
@@ -139,6 +138,8 @@ export default function Payables() {
     currencyBreakdown: {},
   });
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
 
   // Server-side filter state.
   const [status, setStatus] = useState("");
@@ -146,13 +147,30 @@ export default function Payables() {
   const [supplierCategory, setSupplierCategory] = useState("");
   const [dueFrom, setDueFrom] = useState("");
   const [dueTo, setDueTo] = useState("");
-  const [offset, setOffset] = useState(0);
+  const payablesRef = useRef([]);
+  const offsetRef = useRef(0);
+  const loadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
   // Client-side filter — supplier-name substring; the endpoint doesn't
   // accept this yet (future slice).
   const [supplierSearch, setSupplierSearch] = useState("");
 
-  const load = () => {
-    setLoading(true);
+  const load = ({ reset = false } = {}) => {
+    if (reset) {
+      offsetRef.current = 0;
+      payablesRef.current = [];
+      hasMoreRef.current = true;
+      setPayables([]);
+      setHasMore(true);
+      setLoading(true);
+      loadingRef.current = true;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+      loadingMoreRef.current = true;
+    }
+
     const qs = new URLSearchParams();
     if (status) qs.set("status", status);
     if (subBrand) qs.set("subBrand", subBrand);
@@ -160,13 +178,20 @@ export default function Payables() {
     if (dueFrom) qs.set("dueAfter", dueFrom);
     if (dueTo) qs.set("dueBefore", dueTo);
     qs.set("limit", String(PAGE_SIZE));
-    qs.set("offset", String(offset));
+    const startOffset = reset ? 0 : offsetRef.current;
+    qs.set("offset", String(startOffset));
     const url = `/api/travel/payables?${qs.toString()}`;
     fetchApi(url)
       .then((d) => {
         const rows = Array.isArray(d?.payables) ? d.payables : [];
-        setPayables(rows);
-        setTotal(Number.isFinite(d?.total) ? d.total : 0);
+        const nextRows = reset ? rows : [...payablesRef.current, ...rows];
+        const totalRows = Number.isFinite(d?.total) ? d.total : nextRows.length;
+        payablesRef.current = nextRows;
+        offsetRef.current = startOffset + rows.length;
+        hasMoreRef.current = offsetRef.current < totalRows;
+        setPayables(nextRows);
+        setTotal(totalRows);
+        setHasMore(hasMoreRef.current);
         setSummary({
           byStatus: d?.summary?.byStatus || {},
           totalPending: d?.summary?.totalPending || "0.00",
@@ -176,15 +201,21 @@ export default function Payables() {
         });
       })
       .catch((err) => {
-        setPayables([]);
-        setTotal(0);
-        setSummary({
-          byStatus: {},
-          totalPending: "0.00",
-          totalScheduled: "0.00",
-          totalPaid: "0.00",
-          currencyBreakdown: {},
-        });
+        if (reset) {
+          payablesRef.current = [];
+          offsetRef.current = 0;
+          hasMoreRef.current = false;
+          setPayables([]);
+          setTotal(0);
+          setHasMore(false);
+          setSummary({
+            byStatus: {},
+            totalPending: "0.00",
+            totalScheduled: "0.00",
+            totalPaid: "0.00",
+            currencyBreakdown: {},
+          });
+        }
         // Defensive fallback: 404 means the consolidated endpoint isn't on
         // this stack yet (e.g. demo not yet deployed past slice 5); surface
         // a friendly notify.error and leave the empty state showing rather
@@ -197,16 +228,28 @@ export default function Payables() {
           notify.error("Failed to load payables — please try again.");
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (reset) {
+          setLoading(false);
+          loadingRef.current = false;
+        } else {
+          setLoadingMore(false);
+          loadingMoreRef.current = false;
+        }
+      });
   };
 
-  useEffect(load, [status, subBrand, supplierCategory, dueFrom, dueTo, offset]);
-
-  // Reset to page 0 whenever a filter changes so the operator doesn't end up
-  // viewing an empty middle page after a narrowing filter.
   useEffect(() => {
-    setOffset(0);
+    load({ reset: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, subBrand, supplierCategory, dueFrom, dueTo]);
+
+  const handleTableScroll = (e) => {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 180) {
+      load();
+    }
+  };
 
   // Client-side filtering — only the supplier-name substring narrows the
   // server-returned page further.
@@ -224,17 +267,8 @@ export default function Payables() {
   const paidCount = summary.byStatus?.paid || 0;
   const cancelledCount = summary.byStatus?.cancelled || 0;
 
-  const handleNext = () => {
-    if (offset + PAGE_SIZE >= total) return;
-    setOffset(offset + PAGE_SIZE);
-  };
-  const handlePrev = () => {
-    if (offset <= 0) return;
-    setOffset(Math.max(0, offset - PAGE_SIZE));
-  };
-
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
       <header style={{ marginBottom: 16 }}>
         <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
           <Wallet size={26} aria-hidden /> All Payables
@@ -348,14 +382,13 @@ export default function Payables() {
       </div>
 
       {/* Table */}
-      <div className="glass" style={{ padding: 0, overflow: "visible" }}>
-        {loading ? (
+      <div className="glass" onScroll={handleTableScroll} style={tableFrame}>
+        {loading && payables.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : filtered.length === 0 ? (
           <div style={empty}>No payables found</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", minWidth: 1500, borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={th}>Supplier</th>
@@ -420,8 +453,16 @@ export default function Payables() {
                 );
               })}
             </tbody>
+            {loadingMore && (
+              <tfoot>
+                <tr>
+                  <td colSpan={7} style={{ ...td, textAlign: "center", color: "var(--text-secondary)" }}>
+                    Loading more&hellip;
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
-          </TopScrollSync>
         )}
       </div>
 
@@ -450,40 +491,19 @@ export default function Payables() {
         </div>
       )}
 
-      {/* Pagination */}
       <div
         style={{
           marginTop: 12,
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
+          justifyContent: "flex-start",
           gap: 12,
         }}
       >
         <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
           {total > 0
-            ? `Showing ${offset + 1}–${Math.min(offset + PAGE_SIZE, total)} of ${total.toLocaleString()}`
+            ? `Showing ${Math.min(payables.length, total).toLocaleString()} of ${total.toLocaleString()}${hasMore ? "" : " - end of table"}`
             : "No payables to show"}
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button
-            type="button"
-            onClick={handlePrev}
-            disabled={offset <= 0}
-            style={offset <= 0 ? secondaryBtnDisabled : secondaryBtn}
-            aria-label="Previous page"
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            onClick={handleNext}
-            disabled={offset + PAGE_SIZE >= total}
-            style={offset + PAGE_SIZE >= total ? secondaryBtnDisabled : secondaryBtn}
-            aria-label="Next page"
-          >
-            Next
-          </button>
         </div>
       </div>
     </div>
@@ -526,10 +546,21 @@ const th = {
   letterSpacing: 0.5,
   color: "var(--text-secondary)",
   borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)",
+  background: "var(--modal-bg, var(--bg-color))",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
   fontWeight: 600,
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
+const tableFrame = {
+  padding: 0,
+  overflow: "auto",
+  height: "calc(100vh - 360px)",
+  minHeight: 520,
+  maxHeight: 760,
+};
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const inputStyle = {
   padding: "6px 10px",
@@ -548,20 +579,6 @@ const chipStyle = {
   fontWeight: 600,
   cursor: "pointer",
 };
-const secondaryBtn = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "6px 14px",
-  borderRadius: 6,
-  fontWeight: 600,
-  fontSize: 13,
-  background: "var(--surface-color)",
-  color: "var(--text-primary)",
-  border: "1px solid var(--border-color)",
-  cursor: "pointer",
-};
-const secondaryBtnDisabled = { ...secondaryBtn, opacity: 0.4, cursor: "not-allowed" };
 const statusBadge = {
   display: "inline-block",
   padding: "2px 8px",

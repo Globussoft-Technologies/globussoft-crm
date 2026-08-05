@@ -8,6 +8,8 @@ import { usePermissions } from '../hooks/usePermissions';
 import { formatDate } from '../utils/date';
 import { SUB_BRAND_IDS, SUB_BRAND_LABEL } from '../utils/travelSubBrand';
 
+const STAFF_PAGE_SIZE = 12;
+
 // Parse a stored User.subBrandAccess (JSON string / array / null) into a clean
 // array of known sub-brand ids for the picker. null/empty → [] (= all brands).
 function parseSubBrandAccess(raw) {
@@ -395,6 +397,7 @@ export default function Staff() {
   // Filter dropdown open state + click-outside ref so the panel closes when
   // the user clicks elsewhere on the page.
   const [filterOpen, setFilterOpen] = useState(false);
+  const [visibleStaffCount, setVisibleStaffCount] = useState(STAFF_PAGE_SIZE);
   const filterPanelRef = useRef(null);
   // #618 — edit-modal state. null when closed; { id, name, email, role,
   // wellnessRole } when an admin clicked Edit on a row.
@@ -879,6 +882,14 @@ export default function Staff() {
     }
     return true;
   });
+  useEffect(() => setVisibleStaffCount(STAFF_PAGE_SIZE), [filteredStaff.length]);
+  const visibleStaff = filteredStaff.slice(0, visibleStaffCount);
+  const handleStaffTableScroll = (event) => {
+    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 80) {
+      setVisibleStaffCount((count) => Math.min(count + STAFF_PAGE_SIZE, filteredStaff.length));
+    }
+  };
   // Counts ONLY the filters that live inside the dropdown panel — drives the
   // numeric badge on the Filter button. Search lives outside the dropdown and
   // role-pill filter lives in the stats bar above, so they're surfaced visibly
@@ -1274,7 +1285,7 @@ export default function Staff() {
             No staff members match the current search or filters.
           </p>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
+          <div onScroll={handleStaffTableScroll} style={{ maxHeight: 'calc(100vh - 28rem)', overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
@@ -1282,12 +1293,13 @@ export default function Staff() {
                     <th key={h} style={{
                       padding: '0.75rem 0.5rem', textAlign: 'left', color: 'var(--text-secondary)',
                       fontSize: '0.75rem', fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.05em',
+                      position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-color)',
                     }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {filteredStaff.map(member => (
+                {visibleStaff.map(member => (
                   <tr key={member.id} style={{ borderBottom: '1px solid var(--border-color)', transition: '0.15s' }}
                     onMouseEnter={e => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}

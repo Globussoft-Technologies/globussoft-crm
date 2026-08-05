@@ -13,7 +13,6 @@ import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X, Trash2, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
-import TopScrollSync from "../../components/TopScrollSync";
 
 // School is captured as free-text so the operator doesn't have to pre-create
 // a Contact row for every new school. The backend POST /api/travel/trips
@@ -111,7 +110,7 @@ export default function Trips() {
       await fetchApi("/api/travel/trips", { method: "POST", body: JSON.stringify(body) });
       notify.success("Trip created");
       setCreating(false);
-      load();
+      load({ reset: true });
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Failed to create trip");
     } finally {
@@ -338,10 +337,19 @@ export default function Trips() {
         <button type="button" onClick={() => load({ reset: true })} style={refreshBtn} aria-label="Reload list">Refresh</button>
       </div>
 
-      <div style={{
-        background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)",
-      }}>
+      <div
+        ref={listRef}
+        data-testid="trips-table-scroll"
+        onScroll={handleListScroll}
+        style={{
+          background: "var(--surface-color)", borderRadius: 8,
+          border: "1px solid var(--border-color)",
+          overflow: "auto",
+          height: "calc(100vh - 300px)",
+          minHeight: 620,
+          maxHeight: 780,
+        }}
+      >
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : trips.length === 0 ? (
@@ -351,29 +359,22 @@ export default function Trips() {
         ) : visibleTrips.length === 0 ? (
           <div style={empty}>No trips match &ldquo;{search}&rdquo;.</div>
         ) : (
-          <div
-            ref={listRef}
-            data-testid="trips-table-scroll"
-            onScroll={handleListScroll}
-            style={{
-              maxHeight: "60vh",
-              overflowY: "auto",
-              overflowX: "hidden",
-            }}
-          >
-            <TopScrollSync>
-            <table className="stable-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+          <>
+            <table
+              className="stable-table"
+              style={{ width: "100%", minWidth: 1520, borderCollapse: "collapse", tableLayout: "fixed" }}
+            >
               <colgroup>
-                <col style={{ width: "13%" }} />
-                <col style={{ width: "17%" }} />
-                <col style={{ width: "8%" }} />
-                <col style={{ width: "10%" }} />
-                <col style={{ width: "14%" }} />
-                <col style={{ width: "15%" }} />
-                <col style={{ width: "9%" }} />
-                <col style={{ width: "10%" }} />
-                <col style={{ width: "8%" }} />
-                <col style={{ width: "6%" }} />
+                <col style={{ width: 170 }} />
+                <col style={{ width: 260 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 140 }} />
+                <col style={{ width: 220 }} />
+                <col style={{ width: 240 }} />
+                <col style={{ width: 130 }} />
+                <col style={{ width: 150 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 90 }} />
               </colgroup>
               <thead>
                 <tr>
@@ -456,21 +457,20 @@ export default function Trips() {
                 })}
               </tbody>
             </table>
+            {loadingMore && (
+              <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
+                Loading more&hellip;
+              </div>
+            )}
+            {!loadingMore && hasMore && (
+              <div aria-hidden="true" data-testid="trips-table-sentinel" style={{ height: 1 }} />
+            )}
             {total > 0 && reachedEnd && !hasMore && (
-              <div style={{ padding: "12px 0", textAlign: "center", color: "var(--text-secondary)", fontSize: 12 }}>
+              <div style={{ padding: "10px 16px", textAlign: "center", color: "var(--text-secondary)", fontSize: 12, borderTop: "1px solid var(--border-color)" }}>
                 You&apos;ve reached the end of the trips.
               </div>
             )}
-            </TopScrollSync>
-            <div style={{ paddingTop: 12 }}>
-              {loadingMore && (
-                <div style={empty}>Loading more&hellip;</div>
-              )}
-              {!loadingMore && hasMore && (
-                <div aria-hidden="true" data-testid="trips-table-sentinel" style={{ height: 1 }} />
-              )}
-            </div>
-          </div>
+          </>
         )}
       </div>
 
@@ -641,8 +641,8 @@ const th = {
   position: "sticky",
   top: 0,
   zIndex: 10,
-  background: "var(--surface-color)",
-  backgroundColor: "var(--surface-color)",
+  background: "var(--modal-bg, var(--bg-color))",
+  backgroundColor: "var(--modal-bg, var(--bg-color))",
   backgroundClip: "padding-box",
   boxShadow: "inset 0 -1px 0 var(--border-color)",
   whiteSpace: "nowrap",

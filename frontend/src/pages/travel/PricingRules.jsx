@@ -35,7 +35,6 @@ import {
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
-import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import {
   accessibleSubBrands,
@@ -141,6 +140,7 @@ const SCOPES = [
   { value: "transport", label: "Transport" },
   { value: "package", label: "Package" },
 ];
+const PAGE_SIZE = 50;
 
 // Render a date column as YYYY-MM-DD without the time noise.
 function fmtDate(d) {
@@ -152,7 +152,7 @@ function fmtDate(d) {
 
 export default function PricingRules() {
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1320, margin: "0 auto", boxSizing: "border-box" }}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
@@ -186,24 +186,84 @@ function SeasonsSection() {
   const myBrands = accessibleSubBrands(user);
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [seasons, setSeasons] = useState([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [filterSubBrand, setFilterSubBrand] = useState("");
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const blankForm = { subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), seasonName: "", startDate: "", endDate: "", multiplier: "" };
   const [form, setForm] = useState(blankForm);
   const fileRef = useRef(null);
+  const seasonsRef = useRef([]);
+  const offsetRef = useRef(0);
+  const loadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
 
-  const load = () => {
-    setLoading(true);
+  const load = ({ reset = true } = {}) => {
+    if (reset) {
+      offsetRef.current = 0;
+      seasonsRef.current = [];
+      hasMoreRef.current = true;
+      setSeasons([]);
+      setHasMore(true);
+      setLoading(true);
+      loadingRef.current = true;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+      loadingMoreRef.current = true;
+    }
     const qs = new URLSearchParams();
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
+    const startOffset = reset ? 0 : offsetRef.current;
+    if (startOffset > 0) {
+      qs.set("limit", String(PAGE_SIZE));
+      qs.set("offset", String(startOffset));
+    }
     fetchApi(`/api/travel/seasons?${qs.toString()}`)
-      .then((res) => setSeasons(Array.isArray(res?.seasons) ? res.seasons : []))
-      .catch((e) => { notify.error(e?.body?.error || "Failed to load seasons"); setSeasons([]); })
-      .finally(() => setLoading(false));
+      .then((res) => {
+        const rows = Array.isArray(res?.seasons) ? res.seasons : [];
+        const nextRows = reset ? rows : [...seasonsRef.current, ...rows];
+        const totalRows = Number.isFinite(res?.total) ? res.total : nextRows.length;
+        seasonsRef.current = nextRows;
+        offsetRef.current = startOffset + rows.length;
+        hasMoreRef.current = offsetRef.current < totalRows;
+        setSeasons(nextRows);
+        setTotal(totalRows);
+        setHasMore(hasMoreRef.current);
+      })
+      .catch((e) => {
+        if (reset) {
+          seasonsRef.current = [];
+          offsetRef.current = 0;
+          hasMoreRef.current = false;
+          setSeasons([]);
+          setTotal(0);
+          setHasMore(false);
+        }
+        notify.error(e?.body?.error || "Failed to load seasons");
+      })
+      .finally(() => {
+        if (reset) {
+          setLoading(false);
+          loadingRef.current = false;
+        } else {
+          setLoadingMore(false);
+          loadingMoreRef.current = false;
+        }
+      });
   };
-  useEffect(load, [filterSubBrand]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load({ reset: true }); }, [filterSubBrand]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleTableScroll = (e) => {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) {
+      load({ reset: false });
+    }
+  };
 
   const startEdit = (s) => {
     setEditingId(s.id);
@@ -300,7 +360,7 @@ function SeasonsSection() {
         <h2 style={sectionTitle}>
           <CalendarRange size={20} aria-hidden style={{ marginRight: 6, verticalAlign: -4 }} />
           Seasons
-          <span style={countBadge}>{seasons.length}</span>
+          <span style={countBadge}>{total || seasons.length}</span>
         </h2>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
@@ -413,14 +473,13 @@ function SeasonsSection() {
         </div>
       )}
 
-      <div style={tableWrap}>
-        {loading ? (
+      <div style={tableWrap} onScroll={handleTableScroll}>
+        {loading && seasons.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : seasons.length === 0 ? (
           <div style={empty}>No seasons yet. Add one above.</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", minWidth: 1280, borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={th}>Sub-brand</th>
@@ -450,10 +509,24 @@ function SeasonsSection() {
                 </tr>
               ))}
             </tbody>
+            {loadingMore && (
+              <tfoot>
+                <tr>
+                  <td colSpan={6} style={{ ...td, textAlign: "center", color: "var(--text-secondary)" }}>
+                    Loading more&hellip;
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
-          </TopScrollSync>
         )}
       </div>
+      {total > 0 && (
+        <div style={tableCount}>
+          Showing {Math.min(seasons.length, total).toLocaleString()} of {total.toLocaleString()}
+          {!hasMore ? " - end of table" : ""}
+        </div>
+      )}
     </section>
   );
 }
@@ -469,7 +542,10 @@ function MarkupRulesSection() {
   const myBrands = accessibleSubBrands(user);
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [rules, setRules] = useState([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [filterSubBrand, setFilterSubBrand] = useState("");
   const [filterScope, setFilterScope] = useState("");
   const [filterActive, setFilterActive] = useState("");
@@ -482,6 +558,11 @@ function MarkupRulesSection() {
   const [form, setForm] = useState(blankForm);
   const fileRef = useRef(null);
   const [suppliers, setSuppliers] = useState([]);
+  const rulesRef = useRef([]);
+  const offsetRef = useRef(0);
+  const loadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
 
   // Fetch supplier names when the markup-rule form is open and the match
   // field is "supplier". Used to populate the match-value dropdown.
@@ -505,18 +586,70 @@ function MarkupRulesSection() {
     return () => { cancelled = true; };
   }, [adding, editingId, form.matchField, form.subBrand]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const load = () => {
-    setLoading(true);
+  const load = ({ reset = true } = {}) => {
+    if (reset) {
+      offsetRef.current = 0;
+      rulesRef.current = [];
+      hasMoreRef.current = true;
+      setRules([]);
+      setHasMore(true);
+      setLoading(true);
+      loadingRef.current = true;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+      loadingMoreRef.current = true;
+    }
     const qs = new URLSearchParams();
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
     if (filterScope) qs.set("scope", filterScope);
     if (filterActive) qs.set("active", filterActive);
+    const startOffset = reset ? 0 : offsetRef.current;
+    if (startOffset > 0) {
+      qs.set("limit", String(PAGE_SIZE));
+      qs.set("offset", String(startOffset));
+    }
     fetchApi(`/api/travel/markup-rules?${qs.toString()}`)
-      .then((res) => setRules(Array.isArray(res?.rules) ? res.rules : []))
-      .catch((e) => { notify.error(e?.body?.error || "Failed to load markup rules"); setRules([]); })
-      .finally(() => setLoading(false));
+      .then((res) => {
+        const rows = Array.isArray(res?.rules) ? res.rules : [];
+        const nextRows = reset ? rows : [...rulesRef.current, ...rows];
+        const totalRows = Number.isFinite(res?.total) ? res.total : nextRows.length;
+        rulesRef.current = nextRows;
+        offsetRef.current = startOffset + rows.length;
+        hasMoreRef.current = offsetRef.current < totalRows;
+        setRules(nextRows);
+        setTotal(totalRows);
+        setHasMore(hasMoreRef.current);
+      })
+      .catch((e) => {
+        if (reset) {
+          rulesRef.current = [];
+          offsetRef.current = 0;
+          hasMoreRef.current = false;
+          setRules([]);
+          setTotal(0);
+          setHasMore(false);
+        }
+        notify.error(e?.body?.error || "Failed to load markup rules");
+      })
+      .finally(() => {
+        if (reset) {
+          setLoading(false);
+          loadingRef.current = false;
+        } else {
+          setLoadingMore(false);
+          loadingMoreRef.current = false;
+        }
+      });
   };
-  useEffect(load, [filterSubBrand, filterScope, filterActive]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load({ reset: true }); }, [filterSubBrand, filterScope, filterActive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleTableScroll = (e) => {
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 160) {
+      load({ reset: false });
+    }
+  };
 
   const parseMatchKey = (json) => {
     try {
@@ -676,7 +809,7 @@ function MarkupRulesSection() {
         <h2 style={sectionTitle}>
           <Percent size={20} aria-hidden style={{ marginRight: 6, verticalAlign: -4 }} />
           Markup Rules
-          <span style={countBadge}>{rules.length}</span>
+          <span style={countBadge}>{total || rules.length}</span>
         </h2>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={exportCsv} style={secondaryBtn}>
@@ -833,14 +966,13 @@ function MarkupRulesSection() {
         </div>
       )}
 
-      <div style={tableWrap}>
-        {loading ? (
+      <div style={tableWrap} onScroll={handleTableScroll}>
+        {loading && rules.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : rules.length === 0 ? (
           <div style={empty}>No markup rules yet. Add one above.</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", minWidth: 1280, borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={th}>Sub-brand</th>
@@ -878,10 +1010,24 @@ function MarkupRulesSection() {
                 </tr>
               ))}
             </tbody>
+            {loadingMore && (
+              <tfoot>
+                <tr>
+                  <td colSpan={7} style={{ ...td, textAlign: "center", color: "var(--text-secondary)" }}>
+                    Loading more&hellip;
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
-          </TopScrollSync>
         )}
       </div>
+      {total > 0 && (
+        <div style={tableCount}>
+          Showing {Math.min(rules.length, total).toLocaleString()} of {total.toLocaleString()}
+          {!hasMore ? " - end of table" : ""}
+        </div>
+      )}
     </section>
   );
 }
@@ -915,7 +1061,15 @@ const formBox = {
 };
 const tableWrap = {
   background: "var(--surface-color)", borderRadius: 8,
-  border: "1px solid var(--border-color)", overflow: "visible",
+  border: "1px solid var(--border-color)", overflow: "auto",
+  height: "calc((100vh - 360px) / 2)",
+  minHeight: 320,
+  maxHeight: 460,
+};
+const tableCount = {
+  marginTop: 8,
+  color: "var(--text-secondary)",
+  fontSize: 13,
 };
 const selectStyle = {
   padding: "6px 10px", borderRadius: 6,
@@ -930,15 +1084,14 @@ const input = {
 };
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const th = {
-  position: "sticky",
-  top: 0,
-  zIndex: 3,
   textAlign: "left", padding: "10px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
-  background: "var(--bg-color)",
-  backgroundClip: "padding-box",
+  background: "var(--modal-bg, var(--bg-color))",
   boxShadow: "inset 0 -1px 0 var(--border-color)",
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
 const trStyle = { borderTop: "1px solid var(--border-light)" };

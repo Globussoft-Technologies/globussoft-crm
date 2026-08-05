@@ -10,6 +10,8 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 const {
+  VALID_DATA_SCOPES,
+  VALID_SUB_BRANDS,
   normalizeDataScope,
   parseSubBrandScope,
   serializeSubBrandScope,

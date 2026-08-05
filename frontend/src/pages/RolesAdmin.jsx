@@ -544,8 +544,6 @@ export default function RolesAdmin() {
     if (!permLoading && canRead) loadRoles();
   }, [permLoading, canRead, loadRoles]);
   useEffect(() => setVisibleRoleCount(ROLES_PAGE_SIZE), [roles.length]);
-
-  const visibleRoles = roles.slice(0, visibleRoleCount);
   const handleRolesTableScroll = (event) => {
     const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
     if (scrollHeight - scrollTop - clientHeight < 80) {

@@ -915,6 +915,133 @@ async function main() {
     },
   });
 
+  // Wellness demo tenant + quick-login accounts on the shared login page.
+  // These are the exact credentials shown in the login UI, so the seed keeps
+  // them in sync and prevents the "Invalid credentials" error on that card.
+  const wellnessTenant = await prisma.tenant.create({
+    data: {
+      name: 'Enhanced Wellness',
+      slug: 'enhanced-wellness',
+      plan: 'enterprise',
+      vertical: 'wellness',
+      country: 'IN',
+      defaultCurrency: 'INR',
+      locale: 'en-IN',
+      ownerEmail: 'rishu@enhancedwellness.in',
+      isActive: true,
+    },
+  });
+
+  const wellnessLoginUsers = await Promise.all([
+    prisma.user.create({
+      data: {
+        email: 'rishu@enhancedwellness.in',
+        password: await bcrypt.hash('password123', 10),
+        name: 'Rishu Goyal',
+        userType: 'OWNER',
+        role: 'ADMIN',
+        tenantId: wellnessTenant.id,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'admin@wellness.demo',
+        password: await bcrypt.hash('password123', 10),
+        name: 'Wellness Demo Admin',
+        userType: 'STAFF',
+        role: 'ADMIN',
+        tenantId: wellnessTenant.id,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'user@wellness.demo',
+        password: await bcrypt.hash('password123', 10),
+        name: 'Wellness Demo User',
+        userType: 'STAFF',
+        role: 'USER',
+        tenantId: wellnessTenant.id,
+      },
+    }),
+  ]);
+
+  console.log(`Wellness demo tenant seeded with ${wellnessLoginUsers.length} login users`);
+
+  // Travel Stall demo tenant + quick-login accounts on the shared login page.
+  // These accounts must belong to a travel-vertical tenant so the login
+  // resolver can route them to /travel instead of the generic CRM surface.
+  const travelTenant = await prisma.tenant.create({
+    data: {
+      name: 'Travel Stall',
+      slug: 'travel-stall',
+      plan: 'enterprise',
+      vertical: 'travel',
+      country: 'IN',
+      defaultCurrency: 'INR',
+      locale: 'en-IN',
+      ownerEmail: 'yasin@travelstall.in',
+      isActive: true,
+    },
+  });
+
+  // Travel-login quick cards on the shared login page. These are the exact
+  // demo accounts the UI advertises, so the seed keeps them aligned with the
+  // travel-specific login surface instead of leaving dead cards behind.
+  const travelLoginUsers = await Promise.all([
+    prisma.user.create({
+      data: {
+        email: 'yasin@travelstall.in',
+        password: await bcrypt.hash('password123', 10),
+        name: 'Yasin Malik',
+        userType: 'OWNER',
+        role: 'ADMIN',
+        tenantId: travelTenant.id,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'admin@travelstall.demo',
+        password: await bcrypt.hash('password123', 10),
+        name: 'Travel Stall Admin',
+        userType: 'STAFF',
+        role: 'ADMIN',
+        tenantId: travelTenant.id,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'tmc-ops@travelstall.demo',
+        password: await bcrypt.hash('password123', 10),
+        name: 'TMC Operator',
+        userType: 'STAFF',
+        role: 'MANAGER',
+        tenantId: travelTenant.id,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'rfu-advisor@travelstall.demo',
+        password: await bcrypt.hash('password123', 10),
+        name: 'RFU Advisor',
+        userType: 'STAFF',
+        role: 'USER',
+        tenantId: travelTenant.id,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'telecaller@travelstall.demo',
+        password: await bcrypt.hash('password123', 10),
+        name: 'Telecaller',
+        userType: 'STAFF',
+        role: 'USER',
+        tenantId: travelTenant.id,
+      },
+    }),
+  ]);
+
+  console.log(`Travel login users: ${travelLoginUsers.length} seeded to match the shared login screen`);
+
   // OWNER role (system, platform-level, tenantId = null)
   const ownerRole = await prisma.role.create({
     data: {
@@ -1146,6 +1273,145 @@ async function main() {
     });
   }
 
+  // Extra demo rows for the Staff Directory and Roles pages. These are
+  // additive only so the local seed shows enough rows for the infinite scroll
+  // containers without changing any existing UI or business logic.
+  const demoStaffRoleSpecs = [
+    {
+      key: 'OPERATIONS',
+      name: 'Operations',
+      description: 'Keeps day-to-day trip operations moving.',
+      permissions: ['contacts.read', 'tasks.read', 'tasks.write', 'staff.read'],
+    },
+    {
+      key: 'TRAVEL_CONSULTANT',
+      name: 'Travel Consultant',
+      description: 'Handles trip planning and customer coordination.',
+      permissions: ['contacts.read', 'deals.read', 'leads.read', 'tasks.read'],
+    },
+    {
+      key: 'VISA_SPECIALIST',
+      name: 'Visa Specialist',
+      description: 'Coordinates visa documentation and follow-ups.',
+      permissions: ['contacts.read', 'tasks.read', 'documents.read', 'documents.write'],
+    },
+    {
+      key: 'SUPPORT_SPECIALIST',
+      name: 'Support Specialist',
+      description: 'Manages itinerary follow-ups and customer support cases.',
+      permissions: ['tickets.read', 'tickets.write', 'communications.read', 'email.read'],
+    },
+    {
+      key: 'ACCOUNT_EXECUTIVE',
+      name: 'Sales Executive',
+      description: 'Works active travel opportunities and partner renewals.',
+      permissions: ['contacts.read', 'deals.read', 'deals.write', 'reports.read'],
+    },
+    {
+      key: 'CUSTOMER_SUCCESS',
+      name: 'Traveler Success',
+      description: 'Keeps traveller accounts healthy after handoff.',
+      permissions: ['contacts.read', 'tasks.read', 'reports.read', 'dashboards.read'],
+    },
+    {
+      key: 'FINANCE_ASSISTANT',
+      name: 'Accounts Assistant',
+      description: 'Supports invoicing, payments, and settlement follow-up.',
+      permissions: ['invoices.read', 'invoices.write', 'payments.read', 'reports.read'],
+    },
+    {
+      key: 'ANALYST',
+      name: 'Reporting Analyst',
+      description: 'Reviews booking performance and operational reporting.',
+      permissions: ['analytics.read', 'dashboards.read', 'reports.read', 'contacts.read'],
+    },
+    {
+      key: 'CRM_ASSOCIATE',
+      name: 'CRM Associate',
+      description: 'Keeps travel leads tidy and assigned to the right owner.',
+      permissions: ['contacts.read', 'contacts.write', 'tasks.read', 'tasks.write'],
+    },
+    {
+      key: 'EXECUTIVE_ASSISTANT',
+      name: 'Travel Coordinator',
+      description: 'Supports scheduling and travel admin coordination.',
+      permissions: ['contacts.read', 'tasks.read', 'communications.read', 'email.read'],
+    },
+  ];
+
+  const demoStaffRoles = [];
+  for (const spec of demoStaffRoleSpecs) {
+    const role = await prisma.role.create({
+      data: {
+        tenantId: travelTenant.id,
+        key: spec.key,
+        name: spec.name,
+        description: spec.description,
+        isSystem: false,
+        isActive: true,
+        userType: 'STAFF',
+        landingPath: '/dashboard',
+      },
+    });
+    demoStaffRoles.push(role);
+
+    for (const perm of spec.permissions) {
+      const [module, action] = perm.split('.');
+      await prisma.rolePermission.create({
+        data: {
+          roleId: role.id,
+          module,
+          action,
+        },
+      });
+    }
+  }
+
+  const demoStaffUsers = [
+    { email: 'operations.lead@travelstall.demo', name: 'Aarav Sharma', role: 'USER', roleKey: 'OPERATIONS' },
+    { email: 'consultant1@travelstall.demo', name: 'Nisha Patel', role: 'USER', roleKey: 'TRAVEL_CONSULTANT' },
+    { email: 'visa.specialist@travelstall.demo', name: 'Imran Khan', role: 'USER', roleKey: 'VISA_SPECIALIST' },
+    { email: 'support.specialist@travelstall.demo', name: 'Priya Menon', role: 'USER', roleKey: 'SUPPORT_SPECIALIST' },
+    { email: 'sales.executive@travelstall.demo', name: 'Rohan Kapoor', role: 'MANAGER', roleKey: 'ACCOUNT_EXECUTIVE' },
+    { email: 'traveler.success@travelstall.demo', name: 'Sanya Mehta', role: 'USER', roleKey: 'CUSTOMER_SUCCESS' },
+    { email: 'accounts.assistant@travelstall.demo', name: 'Kabir Ali', role: 'USER', roleKey: 'FINANCE_ASSISTANT' },
+    { email: 'reporting.analyst@travelstall.demo', name: 'Mehul Shah', role: 'USER', roleKey: 'ANALYST' },
+    { email: 'crm.associate@travelstall.demo', name: 'Tanvi Joshi', role: 'USER', roleKey: 'CRM_ASSOCIATE' },
+    { email: 'travel.coordinator@travelstall.demo', name: 'Aditi Rao', role: 'USER', roleKey: 'EXECUTIVE_ASSISTANT' },
+    { email: 'operations.desk2@travelstall.demo', name: 'Farhan Qureshi', role: 'USER', roleKey: 'OPERATIONS' },
+    { email: 'support.desk2@travelstall.demo', name: 'Simran Kaur', role: 'USER', roleKey: 'SUPPORT_SPECIALIST' },
+  ];
+
+  const demoStaffUsersCreated = [];
+  for (const spec of demoStaffUsers) {
+    const user = await prisma.user.create({
+      data: {
+        email: spec.email,
+        password: pw,
+        role: spec.role,
+        name: spec.name,
+        tenantId: travelTenant.id,
+        subscriptionStatus: 'TRIAL',
+        trialStartDate,
+        trialEndsAt,
+      },
+    });
+    demoStaffUsersCreated.push(user);
+  }
+
+  for (let i = 0; i < demoStaffUsersCreated.length; i++) {
+    const user = demoStaffUsersCreated[i];
+    const role = demoStaffRoles.find((r) => r.key === demoStaffUsers[i].roleKey);
+    await prisma.userRole.create({
+      data: {
+        userId: user.id,
+        roleId: role.id,
+      },
+    });
+  }
+
+  console.log(`Demo staff rows: ${demoStaffUsersCreated.length} users and ${demoStaffRoles.length} roles created for pagination`);
+
   console.log('RBAC Roles: OWNER + ADMIN + MANAGER + CUSTOMER + USER system roles seeded with permissions');
 
   // ══════════════════════════════════════════════════════════════
@@ -1166,7 +1432,7 @@ async function main() {
   // DONE
   // ══════════════════════════════════════════════════════════════
   console.log('\n=== Database seeded successfully! ===');
-  console.log('  Users: 6  |  Contacts: 30 (assigned)  |  Deals: 24  |  Invoices: 15');
+  console.log('  Users: 18 |  Contacts: 30 (assigned)  |  Deals: 24  |  Invoices: 15');
   console.log('  Tasks: 15  |  Tickets: 8  |  Campaigns: 8  |  Projects: 5');
   console.log('  Contracts: 6  |  Estimates: 4  |  Expenses: 10  |  Emails: 20');
   console.log('  Pipeline Stages: 6  |  Products: 8  |  Sequences: 3');

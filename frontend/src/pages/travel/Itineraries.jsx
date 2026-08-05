@@ -22,7 +22,6 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import PermissionGate from "../../components/PermissionGate";
-import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import {
   accessibleSubBrands,
@@ -145,6 +144,7 @@ const EMPTY_FORM = {
 };
 
 const CURRENCIES = ["INR", "USD", "EUR"];
+const ITINERARY_TABLE_WIDTH = 1800;
 const PAGE_SIZE = 10;
 
 // Geocode cache: city name → { lat, lng } resolved via Nominatim (same OSM
@@ -457,7 +457,7 @@ export default function Itineraries() {
       await fetchApi(`/api/travel/itineraries/${id}`, { method: 'DELETE' });
       notify.success(`Deleted "${destination}"`);
       if (selectedItineraryId === id) setSelectedItineraryId(null);
-      load();
+      load({ reset: true });
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to delete itinerary');
     } finally {
@@ -596,7 +596,7 @@ export default function Itineraries() {
         // operator can review + edit before sending.
         navigate(`/travel/itineraries/${newId}`);
       } else {
-        load();
+        load({ reset: true });
       }
     } catch (err) {
       notify.error(
@@ -654,7 +654,7 @@ export default function Itineraries() {
       });
       notify.success(selectedTemplateId ? "Itinerary created from template" : "Itinerary created");
       setCreating(false);
-      load();
+      load({ reset: true });
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Failed to create itinerary");
     } finally {
@@ -761,7 +761,7 @@ export default function Itineraries() {
   }, [suggesting]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
       <header style={{
         display: "flex", justifyContent: "space-between", alignItems: "flex-start",
         gap: 12, marginBottom: 4,
@@ -922,13 +922,13 @@ export default function Itineraries() {
             data-testid="itineraries-scroll-area"
             onScroll={handleTableScroll}
             style={{
-              maxHeight: "60vh",
-              overflowY: "auto",
-              overflowX: "hidden",
+              overflow: "auto",
+              height: "calc(100vh - 340px)",
+              minHeight: 520,
+              maxHeight: 760,
             }}
           >
-            <TopScrollSync scrollWidth="1000px">
-            <table style={{ width: "100%", minWidth: "1000px", borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", minWidth: ITINERARY_TABLE_WIDTH, borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={th}>Destination</th>
@@ -1086,10 +1086,21 @@ export default function Itineraries() {
               })}
             </tbody>
           </table>
-          </TopScrollSync>
+            {loadingMore && (
+              <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
+                Loading more&hellip;
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      {total > 0 && (
+        <div style={{ marginTop: 12, color: "var(--text-secondary)", fontSize: 13 }}>
+          Showing {Math.min(items.length, total).toLocaleString()} of {total.toLocaleString()}
+          {!hasMore ? " - end of table" : ""}
+        </div>
+      )}
 
       {creating && (
         <div
@@ -1814,7 +1825,7 @@ const th = {
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
   position: "sticky", top: 0, zIndex: 3,
-  background: "var(--bg-color)",
+  background: "var(--modal-bg, var(--bg-color))",
   backgroundClip: "padding-box",
   boxShadow: "inset 0 -1px 0 var(--border-color)",
 };

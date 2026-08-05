@@ -8178,6 +8178,80 @@ const reportRange = (req) => {
   return { from, to };
 };
 
+const REPORT_PAGE_SIZE_DEFAULT = 10;
+const REPORT_PAGE_SIZE_MAX = 100;
+
+function parseReportPagination(req) {
+  const rawLimit = Number.parseInt(req.query.limit, 10);
+  const limit = Number.isInteger(rawLimit) && rawLimit > 0
+    ? Math.min(rawLimit, REPORT_PAGE_SIZE_MAX)
+    : REPORT_PAGE_SIZE_DEFAULT;
+  const cursor = typeof req.query.cursor === "string" && req.query.cursor.trim()
+    ? req.query.cursor.trim()
+    : null;
+  return { limit, cursor };
+}
+
+function encodeReportCursor(row, keyField) {
+  if (!row) return null;
+  const payload = {
+    v: 1,
+    revenue: Number(row.revenue) || 0,
+    key: String(row?.[keyField] ?? row?.id ?? row?.source ?? ""),
+  };
+  return Buffer.from(JSON.stringify(payload)).toString("base64url");
+}
+
+function decodeReportCursor(cursor) {
+  try {
+    const raw = Buffer.from(String(cursor), "base64url").toString("utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    if (parsed.v !== 1) return null;
+    return {
+      revenue: Number(parsed.revenue) || 0,
+      key: String(parsed.key ?? ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function compareReportRows(a, b, keyField) {
+  const revenueDelta = (Number(b.revenue) || 0) - (Number(a.revenue) || 0);
+  if (revenueDelta !== 0) return revenueDelta;
+  return String(a?.[keyField] ?? a?.id ?? a?.source ?? "").localeCompare(
+    String(b?.[keyField] ?? b?.id ?? b?.source ?? ""),
+  );
+}
+
+function paginateReportRows(rows, req, keyField = "id") {
+  const { limit, cursor } = parseReportPagination(req);
+  const sorted = [...rows].sort((a, b) => compareReportRows(a, b, keyField));
+  let start = 0;
+  const decoded = cursor ? decodeReportCursor(cursor) : null;
+  if (decoded) {
+    const idx = sorted.findIndex((row) =>
+      (Number(row.revenue) || 0) === decoded.revenue &&
+      String(row?.[keyField] ?? row?.id ?? row?.source ?? "") === decoded.key,
+    );
+    start = idx >= 0 ? idx + 1 : 0;
+  }
+  const pageRows = sorted.slice(start, start + limit);
+  const nextCursor = start + limit < sorted.length
+    ? encodeReportCursor(pageRows[pageRows.length - 1], keyField)
+    : null;
+  return {
+    rows: pageRows,
+    pagination: {
+      limit,
+      total: sorted.length,
+      hasMore: !!nextCursor,
+      nextCursor,
+    },
+  };
+}
+
 // #207/#216: org-wide financial reports must not leak to clinical staff.
 // Doctors / professionals see their own slice via /per-professional? but
 // the unfiltered P&L view stays admin/manager.
@@ -8328,6 +8402,7 @@ async function computePnlByService(req) {
     ticketTier: r.ticketTier,
     count: r.count,
   }));
+  const paginated = paginateReportRows(rows, req, "id");
   return {
     window: { from, to, locationId: locationId || null },
     totals: {
@@ -8350,7 +8425,8 @@ async function computePnlByService(req) {
     // a different figure than the P&L page for the same window.
     totalRevenue: bucketedRevenue,
     servicesSummary,
-    rows,
+    rows: paginated.rows,
+    pagination: paginated.pagination,
   };
 }
 
@@ -8412,6 +8488,7 @@ async function computePerProfessional(req) {
   const rows = Object.values(acc).sort((a, b) => b.revenue - a.revenue);
   const canonical = canonicalVisitTotals(visits);
   const bucketedVisits = rows.reduce((s, r) => s + r.visits, 0);
+  const paginated = paginateReportRows(rows, req, "id");
   return {
     window: { from, to, locationId: locationId || null },
     totals: {
@@ -8419,7 +8496,8 @@ async function computePerProfessional(req) {
       revenue: canonical.revenue,
       unbucketed: canonical.visits - bucketedVisits,
     },
-    rows,
+    rows: paginated.rows,
+    pagination: paginated.pagination,
   };
 }
 
@@ -8480,6 +8558,7 @@ async function computeAttribution(req) {
       revenuePerLead: r.leads ? Math.round(r.revenue / r.leads) : 0,
     }))
     .sort((a, b) => b.revenue - a.revenue);
+  const paginated = paginateReportRows(rows, req, "source");
 
   return {
     window: { from, to },
@@ -8489,7 +8568,8 @@ async function computeAttribution(req) {
       qualified: rows.reduce((s, r) => s + r.qualified, 0),
       revenue: rows.reduce((s, r) => s + r.revenue, 0),
     },
-    rows,
+    rows: paginated.rows,
+    pagination: paginated.pagination,
   };
 }
 
@@ -8536,6 +8616,9 @@ async function computePerLocation(req) {
 
   const canonical = canonicalVisitTotals(visits);
   const bucketedVisits = rows.reduce((s, r) => s + r.visits, 0);
+  const paginated = paginateReportRows(rows, req, "id");
+  const activeCount = rows.filter((r) => r.isActive).length;
+  const inactiveCount = rows.length - activeCount;
   return {
     window: { from, to },
     totals: {
@@ -8543,7 +8626,12 @@ async function computePerLocation(req) {
       revenue: canonical.revenue,
       unbucketed: canonical.visits - bucketedVisits,
     },
-    rows,
+    locationSummary: {
+      activeCount,
+      inactiveCount,
+    },
+    rows: paginated.rows,
+    pagination: paginated.pagination,
   };
 }
 

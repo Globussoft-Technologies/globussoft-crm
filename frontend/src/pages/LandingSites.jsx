@@ -82,6 +82,32 @@ function buildTemplateType(sectorKey) {
 
 }
 
+function useDocumentTheme() {
+  const [theme, setTheme] = useState(() => (
+    typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark'
+      ? 'dark'
+      : 'light'
+  ));
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+
+    const root = document.documentElement;
+    const updateTheme = () => {
+      setTheme(root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
+    };
+
+    updateTheme();
+
+    const observer = new MutationObserver(updateTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+
+    return () => observer.disconnect();
+  }, []);
+
+  return theme;
+}
+
 
 
 export default function LandingSites() {
@@ -95,6 +121,8 @@ export default function LandingSites() {
   const tenantVertical = auth?.user?.tenant?.vertical || auth?.tenant?.vertical || 'generic';
 
   const isWellnessTenant = tenantVertical === 'wellness';
+  const themeName = useDocumentTheme();
+  const isDarkTheme = themeName === 'dark';
 
   const [pages, setPages] = useState([]);
 
@@ -146,6 +174,35 @@ export default function LandingSites() {
   });
 
   const [form, setForm] = useState(defaultFormState(isWellnessTenant));
+  const libraryShellStyle = useMemo(() => ({
+    padding: '1.4rem',
+    border: isDarkTheme ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(200,154,78,0.16)',
+    background: isDarkTheme
+      ? 'linear-gradient(180deg, rgba(16, 19, 25, 0.96), rgba(10, 12, 16, 0.92))'
+      : 'linear-gradient(180deg, rgba(255,255,255,0.66), rgba(255,255,255,0.38))',
+    boxShadow: isDarkTheme ? '0 22px 60px rgba(0, 0, 0, 0.46)' : '0 18px 48px rgba(25, 28, 33, 0.08)',
+    borderRadius: '20px',
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+  }), [isDarkTheme]);
+  const libraryBadgeStyle = useMemo(() => ({
+    width: '38px',
+    height: '38px',
+    borderRadius: '12px',
+    display: 'grid',
+    placeItems: 'center',
+    background: isDarkTheme ? 'rgba(200,154,78,0.14)' : 'rgba(200,154,78,0.12)',
+    color: '#b8893b',
+    border: isDarkTheme ? '1px solid rgba(200,154,78,0.14)' : 'none',
+  }), [isDarkTheme]);
+  const emptyStateStyle = useMemo(() => ({
+    padding: '4rem',
+    textAlign: 'center',
+    background: isDarkTheme ? 'rgba(15, 18, 24, 0.88)' : 'rgba(255,255,255,0.55)',
+    border: isDarkTheme ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(200,154,78,0.12)',
+  }), [isDarkTheme]);
 
 
 
@@ -548,21 +605,11 @@ export default function LandingSites() {
 
       <section
         className="card"
-        style={{
-          padding: '1.4rem',
-          border: '1px solid rgba(200,154,78,0.16)',
-          background: 'linear-gradient(180deg, rgba(255,255,255,0.66), rgba(255,255,255,0.38))',
-          boxShadow: '0 18px 48px rgba(25, 28, 33, 0.08)',
-          borderRadius: '20px',
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-        }}
+        style={libraryShellStyle}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
-            <div style={{ width: '38px', height: '38px', borderRadius: '12px', display: 'grid', placeItems: 'center', background: 'rgba(200,154,78,0.12)', color: '#b8893b' }}>
+            <div style={libraryBadgeStyle}>
               <LayoutGrid size={20} />
             </div>
             <div>
@@ -598,7 +645,7 @@ export default function LandingSites() {
 
           ) : visiblePages.length === 0 ? (
 
-            <div className="card" style={{ padding: '4rem', textAlign: 'center', background: 'rgba(255,255,255,0.55)' }}>
+            <div className="card" style={emptyStateStyle}>
 
               <LayoutGrid size={48} style={{ color: 'var(--text-secondary)', opacity: 0.3, marginBottom: '1rem' }} />
 

@@ -19,7 +19,6 @@ import { ClipboardCheck, Plus, Compass, Filter } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
-import TopScrollSync from '../../components/TopScrollSync';
 const SUB_BRANDS = [
   { value: '', label: 'All sub-brands' },
   { value: 'tmc', label: 'TMC (schools)' },
@@ -151,7 +150,7 @@ export default function Diagnostics() {
   }, [load]);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
+    <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 4 }}>
         <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, margin: 0 }}>
           <ClipboardCheck size={28} aria-hidden /> Diagnostics
@@ -234,13 +233,13 @@ export default function Diagnostics() {
             onScroll={handleListScroll}
             data-testid="diagnostics-table-scroll"
             style={{
-              maxHeight: '60vh',
-              overflowY: 'auto',
-              overflowX: 'hidden',
+              height: 'calc(100vh - 300px)',
+              minHeight: 620,
+              maxHeight: 780,
+              overflow: 'auto',
             }}
           >
-          <TopScrollSync>
-          <table aria-label="Diagnostics results" style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table aria-label="Diagnostics results" style={{ width: '100%', minWidth: 1600, borderCollapse: 'collapse' }}>
             <thead>
               <tr>
                 <th style={th}>Submitted</th>
@@ -295,7 +294,6 @@ export default function Diagnostics() {
               })}
             </tbody>
           </table>
-          </TopScrollSync>
           <div style={{ padding: '12px 0' }}>
             {loadingMore && (
               <div style={empty}>Loading more&hellip;</div>
@@ -351,13 +349,13 @@ const empty = {
 };
 
 const th = {
+  position: 'sticky', top: 0, zIndex: 3,
   textAlign: 'left', padding: '10px 12px', fontSize: 12,
   textTransform: 'uppercase', letterSpacing: 0.5,
   color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)',
-  position: 'sticky', top: 0, zIndex: 3,
-  background: 'var(--bg-color)',
-  backgroundClip: 'padding-box',
+  background: 'var(--modal-bg, var(--bg-color))',
   boxShadow: 'inset 0 -1px 0 var(--border-color)',
+  whiteSpace: 'nowrap',
 };
 
 const td = {

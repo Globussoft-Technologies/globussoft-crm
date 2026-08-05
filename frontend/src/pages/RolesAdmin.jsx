@@ -21,6 +21,8 @@ import { ROLE_KEY_DESCRIPTION, validateRoleKey } from '../utils/roleKey';
 // future — renders identically here AND on the Settings page.
 import RoleHistoryDialog from '../components/RoleHistoryDialog';
 
+const ROLES_PAGE_SIZE = 12;
+
 // Admin UI for the RBAC role + permission system. Mirrors the endpoints
 // under /api/roles (see backend/routes/roles.js). Tenant scoping is enforced
 // server-side — non-OWNER admins only see their own tenant's roles.
@@ -458,6 +460,7 @@ export default function RolesAdmin() {
   const [roles, setRoles] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [visibleRoleCount, setVisibleRoleCount] = useState(ROLES_PAGE_SIZE);
   const [permissionModules, setPermissionModules] = useState(
     PERMISSION_MODULES_FALLBACK,
   );
@@ -524,6 +527,15 @@ export default function RolesAdmin() {
   useEffect(() => {
     if (!permLoading && canRead) loadRoles();
   }, [permLoading, canRead, loadRoles]);
+  useEffect(() => setVisibleRoleCount(ROLES_PAGE_SIZE), [roles.length]);
+
+  const visibleRoles = roles.slice(0, visibleRoleCount);
+  const handleRolesTableScroll = (event) => {
+    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 80) {
+      setVisibleRoleCount((count) => Math.min(count + ROLES_PAGE_SIZE, roles.length));
+    }
+  };
 
   if (permLoading) {
     return (
@@ -620,13 +632,17 @@ export default function RolesAdmin() {
         style={{
           border: '1px solid var(--border-color)',
           borderRadius: 12,
+          background: 'var(--bg-color)',
+          maxHeight: 'calc(100vh - 17rem)',
           overflow: 'auto',
         }}
+        onScroll={handleRolesTableScroll}
       >
         <table
           style={{
             width: '100%',
-            borderCollapse: 'collapse',
+            borderCollapse: 'separate',
+            borderSpacing: 0,
             fontSize: '0.9rem',
             // Bumped from 760 → 1100 after adding the Landing path column +
             // 3-button Actions cell. Below 1100 the parent's overflow:auto
@@ -669,7 +685,7 @@ export default function RolesAdmin() {
               </tr>
             )}
             {!isLoading &&
-              roles.map((r) => (
+              visibleRoles.map((r) => (
                 <tr
                   key={r.id}
                   style={{ borderTop: '1px solid var(--border-color)' }}
@@ -2780,6 +2796,11 @@ function Th({ children }) {
         textTransform: 'uppercase',
         letterSpacing: '0.04em',
         color: 'var(--text-secondary)',
+        position: 'sticky',
+        top: 0,
+        zIndex: 5,
+        background: 'var(--bg-color)',
+        boxShadow: '0 1px 0 var(--border-color)',
         // Headers should never wrap — at narrow viewports the parent's
         // overflow:auto gives a horizontal scrollbar instead of breaking
         // a header like "LANDING PATH" into 2 lines.

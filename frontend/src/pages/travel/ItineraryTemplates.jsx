@@ -1544,7 +1544,7 @@ const th = {
   letterSpacing: 0.5,
   color: 'var(--text-secondary)',
   borderBottom: '1px solid var(--border-color)',
-  background: 'var(--bg-color)',
+  background: 'var(--modal-bg, var(--bg-color))',
   backgroundClip: 'padding-box',
   boxShadow: 'inset 0 -1px 0 var(--border-color)',
 };

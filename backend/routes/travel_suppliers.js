@@ -62,6 +62,62 @@ const METADATA_SELECT = {
   updatedAt: true,
 };
 
+function tryParseJsonObject(value) {
+  if (!value || typeof value !== "string") return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readCredentialMetadata(row) {
+  if (!row?.metadataJson) return {};
+  try {
+    const decrypted = decrypt(row.metadataJson);
+    const parsed = tryParseJsonObject(decrypted);
+    if (parsed) return parsed;
+    return decrypted ? { notes: decrypted } : {};
+  } catch {
+    return {};
+  }
+}
+
+function buildCredentialMetadata({ existingRow = null, metadata, portalUrl }) {
+  const base = existingRow ? readCredentialMetadata(existingRow) : {};
+  const next = { ...base };
+
+  if (metadata !== undefined) {
+    for (const key of Object.keys(next)) delete next[key];
+    if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+      Object.assign(next, metadata);
+    } else if (typeof metadata === "string") {
+      const parsed = tryParseJsonObject(metadata);
+      if (parsed) Object.assign(next, parsed);
+      else if (metadata.trim()) next.notes = metadata.trim();
+    }
+  }
+
+  if (portalUrl !== undefined) {
+    const normalized = String(portalUrl || "").trim();
+    if (normalized) next.portalUrl = normalized;
+    else delete next.portalUrl;
+  }
+
+  return Object.keys(next).length ? encrypt(JSON.stringify(next)) : null;
+}
+
+function withCredentialMetadata(row) {
+  const metadata = readCredentialMetadata(row);
+  const { metadataJson, ...safeRow } = row || {};
+  return {
+    ...safeRow,
+    portalUrl: typeof metadata.portalUrl === "string" ? metadata.portalUrl : null,
+  };
+}
+
+
 // ─── List + create ────────────────────────────────────────────────────
 
 router.get(
@@ -78,11 +134,11 @@ router.get(
       }
       const rows = await prisma.supplierCredential.findMany({
         where,
-        select: METADATA_SELECT,
+        select: { ...METADATA_SELECT, metadataJson: true },
         orderBy: [{ category: "asc" }, { supplierName: "asc" }],
         take: 200,
       });
-      res.json({ credentials: rows });
+      res.json({ credentials: rows.map(withCredentialMetadata) });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-sup] list error:", e.message);
@@ -98,7 +154,7 @@ router.post(
   requirePermission("suppliers", "manage"),
   async (req, res) => {
     try {
-      const { category, supplierName, loginId, password, metadata, ownerUserId } = req.body || {};
+      const { category, supplierName, loginId, password, metadata, portalUrl, ownerUserId } = req.body || {};
       if (!category || !supplierName || !loginId || !password) {
         return res.status(400).json({
           error: "category, supplierName, loginId, password required",
@@ -119,12 +175,12 @@ router.post(
           supplierName: String(supplierName),
           loginIdEncrypted: encrypt(String(loginId)),
           passwordEncrypted: encrypt(String(password)),
-          metadataJson: metadata ? encrypt(typeof metadata === "string" ? metadata : JSON.stringify(metadata)) : null,
+          metadataJson: buildCredentialMetadata({ metadata, portalUrl }),
           ownerUserId: ownerUserId ? parseInt(ownerUserId, 10) : req.user.userId,
         },
-        select: METADATA_SELECT,
+        select: { ...METADATA_SELECT, metadataJson: true },
       });
-      res.status(201).json(created);
+      res.status(201).json(withCredentialMetadata(created));
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-sup] create error:", e.message);
@@ -148,10 +204,10 @@ router.get(
       }
       const row = await prisma.supplierCredential.findFirst({
         where: { id, tenantId: req.travelTenant.id },
-        select: METADATA_SELECT,
+        select: { ...METADATA_SELECT, metadataJson: true },
       });
       if (!row) return res.status(404).json({ error: "Credential not found", code: "NOT_FOUND" });
-      res.json(row);
+      res.json(withCredentialMetadata(row));
     } catch (e) {
       console.error("[travel-sup] get error:", e.message);
       res.status(500).json({ error: "Failed to get credential" });
@@ -204,6 +260,7 @@ router.post(
         loginId: decrypt(row.loginIdEncrypted),
         password: decrypt(row.passwordEncrypted),
         metadata: row.metadataJson ? decrypt(row.metadataJson) : null,
+        portalUrl: readCredentialMetadata(row).portalUrl || null,
       });
     } catch (e) {
       console.error("[travel-sup] reveal error:", e.message);
@@ -231,7 +288,7 @@ router.patch(
       if (!existing) return res.status(404).json({ error: "Credential not found", code: "NOT_FOUND" });
 
       const data = {};
-      const { supplierName, loginId, password, metadata, ownerUserId, category } = req.body || {};
+      const { supplierName, loginId, password, metadata, portalUrl, ownerUserId, category } = req.body || {};
       if (category !== undefined) {
         assertValidCategory(category);
         data.category = category;
@@ -239,10 +296,8 @@ router.patch(
       if (supplierName !== undefined) data.supplierName = String(supplierName);
       if (loginId !== undefined) data.loginIdEncrypted = encrypt(String(loginId));
       if (password !== undefined) data.passwordEncrypted = encrypt(String(password));
-      if (metadata !== undefined) {
-        data.metadataJson = metadata
-          ? encrypt(typeof metadata === "string" ? metadata : JSON.stringify(metadata))
-          : null;
+      if (metadata !== undefined || portalUrl !== undefined) {
+        data.metadataJson = buildCredentialMetadata({ existingRow: existing, metadata, portalUrl });
       }
       if (ownerUserId !== undefined) {
         data.ownerUserId = ownerUserId ? parseInt(ownerUserId, 10) : null;
@@ -255,7 +310,7 @@ router.patch(
       const updated = await prisma.supplierCredential.update({
         where: { id },
         data,
-        select: METADATA_SELECT,
+        select: { ...METADATA_SELECT, metadataJson: true },
       });
       // Audit on rotate (only when secrets actually change)
       if (data.loginIdEncrypted || data.passwordEncrypted || data.metadataJson !== undefined) {
@@ -268,7 +323,7 @@ router.patch(
           },
         });
       }
-      res.json(updated);
+      res.json(withCredentialMetadata(updated));
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-sup] patch error:", e.message);

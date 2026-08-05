@@ -790,6 +790,7 @@ const embassyRulesRoutes = require("./routes/embassy_rules");
 // not sub-brand-scoped. Backs the diagnostic-engine destination scoring.
 const travelCurriculumRoutes = require("./routes/travel_curriculum");
 const travelSchoolTermRoutes = require("./routes/travel_school_terms");
+const travelContactProfilesRoutes = require("./routes/travel_contact_profiles");
 // TS18 Phase 2 SHELL — Travel Stall personalised destination recommender
 // (LLM consumer). Mounted at /api/travel-personalised-destinations so the
 // URL is sibling-flat with /api/embassy-rules / /api/travel-curriculum
@@ -1421,6 +1422,7 @@ app.use("/api/travel/pois", require("./routes/travel_pois"));
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
 app.use("/api/travel-school-terms", travelSchoolTermRoutes);
+app.use("/api/travel", travelContactProfilesRoutes);
 app.use(
   "/api/travel-personalised-destinations",
   travelPersonalisedDestinationsRoutes,
@@ -2488,4 +2490,3 @@ if (require("fs").existsSync(FRONTEND_DIST)) {
 }
 
 // nodemon restart trigger
-

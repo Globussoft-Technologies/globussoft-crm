@@ -51,6 +51,7 @@ const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
   getAuthToken: () => 'test-token',
+  getActiveTenantId: () => 1,
 }));
 
 const notifyError = vi.fn();
@@ -661,5 +662,42 @@ describe('<SightseeingMaster /> â€” form interaction & error surfaces', () => {
     });
     // Form stays open on error (editingId still null, but form not reset).
     expect(screen.getByLabelText('destinationName')).toBeInTheDocument();
+  });
+});
+
+describe('<SightseeingMaster /> — template + import actions', () => {
+  it('renders CSV/Excel template actions and import control in the header', async () => {
+    renderPage();
+    await screen.findByText('Masjid al-Haram');
+    expect(screen.getByRole('button', { name: /CSV template/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Excel template/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Import CSV\/Excel/i })).toBeInTheDocument();
+  });
+
+  it('uploading a CSV file POSTs to /api/travel/sightseeing/import.csv and shows the summary', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ total: 1, imported: 1, updated: 0, skipped: 0, errors: [] }),
+    });
+    const prevFetch = global.fetch;
+    global.fetch = fetchMock;
+    try {
+      renderPage();
+      await screen.findByText('Masjid al-Haram');
+      const fileInput = screen.getByLabelText(/Upload sightseeing CSV or Excel file/i);
+      const file = new File(['destinationName,name\nMakkah,Masjid al-Haram'], 'sightseeing.csv', { type: 'text/csv' });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          '/api/travel/sightseeing/import.csv',
+          expect.objectContaining({ method: 'POST' }),
+        );
+      });
+      expect(notifySuccess).toHaveBeenCalledWith('Imported 1, updated 0, skipped 0');
+      expect(await screen.findByText(/Imported 1, updated 0, skipped 0 of 1 rows\./i)).toBeInTheDocument();
+    } finally {
+      global.fetch = prevFetch;
+    }
   });
 });

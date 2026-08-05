@@ -1120,6 +1120,11 @@ const Leads = () => {
     ? `${900 + customFieldDefs.length * 140}px`
     : undefined;
 
+  const leadDetailPath = (lead) => {
+    if (isTravel) return `/travel/leads/${lead.id}`;
+    return `/contacts/${lead.id}`;
+  };
+
   const filteredLeads = leads.filter(lead => {
     if (!matchesSource(lead.source, sourceFilter)) return false;
     if (isTravel && subBrandFilter && lead.subBrand !== subBrandFilter) return false;
@@ -1765,7 +1770,7 @@ const Leads = () => {
                   key={lead.id}
                   style={{ borderBottom: '1px solid var(--border-color)', cursor: 'pointer' }}
                   className="table-row-hover"
-                  onClick={() => navigate(`/contacts/${lead.id}`)}
+                  onClick={() => navigate(leadDetailPath(lead))}
                   title="Open lead detail"
                 >
                   {isAdmin && (

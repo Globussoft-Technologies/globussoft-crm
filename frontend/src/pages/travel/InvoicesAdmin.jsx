@@ -290,8 +290,10 @@ export default function InvoicesAdmin() {
     if (contactIdFilter.trim()) qs.set("contactId", contactIdFilter.trim());
     if (quoteIdFilter.trim()) qs.set("quoteId", quoteIdFilter.trim());
     const startOffset = reset ? 0 : offsetRef.current;
-    qs.set("limit", String(PAGE_SIZE));
-    qs.set("offset", String(startOffset));
+    if (startOffset > 0) {
+      qs.set("limit", String(PAGE_SIZE));
+      qs.set("offset", String(startOffset));
+    }
     const url = `/api/travel/invoices${qs.toString() ? `?${qs.toString()}` : ""}`;
     fetchApi(url)
       .then((d) => {

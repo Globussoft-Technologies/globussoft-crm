@@ -219,8 +219,10 @@ function SeasonsSection() {
     const qs = new URLSearchParams();
     if (filterSubBrand) qs.set("subBrand", filterSubBrand);
     const startOffset = reset ? 0 : offsetRef.current;
-    qs.set("limit", String(PAGE_SIZE));
-    qs.set("offset", String(startOffset));
+    if (startOffset > 0) {
+      qs.set("limit", String(PAGE_SIZE));
+      qs.set("offset", String(startOffset));
+    }
     fetchApi(`/api/travel/seasons?${qs.toString()}`)
       .then((res) => {
         const rows = Array.isArray(res?.seasons) ? res.seasons : [];
@@ -603,8 +605,10 @@ function MarkupRulesSection() {
     if (filterScope) qs.set("scope", filterScope);
     if (filterActive) qs.set("active", filterActive);
     const startOffset = reset ? 0 : offsetRef.current;
-    qs.set("limit", String(PAGE_SIZE));
-    qs.set("offset", String(startOffset));
+    if (startOffset > 0) {
+      qs.set("limit", String(PAGE_SIZE));
+      qs.set("offset", String(startOffset));
+    }
     fetchApi(`/api/travel/markup-rules?${qs.toString()}`)
       .then((res) => {
         const rows = Array.isArray(res?.rules) ? res.rules : [];

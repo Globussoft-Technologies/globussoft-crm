@@ -143,7 +143,7 @@ export default function MilestoneTracker() {
   const [notifying, setNotifying] = useState({});
   const [notified, setNotified] = useState({});
 
-  const load = ({ reset = false } = {}) => {
+  const load = ({ reset = false, targetOffset = null } = {}) => {
     if (reset) {
       offsetRef.current = 0;
       milestonesRef.current = [];
@@ -152,10 +152,18 @@ export default function MilestoneTracker() {
       setHasMore(true);
       setLoading(true);
       loadingRef.current = true;
+      loadingMoreRef.current = false;
     } else {
-      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      if (loadingRef.current || loadingMoreRef.current) return;
       setLoadingMore(true);
       loadingMoreRef.current = true;
+    }
+
+    const nextOffset = targetOffset != null ? targetOffset : (reset ? 0 : offsetRef.current + PAGE_SIZE);
+    offsetRef.current = nextOffset;
+    if (!reset && nextOffset > 0) {
+      hasMoreRef.current = true;
+      setHasMore(true);
     }
 
     const qs = new URLSearchParams();
@@ -167,18 +175,15 @@ export default function MilestoneTracker() {
       qs.set("within", String(within));
     }
     qs.set("limit", String(PAGE_SIZE));
-    const startOffset = reset ? 0 : offsetRef.current;
-    qs.set("offset", String(startOffset));
+    qs.set("offset", String(nextOffset));
     const url = `/api/travel/payment-schedules/upcoming?${qs.toString()}`;
     fetchApi(url)
       .then((d) => {
         const rows = Array.isArray(d?.milestones) ? d.milestones : [];
-        const nextRows = reset ? rows : [...milestonesRef.current, ...rows];
-        const totalRows = Number.isFinite(d?.total) ? d.total : nextRows.length;
-        milestonesRef.current = nextRows;
-        offsetRef.current = startOffset + rows.length;
-        hasMoreRef.current = offsetRef.current < totalRows;
-        setMilestones(nextRows);
+        const totalRows = Number.isFinite(d?.total) ? d.total : rows.length;
+        milestonesRef.current = rows;
+        hasMoreRef.current = nextOffset + rows.length < totalRows;
+        setMilestones(rows);
         setTotal(totalRows);
         setHasMore(hasMoreRef.current);
         setSummary({
@@ -224,7 +229,21 @@ export default function MilestoneTracker() {
   const handleTableScroll = (e) => {
     const el = e.currentTarget;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 180) {
-      load();
+      if (!loadingRef.current && !loadingMoreRef.current && hasMoreRef.current) {
+        load({ reset: false });
+      }
+    }
+  };
+
+  const goNext = () => {
+    if (!loadingRef.current && !loadingMoreRef.current && hasMoreRef.current) {
+      load({ reset: false });
+    }
+  };
+
+  const goPrev = () => {
+    if (!loadingRef.current && !loadingMoreRef.current && offsetRef.current > 0) {
+      load({ reset: false, targetOffset: Math.max(0, offsetRef.current - PAGE_SIZE) });
     }
   };
 
@@ -523,14 +542,35 @@ export default function MilestoneTracker() {
           marginTop: 12,
           display: "flex",
           alignItems: "center",
-          justifyContent: "flex-start",
+          justifyContent: "space-between",
           gap: 12,
+          flexWrap: "wrap",
         }}
       >
         <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
           {total > 0
             ? `Showing ${Math.min(milestones.length, total).toLocaleString()} of ${total.toLocaleString()}${hasMore ? "" : " - end of table"}`
             : "No milestones to show"}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            type="button"
+            onClick={goPrev}
+            disabled={offsetRef.current === 0 || loading || loadingMore}
+            aria-label="Previous page"
+            style={pageBtn}
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            onClick={goNext}
+            disabled={!hasMore || loading || loadingMore}
+            aria-label="Next page"
+            style={pageBtn}
+          >
+            Next
+          </button>
         </div>
       </div>
     </div>
@@ -637,4 +677,14 @@ const notifyBtn = {
   color: "#fff",
   border: "none",
   whiteSpace: "nowrap",
+};
+const pageBtn = {
+  padding: "6px 12px",
+  borderRadius: 6,
+  border: "1px solid var(--border-color)",
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
 };

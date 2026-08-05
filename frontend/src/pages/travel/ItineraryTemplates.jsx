@@ -988,7 +988,7 @@ export default function ItineraryTemplates() {
           >
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
+                <tr>
                 <th style={th}>Name</th>
                 <th style={th}>Destination</th>
                 <th style={th}>Duration</th>
@@ -1536,7 +1536,7 @@ const emptyStyle = {
 const th = {
   position: 'sticky',
   top: 0,
-  zIndex: 10,
+  zIndex: 3,
   textAlign: 'left',
   padding: '10px 12px',
   fontSize: 12,
@@ -1544,7 +1544,9 @@ const th = {
   letterSpacing: 0.5,
   color: 'var(--text-secondary)',
   borderBottom: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg)',
+  background: 'var(--bg-color)',
+  backgroundClip: 'padding-box',
+  boxShadow: 'inset 0 -1px 0 var(--border-color)',
 };
 const td = { padding: '10px 12px', fontSize: 14, color: 'var(--text-primary)' };
 const brandBadge = {

@@ -52,7 +52,7 @@
  * Travel folder (NOT under visa/, since this is TMC vertical not Visa
  * Sure).
  */
-import { useContext, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { GraduationCap, Plus, Edit2, Trash2, X, AlertTriangle, Sparkles } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -62,6 +62,7 @@ import TopScrollSync from '../../components/TopScrollSync';
 // learningOutcome max length matches schema (prisma/schema.prisma —
 // TravelCurriculumMapping.learningOutcome is VarChar(300)).
 const LEARNING_OUTCOME_MAX = 300;
+const PAGE_SIZE = 10;
 
 // Common curriculum tokens the academic-team curates. The backend
 // accepts arbitrary non-empty strings; the dropdown is a suggestion
@@ -98,9 +99,6 @@ const EMPTY_PROPOSAL_FORM = {
   learningOutcomeCode: '',
   learningOutcome: '',
 };
-
-const CURRICULUM_TABLE_MIN_WIDTH = 1480;
-const PROPOSAL_TABLE_MIN_WIDTH = 1380;
 
 // Backend code → user-friendly message map. Returns the backend's own
 // message as a fallback (it's already human-readable for MISSING_FIELDS).
@@ -160,7 +158,10 @@ export default function CurriculumAdmin() {
 
   const [mappings, setMappings] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
 
   // Filter state.
   const [filterAcademicYear, setFilterAcademicYear] = useState('');
@@ -183,8 +184,34 @@ export default function CurriculumAdmin() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const listRef = useRef(null);
+  const mappingsRef = useRef([]);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
 
-  const buildQuery = () => {
+  useEffect(() => {
+    mappingsRef.current = mappings;
+  }, [mappings]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const buildQuery = useCallback(() => {
     const qs = new URLSearchParams();
     if (filterAcademicYear.trim()) qs.set('academicYear', filterAcademicYear.trim());
     if (filterCurriculum.trim()) qs.set('curriculum', filterCurriculum.trim());
@@ -192,30 +219,80 @@ export default function CurriculumAdmin() {
     if (filterSubject.trim()) qs.set('subject', filterSubject.trim());
     if (filterIsActive !== 'all') qs.set('isActive', filterIsActive);
     return qs.toString();
-  };
+  }, [filterAcademicYear, filterCurriculum, filterGrade, filterSubject, filterIsActive]);
 
-  const load = async () => {
-    setLoading(true);
-    setLoadError('');
-    const qs = buildQuery();
+  const load = useCallback(async ({ reset = false } = {}) => {
+    const startOffset = reset ? 0 : offsetRef.current;
+
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setLoadError('');
+      setMappings([]);
+      mappingsRef.current = [];
+      setOffset(0);
+      setHasMore(true);
+      offsetRef.current = 0;
+      hasMoreRef.current = true;
+      if (listRef.current) listRef.current.scrollTop = 0;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
+
+    const qs = new URLSearchParams(buildQuery());
+    qs.set('limit', String(PAGE_SIZE));
+    qs.set('offset', String(startOffset));
     const url = `/api/travel-curriculum${qs ? `?${qs}` : ''}`;
     try {
       const res = await fetchApi(url);
-      setMappings(Array.isArray(res?.mappings) ? res.mappings : []);
+      const rows = Array.isArray(res?.mappings) ? res.mappings : [];
+      const totalCount = Number.isFinite(Number(res?.total)) ? Number(res.total) : rows.length;
+      const nextMappings = reset ? rows : [...mappingsRef.current, ...rows];
+      const nextOffset = startOffset + rows.length;
+      const nextHasMore = Number.isFinite(totalCount)
+        ? nextOffset < totalCount
+        : rows.length === PAGE_SIZE;
+
+      mappingsRef.current = nextMappings;
+      setMappings(nextMappings);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+      offsetRef.current = nextOffset;
+      hasMoreRef.current = nextHasMore;
     } catch (e) {
       setLoadError(e?.message || 'Failed to load curriculum mappings');
-      setMappings([]);
+      if (reset) {
+        setMappings([]);
+        mappingsRef.current = [];
+        setOffset(0);
+        setHasMore(false);
+        offsetRef.current = 0;
+        hasMoreRef.current = false;
+      }
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  };
+  }, [buildQuery]);
 
-  // Initial + filter-change load. We intentionally pass the filter
-  // state as deps so changing any filter re-fetches with the new query.
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterAcademicYear, filterCurriculum, filterGrade, filterSubject, filterIsActive]);
+    load({ reset: true });
+  }, [load]);
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 72) {
+      load({ reset: false });
+    }
+  }, [load]);
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || loading || loadingMore || !hasMore) return;
+    if (el.scrollHeight <= el.clientHeight + 72) load({ reset: false });
+  }, [mappings, hasMore, loading, loadingMore, load]);
 
   const openCreate = () => {
     setEditingId(null);
@@ -771,27 +848,19 @@ export default function CurriculumAdmin() {
             <div style={empty}>No pending proposals yet.</div>
           ) : (
             <TopScrollSync>
-              <table
-                data-testid="curriculum-proposal-table"
-                style={{
-                  width: '100%',
-                  minWidth: PROPOSAL_TABLE_MIN_WIDTH,
-                  borderCollapse: 'collapse',
-                  tableLayout: 'fixed',
-                }}
-              >
+              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <thead>
                   <tr>
-                                        <th style={{ ...th, width: '4%' }}>Sel</th>
-                    <th style={{ ...th, width: '8%' }}>Year</th>
-                    <th style={{ ...th, width: '9%' }}>Curriculum</th>
-                    <th style={{ ...th, width: '6%' }}>Grade</th>
-                    <th style={{ ...th, width: '8%' }}>Subject</th>
-                    <th style={{ ...th, width: '24%' }}>Outcome</th>
-                    <th style={{ ...th, width: '16%' }}>Destination</th>
-                    <th style={{ ...th, width: '5%' }}>Fit</th>
-                    <th style={{ ...th, width: '6%' }}>Conf.</th>
-                    <th style={{ ...th, width: '14%' }}>Actions</th>
+                    <th style={{ ...th, width: '5%' }}>Sel</th>
+                    <th style={{ ...th, width: '10%' }}>Year</th>
+                    <th style={{ ...th, width: '10%' }}>Curriculum</th>
+                    <th style={{ ...th, width: '8%' }}>Grade</th>
+                    <th style={{ ...th, width: '10%' }}>Subject</th>
+                    <th style={{ ...th, width: '18%' }}>Outcome</th>
+                    <th style={{ ...th, width: '14%' }}>Destination</th>
+                    <th style={{ ...th, width: '7%' }}>Fit</th>
+                    <th style={{ ...th, width: '8%' }}>Conf.</th>
+                    <th style={{ ...th, width: '10%' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -842,7 +911,7 @@ export default function CurriculumAdmin() {
       {loadError && (
         <div role="alert" style={errorBanner}>
           <AlertTriangle size={16} /> {loadError}
-          <button onClick={load} type="button" style={{ ...refreshBtn, marginLeft: 'auto' }}>
+          <button onClick={() => load({ reset: true })} type="button" style={{ ...refreshBtn, marginLeft: 'auto' }}>
             Retry
           </button>
         </div>
@@ -856,7 +925,7 @@ export default function CurriculumAdmin() {
           overflow: 'visible',
         }}
       >
-        {loading ? (
+        {loading && mappings.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : mappings.length === 0 ? (
           <div style={empty}>
@@ -864,29 +933,27 @@ export default function CurriculumAdmin() {
             with &ldquo;New Mapping&rdquo; or clear the filters to widen the search.
           </div>
         ) : (
-          <TopScrollSync>
-          <table
-            data-testid="curriculum-mapping-table"
-            style={{
-              width: '100%',
-              minWidth: CURRICULUM_TABLE_MIN_WIDTH,
-              borderCollapse: 'collapse',
-              tableLayout: 'fixed',
-            }}
+          <div
+            ref={listRef}
+            data-testid="curriculum-admin-table-scroll"
+            onScroll={handleListScroll}
+            style={{ maxHeight: '60vh', overflowY: 'auto', overflowX: 'hidden' }}
           >
+          <TopScrollSync disabled>
+          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
-              <tr>
-                <th style={{ ...th, width: '7%' }}>Year</th>
-                <th style={{ ...th, width: '8%' }}>Curriculum</th>
+              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
+                <th style={{ ...th, width: '10%' }}>Year</th>
+                <th style={{ ...th, width: '11%' }}>Curriculum</th>
                 <th style={{ ...th, width: '6%' }}>Grade</th>
-                <th style={{ ...th, width: '8%' }}>Subject</th>
-                <th style={{ ...th, width: '8%' }}>Code</th>
-                <th style={{ ...th, width: '21%' }}>Learning outcome</th>
-                <th style={{ ...th, width: '15%' }}>Destination</th>
-                <th style={{ ...th, width: '5%' }}>Fit</th>
-                <th style={{ ...th, width: '6%' }}>Conf.</th>
-                <th style={{ ...th, width: '5%' }}>Active</th>
-                {isAdmin && <th style={{ ...th, width: '11%' }}>Actions</th>}
+                <th style={{ ...th, width: '10%' }}>Subject</th>
+                <th style={{ ...th, width: '10%' }}>Code</th>
+                <th style={{ ...th, width: '18%' }}>Learning outcome</th>
+                <th style={{ ...th, width: '13%' }}>Destination</th>
+                <th style={{ ...th, width: '6%' }}>Fit</th>
+                <th style={{ ...th, width: '7%' }}>Conf.</th>
+                <th style={{ ...th, width: '7%' }}>Active</th>
+                {isAdmin && <th style={{ ...th, width: '12%' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -894,7 +961,7 @@ export default function CurriculumAdmin() {
                 <tr key={m.id} style={{ borderTop: '1px solid var(--border-light)' }} data-testid={`curriculum-mapping-row-${m.id}`}>
                   <td style={td}>{m.academicYear || <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span>}</td>
                   <td style={td}><strong>{m.curriculum}</strong></td>
-                  <td style={td}>{m.grade}</td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>{m.grade}</td>
                   <td style={td}>{m.subject}</td>
                   <td style={td}>{m.learningOutcomeCode || <span style={{ color: 'var(--text-secondary)' }}>&mdash;</span>}</td>
                   <td style={td} title={m.learningOutcome || ''}>
@@ -941,6 +1008,13 @@ export default function CurriculumAdmin() {
             </tbody>
           </table>
           </TopScrollSync>
+          {loadingMore && (
+            <div style={{ padding: '10px 16px', fontSize: 12, color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)' }}>
+              Loading more&hellip;
+            </div>
+          )}
+          {!loadingMore && hasMore && <div data-testid="curriculum-admin-scroll-sentinel" style={{ height: 1 }} />}
+          </div>
         )}
       </div>
 
@@ -1319,6 +1393,9 @@ const empty = {
 };
 
 const th = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 10,
   textAlign: 'left',
   padding: '10px 12px',
   fontSize: 12,
@@ -1326,7 +1403,9 @@ const th = {
   letterSpacing: 0.5,
   color: 'var(--text-secondary)',
   borderBottom: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg)',
+  background: 'var(--bg-color)',
+  backgroundClip: 'padding-box',
+  boxShadow: 'inset 0 -1px 0 var(--border-color)',
 };
 
 const td = {
@@ -1337,6 +1416,3 @@ const td = {
   overflowWrap: 'break-word',
   whiteSpace: 'normal',
 };
-
-
-

@@ -1,11 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDate } from '../utils/date';
 import { Receipt, Plus, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
-import TopScrollSync from '../components/TopScrollSync';
 
 const CATEGORY_OPTIONS = [
   'Building Rent',
@@ -115,33 +114,139 @@ const EMPTY_FORM = {
   payment: { cash: '', card: '', online: '', upi: '' },
 };
 
+const PAGE_SIZE = 25;
+
 export default function Expenses() {
   const notify = useNotify();
   const [expenses, setExpenses] = useState([]);
+  const [expenseStats, setExpenseStats] = useState({
+    total: 0,
+    totalAmount: 0,
+    approvedAmount: 0,
+    pendingAmount: 0,
+  });
   const [form, setForm] = useState(EMPTY_FORM);
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
   const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
-  // Filter by expenseDate when set, fall back to createdAt for legacy rows
-  // that haven't backfilled expenseDate.
-  const visibleExpenses = (rangeStart && rangeEnd)
-    ? expenses.filter((exp) => {
-        const d = exp.expenseDate || exp.createdAt;
-        if (!d) return false;
-        const ts = new Date(d).getTime();
-        return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
-      })
-    : expenses;
+  const tableScrollRef = useRef(null);
+  const requestSeqRef = useRef(0);
+  const requestInFlightRef = useRef(false);
+  const hasMoreRef = useRef(true);
+  const expensesRef = useRef([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [tableError, setTableError] = useState(null);
+  const [reloadTick, setReloadTick] = useState(0);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => {
+    expensesRef.current = expenses;
+  }, [expenses]);
 
-  const loadData = async () => {
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const loadExpenses = useCallback(async ({ reset = false } = {}) => {
+    if (!reset && (requestInFlightRef.current || !hasMoreRef.current)) return;
+
+    const requestId = ++requestSeqRef.current;
+    const nextOffset = reset ? 0 : expensesRef.current.length;
+    requestInFlightRef.current = true;
+
+    if (reset) {
+      setLoading(true);
+      setTableError(null);
+      setExpenses([]);
+      expensesRef.current = [];
+      setHasMore(true);
+      hasMoreRef.current = true;
+      tableScrollRef.current?.scrollTo({ top: 0 });
+    } else {
+      setLoadingMore(true);
+    }
+
     try {
-      const e = await fetchApi('/api/expenses');
-      setExpenses(Array.isArray(e) ? e : []);
+      const qs = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        offset: String(nextOffset),
+      });
+      const rows = await fetchApi(`/api/expenses?${qs.toString()}`);
+      if (requestSeqRef.current !== requestId) return;
+
+      const nextRows = Array.isArray(rows) ? rows : [];
+      const combined = reset ? nextRows : [...expensesRef.current, ...nextRows];
+      const nextHasMore = nextRows.length === PAGE_SIZE;
+
+      expensesRef.current = combined;
+      setExpenses(combined);
+      setHasMore(nextHasMore);
+      hasMoreRef.current = nextHasMore;
+    } catch (err) {
+      if (requestSeqRef.current !== requestId) return;
+      setTableError(err?.message || 'Failed to load expenses');
+    } finally {
+      if (requestSeqRef.current === requestId) {
+        requestInFlightRef.current = false;
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    }
+  }, []);
+
+  const loadStats = useCallback(async () => {
+    try {
+      const stats = await fetchApi('/api/expenses/stats');
+      setExpenseStats({
+        total: Number(stats?.total) || 0,
+        totalAmount: Number(stats?.totalAmount) || 0,
+        approvedAmount: Number(stats?.approvedAmount) || 0,
+        pendingAmount: Number(stats?.pendingAmount) || 0,
+      });
     } catch (err) {
       console.error(err);
     }
+  }, []);
+
+  useEffect(() => {
+    loadStats();
+    loadExpenses({ reset: true });
+  }, [loadStats, loadExpenses, reloadTick]);
+
+  useEffect(() => {
+    if (!tableScrollRef.current || loading || loadingMore || !hasMore) return;
+    const el = tableScrollRef.current;
+    if (el.scrollHeight <= el.clientHeight + 24) {
+      loadExpenses({ reset: false });
+    }
+  }, [expenses, loading, loadingMore, hasMore, loadExpenses]);
+
+  const handleTableScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || requestInFlightRef.current || !hasMoreRef.current) return;
+    const threshold = 96;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      loadExpenses({ reset: false });
+    }
+  }, [loadExpenses]);
+
+  const refreshExpenses = () => {
+    tableScrollRef.current?.scrollTo({ top: 0 });
+    setReloadTick((n) => n + 1);
   };
+
+  // Filter by expenseDate when set, fall back to createdAt for legacy rows
+  // that haven't backfilled expenseDate.
+  const visibleExpenses = useMemo(() => (
+    (rangeStart && rangeEnd)
+      ? expenses.filter((exp) => {
+          const d = exp.expenseDate || exp.createdAt;
+          if (!d) return false;
+          const ts = new Date(d).getTime();
+          return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+        })
+      : expenses
+  ), [expenses, rangeStart, rangeEnd]);
 
   const createExpense = async (e, status = 'Pending') => {
     e.preventDefault();
@@ -171,7 +276,7 @@ export default function Expenses() {
       });
       setForm(EMPTY_FORM);
       notify.success(`Expense created as ${status}`);
-      loadData();
+      refreshExpenses();
     } catch (err) {
       notify.error('Failed to create expense');
     }
@@ -183,7 +288,7 @@ export default function Expenses() {
         method: 'PATCH',
       });
       notify.success('Expense submitted for approval');
-      await loadData();
+      refreshExpenses();
     } catch (err) {
       console.error('[Expenses] Submit error:', err);
       notify.error(err.message || 'Failed to submit expense');
@@ -196,7 +301,7 @@ export default function Expenses() {
         method: 'PATCH',
       });
       notify.success('Expense approved');
-      await loadData();
+      refreshExpenses();
     } catch (err) {
       console.error('[Expenses] Approve error:', err);
       notify.error(err.message || 'Failed to approve expense');
@@ -216,7 +321,7 @@ export default function Expenses() {
         body: JSON.stringify({ reason: reason || '' }),
       });
       notify.success('Expense rejected');
-      await loadData();
+      refreshExpenses();
     } catch (err) {
       console.error('[Expenses] Reject error:', err);
       notify.error(err.message || 'Failed to reject expense');
@@ -229,7 +334,7 @@ export default function Expenses() {
         method: 'PUT',
         body: JSON.stringify({ status }),
       });
-      loadData();
+      refreshExpenses();
     } catch (err) {
       console.error(err);
     }
@@ -239,15 +344,13 @@ export default function Expenses() {
     if (!await notify.confirm('Delete this expense? This action cannot be undone.')) return;
     try {
       await fetchApi(`/api/expenses/${id}`, { method: 'DELETE' });
-      loadData();
+      refreshExpenses();
     } catch (err) {
       console.error(err);
     }
   };
 
-  const totalPending = expenses
-    .filter(e => e.status === 'Pending')
-    .reduce((sum, e) => sum + e.amount, 0);
+  const totalPending = expenseStats.pendingAmount || 0;
   const totalApproved = expenses
     .filter(e => e.status === 'Approved')
     .reduce((sum, e) => sum + e.amount, 0);
@@ -293,7 +396,7 @@ export default function Expenses() {
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
           background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
         }}>
-          {expenses.length} total expenses
+          {expenseStats.total} total expenses
         </span>
       </div>
 
@@ -383,7 +486,7 @@ export default function Expenses() {
             <h3 style={{ fontSize: '1.15rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Receipt size={20} color="var(--accent-color)" /> All Expenses
             </h3>
-            {expenses.length > 0 && (
+          {expenses.length > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <DateRangeFilter value={dateFilter} onChange={setDateFilter} label={null} />
                 {visibleExpenses.length !== expenses.length && (
@@ -395,7 +498,26 @@ export default function Expenses() {
             )}
           </div>
 
-          {expenses.length === 0 ? (
+          {tableError && (
+            <div
+              role="alert"
+              style={{
+                background: 'rgba(239,68,68,0.08)',
+                color: '#ef4444',
+                padding: '0.75rem',
+                borderRadius: 8,
+                marginBottom: '1rem',
+              }}
+            >
+              {tableError}
+            </div>
+          )}
+
+          {loading ? (
+            <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
+              Loading expenses...
+            </p>
+          ) : expenses.length === 0 ? (
             <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem' }}>
               No expenses recorded yet.
             </p>
@@ -404,17 +526,27 @@ export default function Expenses() {
               No expenses in the selected range.
             </p>
           ) : (
-            <TopScrollSync>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+            <div
+              ref={tableScrollRef}
+              onScroll={handleTableScroll}
+              style={{
+                overflow: 'auto',
+                maxHeight: 'calc(100vh - 330px)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 8,
+                background: 'var(--surface-color)',
+              }}
+            >
+              <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem' }}>
                 <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
-                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Title</th>
-                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Amount</th>
-                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Category</th>
-                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Status</th>
-                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>User</th>
-                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Date</th>
-                    <th style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Actions</th>
+                  <tr style={{ textAlign: 'left' }}>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Title</th>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Amount</th>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Category</th>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Status</th>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>User</th>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Date</th>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -514,9 +646,23 @@ export default function Expenses() {
                       </td>
                     </tr>
                   ))}
+                  {loadingMore && (
+                    <tr>
+                      <td colSpan={7} style={{ padding: '1rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                        Loading more expenses...
+                      </td>
+                    </tr>
+                  )}
+                  {!loading && !loadingMore && hasMore && visibleExpenses.length > 0 && (
+                    <tr>
+                      <td colSpan={7} style={{ padding: '1rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                        Scroll to load more expenses.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
-            </TopScrollSync>
+            </div>
           )}
         </div>
       </div>

@@ -930,10 +930,15 @@ const input = {
 };
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const th = {
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
   textAlign: "left", padding: "10px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)",
+  background: "var(--bg-color)",
+  backgroundClip: "padding-box",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
 const trStyle = { borderTop: "1px solid var(--border-light)" };

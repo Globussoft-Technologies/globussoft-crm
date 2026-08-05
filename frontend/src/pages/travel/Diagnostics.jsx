@@ -241,7 +241,7 @@ export default function Diagnostics() {
           >
           <TopScrollSync>
           <table aria-label="Diagnostics results" style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead style={{position: "sticky", top: 0,background: "#fff",zIndex: 10,}}>
+            <thead>
               <tr>
                 <th style={th}>Submitted</th>
                 <th style={th}>Sub-brand</th>
@@ -354,7 +354,10 @@ const th = {
   textAlign: 'left', padding: '10px 12px', fontSize: 12,
   textTransform: 'uppercase', letterSpacing: 0.5,
   color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg)',
+  position: 'sticky', top: 0, zIndex: 3,
+  background: 'var(--bg-color)',
+  backgroundClip: 'padding-box',
+  boxShadow: 'inset 0 -1px 0 var(--border-color)',
 };
 
 const td = {

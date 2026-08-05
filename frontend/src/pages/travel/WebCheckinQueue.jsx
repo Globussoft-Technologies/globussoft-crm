@@ -319,7 +319,18 @@ export default function WebCheckinQueue() {
             flights are accepted.
           </div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
+          <table className="stable-table webcheckins-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <colgroup>
+              <col style={{ width: "130px" }} />
+              <col style={{ width: "96px" }} />
+              <col style={{ width: "100px" }} />
+              <col style={{ width: "95px" }} />
+              <col style={{ width: "150px" }} />
+              <col style={{ width: "170px" }} />
+              <col style={{ width: "98px" }} />
+              <col style={{ width: "132px" }} />
+              <col />
+            </colgroup>
             <thead>
               <tr>
                 <th style={th}>Window opens</th>
@@ -368,16 +379,44 @@ export default function WebCheckinQueue() {
                           href={normalizeUploadUrl(r.boardingPassUrl)}
                           target="_blank"
                           rel="noopener noreferrer"
-                          style={{ color: "var(--primary-color)", textDecoration: "none", fontWeight: 600 }}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "4px 8px",
+                            borderRadius: 4,
+                            border: "1px solid rgba(47,122,77,0.35)",
+                            background: "rgba(47,122,77,0.10)",
+                            color: "var(--text-primary)",
+                            textDecoration: "none",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            whiteSpace: "nowrap",
+                          }}
                         >
-                          View
+                          View file
                         </a>
                       ) : (
-                        <span style={{ color: "var(--text-secondary)" }}>—</span>
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            padding: "4px 8px",
+                            borderRadius: 4,
+                            border: "1px solid var(--border-color)",
+                            background: "var(--subtle-bg)",
+                            color: "var(--text-secondary)",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Not uploaded
+                        </span>
                       )}
                     </td>
                     <td style={td}>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "nowrap", alignItems: "center", minWidth: 0, overflow: "auto" }}>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", minWidth: 0 }}>
                         <button
                           type="button"
                           onClick={() => onUploadClick(r.id)}
@@ -429,7 +468,7 @@ export default function WebCheckinQueue() {
                   </tr>
                 );
               })}
-            </tbody>
+              </tbody>
           </table>
         )}
       </div>
@@ -512,7 +551,10 @@ const th = {
   textAlign: "left", padding: "12px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)", whiteSpace: "nowrap", fontWeight: 600,
+  background: "var(--bg-color)", backgroundColor: "var(--bg-color)",
+  backgroundClip: "padding-box",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+  whiteSpace: "nowrap", fontWeight: 600,
 };
 const td = {
   padding: "12px 12px", fontSize: 14,

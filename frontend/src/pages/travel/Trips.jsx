@@ -8,7 +8,7 @@
 // No creation flow here — trips spawn from the linked Deal in the sales
 // pipeline (Day 7+ Deal-extension lands later).
 
-import { useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X, Trash2, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
@@ -54,13 +54,16 @@ const EMPTY_FORM = {
   departDate: "", returnDate: "", pricePerStudent: "", status: "confirmed",
 };
 
+const BRAND_LABEL = "TMC";
+const SUB_BRAND_LABEL = "School trips";
+const PAGE_SIZE = 10;
+
 export default function Trips() {
   const notify = useNotify();
   const location = useLocation();
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [offset, setOffset] = useState(0);
-  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialStatus = searchParams.get("status") || "";
   const initialSearch = searchParams.get("search") || "";
@@ -68,9 +71,19 @@ export default function Trips() {
   const tripsListPath = `${location.pathname}${location.search}`;
   const [status, setStatus] = useState(initialStatus);
   const [search, setSearch] = useState(initialSearch);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const [reachedEnd, setReachedEnd] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const listRef = useRef(null);
+  const tripsRef = useRef([]);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
 
   const openCreate = () => {
     setForm(EMPTY_FORM);
@@ -113,44 +126,118 @@ export default function Trips() {
     setSearch((current) => (current === nextSearch ? current : nextSearch));
   }, [searchParams]);
 
-  const LIMIT = 10;
-  const hasMore = trips.length < total;
+  useEffect(() => {
+    tripsRef.current = trips;
+  }, [trips]);
 
-  const load = (append = false, nextOffset = 0) => {
-    setLoading(true);
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  useEffect(() => {
+    if (loading || loadingMore || !listRef.current) return;
+    if (hasMore) {
+      setReachedEnd(false);
+      return;
+    }
+    const el = listRef.current;
+    const threshold = 72;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+    setReachedEnd(atBottom);
+  }, [trips, hasMore, loading, loadingMore]);
+
+  const load = useCallback(async ({ reset = false } = {}) => {
+    const startOffset = reset ? 0 : offsetRef.current;
+
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setTrips([]);
+      tripsRef.current = [];
+      setTotal(0);
+      setOffset(0);
+      setHasMore(true);
+      setReachedEnd(false);
+      offsetRef.current = 0;
+      hasMoreRef.current = true;
+      if (listRef.current) {
+        listRef.current.scrollTop = 0;
+      }
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
     const qs = new URLSearchParams();
     if (status) qs.set("status", status);
-    qs.set("limit", String(LIMIT));
-    qs.set("offset", String(nextOffset));
-    fetchApi(`/api/travel/trips?${qs.toString()}`)
-      .then((res) => {
-        const nextTrips = Array.isArray(res?.trips) ? res.trips : [];
-        setTrips(append ? (prev) => [...prev, ...nextTrips] : nextTrips);
-        setTotal(typeof res?.total === "number" ? res.total : nextTrips.length);
-        setOffset(nextOffset);
-      })
-      .catch((e) => {
-        notify.error(e?.body?.error || "Failed to load trips");
-        if (!append) {
-          setTrips([]);
-          setTotal(0);
-          setOffset(0);
-        }
-      })
-      .finally(() => setLoading(false));
-  };
+    qs.set("limit", String(PAGE_SIZE));
+    qs.set("offset", String(startOffset));
 
-  const loadMore = () => {
-    if (loading || !hasMore) return;
-    load(true, offset + LIMIT);
-  };
+    try {
+      const res = await fetchApi(`/api/travel/trips?${qs.toString()}`);
+      const rows = Array.isArray(res?.trips) ? res.trips : [];
+      const totalCount = Number.isFinite(Number(res?.total)) ? Number(res.total) : rows.length;
+      const nextTrips = reset ? rows : [...tripsRef.current, ...rows];
+      const nextOffset = startOffset + rows.length;
+      const nextHasMore = Number.isFinite(totalCount)
+        ? nextOffset < totalCount
+        : rows.length === PAGE_SIZE;
 
-  const resetAndLoad = () => {
-    setOffset(0);
-    load(false, 0);
-  };
+      tripsRef.current = nextTrips;
+      setTrips(nextTrips);
+      setTotal(totalCount);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+      offsetRef.current = nextOffset;
+      hasMoreRef.current = nextHasMore;
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to load trips");
+      setTrips([]);
+      tripsRef.current = [];
+      setTotal(0);
+      setOffset(0);
+      setHasMore(false);
+      offsetRef.current = 0;
+      hasMoreRef.current = false;
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [status, notify]);
 
-  useEffect(resetAndLoad, [status]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load({ reset: true });
+  }, [load]);
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+    setReachedEnd(atBottom);
+    if (atBottom) {
+      load({ reset: false });
+    }
+  }, [load]);
+
+  const handleStatusChange = (nextStatus) => {
+    setStatus(nextStatus);
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextStatus) nextParams.set("status", nextStatus);
+    else nextParams.delete("status");
+    setSearchParams(nextParams, { replace: true });
+  };
 
   // Track which trip is currently being deleted so we can disable its
   // row's trash button (prevents double-click race) without disabling
@@ -195,7 +282,7 @@ export default function Trips() {
     try {
       await fetchApi(`/api/travel/trips/${t.id}`, { method: "DELETE" });
       notify.success(`Trip ${t.tripCode} deleted`);
-      load();
+      load({ reset: true });
     } catch (e) {
       // The route returns 403 RBAC_DENIED for non-ADMIN callers; surface
       // the server-side message so the operator knows it's a perms issue
@@ -245,26 +332,16 @@ export default function Trips() {
             style={{ ...selectStyle, paddingLeft: 28, minWidth: 240 }}
           />
         </div>
-        <select value={status} onChange={(e) => setStatus(e.target.value)} style={selectStyle} aria-label="Filter by status">
+        <select value={status} onChange={(e) => handleStatusChange(e.target.value)} style={selectStyle} aria-label="Filter by status">
           {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <button type="button" onClick={resetAndLoad} style={refreshBtn} aria-label="Reload list">Refresh</button>
+        <button type="button" onClick={() => load({ reset: true })} style={refreshBtn} aria-label="Reload list">Refresh</button>
       </div>
 
-      <div
-        data-testid="trips-table-scroll"
-        onScroll={(e) => {
-          const { scrollTop, clientHeight, scrollHeight } = e.currentTarget;
-          if (scrollTop + clientHeight >= scrollHeight - 80) {
-            loadMore();
-          }
-        }}
-        style={{
-          background: "var(--surface-color)", borderRadius: 8,
-          border: "1px solid var(--border-color)", overflow: "auto",
-          maxHeight: 480,
-        }}
-      >
+      <div style={{
+        background: "var(--surface-color)", borderRadius: 8,
+        border: "1px solid var(--border-color)",
+      }}>
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : trips.length === 0 ? (
@@ -274,25 +351,49 @@ export default function Trips() {
         ) : visibleTrips.length === 0 ? (
           <div style={empty}>No trips match &ldquo;{search}&rdquo;.</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={th}>Trip code</th>
-                <th style={th}>Destination</th>
-                <th style={th}>Dates</th>
-                <th style={th}>School</th>
-                <th style={th}>Participants</th>
-                <th style={th}>Per-student</th>
-                <th style={th}>Status</th>
-                <th style={{ ...th, width: 60, textAlign: "right" }} aria-label="Actions"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleTrips.map((t) => {
-                const sc = STATUS_COLORS[t.status] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
-                return (
-                  <tr key={t.id} style={{ borderTop: "1px solid var(--border-light)" }}>
+          <div
+            ref={listRef}
+            data-testid="trips-table-scroll"
+            onScroll={handleListScroll}
+            style={{
+              maxHeight: "60vh",
+              overflowY: "auto",
+              overflowX: "hidden",
+            }}
+          >
+            <TopScrollSync>
+            <table className="stable-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+              <colgroup>
+                <col style={{ width: "13%" }} />
+                <col style={{ width: "17%" }} />
+                <col style={{ width: "8%" }} />
+                <col style={{ width: "10%" }} />
+                <col style={{ width: "14%" }} />
+                <col style={{ width: "15%" }} />
+                <col style={{ width: "9%" }} />
+                <col style={{ width: "10%" }} />
+                <col style={{ width: "8%" }} />
+                <col style={{ width: "6%" }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th style={th}>Trip code</th>
+                  <th style={th}>Destination</th>
+                  <th style={th}>Brand</th>
+                  <th style={th}>Sub-brand</th>
+                  <th style={th}>Dates</th>
+                  <th style={th}>School</th>
+                  <th style={th}>Participants</th>
+                  <th style={th}>Per-student</th>
+                  <th style={th}>Status</th>
+                  <th style={{ ...th, width: 60, textAlign: "right" }} aria-label="Actions"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleTrips.map((t) => {
+                  const sc = STATUS_COLORS[t.status] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
+                  return (
+                    <tr key={t.id} style={{ borderTop: "1px solid var(--border-light)" }}>
                     <td style={td}>
                       <Link
                         to={`/travel/trips/${t.id}`}
@@ -303,13 +404,15 @@ export default function Trips() {
                       </Link>
                     </td>
                     <td style={td}>{t.destination}</td>
+                    <td style={td}><span style={brandBadge}>{BRAND_LABEL}</span></td>
+                    <td style={td}>{SUB_BRAND_LABEL}</td>
                     <td style={td}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                         <CalendarIcon size={12} aria-hidden />
                         {fmt(t.departDate)} → {fmt(t.returnDate)}
                       </span>
                     </td>
-                    <td style={td}>School #{t.schoolContactId}</td>
+                    <td style={td}>{t.schoolName || (t.schoolContactId ? `School #${t.schoolContactId}` : "?")}</td>
                     <td style={td}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                         <Users size={12} aria-hidden />
@@ -348,12 +451,26 @@ export default function Trips() {
                         <Trash2 size={14} aria-hidden />
                       </button>
                     </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          </TopScrollSync>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {total > 0 && reachedEnd && !hasMore && (
+              <div style={{ padding: "12px 0", textAlign: "center", color: "var(--text-secondary)", fontSize: 12 }}>
+                You&apos;ve reached the end of the trips.
+              </div>
+            )}
+            </TopScrollSync>
+            <div style={{ paddingTop: 12 }}>
+              {loadingMore && (
+                <div style={empty}>Loading more&hellip;</div>
+              )}
+              {!loadingMore && hasMore && (
+                <div aria-hidden="true" data-testid="trips-table-sentinel" style={{ height: 1 }} />
+              )}
+            </div>
+          </div>
         )}
       </div>
 
@@ -511,13 +628,29 @@ const empty = {
   padding: 32, textAlign: "center",
   color: "var(--text-secondary)", fontSize: 14,
 };
+const brandBadge = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700,
+  letterSpacing: 0.5, textTransform: "uppercase",
+  background: "rgba(91,110,225,0.14)", color: "var(--primary-color)",
+};
 const th = {
   textAlign: "left", padding: "10px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)",
+  position: "sticky",
+  top: 0,
+  zIndex: 10,
+  background: "var(--surface-color)",
+  backgroundColor: "var(--surface-color)",
+  backgroundClip: "padding-box",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+  whiteSpace: "nowrap",
 };
 const td = {
   padding: "10px 12px", fontSize: 14,
   color: "var(--text-primary)",
+  verticalAlign: "middle",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
 };

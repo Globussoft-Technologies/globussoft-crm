@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Calendar, Search, Filter, RefreshCw, UserPlus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
@@ -7,30 +7,15 @@ import { useNotify } from '../../utils/notify';
 import { AssignDoctorModal, displayStatus } from './Calendar';
 
 /**
- * Appointments — tenant-wide list view.
+ * Appointments - tenant-wide list view.
  *
- * Backend: GET /api/wellness/visits?from=&to=&doctorId=&status=
- *   - For ADMIN / MANAGER: returns all visits in the tenant matching the
- *     query (every practitioner's column).
- *   - For wellnessRole=doctor: the server overrides doctorId to req.user.
- *     userId (PHI scope per #324), so a doctor opening this page sees
- *     ONLY their own appointments — same data the /my-appointments page
- *     shows. That's intentional: a single endpoint, two surfaces, the
- *     server enforces who sees what.
+ * Backend: GET /api/wellness/visits?from=&to=&doctorId=&status=&limit=&offset=
+ * - For ADMIN / MANAGER: returns all visits in the tenant matching the query.
+ * - For wellnessRole=doctor: the server overrides doctorId to req.user.userId.
  *
- * The page assumes the visit row is the "appointment" (in this codebase
- * a booking creates a Visit row with status='booked'; status terms are
- * used interchangeably elsewhere — Calendar.jsx, the booking flow, etc.)
- *
- * Status filter is keyed to the real Visit.status values used elsewhere
- * (per Calendar.jsx palette). 'pending' is a CLIENT-SIDE presentational
- * filter only — it maps to `displayStatus(v) === 'pending'` (i.e.
- * status='booked' && doctorId IS NULL) since the server has no notion
- * of pending separate from booked.
+ * The table loads a page at a time and fetches more rows as the user scrolls
+ * toward the bottom of the table container.
  */
-// Real Visit.status set per Calendar.jsx + wellness.js routes. 'pending'
-// is presentational only — derived from `booked` + null doctorId via
-// displayStatus(). Keep this list in lockstep with Calendar's palette.
 const STATUS_OPTIONS = [
   { value: '', label: 'Any status' },
   { value: 'booked', label: 'Booked' },
@@ -42,16 +27,22 @@ const STATUS_OPTIONS = [
   { value: 'cancelled', label: 'Cancelled' },
   { value: 'no-show', label: 'No-show' },
 ];
+
+const PAGE_SIZE = 100;
+
 export default function Appointments() {
   const { user } = useContext(AuthContext) || {};
   const isOrg = user?.role === 'ADMIN' || user?.role === 'MANAGER';
   const notify = useNotify();
-  // Pending visit currently being assigned to a doctor. Set when the
-  // user clicks the "Assign doctor" action on a pending row.
+
+  const tableScrollRef = useRef(null);
+  const requestSeqRef = useRef(0);
+  const requestInFlightRef = useRef(false);
+  const hasMoreRef = useRef(true);
+  const visitsRef = useRef([]);
+
   const [assignTarget, setAssignTarget] = useState(null);
 
-  // Filter state — default to "this week" so the page is useful without
-  // any clicks. Admin can widen / narrow from there.
   const today = useMemo(() => todayLocalDate(), []);
   const oneWeekFromToday = useMemo(() => addDaysLocal(today, 7), [today]);
   const [from, setFrom] = useState(today);
@@ -62,42 +53,84 @@ export default function Appointments() {
   const [reloadTick, setReloadTick] = useState(0);
 
   const [visits, setVisits] = useState([]);
-  const [doctors, setDoctors] = useState([]); // for the dropdown
+  const [doctors, setDoctors] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    const qs = new URLSearchParams();
-    qs.set('from', `${from}T00:00:00${localTzOffset()}`);
-    qs.set('to', `${to}T23:59:59${localTzOffset()}`);
-    qs.set('limit', '500');
-    if (doctorId) qs.set('doctorId', doctorId);
-    // 'pending' is client-side-only — server stores it as 'booked' with
-    // null doctorId. Send everything else through as-is.
-    if (status && status !== 'pending') qs.set('status', status);
-    fetchApi(`/api/wellness/visits?${qs.toString()}`, { silent: true })
-      .then((res) => {
-        if (cancelled) return;
-        setVisits(Array.isArray(res) ? res : Array.isArray(res?.visits) ? res.visits : []);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(err?.message || 'Failed to load appointments');
-        setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [from, to, doctorId, status, reloadTick]);
+    visitsRef.current = visits;
+  }, [visits]);
 
-  // Doctors dropdown — only needed for admin/manager (doctors see own only).
-  // Filter staff to wellnessRole='doctor' OR a primary RBAC role of DOCTOR.
   useEffect(() => {
-    if (!isOrg) return;
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const loadVisits = useCallback(
+    async ({ reset = false } = {}) => {
+      if (!reset && (requestInFlightRef.current || !hasMoreRef.current)) return;
+
+      const requestId = ++requestSeqRef.current;
+      const nextOffset = reset ? 0 : visitsRef.current.length;
+      requestInFlightRef.current = true;
+
+      if (reset) {
+        setLoading(true);
+        setError(null);
+        setVisits([]);
+        visitsRef.current = [];
+        setHasMore(true);
+        hasMoreRef.current = true;
+        tableScrollRef.current?.scrollTo({ top: 0 });
+      } else {
+        setLoadingMore(true);
+      }
+
+      try {
+        const qs = new URLSearchParams();
+        qs.set('from', `${from}T00:00:00${localTzOffset()}`);
+        qs.set('to', `${to}T23:59:59${localTzOffset()}`);
+        qs.set('limit', String(PAGE_SIZE));
+        qs.set('offset', String(nextOffset));
+        if (doctorId) qs.set('doctorId', doctorId);
+        if (status && status !== 'pending') qs.set('status', status);
+
+        const res = await fetchApi(`/api/wellness/visits?${qs.toString()}`, { silent: true });
+        const nextRows = Array.isArray(res) ? res : Array.isArray(res?.visits) ? res.visits : [];
+        if (requestSeqRef.current !== requestId) return;
+
+        const combined = reset ? nextRows : [...visitsRef.current, ...nextRows];
+        const nextHasMore = nextRows.length === PAGE_SIZE;
+
+        visitsRef.current = combined;
+        setVisits(combined);
+        setHasMore(nextHasMore);
+        hasMoreRef.current = nextHasMore;
+      } catch (err) {
+        if (requestSeqRef.current !== requestId) return;
+        setError(err?.message || 'Failed to load appointments');
+      } finally {
+        if (requestSeqRef.current === requestId) {
+          requestInFlightRef.current = false;
+          setLoading(false);
+          setLoadingMore(false);
+        }
+      }
+    },
+    [from, to, doctorId, status],
+  );
+
+  useEffect(() => {
+    loadVisits({ reset: true });
+  }, [loadVisits, reloadTick]);
+
+  useEffect(() => {
+    if (!isOrg) {
+      setDoctors([]);
+      return undefined;
+    }
+
     let cancelled = false;
     fetchApi('/api/staff', { silent: true })
       .then((res) => {
@@ -110,20 +143,18 @@ export default function Appointments() {
         );
       })
       .catch(() => setDoctors([]));
+
     return () => {
       cancelled = true;
     };
   }, [isOrg]);
 
-  // Client-side filters: presentational 'pending' status + free-text search.
-  // Server already narrows by date / doctor / real status; this layer adds
-  // the bits the server can't (pending = booked + no doctor) and per-row
-  // search without a round-trip.
-  const filtered = useMemo(() => {
+  const visibleRows = useMemo(() => {
     let rows = visits;
     if (status === 'pending') {
       rows = rows.filter((v) => v.status === 'booked' && !v.doctorId);
     }
+
     const term = search.trim().toLowerCase();
     if (term) {
       rows = rows.filter((v) => {
@@ -131,14 +162,34 @@ export default function Appointments() {
         return blob.includes(term);
       });
     }
+
     return rows;
   }, [visits, status, search]);
 
-  // Sort by visitDate ascending so the timeline reads top-to-bottom.
-  const sorted = useMemo(
-    () => [...filtered].sort((a, b) => new Date(a.visitDate) - new Date(b.visitDate)),
-    [filtered],
+  useEffect(() => {
+    if (!tableScrollRef.current || loading || loadingMore || !hasMore) return;
+    const el = tableScrollRef.current;
+    if (el.scrollHeight <= el.clientHeight + 24) {
+      loadVisits({ reset: false });
+    }
+  }, [visibleRows, loading, loadingMore, hasMore, loadVisits]);
+
+  const handleTableScroll = useCallback(
+    (e) => {
+      const el = e.currentTarget;
+      if (!el || requestInFlightRef.current || !hasMoreRef.current) return;
+      const threshold = 96;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+        loadVisits({ reset: false });
+      }
+    },
+    [loadVisits],
   );
+
+  const handleRefresh = () => {
+    tableScrollRef.current?.scrollTo({ top: 0 });
+    setReloadTick((n) => n + 1);
+  };
 
   return (
     <div style={{ padding: '1.5rem', width: '100%' }}>
@@ -165,7 +216,7 @@ export default function Appointments() {
         </div>
         <button
           type="button"
-          onClick={() => setReloadTick((n) => n + 1)}
+          onClick={handleRefresh}
           className="btn-secondary"
           style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
         >
@@ -173,7 +224,6 @@ export default function Appointments() {
         </button>
       </header>
 
-      {/* Filter bar */}
       <div
         style={{
           display: 'grid',
@@ -233,7 +283,9 @@ export default function Appointments() {
             style={{ width: '100%' }}
           >
             {STATUS_OPTIONS.map((opt) => (
-              <option key={opt.value || 'any'} value={opt.value}>{opt.label}</option>
+              <option key={opt.value || 'any'} value={opt.value}>
+                {opt.label}
+              </option>
             ))}
           </select>
         </label>
@@ -256,7 +308,7 @@ export default function Appointments() {
               className="input-field"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Patient or service…"
+              placeholder="Patient or service..."
               style={{ width: '100%', paddingLeft: 28 }}
             />
           </div>
@@ -279,22 +331,28 @@ export default function Appointments() {
       )}
 
       <div
+        ref={tableScrollRef}
+        onScroll={handleTableScroll}
         style={{
           border: '1px solid var(--border-color)',
           borderRadius: 12,
           overflow: 'auto',
+          maxHeight: 'calc(100vh - 350px)',
+          background: 'var(--surface-color)',
         }}
       >
         <table
           style={{
             width: '100%',
-            borderCollapse: 'collapse',
+            borderCollapse: 'separate',
+            borderSpacing: 0,
             fontSize: '0.9rem',
             minWidth: 720,
+            background: 'transparent',
           }}
         >
           <thead>
-            <tr style={{ background: 'var(--subtle-bg-3)', textAlign: 'left' }}>
+            <tr style={{ textAlign: 'left' }}>
               <Th>When</Th>
               <Th>Patient</Th>
               {isOrg && <Th>Doctor</Th>}
@@ -307,11 +365,11 @@ export default function Appointments() {
             {loading && (
               <tr>
                 <Td colSpan={isOrg ? 6 : 5} center>
-                  Loading appointments…
+                  Loading appointments...
                 </Td>
               </tr>
             )}
-            {!loading && sorted.length === 0 && (
+            {!loading && visibleRows.length === 0 && (
               <tr>
                 <Td colSpan={isOrg ? 6 : 5} center>
                   <Filter size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />
@@ -320,7 +378,7 @@ export default function Appointments() {
               </tr>
             )}
             {!loading &&
-              sorted.map((v) => (
+              visibleRows.map((v) => (
                 <tr key={v.id} style={{ borderTop: '1px solid var(--border-color)' }}>
                   <Td>
                     <div style={{ fontWeight: 600 }}>
@@ -329,7 +387,7 @@ export default function Appointments() {
                             month: 'short',
                             day: 'numeric',
                           })
-                        : '—'}
+                        : '-'}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                       {v.visitDate
@@ -349,7 +407,7 @@ export default function Appointments() {
                         <strong>{v.patient.name}</strong>
                       </Link>
                     ) : (
-                      <span>—</span>
+                      <span>-</span>
                     )}
                     {v.patient?.phone && (
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
@@ -366,7 +424,7 @@ export default function Appointments() {
                   )}
                   <Td>
                     {v.service?.name || (
-                      <span style={{ color: 'var(--text-secondary)' }}>—</span>
+                      <span style={{ color: 'var(--text-secondary)' }}>-</span>
                     )}
                   </Td>
                   <Td>
@@ -374,21 +432,23 @@ export default function Appointments() {
                   </Td>
                   <Td>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', alignItems: 'flex-start' }}>
-                      {/* Assign-doctor action — only surfaces for pending
-                          visits (doctorId is null and still booked). Org
-                          roles only; doctors viewing their own list don't
-                          need the action. */}
                       {isOrg && !v.doctorId && v.status === 'booked' && (
                         <button
                           type="button"
                           onClick={() => setAssignTarget(v)}
                           data-testid={`appointments-assign-${v.id}`}
                           style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
-                            padding: '0.3rem 0.6rem', borderRadius: 6,
-                            fontSize: '0.78rem', fontWeight: 500,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            padding: '0.3rem 0.6rem',
+                            borderRadius: 6,
+                            fontSize: '0.78rem',
+                            fontWeight: 500,
                             background: 'var(--primary-color, var(--accent-color, #6366f1))',
-                            color: '#fff', border: 'none', cursor: 'pointer',
+                            color: '#fff',
+                            border: 'none',
+                            cursor: 'pointer',
                           }}
                         >
                           <UserPlus size={13} /> Assign doctor
@@ -402,12 +462,26 @@ export default function Appointments() {
                           textDecoration: 'none',
                         }}
                       >
-                        Open in calendar →
+                        Open in calendar 
                       </Link>
                     </div>
                   </Td>
                 </tr>
               ))}
+            {loadingMore && (
+              <tr>
+                <Td colSpan={isOrg ? 6 : 5} center>
+                  Loading more appointments...
+                </Td>
+              </tr>
+            )}
+            {!loading && !loadingMore && hasMore && visibleRows.length > 0 && (
+              <tr>
+                <Td colSpan={isOrg ? 6 : 5} center>
+                  Scroll to load more appointments.
+                </Td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -420,7 +494,8 @@ export default function Appointments() {
             color: 'var(--text-secondary)',
           }}
         >
-          {sorted.length} of {visits.length} appointments shown
+          {visibleRows.length} shown from {visits.length} loaded appointments
+          {hasMore ? ' - more available below' : ''}
         </div>
       )}
 
@@ -431,8 +506,6 @@ export default function Appointments() {
           onClose={() => setAssignTarget(null)}
           onAssigned={() => {
             setAssignTarget(null);
-            // Refetch the list so the just-assigned visit shows its new
-            // doctor + drops its Assign button.
             setReloadTick((t) => t + 1);
           }}
         />
@@ -440,8 +513,6 @@ export default function Appointments() {
     </div>
   );
 }
-
-// ───────────────────────────── helpers + cells ───────────────────────
 
 function todayLocalDate() {
   const d = new Date();
@@ -468,8 +539,6 @@ function localTzOffset() {
   return `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
 }
 
-// Local-calendar-day for a Date / ISO string. Used to pin the calendar
-// page to the day the receptionist clicked, regardless of the runtime TZ.
 function isoLocalDate(input) {
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return '';
@@ -481,10 +550,6 @@ function isoLocalDate(input) {
 
 function StatusBadge({ status }) {
   const palette = {
-    // 'pending' is a presentational status — surfaced for visits whose
-    // doctorId is null. The Calendar export `displayStatus` flips
-    // status='booked' + doctorId=null into 'pending' so the admin UI
-    // never displays raw 'booked' for an unassigned appointment.
     pending: { fg: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
     booked: { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
     scheduled: { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
@@ -511,7 +576,7 @@ function StatusBadge({ status }) {
         whiteSpace: 'nowrap',
       }}
     >
-      {status || '—'}
+      {status || '-'}
     </span>
   );
 }
@@ -528,6 +593,9 @@ function Th({ children }) {
   return (
     <th
       style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 4,
         padding: '0.6rem 0.85rem',
         fontWeight: 600,
         fontSize: '0.75rem',
@@ -535,6 +603,9 @@ function Th({ children }) {
         letterSpacing: '0.04em',
         color: 'var(--text-secondary)',
         whiteSpace: 'nowrap',
+        background: 'var(--bg-color)',
+        backgroundClip: 'padding-box',
+        boxShadow: 'inset 0 -1px 0 var(--border-color), 0 1px 0 var(--border-color)',
       }}
     >
       {children}

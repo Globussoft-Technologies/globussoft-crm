@@ -807,7 +807,7 @@ export default function CostMaster() {
           <TopScrollSync disabled>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
-              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
+              <tr>
                 <th style={th}>Sub-brand</th>
                 <th style={th}>Category</th>
                 <th style={th}>Route / SKU</th>
@@ -909,7 +909,22 @@ const selectStyle = { padding: "9px 12px", borderRadius: 8, border: "1px solid v
 const input = { padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--bg-color)", color: "var(--text-primary)", fontSize: 13 };
 const inlineInput = { padding: "5px 8px", borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--bg-color)", color: "var(--text-primary)", fontSize: 13, width: "100%" };
 const emptyStyle = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
-const th = { position: "sticky", top: 0, background: "#fff", zIndex: 10, textAlign: "left", padding: "14px 16px", fontSize: 11.5, textTransform: "uppercase", letterSpacing: "0.03em", color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)", fontWeight: 600 };
+const th = {
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
+  textAlign: "left",
+  padding: "14px 16px",
+  fontSize: 11.5,
+  textTransform: "uppercase",
+  letterSpacing: "0.03em",
+  color: "var(--text-secondary)",
+  borderBottom: "1px solid var(--border-color)",
+  fontWeight: 600,
+  background: "var(--bg-color)",
+  backgroundClip: "padding-box",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+};
 const td = { padding: "14px 16px", fontSize: 13.5, color: "var(--text-primary)", verticalAlign: "middle" };
 const brandBadge = { display: "inline-block", padding: "4px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, background: "var(--subtle-bg-3, rgba(91,110,248,0.15))", color: "var(--primary-color, #5b6ef8)", textTransform: "uppercase", letterSpacing: 0.5 };
 const attrChip = { padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "var(--subtle-bg)", color: "var(--text-secondary)", border: "1px solid var(--border-color)", whiteSpace: "nowrap" };

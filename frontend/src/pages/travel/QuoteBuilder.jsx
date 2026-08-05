@@ -152,6 +152,7 @@ const SUB_BRAND_LABELS = Object.fromEntries(
 );
 
 const LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
+const LINE_LINK_MARKER = "[[QUOTE_LINK_META]]";
 
 // TBO search data-source badge (mirrors tboClient's `provider`): live TBO,
 // an AI web estimate, or offline sample data — so the operator verifies before
@@ -227,6 +228,77 @@ function countTemplateLines(linesJson) {
   } catch {
     return 0;
   }
+}
+
+function parseLineNotesPayload(raw) {
+  const text = raw == null ? "" : String(raw);
+  const idx = text.indexOf(LINE_LINK_MARKER);
+  if (idx === -1) return { visibleNotes: text, linkMeta: null };
+  const visibleNotes = text.slice(0, idx).trimEnd();
+  const encoded = text.slice(idx + LINE_LINK_MARKER.length).trim();
+  if (!encoded) return { visibleNotes, linkMeta: null };
+  try {
+    const parsed = JSON.parse(atob(encoded));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { visibleNotes, linkMeta: null };
+    }
+    return { visibleNotes, linkMeta: parsed };
+  } catch {
+    return { visibleNotes: text, linkMeta: null };
+  }
+}
+
+function normalizeLineLinkMeta(linkMeta, fallbackSupplierId = null) {
+  if (!linkMeta || typeof linkMeta !== "object" || Array.isArray(linkMeta)) return null;
+  const out = { ...linkMeta };
+  const masterRefs = out.masterRefs && typeof out.masterRefs === "object" && !Array.isArray(out.masterRefs)
+    ? { ...out.masterRefs }
+    : {};
+  if (masterRefs.supplierId == null && fallbackSupplierId != null && `${fallbackSupplierId}` !== "") {
+    const sid = Number(fallbackSupplierId);
+    if (Number.isFinite(sid)) masterRefs.supplierId = sid;
+  }
+  if (Object.keys(masterRefs).length > 0) out.masterRefs = masterRefs;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function mergeLineLinkMeta(existingMeta, previewLine, supplierId) {
+  const base = normalizeLineLinkMeta(existingMeta, supplierId) || {};
+  const additions = previewLine && typeof previewLine === "object" ? {
+    masterRefs: {
+      ...(previewLine.costMasterId != null ? { costMasterId: Number(previewLine.costMasterId) } : {}),
+      ...(previewLine.routeOrSku ? { routeOrSku: previewLine.routeOrSku } : {}),
+      ...(previewLine.supplierId != null ? { supplierId: Number(previewLine.supplierId) } : {}),
+    },
+    pricingLink: {
+      ...(previewLine.baseRate != null ? { baseRate: Number(previewLine.baseRate) } : {}),
+      ...(previewLine.currency ? { currency: previewLine.currency } : {}),
+      seasonMultiplier: previewLine.seasonMultiplier ?? 1,
+      matchedSeasonName: previewLine.matchedSeasonName ?? null,
+      matchedMarkupRuleId: previewLine.markupRuleId ?? previewLine.matchedMarkupRuleId ?? null,
+      ...(previewLine.subtotal != null ? { subtotal: Number(previewLine.subtotal) } : {}),
+      ...(previewLine.grandTotal != null ? { grandTotal: Number(previewLine.grandTotal) } : {}),
+      linkedAt: new Date().toISOString(),
+    },
+  } : {};
+  const merged = {
+    ...base,
+    ...additions,
+    masterRefs: { ...(base.masterRefs || {}), ...(additions.masterRefs || {}) },
+    pricingLink: { ...(base.pricingLink || {}), ...(additions.pricingLink || {}) },
+  };
+  if (!Object.keys(merged.masterRefs).length) delete merged.masterRefs;
+  if (!Object.keys(merged.pricingLink).length) delete merged.pricingLink;
+  return normalizeLineLinkMeta(merged, supplierId);
+}
+
+function summarizeLinkedQuoteData(lines) {
+  return (Array.isArray(lines) ? lines : []).reduce((acc, line) => {
+    if (line?.costMasterId != null || line?.linkMeta?.masterRefs?.costMasterId != null) acc.costLinked += 1;
+    if (line?.markupRuleId != null || line?.linkMeta?.pricingLink?.matchedMarkupRuleId != null) acc.pricingLinked += 1;
+    if (line?.supplierId != null || line?.linkMeta?.masterRefs?.supplierId != null) acc.supplierLinked += 1;
+    return acc;
+  }, { costLinked: 0, pricingLinked: 0, supplierLinked: 0 });
 }
 
 export default function QuoteBuilder() {
@@ -467,20 +539,24 @@ export default function QuoteBuilder() {
       const resp = await fetchApi(`/api/travel/quotes/${id}/lines`);
       const rows = Array.isArray(resp?.lines) ? resp.lines : [];
       setPersistedLines(
-        rows.map((r) => ({
-          key: `srv-${r.id}`,
-          id: r.id,
-          lineType: r.lineType || "other",
-          description: r.description || "",
-          quantity: Number(r.quantity) || 1,
-          unitPrice: Number(r.unitPrice) || 0,
-          amount: Number(r.amount) || 0,
-          supplierId: r.supplierId == null ? "" : String(r.supplierId),
-          notes: r.notes || "",
-          currency: r.currency || null,
-          taxPercent: r.taxPercent == null ? 0 : Number(r.taxPercent) || 0,
-          sortOrder: r.sortOrder || 0,
-        })),
+        rows.map((r) => {
+          const parsedNotes = parseLineNotesPayload(r.notes);
+          return {
+            key: `srv-${r.id}`,
+            id: r.id,
+            lineType: r.lineType || "other",
+            description: r.description || "",
+            quantity: Number(r.quantity) || 1,
+            unitPrice: Number(r.unitPrice) || 0,
+            amount: Number(r.amount) || 0,
+            supplierId: r.supplierId == null ? "" : String(r.supplierId),
+            notes: parsedNotes.visibleNotes || "",
+            linkMeta: normalizeLineLinkMeta(r.linkMeta || parsedNotes.linkMeta, r.supplierId),
+            currency: r.currency || null,
+            taxPercent: r.taxPercent == null ? 0 : Number(r.taxPercent) || 0,
+            sortOrder: r.sortOrder || 0,
+          };
+        }),
       );
     } catch (err) {
       notify.error(err?.data?.error || err?.message || "Failed to load lines");
@@ -719,39 +795,26 @@ export default function QuoteBuilder() {
   const taxAmount = (taxable * (Number(taxPct) || 0)) / 100;
   const grandTotal = taxable + taxAmount;
   const selectedSubBrandLabel = SUB_BRAND_LABELS[subBrand] || subBrand;
-  const customerLabel =
-    selectedCustomer?.name ||
-    contactsById[contactId]?.name ||
-    (contactId ? `Contact #${contactId}` : "Not selected");
-  const internalMarkupDelta = pricingPreview
-    ? Math.max(
-        0,
-        Number(pricingPreview.total || 0) -
-          Number(pricingPreview.subtotal || 0),
-      )
-    : 0;
-  const quoteComposition = LINE_TYPES.map((type) => ({
-    type,
-    count: visibleLines.filter((line) => (line.lineType || "other") === type)
-      .length,
-  })).filter((item) => item.count > 0);
-  const customerActionState =
-    status === "Accepted"
-      ? "Customer accepted"
-      : status === "Rejected"
-        ? "Customer rejected"
-        : shareInfo?.shareUrl
-          ? "Awaiting customer action"
-          : "Ready to share";
-  const customerActionTone =
-    status === "Accepted"
-      ? { fg: "var(--success-color, #22c55e)", bg: "rgba(34, 197, 94, 0.12)" }
-      : status === "Rejected"
-        ? { fg: "var(--danger-color, #f43f5e)", bg: "rgba(244, 63, 94, 0.12)" }
-        : {
-            fg: "var(--primary-color, var(--accent-color))",
-            bg: "rgba(59, 130, 246, 0.12)",
-          };
+  const customerLabel = selectedCustomer?.name || contactsById[contactId]?.name || (contactId ? `Contact #${contactId}` : "Not selected");
+  const internalMarkupDelta = pricingPreview ? Math.max(0, Number(pricingPreview.total || 0) - Number(pricingPreview.subtotal || 0)) : 0;
+  const quoteComposition = LINE_TYPES
+    .map((type) => ({
+      type,
+      count: visibleLines.filter((line) => (line.lineType || "other") === type).length,
+    }))
+    .filter((item) => item.count > 0);
+  const customerActionState = status === "Accepted"
+    ? "Customer accepted"
+    : status === "Rejected"
+      ? "Customer rejected"
+      : shareInfo?.shareUrl
+        ? "Awaiting customer action"
+        : "Ready to share";
+  const customerActionTone = status === "Accepted"
+    ? { fg: "var(--success-color, #22c55e)", bg: "rgba(34, 197, 94, 0.12)" }
+    : status === "Rejected"
+      ? { fg: "var(--danger-color, #f43f5e)", bg: "rgba(244, 63, 94, 0.12)" }
+      : { fg: "var(--primary-color, var(--accent-color))", bg: "rgba(59, 130, 246, 0.12)" };
 
   const addLine = () => setDraftLines([...draftLines, EMPTY_DRAFT()]);
 
@@ -1340,9 +1403,11 @@ export default function QuoteBuilder() {
     setBusyLineKey(row.key);
     try {
       const taxPercent = currentQuoteTaxPercent();
+      const previewLine = pricingPreview?.lines?.find?.((line) => line.lineId === row.id) || null;
+      const linkMeta = mergeLineLinkMeta(row.linkMeta, previewLine, patch?.supplierId ?? row.supplierId);
       await fetchApi(`/api/travel/quotes/${quoteId}/lines/${row.id}`, {
         method: "PUT",
-        body: JSON.stringify({ ...patch, taxPercent }),
+        body: JSON.stringify({ ...patch, taxPercent, ...(row.notes ? { notes: row.notes } : {}), ...(linkMeta ? { linkMeta } : {}) }),
       });
       await syncQuoteTotals(quoteId);
       await refreshLines(quoteId);
@@ -1400,7 +1465,7 @@ export default function QuoteBuilder() {
     return Number.isFinite(n) && n > 0 ? Number(n.toFixed(2)) : 0;
   };
 
-  const buildLinePayload = (row) => {
+  const buildLinePayload = (row, previewLine = null) => {
     const unit = Number(row?.unitPrice);
     if (!Number.isFinite(unit) || unit < 0) return null;
     const body = {
@@ -1415,6 +1480,8 @@ export default function QuoteBuilder() {
       body.supplierId = parseInt(row.supplierId, 10);
     }
     if (row?.notes) body.notes = String(row.notes);
+    const linkMeta = mergeLineLinkMeta(row?.linkMeta, previewLine, row?.supplierId);
+    if (linkMeta) body.linkMeta = linkMeta;
     return body;
   };
 
@@ -1477,18 +1544,20 @@ export default function QuoteBuilder() {
       const latestLines = await fetchApi(`/api/travel/quotes/${id}/lines`);
       const rows = Array.isArray(latestLines?.lines) ? latestLines.lines : [];
       const targetTaxPercent = currentQuoteTaxPercent();
+      const previewById = new Map((pricingPreview?.lines || []).map((line) => [line.lineId, line]));
       for (const row of rows) {
-        const savedTaxPercent =
-          row?.taxPercent == null ? 0 : Number(row.taxPercent) || 0;
+        const savedTaxPercent = row?.taxPercent == null ? 0 : Number(row.taxPercent) || 0;
         if (savedTaxPercent == targetTaxPercent) continue;
         try {
           await fetchApi(`/api/travel/quotes/${id}/lines/${row.id}`, {
             method: "PUT",
-            body: JSON.stringify({ taxPercent: targetTaxPercent }),
+            body: JSON.stringify({
+              taxPercent: targetTaxPercent,
+              ...(parsedNotes.visibleNotes ? { notes: parsedNotes.visibleNotes } : {}),
+              ...(hasLinkMeta ? { linkMeta: nextLinkMeta } : {}),
+            }),
           });
-        } catch {
-          /* keep saving the quote even if one line tax sync fails */
-        }
+        } catch { /* keep saving the quote even if one line tax sync fails */ }
       }
       await syncQuoteTotals(id);
       if (committed > 0) {
@@ -1666,6 +1735,7 @@ export default function QuoteBuilder() {
         `/api/travel/quotes/${quoteId}/pricing-preview`,
       );
       if (resp && typeof resp === "object") {
+        const lines = Array.isArray(resp.lines) ? resp.lines : [];
         setPricingPreview({
           baseSubtotal: Number(resp.baseSubtotal) || 0,
           seasonMultiplier: Number(resp.seasonMultiplier) || 1,
@@ -1673,9 +1743,7 @@ export default function QuoteBuilder() {
           subtotal: Number(resp.subtotal) || 0,
           total: Number(resp.total) || 0,
           currency: resp.currency || currency || "INR",
-          markupApplied: Array.isArray(resp.markupApplied)
-            ? resp.markupApplied
-            : [],
+          markupApplied: Array.isArray(resp.markupApplied) ? resp.markupApplied : [],
           lines: Array.isArray(resp.lines) ? resp.lines : [],
         });
       }
@@ -1843,6 +1911,7 @@ export default function QuoteBuilder() {
           sortOrder: idx,
         };
         if (l.notes) item.notes = String(l.notes);
+        if (l.linkMeta) item.linkMeta = l.linkMeta;
         return item;
       });
 
@@ -1927,6 +1996,7 @@ export default function QuoteBuilder() {
         unitPrice: Number(l.unitPrice) || 0,
         supplierId: l.supplierId != null ? String(l.supplierId) : "",
         notes: l.notes || "",
+        linkMeta: normalizeLineLinkMeta(l.linkMeta, l.supplierId),
         currency: l.currency || t.currency || currency || "INR",
       }));
       setDraftLines((prev) => [...prev, ...newDrafts]);
@@ -3582,13 +3652,7 @@ export default function QuoteBuilder() {
             Keep margin and markup decisions internal while giving the customer
             a cleaner tax and total summary.
           </p>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: 12,
-            }}
-          >
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
             <label style={fieldLabel}>
               Discount %
               <input
@@ -4469,6 +4533,17 @@ const th = {
   fontWeight: 600,
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
+const miniPill = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "4px 10px",
+  borderRadius: 999,
+  background: "rgba(15, 118, 110, 0.12)",
+  color: "#0f766e",
+  border: "1px solid rgba(15, 118, 110, 0.18)",
+  fontSize: 12,
+  fontWeight: 700,
+};
 const empty = {
   padding: 32,
   textAlign: "center",

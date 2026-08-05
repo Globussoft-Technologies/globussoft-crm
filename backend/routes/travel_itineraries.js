@@ -690,16 +690,28 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
           const tplItems = Array.isArray(parsed.items) ? parsed.items : [];
           tplItems.forEach((it, i) => {
             if (!it || !it.itemType || !it.description) return;
-            const cost = it.estimatedCost != null ? Number(it.estimatedCost) : null;
+            const unitCost = it.unitCost != null && it.unitCost !== ""
+              ? Number(it.unitCost)
+              : (it.estimatedCost != null ? Number(it.estimatedCost) : null);
+            const markup = it.markup != null && it.markup !== "" ? Number(it.markup) : null;
+            const gstAmount = it.gstAmount != null && it.gstAmount !== "" ? Number(it.gstAmount) : null;
+            const quantity = it.quantity != null && it.quantity !== "" ? Number(it.quantity) : 1;
+            const templateTotal = it.totalPrice != null && it.totalPrice !== ""
+              ? Number(it.totalPrice)
+              : computeItemLineTotal({ unitCost, quantity, markup, gstAmount });
             templateItemRows.push({
               itemType: String(it.itemType),
-              position: i,
+              position: Number.isFinite(Number(it.position)) ? Number(it.position) : i,
               description: String(it.description),
-              detailsJson: it.locationName ? JSON.stringify({ locationName: it.locationName }) : null,
-              unitCost: cost,
-              totalPrice: cost,
-              unit: "per_person",
-              quantity: 1,
+              detailsJson: normalizeTemplateDetailsJson(it),
+              supplierId: it.supplierId != null && it.supplierId !== "" ? Number(it.supplierId) : null,
+              unitCost,
+              markup,
+              gstAmount,
+              totalPrice: Number.isFinite(templateTotal) ? templateTotal : null,
+              unit: it.unit ? String(it.unit) : "per_person",
+              quantity: Number.isFinite(quantity) && quantity >= 0 ? quantity : 1,
+              direction: it.direction ? String(it.direction) : null,
               dayNumber: it.dayNumber != null ? parseInt(it.dayNumber, 10) : null,
               latitude: it.latitude != null ? Number(it.latitude) : null,
               longitude: it.longitude != null ? Number(it.longitude) : null,
@@ -2873,6 +2885,23 @@ function computeItemLineTotal({ unitCost, quantity, markup, gstAmount }) {
   return Math.round((rate * qty + mk + gst) * 100) / 100;
 }
 
+function normalizeTemplateDetailsJson(item) {
+  if (item?.detailsJson && typeof item.detailsJson === "string") {
+    return item.detailsJson;
+  }
+  if (item?.detailsJson && typeof item.detailsJson === "object" && !Array.isArray(item.detailsJson)) {
+    try {
+      return JSON.stringify(item.detailsJson);
+    } catch (_e) {
+      return null;
+    }
+  }
+  if (item?.locationName != null && String(item.locationName).trim() !== "") {
+    return JSON.stringify({ locationName: String(item.locationName).trim() });
+  }
+  return null;
+}
+
 // After any item add/edit/delete: recompute the itinerary total from its line
 // items (GROUP total = sum of item line totals; per-person is derived as
 // total / pax in the UI), and — if the customer had previously DECLINED —
@@ -4170,6 +4199,7 @@ router.post(
           position: true,
           description: true,
           detailsJson: true,
+          supplierId: true,
           unitCost: true,
           markup: true,
           gstAmount: true,
@@ -4234,6 +4264,7 @@ router.post(
         position: it.position,
         description: it.description,
         detailsJson: it.detailsJson,
+        supplierId: it.supplierId,
         unit: it.unit,
         quantity: it.quantity != null ? String(it.quantity) : null,
         unitCost: it.unitCost != null ? String(it.unitCost) : null,

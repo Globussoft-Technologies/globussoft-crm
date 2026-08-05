@@ -169,6 +169,46 @@ function buildFlightDetails(fields) {
   return Object.keys(obj).length > 0 ? JSON.stringify(obj) : "";
 }
 
+function parseDetailsObject(detailsJson) {
+  if (!detailsJson) return {};
+  try {
+    const parsed = JSON.parse(detailsJson);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function mergePricingLinkDetails(detailsJson, preview, supplierId) {
+  if (!preview?.matched) return detailsJson || "";
+  const parsed = parseDetailsObject(detailsJson);
+  if (parsed == null && detailsJson) return detailsJson;
+  const details = parsed || {};
+  const masterRefs = details.masterRefs && typeof details.masterRefs === "object" && !Array.isArray(details.masterRefs)
+    ? { ...details.masterRefs }
+    : {};
+  if (preview.costMasterId != null && Number.isFinite(Number(preview.costMasterId))) {
+    masterRefs.costMasterId = Number(preview.costMasterId);
+  }
+  if (supplierId !== "" && supplierId != null && Number.isFinite(Number(supplierId))) {
+    masterRefs.supplierId = Number(supplierId);
+  }
+  const next = { ...details };
+  if (Object.keys(masterRefs).length > 0) next.masterRefs = masterRefs;
+  next.pricingLink = {
+    ...(details.pricingLink && typeof details.pricingLink === "object" && !Array.isArray(details.pricingLink)
+      ? details.pricingLink
+      : {}),
+    baseRate: preview.baseRate ?? null,
+    seasonMultiplier: preview.seasonMultiplier ?? null,
+    matchedSeasonName: preview.matchedSeasonName || null,
+    matchedMarkupRuleId: preview.matchedMarkupRuleId ?? null,
+    currency: preview.currency || null,
+    linkedAt: new Date().toISOString(),
+  };
+  return JSON.stringify(next);
+}
+
 // Merge flight fields into a values object (for initializing edit mode).
 function mergeFlightFields(values) {
   const parsed = parseFlightDetails(values.detailsJson);
@@ -689,7 +729,8 @@ export default function ItineraryDetail() {
         description: newItem.description,
       };
       if (newItem.position !== "") body.position = Number(newItem.position);
-      if (newItem.detailsJson !== "") body.detailsJson = newItem.detailsJson;
+      const mergedDetailsJson = mergePricingLinkDetails(newItem.detailsJson, pricingPreview, newItem.supplierId);
+      if (mergedDetailsJson !== "") body.detailsJson = mergedDetailsJson;
       if (newItem.supplierId !== "") body.supplierId = Number(newItem.supplierId);
       if (newItem.unitCost !== "") body.unitCost = Number(newItem.unitCost);
       if (newItem.markup !== "") body.markup = Number(newItem.markup);

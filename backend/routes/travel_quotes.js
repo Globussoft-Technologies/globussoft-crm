@@ -81,14 +81,8 @@ const ratehawkClient = require("../services/ratehawkClient");
 const bookingExpediaClient = require("../services/bookingExpediaClient");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
-const VALID_LINE_TYPES = [
-  "hotel",
-  "flight",
-  "transport",
-  "visa",
-  "service",
-  "other",
-];
+const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
+const QUOTE_LINE_LINK_MARKER = "[[QUOTE_LINK_META]]";
 // G020 (PRD §3.2 FR-3.2.3) — dimension drives how the line's quantity
 // renders in the quote PDF (e.g. "₹15,000 per pax × 4 pax = ₹60,000" when
 // dimension="perPax"). Null is accepted by the validator (back-compat
@@ -373,19 +367,19 @@ async function hydrateTravelQuoteListRows(req, quotes) {
   const [contacts, assignees] = await Promise.all([
     contactIds.length
       ? prisma.contact.findMany({
-          where: { tenantId: req.travelTenant.id, id: { in: contactIds } },
-          select: { id: true, name: true },
-        })
+        where: { tenantId: req.travelTenant.id, id: { in: contactIds } },
+        select: { id: true, name: true },
+      })
       : Promise.resolve([]),
     assigneeIds.length
       ? prisma.user.findMany({
-          where: {
-            tenantId: req.travelTenant.id,
-            deactivatedAt: null,
-            id: { in: assigneeIds },
-          },
-          select: { id: true, name: true, email: true },
-        })
+        where: {
+          tenantId: req.travelTenant.id,
+          deactivatedAt: null,
+          id: { in: assigneeIds },
+        },
+        select: { id: true, name: true, email: true },
+      })
       : Promise.resolve([]),
   ]);
 
@@ -557,11 +551,203 @@ async function findComplexVisaCase(tenantId, contactId) {
 
 function visaComplexCaseError() {
   const err = new Error(
-    "Contact has a complex visa case — structured quotation is disabled; build this quote manually",
+    "Contact has a complex visa case - structured quotation is disabled; build this quote manually",
   );
   err.status = 422;
   err.code = "VISA_COMPLEX_CASE_MANUAL_ONLY";
   return err;
+}
+
+function parseQuoteLineNotes(raw) {
+  const text = raw == null ? "" : String(raw);
+  const idx = text.indexOf(QUOTE_LINE_LINK_MARKER);
+  if (idx == -1) {
+    return { visibleNotes: text, linkMeta: null };
+  }
+  const visibleNotes = text.slice(0, idx).trimEnd();
+  const encoded = text.slice(idx + QUOTE_LINE_LINK_MARKER.length).trim();
+  if (!encoded) {
+    return { visibleNotes, linkMeta: null };
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { visibleNotes, linkMeta: null };
+    }
+    return { visibleNotes, linkMeta: parsed };
+  } catch {
+    return { visibleNotes: text, linkMeta: null };
+  }
+}
+
+function composeQuoteLineNotes(visibleNotes, linkMeta) {
+  const cleanNotes = visibleNotes == null ? "" : String(visibleNotes).trim();
+  if (!linkMeta || typeof linkMeta !== "object" || Array.isArray(linkMeta) || Object.keys(linkMeta).length === 0) {
+    return cleanNotes || null;
+  }
+  let encoded = null;
+  try {
+    encoded = Buffer.from(JSON.stringify(linkMeta), "utf8").toString("base64");
+  } catch {
+    return cleanNotes || null;
+  }
+  return cleanNotes
+    ? `${cleanNotes}\n${QUOTE_LINE_LINK_MARKER}${encoded}`
+    : `${QUOTE_LINE_LINK_MARKER}${encoded}`;
+}
+
+function normalizeQuoteLineLinkMeta(linkMeta, fallbackSupplierId = null) {
+  if (!linkMeta || typeof linkMeta !== "object" || Array.isArray(linkMeta)) return null;
+  const out = { ...linkMeta };
+  const masterRefs = out.masterRefs && typeof out.masterRefs === "object" && !Array.isArray(out.masterRefs)
+    ? { ...out.masterRefs }
+    : {};
+  if (
+    masterRefs.supplierId == null
+    && fallbackSupplierId != null
+    && Number.isFinite(Number(fallbackSupplierId))
+  ) {
+    masterRefs.supplierId = Number(fallbackSupplierId);
+  }
+  if (Object.keys(masterRefs).length > 0) out.masterRefs = masterRefs;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function buildRouteOrSkuCandidates(line, linkMeta = null) {
+  const candidates = new Set();
+  const routeOrSku = linkMeta?.masterRefs?.routeOrSku;
+  if (routeOrSku) candidates.add(String(routeOrSku).trim());
+
+  const description = String(line?.description || "").trim();
+  if (!description) return Array.from(candidates);
+
+  if (line?.lineType === "hotel") {
+    const hotelMatch = /^(.+?),\s*([^\u2014-]+?)\s*(?:\u2014|-)\s*(.+)$/.exec(description);
+    if (hotelMatch) {
+      const hotelName = hotelMatch[1].trim();
+      const city = hotelMatch[2].trim();
+      const roomType = hotelMatch[3].trim();
+      candidates.add(`${city}:${hotelName}:${roomType}`);
+    }
+  }
+
+  const routeMatch = /\b([A-Za-z]{3})\s*(?:\u2192|->|to|-)\s*([A-Za-z]{3})\b/i.exec(description);
+  if (routeMatch) {
+    candidates.add(`${routeMatch[1].toUpperCase()}-${routeMatch[2].toUpperCase()}`);
+  }
+
+  const transferMatch = /^\s*Transfer:\s*(.+?)\s*(?:\u2192|->|to|-)\s*(.+?)(?:\s*\(|$)/i.exec(description);
+  if (transferMatch) {
+    candidates.add(`${transferMatch[1].trim()}-${transferMatch[2].trim()}`);
+  }
+
+  return Array.from(candidates).filter(Boolean);
+}
+
+function mergeQuoteLineLinkMeta(existingMeta, additions, fallbackSupplierId = null) {
+  const base = normalizeQuoteLineLinkMeta(existingMeta, fallbackSupplierId) || {};
+  const next = additions && typeof additions === "object" && !Array.isArray(additions) ? additions : {};
+  const merged = {
+    ...base,
+    ...next,
+    masterRefs: {
+      ...(base.masterRefs || {}),
+      ...(next.masterRefs || {}),
+    },
+    pricingLink: {
+      ...(base.pricingLink || {}),
+      ...(next.pricingLink || {}),
+    },
+  };
+  if (!Object.keys(merged.masterRefs).length) delete merged.masterRefs;
+  if (!Object.keys(merged.pricingLink).length) delete merged.pricingLink;
+  return normalizeQuoteLineLinkMeta(merged, fallbackSupplierId);
+}
+
+async function attachQuoteBreakdownConnections(tenantId, subBrand, rawLines, breakdownLines) {
+  if (!Array.isArray(rawLines) || !Array.isArray(breakdownLines) || breakdownLines.length === 0) {
+    return breakdownLines;
+  }
+
+  const candidateRouteOrSkus = new Set();
+  const lineMetaById = new Map();
+  const lineById = new Map();
+
+  for (const line of rawLines) {
+    const { linkMeta } = parseQuoteLineNotes(line?.notes);
+    lineMetaById.set(line.id, linkMeta);
+    lineById.set(line.id, line);
+    for (const candidate of buildRouteOrSkuCandidates(line, linkMeta)) {
+      if (candidate) candidateRouteOrSkus.add(candidate);
+    }
+  }
+
+  const costRows = candidateRouteOrSkus.size > 0
+    ? await prisma.travelCostMaster.findMany({
+      where: {
+        tenantId,
+        subBrand,
+        isActive: true,
+        routeOrSku: { in: Array.from(candidateRouteOrSkus) },
+      },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+    })
+    : [];
+
+  const costRowsByNaturalKey = new Map();
+  for (const row of costRows) {
+    const key = `${row.category}|${row.routeOrSku}|${row.supplierId ?? ""}`;
+    if (!costRowsByNaturalKey.has(key)) costRowsByNaturalKey.set(key, row);
+    const wildcardKey = `${row.category}|${row.routeOrSku}|`;
+    if (!costRowsByNaturalKey.has(wildcardKey)) costRowsByNaturalKey.set(wildcardKey, row);
+  }
+
+  return breakdownLines.map((lineBreakdown) => {
+    const rawLine = lineById.get(lineBreakdown.lineId);
+    const existingMeta = lineMetaById.get(lineBreakdown.lineId);
+    const candidates = rawLine ? buildRouteOrSkuCandidates(rawLine, existingMeta) : [];
+    const supplierKey = rawLine?.supplierId != null ? String(rawLine.supplierId) : "";
+    let matchedCost = null;
+    for (const candidate of candidates) {
+      matchedCost = costRowsByNaturalKey.get(`${lineBreakdown.lineType}|${candidate}|${supplierKey}`)
+        || costRowsByNaturalKey.get(`${lineBreakdown.lineType}|${candidate}|`);
+      if (matchedCost) break;
+    }
+
+    const mergedMeta = mergeQuoteLineLinkMeta(
+      existingMeta,
+      {
+        masterRefs: matchedCost
+          ? {
+            costMasterId: matchedCost.id,
+            routeOrSku: matchedCost.routeOrSku,
+            supplierId: matchedCost.supplierId ?? rawLine?.supplierId ?? null,
+          }
+          : undefined,
+        pricingLink: {
+          baseRate: matchedCost ? Number(matchedCost.baseRate) : undefined,
+          currency: matchedCost?.currency || rawLine?.currency || null,
+          seasonMultiplier: lineBreakdown.seasonMultiplier ?? 1,
+          matchedSeasonName: lineBreakdown.matchedSeasonName ?? null,
+          matchedMarkupRuleId: lineBreakdown.markupRuleId ?? null,
+          linkedAt: new Date().toISOString(),
+        },
+      },
+      rawLine?.supplierId ?? null,
+    );
+
+    return {
+      ...lineBreakdown,
+      costMasterId: mergedMeta?.masterRefs?.costMasterId ?? null,
+      supplierId: mergedMeta?.masterRefs?.supplierId ?? rawLine?.supplierId ?? null,
+      routeOrSku: mergedMeta?.masterRefs?.routeOrSku ?? null,
+      baseRate: mergedMeta?.pricingLink?.baseRate ?? lineBreakdown.baseAmount ?? lineBreakdown.amount ?? 0,
+      subtotal: lineBreakdown.seasonAmount ?? lineBreakdown.amount ?? 0,
+      grandTotal: lineBreakdown.finalAmount ?? lineBreakdown.amountWithMarkup ?? lineBreakdown.amount ?? 0,
+      currency: rawLine?.currency || null,
+      linkMeta: mergedMeta,
+    };
+  });
 }
 
 // GET /api/travel/quotes
@@ -2811,7 +2997,15 @@ router.get(
         where: { quoteId, tenantId: req.travelTenant.id },
         orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       });
-      res.json({ lines, total: lines.length });
+      const shapedLines = lines.map((line) => {
+        const parsedNotes = parseQuoteLineNotes(line.notes);
+        return {
+          ...line,
+          notes: parsedNotes.visibleNotes || null,
+          linkMeta: normalizeQuoteLineLinkMeta(parsedNotes.linkMeta, line.supplierId),
+        };
+      });
+      res.json({ lines: shapedLines, total: shapedLines.length });
     } catch (e) {
       if (e.status)
         return res.status(e.status).json({ error: e.message, code: e.code });
@@ -2837,14 +3031,8 @@ router.post(
       if (!quote) return;
 
       const {
-        lineType,
-        description,
-        quantity,
-        unitPrice,
-        currency,
-        supplierId,
-        sortOrder,
-        notes,
+        lineType, description, quantity, unitPrice,
+        currency, supplierId, sortOrder, notes,
         // G020 — new optional fields
         hsnSac,
         taxPercent,
@@ -2894,8 +3082,7 @@ router.post(
           currency: currency ? String(currency) : quote.currency,
           supplierId: supplierIdInt,
           sortOrder: Number.isFinite(parseInt(sortOrder, 10))
-            ? parseInt(sortOrder, 10)
-            : 0,
+            ? parseInt(sortOrder, 10) : 0,
           notes: notes ? String(notes) : null,
           // G020 additive nullable fields
           hsnSac:
@@ -2961,14 +3148,8 @@ router.put(
 
       const data = {};
       const {
-        lineType,
-        description,
-        quantity,
-        unitPrice,
-        currency,
-        supplierId,
-        sortOrder,
-        notes,
+        lineType, description, quantity, unitPrice,
+        currency, supplierId, sortOrder, notes,
         // G020 — new optional fields
         hsnSac,
         taxPercent,
@@ -3034,8 +3215,7 @@ router.put(
         }
         data.sortOrder = so;
       }
-      if (notes !== undefined)
-        data.notes = notes === null ? null : String(notes);
+      if (notes !== undefined) data.notes = notes === null ? null : String(notes);
 
       // G020 — additive nullable line extension fields.
       if (hsnSac !== undefined) {
@@ -3659,7 +3839,7 @@ router.post(
           let meta = {};
           try {
             meta = JSON.parse(p.metadata || "{}");
-          } catch (_) {}
+          } catch (_) { }
           if (meta.type !== "travel-quote-advance" || p.invoiceId) continue;
           await prisma.payment.update({
             where: { id: p.id },
@@ -4046,10 +4226,17 @@ router.get(
       // composeQuoteBreakdown helper so the customer-facing envelope shows
       // the exact same math.
       const breakdown = composeQuoteBreakdown(quote, lines, seasons, rules);
+      const linkedLines = await attachQuoteBreakdownConnections(
+        req.travelTenant.id,
+        quote.subBrand,
+        lines,
+        breakdown.lines,
+      );
 
       res.json({
         ...breakdown,
         currency: quote.currency,
+        lines: linkedLines,
       });
     } catch (e) {
       if (e.status)
@@ -4938,7 +5125,7 @@ router.post(
       if (promote) {
         await prisma.travelQuote
           .update({ where: { id }, data: { status: "Sent" } })
-          .catch(() => {});
+          .catch(() => { });
       }
 
       // Deliver to the contact: email if present, WhatsApp if a phone is on file.
@@ -4999,7 +5186,7 @@ router.post(
           subBrand: quote.subBrand,
           channel: channelsUsed.join("+") || "none",
         },
-      ).catch(() => {});
+      ).catch(() => { });
 
       res.json({
         shareToken: token,

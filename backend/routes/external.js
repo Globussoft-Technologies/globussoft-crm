@@ -104,6 +104,40 @@ function resolvePartnerOrigin(body) {
   );
 }
 
+function resolveRequestOrigin(req) {
+  const bodyOrigin = resolvePartnerOrigin(req?.body);
+  if (bodyOrigin) return bodyOrigin;
+
+  const headerOrigin = normalizeEmbedOrigin(req?.headers?.origin || req?.headers?.Origin);
+  if (headerOrigin) return headerOrigin;
+
+  const referer = req?.headers?.referer || req?.headers?.referrer;
+  if (referer) {
+    try {
+      return normalizeEmbedOrigin(new URL(referer).origin);
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function hasConfiguredEmbedAllowlist(allowlistJson) {
+  if (!allowlistJson) return false;
+
+  let allowlist = allowlistJson;
+  if (typeof allowlistJson === "string") {
+    try {
+      allowlist = JSON.parse(allowlistJson);
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  return Array.isArray(allowlist) && allowlist.length > 0;
+}
+
 function splitCustomLeadFields(body) {
   if (!body || typeof body !== "object") return { rawCustomFields: {}, storageCustomFields: {} };
   const rawCustomFields = {};
@@ -350,7 +384,15 @@ router.post("/leads", async (req, res) => {
       console.error("[external] tenant config lookup failed:", e.message);
     }
     const isGenericLeadAwaitingCall = (tenantCfg?.vertical || "generic") === "generic";
-    const partnerOrigin = resolvePartnerOrigin(req.body);
+    const partnerOrigin = resolveRequestOrigin(req);
+    const hasEmbedAllowlist = hasConfiguredEmbedAllowlist(tenantCfg?.embedAllowlistJson);
+
+    if (hasEmbedAllowlist && !partnerOrigin) {
+      return res.status(403).json({
+        error: "Partner origin is required",
+        code: "ORIGIN_REQUIRED",
+      });
+    }
 
     if (partnerOrigin && !isEmbedOriginAllowed(partnerOrigin, tenantCfg?.embedAllowlistJson)) {
       await notifyAdminsOfBlockedLeadOrigin({

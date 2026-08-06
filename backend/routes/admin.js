@@ -25,6 +25,7 @@ const path = require('path');
 const fs = require('fs');
 const prisma = require('../lib/prisma');
 const { verifyToken, verifyRole } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 const { runBackup, listBackups, getBackupDir } = require('../cron/backupEngine');
 const backfillLastVisitEngine = require('../cron/backfillLastVisitEngine');
 const { writeAudit } = require('../lib/audit');
@@ -533,7 +534,7 @@ router.post(
 // Response shape (400): { error, code: 'INVALID_TENANT_ID' }
 router.get(
   '/tenants/:id/embed-allowlist',
-  verifyRole(['ADMIN']),
+  requirePermission('settings', 'manage'),
   async (req, res) => {
     try {
       const targetTenantId = parseInt(req.params.id, 10);
@@ -637,7 +638,7 @@ const HTTPS_ORIGIN_RE = HTTPS_ORIGIN_RE_V2;
 
 router.patch(
   '/tenants/:id/embed-allowlist',
-  verifyRole(['ADMIN']),
+  requirePermission('settings', 'manage'),
   async (req, res) => {
     try {
       const targetTenantId = parseInt(req.params.id, 10);

@@ -3074,7 +3074,7 @@ router.put("/:id", verifyToken, async (req, res) => {
 
                   });
 
-                  const formattedAmount = `?${inst.amount.toLocaleString('en-IN')}`;
+                  const formattedAmount = `₹${inst.amount.toLocaleString('en-IN')}`;
 
                   return {
 
@@ -3426,7 +3426,7 @@ router.post("/:id/sync-investment", verifyToken, async (req, res) => {
 
       });
 
-      const formattedAmount = `?${inst.amount.toLocaleString('en-IN')}`;
+      const formattedAmount = `₹${inst.amount.toLocaleString('en-IN')}`;
 
       return {
 

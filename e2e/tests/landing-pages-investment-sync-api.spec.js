@@ -35,6 +35,12 @@ async function assertOk(response, label) {
   }
 }
 
+function uniqueTripCode(base) {
+  // Defensive suffix so retries / stale demo data do not collide on the
+  // tripCode unique constraint (see previous api_tests failures).
+  return `${base}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
+}
+
 async function createTrip(request, tripCode, destination, pricePerStudent, dayOffsets = [30, 40]) {
   const tripRes = await request.post(`${API_BASE}/travel/trips`, {
     headers: adminHeaders,
@@ -98,7 +104,7 @@ test.describe('landing-pages-investment-sync-api', () => {
   });
 
   test('POST /landing-pages/:id — auto-fill investment when linking to trip with payment plan', async ({ request }) => {
-    const trip = await createTrip(request, 'tmc-test-sync-001', 'Jaipur', 95000);
+    const trip = await createTrip(request, uniqueTripCode('tmc-test-sync-001'), 'Jaipur', 95000);
     await createPaymentPlan(request, trip.id, [
       { dueDate: '2026-04-20', amount: 25000, reminderDays: 7 },
       { dueDate: '2026-05-15', amount: 35000, reminderDays: 7 },
@@ -142,7 +148,7 @@ test.describe('landing-pages-investment-sync-api', () => {
   });
 
   test('POST /landing-pages/:id/sync-investment — regenerate installments from trip', async ({ request }) => {
-    const trip = await createTrip(request, 'tmc-test-sync-002', 'Andaman', 120000, [50, 60]);
+    const trip = await createTrip(request, uniqueTripCode('tmc-test-sync-002'), 'Andaman', 120000, [50, 60]);
     await createPaymentPlan(request, trip.id, [
       { dueDate: '2026-05-01', amount: 40000, reminderDays: 7 },
       { dueDate: '2026-06-01', amount: 40000, reminderDays: 7 },

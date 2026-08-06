@@ -42,6 +42,7 @@
       var apiBase = cfg.apiBase || params.get('api') || 'https://crm.globusdemos.com';
       var slug    = cfg.slug    || params.get('slug') || '';
       var apiKey  = cfg.apiKey  || params.get('key') || '';
+      var partnerOrigin = cfg.partnerOrigin || params.get('partner_origin') || '';
       var title   = cfg.title   || params.get('title') || 'Book your appointment';
       var subtitle = cfg.subtitle || params.get('sub') || 'We\u2019ll call you within 30 minutes to confirm.';
       var accent  = cfg.accent  || params.get('color') || '#0ea5e9';
@@ -106,6 +107,9 @@
           source: 'website-form',
           note: [fd.get('service') ? 'Service: ' + fd.get('service') : null, fd.get('note')].filter(Boolean).join(' | '),
         };
+        if (partnerOrigin) {
+          payload.partnerOrigin = partnerOrigin;
+        }
 
         // Two delivery modes:
         //   (a) public booking page if `slug` is set (creates Patient + Visit, no key)

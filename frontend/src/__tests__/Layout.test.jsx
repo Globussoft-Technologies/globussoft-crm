@@ -11,6 +11,14 @@ vi.mock('../components/Omnibar', () => ({ default: () => <div data-testid="omnib
 vi.mock('../components/Presence', () => ({ default: () => <div data-testid="presence-stub" /> }));
 vi.mock('../components/Softphone', () => ({ default: () => <div data-testid="softphone-stub" /> }));
 vi.mock('../components/NotificationBell', () => ({ default: () => <div data-testid="bell-stub" /> }));
+const notifyMock = {
+  success: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  confirm: vi.fn(),
+  prompt: vi.fn(),
+};
+vi.mock('../utils/notify', () => ({ useNotify: () => notifyMock }));
 
 // #555: mock fetchApi (Layout no longer pings /api/auth/tenants under
 // lock-per-session — the chip reads from AuthContext.tenant — but
@@ -57,6 +65,12 @@ describe('Layout', () => {
     setupPushMock.mockClear();
     fetchApiMock.mockReset();
     fetchApiMock.mockResolvedValue({});
+    notifyMock.success.mockReset();
+    notifyMock.error.mockReset();
+    notifyMock.info.mockReset();
+    notifyMock.confirm.mockReset();
+    notifyMock.prompt.mockReset();
+    notifyMock.confirm.mockResolvedValue(true);
   });
 
   it('renders Sidebar + Omnibar + Presence + NotificationBell + outlet', () => {
@@ -93,7 +107,7 @@ describe('Layout', () => {
     expect(setupPushMock).toHaveBeenCalledWith('t-abc');
   });
 
-  it('logout button has aria-label + is clickable', () => {
+  it('logout button has aria-label + opens the in-app confirm dialog', () => {
     renderLayout();
     const btn = screen.getByLabelText(/Log out/i);
     expect(btn).toBeInTheDocument();
@@ -260,6 +274,19 @@ describe('Layout', () => {
     );
     expect(logoutCalls.length).toBeGreaterThanOrEqual(1);
     expect(logoutCalls[0][1]).toMatchObject({ method: 'POST', silent: true });
+  });
+
+  it('does not call logout APIs when the user cancels the confirm dialog', async () => {
+    notifyMock.confirm.mockResolvedValueOnce(false);
+
+    renderLayout();
+    fireEvent.click(screen.getByLabelText(/Log out/i));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const logoutCalls = fetchApiMock.mock.calls.filter(
+      (c) => c[0] === '/api/auth/logout',
+    );
+    expect(logoutCalls).toHaveLength(0);
   });
 
   // #862 -- theme toggle button is gated on ThemeContext.toggleTheme. With

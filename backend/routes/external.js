@@ -23,7 +23,12 @@ const { classifyLead } = require("../lib/leadJunkFilter");
 const { pickAssignee } = require("../lib/leadAutoRouter");
 const { computeFirstResponseDueAt } = require("../lib/leadSla");
 const { writeLeadCustomFieldValues } = require("../lib/leadCustomFieldValues");
-const { notifyAdminsOfNewLead } = require("../lib/leadNotifications");
+const {
+  isEmbedOriginAllowed,
+  notifyAdminsOfBlockedLeadOrigin,
+  notifyAdminsOfNewLead,
+  normalizeEmbedOrigin,
+} = require("../lib/leadNotifications");
 
 const router = express.Router();
 
@@ -86,6 +91,17 @@ function resolveSubmittedSource(body) {
     || normalizeSubmittedSource(body.lead_source)
     || normalizeSubmittedSource(body.utm?.source)
     || normalizeSubmittedSource(body.utm?.utm_source);
+}
+
+function resolvePartnerOrigin(body) {
+  if (!body || typeof body !== "object") return null;
+  return normalizeEmbedOrigin(
+    body.partnerOrigin
+      || body.embedOrigin
+      || body.origin
+      || body.referrerOrigin
+      || body.parentOrigin,
+  );
 }
 
 function splitCustomLeadFields(body) {
@@ -328,12 +344,25 @@ router.post("/leads", async (req, res) => {
     try {
       tenantCfg = await prisma.tenant.findUnique({
         where: { id: req.tenantId },
-        select: { vertical: true, callifiedAutoCampaignId: true },
+        select: { vertical: true, callifiedAutoCampaignId: true, embedAllowlistJson: true },
       });
     } catch (e) {
       console.error("[external] tenant config lookup failed:", e.message);
     }
     const isGenericLeadAwaitingCall = (tenantCfg?.vertical || "generic") === "generic";
+    const partnerOrigin = resolvePartnerOrigin(req.body);
+
+    if (partnerOrigin && !isEmbedOriginAllowed(partnerOrigin, tenantCfg?.embedAllowlistJson)) {
+      await notifyAdminsOfBlockedLeadOrigin({
+        tenantId: req.tenantId,
+        origin: partnerOrigin,
+        io: req.io || null,
+      });
+      return res.status(403).json({
+        error: "Partner origin is not allowed",
+        code: "ORIGIN_NOT_ALLOWED",
+      });
+    }
 
     // Run the junk filter before persisting (rules + optional Gemini AI)
     const verdict = await classifyLead({

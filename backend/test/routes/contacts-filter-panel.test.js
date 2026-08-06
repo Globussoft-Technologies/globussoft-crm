@@ -595,7 +595,9 @@ describe('GET /api/contacts?filters=<JSON> — generic where-clause builder', ()
     expect(res.status).toBe(200);
     expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1 },
-      select: { id: true },
+      // fieldType comes back too — it decides which typed column on
+      // LeadCustomFieldValue the clause probes (valueDate vs valueText).
+      select: { id: true, fieldType: true },
     });
     const call = prisma.contact.findMany.mock.calls[0][0];
     expect(call.where.AND).toEqual([
@@ -727,6 +729,107 @@ describe('GET /api/contacts?filters=<JSON> — generic where-clause builder', ()
 
       const call = prisma.contact.findMany.mock.calls[0][0];
       expect(call.where.AND).toEqual([{ id: { in: [] } }]);
+    });
+  });
+
+  describe('"between" operator — the calendar range a date field is picked with', () => {
+    const andOf = () => prisma.contact.findMany.mock.calls[0][0].where.AND;
+
+    test('[from, to] → one inclusive-of-both-days range', async () => {
+      const filters = [{ field: 'createdAt', operator: 'between', values: ['2026-08-01', '2026-08-31'] }];
+      const res = await request(makeApp()).get(`/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`);
+
+      expect(res.status).toBe(200);
+      const r = andOf()[0].createdAt;
+      expect(r.gte.toISOString()).toBe('2026-08-01T00:00:00.000Z');
+      // End day is exclusive-of-the-NEXT-day, so a timestamp at any hour on
+      // Aug 31 still matches. `lte` against Aug 31 midnight would drop them.
+      expect(r.lt.toISOString()).toBe('2026-09-01T00:00:00.000Z');
+    });
+
+    test('same date on both ends → that single day', async () => {
+      const filters = [{ field: 'createdAt', operator: 'between', values: ['2026-08-03', '2026-08-03'] }];
+      await request(makeApp()).get(`/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`);
+
+      const r = andOf()[0].createdAt;
+      expect(r.gte.toISOString()).toBe('2026-08-03T00:00:00.000Z');
+      expect(r.lt.toISOString()).toBe('2026-08-04T00:00:00.000Z');
+    });
+
+    test('open-ended [from, ""] → only a lower bound; the blank end is not shifted into `from`', async () => {
+      const filters = [{ field: 'createdAt', operator: 'between', values: ['2026-05-01', ''] }];
+      await request(makeApp()).get(`/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`);
+
+      const r = andOf()[0].createdAt;
+      expect(r.gte.toISOString()).toBe('2026-05-01T00:00:00.000Z');
+      expect(r.lt).toBeUndefined();
+    });
+
+    test('open-ended ["", to] → only an upper bound', async () => {
+      const filters = [{ field: 'createdAt', operator: 'between', values: ['', '2026-05-01'] }];
+      await request(makeApp()).get(`/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`);
+
+      const r = andOf()[0].createdAt;
+      expect(r.gte).toBeUndefined();
+      expect(r.lt.toISOString()).toBe('2026-05-02T00:00:00.000Z');
+    });
+
+    test('both ends blank / unparseable → clause dropped, not an empty range', async () => {
+      const filters = [{ field: 'createdAt', operator: 'between', values: ['', 'not-a-date'] }];
+      const res = await request(makeApp()).get(`/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`);
+
+      expect(res.status).toBe(200);
+      expect(prisma.contact.findMany.mock.calls[0][0].where.AND).toBeUndefined();
+    });
+
+    test('"between" on a non-date field is ignored', async () => {
+      const filters = [{ field: 'source', operator: 'between', values: ['2026-01-01', '2026-12-31'] }];
+      await request(makeApp()).get(`/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`);
+
+      expect(prisma.contact.findMany.mock.calls[0][0].where.AND).toBeUndefined();
+    });
+  });
+
+  describe('custom DATE fields query valueDate, not valueText', () => {
+    // Regression: every custom field was handed to the clause builder as
+    // "text", so a Date-picker field probed valueText — always NULL for a
+    // date field, since its values live in valueDate. `between` then built
+    // no clause at all and the request came back completely UNFILTERED,
+    // which reads as "the filter did nothing" rather than as an error.
+    beforeEach(() => {
+      prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([
+        { id: 7, fieldType: 'date' },
+        { id: 9, fieldType: 'dropdown' },
+      ]);
+    });
+
+    test('between on a custom date field → valueDate range on the relation', async () => {
+      const filters = [{ field: 'custom_7', operator: 'between', values: ['2026-08-01', '2026-08-31'] }];
+      const res = await request(makeApp()).get(`/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`);
+
+      expect(res.status).toBe(200);
+      const some = prisma.contact.findMany.mock.calls[0][0].where.AND[0].leadCustomFieldValues.some;
+      expect(some.fieldId).toBe(7);
+      expect(some.valueDate.gte.toISOString()).toBe('2026-08-01T00:00:00.000Z');
+      expect(some.valueDate.lt.toISOString()).toBe('2026-09-01T00:00:00.000Z');
+      expect(some.valueText).toBeUndefined();
+    });
+
+    test('is_not_empty on a custom date field checks valueDate', async () => {
+      const filters = [{ field: 'custom_7', operator: 'is_not_empty', values: [] }];
+      await request(makeApp()).get(`/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`);
+
+      const some = prisma.contact.findMany.mock.calls[0][0].where.AND[0].leadCustomFieldValues.some;
+      expect(some).toEqual({ fieldId: 7, valueDate: { not: null } });
+    });
+
+    test('a non-date custom field still matches on valueText', async () => {
+      const filters = [{ field: 'custom_9', operator: 'contains', values: ['Google'] }];
+      await request(makeApp()).get(`/api/contacts?filters=${encodeURIComponent(JSON.stringify(filters))}`);
+
+      const some = prisma.contact.findMany.mock.calls[0][0].where.AND[0].leadCustomFieldValues.some;
+      expect(some.fieldId).toBe(9);
+      expect(some.OR).toEqual([{ valueText: { contains: 'Google' } }]);
     });
   });
 

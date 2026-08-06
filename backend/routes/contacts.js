@@ -206,7 +206,10 @@ const FILTERABLE_FIELDS = {
   assignedToId: { column: 'assignedToId', kind: 'id', label: 'Sales Owner' },
 };
 
-const FILTER_OPERATORS = ['contains', 'not_contains', 'is_empty', 'is_not_empty'];
+// `between` is date-only: it takes [from, to] (either side omittable for an
+// open-ended range) and is what a date field offers instead of the
+// checkbox-of-every-stored-day list the other kinds use.
+const FILTER_OPERATORS = ['contains', 'not_contains', 'is_empty', 'is_not_empty', 'between'];
 
 // NOTE: there is deliberately NO "has-data" gate on the field list.
 //
@@ -239,6 +242,18 @@ const FILTER_OPERATORS = ['contains', 'not_contains', 'is_empty', 'is_not_empty'
 // without needing per-type clause branches.
 const CUSTOM_FIELD_PREFIX = 'custom_';
 
+// Maps a LeadCustomFieldDefinition.fieldType to the filter `kind` that
+// drives its operator set and value UI. Mirrors the typed-column split in
+// LeadCustomFieldValue: date → valueDate, number → valueNumber, checkbox →
+// valueBool, and everything else → valueText. Types not listed fall back to
+// "text" (textarea / url / dropdown / radio / multiselect all live in
+// valueText and are matched as strings).
+const CUSTOM_FIELD_TYPE_TO_KIND = {
+  date: 'date',
+  number: 'number',
+  checkbox: 'boolean',
+};
+
 function isCustomField(field) {
   return typeof field === 'string' && field.startsWith(CUSTOM_FIELD_PREFIX);
 }
@@ -269,6 +284,32 @@ function dayRange(value) {
   return { gte: start, lt: end };
 }
 
+// [from, to] "YYYY-MM-DD" pair → an inclusive-of-both-days Prisma range.
+// `to` becomes the START of the following day and is compared with `lt`, so
+// a stored timestamp anywhere inside the end day still matches — comparing
+// `lte` against the end day's midnight would drop everything after 00:00 on
+// that day. Either side may be blank for an open-ended range; both blank
+// (or both unparseable) yields null so the caller drops the clause.
+function betweenRange(fromValue, toValue) {
+  const range = {};
+  if (fromValue) {
+    const from = new Date(fromValue);
+    if (!Number.isNaN(from.getTime())) {
+      from.setUTCHours(0, 0, 0, 0);
+      range.gte = from;
+    }
+  }
+  if (toValue) {
+    const to = new Date(toValue);
+    if (!Number.isNaN(to.getTime())) {
+      to.setUTCHours(0, 0, 0, 0);
+      to.setUTCDate(to.getUTCDate() + 1);
+      range.lt = to;
+    }
+  }
+  return Object.keys(range).length ? range : null;
+}
+
 // is_empty/is_not_empty on a `required` (non-nullable) column — Contact.
 // name/status/aiScore/createdAt today — must NOT reference `{ not: null }`
 // / `{ [column]: null }` at all: Prisma rejects null as a value for a
@@ -280,17 +321,31 @@ function dayRange(value) {
 // is_not_empty matches everything for those two kinds.
 function buildFilterClause(fieldDef, operator, values) {
   const { column, kind, required } = fieldDef;
+  // A DateTime / Int column has no empty-string state, and Prisma rejects
+  // '' as a value for one outright ("Invalid value for argument: Expected
+  // ISO-8601 DateTime"). Only NULL means empty for these.
+  const nonTextual = kind === 'number' || kind === 'date' || kind === 'range';
   if (operator === 'is_empty') {
     if (kind === 'id' || kind === 'external') return { [column]: null };
-    if (required && (kind === 'number' || kind === 'date' || kind === 'range')) return { id: { in: [] } }; // matches nothing — see comment above
+    if (required && nonTextual) return { id: { in: [] } }; // matches nothing — see comment above
+    if (nonTextual) return { [column]: null };
     return required ? { [column]: '' } : { OR: [{ [column]: null }, { [column]: '' }] };
   }
   if (operator === 'is_not_empty') {
     if (kind === 'id' || kind === 'external') return { [column]: { not: null } };
-    if (required && (kind === 'number' || kind === 'date' || kind === 'range')) return {}; // matches everything — see comment above
+    if (required && nonTextual) return {}; // matches everything — see comment above
+    if (nonTextual) return { [column]: { not: null } };
     return required
       ? { [column]: { not: '' } }
       : { AND: [{ [column]: { not: null } }, { [column]: { not: '' } }] };
+  }
+  // Handled before the empty-string strip below: `between` carries
+  // [from, to] positionally, and either end may legitimately be blank for
+  // an open-ended range — compacting the array would shift `to` into `from`.
+  if (operator === 'between') {
+    if (kind !== 'date') return null;
+    const range = betweenRange((values || [])[0], (values || [])[1]);
+    return range ? { [column]: range } : null;
   }
   const list = (values || []).filter((v) => v !== undefined && v !== null && v !== '');
   if (list.length === 0) return null;
@@ -337,15 +392,36 @@ function buildFilterClause(fieldDef, operator, values) {
 // means "no LeadCustomFieldValue row for this field at all, OR a row
 // exists with an empty valueText" — an admin can add a field after leads
 // already exist, leaving old rows with no value row for it.
-function buildCustomFieldClause(defId, operator, values) {
+function buildCustomFieldClause(defId, operator, values, kind = 'text') {
+  // Which typed column on LeadCustomFieldValue actually holds this field's
+  // data — see CUSTOM_FIELD_TYPE_TO_KIND. A Date-picker field's values live
+  // in valueDate and are always NULL in valueText, so probing valueText for
+  // one returns nothing no matter what the user picked.
+  const isDate = kind === 'date';
   if (operator === 'is_empty') {
+    if (isDate) {
+      return { OR: [
+        { leadCustomFieldValues: { none: { fieldId: defId } } },
+        { leadCustomFieldValues: { some: { fieldId: defId, valueDate: null } } },
+      ] };
+    }
     return { OR: [
       { leadCustomFieldValues: { none: { fieldId: defId } } },
       { leadCustomFieldValues: { some: { fieldId: defId, OR: [{ valueText: null }, { valueText: '' }] } } },
     ] };
   }
   if (operator === 'is_not_empty') {
+    if (isDate) {
+      return { leadCustomFieldValues: { some: { fieldId: defId, valueDate: { not: null } } } };
+    }
     return { leadCustomFieldValues: { some: { fieldId: defId, valueText: { not: null }, NOT: { valueText: '' } } } };
+  }
+  // See buildFilterClause: handled before the empty-string strip so an
+  // open-ended [from, ""] range keeps its positions.
+  if (operator === 'between') {
+    if (!isDate) return null;
+    const range = betweenRange((values || [])[0], (values || [])[1]);
+    return range ? { leadCustomFieldValues: { some: { fieldId: defId, valueDate: range } } } : null;
   }
   const list = (values || []).filter((v) => v !== undefined && v !== null && v !== '');
   if (list.length === 0) return null;
@@ -705,12 +781,22 @@ router.get('/', async (req, res) => {
       // row exists there. Fetched once, only when the payload actually
       // references one, to avoid an extra round-trip on the common case.
       let tenantCustomFieldIds = null;
+      let tenantCustomFieldKinds = null;
       if (parsed.some((f) => f && isCustomField(f.field))) {
         const defs = await prisma.leadCustomFieldDefinition.findMany({
           where: { tenantId: req.user.tenantId },
-          select: { id: true },
+          select: { id: true, fieldType: true },
         });
         tenantCustomFieldIds = new Set(defs.map((d) => d.id));
+        // fieldType decides WHICH typed column on LeadCustomFieldValue holds
+        // the data (valueDate for a Date-picker field, valueText otherwise),
+        // so buildCustomFieldClause needs it to probe the right one. Without
+        // it every custom field was treated as text and a date `between`
+        // silently produced no clause at all — the filter then returned the
+        // whole unfiltered list rather than the matching rows.
+        tenantCustomFieldKinds = new Map(
+          defs.map((d) => [d.id, CUSTOM_FIELD_TYPE_TO_KIND[d.fieldType] || 'text']),
+        );
       }
       // Vertical gate — same rule as /filter-fields and /filter-values (see
       // the big comment above FILTERABLE_FIELDS): a field restricted to
@@ -731,7 +817,7 @@ router.get('/', async (req, res) => {
         if (isCustomField(f.field)) {
           const defId = customFieldDefIdFromKey(f.field);
           if (defId === null || !tenantCustomFieldIds.has(defId)) continue;
-          const clause = buildCustomFieldClause(defId, f.operator, rawValues);
+          const clause = buildCustomFieldClause(defId, f.operator, rawValues, tenantCustomFieldKinds.get(defId) || 'text');
           if (clause) clauses.push(clause);
           continue;
         }
@@ -843,10 +929,16 @@ router.get('/filter-fields', async (req, res) => {
       orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
       select: { id: true, label: true, fieldType: true },
     });
+    // A custom field's admin-chosen fieldType decides how it can be
+    // filtered, exactly as it decides which typed column stores its values
+    // (valueText / valueNumber / valueDate / valueBool — see
+    // attachLeadCustomFieldsBatch). Handing every custom field back as
+    // "text" made a Date-picker field offer a substring match over a list
+    // of stored days instead of a calendar.
     const customFields = customDefs.map((d) => ({
       field: `${CUSTOM_FIELD_PREFIX}${d.id}`,
       label: d.label,
-      kind: 'text',
+      kind: CUSTOM_FIELD_TYPE_TO_KIND[d.fieldType] || 'text',
       custom: true,
       fieldType: d.fieldType,
     }));

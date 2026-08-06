@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Filter, X, ChevronLeft, Plus, Search } from "lucide-react";
 import { fetchApi } from "../utils/api";
+import CalendarRangePicker from "./CalendarRangePicker";
 
 // ── FilterPanel — Freshsales-style "Filter by" panel ───────────────────
 // Trigger button opens a panel DOCKED TO THE RIGHT EDGE OF THE VIEWPORT
@@ -30,6 +31,7 @@ export default function FilterPanel({ fieldsUrl, valuesUrl, filters, onChange })
   const [valuesLoading, setValuesLoading] = useState(false);
   const [fieldSearch, setFieldSearch] = useState(""); // filters the field-picker list
   const [valueSearch, setValueSearch] = useState(""); // filters the checkbox-value list
+  const [dateRange, setDateRange] = useState({ from: "", to: "" }); // date-kind fields only
   const wrapRef = useRef(null);
   const triggerRef = useRef(null);
   const panelRef = useRef(null);
@@ -72,11 +74,20 @@ export default function FilterPanel({ fieldsUrl, valuesUrl, filters, onChange })
 
   const openFieldPicker = () => { setActiveField(null); setFieldSearch(""); setOpen(true); };
 
+  const kindOf = (field) => fields.find((f) => f.field === field)?.kind || "text";
+  const activeKind = activeField ? kindOf(activeField) : "text";
+  const isDateField = activeKind === "date";
+
   const chooseField = async (field) => {
     setActiveField(field);
-    setOperator("contains");
+    // A date field is picked on a calendar, so it opens on `between` rather
+    // than the substring/checkbox operators the other kinds default to.
+    setOperator(kindOf(field) === "date" ? "between" : "contains");
     setChecked([]);
     setValueSearch("");
+    setDateRange({ from: "", to: "" });
+    // Date fields never show a value list — there is nothing to fetch.
+    if (kindOf(field) === "date") return;
     if (valuesByField[field]) return;
     setValuesLoading(true);
     try {
@@ -93,22 +104,42 @@ export default function FilterPanel({ fieldsUrl, valuesUrl, filters, onChange })
     setChecked((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
   };
 
-  const needsValues = operator === "contains" || operator === "not_contains";
+  const needsValues = !isDateField && (operator === "contains" || operator === "not_contains");
+  const needsRange = operator === "between";
+
+  // Apply stays disabled until the chosen operator actually has an input:
+  // checkbox operators need a tick, `between` needs at least one end of the
+  // range. The empty/not-empty operators need neither.
+  const applyDisabled = (needsValues && checked.length === 0)
+    || (needsRange && !dateRange.from && !dateRange.to);
 
   const applyFilter = () => {
     if (!activeField) return;
     if (needsValues && checked.length === 0) return;
+    if (needsRange && !dateRange.from && !dateRange.to) return;
     const fieldMeta = fields.find((f) => f.field === activeField);
     const options = valuesByField[activeField] || [];
     const valueLabels = checked.map((v) => options.find((o) => o.value === v)?.label || v);
     const next = filters.filter((f) => f.field !== activeField);
+    // `between` carries [from, to] POSITIONALLY — an omitted end stays as an
+    // empty string rather than being dropped, so an open-ended range ("from
+    // 1 Aug onwards") doesn't slide its `to` into the `from` slot.
+    let values = [];
+    let labels = [];
+    if (needsRange) {
+      values = [dateRange.from || "", dateRange.to || ""];
+      labels = [[dateRange.from, dateRange.to].filter(Boolean).join(" → ")];
+    } else if (needsValues) {
+      values = checked;
+      labels = valueLabels;
+    }
     next.push({
       field: activeField,
       label: fieldMeta?.label || activeField,
       kind: fieldMeta?.kind || "text",
       operator,
-      values: needsValues ? checked : [],
-      valueLabels: needsValues ? valueLabels : [],
+      values,
+      valueLabels: labels,
     });
     onChange(next);
     setOpen(false);
@@ -264,7 +295,6 @@ export default function FilterPanel({ fieldsUrl, valuesUrl, filters, onChange })
                     {fields.find((f) => f.field === activeField)?.label || activeField}
                   </strong>
                   {(() => {
-                    const activeKind = fields.find((f) => f.field === activeField)?.kind;
                     const labels = operatorLabelsFor(activeKind);
                     return (
                       <select
@@ -275,14 +305,34 @@ export default function FilterPanel({ fieldsUrl, valuesUrl, filters, onChange })
                           background: "var(--surface-color, #fff)", color: "var(--accent-color)", fontSize: "0.82rem",
                         }}
                       >
-                        <option value="contains">{labels.contains}</option>
-                        <option value="not_contains">{labels.not_contains}</option>
+                        {/* A date is picked on a calendar, so substring
+                            operators make no sense for it — it gets a range
+                            instead, plus the empty/not-empty pair. */}
+                        {isDateField ? (
+                          <option value="between">is between</option>
+                        ) : (
+                          <>
+                            <option value="contains">{labels.contains}</option>
+                            <option value="not_contains">{labels.not_contains}</option>
+                          </>
+                        )}
                         <option value="is_not_empty">{labels.is_not_empty} (has any value)</option>
                         <option value="is_empty">{labels.is_empty}</option>
                       </select>
                     );
                   })()}
                 </div>
+                {needsRange && (
+                  <div style={{ padding: "0.9rem", display: "grid", gap: "0.6rem" }}>
+                    <CalendarRangePicker
+                      value={dateRange}
+                      onChange={(next) => setDateRange({ from: next?.from || "", to: next?.to || "" })}
+                    />
+                    <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                      Pick one date for a single day, or two to cover a range. Both ends are included.
+                    </span>
+                  </div>
+                )}
                 {needsValues && (
                   <>
                     <div style={{ padding: "0.6rem 0.9rem", borderBottom: "1px solid var(--border-color, rgba(0,0,0,0.08))", position: "relative" }}>
@@ -335,8 +385,8 @@ export default function FilterPanel({ fieldsUrl, valuesUrl, filters, onChange })
                     type="button"
                     className="btn-primary"
                     onClick={applyFilter}
-                    disabled={needsValues && checked.length === 0}
-                    style={{ fontSize: "0.85rem", padding: "0.4rem 0.9rem", opacity: needsValues && checked.length === 0 ? 0.5 : 1 }}
+                    disabled={applyDisabled}
+                    style={{ fontSize: "0.85rem", padding: "0.4rem 0.9rem", opacity: applyDisabled ? 0.5 : 1 }}
                   >
                     Apply
                   </button>

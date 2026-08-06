@@ -9216,6 +9216,10 @@ export default function WebForms() {
 
 
   const notify = useNotify();
+  const notifyRef = useRef(notify);
+  useEffect(() => {
+    notifyRef.current = notify;
+  }, [notify]);
 
 
 
@@ -9820,7 +9824,7 @@ export default function WebForms() {
 
 
 
-      notify.error(err?.message || "Failed to load forms");
+      notifyRef.current.error(err?.message || "Failed to load forms");
 
 
 
@@ -9884,7 +9888,7 @@ export default function WebForms() {
 
 
 
-  }, [notify]);
+  }, []);
 
 
 

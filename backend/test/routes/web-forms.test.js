@@ -1,4 +1,4 @@
-﻿// @ts-check
+// @ts-check
 
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -40,6 +40,10 @@ prisma.leadCustomFieldDefinition = prisma.leadCustomFieldDefinition || {};
 
 prisma.leadCustomFieldValue = prisma.leadCustomFieldValue || {};
 
+prisma.tenant = prisma.tenant || {};
+
+prisma.user = prisma.user || {};
+
 
 
 for (const key of ['findMany', 'findFirst', 'create', 'update', 'delete', 'groupBy']) {
@@ -67,6 +71,10 @@ for (const key of ['findMany', 'upsert']) {
   prisma.leadCustomFieldValue[key] = vi.fn();
 
 }
+
+prisma.tenant.findUnique = vi.fn();
+
+prisma.user.findFirst = vi.fn();
 
 
 
@@ -104,7 +112,7 @@ function makeApp() {
 
 beforeEach(() => {
 
-  for (const model of [prisma.webForm, prisma.webFormSubmission, prisma.contact, prisma.deal, prisma.contactAttachment, prisma.leadCustomFieldDefinition, prisma.leadCustomFieldValue]) {
+  for (const model of [prisma.webForm, prisma.webFormSubmission, prisma.contact, prisma.deal, prisma.contactAttachment, prisma.leadCustomFieldDefinition, prisma.leadCustomFieldValue, prisma.tenant, prisma.user]) {
 
     for (const key of Object.keys(model)) {
 
@@ -133,6 +141,10 @@ beforeEach(() => {
   prisma.leadCustomFieldDefinition.findMany.mockResolvedValue([]);
 
   prisma.leadCustomFieldValue.upsert.mockResolvedValue({});
+
+  prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, currency: 'USD' });
+
+  prisma.user.findFirst.mockResolvedValue(null);
 
   emailSender.sendEmail.mockClear();
 

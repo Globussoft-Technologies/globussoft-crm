@@ -62,6 +62,21 @@ const ALLOWED_FILE_MIMES = new Set([
 
 
 
+const MIME_TO_EXT = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "application/pdf": ".pdf",
+  "text/plain": ".txt",
+  "text/csv": ".csv",
+  "application/msword": ".doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.ms-excel": ".xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+};
+
 const upload = multer({
 
   storage: multer.diskStorage({
@@ -70,13 +85,11 @@ const upload = multer({
 
     filename: (_req, file, cb) => {
 
-      const ext = path.extname(file.originalname || "").slice(0, 12).toLowerCase();
-
-      const safeExt = ext && ext.length < 8 ? ext : ".bin";
+      const ext = MIME_TO_EXT[String(file.mimetype || "").toLowerCase()] || ".bin";
 
       const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-      cb(null, `${stamp}${safeExt}`);
+      cb(null, `${stamp}${ext}`);
 
     },
 
@@ -362,6 +375,8 @@ function normalizeField(field, index) {
 
     width: field?.width === "half" ? "half" : "full",
 
+    defaultValue: field?.defaultValue ?? null,
+
   };
 
 }
@@ -410,6 +425,19 @@ function normalizeStyle(raw) {
 
 
 
+function normalizeUrl(value) {
+  if (!value || typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+    return trimmed;
+  } catch (_err) {
+    return "";
+  }
+}
+
 function normalizeSettings(raw) {
 
   const settings = { ...defaultSettings(), ...(parseJson(raw, {}) || {}) };
@@ -426,7 +454,7 @@ function normalizeSettings(raw) {
 
     afterSubmitAction: settings.afterSubmitAction === "redirect" ? "redirect" : "message",
 
-    redirectUrl: textOr(settings.redirectUrl),
+    redirectUrl: normalizeUrl(settings.redirectUrl),
 
     notificationEnabled: settings.notificationEnabled == null ? Boolean(textOr(settings.notificationEmail)) : Boolean(settings.notificationEnabled),
 
@@ -438,7 +466,7 @@ function normalizeSettings(raw) {
 
     optInLinkText: textOr(settings.optInLinkText),
 
-    optInLinkUrl: textOr(settings.optInLinkUrl),
+    optInLinkUrl: normalizeUrl(settings.optInLinkUrl),
 
   };
 
@@ -512,15 +540,29 @@ async function ensureUniqueSlug(baseSlug, excludeId = null) {
 
 
 
-function shapeForm(row, submissionCount = 0, origin = null) {
+function shapeForm(row, submissionCount = 0, origin = null, isPublic = false) {
 
   if (!row) return null;
 
   const fields = normalizeFields(row.fieldsJson);
-
   const style = normalizeStyle(row.styleJson);
-
   const settings = normalizeSettings(row.settingsJson);
+
+  if (isPublic) {
+    const payload = {
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      description: row.description,
+      isActive: row.isActive,
+      fields,
+      style,
+      settings,
+      submissionCount,
+    };
+    if (origin) payload.embedCode = buildEmbedCode(row, origin);
+    return payload;
+  }
 
   const payload = {
 
@@ -750,7 +792,7 @@ router.get("/public/:slug", async (req, res) => {
 
     const origin = `${req.protocol}://${req.get("host")}`;
 
-    res.json(shapeForm(form, 0, origin));
+    res.json(shapeForm(form, 0, origin, true));
 
   } catch (err) {
 
@@ -948,6 +990,32 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
 
 
+    if (contactData.assignedToId) {
+
+      const assignee = await prisma.user.findFirst({
+
+        where: { id: contactData.assignedToId, tenantId: form.tenantId, deactivatedAt: null },
+
+      });
+
+      if (!assignee) delete contactData.assignedToId;
+
+    }
+
+
+
+    const tenant = await prisma.tenant.findUnique({
+
+      where: { id: form.tenantId },
+
+      select: { currency: true },
+
+    });
+
+    const tenantCurrency = tenant?.currency || "USD";
+
+
+
     const contact = await prisma.contact.create({
 
       data: {
@@ -984,7 +1052,7 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
           amount: 0,
 
-          currency: "USD",
+          currency: tenantCurrency,
 
           contactId: contact.id,
 

@@ -280,11 +280,11 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Tickets')).toBeTruthy();
     });
 
-    it('renders the Widgets nav entry with href /widgets for ADMIN', () => {
+    it('renders the Web Forms nav entry with href /forms for ADMIN', () => {
       renderSidebar({ vertical: 'generic', role: 'ADMIN' });
-      const link = screen.getByText('Widgets').closest('a');
+      const link = screen.getByText('Web Forms').closest('a');
       expect(link).toBeTruthy();
-      expect(link.getAttribute('href')).toBe('/widgets');
+      expect(link.getAttribute('href')).toBe('/forms');
     });
 
     it('renders 40+ links for ADMIN under generic vertical (full enterprise nav)', () => {

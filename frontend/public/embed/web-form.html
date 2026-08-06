@@ -142,6 +142,8 @@
 
       function fieldHtml(field){
 
+        var name = esc(field.sourceKey || field.id || 'field');
+
         if (field.hidden) {
 
           var hiddenValue = esc(field.defaultValue || '');
@@ -157,8 +159,6 @@
         var label = esc(field.label || 'Field');
 
         var help = field.helpText ? '<div class="note" style="margin-top:6px">' + esc(field.helpText) + '</div>' : '';
-
-        var name = esc(field.sourceKey || field.id || 'field');
 
         var placeholder = esc(field.placeholder || '');
 

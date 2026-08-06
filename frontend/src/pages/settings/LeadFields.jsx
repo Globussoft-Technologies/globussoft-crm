@@ -55,7 +55,13 @@ const th = {
   letterSpacing: "0.04em",
   color: "var(--text-secondary)",
   fontWeight: 600,
-  background: "#23262d",
+  // Theme-driven, not a fixed dark hex. --subtle-bg composites over the
+  // table body's --bg-color to sit a shade apart from the rows in BOTH
+  // themes (white 5% over near-black in dark, black 4% over #f0f2f5 in
+  // light). A hardcoded #23262d kept the header dark under the light
+  // theme while the text colours followed the theme and went dark too,
+  // leaving the labels unreadable.
+  background: "var(--subtle-bg)",
   boxShadow: "inset 0 -1px 0 var(--border-color)",
 };
 const td = { padding: "0.75rem 1rem", fontSize: "0.9rem" };
@@ -248,7 +254,7 @@ function renderFieldPreview(field, optionsText) {
             style={{
               padding: "0.3rem 0.6rem",
               borderRadius: 999,
-              background: "#23262d",
+              background: "var(--subtle-bg)",
               border: "1px solid var(--border-color)",
               color: "var(--text-secondary)",
               fontSize: "0.85rem",
@@ -528,11 +534,11 @@ export default function LeadFields() {
         ) : (
           <div style={{ marginTop: "0.75rem", paddingBottom: "0.5rem" }}>
             <TopScrollSync>
-              <div style={{ background: "#14161b" }}>
+              <div style={{ background: "var(--bg-color)" }}>
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
                   <table className="stable-table" style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", tableLayout: "fixed" }}>
                     <thead>
-                      <tr style={{ background: "#23262d", display: "table", width: "100%", tableLayout: "fixed" }}>
+                      <tr style={{ background: "var(--subtle-bg)", display: "table", width: "100%", tableLayout: "fixed" }}>
                         <th style={{ ...th, width: "88px" }}>Order</th>
                         <th style={th}>Label</th>
                         <th style={th}>Type</th>

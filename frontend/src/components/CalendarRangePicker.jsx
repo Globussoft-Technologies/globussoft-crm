@@ -187,9 +187,14 @@ export default function CalendarRangePicker({ value, onChange, label = 'Date ran
           aria-label="Select date range"
           style={{
             position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 50,
-            background: 'var(--card-bg, #1a1a1a)', color: 'var(--text-primary)',
+            // --card-bg is not defined by either theme, so this always fell
+            // through to the hardcoded dark #1a1a1a. Under the light theme
+            // that put --text-primary (near-black there) on a near-black
+            // panel and the month name and dates went invisible. --bg-color
+            // is defined by both themes and is opaque in both.
+            background: 'var(--bg-color)', color: 'var(--text-primary)',
             border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
-            borderRadius: 12, boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
+            borderRadius: 12, boxShadow: 'var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.4))',
             padding: '0.85rem', width: 300,
           }}
         >

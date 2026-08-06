@@ -1,11 +1,12 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import { Search, Plus, Trash2, Pencil, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, Users, GitMerge, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import DuplicateContactModal from '../components/DuplicateContactModal';
 import ColumnPicker from '../components/ColumnPicker';
+import FilterPanel from '../components/FilterPanel';
 import TopScrollSync from '../components/TopScrollSync';
 import SavedViewsBar from '../components/SavedViewsBar';
 import ScrollableSelect from '../components/ScrollableSelect';
@@ -191,6 +192,12 @@ const Contacts = () => {
   // '' = all, else "min-max" bucket key parsed at filter time.
   const [assignedToFilter, setAssignedToFilter] = useState('');
   const [scoreFilter, setScoreFilter] = useState('');
+  // Freshsales-style "Filter by" panel (components/FilterPanel.jsx) — a
+  // dynamic field-picker + operator + checkbox-values panel, separate from
+  // the fixed dropdowns above. Applied server-side via ?filters=<JSON>
+  // (backend/routes/contacts.js FILTERABLE_FIELDS) so it isn't bounded by
+  // the same-page 500-row client cap the way the dropdowns above are.
+  const [advancedFilters, setAdvancedFilters] = useState([]);
   const SCORE_BUCKETS = [
     { value: '0-25', label: '0 - 25', min: 0, max: 25 },
     { value: '26-50', label: '26 - 50', min: 26, max: 50 },
@@ -253,7 +260,10 @@ const Contacts = () => {
   };
 
   const fetchContacts = () => {
-    fetchApi('/api/contacts').then(data => {
+    const qs = advancedFilters.length > 0
+      ? `?filters=${encodeURIComponent(JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
+      : '';
+    fetchApi(`/api/contacts${qs}`).then(data => {
         setContacts(Array.isArray(data) ? data : []);
         setLoading(false);
       }).catch(() => { setContacts([]); setLoading(false); });
@@ -275,6 +285,15 @@ const Contacts = () => {
     fetchContacts();
     fetchApi('/api/staff').then(data => setStaff(data)).catch(() => {});
   }, []);
+
+  // Refetch (server-side) whenever the FilterPanel's filter set changes.
+  // Skips the very first render — the mount effect above already fetched
+  // once with the (empty) initial advancedFilters.
+  const isFirstFiltersRender = useRef(true);
+  useEffect(() => {
+    if (isFirstFiltersRender.current) { isFirstFiltersRender.current = false; return; }
+    fetchContacts();
+  }, [advancedFilters]);
 
   // Generic-vertical-only Lead custom fields (Settings > Lead Fields).
   // Own effect keyed on [isWellness, isTravel] (not the mount-only effect
@@ -559,7 +578,7 @@ const Contacts = () => {
       )}
 
       <div className="card" style={{ overflow: 'hidden' }}>
-        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center' }}>
+        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ position: 'relative', flex: 1, maxWidth: '300px' }}>
             <Search size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
             <input
@@ -610,13 +629,19 @@ const Contacts = () => {
               <option key={b.value} value={b.value}>{b.label}</option>
             ))}
           </select>
-          {(searchTerm || statusFilter !== 'All' || assignedToFilter || scoreFilter || activeViewId != null) && (
+          <FilterPanel
+            fieldsUrl="/api/contacts/filter-fields"
+            valuesUrl={(field) => `/api/contacts/filter-values/${field}`}
+            filters={advancedFilters}
+            onChange={setAdvancedFilters}
+          />
+          {(searchTerm || statusFilter !== 'All' || assignedToFilter || scoreFilter || activeViewId != null || advancedFilters.length > 0) && (
             <>
               <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                 Showing {visibleContacts.length} of {contacts.length}
               </span>
               <button
-                onClick={() => { setSearchTerm(''); setStatusFilter('All'); setAssignedToFilter(''); setScoreFilter(''); }}
+                onClick={() => { setSearchTerm(''); setStatusFilter('All'); setAssignedToFilter(''); setScoreFilter(''); setAdvancedFilters([]); }}
                 style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontSize: '0.8rem' }}
               >
                 Clear filters

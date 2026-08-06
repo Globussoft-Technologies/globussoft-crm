@@ -118,6 +118,243 @@ function canViewAllLeads(req) {
   return !!(req && req.user && ['ADMIN', 'MANAGER'].includes(req.user.role));
 }
 
+// Freshsales-style "Filter by" panel — field allowlist. Each entry maps a
+// UI-facing field key to a real Contact column (or the two joined columns,
+// owner/territory, which resolve to a User/Territory row for their label).
+// `kind: "text"` fields support contains/does not contain/is empty/is not
+// empty. `kind: "id"` fields (owner, territory) are equality-only against a
+// resolved id, since "contains" has no meaning on a foreign key — the UI
+// still presents them as a checkbox list of distinct values, just sourced
+// from the User/Territory table instead of DISTINCT on Contact.
+// `required: true` marks the one column (Contact.status) that is a
+// non-nullable `String` in the schema — Prisma rejects `{ not: null }` on a
+// required-string field ("Argument `not` is missing", since `null` isn't a
+// valid value for that field's type at all), so the /filter-fields
+// has-any-data presence check below only checks "not empty string" for it,
+// skipping the not-null half other (nullable) fields need.
+//
+// `verticals: [...]` restricts a field to specific Tenant.vertical values
+// (see the `vertical` column on Tenant — "generic" | "wellness" | "travel").
+// Two fields on Contact are travel-specific per their own schema.prisma
+// comments — `subBrand` ("Travel vertical sub-brand tag... nullable so
+// generic + wellness Contacts ignore it") and `kycStatus` ("Travel CRM —
+// customer-portal DigiLocker / Aadhaar verification... nullable so
+// non-travel + non-customer Contacts ignore them"). The has-data presence
+// check alone isn't enough to keep these off a generic tenant's picker:
+// `kycStatus` has a schema `@default("unverified")` that Prisma writes to
+// EVERY new Contact regardless of vertical — so has-data is trivially true
+// everywhere, even though no generic tenant ever intentionally sets it —
+// and `subBrand` can leak in from a single stray/seed/imported row even on
+// a tenant that has never used the travel feature. A field with no
+// `verticals` key is available to every vertical (the common case).
+// SOURCE OF TRUTH: this list is deliberately kept in lockstep with
+// BUILTIN_COLUMNS in table_column_preferences.js ("Customize table") — the
+// same union of Leads + Contacts built-in columns (name, email, phone,
+// company, aiScore, source, status, assignedTo, createdAt), mapped to
+// their real Contact column + comparison kind. Two lists existed briefly
+// during development (this one grew to ~30 fields including title,
+// linkedin, gst, birthDate, callifiedCampaignId, etc.) and drifted out of
+// sync with what "Customize table" actually shows as columns — a field a
+// user could filter by but never see rendered anywhere. Reusing the same
+// authoritative set both UIs already agree on avoids that drift by
+// construction. Territory (territoryId) is the one addition beyond
+// BUILTIN_COLUMNS — it has no visible table column today, but is kept
+// because it's a real, already-shipped Freshsales-parity filter (see the
+// original screenshots this feature was built from) with its own User/
+// Territory-backed value resolution, not a hand-added guess.
+//
+// `kind` drives BOTH the operator set the value-panel offers per field AND
+// how buildFilterClause turns a checkbox selection into a Prisma clause:
+//   "text"   — contains/not_contains via substring `contains` match.
+//   "id"     — contains/not_contains via `in`/`notIn` on a parsed int,
+//              values resolved against a local table (User/Territory) for
+//              a human label.
+//   "number" — contains/not_contains via `in`/`notIn` on a parsed float.
+//   "date"   — contains/not_contains via `in`/`notIn` matching the exact
+//              calendar day (values are day-boundary ranges under the
+//              hood — see buildFilterClause).
+//   "range"  — a bounded numeric column offered as fixed BUCKETS rather
+//              than one checkbox per distinct value. Lead Score is 0-100,
+//              so a DISTINCT scan lists every individual score a tenant
+//              happens to have (5, 36, 49, 64, 66, 68, 72, ...) — useless
+//              to pick from and unbounded as data grows. The buckets
+//              mirror the Lead Score dropdown Contacts.jsx already ships
+//              (SCORE_BUCKETS), so both surfaces offer the same choices.
+const FILTERABLE_FIELDS = {
+  name: { column: 'name', kind: 'text', label: 'Name', required: true },
+  email: { column: 'email', kind: 'text', label: 'Email' },
+  phone: { column: 'phone', kind: 'text', label: 'Phone' },
+  company: { column: 'company', kind: 'text', label: 'Company' },
+  status: { column: 'status', kind: 'text', label: 'Status', required: true },
+  source: { column: 'source', kind: 'text', label: 'Source' },
+  kycStatus: { column: 'kycStatus', kind: 'text', label: 'KYC Status', verticals: ['travel'] },
+  subBrand: { column: 'subBrand', kind: 'text', label: 'Sub-brand', verticals: ['travel'] },
+  aiScore: {
+    column: 'aiScore',
+    kind: 'range',
+    label: 'Lead Score',
+    required: true,
+    // Mirrors SCORE_BUCKETS in frontend/src/pages/Contacts.jsx.
+    buckets: [
+      { value: '0-25', label: '0 - 25', min: 0, max: 25 },
+      { value: '26-50', label: '26 - 50', min: 26, max: 50 },
+      { value: '51-75', label: '51 - 75', min: 51, max: 75 },
+      { value: '76-100', label: '76 - 100', min: 76, max: 100 },
+    ],
+  },
+  createdAt: { column: 'createdAt', kind: 'date', label: 'Created', required: true },
+  assignedToId: { column: 'assignedToId', kind: 'id', label: 'Sales Owner' },
+};
+
+const FILTER_OPERATORS = ['contains', 'not_contains', 'is_empty', 'is_not_empty'];
+
+// NOTE: there is deliberately NO "has-data" gate on the field list.
+//
+// A field is offered because the ORG HAS IT — i.e. it's one of the
+// Leads/Contacts table columns (BUILTIN_COLUMNS) or a custom field an
+// admin created in Settings > Lead Fields. Whether any row has a value
+// yet is irrelevant to whether the field exists: a freshly-added "UTM
+// Source" custom field with zero values filled in is still a field this
+// org has, and hiding it from the picker just makes the panel look broken
+// next to a table that clearly renders that column.
+//
+// Earlier revisions gated on row counts (≥1, then ≥2) to suppress
+// "First Touch Source", which appeared off the back of a single
+// system-generated Sample row. That was the wrong lever — firstTouchSource
+// is not a table column or a custom field, so it simply doesn't belong in
+// FILTERABLE_FIELDS at all, and removing it there fixed the real problem.
+//
+// "Show only what exists" still applies one level down, to VALUES: each
+// field's checkbox list is a DISTINCT scan of values actually present, so
+// an empty field just yields an empty value list.
+
+// Admin-defined Lead custom fields (Settings > Lead Fields,
+// LeadCustomFieldDefinition/LeadCustomFieldValue) are dynamic per tenant —
+// unlike FILTERABLE_FIELDS above they can't be a static allowlist. The
+// panel addresses them as "custom_<definitionId>" and this always resolves
+// against `valueText`: every fieldType stores its display value there
+// too (dropdown/radio store the selected option string, multiselect a JSON
+// array string, checkbox "true"/"false" — see the model comment in
+// schema.prisma), so a single `contains`-style match works uniformly
+// without needing per-type clause branches.
+const CUSTOM_FIELD_PREFIX = 'custom_';
+
+function isCustomField(field) {
+  return typeof field === 'string' && field.startsWith(CUSTOM_FIELD_PREFIX);
+}
+
+function customFieldDefIdFromKey(field) {
+  const id = parseInt(field.slice(CUSTOM_FIELD_PREFIX.length), 10);
+  return Number.isNaN(id) ? null : id;
+}
+
+// Builds a single Prisma where-clause fragment for one filter field.
+// `values` is always an array (checkbox multi-select) — for `kind: "text"`
+// with "contains"/"not_contains" this becomes an OR/AND-NOT of `contains`
+// matches; `kind: "id"` uses `in`/`notIn` on the raw id since exact-match
+// is the only sensible comparison for a foreign key.
+//
+// Converts a "YYYY-MM-DD" (or any Date-parseable) checkbox value into a
+// [start-of-day, start-of-next-day) range — the DISTINCT scan in
+// /filter-values/:field returns whole calendar days for date-kind fields
+// (see that route), so a "contains" match here means "occurred on this
+// day", not an exact-to-the-millisecond DateTime equality that would never
+// match a real timestamp.
+function dayRange(value) {
+  const start = new Date(value);
+  if (Number.isNaN(start.getTime())) return null;
+  start.setUTCHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { gte: start, lt: end };
+}
+
+// is_empty/is_not_empty on a `required` (non-nullable) column — Contact.
+// name/status/aiScore/createdAt today — must NOT reference `{ not: null }`
+// / `{ [column]: null }` at all: Prisma rejects null as a value for a
+// required field's comparison ("Argument `not` must not be null" /
+// equivalent), since null can never legally appear in that column. A
+// required TEXT field's "empty" can only mean the empty string; a required
+// NUMBER/DATE field (aiScore, createdAt) has no such "empty" representation
+// at all — every row always has a value — so is_empty matches nothing and
+// is_not_empty matches everything for those two kinds.
+function buildFilterClause(fieldDef, operator, values) {
+  const { column, kind, required } = fieldDef;
+  if (operator === 'is_empty') {
+    if (kind === 'id' || kind === 'external') return { [column]: null };
+    if (required && (kind === 'number' || kind === 'date' || kind === 'range')) return { id: { in: [] } }; // matches nothing — see comment above
+    return required ? { [column]: '' } : { OR: [{ [column]: null }, { [column]: '' }] };
+  }
+  if (operator === 'is_not_empty') {
+    if (kind === 'id' || kind === 'external') return { [column]: { not: null } };
+    if (required && (kind === 'number' || kind === 'date' || kind === 'range')) return {}; // matches everything — see comment above
+    return required
+      ? { [column]: { not: '' } }
+      : { AND: [{ [column]: { not: null } }, { [column]: { not: '' } }] };
+  }
+  const list = (values || []).filter((v) => v !== undefined && v !== null && v !== '');
+  if (list.length === 0) return null;
+  if (kind === 'id' || kind === 'external') {
+    const ids = list.map((v) => parseInt(v, 10)).filter((n) => !Number.isNaN(n));
+    if (ids.length === 0) return null;
+    return operator === 'not_contains' ? { [column]: { notIn: ids } } : { [column]: { in: ids } };
+  }
+  if (kind === 'number') {
+    const nums = list.map((v) => Number(v)).filter((n) => Number.isFinite(n));
+    if (nums.length === 0) return null;
+    return operator === 'not_contains' ? { [column]: { notIn: nums } } : { [column]: { in: nums } };
+  }
+  if (kind === 'range') {
+    // Values are bucket keys ("26-50"), resolved back to their {min,max}
+    // via the field's own `buckets` definition rather than parsed from the
+    // string — an unknown key is dropped instead of being coerced into a
+    // bogus range.
+    const picked = list
+      .map((v) => (fieldDef.buckets || []).find((b) => b.value === String(v)))
+      .filter(Boolean);
+    if (picked.length === 0) return null;
+    return operator === 'not_contains'
+      ? { AND: picked.map((b) => ({ NOT: { [column]: { gte: b.min, lte: b.max } } })) }
+      : { OR: picked.map((b) => ({ [column]: { gte: b.min, lte: b.max } })) };
+  }
+  if (kind === 'date') {
+    const ranges = list.map(dayRange).filter(Boolean);
+    if (ranges.length === 0) return null;
+    return operator === 'not_contains'
+      ? { AND: ranges.map((r) => ({ NOT: { [column]: r } })) }
+      : { OR: ranges.map((r) => ({ [column]: r })) };
+  }
+  if (operator === 'not_contains') {
+    return { AND: list.map((v) => ({ [column]: { not: { contains: String(v) } } })) };
+  }
+  return { OR: list.map((v) => ({ [column]: { contains: String(v) } })) };
+}
+
+// Same operator semantics as buildFilterClause, but against the related
+// LeadCustomFieldValue rows for one definition id (via
+// Contact.leadCustomFieldValues — see the relation field of that name on
+// both Contact and LeadCustomFieldDefinition in schema.prisma). is_empty
+// means "no LeadCustomFieldValue row for this field at all, OR a row
+// exists with an empty valueText" — an admin can add a field after leads
+// already exist, leaving old rows with no value row for it.
+function buildCustomFieldClause(defId, operator, values) {
+  if (operator === 'is_empty') {
+    return { OR: [
+      { leadCustomFieldValues: { none: { fieldId: defId } } },
+      { leadCustomFieldValues: { some: { fieldId: defId, OR: [{ valueText: null }, { valueText: '' }] } } },
+    ] };
+  }
+  if (operator === 'is_not_empty') {
+    return { leadCustomFieldValues: { some: { fieldId: defId, valueText: { not: null }, NOT: { valueText: '' } } } };
+  }
+  const list = (values || []).filter((v) => v !== undefined && v !== null && v !== '');
+  if (list.length === 0) return null;
+  if (operator === 'not_contains') {
+    return { NOT: { leadCustomFieldValues: { some: { fieldId: defId, OR: list.map((v) => ({ valueText: { contains: String(v) } })) } } } };
+  }
+  return { leadCustomFieldValues: { some: { fieldId: defId, OR: list.map((v) => ({ valueText: { contains: String(v) } })) } } };
+}
+
 function canAccessLead(req, contact) {
   if (!req || !req.user || !contact) return false;
   if (canViewAllLeads(req)) return true;
@@ -443,6 +680,69 @@ router.get('/', async (req, res) => {
       }
       where.source = { startsWith: prefix };
     }
+    // Freshsales-style "Filter by" panel — ?filters=<JSON array>, each entry
+    // {field, operator, values}. `field` is either a FILTERABLE_FIELDS key
+    // (never trust a raw column name from the client into a Prisma
+    // where-clause) or "custom_<id>" for an admin-defined Lead custom field
+    // (Settings > Lead Fields — dynamic per tenant, so it can't be a static
+    // allowlist like FILTERABLE_FIELDS). operator must be one of
+    // FILTER_OPERATORS. Invalid entries are skipped rather than erroring —
+    // the panel only ever sends known field/operator pairs, so a mismatch
+    // here means stale client cache, not attacker input.
+    if (req.query.filters) {
+      let parsed;
+      try {
+        parsed = JSON.parse(req.query.filters);
+      } catch {
+        return res.status(400).json({ error: 'filters must be a JSON array', code: 'INVALID_FILTERS' });
+      }
+      if (!Array.isArray(parsed)) {
+        return res.status(400).json({ error: 'filters must be a JSON array', code: 'INVALID_FILTERS' });
+      }
+      // Custom-field entries need their definition id checked against this
+      // tenant before it's trusted in a query — otherwise a crafted
+      // "custom_<id>" from another tenant's field would leak whether a
+      // row exists there. Fetched once, only when the payload actually
+      // references one, to avoid an extra round-trip on the common case.
+      let tenantCustomFieldIds = null;
+      if (parsed.some((f) => f && isCustomField(f.field))) {
+        const defs = await prisma.leadCustomFieldDefinition.findMany({
+          where: { tenantId: req.user.tenantId },
+          select: { id: true },
+        });
+        tenantCustomFieldIds = new Set(defs.map((d) => d.id));
+      }
+      // Vertical gate — same rule as /filter-fields and /filter-values (see
+      // the big comment above FILTERABLE_FIELDS): a field restricted to
+      // e.g. `verticals: ['travel']` must be rejected here too, not just
+      // hidden from the picker, or a crafted request could still filter a
+      // generic tenant's contacts by a travel-only column. Only resolved
+      // when the payload actually references a `verticals`-gated field, to
+      // avoid the extra round-trip on the common (ungated-fields-only) case.
+      let vertical = null;
+      if (parsed.some((f) => f && FILTERABLE_FIELDS[f.field]?.verticals)) {
+        const tenant = await prisma.tenant.findUnique({ where: { id: req.user.tenantId }, select: { vertical: true } });
+        vertical = tenant?.vertical || 'generic';
+      }
+      const clauses = [];
+      for (const f of parsed) {
+        if (!f || typeof f !== 'object' || !FILTER_OPERATORS.includes(f.operator)) continue;
+        const rawValues = Array.isArray(f.values) ? f.values : [];
+        if (isCustomField(f.field)) {
+          const defId = customFieldDefIdFromKey(f.field);
+          if (defId === null || !tenantCustomFieldIds.has(defId)) continue;
+          const clause = buildCustomFieldClause(defId, f.operator, rawValues);
+          if (clause) clauses.push(clause);
+          continue;
+        }
+        const fieldDef = FILTERABLE_FIELDS[f.field];
+        if (!fieldDef) continue;
+        if (fieldDef.verticals && !fieldDef.verticals.includes(vertical)) continue;
+        const clause = buildFilterClause(fieldDef, f.operator, rawValues);
+        if (clause) clauses.push(clause);
+      }
+      if (clauses.length > 0) where.AND = [...(where.AND || []), ...clauses];
+    }
     // #167: hide soft-deleted rows by default; admin views can opt in.
     applyDeletedAtFilter(where, req.query.includeDeleted === 'true');
     // #588: USER role sees only contacts assigned to them; ADMIN/MANAGER see
@@ -500,6 +800,200 @@ router.get('/', async (req, res) => {
     res.json(withCustomFields);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contacts' });
+  }
+});
+
+// GET /api/contacts/filter-fields — the field list a "Filter by" panel
+// offers, mirroring Freshsales' field picker. Merges the static
+// FILTERABLE_FIELDS allowlist (kept in lockstep with BUILTIN_COLUMNS in
+// table_column_preferences.js — the same columns "Customize table" shows)
+// with this tenant's admin-defined Lead custom fields (Settings > Lead
+// Fields), so a field an admin adds today shows up in the filter panel
+// immediately with no code change. Every field the org HAS is listed;
+// there is no has-data gate (see the NOTE above FILTERABLE_FIELDS for why
+// row-count gating was removed). The frontend renders these as the
+// left-hand field-picker list, then calls /filter-values/:field once a
+// field is chosen.
+//
+// Optional ?status=<value> scopes the VALUE lists (via /filter-values) to
+// the same subset the calling page filters over — Leads.jsx passes
+// ?status=Lead (leads ARE Contact rows with status="Lead"; there is no
+// separate Lead model), Contacts.jsx passes nothing and sees every status.
+// It's accepted here too so both endpoints take the same query shape.
+//
+// Registered BEFORE /:id — Express matches in order, so a literal path
+// must precede the /:id param route or it would be read as :id.
+router.get('/filter-fields', async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    // Vertical gate — see the comment above FILTERABLE_FIELDS. Travel-only
+    // columns (subBrand, kycStatus) never reach a generic/wellness tenant's
+    // picker, regardless of what stray or schema-default data exists.
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    const vertical = tenant?.vertical || 'generic';
+    const staticFields = Object.entries(FILTERABLE_FIELDS)
+      .filter(([, def]) => !def.verticals || def.verticals.includes(vertical))
+      .map(([key, def]) => ({
+        field: key,
+        label: def.label,
+        kind: def.kind,
+      }));
+    const customDefs = await prisma.leadCustomFieldDefinition.findMany({
+      where: { tenantId },
+      orderBy: [{ displayOrder: 'asc' }, { id: 'asc' }],
+      select: { id: true, label: true, fieldType: true },
+    });
+    const customFields = customDefs.map((d) => ({
+      field: `${CUSTOM_FIELD_PREFIX}${d.id}`,
+      label: d.label,
+      kind: 'text',
+      custom: true,
+      fieldType: d.fieldType,
+    }));
+    res.json({ fields: [...staticFields, ...customFields] });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to fetch filter fields' });
+  }
+});
+
+// GET /api/contacts/filter-values/:field — distinct values for one field,
+// scoped to the caller's tenant, for the panel's checkbox list. `id`-kind
+// fields (owner/territory) resolve against User/Territory rows rather than
+// DISTINCT Contact.assignedToId, since the panel needs a human label
+// ("Jane Doe"), not a bare foreign-key integer. "custom_<id>" fields with a
+// fixed choice list (dropdown/radio/multiselect) return the field
+// definition's own `options` — this is deliberately NOT a DISTINCT scan
+// over stored values, so a choice nobody has picked yet still appears as a
+// filterable option (mirrors how the Lead create/edit form itself sources
+// its dropdown). Free-text custom field types (text/textarea/url/number/
+// date/checkbox) fall back to a DISTINCT scan since there's no fixed list.
+router.get('/filter-values/:field', async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    // Same ?status scoping as /filter-fields (see that route's comment) —
+    // Leads.jsx passes ?status=Lead so the value list only shows values
+    // that actually occur among Lead-status rows, matching what /filter-
+    // fields already gated the field's very presence on. Without this, a
+    // field could correctly appear in the Leads picker (gated on Lead-scoped
+    // presence) but its value list would still include values that only
+    // ever occur on Customer/Prospect rows — same mismatch, one level down.
+    const statusScope = typeof req.query.status === 'string' && req.query.status ? req.query.status : null;
+    const scopeWhere = statusScope ? { status: statusScope } : {};
+    if (isCustomField(req.params.field)) {
+      const defId = customFieldDefIdFromKey(req.params.field);
+      if (defId === null) return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
+      const def = await prisma.leadCustomFieldDefinition.findFirst({ where: { id: defId, tenantId } });
+      if (!def) return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
+      if (['dropdown', 'radio', 'multiselect'].includes(def.fieldType) && def.options) {
+        const options = JSON.parse(def.options);
+        return res.json({ values: options.map((o) => ({ value: o, label: o })) });
+      }
+      // Custom field values live on LeadCustomFieldValue, joined via its
+      // `contact` relation — status scoping has to filter through that
+      // relation since the value row itself has no status column.
+      const rows = await prisma.leadCustomFieldValue.findMany({
+        where: {
+          fieldId: defId,
+          tenantId,
+          valueText: { not: null },
+          ...(statusScope ? { contact: { status: statusScope, deletedAt: null } } : {}),
+        },
+        select: { valueText: true },
+        distinct: ['valueText'],
+        orderBy: { valueText: 'asc' },
+        take: 200,
+      });
+      const values = rows
+        .map((r) => r.valueText)
+        .filter((v) => v !== null && v !== '')
+        .map((v) => ({ value: v, label: v }));
+      return res.json({ values });
+    }
+    const fieldDef = FILTERABLE_FIELDS[req.params.field];
+    if (!fieldDef) return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
+    // Vertical gate — mirrors /filter-fields' eligibility check (see the
+    // big comment above FILTERABLE_FIELDS). A vertical-restricted field
+    // (subBrand, kycStatus) is rejected here too, not just hidden from the
+    // picker — otherwise a stale client-side filter chip, or someone
+    // hitting this endpoint directly, could still pull values for a
+    // feature this tenant's vertical doesn't have.
+    if (fieldDef.verticals) {
+      const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+      const vertical = tenant?.vertical || 'generic';
+      if (!fieldDef.verticals.includes(vertical)) {
+        return res.status(404).json({ error: 'Unknown filter field', code: 'UNKNOWN_FIELD' });
+      }
+    }
+    if (req.params.field === 'assignedToId') {
+      const users = await prisma.user.findMany({
+        where: { tenantId },
+        select: { id: true, name: true, email: true },
+        orderBy: { name: 'asc' },
+      });
+      return res.json({ values: users.map((u) => ({ value: String(u.id), label: u.name || u.email })) });
+    }
+    if (req.params.field === 'territoryId') {
+      const territories = await prisma.territory.findMany({
+        where: { tenantId },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      });
+      return res.json({ values: territories.map((t) => ({ value: String(t.id), label: t.name })) });
+    }
+    // range-kind fields offer their fixed buckets, not a DISTINCT scan of
+    // every individual value present (see the "range" note above
+    // FILTERABLE_FIELDS — Lead Score would otherwise list 5, 36, 49, 64…).
+    if (fieldDef.kind === 'range') {
+      return res.json({ values: (fieldDef.buckets || []).map((b) => ({ value: b.value, label: b.label })) });
+    }
+    // `required` (non-nullable) columns — Contact.name/status/aiScore/
+    // createdAt — can't be filtered with `{ not: null }`; Prisma rejects
+    // null as a comparison value for a field whose type never permits it.
+    // Text ones only need the empty-string exclusion; number/date ones
+    // have no "empty" representation at all (every row has a real value),
+    // so no not-null/not-empty filter is needed on the DISTINCT scan itself.
+    let notNullFilter;
+    if (fieldDef.required && (fieldDef.kind === 'number' || fieldDef.kind === 'date')) {
+      notNullFilter = undefined;
+    } else if (fieldDef.required) {
+      notNullFilter = { not: '' };
+    } else {
+      notNullFilter = { not: null };
+    }
+    // Same status/column key-collision risk as /filter-fields' presence
+    // check above (querying /filter-values/status?status=Lead would spread
+    // `status: 'Lead'` then `status: {not: ''}`, silently dropping one) —
+    // AND-combine instead of a flat spread so both always apply.
+    const columnPredicate = notNullFilter ? { [fieldDef.column]: notNullFilter } : {};
+    const rows = await prisma.contact.findMany({
+      where: { tenantId, deletedAt: null, AND: [scopeWhere, columnPredicate] },
+      select: { [fieldDef.column]: true },
+      distinct: [fieldDef.column],
+      orderBy: { [fieldDef.column]: 'asc' },
+      take: 200,
+    });
+    // date-kind values are DateTime objects — normalize to a "YYYY-MM-DD"
+    // day label both for the checkbox list's display AND as the `value`
+    // sent back in ?filters=, since buildFilterClause's dayRange() parses
+    // that same string into a [start, end) range. Time-of-day is dropped
+    // deliberately — the panel filters by "occurred on this day", matching
+    // how a human reads a date column in a table, not exact timestamps.
+    if (fieldDef.kind === 'date') {
+      const days = [...new Set(
+        rows
+          .map((r) => r[fieldDef.column])
+          .filter((v) => v !== null)
+          .map((v) => new Date(v).toISOString().slice(0, 10)),
+      )].sort();
+      return res.json({ values: days.map((d) => ({ value: d, label: d })) });
+    }
+    const values = rows
+      .map((r) => r[fieldDef.column])
+      .filter((v) => v !== null && v !== '')
+      .map((v) => ({ value: String(v), label: String(v) }));
+    res.json({ values });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to fetch filter values' });
   }
 });
 

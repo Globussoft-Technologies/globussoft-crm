@@ -727,6 +727,9 @@ router.post("/travel/itineraries/:id/request-cancellation", verifyPortalToken, r
     if (itin.cancellationStatus === "requested" || itin.cancellationStatus === "cancelled") {
       return res.status(409).json({ error: "A cancellation is already in progress for this booking.", code: "ALREADY_REQUESTED" });
     }
+    if (itin.cancellationStatus === "refunded") {
+      return res.status(409).json({ error: "This booking has already been cancelled and refunded.", code: "ALREADY_REFUNDED" });
+    }
     // A trip that has already departed (or ended) can't be cancelled online —
     // there's nothing left to cancel and the cancellation policy keys off
     // days-before-departure (which is now negative). The customer must contact

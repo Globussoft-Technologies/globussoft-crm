@@ -2412,7 +2412,7 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
       {/* Customer-editable travel dates (collect-at-accept). Shown while the
           offer is live so the customer can set/adjust dates; saving notifies
           the advisor to confirm fares/availability. */}
-      {!isDeclined && status !== "expired" && cancellationStatus !== "cancelled" && (
+      {!isDeclined && status !== "expired" && cancellationStatus !== "cancelled" && cancellationStatus !== "refunded" && (
         <section style={cardStyle} aria-labelledby="dates-edit-heading">
           <h3 id="dates-edit-heading" style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
             <Calendar size={18} aria-hidden /> Your travel dates
@@ -2497,7 +2497,7 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <Star size={18} aria-hidden fill="#F5B301" color="#F5B301" />
-              <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>Thanks for reviewing your trip � we appreciate your feedback!</span>
+              <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>Thanks for reviewing your trip — we appreciate your feedback!</span>
             </div>
             {reviewDone && reviewFollowUp?.enabled && (
               <div style={{ padding: 16, borderRadius: 12, border: "1px solid var(--border-color, rgba(255,255,255,0.08))", background: "rgba(255,255,255,0.03)" }}>
@@ -2534,13 +2534,15 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
 
       {/* Cancellation — a committed booking can be cancelled; the advisor is
           flagged + processes any refund per the cancellation policy. */}
-      {(cancellationStatus === "requested" || cancellationStatus === "cancelled") ? (
-        <section style={{ ...cardStyle, background: "rgba(168, 50, 63, 0.06)", border: "1px solid rgba(168, 50, 63, 0.22)" }} role="status">
+      {(cancellationStatus === "requested" || cancellationStatus === "cancelled" || cancellationStatus === "refunded") ? (
+        <section style={{ ...cardStyle, background: cancellationStatus === "refunded" ? "rgba(22, 163, 74, 0.06)" : "rgba(168, 50, 63, 0.06)", border: cancellationStatus === "refunded" ? "1px solid rgba(22, 163, 74, 0.22)" : "1px solid rgba(168, 50, 63, 0.22)" }} role="status">
           <h3 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
-            <AlertCircle size={18} aria-hidden /> {cancellationStatus === "cancelled" ? "Booking cancelled" : "Cancellation requested"}
+            <AlertCircle size={18} aria-hidden /> {cancellationStatus === "refunded" ? "Booking cancelled & refunded" : cancellationStatus === "cancelled" ? "Booking cancelled" : "Cancellation requested"}
           </h3>
           <p style={{ color: "var(--text-secondary)", margin: "8px 0 0", fontSize: 14 }}>
-            {cancellationStatus === "cancelled"
+            {cancellationStatus === "refunded"
+              ? "This booking has been cancelled and your refund has been processed."
+              : cancellationStatus === "cancelled"
               ? "This booking has been cancelled. Your advisor will confirm any refund due per the cancellation policy."
               : "We've received your cancellation request. Your advisor will review it and process any refund due per the cancellation policy."}
           </p>

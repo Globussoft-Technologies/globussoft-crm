@@ -125,7 +125,7 @@ describe('<TripsResolver />', () => {
     renderResolver();
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     const [url, opts] = global.fetch.mock.calls[0];
-    expect(url).toBe('/api/landing-pages/public/featured-html');
+    expect(url).toBe('/api/landing-pages/public/featured-html?vertical=travel');
     expect(opts?.method).toBe('GET');
     expect(opts?.headers?.Accept).toBe('text/html');
   });

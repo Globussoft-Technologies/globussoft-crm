@@ -22,12 +22,21 @@ const SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 // dev tree (regen has lagged behind schema). Stand it up if absent so we
 // can patch findUnique.
 let originalRevokedToken;
+let originalUserFindUnique;
 let findUniqueMock;
+let userFindUniqueMock;
 
 beforeEach(() => {
   originalRevokedToken = prisma.revokedToken;
+  originalUserFindUnique = prisma.user.findUnique;
   findUniqueMock = vi.fn();
+  userFindUniqueMock = vi.fn().mockResolvedValue({
+    id: 1,
+    deactivatedAt: null,
+    sessionVersion: 0,
+  });
   prisma.revokedToken = { findUnique: findUniqueMock };
+  prisma.user.findUnique = userFindUniqueMock;
 });
 
 afterEach(() => {
@@ -36,6 +45,7 @@ afterEach(() => {
   } else {
     prisma.revokedToken = originalRevokedToken;
   }
+  prisma.user.findUnique = originalUserFindUnique;
 });
 
 function makeReqResNext({ headers = {}, cookies = {}, user = null } = {}) {
@@ -133,6 +143,42 @@ describe('verifyToken', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  test('rejects deactivated users before revocation lookup', async () => {
+    userFindUniqueMock.mockResolvedValueOnce({
+      id: 8,
+      deactivatedAt: new Date('2026-08-01T00:00:00.000Z'),
+      sessionVersion: 1,
+    });
+    const token = jwt.sign({ userId: 8, role: 'ADMIN', tenantId: 1, sessionVersion: 1 }, SECRET);
+    const { req, res, next } = makeReqResNext({
+      headers: { authorization: `Bearer ${token}` },
+    });
+    await verifyToken(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Account deactivated. Please contact your administrator.',
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('rejects stale tokens when sessionVersion mismatches the live user', async () => {
+    userFindUniqueMock.mockResolvedValueOnce({
+      id: 9,
+      deactivatedAt: null,
+      sessionVersion: 4,
+    });
+    const token = jwt.sign({ userId: 9, role: 'USER', tenantId: 3, sessionVersion: 2 }, SECRET);
+    const { req, res, next } = makeReqResNext({
+      headers: { authorization: `Bearer ${token}` },
+    });
+    await verifyToken(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'Session expired, please log in again',
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
   test('rejects awaiting2FA temp tokens', async () => {
     const token = jwt.sign(
       { userId: 1, role: 'ADMIN', tenantId: 1, awaiting2FA: true },
@@ -151,16 +197,26 @@ describe('verifyToken', () => {
   });
 
   test('happy path sets req.user and calls next', async () => {
-    const token = jwt.sign({ userId: 7, role: 'USER', tenantId: 3 }, SECRET);
+    userFindUniqueMock.mockResolvedValueOnce({
+      id: 7,
+      deactivatedAt: null,
+      sessionVersion: 2,
+    });
+    const token = jwt.sign({ userId: 7, role: 'USER', tenantId: 3, sessionVersion: 2 }, SECRET);
     const { req, res, next } = makeReqResNext({
       headers: { authorization: `Bearer ${token}` },
     });
     await verifyToken(req, res, next);
+    expect(userFindUniqueMock).toHaveBeenCalledWith({
+      where: { id: 7 },
+      select: { deactivatedAt: true, sessionVersion: true },
+    });
     expect(next).toHaveBeenCalledOnce();
     expect(req.user).toMatchObject({
       userId: 7,
       role: 'USER',
       tenantId: 3,
+      sessionVersion: 2,
     });
     expect(res.status).not.toHaveBeenCalled();
   });

@@ -95,6 +95,7 @@ export default function TripDetail() {
   }, [id]);
   useEffect(load, [load]);
 
+
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;
   if (!trip) return (
     <div style={{ padding: 24 }}>
@@ -1446,6 +1447,7 @@ function RoomingTab({ trip, notify }) {
 
   useEffect(load, [load]);
 
+
   const participants = Array.isArray(trip.participants) ? trip.participants : [];
 
   // Live unassigned count — derived from current edit buffers + the
@@ -1983,8 +1985,6 @@ function PaymentTab({ trip, notify }) {
   const [editingInstalment, setEditingInstalment] = useState(null);
   const [instalmentEdit, setInstalmentEdit] = useState({});
   const [expandedParticipant, setExpandedParticipant] = useState(null);
-  // Payment link state — keyed by instalment id: { url, generating }
-  const [paymentLinks, setPaymentLinks] = useState({});
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1998,12 +1998,6 @@ function PaymentTab({ trip, notify }) {
       .then(([p, ins]) => {
         setPlan(p);
         setInstalments(ins);
-        // Seed payment link state from any previously generated URLs stored on rows
-        const seeded = {};
-        for (const row of ins) {
-          if (row.paymentLinkUrl) seeded[row.id] = { url: row.paymentLinkUrl, generating: false };
-        }
-        setPaymentLinks(seeded);
         if (p) {
           setGraceDays(p.graceDays ?? 0);
           let parsed = [];
@@ -2019,6 +2013,16 @@ function PaymentTab({ trip, notify }) {
 
   useEffect(load, [load]);
 
+
+  const buildInstalmentPortalUrl = (instalmentNumber) => (
+    `${window.location.origin}/pay/trip/${trip.id}/installment/${instalmentNumber}`
+  );
+
+  const onCopyPortalLink = (url) => {
+    navigator.clipboard?.writeText(url)
+      .then(() => notify.success("Payment portal link copied"))
+      .catch(() => notify.error("Copy failed - select the link manually"));
+  };
   const addInstalment = () => {
     setEditInstalments([
       ...editInstalments,
@@ -2141,42 +2145,6 @@ function PaymentTab({ trip, notify }) {
     }
   };
 
-  const onGeneratePaymentLink = async (ins) => {
-    setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], generating: true } }));
-    try {
-      const result = await fetchApi(`/api/travel/trips/${trip.id}/instalments/${ins.id}/payment-link`, {
-        method: "POST",
-      });
-      setPaymentLinks((prev) => ({ ...prev, [ins.id]: { url: result.url, generating: false } }));
-    } catch (e) {
-      setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], generating: false } }));
-      notify.error(e?.body?.error || "Failed to generate payment link");
-    }
-  };
-
-  const onCopyPaymentLink = (url) => {
-    navigator.clipboard?.writeText(url)
-      .then(() => notify.success("Payment link copied"))
-      .catch(() => notify.error("Copy failed — select the link manually"));
-  };
-
-  const onSyncPayment = async (ins) => {
-    setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], syncing: true } }));
-    try {
-      const result = await fetchApi(`/api/travel/trips/${trip.id}/instalments/${ins.id}/sync-payment`, { method: "POST" });
-      if (result.synced) {
-        notify.success("Payment synced — instalment marked " + result.status);
-        load();
-      } else {
-        notify.info(result.reason === "already_paid" ? "Already paid" : "No completed payment found for this link yet");
-      }
-    } catch (e) {
-      notify.error(e?.body?.error || "Sync failed");
-    } finally {
-      setPaymentLinks((prev) => ({ ...prev, [ins.id]: { ...prev[ins.id], syncing: false } }));
-    }
-  };
-
   const total = editInstalments.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
 
   if (loading) return <div style={empty}>Loading&hellip;</div>;
@@ -2217,7 +2185,7 @@ function PaymentTab({ trip, notify }) {
               {/* Column header row — only shown when instalments exist. */}
               <div style={{
                 display: "grid",
-                gridTemplateColumns: "32px 1fr 1fr 130px 90px",
+                gridTemplateColumns: "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 84px 90px",
                 gap: 8,
                 padding: "8px 14px",
                 fontSize: 10,
@@ -2231,12 +2199,13 @@ function PaymentTab({ trip, notify }) {
                 <span>Due date</span>
                 <span>Amount (₹)</span>
                 <span>Reminder (days)</span>
+                <span style={{ textAlign: "center" }}>Payment link</span>
                 <span style={{ textAlign: "right" }}>Actions</span>
               </div>
               {editInstalments.map((ins, idx) => (
                 <div key={idx} style={{
                   display: "grid",
-                  gridTemplateColumns: "32px 1fr 1fr 130px 90px",
+                  gridTemplateColumns: "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 84px 90px",
                   gap: 8,
                   padding: "10px 14px",
                   alignItems: "center",
@@ -2270,6 +2239,17 @@ function PaymentTab({ trip, notify }) {
                     aria-label={`Instalment ${idx + 1} reminder days before due`}
                     title="Days before dueDate to fire reminder (blank = no reminder)"
                   />
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minWidth: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => onCopyPortalLink(buildInstalmentPortalUrl(idx + 1))}
+                      style={{ ...secondaryBtn, padding: "5px 8px", fontSize: 11, flexShrink: 0, minWidth: 58, justifyContent: "center" }}
+                      title={buildInstalmentPortalUrl(idx + 1)}
+                      aria-label={`Copy instalment ${idx + 1} payment link`}
+                    >
+                      <Link2 size={12} aria-hidden /> Link
+                    </button>
+                  </div>
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 2 }}>
                     <button
                       type="button"
@@ -2393,7 +2373,7 @@ function PaymentTab({ trip, notify }) {
             // Calculate totals for this participant
             const totalDue = participantInstalments.reduce((sum, i) => sum + Number(i.amount), 0);
             const totalPaid = participantInstalments.reduce((sum, i) => sum + Number(i.paidAmount || 0), 0);
-            const pendingCount = participantInstalments.filter((i) => i.status === "pending" || i.status === "partial").length;
+            const pendingCount = participantInstalments.filter((i) => i.status === "pending" || i.status === "partial" || i.status === "pending_verification").length;
 
             return (
               <div key={participantId} style={{ borderBottom: "1px solid var(--border-color)" }}>
@@ -2505,15 +2485,11 @@ function PaymentTab({ trip, notify }) {
                           );
                         }
 
-                        const linkState = paymentLinks[i.id] || {};
-                        const hasLink = !!linkState.url;
-                        const isGenerating = !!linkState.generating;
-
                         return (
                           <div key={i.id} style={{ marginTop: 10 }}>
                             <div
                               style={{
-                                background: statusBg, padding: 10, borderRadius: hasLink ? "6px 6px 0 0" : 6,
+                                background: statusBg, padding: 10, borderRadius: 6,
                                 display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
                               }}
                             >
@@ -2533,32 +2509,7 @@ function PaymentTab({ trip, notify }) {
                                   }}
                                 >
                                   {i.status}
-                                </span>
-                                {i.status !== "paid" && hasLink && (
-                                  <button
-                                    type="button"
-                                    onClick={() => onSyncPayment(i)}
-                                    disabled={!!(paymentLinks[i.id] || {}).syncing}
-                                    style={{ ...iconBtn, padding: "4px", opacity: (paymentLinks[i.id] || {}).syncing ? 0.5 : 1 }}
-                                    title="Sync payment status from gateway"
-                                    aria-label="Sync payment status"
-                                  >
-                                    <RotateCcw size={12} aria-hidden />
-                                  </button>
-                                )}
-                                {i.status !== "paid" && (
-                                  <button
-                                    type="button"
-                                    onClick={() => onGeneratePaymentLink(i)}
-                                    disabled={isGenerating}
-                                    style={{ ...iconBtn, padding: "4px", opacity: isGenerating ? 0.5 : 1 }}
-                                    title={hasLink ? "Regenerate payment link" : "Generate payment link"}
-                                    aria-label={hasLink ? "Regenerate payment link" : "Generate payment link"}
-                                  >
-                                    <Link2 size={12} aria-hidden />
-                                  </button>
-                                )}
-                                <button
+                                </span>                                <button
                                   type="button"
                                   onClick={() => onEditInstalment(i)}
                                   style={{ ...iconBtn, padding: "4px" }}
@@ -2569,25 +2520,6 @@ function PaymentTab({ trip, notify }) {
                                 </button>
                               </div>
                             </div>
-                            {hasLink && (
-                              <div style={{
-                                background: "var(--bg-color, #111318)", borderTop: "1px solid var(--border-color)",
-                                borderRadius: "0 0 6px 6px", padding: "8px 10px",
-                                display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
-                              }}>
-                                <Link2 size={12} aria-hidden style={{ color: "var(--primary-color, var(--accent-color))", flexShrink: 0 }} />
-                                <code style={{ fontSize: 11, wordBreak: "break-all", flex: 1, minWidth: 0, color: "var(--text-secondary)" }}>
-                                  {linkState.url}
-                                </code>
-                                <button
-                                  type="button"
-                                  onClick={() => onCopyPaymentLink(linkState.url)}
-                                  style={{ ...secondaryBtn, padding: "4px 10px", fontSize: 11, flexShrink: 0 }}
-                                >
-                                  <Copy size={11} aria-hidden /> Copy
-                                </button>
-                              </div>
-                            )}
                           </div>
                         );
                       })}

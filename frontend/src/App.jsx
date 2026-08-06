@@ -57,14 +57,29 @@ const Portal = lazy(() => import("./pages/Portal"));
 // no User/tenant table). See middleware/superAdminAuth.js on the backend
 // for the full contract. SuperAdminLayout manages its own auth redirect
 // (checks localStorage superAdminToken) rather than the app's AuthContext.
-const SuperAdminLogin = lazy(() => import("./pages/superadmin/SuperAdminLogin"));
-const SuperAdminLayout = lazy(() => import("./pages/superadmin/SuperAdminLayout"));
-const SuperAdminCronMaintenance = lazy(() => import("./pages/superadmin/SuperAdminCronMaintenance"));
-const SuperAdminCronAnalytics = lazy(() => import("./pages/superadmin/SuperAdminCronAnalytics"));
-const SuperAdminApiAnalytics = lazy(() => import("./pages/superadmin/SuperAdminApiAnalytics"));
-const TravelCustomerPortal = lazy(() => import("./pages/travel/TravelCustomerPortal"));
-const PublicTripMicrosite = lazy(() => import("./pages/travel/PublicTripMicrosite"));
-// Public itinerary share page (no auth) Ã¢â‚¬â€ the advisor's "Share link" opens
+const SuperAdminLogin = lazy(
+  () => import("./pages/superadmin/SuperAdminLogin"),
+);
+const SuperAdminLayout = lazy(
+  () => import("./pages/superadmin/SuperAdminLayout"),
+);
+const SuperAdminCronMaintenance = lazy(
+  () => import("./pages/superadmin/SuperAdminCronMaintenance"),
+);
+const SuperAdminCronAnalytics = lazy(
+  () => import("./pages/superadmin/SuperAdminCronAnalytics"),
+);
+const SuperAdminApiAnalytics = lazy(
+  () => import("./pages/superadmin/SuperAdminApiAnalytics"),
+);
+const TravelCustomerPortal = lazy(
+  () => import("./pages/travel/TravelCustomerPortal"),
+);
+const PublicTripMicrosite = lazy(
+  () => import("./pages/travel/PublicTripMicrosite"),
+);
+const TravelPaymentPortal = lazy(() => import("./pages/travel/TravelPaymentPortal"));
+// Public itinerary share page (no auth)  the advisor's "Share link" opens
 // /p/itinerary/:shareToken here. Backed by GET /api/travel/itineraries/public/:shareToken.
 const TripBooking = lazy(() => import("./pages/public/TripBooking"));
 const LandingSiteResolver = lazy(
@@ -306,7 +321,7 @@ const TravelSuppliers = lazy(() => import("./pages/travel/Suppliers"));
 const TravelSuppliersAdmin = lazy(
   () => import("./pages/travel/SuppliersAdmin"),
 );
-// PRD_TRAVEL_SUPPLIER_MASTER G035/G036  Supplier PO ledger UI.
+// PRD_TRAVEL_SUPPLIER_MASTER G035/G036 - Supplier PO ledger UI.
 const TravelPurchaseOrders = lazy(
   () => import("./pages/travel/PurchaseOrders"),
 );
@@ -1326,6 +1341,8 @@ export default function App() {
                       path="/p/tripmicrosite/:publicUuid"
                       element={<PublicTripMicrosite />}
                     />
+                    <Route path="/pay/:token" element={<TravelPaymentPortal />} />
+                    <Route path="/pay/trip/:tripId/installment/:installmentId" element={<TravelPaymentPortal />} />
                     {/* Public itinerary share link (no auth). The advisor's
                       "Share link" generates /p/itinerary/:shareToken; the lead
                       reviews the itinerary + pays the 50% advance here without
@@ -2919,7 +2936,7 @@ export default function App() {
                           </TravelOnly>
                         }
                       />
-                      {/* PRD_TRAVEL_SUPPLIER_MASTER G035/G036 Ã¢â‚¬â€ Supplier PO ledger */}
+                      {/* PRD_TRAVEL_SUPPLIER_MASTER G035/G036 - Supplier PO ledger */}
                       <Route
                         path="travel/purchase-orders"
                         element={
@@ -2928,7 +2945,7 @@ export default function App() {
                           </TravelOnly>
                         }
                       />
-                      {/* PRD_TRAVEL_SUPPLIER_MASTER G045 Ã¢â‚¬â€ per-supplier commission ledger */}
+                      {/* PRD_TRAVEL_SUPPLIER_MASTER G045 - per-supplier commission ledger */}
                       <Route
                         path="travel/suppliers/:id/commissions"
                         element={
@@ -2937,7 +2954,7 @@ export default function App() {
                           </TravelOnly>
                         }
                       />
-                      {/* PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 Ã¢â‚¬â€ per-supplier statement
+                      {/* PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 - per-supplier statement
                   reconciliation + invoice-PDF uploads. */}
                       <Route
                         path="travel/suppliers/:id/reconcile"

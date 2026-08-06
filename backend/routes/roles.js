@@ -10,6 +10,13 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 const {
+  VALID_DATA_SCOPES,
+  VALID_SUB_BRANDS,
+  normalizeDataScope,
+  parseSubBrandScope,
+  serializeSubBrandScope,
+} = require("../lib/rbacScope");
+const {
   requirePermission,
   requireAnyPermission,
   clearUserCache,
@@ -106,6 +113,32 @@ async function getTenantVertical(tenantId) {
   } catch {
     return "generic";
   }
+}
+
+function coerceRoleSubBrandScope(input) {
+  if (input === undefined || input === null || input === "") {
+    return { value: null };
+  }
+  if (typeof input === "string") {
+    try {
+      input = JSON.parse(input);
+    } catch {
+      return { error: "subBrandScope must be a JSON array of sub-brand codes" };
+    }
+  }
+  if (!Array.isArray(input)) {
+    return { error: "subBrandScope must be an array of sub-brand codes" };
+  }
+  const cleaned = [];
+  for (const item of input) {
+    const code = typeof item === "string" ? item.trim() : "";
+    if (!code) continue;
+    if (!VALID_SUB_BRANDS.includes(code)) {
+      return { error: `subBrandScope contains an invalid sub-brand: ${code}` };
+    }
+    if (!cleaned.includes(code)) cleaned.push(code);
+  }
+  return { value: cleaned };
 }
 const { isValidWidgetKey } = require("../lib/widgetCatalog");
 const { getAccessiblePages, canAccessPath } = require("../lib/pageCatalog");
@@ -238,8 +271,11 @@ router.get(
           const visible = (role.permissions || []).filter((p) =>
             isVisible(p.module, p.action),
           );
+          const { subBrandScopeJson, dataScope, ...roleClean } = role;
           return {
-            ...role,
+            ...roleClean,
+            dataScope: normalizeDataScope(dataScope),
+            subBrandScope: parseSubBrandScope(subBrandScopeJson),
             userCount: role._count.userRoles,
             permissionCount: role.permissions.length,
             visiblePermissionCount: visible.length,
@@ -328,8 +364,11 @@ router.get(
         return res.status(403).json({ error: "Access denied" });
       }
 
+      const { subBrandScopeJson, dataScope, ...roleClean } = role;
       res.json({
-        ...role,
+        ...roleClean,
+        dataScope: normalizeDataScope(dataScope),
+        subBrandScope: parseSubBrandScope(subBrandScopeJson),
         userCount: role._count.userRoles,
         _count: undefined,
       });
@@ -347,7 +386,7 @@ router.post(
   requirePermission("roles", "manage"),
   async (req, res) => {
     try {
-      const { name, description, key, userType, landingPath } = req.body;
+      const { name, description, key, userType, landingPath, dataScope, subBrandScope } = req.body;
 
       if (!name || typeof name !== "string") {
         return res.status(400).json({ error: "Role name is required" });
@@ -364,6 +403,20 @@ router.post(
       const landingPathErr = validateLandingPath(landingPath);
       if (landingPathErr) {
         return res.status(400).json({ error: landingPathErr });
+      }
+      if (dataScope !== undefined) {
+        const normalizedDataScope = String(dataScope || "").trim().toUpperCase();
+        if (!VALID_DATA_SCOPES.includes(normalizedDataScope)) {
+          return res.status(400).json({ error: "dataScope must be one of OWN, TEAM, or ALL" });
+        }
+      }
+      const subBrandScopeResult = coerceRoleSubBrandScope(subBrandScope);
+      if (subBrandScopeResult.error) {
+        return res.status(400).json({ error: subBrandScopeResult.error, code: "INVALID_SUB_BRAND_SCOPE" });
+      }
+      const tenantVertical = await getTenantVertical(req.user.tenantId);
+      if (tenantVertical !== "travel" && subBrandScopeResult.value && subBrandScopeResult.value.length > 0) {
+        return res.status(400).json({ error: "subBrandScope is only available for travel tenants" });
       }
 
       // Check if key already exists in this tenant
@@ -389,6 +442,8 @@ router.post(
           isSystem: false,
           userType: userType || "STAFF",
           isActive: true,
+          dataScope: dataScope !== undefined ? normalizeDataScope(dataScope) : "ALL",
+          subBrandScopeJson: serializeSubBrandScope(subBrandScopeResult.value),
           landingPath: normalizeLandingPath(landingPath),
         },
         include: { permissions: true },
@@ -407,7 +462,12 @@ router.post(
         },
       );
 
-      res.status(201).json(role);
+      const { subBrandScopeJson, dataScope: storedDataScope, ...createdRole } = role;
+      res.status(201).json({
+        ...createdRole,
+        dataScope: normalizeDataScope(storedDataScope),
+        subBrandScope: parseSubBrandScope(subBrandScopeJson),
+      });
     } catch (err) {
       console.error("[roles] create error:", err);
       res.status(500).json({ error: "Failed to create role" });
@@ -428,7 +488,7 @@ router.put(
   async (req, res) => {
     try {
       const roleId = parseInt(req.params.id);
-      const { name, description, landingPath } = req.body;
+      const { name, description, landingPath, dataScope, subBrandScope } = req.body;
 
       const role = await prisma.role.findUnique({ where: { id: roleId } });
       if (!role) {
@@ -486,6 +546,20 @@ router.put(
           }
         }
       }
+      if (dataScope !== undefined) {
+        const normalizedDataScope = String(dataScope || "").trim().toUpperCase();
+        if (!VALID_DATA_SCOPES.includes(normalizedDataScope)) {
+          return res.status(400).json({ error: "dataScope must be one of OWN, TEAM, or ALL" });
+        }
+      }
+      const subBrandScopeResult = coerceRoleSubBrandScope(subBrandScope);
+      if (subBrandScopeResult.error) {
+        return res.status(400).json({ error: subBrandScopeResult.error, code: "INVALID_SUB_BRAND_SCOPE" });
+      }
+      const tenantVertical = await getTenantVertical(role.tenantId);
+      if (tenantVertical !== "travel" && subBrandScopeResult.value && subBrandScopeResult.value.length > 0) {
+        return res.status(400).json({ error: "subBrandScope is only available for travel tenants" });
+      }
 
       const updated = await prisma.role.update({
         where: { id: roleId },
@@ -497,6 +571,12 @@ router.put(
             landingPath !== undefined
               ? normalizeLandingPath(landingPath)
               : role.landingPath,
+          dataScope:
+            dataScope !== undefined ? normalizeDataScope(dataScope) : role.dataScope,
+          subBrandScopeJson:
+            subBrandScope !== undefined
+              ? serializeSubBrandScope(subBrandScopeResult.value)
+              : role.subBrandScopeJson,
         },
         include: { permissions: true },
       });
@@ -510,11 +590,16 @@ router.put(
         {
           roleId: updated.id,
           key: updated.key,
-          changes: { name, description, landingPath },
+          changes: { name, description, landingPath, dataScope, subBrandScope },
         },
       );
 
-      res.json(updated);
+      const { subBrandScopeJson, dataScope: storedDataScope, ...updatedRole } = updated;
+      res.json({
+        ...updatedRole,
+        dataScope: normalizeDataScope(storedDataScope),
+        subBrandScope: parseSubBrandScope(subBrandScopeJson),
+      });
     } catch (err) {
       console.error("[roles] update error:", err);
       res.status(500).json({ error: "Failed to update role" });
@@ -1508,7 +1593,7 @@ router.post(
           where: { userId },
           include: {
             role: {
-              select: { id: true, key: true, name: true, landingPath: true },
+              select: { id: true, key: true, name: true, landingPath: true, dataScope: true, subBrandScopeJson: true },
             },
           },
         });
@@ -1543,6 +1628,8 @@ router.post(
           key: a.role && a.role.key,
           name: a.role && a.role.name,
           landingPath: a.role && a.role.landingPath,
+          dataScope: a.role ? normalizeDataScope(a.role.dataScope) : "ALL",
+          subBrandScope: a.role ? parseSubBrandScope(a.role.subBrandScopeJson) : null,
           assignedAt: a.assignedAt,
         })),
       });

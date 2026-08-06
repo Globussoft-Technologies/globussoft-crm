@@ -25,6 +25,15 @@ vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
 }));
 
+let activeSubBrand = null;
+let rolesResponse = [];
+vi.mock('../utils/subBrand', () => ({
+  useActiveSubBrand: () => ({
+    activeSubBrand,
+    setActiveSubBrand: vi.fn(),
+  }),
+}));
+
 // Stable notify mock (see Approvals.test.jsx for the rationale on stable
 // object identity for hooks consumed by useCallback dependency arrays).
 const notifyObj = {
@@ -119,8 +128,8 @@ const dirtyRoleFromList = {
   ],
 };
 
-function renderPage() {
-  return render(
+function renderPageTree() {
+  return (
     <AuthContext.Provider
       value={{
         user: { id: 1, role: 'ADMIN', userType: 'STAFF', email: 'a@b' },
@@ -132,11 +141,19 @@ function renderPage() {
       <MemoryRouter>
         <RolesAdmin />
       </MemoryRouter>
-    </AuthContext.Provider>,
+    </AuthContext.Provider>
   );
 }
 
+function renderPage({ roles = [dirtyRoleFromList], activeBrand = null } = {}) {
+  activeSubBrand = activeBrand;
+  rolesResponse = roles;
+  return render(renderPageTree());
+}
+
 beforeEach(() => {
+  activeSubBrand = null;
+  rolesResponse = [dirtyRoleFromList];
   fetchApiMock.mockReset();
   notifyObj.error.mockReset();
   notifyObj.success.mockReset();
@@ -144,7 +161,7 @@ beforeEach(() => {
   // Default endpoint handlers — every test that runs the page hits these.
   fetchApiMock.mockImplementation((url, opts) => {
     if (url === '/api/roles' && (!opts || opts.method == null || opts.method === 'GET')) {
-      return Promise.resolve({ roles: [dirtyRoleFromList], tenantId: 11 });
+      return Promise.resolve({ roles: rolesResponse, tenantId: 11 });
     }
     if (url === '/api/roles/catalog') {
       return Promise.resolve(TRAVEL_CATALOG);
@@ -296,5 +313,31 @@ describe('Bug 5 / Step-6 — Table badge count matches editor count', () => {
     expect(badge.getAttribute('title')).not.toMatch(/hidden/i);
     // Tooltip just shows the effective count.
     expect(badge.getAttribute('title')).toMatch(/3 permissions/i);
+  });
+});
+
+
+describe('Role scope controls', () => {
+  it('filters roles when the active travel sub-brand switches between brands', async () => {
+    const roles = [
+      { ...dirtyRoleFromList, id: 9, name: 'Shared Manager', subBrandScope: [], subBrandScopeJson: null },
+      { ...dirtyRoleFromList, id: 10, name: 'TMC Specialist', subBrandScope: ['tmc'], subBrandScopeJson: '["tmc"]' },
+      { ...dirtyRoleFromList, id: 11, name: 'RFU Specialist', subBrandScope: ['rfu'], subBrandScopeJson: '["rfu"]' },
+    ];
+    const view = renderPage({ roles, activeBrand: 'tmc' });
+
+    await screen.findByText('Shared Manager');
+    expect(screen.getByText('TMC Specialist')).toBeInTheDocument();
+    expect(screen.queryByText('RFU Specialist')).not.toBeInTheDocument();
+    expect(screen.getByText((_, el) => el?.textContent === 'Filtering to roles available in TMC.')).toBeInTheDocument();
+
+    activeSubBrand = 'rfu';
+    view.rerender(renderPageTree());
+
+    await waitFor(() => {
+      expect(screen.getByText('RFU Specialist')).toBeInTheDocument();
+      expect(screen.queryByText('TMC Specialist')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText((_, el) => el?.textContent === 'Filtering to roles available in RFU.')).toBeInTheDocument();
   });
 });

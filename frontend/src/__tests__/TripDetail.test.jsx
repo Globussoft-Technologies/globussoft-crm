@@ -1212,6 +1212,20 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
     expect(puts.length).toBe(0);
   });
 
+
+  it('renders CRM portal link buttons per instalment and no participant Razorpay link generation', async () => {
+    installPaymentMock();
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    await screen.findByRole('heading', { name: /Edit payment plan/i });
+
+    expect(screen.getByRole('button', { name: /Copy instalment 1 payment link/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy instalment 2 payment link/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy instalment 3 payment link/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Generate payment link/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/rzp\.io/i)).not.toBeInTheDocument();
+  });
   it('per-participant instalments section renders rows from /instalments response', async () => {
     const perPartFixture = [
       {

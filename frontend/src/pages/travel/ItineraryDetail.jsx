@@ -1127,7 +1127,7 @@ export default function ItineraryDetail() {
             }
             return (
               <div style={{ ...box, color: "var(--text-secondary)" }}>
-                Refund can&apos;t be auto-calculated — {r.policyName ? "set a travel start date" : "assign a cancellation policy"} on this booking, then approve. Settle the refund manually per policy.
+                Refund can&apos;t be auto-calculated - {r.policyName ? `${r.policyName} is applied; set a travel start date` : "assign a cancellation policy"} on this booking, then approve. Settle the refund manually per policy.
               </div>
             );
           })()}

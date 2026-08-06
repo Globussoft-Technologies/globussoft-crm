@@ -1,28 +1,28 @@
-// Travel CRM — TMC trip CRUD routes (Phase 1 MVP).
+﻿// Travel CRM â€” TMC trip CRUD routes (Phase 1 MVP).
 //
 // Endpoints:
-//   GET    /api/travel/trips                                   — list trips
-//   POST   /api/travel/trips                                   — create trip
-//   GET    /api/travel/trips/by-month                          — tenant-wide monthly rollup
-//   GET    /api/travel/trips/by-quarter                        — tenant-wide quarterly rollup
-//   GET    /api/travel/trips/:id                               — fetch with children
-//   PATCH  /api/travel/trips/:id                               — amend trip
-//   DELETE /api/travel/trips/:id                               — ADMIN only (cascades)
-//   GET    /api/travel/trips/:id/ops-dashboard                 — PRD §4.9 operational rollup (ADMIN/MANAGER)
+//   GET    /api/travel/trips                                   â€” list trips
+//   POST   /api/travel/trips                                   â€” create trip
+//   GET    /api/travel/trips/by-month                          â€” tenant-wide monthly rollup
+//   GET    /api/travel/trips/by-quarter                        â€” tenant-wide quarterly rollup
+//   GET    /api/travel/trips/:id                               â€” fetch with children
+//   PATCH  /api/travel/trips/:id                               â€” amend trip
+//   DELETE /api/travel/trips/:id                               â€” ADMIN only (cascades)
+//   GET    /api/travel/trips/:id/ops-dashboard                 â€” PRD Â§4.9 operational rollup (ADMIN/MANAGER)
 //
-//   GET    /api/travel/trips/:id/participants                  — list participants
-//   POST   /api/travel/trips/:id/participants                  — add participant
-//   PATCH  /api/travel/trips/:id/participants/:pid             — amend participant
-//   DELETE /api/travel/trips/:id/participants/:pid             — remove participant
+//   GET    /api/travel/trips/:id/participants                  â€” list participants
+//   POST   /api/travel/trips/:id/participants                  â€” add participant
+//   PATCH  /api/travel/trips/:id/participants/:pid             â€” amend participant
+//   DELETE /api/travel/trips/:id/participants/:pid             â€” remove participant
 //
 //   POST   /api/travel/trips/:tripId/participants/:participantId/digilocker/initiate
-//                                                              — start DigiLocker OAuth (stub-mode, PRD §4.5)
+//                                                              â€” start DigiLocker OAuth (stub-mode, PRD Â§4.5)
 //   POST   /api/travel/trips/:tripId/participants/:participantId/digilocker/callback
-//                                                              — exchange state+code, persist Aadhaar last-4 + token
+//                                                              â€” exchange state+code, persist Aadhaar last-4 + token
 //
-//   GET    /api/travel/trips/:id/documents                     — list required docs
-//   POST   /api/travel/trips/:id/documents                     — add required doc
-//   DELETE /api/travel/trips/:id/documents/:docId              — remove required doc
+//   GET    /api/travel/trips/:id/documents                     â€” list required docs
+//   POST   /api/travel/trips/:id/documents                     â€” add required doc
+//   DELETE /api/travel/trips/:id/documents/:docId              â€” remove required doc
 //
 // DEFERRED to Phase 1.5 (schema is in place; routes pending):
 //   - RoomingAssignment (depends on participant assignment UX)
@@ -38,7 +38,7 @@
 // PII: TripParticipant carries passport + Aadhaar token (encrypted). The
 // route stores aadhaarTokenId as-is (encrypted at the application layer
 // before submit, never by this route); raw Aadhaar numbers MUST NOT be
-// stored (Q14 + Aadhaar Act §29 — see TRAVEL_CRM_RISKS.md R8).
+// stored (Q14 + Aadhaar Act Â§29 â€” see TRAVEL_CRM_RISKS.md R8).
 
 const express = require("express");
 const multer = require("multer");
@@ -53,11 +53,69 @@ const visaDocStore = require("../lib/visaDocStore");
 const passportOcrClient = require("../services/passportOcrClient");
 const listProjection = require("../lib/listProjection");
 const { toE164 } = require("../utils/deduplication");
+const { sendEmail } = require("../lib/emailSender");
+const { mintPaymentPortalToken } = require("../lib/travelPaymentPortalToken");
+const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalments");
 const {
   parseSpreadsheetBuffer,
   parseParticipantImportRow,
 } = require("../lib/travelTmcImport");
 
+
+function paymentPortalBaseUrl() {
+  return process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "http://localhost:5173";
+}
+
+function escapeHtml(value) {
+  return String(value || "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[char]));
+}
+
+function sendApprovalPaymentPortalEmail({ tenantId, trip, participant }) {
+  const parentEmail = String(participant?.parentEmail || "").trim().toLowerCase();
+  if (!parentEmail) return;
+  setImmediate(async () => {
+    try {
+      const token = mintPaymentPortalToken({
+        tenantId,
+        tripId: trip.id,
+        participantId: participant.id,
+        email: parentEmail,
+      });
+      const paymentUrl = `${paymentPortalBaseUrl()}/pay/${token}`;
+      const subject = `Registration approved for ${trip.tripCode || "your trip"}`;
+      const greeting = participant.parentName || participant.fullName || "there";
+      const text = [
+        `Hello ${greeting},`,
+        "",
+        "Your trip registration has been approved.",
+        "Welcome to the trip. Use the secure payment button in this email to review and pay your instalments.",
+        "",
+        "This portal link is unique to the participant and should not be shared publicly.",
+      ].join("\n");
+      const html = `
+        <p>Hello ${escapeHtml(greeting)},</p>
+        <p>Your trip registration has been approved.</p>
+        <p>Welcome to the trip. You can review and pay your instalments from the secure CRM payment portal.</p>
+        <p><a href="${paymentUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:12px 18px;background:#4f46e5;color:#fff;text-decoration:none;border-radius:10px;font-weight:700;">Click here for payment</a></p>
+        <p>This portal link is unique to the participant and should not be shared publicly.</p>
+      `;
+      await sendEmail({
+        to: parentEmail,
+        subject,
+        text,
+        html,
+      });
+    } catch (e) {
+      console.error("[travel-trips] approval payment portal email error:", e.message);
+    }
+  });
+}
 const VALID_TRIP_STATUSES = ["confirmed", "in-trip", "completed", "cancelled"];
 const tripImportUpload = multer({
   storage: multer.memoryStorage(),
@@ -79,17 +137,17 @@ async function requireTmcAccess(req, res, next) {
   }
 }
 
-// ─── Trip CRUD ────────────────────────────────────────────────────────
+// â”€â”€â”€ Trip CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // GET /api/travel/trips
 //
-// Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction). Default
-// shape unchanged (full TmcTrip row + _count include) — every existing
+// Slim-shape opt-in (#920 slice S3 â€” FR-3.5 PII payload reduction). Default
+// shape unchanged (full TmcTrip row + _count include) â€” every existing
 // caller (frontend Trips.jsx + TripDetail.jsx + e2e specs) keeps working.
 // Callers can opt into the slim summary projection (id + tripCode +
 // destination + status + dates + createdAt; NO microsite URL, drive
 // folder id, or pricePerStudent) by passing `?fields=summary`. The slim
-// path also skips the `_count` include — slim-shape pickers don't need
+// path also skips the `_count` include â€” slim-shape pickers don't need
 // per-trip child counts. The projection lookup is centralized in
 // backend/lib/listProjection.js so future routes adopt the same shape
 // via a single require() instead of cargo-culting the literal `select`.
@@ -118,7 +176,7 @@ router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (
       skip,
     };
     if (isSummary) {
-      // Slim path: SQL-level field drop via Prisma `select` — keeps the
+      // Slim path: SQL-level field drop via Prisma `select` â€” keeps the
       // route handler the only enforcement layer required. The `_count`
       // include is skipped (picker callers don't need per-trip child
       // counts).
@@ -166,8 +224,8 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
       legalEntity, pricePerStudent, status, micrositeUrl, driveFolderId,
     } = req.body || {};
 
-    // Either schoolContactId (existing FK — back-compat for any caller that
-    // already resolved the contact) OR schoolName (free-text — what the
+    // Either schoolContactId (existing FK â€” back-compat for any caller that
+    // already resolved the contact) OR schoolName (free-text â€” what the
     // operator types in the New Trip modal). When schoolName is supplied we
     // find-or-create a Contact in this tenant tagged with subBrand="tmc" so
     // it shows up correctly in TMC analytics + lead lists.
@@ -231,12 +289,12 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
       return res.status(400).json({ error: "returnDate must be on or after departDate", code: "INVERTED_DATES" });
     }
 
-    // PRD §4.8 — Drive folder auto-create on confirmed-trip trigger.
+    // PRD Â§4.8 â€” Drive folder auto-create on confirmed-trip trigger.
     // If the operator explicitly supplied driveFolderId in the body,
     // HONOUR it (manual override). Otherwise, when the new row's
     // status is "confirmed", call the stub Drive client to mint a
     // folder. Best-effort: a stub failure logs but never blocks trip
-    // creation — the trip's primary contract is its own row, not the
+    // creation â€” the trip's primary contract is its own row, not the
     // optional Drive linkage. Pending Q1 (Workspace admin creds).
     const finalStatus = status || "confirmed";
     let resolvedDriveFolderId = driveFolderId || null;
@@ -249,7 +307,7 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
         });
         resolvedDriveFolderId = folder.folderId;
       } catch (driveErr) {
-        console.warn(`[travel-trips] drive auto-create failed for tripCode=${tripCode}: ${driveErr.message} — persisting NULL`);
+        console.warn(`[travel-trips] drive auto-create failed for tripCode=${tripCode}: ${driveErr.message} â€” persisting NULL`);
       }
     }
 
@@ -278,15 +336,15 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
   }
 });
 
-// ─── Tenant-wide monthly rollup ───────────────────────────────────────
+// â”€â”€â”€ Tenant-wide monthly rollup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// GET /api/travel/trips/by-month — TMC-only, tenant + sub-brand scoped.
+// GET /api/travel/trips/by-month â€” TMC-only, tenant + sub-brand scoped.
 //
 // Mirrors the Travel arc's established by-month pattern (#900 slice 16
 // /quotes/by-month, #901 slice 29 /invoices/by-month, #907 slice 16
-// /itineraries/by-month, #908 slice 21 /flyer-templates/by-month) —
+// /itineraries/by-month, #908 slice 21 /flyer-templates/by-month) â€”
 // same UTC YYYY-MM bucketing template, same defensive math (null/invalid
-// createdAt → "unknown" bucket, excluded when ?from/?to is set), same
+// createdAt â†’ "unknown" bucket, excluded when ?from/?to is set), same
 // orderBy semantics. One row per UTC-month present in the scoped trip
 // set, summarising count + 4-status splits for that month.
 //
@@ -301,12 +359,12 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
 //   - Tenant-scoped on TmcTrip.tenantId.
 //   - TMC-only: requireTmcAccess guard already ensures the caller has
 //     "tmc" in subBrandAccess[] (or full access via ADMIN).
-//   - Any verified token; no further RBAC narrowing — operator-readable
+//   - Any verified token; no further RBAC narrowing â€” operator-readable
 //     read.
 //
 // Query string:
 //   status   optional TmcTrip.status filter (one of VALID_TRIP_STATUSES);
-//            invalid → 400 INVALID_STATUS.
+//            invalid â†’ 400 INVALID_STATUS.
 //   from     optional inclusive lower bound on bucket (YYYY-MM); rows
 //            with month < from are excluded.
 //   to       optional inclusive upper bound on bucket (YYYY-MM); rows
@@ -343,7 +401,7 @@ router.get("/trips/by-month", verifyToken, requireTravelTenant, requireTmcAccess
       return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
     }
 
-    // YYYY-MM validation — same regex slice 16 / 29 / 21 use.
+    // YYYY-MM validation â€” same regex slice 16 / 29 / 21 use.
     const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
     const fromRaw = req.query.from ? String(req.query.from) : null;
     const toRaw = req.query.to ? String(req.query.to) : null;
@@ -373,7 +431,7 @@ router.get("/trips/by-month", verifyToken, requireTravelTenant, requireTmcAccess
     const where = { tenantId: req.travelTenant.id };
     if (statusFilter) where.status = statusFilter;
 
-    // No DB-level pagination — aggregation runs in-process so we can
+    // No DB-level pagination â€” aggregation runs in-process so we can
     // bucket by UTC YYYY-MM.
     const trips = await prisma.tmcTrip.findMany({
       where,
@@ -384,7 +442,7 @@ router.get("/trips/by-month", verifyToken, requireTravelTenant, requireTmcAccess
       },
     });
 
-    // Aggregate per-UTC-month. Map "YYYY-MM" → { ...row counts }.
+    // Aggregate per-UTC-month. Map "YYYY-MM" â†’ { ...row counts }.
     // Rows with null/invalid createdAt go into "unknown" so counts stay
     // accurate.
     const byMonth = new Map();
@@ -478,19 +536,19 @@ router.get("/trips/by-month", verifyToken, requireTravelTenant, requireTmcAccess
   }
 });
 
-// ─── Tenant-wide quarterly rollup ─────────────────────────────────────
+// â”€â”€â”€ Tenant-wide quarterly rollup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// GET /api/travel/trips/by-quarter — TMC-only, tenant + sub-brand scoped.
+// GET /api/travel/trips/by-quarter â€” TMC-only, tenant + sub-brand scoped.
 //
 // Quarter-resolution sibling of GET /trips/by-month above (commit
 // 4b0f7e36). Same UTC bucketing template, same defensive math
-// (null/invalid createdAt → "unknown" bucket, excluded when ?from/?to
+// (null/invalid createdAt â†’ "unknown" bucket, excluded when ?from/?to
 // is set), same orderBy semantics. One row per UTC-calendar-quarter
 // present in the scoped trip set, summarising count + 4-status splits
 // for that quarter.
 //
 // Calendar-quarter derivation: Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep,
-// Q4=Oct-Dec — `Math.floor(month/3)+1` over UTC months [0..11].
+// Q4=Oct-Dec â€” `Math.floor(month/3)+1` over UTC months [0..11].
 //
 // 4-status TMC envelope:
 //   confirmed / in-trip / completed / cancelled
@@ -502,12 +560,12 @@ router.get("/trips/by-month", verifyToken, requireTravelTenant, requireTmcAccess
 //   - Tenant-scoped on TmcTrip.tenantId.
 //   - TMC-only: requireTmcAccess guard already ensures the caller has
 //     "tmc" in subBrandAccess[] (or full access via ADMIN).
-//   - Any verified token; no further RBAC narrowing — operator-readable
+//   - Any verified token; no further RBAC narrowing â€” operator-readable
 //     read.
 //
 // Query string:
 //   status   optional TmcTrip.status filter (one of VALID_TRIP_STATUSES);
-//            invalid → 400 INVALID_STATUS.
+//            invalid â†’ 400 INVALID_STATUS.
 //   from     optional inclusive lower bound on bucket (YYYY-Qn); rows
 //            with quarter < from are excluded.
 //   to       optional inclusive upper bound on bucket (YYYY-Qn); rows
@@ -544,7 +602,7 @@ router.get("/trips/by-quarter", verifyToken, requireTravelTenant, requireTmcAcce
       return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
     }
 
-    // YYYY-Qn validation — n ∈ {1,2,3,4}.
+    // YYYY-Qn validation â€” n âˆˆ {1,2,3,4}.
     const QUARTER_RE = /^\d{4}-Q[1-4]$/;
     const fromRaw = req.query.from ? String(req.query.from) : null;
     const toRaw = req.query.to ? String(req.query.to) : null;
@@ -574,7 +632,7 @@ router.get("/trips/by-quarter", verifyToken, requireTravelTenant, requireTmcAcce
     const where = { tenantId: req.travelTenant.id };
     if (statusFilter) where.status = statusFilter;
 
-    // No DB-level pagination — aggregation runs in-process so we can
+    // No DB-level pagination â€” aggregation runs in-process so we can
     // bucket by UTC YYYY-Qn.
     const trips = await prisma.tmcTrip.findMany({
       where,
@@ -585,7 +643,7 @@ router.get("/trips/by-quarter", verifyToken, requireTravelTenant, requireTmcAcce
       },
     });
 
-    // Aggregate per-UTC-quarter. Map "YYYY-Qn" → { ...row counts }.
+    // Aggregate per-UTC-quarter. Map "YYYY-Qn" â†’ { ...row counts }.
     // Rows with null/invalid createdAt go into "unknown" so counts stay
     // accurate.
     const byQuarter = new Map();
@@ -680,13 +738,13 @@ router.get("/trips/by-quarter", verifyToken, requireTravelTenant, requireTmcAcce
   }
 });
 
-// ─── Tenant-wide yearly rollup ────────────────────────────────────────
+// â”€â”€â”€ Tenant-wide yearly rollup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// GET /api/travel/trips/by-year — TMC-only, tenant + sub-brand scoped.
+// GET /api/travel/trips/by-year â€” TMC-only, tenant + sub-brand scoped.
 //
 // Year-resolution sibling of GET /trips/by-month + /trips/by-quarter
 // above. Same UTC bucketing template, same defensive math
-// (null/invalid createdAt → "unknown" bucket, excluded when ?from/?to
+// (null/invalid createdAt â†’ "unknown" bucket, excluded when ?from/?to
 // is set), same orderBy semantics. One row per UTC-calendar-year
 // present in the scoped trip set, summarising count + 4-status splits
 // for that year.
@@ -703,12 +761,12 @@ router.get("/trips/by-quarter", verifyToken, requireTravelTenant, requireTmcAcce
 //   - Tenant-scoped on TmcTrip.tenantId.
 //   - TMC-only: requireTmcAccess guard already ensures the caller has
 //     "tmc" in subBrandAccess[] (or full access via ADMIN).
-//   - Any verified token; no further RBAC narrowing — operator-readable
+//   - Any verified token; no further RBAC narrowing â€” operator-readable
 //     read.
 //
 // Query string:
 //   status   optional TmcTrip.status filter (one of VALID_TRIP_STATUSES);
-//            invalid → 400 INVALID_STATUS.
+//            invalid â†’ 400 INVALID_STATUS.
 //   from     optional inclusive lower bound on bucket (YYYY); rows
 //            with year < from are excluded.
 //   to       optional inclusive upper bound on bucket (YYYY); rows
@@ -745,7 +803,7 @@ router.get("/trips/by-year", verifyToken, requireTravelTenant, requireTmcAccess,
       return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
     }
 
-    // YYYY validation — 4-digit calendar year.
+    // YYYY validation â€” 4-digit calendar year.
     const YEAR_RE = /^\d{4}$/;
     const fromRaw = req.query.from ? String(req.query.from) : null;
     const toRaw = req.query.to ? String(req.query.to) : null;
@@ -775,7 +833,7 @@ router.get("/trips/by-year", verifyToken, requireTravelTenant, requireTmcAccess,
     const where = { tenantId: req.travelTenant.id };
     if (statusFilter) where.status = statusFilter;
 
-    // No DB-level pagination — aggregation runs in-process so we can
+    // No DB-level pagination â€” aggregation runs in-process so we can
     // bucket by UTC YYYY.
     const trips = await prisma.tmcTrip.findMany({
       where,
@@ -786,7 +844,7 @@ router.get("/trips/by-year", verifyToken, requireTravelTenant, requireTmcAccess,
       },
     });
 
-    // Aggregate per-UTC-year. Map "YYYY" → { ...row counts }.
+    // Aggregate per-UTC-year. Map "YYYY" â†’ { ...row counts }.
     // Rows with null/invalid createdAt go into "unknown" so counts stay
     // accurate.
     const byYear = new Map();
@@ -925,7 +983,7 @@ router.get("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, asy
   }
 });
 
-// GET /api/travel/trips/:id/ops-dashboard — PRD §4.9 operational rollup.
+// GET /api/travel/trips/:id/ops-dashboard â€” PRD Â§4.9 operational rollup.
 //
 // Single-shot rollup endpoint that aggregates the 5 sources of truth a
 // trip operator needs at-a-glance for a confirmed trip:
@@ -935,14 +993,14 @@ router.get("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, asy
 //   - TripDocumentRequirement  (required-doc count)
 //   - RoomingAssignment        (rooms + roomed-vs-unroomed)
 //
-// Computes a departureReadiness score (0–100) as a weighted average:
-//   30% consent capture · 30% documents · 30% payment · 10% rooming.
+// Computes a departureReadiness score (0â€“100) as a weighted average:
+//   30% consent capture Â· 30% documents Â· 30% payment Â· 10% rooming.
 // Returns score=null when a denominator is zero (zero participants OR
 // zero expected payments) so the UI can show "Insufficient data"
 // rather than rendering a fabricated percentage.
 //
 // Notes on schema realities (do NOT assume from the PRD prose):
-//   - TripDocumentRequirement has { tripId, docType, required } only —
+//   - TripDocumentRequirement has { tripId, docType, required } only â€”
 //     it has no `status` or `participantId`. The model lists what docs
 //     the trip REQUIRES, not which participant has submitted. With no
 //     submitted-tracking on this model we conservatively count
@@ -986,7 +1044,7 @@ router.get(
       if (!trip) return res.status(404).json({ error: "Trip not found", code: "NOT_FOUND" });
 
       // Parallel-fetch the 4 child collections. TMC trips have tens of
-      // participants, not thousands — no pagination needed; aggregate
+      // participants, not thousands â€” no pagination needed; aggregate
       // in JS (simpler than Prisma groupBy with parsed JSON columns).
       const [participants, payments, docs, roomings] = await Promise.all([
         prisma.tripParticipant.findMany({
@@ -1010,8 +1068,8 @@ router.get(
       // Participants
       const participantsCount = participants.length;
       const capturedConsent = participants.filter((p) => p.consentCapturedAt != null).length;
-      // Application-status breakdown — additive over consentCapturedAt so
-      // Overview KPI can show "X registered · Y approved · Z pending".
+      // Application-status breakdown â€” additive over consentCapturedAt so
+      // Overview KPI can show "X registered Â· Y approved Â· Z pending".
       // Legacy rows (pre-applicationStatus) default to "pending" via schema
       // default, so the counts always sum to participantsCount.
       let approvedCount = 0;
@@ -1028,7 +1086,7 @@ router.get(
         }
       }
 
-      // Payments — Decimal columns come back as Prisma.Decimal; coerce
+      // Payments â€” Decimal columns come back as Prisma.Decimal; coerce
       // with Number(). Demo amounts are well within Number-safe range.
       let expectedTotalRupees = 0;
       let receivedRupees = 0;
@@ -1051,7 +1109,7 @@ router.get(
       expectedTotalRupees = Math.round(expectedTotalRupees * 100) / 100;
       receivedRupees = Math.round(receivedRupees * 100) / 100;
 
-      // Documents — only the `required: true` rows count toward the
+      // Documents â€” only the `required: true` rows count toward the
       // denominator. No submitted-tracking exists on this model today,
       // so submittedCount = 0 / missingCount = requirementCount. When
       // a submission tracking column lands, flip this to count rows
@@ -1060,7 +1118,7 @@ router.get(
       const submittedCount = 0;
       const missingCount = requirementCount - submittedCount;
 
-      // Rooming — participantIds is a JSON-string array. Parse-failure
+      // Rooming â€” participantIds is a JSON-string array. Parse-failure
       // is tolerated (counts as 0 for that row, never throws).
       let participantsRoomed = 0;
       let assignmentCount = 0;
@@ -1070,10 +1128,10 @@ router.get(
           const arr = JSON.parse(r.participantIds || "[]");
           if (Array.isArray(arr)) participantsRoomed += arr.length;
         } catch (_e) {
-          // Tolerate malformed JSON — counted as 0 for this row.
+          // Tolerate malformed JSON â€” counted as 0 for this row.
         }
       }
-      // Clamp roomed at participants count — an over-assigned room
+      // Clamp roomed at participants count â€” an over-assigned room
       // (participant in two rooms) shouldn't push the rooming
       // percentage above 100%.
       if (participantsCount > 0 && participantsRoomed > participantsCount) {
@@ -1095,7 +1153,7 @@ router.get(
         const consentFrac = clampFrac(capturedConsent / participantsCount);
         const docsFrac = requirementCount > 0
           ? clampFrac(submittedCount / requirementCount)
-          : 0; // No docs required → 0% (nothing to submit)
+          : 0; // No docs required â†’ 0% (nothing to submit)
         const paymentFrac = clampFrac(receivedRupees / expectedTotalRupees);
         const roomingFrac = clampFrac(participantsRoomed / participantsCount);
         const weighted = (consentFrac * 0.3) + (docsFrac * 0.3) + (paymentFrac * 0.3) + (roomingFrac * 0.1);
@@ -1119,7 +1177,7 @@ router.get(
         },
         participants: {
           count: participantsCount,
-          target: null, // TmcTrip has no targetStudentCount column (deferred — see route header)
+          target: null, // TmcTrip has no targetStudentCount column (deferred â€” see route header)
           capturedConsent,
           // Application-status breakdown (additive). Sums to count.
           pendingReview: pendingReviewCount,
@@ -1230,7 +1288,7 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
       return res.status(400).json({ error: "returnDate must be on or after departDate", code: "INVERTED_DATES" });
     }
 
-    // PRD §4.8 — Drive folder auto-create on confirmed-trip trigger.
+    // PRD Â§4.8 â€” Drive folder auto-create on confirmed-trip trigger.
     // Fire when the operator flips status from non-confirmed to
     // "confirmed" AND the existing row has no driveFolderId AND the
     // body did not explicitly supply one (operator override always
@@ -1240,13 +1298,13 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
     const flippingToConfirmed =
       data.status === "confirmed" && existing.status !== "confirmed";
 
-    // PRD_TRAVEL_SUPPLIER_MASTER G042 — credit-limit hard-block.
+    // PRD_TRAVEL_SUPPLIER_MASTER G042 â€” credit-limit hard-block.
     // When the trip flips to "confirmed" AND req.body carries a supplierId
     // + a totalAmount (the booking value being projected against the
     // supplier's outstanding A/P), call the credit-check helper. If the
     // projected total exceeds the supplier's configured creditLimit,
     // return 409 CREDIT_LIMIT_EXCEEDED. ADMIN may override via
-    // req.body.overrideCreditLimit=true (operator escalation path —
+    // req.body.overrideCreditLimit=true (operator escalation path â€”
     // logged at write time so the override is auditable).
     if (flippingToConfirmed) {
       const { supplierId: sIdRaw, totalAmount, overrideCreditLimit } = req.body || {};
@@ -1291,18 +1349,18 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
         });
         data.driveFolderId = folder.folderId;
       } catch (driveErr) {
-        console.warn(`[travel-trips] drive auto-create failed for tripCode=${existing.tripCode}: ${driveErr.message} — leaving driveFolderId unchanged`);
+        console.warn(`[travel-trips] drive auto-create failed for tripCode=${existing.tripCode}: ${driveErr.message} â€” leaving driveFolderId unchanged`);
       }
     }
 
     const updated = await prisma.tmcTrip.update({ where: { id }, data });
 
-    // PRD_TRAVEL_SUPPLIER_MASTER FR-3.2.a (G037) — auto-create draft PO on
+    // PRD_TRAVEL_SUPPLIER_MASTER FR-3.2.a (G037) â€” auto-create draft PO on
     // booking-confirm. TmcTrip does NOT carry a supplierId column today;
     // the booking-confirm flow accepts an OPTIONAL `supplierId` body field
     // that, when present AND the trip flips to confirmed, fires the auto-PO.
     // Best-effort: any failure (missing supplier, sub-brand mismatch, PO
-    // sequence collision) logs but does NOT block the PATCH — the trip's
+    // sequence collision) logs but does NOT block the PATCH â€” the trip's
     // status flip is the load-bearing op. Without supplierId, trip-confirm
     // just doesn't spawn a PO (operator can still manually create one via
     // POST /api/travel/purchase-orders).
@@ -1346,7 +1404,7 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
   }
 });
 
-// DELETE /api/travel/trips/:id — ADMIN only, cascades through children.
+// DELETE /api/travel/trips/:id â€” ADMIN only, cascades through children.
 router.delete(
   "/trips/:id",
   verifyToken,
@@ -1372,16 +1430,16 @@ router.delete(
   },
 );
 
-// ─── Trip-owned Landing Page lifecycle ────────────────────────────────
+// â”€â”€â”€ Trip-owned Landing Page lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // Each TmcTrip owns AT MOST one LandingPage (LandingPage.tripId is
 // nullable + @unique). The Trip module is the single owner of the
-// public experience — operators edit/preview/publish from /trips/:id,
+// public experience â€” operators edit/preview/publish from /trips/:id,
 // not from the generic /landing-pages list. Lifecycle:
 //
-//   GET    /trips/:id/landing-page → 200 page | 404 NOT_LINKED
-//   POST   /trips/:id/landing-page → 200 existing | 201 freshly lazy-created
-//   DELETE /trips/:id/landing-page → unlinks (sets tripId=null); the
+//   GET    /trips/:id/landing-page â†’ 200 page | 404 NOT_LINKED
+//   POST   /trips/:id/landing-page â†’ 200 existing | 201 freshly lazy-created
+//   DELETE /trips/:id/landing-page â†’ unlinks (sets tripId=null); the
 //          LandingPage row itself survives so existing analytics + slug
 //          stay intact, but it becomes a generic page again
 //
@@ -1389,7 +1447,7 @@ router.delete(
 // Student/Parent/Passport wizard) in DRAFT status, with subBrand="tmc"
 // and destination/title derived from the trip. Operators can then edit
 // via the existing LandingPageBuilder + LandingPageWanderluxEditor.
-// We do NOT touch any other Builder behaviour — only the registration
+// We do NOT touch any other Builder behaviour â€” only the registration
 // submission flow changes (Phase 3).
 
 async function loadTripWithLandingPage(req) {
@@ -1427,7 +1485,7 @@ function defaultWanderluxConfig(trip) {
     },
     hero: {
       title: `${trip.destination} Trip`,
-      subtitle: `${new Date(trip.departDate).toLocaleDateString()} — ${new Date(trip.returnDate).toLocaleDateString()}`,
+      subtitle: `${new Date(trip.departDate).toLocaleDateString()} â€” ${new Date(trip.returnDate).toLocaleDateString()}`,
       backgroundImage: null,
     },
     sections: [],
@@ -1437,10 +1495,10 @@ function defaultWanderluxConfig(trip) {
     // Contact+Deal. Step shape mirrors the existing Wanderlux template.
     register: {
       title: "Register your child for this trip",
-      subtitle: "Three quick steps — Student, Parent, Passport.",
+      subtitle: "Three quick steps â€” Student, Parent, Passport.",
       mode: "registration-draft",
       submitText: "Submit registration",
-      thankYouMessage: "Thank you — we'll redirect you to verify your phone.",
+      thankYouMessage: "Thank you â€” we'll redirect you to verify your phone.",
       steps: [
         { id: "student", title: "Student Information" },
         { id: "parent",  title: "Parent Information" },
@@ -1474,13 +1532,13 @@ router.post("/trips/:id/landing-page", verifyToken, requireTravelTenant, require
   try {
     const trip = await loadTripWithLandingPage(req);
     if (trip.landingPage) {
-      // Already linked — return existing. Idempotent.
+      // Already linked â€” return existing. Idempotent.
       return res.json(trip.landingPage);
     }
 
     const baseSlug = `trip-${trip.tripCode}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 50);
     const baseData = {
-      title: `${trip.destination} Trip — ${trip.tripCode}`,
+      title: `${trip.destination} Trip â€” ${trip.tripCode}`,
       templateType: "wanderlux-v1",
       content: JSON.stringify(defaultWanderluxConfig(trip)),
       status: "DRAFT",
@@ -1503,13 +1561,13 @@ router.post("/trips/:id/landing-page", verifyToken, requireTravelTenant, require
       } catch (e) {
         // P2002 can fire on either @@unique([tenantId, slug]) OR on
         // tripId @unique. The latter means a concurrent POST raced us
-        // to attach a page — re-read and return that page.
+        // to attach a page â€” re-read and return that page.
         if (e.code !== "P2002") throw e;
         if (Array.isArray(e.meta?.target) && e.meta.target.includes("tripId")) {
           const racePage = await prisma.landingPage.findUnique({ where: { tripId: trip.id } });
           if (racePage) return res.json(racePage);
         }
-        // Otherwise slug collision — try again with a fresh suffix.
+        // Otherwise slug collision â€” try again with a fresh suffix.
       }
     }
     if (!created) {
@@ -1553,7 +1611,7 @@ router.delete(
   },
 );
 
-// ─── Participants ─────────────────────────────────────────────────────
+// â”€â”€â”€ Participants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function loadTrip(req) {
   const id = parseInt(req.params.id, 10);
@@ -1685,11 +1743,11 @@ router.post(
 
 // GET /api/travel/trips/:id/participants
 //
-// Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction).
+// Slim-shape opt-in (#920 slice S3 â€” FR-3.5 PII payload reduction).
 // **High-value PII target.** Default shape ships the full TripParticipant
 // row including passportNumber, passportExtractionJson (raw vendor
 // envelope), aadhaarLast4 + aadhaarTokenId (DigiLocker), parentName /
-// parentPhone / parentEmail, and medicalNotes — every field on the
+// parentPhone / parentEmail, and medicalNotes â€” every field on the
 // model is regulated PII / sensitive data. Callers that just need the
 // roster picker (fullName + tripId + id) can opt into the slim
 // projection via `?fields=summary`; the SQL-level `select` drops every
@@ -1727,7 +1785,7 @@ router.post("/trips/:id/participants", verifyToken, requireTravelTenant, require
     if (!fullName) {
       return res.status(400).json({ error: "fullName required", code: "MISSING_FIELDS" });
     }
-    // Aadhaar Act §29 safety — refuse if caller submits a raw 12-digit
+    // Aadhaar Act Â§29 safety â€” refuse if caller submits a raw 12-digit
     // Aadhaar number. Only `aadhaarLast4` (display) + `aadhaarTokenId`
     // (DigiLocker token) are allowed in storage.
     if (aadhaarLast4 && !/^\d{4}$/.test(String(aadhaarLast4))) {
@@ -1738,7 +1796,7 @@ router.post("/trips/:id/participants", verifyToken, requireTravelTenant, require
     }
     // Bare 10-digit Indian mobiles get +91 auto-prepended (Travel Stall is
     // Indian-only). E.164 (`+919876543210`) and 12-digit `91XXXXXXXXXX` are
-    // also accepted. Returns null on garbage like `abcde` → 400.
+    // also accepted. Returns null on garbage like `abcde` â†’ 400.
     let normalizedPhone = null;
     if (parentPhone) {
       normalizedPhone = toE164(parentPhone);
@@ -1839,7 +1897,7 @@ router.patch("/trips/:id/participants/:pid", verifyToken, requireTravelTenant, r
 // POST /api/travel/trips/:id/participants/:pid/reject
 //
 // Operator decision on a registered participant. Additive over the existing
-// PATCH route — the dedicated endpoints make audit + workflow integration
+// PATCH route â€” the dedicated endpoints make audit + workflow integration
 // (notifications, downstream payment-plan trigger) cleaner than overloading
 // PATCH with an `applicationStatus` toggle in the allowed-fields list.
 //
@@ -1849,7 +1907,7 @@ router.patch("/trips/:id/participants/:pid", verifyToken, requireTravelTenant, r
 // the Participants tab can show it inline next to the status pill.
 //
 // Re-approving an already-approved row (or re-rejecting a rejected row) is
-// tolerated and refreshes reviewedAt + reviewedById — useful when a second
+// tolerated and refreshes reviewedAt + reviewedById â€” useful when a second
 // reviewer signs off.
 async function decideApplication(req, res, nextStatus) {
   try {
@@ -1875,16 +1933,34 @@ async function decideApplication(req, res, nextStatus) {
     }
     const reviewerId = req.user?.userId ?? null;
 
-    const updated = await prisma.tripParticipant.update({
-      where: { id: pid },
-      data: {
-        applicationStatus: nextStatus,
-        reviewedAt: new Date(),
-        reviewedById: Number.isFinite(reviewerId) ? reviewerId : null,
-        reviewNotes,
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.tripParticipant.update({
+        where: { id: pid },
+        data: {
+          applicationStatus: nextStatus,
+          reviewedAt: new Date(),
+          reviewedById: Number.isFinite(reviewerId) ? reviewerId : null,
+          reviewNotes,
+        },
+      });
+      if (nextStatus === "approved") {
+        await materializeTripInstalmentsFromPlan({
+          db: tx,
+          tripId: trip.id,
+          participantIds: [pid],
+          allowMissingPlan: true,
+        });
+      }
+      return row;
     });
     res.json(updated);
+    if (nextStatus === "approved" && existing.applicationStatus !== "approved") {
+      sendApprovalPaymentPortalEmail({
+        tenantId: req.travelTenant.id,
+        trip,
+        participant: updated,
+      });
+    }
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-trips] participant decide error:", e.message);
@@ -1928,29 +2004,7 @@ router.delete("/trips/:id/participants/:pid", verifyToken, requireTravelTenant, 
   }
 });
 
-// ─── Pending registrations (Phase 5 hybrid architecture) ─────────────
-//
-// Trip-scoped admin queue surfacing the staging rows produced by the
-// landing-page → microsite OTP flow. Lives alongside Participants in
-// the CRM UI — the user keeps a single Participants area per
-// decision #7, so the frontend merges these rows into the same list
-// with a status-aware presentation.
-//
-//   GET    /trips/:id/registrations
-//          ?status=DRAFT|OTP_VERIFIED|REJECTED|CONVERTED  (default: all)
-//   POST   /trips/:id/registrations/:rid/approve
-//          Body: { reviewNotes? }
-//          Requires draft.status === "OTP_VERIFIED". In one
-//          transaction: creates TripParticipant with
-//          applicationStatus="approved" (per decision #8, no second
-//          approval workflow), updates draft to status=CONVERTED.
-//   POST   /trips/:id/registrations/:rid/reject
-//          Body: { reviewNotes? }
-//          Marks draft as REJECTED. No participant is created.
-//
-// Auth: same chain as participants (verifyToken + requireTravelTenant
-// + requireTmcAccess). All routes are tenant + trip scoped.
-
+// GET /trips/:id/registrations
 router.get(
   "/trips/:id/registrations",
   verifyToken,
@@ -1978,7 +2032,7 @@ router.get(
       const registrations = await prisma.pendingTripRegistration.findMany({
         where,
         orderBy: { createdAt: "desc" },
-        // Slim shape — omit the draftToken (server-side secret) and
+        // Slim shape â€” omit the draftToken (server-side secret) and
         // draftTokenExpiresAt (microsite-only signal). Operators don't
         // need either; the CRM acts on the draft id directly.
         select: {
@@ -2011,9 +2065,9 @@ router.get(
 // Mints a short-lived (5-min) signed URL for a passport, Aadhaar scan or
 // parent consent letter uploaded via the public microsite and stored in
 // PendingTripRegistration.
-// All authenticated travel users (including USER/agent role) can view documents —
+// All authenticated travel users (including USER/agent role) can view documents â€”
 // document access is controlled by trip tenancy, not by role.
-// Returns { url } — the signed URL is valid for DEFAULT_VIEW_TTL_SEC seconds.
+// Returns { url } â€” the signed URL is valid for DEFAULT_VIEW_TTL_SEC seconds.
 router.get(
   "/trips/:id/registrations/:rid/documents/:docType/view-url",
   verifyToken,
@@ -2038,7 +2092,7 @@ router.get(
           code: "DOC_NOT_FOUND",
         });
       }
-      // Map microsite descriptor shape { storage, url, key } → visaDocStore item shape
+      // Map microsite descriptor shape { storage, url, key } â†’ visaDocStore item shape
       const item = {
         attachmentUrl: descriptor.url,
         attachmentKey: descriptor.key,
@@ -2114,8 +2168,8 @@ router.post(
       // pointed at it, or vice versa). Approve writes
       // applicationStatus="approved" directly so the operator doesn't
       // have to re-approve in the Participants tab.
-      const [participant] = await prisma.$transaction([
-        prisma.tripParticipant.create({
+            const { participant, updatedDraft } = await prisma.$transaction(async (tx) => {
+        const createdParticipant = await tx.tripParticipant.create({
           data: {
             tripId: trip.id,
             fullName: draft.studentName,
@@ -2136,26 +2190,38 @@ router.post(
             // and linked via convertedToParticipantId). Add them back once the
             // columns exist in the live DB.
           },
-        }),
-      ]);
-      // Second update wires the back-reference; done as a separate call
-      // because we need the freshly-created participant.id to fill
-      // convertedToParticipantId.
-      const updatedDraft = await prisma.pendingTripRegistration.update({
-        where: { id: draft.id },
-        data: {
-          status: "CONVERTED",
-          convertedToParticipantId: participant.id,
-          approvedAt: new Date(),
-          approvedById: reviewerIdSafe,
-          reviewNotes: reviewNotes ?? draft.reviewNotes,
-        },
+        });
+
+        const draftUpdate = await tx.pendingTripRegistration.update({
+          where: { id: draft.id },
+          data: {
+            status: "CONVERTED",
+            convertedToParticipantId: createdParticipant.id,
+            approvedAt: new Date(),
+            approvedById: reviewerIdSafe,
+            reviewNotes: reviewNotes ?? draft.reviewNotes,
+          },
+        });
+
+        await materializeTripInstalmentsFromPlan({
+          db: tx,
+          tripId: trip.id,
+          participantIds: [createdParticipant.id],
+          allowMissingPlan: true,
+        });
+
+        return { participant: createdParticipant, updatedDraft: draftUpdate };
       });
       res.json({ approved: true, participant, registration: updatedDraft });
+      sendApprovalPaymentPortalEmail({
+        tenantId: req.travelTenant.id,
+        trip,
+        participant,
+      });
 
       // Fire-and-forget passport OCR so the participant surfaces in
       // PassportVerificationQueue without blocking the conversion response.
-      // Failures are logged and silently swallowed — the operator can always
+      // Failures are logged and silently swallowed â€” the operator can always
       // trigger a re-upload via the verification queue's "Clear (re-upload)" action.
       if (draftDocs.passport?.key) {
         setImmediate(async () => {
@@ -2165,14 +2231,14 @@ router.post(
             const extMap = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", pdf: "application/pdf" };
             const ext = (passportDescriptor.key || "").split(".").pop().toLowerCase();
             const mimeType = extMap[ext] || "image/jpeg";
-            // Use travelTenant.id — trip is loaded with select:{id:true} so trip.tenantId is undefined.
+            // Use travelTenant.id â€” trip is loaded with select:{id:true} so trip.tenantId is undefined.
             const tenantId = req.travelTenant?.id;
             let envelope;
             if (buffer) {
               try {
                 envelope = await passportOcrClient.extractPassport({ tenantId, fileBuffer: buffer, mimeType });
               } catch (_ocrErr) {
-                // OCR disabled or failed — still queue the participant for manual operator review.
+                // OCR disabled or failed â€” still queue the participant for manual operator review.
                 envelope = {
                   extraction: {
                     passportNumber: null, surname: null, givenNames: null,
@@ -2182,11 +2248,11 @@ router.post(
                   confidence: 0,
                   provider: "manual",
                   mrzFound: false,
-                  note: "Automatic extraction unavailable — please verify passport fields manually.",
+                  note: "Automatic extraction unavailable â€” please verify passport fields manually.",
                 };
               }
             } else {
-              // File not readable (moved/deleted) — queue with empty envelope so operator is notified.
+              // File not readable (moved/deleted) â€” queue with empty envelope so operator is notified.
               envelope = {
                 extraction: {
                   passportNumber: null, surname: null, givenNames: null,
@@ -2196,7 +2262,7 @@ router.post(
                 confidence: 0,
                 provider: "manual",
                 mrzFound: false,
-                note: "Document file not readable — ask participant to re-upload.",
+                note: "Document file not readable â€” ask participant to re-upload.",
               };
             }
             await prisma.tripParticipant.update({
@@ -2263,10 +2329,10 @@ router.post(
   },
 );
 
-// ─── DigiLocker Aadhaar verification (stub-mode) ─────────────────────
+// â”€â”€â”€ DigiLocker Aadhaar verification (stub-mode) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
-// PRD §4.5 + §4.7. Currently uses the stub client in
-// services/digilockerClient.js — real OAuth flow lands when the
+// PRD Â§4.5 + Â§4.7. Currently uses the stub client in
+// services/digilockerClient.js â€” real OAuth flow lands when the
 // Travel Stall partner-registration creds (Q3) drop. Swap point is
 // that single file; routes + DB shape stay identical.
 //
@@ -2274,7 +2340,7 @@ router.post(
 // browser would redirect to. /callback verifies the state, exchanges
 // the (state, code) pair for an Aadhaar last-4 + opaque token, and
 // writes those onto the TripParticipant. The token NEVER appears in
-// any HTTP response — only persisted server-side (matches the existing
+// any HTTP response â€” only persisted server-side (matches the existing
 // `aadhaarTokenId` convention for opaque PII tokens).
 
 async function loadTripAndParticipant(req) {
@@ -2361,7 +2427,7 @@ router.post(
         return res.status(404).json({ error: "DigiLocker session not found", code: "SESSION_NOT_FOUND" });
       }
       if (session.status === "verified") {
-        // Replay protection — the state has already been consumed.
+        // Replay protection â€” the state has already been consumed.
         return res.status(409).json({ error: "DigiLocker session already verified", code: "INVALID_STATE" });
       }
       if (session.status === "expired" || session.status === "failed") {
@@ -2385,7 +2451,7 @@ router.post(
         }),
       ]);
 
-      // NOTE: never leak resultTokenId / aadhaarTokenId in the response —
+      // NOTE: never leak resultTokenId / aadhaarTokenId in the response â€”
       // token stays server-side per the route header convention.
       res.status(200).json({ verified: true, aadhaarLast4 });
     } catch (e) {
@@ -2396,7 +2462,7 @@ router.post(
   },
 );
 
-// ─── Document requirements ────────────────────────────────────────────
+// â”€â”€â”€ Document requirements â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 router.get("/trips/:id/documents", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
   try {
@@ -2456,3 +2522,7 @@ router.delete("/trips/:id/documents/:docId", verifyToken, requireTravelTenant, r
 });
 
 module.exports = router;
+
+
+
+

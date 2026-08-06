@@ -1870,10 +1870,11 @@ router.get("/itineraries/stats", verifyToken, requireTravelTenant, async (req, r
 
 // GET /api/travel/itineraries/:id
 // Resolve the policy-driven refund context for a booking: which cancellation
-// policy applies (the one pinned to its TravelInvoice, else the active policy
-// for the sub-brand, else the tenant-wide default), how many days until the trip
-// starts, and the resulting refund % + amount of what's been paid. Best-effort;
-// returns computable:false when no policy/date so the advisor decides manually.
+// policy applies (trip-specific policy attached to this itinerary, else the one
+// pinned to its TravelInvoice, else the active policy for the sub-brand, else
+// the tenant-wide default), how many days until the trip starts, and the
+// resulting refund % + amount of what's been paid. Best-effort; returns
+// computable:false when no policy/date so the advisor decides manually.
 async function resolveCancellationRefund(itin) {
   const base = {
     policyId: null,
@@ -1889,18 +1890,26 @@ async function resolveCancellationRefund(itin) {
   try {
     const tenantId = itin.tenantId;
     let policy = null;
-    // 1. Policy the operator pinned to this booking's invoice.
-    const inv = await prisma.travelInvoice.findFirst({
-      where: { tenantId, itineraryId: itin.id, cancellationPolicyId: { not: null } },
-      select: { cancellationPolicyId: true },
-      orderBy: { id: "desc" },
+    // 1. Trip-specific policy attached directly to this itinerary.
+    policy = await prisma.cancellationPolicy.findFirst({
+      where: { tenantId, itineraryId: itin.id, isActive: true },
     }).catch(() => null);
-    if (inv && inv.cancellationPolicyId) {
-      policy = await prisma.cancellationPolicy.findFirst({
-        where: { id: inv.cancellationPolicyId, tenantId },
+
+    // 2. Else the operator-pinned policy on this booking's invoice.
+    if (!policy) {
+      const inv = await prisma.travelInvoice.findFirst({
+        where: { tenantId, itineraryId: itin.id, cancellationPolicyId: { not: null } },
+        select: { cancellationPolicyId: true },
+        orderBy: { id: "desc" },
       }).catch(() => null);
+      if (inv && inv.cancellationPolicyId) {
+        policy = await prisma.cancellationPolicy.findFirst({
+          where: { id: inv.cancellationPolicyId, tenantId, isActive: true },
+        }).catch(() => null);
+      }
     }
-    // 2. Else the active policy for the sub-brand (sub-brand-specific wins over
+
+    // 3. Else the active policy for the sub-brand (sub-brand-specific wins over
     //    the tenant-wide null default).
     if (!policy) {
       const policies = await prisma.cancellationPolicy.findMany({
@@ -1918,7 +1927,6 @@ async function resolveCancellationRefund(itin) {
     return base;
   }
 }
-
 router.get("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);

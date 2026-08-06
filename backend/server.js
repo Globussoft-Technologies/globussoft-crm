@@ -164,6 +164,10 @@ const ALLOWED_ORIGINS = [
   "https://empcloud.com",
   "https://www.empcloud.com",
   "https://app.empcloud.com",
+  // The Modern Classroom client site ? hosts a standalone landing-page shell
+  // that fetches the public CRM-rendered landing-page HTML from the browser.
+  "https://themodernclassroom.in",
+  "https://www.themodernclassroom.in",
   // Dr. Haror's external marketing site — consumes the public wellness
   // catalog + payment endpoints (POST /api/wellness/public/payment/order +
   // /confirm). Hardcoded because it's part of the product surface, not a
@@ -1498,7 +1502,25 @@ app.use("/api/admin", adminRoutes);
 // at the route. Separate from /api/csp (slice 2 of #917) — see route header.
 app.use("/api/security", require("./routes/security_reports"));
 
-// Public landing pages (outside /api/ prefix, no auth guard)
+// Public landing pages (outside /api/ prefix, no auth guard).
+// The Modern Classroom hosts a thin shell on its own domain that frames
+// the published CRM landing page so the existing public renderer keeps
+// owning layout, CSS, JS, forms, and analytics without duplication.
+// Keep the allowlist tight to the client's production origin pair only.
+app.use(
+  "/p",
+  allowIframeEmbedding({
+    allowList: [
+      "https://themodernclassroom.in",
+      "https://www.themodernclassroom.in",
+      // Local QA path for the standalone host HTML. The public /p/* page
+      // still stays non-framable for arbitrary origins; we only mirror the
+      // local HTTP ports already CORS-allowed above.
+      "http://localhost:8000",
+      "http://127.0.0.1:8000",
+    ],
+  }),
+);
 app.use("/p", landingPagesPublic);
 
 // Public legal/policy pages — rendered from Markdown (no auth)

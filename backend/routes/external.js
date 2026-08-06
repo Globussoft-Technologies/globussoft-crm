@@ -105,22 +105,23 @@ function resolvePartnerOrigin(body) {
 }
 
 function resolveRequestOrigin(req) {
-  const bodyOrigin = resolvePartnerOrigin(req?.body);
-  if (bodyOrigin) return bodyOrigin;
-
+  // Browser-controlled headers are trusted first. Body fields are only used
+  // as a fallback because the embed snippet's query parameter can be forged by
+  // a malicious site embedding the widget.
   const headerOrigin = normalizeEmbedOrigin(req?.headers?.origin || req?.headers?.Origin);
   if (headerOrigin) return headerOrigin;
 
   const referer = req?.headers?.referer || req?.headers?.referrer;
   if (referer) {
     try {
-      return normalizeEmbedOrigin(new URL(referer).origin);
+      const refererOrigin = normalizeEmbedOrigin(new URL(referer).origin);
+      if (refererOrigin) return refererOrigin;
     } catch (_err) {
-      return null;
+      // ignore malformed referer
     }
   }
 
-  return null;
+  return resolvePartnerOrigin(req?.body);
 }
 
 function hasConfiguredEmbedAllowlist(allowlistJson) {

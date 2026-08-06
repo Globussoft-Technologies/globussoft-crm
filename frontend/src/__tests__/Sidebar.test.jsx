@@ -280,6 +280,13 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Tickets')).toBeTruthy();
     });
 
+    it('renders the Widgets nav entry with href /widgets for ADMIN', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const link = screen.getByText('Widgets').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/widgets');
+    });
+
     it('renders 40+ links for ADMIN under generic vertical (full enterprise nav)', () => {
       const { container } = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
       // Generic nav has 50+ items across core + manager + admin sections.
@@ -1713,3 +1720,4 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 });
+

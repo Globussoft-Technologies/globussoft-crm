@@ -1,4 +1,4 @@
-import React, {
+﻿import React, {
   useState,
   useContext,
   createContext,
@@ -157,6 +157,7 @@ const Forecasting = lazy(() => import("./pages/Forecasting"));
 const Dashboards = lazy(() => import("./pages/Dashboards"));
 const CustomReports = lazy(() => import("./pages/CustomReports"));
 const BookingPages = lazy(() => import("./pages/BookingPages"));
+const WebForms = lazy(() => import("./pages/WebForms"));
 const Signatures = lazy(() => import("./pages/Signatures"));
 const KnowledgeBase = lazy(() => import("./pages/KnowledgeBase"));
 const Currencies = lazy(() => import("./pages/Currencies"));
@@ -1319,10 +1320,13 @@ export default function App() {
                     <Route path="cron-analytics" element={<SuperAdminCronAnalytics />} />
                     <Route path="api-analytics" element={<SuperAdminApiAnalytics />} />
                   </Route>
-                  {/* Travel customer portal Ã¢â‚¬â€ end-user (Contact) login + dashboard
-                      + DigiLocker / Aadhaar verification (PRD Ã‚Â§4.5 extended).
+                  {/* Travel customer portal — end-user (Contact) login + dashboard
+                      + DigiLocker / Aadhaar verification (PRD §4.5 extended).
                       Distinct from /portal (Knowledge Base) + /wellness/portal
                       (wellness patient OTP). Travel-tenant scoped on the
+                      backend via requireTravelPortalTenant. */}
+                    {/* Wildcard: TravelCustomerPortal handles its own sub-paths
+                    {/* Wildcard: TravelCustomerPortal handles its own sub-paths
                       backend via requireTravelPortalTenant. */}
                     {/* Wildcard: TravelCustomerPortal handles its own sub-paths
                       (/login, /bookings, etc.) internally  must stay /* or
@@ -2433,6 +2437,8 @@ export default function App() {
                           </GenericOnly>
                         }
                       />
+                                            <Route path="widgets" element={<Navigate to="/forms" replace />} />
+                      <Route path="forms" element={<GenericOnly><WebForms /></GenericOnly>} />
                       <Route path="booking-pages" element={<BookingPages />} />
                       <Route path="signatures" element={<Signatures />} />
                       <Route
@@ -3385,4 +3391,10 @@ export default function App() {
     </ThemeContext.Provider>
   );
 }
+
+
+
+
+
+
 

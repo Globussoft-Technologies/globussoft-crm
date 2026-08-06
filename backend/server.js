@@ -686,6 +686,7 @@ const forecastingRoutes = require("./routes/forecasting");
 const dashboardsRoutes = require("./routes/dashboards");
 const customReportsRoutes = require("./routes/custom_reports");
 const bookingPagesRoutes = require("./routes/booking_pages");
+const webFormsRoutes = require("./routes/web_forms");
 const signaturesRoutes = require("./routes/signatures");
 const knowledgeBaseRoutes = require("./routes/knowledge_base");
 const portalRoutes = require("./routes/portal");
@@ -941,6 +942,7 @@ app.use("/api", (req, res, next) => {
     "/accounting/webhook",
     "/scim/v2",
     "/booking-pages/public",
+    "/forms/public",
     "/knowledge-base/public",
     "/live-chat/visitor",
     "/document-views/track",
@@ -1242,6 +1244,7 @@ app.use("/api/forecasting", forecastingRoutes);
 app.use("/api/dashboards", dashboardsRoutes);
 app.use("/api/custom-reports", customReportsRoutes);
 app.use("/api/booking-pages", bookingPagesRoutes);
+app.use("/api/forms", webFormsRoutes);
 app.use("/api/signatures", signaturesRoutes);
 app.use("/api/knowledge-base", knowledgeBaseRoutes);
 app.use("/api/portal", portalRoutes);
@@ -2515,3 +2518,4 @@ if (require("fs").existsSync(FRONTEND_DIST)) {
 }
 
 // nodemon restart trigger
+

@@ -6,7 +6,7 @@ describe('buildWebFormEmbedCode', () => {
     const code = buildWebFormEmbedCode({ name: 'Contact Us', slug: 'contact-us' }, 'https://crm.example.com');
 
     expect(code).toContain('https://crm.example.com/embed/web-form.html?slug=contact-us');
-    expect(code).toContain('https://crm.example.com/api/forms/public/contact-us');
+    expect(code.match(/https:\/\/crm\.example\.com\/embed\/web-form\.html\?slug=contact-us/g)).toHaveLength(2);
     expect(code).toContain('title="Contact Us"');
   });
 

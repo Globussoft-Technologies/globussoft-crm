@@ -54,7 +54,7 @@ for (const key of ['findMany', 'findFirst', 'create', 'update', 'delete', 'group
 
 }
 
-for (const key of ['create']) {
+for (const key of ['findFirst', 'create']) {
 
   prisma.contact[key] = vi.fn();
 
@@ -131,6 +131,8 @@ beforeEach(() => {
   prisma.webFormSubmission.create.mockResolvedValue({ id: 1001 });
 
   prisma.webForm.create.mockResolvedValue({ id: 1, tenantId: TENANT_ID, createdByUserId: USER_ID, name: 'Contact Us', slug: 'contact-us', description: '', isActive: true, fieldsJson: JSON.stringify([]), styleJson: JSON.stringify({}), settingsJson: JSON.stringify({}) });
+
+  prisma.contact.findFirst.mockResolvedValue(null);
 
   prisma.contact.create.mockResolvedValue({ id: 2001, name: 'Jane Doe', email: 'jane@example.com', phone: '9876543210' });
 
@@ -424,9 +426,9 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
         name: 'Jane Doe',
 
-        source: 'website-form',
+        source: 'Referral',
 
-        status: 'Lead',
+        status: 'Prospect',
 
       }),
 
@@ -450,5 +452,71 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
   });
 
+  test('reuses an existing contact when the submitted email already exists', async () => {
+
+    prisma.webForm.findFirst.mockResolvedValue({
+
+      id: 1,
+
+      tenantId: TENANT_ID,
+
+      createdByUserId: USER_ID,
+
+      name: 'Contact Us',
+
+      slug: 'contact-us',
+
+      description: '',
+
+      isActive: true,
+
+      fieldsJson: JSON.stringify([
+
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+
+      ]),
+
+      styleJson: JSON.stringify({}),
+
+      settingsJson: JSON.stringify({ submitButtonLabel: 'Send', successMessage: 'Thanks!' }),
+
+    });
+
+    prisma.contact.findFirst.mockResolvedValueOnce({ id: 2002, tenantId: TENANT_ID, name: 'Monica', email: 'monica999@gmail.com' });
+
+
+
+    const res = await request(makeApp())
+
+      .post('/api/forms/public/contact-us/submit')
+
+      .field('name', 'Monica')
+
+      .field('email', 'monica999@gmail.com');
+
+
+
+    expect(res.status).toBe(201);
+
+    expect(res.body.contactId).toBe(2002);
+
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+
+    expect(prisma.webFormSubmission.create).toHaveBeenCalledWith(expect.objectContaining({
+
+      data: expect.objectContaining({
+
+        contactId: 2002,
+
+        tenantId: TENANT_ID,
+
+      }),
+
+    }));
+
 });
 
+
+});

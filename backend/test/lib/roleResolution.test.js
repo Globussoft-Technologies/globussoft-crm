@@ -50,6 +50,8 @@ describe('resolvePrimaryRole', () => {
       key: 'TELECALLER',
       name: 'Telecaller',
       landingPath: '/wellness/telecaller',
+      dataScope: 'ALL',
+      subBrandScope: null,
     });
     expect(prisma.userRole.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -78,6 +80,8 @@ describe('resolvePrimaryRole', () => {
       key: 'USER',
       name: 'User',
       landingPath: null,
+      dataScope: 'ALL',
+      subBrandScope: null,
     });
   });
 
@@ -101,6 +105,8 @@ describe('resolvePrimaryRole', () => {
       key: 'ADMIN',
       name: 'Admin',
       landingPath: '/dashboard',
+      dataScope: 'ALL',
+      subBrandScope: null,
     });
     expect(prisma.role.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({

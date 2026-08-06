@@ -133,6 +133,9 @@ import {
   // dropdown trigger, replacing the native <select> so switching brands
   // can't race against an OS-rendered popup.
   ChevronDown,
+  // RAG Knowledge Base for travel brochures — admin connects Google Drive
+  // and syncs PDFs so TMC diagnostics can recommend trips with AI.
+  Brain,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -2023,6 +2026,7 @@ function renderTravelNav({
       {/* COMMENTED OUT - Inbound Leads hidden from sidebar */}
       {/* <Link to="/travel/inbound-leads" icon={InboxIcon} label="Inbound Leads" requiredPermission={{ module: "inbound_leads", action: "read" }} /> */}
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" requiredPermission={{ module: "diagnostics", action: "read" }} />
+      <Link to="/travel/trip-knowledge" icon={Brain} label="Travel Knowledge" requiredPermission={{ module: "diagnostics", action: "write" }} />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" requiredPermission={{ module: "itineraries", action: "read" }} />
       <Link to="/travel/pois/pending" icon={CheckSquare} label="POI Approvals" requiredPermission={{ module: "pois", action: "manage" }} />
       {inBrand("tmc") && (

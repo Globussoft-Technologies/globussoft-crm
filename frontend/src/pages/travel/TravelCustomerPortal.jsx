@@ -39,7 +39,7 @@ import {
   ShieldCheck, ShieldAlert, LogOut, Plane, User as UserIcon,
   CheckCircle2, AlertCircle, Loader2, ClipboardCheck, Award, LayoutDashboard,
   ChevronRight, ChevronLeft, Hotel, Ticket, FileUp, Upload, UserPlus,
-  Mail, Phone, Sun, Moon, Stamp, Star, Bell, Search, X, Calendar,
+  Mail, Phone, Sun, Moon, Stamp, Star, Bell, Search, X, Calendar, Download, FileText,
 } from "lucide-react";
 import TravelReviewForm from "../../components/TravelReviewForm";
 
@@ -1436,9 +1436,9 @@ function ProfileCard({ contact, kyc, loading, verifyLoading, onVerify }) {
 }
 
 const SUB_BRAND_LABELS = {
-  tmc: "TMC — School trips",
-  rfu: "RFU — Umrah",
-  travelstall: "Travel Stall — Family holidays",
+  tmc: "TMC",
+  rfu: "RFU",
+  travelstall: "Travel Stall",
   visasure: "Visa Sure",
 };
 const brandLabel = (b) => SUB_BRAND_LABELS[b] || b;
@@ -1866,15 +1866,15 @@ function DiagnosticsCard({ token }) {
             <div
               style={{
                 marginTop: 14,
-                padding: "12px 14px",
-                borderRadius: 10,
+                padding: "14px 16px",
+                borderRadius: 12,
                 background: "rgba(47, 122, 77, 0.08)",
                 border: "1px solid rgba(47, 122, 77, 0.25)",
               }}
               role="status"
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
-                <Award size={16} aria-hidden style={{ color: "var(--success-color, #2F7A4D)" }} />
+                <Award size={18} aria-hidden style={{ color: "var(--success-color, #2F7A4D)" }} />
                 {latest.classificationLabel || "Completed"}
                 {latest.recommendedTier && (
                   <span
@@ -1894,6 +1894,95 @@ function DiagnosticsCard({ token }) {
                 Submitted {latest.createdAt ? new Date(latest.createdAt).toLocaleString() : "—"}
                 {" · "}Your advisor can see this result.
               </div>
+
+              {latest.reportPdfUrl && (
+                <a
+                  href={latest.reportPdfUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    marginTop: 12,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "9px 16px",
+                    background: "var(--primary-color, #122647)",
+                    color: "white",
+                    borderRadius: 8,
+                    fontWeight: 600,
+                    textDecoration: "none",
+                    fontSize: 14,
+                  }}
+                >
+                  <Download size={16} aria-hidden /> Download recommendations PDF
+                </a>
+              )}
+
+              {latest.ragResult && (
+                <div style={{ marginTop: 14 }}>
+                  {Number.isFinite(latest.ragResult.readinessScore) && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                      <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>Readiness score</span>
+                      <span
+                        style={{
+                          fontSize: 18,
+                          fontWeight: 700,
+                          color: "#2F7A4D",
+                          background: "rgba(47, 122, 77, 0.12)",
+                          padding: "4px 12px",
+                          borderRadius: 999,
+                        }}
+                      >
+                        {latest.ragResult.readinessScore} / 10
+                      </span>
+                    </div>
+                  )}
+                  {latest.ragResult.summary && (
+                    <p style={{ fontSize: 14, color: "var(--text-primary)", margin: "0 0 12px", lineHeight: 1.5 }}>
+                      {latest.ragResult.summary}
+                    </p>
+                  )}
+                  {(latest.ragResult.recommendedTrips || []).map((trip, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        marginTop: 12,
+                        padding: 12,
+                        borderRadius: 10,
+                        background: "white",
+                        border: "1px solid rgba(18, 38, 71, 0.08)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                        <FileText size={16} aria-hidden style={{ color: "var(--primary-color, #122647)" }} />
+                        <strong style={{ fontSize: 15, color: "var(--text-primary)" }}>{trip.name}</strong>
+                        {trip.driveLink && (
+                          <a
+                            href={trip.driveLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize: 12, color: "#2563eb", marginLeft: "auto" }}
+                          >
+                            View brochure
+                          </a>
+                        )}
+                      </div>
+                      {(trip.places || []).map((place, pidx) => (
+                        <div key={pidx} style={{ marginTop: 8, fontSize: 13, color: "var(--text-secondary)" }}>
+                          <strong style={{ color: "var(--text-primary)" }}>{place.name}</strong>
+                          {place.learnings?.length > 0 && (
+                            <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
+                              {place.learnings.map((l, li) => (
+                                <li key={li}>{l}</li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

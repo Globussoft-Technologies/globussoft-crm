@@ -3234,6 +3234,7 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
   const { branding } = resolveTravelHeaderBrandKit(sub, opts);
   const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
+  const ragResult = opts?.ragResult || null;
 
   let questions = [];
   try {
@@ -3380,6 +3381,44 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
       });
       doc.moveDown(0.3);
     });
+  }
+
+  // RAG knowledge-base recommendations — rendered only for TMC diagnostics that
+  // have a persisted RAG result. Includes readiness score, recommended trips,
+  // places, learnings, and clickable Drive links for each brochure.
+  if (sub === "tmc" && ragResult && ragResult.recommendations) {
+    const recs = ragResult.recommendations;
+    const trips = Array.isArray(recs.recommendedTrips) ? recs.recommendedTrips : [];
+    if (trips.length || Number.isFinite(recs.readinessScore)) {
+      doc.moveDown(1);
+      doc.font("Helvetica-Bold").fontSize(12).fillColor("#111")
+        .text("Recommended trips from our brochure library");
+      if (Number.isFinite(recs.readinessScore)) {
+        doc.font("Helvetica").fontSize(10).fillColor("#333")
+          .text(`Readiness score: ${recs.readinessScore} / 10`);
+      }
+      if (recs.summary) {
+        doc.font("Helvetica").fontSize(9.5).fillColor("#555").text(recs.summary);
+      }
+      doc.moveDown(0.4);
+      trips.forEach((trip, tIdx) => {
+        doc.font("Helvetica-Bold").fontSize(10.5).fillColor(accent)
+          .text(`${tIdx + 1}. ${trip.name || "Trip"}`);
+        if (trip.driveLink) {
+          doc.font("Helvetica").fontSize(9).fillColor("#2563EB")
+            .text("View brochure on Google Drive", { underline: true, link: trip.driveLink });
+        }
+        (trip.places || []).forEach((place) => {
+          doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#333")
+            .text(`   • ${place.name || "Place"}`);
+          (place.learnings || []).forEach((learning) => {
+            doc.font("Helvetica").fontSize(9).fillColor("#555")
+              .text(`      – ${learning}`);
+          });
+        });
+        doc.moveDown(0.4);
+      });
+    }
   }
 
   const footerY = doc.page.height - doc.page.margins.bottom - 32;

@@ -729,6 +729,7 @@ const emailThreadingRoutes = require("./routes/email_threading");
 // Hosts TMC (school trips), RFU (Umrah), Travel Stall, Visa Sure sub-brands.
 const travelRoutes = require("./routes/travel");
 const travelDiagnosticsRoutes = require("./routes/travel_diagnostics");
+const travelKnowledgeBaseRoutes = require("./routes/travel_knowledge_base");
 const travelVisaAnalyticsRoutes = require("./routes/travel_visa_analytics");
 const travelVisaRoutes = require("./routes/travel_visa");
 const travelItinerariesRoutes = require("./routes/travel_itineraries");
@@ -976,6 +977,7 @@ app.use("/api", (req, res, next) => {
     // Public landing-page submit + tracking pixels are referenced by
     // rendered pages as /api/pages/<slug>/submit and /api/pages/<slug>/track.
     "/pages/",
+    "/travel/knowledge-base/oauth/callback",
     // Super Admin Portal — deliberately its OWN auth system (env-based
     // credentials, no User/tenant table, dedicated JWT secret), so it must
     // bypass the app's verifyToken guard entirely. Every actual route
@@ -1297,6 +1299,7 @@ app.use("/api/travel", travelCsvIoRoutes);
 app.use("/api/travel", travelDashboardRoutes);
 app.use("/api/travel", travelReportsRoutes);
 app.use("/api/travel", travelDiagnosticsRoutes);
+app.use("/api/travel/knowledge-base", travelKnowledgeBaseRoutes);
 app.use("/api/travel/visa/analytics", travelVisaAnalyticsRoutes);
 app.use("/api/travel/visa", travelVisaRoutes);
 app.use("/api/travel", travelReviewsRoutes); // literal /reviews paths — mount before parametric itinerary routes

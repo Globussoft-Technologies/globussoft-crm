@@ -220,6 +220,7 @@ const TravelDiagnostics = lazy(() => import("./pages/travel/Diagnostics"));
 const TravelDiagnosticWizard = lazy(() => import("./pages/travel/DiagnosticWizard"));
 const TravelDiagnosticBuilder = lazy(() => import("./pages/travel/DiagnosticBuilder"));
 const TravelDiagnosticDetail = lazy(() => import("./pages/travel/DiagnosticDetail"));
+const TravelKnowledgeBaseAdmin = lazy(() => import("./pages/travel/KnowledgeBaseAdmin"));
 // T16 Ã¢â‚¬â€ dedicated TMC catalogue admin (extracts the Promote-to-active sub-panel
 // from DiagnosticBuilder's EngineWeights tab into a first-class page).
 const TravelTmcCatalogueAdmin = lazy(() => import("./pages/travel/TmcCatalogueAdmin"));
@@ -1989,6 +1990,7 @@ export default function App() {
               <Route path="travel/diagnostics/new" element={<TravelOnly><TravelDiagnosticWizard /></TravelOnly>} />
               <Route path="travel/diagnostics/banks/new" element={<TravelOnly><TravelDiagnosticBuilder /></TravelOnly>} />
               <Route path="travel/diagnostics/:id" element={<TravelOnly><TravelDiagnosticDetail /></TravelOnly>} />
+              <Route path="travel/trip-knowledge" element={<TravelOnly><TravelKnowledgeBaseAdmin /></TravelOnly>} />
               <Route path="travel/itineraries" element={<TravelOnly><TravelItineraries /></TravelOnly>} />
               <Route path="travel/pipeline" element={<TravelOnly><TravelPipeline /></TravelOnly>} />
               <Route path="travel/trips" element={<TravelOnly><TravelTrips /></TravelOnly>} />

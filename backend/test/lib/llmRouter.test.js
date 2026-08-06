@@ -194,6 +194,9 @@ describe('llmRouter — module shape', () => {
       "flight-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
       "hotel-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
       "transfer-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
+      // Travel RAG knowledge-base brochure recommendation report (2026-08-04).
+      // gemini-flash primary / gpt-4 fallback for structured JSON shape.
+      "travel-knowledge-rag": { primary: "gemini-flash", fallback: "gpt-4" },
       // Airport/city name → IATA resolver for the flight search box (2026-06-19;
       // 2026-06-23 primary gemini-flash → gpt-4 to match the search provider).
       "airport-iata": { primary: "gpt-4", fallback: "gemini-flash" },
@@ -214,8 +217,9 @@ describe('llmRouter — module shape', () => {
     // 'landing-page-generate' (PR #1174) + 'quote-template-generate' (PR #1178) +
     // 'lead-conversation-summary' + 'lead-narrative-summary' (PR #1203) +
     // 'lead-capture-consolidate' (PR #1210) +
-    // 'callified-lead-status' (Callified lead hot/cold classification) = 23.
-    expect(r.VALID_TASKS).toHaveLength(23);
+    // 'callified-lead-status' (Callified lead hot/cold classification) +
+    // 'travel-knowledge-rag' (RAG brochure recommendation report) = 24.
+    expect(r.VALID_TASKS).toHaveLength(24);
   });
 });
 
@@ -468,9 +472,9 @@ describe('routeRequest', () => {
         // can render line items without a live LLM key.
         expect(() => JSON.parse(out.text)).not.toThrow();
         expect(Array.isArray(JSON.parse(out.text))).toBe(true);
-      } else if (task === 'lead-conversation-summary' || task === 'lead-narrative-summary' || task === 'lead-capture-consolidate' || task === 'callified-lead-status') {
-        // Stub returns parseable JSON objects so lead summary consumers can
-        // render the summary without a live LLM key.
+      } else if (task === 'lead-conversation-summary' || task === 'lead-narrative-summary' || task === 'lead-capture-consolidate' || task === 'callified-lead-status' || task === 'travel-knowledge-rag') {
+        // Stub returns parseable JSON objects so lead summary consumers and the
+        // RAG report generator can render without a live LLM key.
         expect(() => JSON.parse(out.text)).not.toThrow();
         expect(typeof JSON.parse(out.text)).toBe('object');
         expect(Array.isArray(JSON.parse(out.text))).toBe(false);
@@ -782,6 +786,8 @@ describe('routeRequest — real provider call (key present, not under test)', ()
   test('calls the real provider and returns stub:false when a key is set', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     const prevNodeEnv = process.env.NODE_ENV;
+    const prevGeminiBaseUrl = process.env.GEMINI_BASE_URL;
+    const prevRagGeminiBaseUrl = process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL;
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -792,6 +798,8 @@ describe('routeRequest — real provider call (key present, not under test)', ()
     vi.stubGlobal('fetch', fetchMock);
     process.env.NODE_ENV = 'production';
     process.env.GEMINI_API_KEY = 'AIzaSy-real';
+    delete process.env.GEMINI_BASE_URL;
+    delete process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL;
     try {
       const r = loadRouter();
       const out = await r.routeRequest({ task: 'talking-points', payload: { leadId: 7 }, tenantId: 3 });
@@ -804,6 +812,45 @@ describe('routeRequest — real provider call (key present, not under test)', ()
       expect(String(fetchMock.mock.calls[0][0])).toContain('generativelanguage.googleapis.com');
     } finally {
       process.env.NODE_ENV = prevNodeEnv;
+      process.env.GEMINI_BASE_URL = prevGeminiBaseUrl;
+      process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL = prevRagGeminiBaseUrl;
+      vi.unstubAllGlobals();
+      logSpy.mockRestore();
+    }
+  });
+
+  test('travel-knowledge-rag uses TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL while other tasks use GEMINI_BASE_URL or default', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+    const prevNodeEnv = process.env.NODE_ENV;
+    const prevGeminiBaseUrl = process.env.GEMINI_BASE_URL;
+    const prevRagGeminiBaseUrl = process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: '{"readinessScore": 8, "summary": "s", "recommendedTrips": []}' }] } }],
+        usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 20 },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    process.env.NODE_ENV = 'production';
+    process.env.GEMINI_API_KEY = 'AIzaSy-real';
+    process.env.GEMINI_BASE_URL = 'https://global-gemini.example.com/v1beta';
+    process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL = 'https://rag-gemini.example.com/v1beta';
+    try {
+      const r = loadRouter();
+
+      // Non-RAG task uses the global GEMINI_BASE_URL.
+      await r.routeRequest({ task: 'talking-points', payload: { leadId: 7 }, tenantId: 3 });
+      expect(String(fetchMock.mock.calls[0][0])).toContain('global-gemini.example.com');
+
+      // travel-knowledge-rag uses the dedicated RAG base URL.
+      fetchMock.mockClear();
+      await r.routeRequest({ task: 'travel-knowledge-rag', payload: { queryText: 'test' }, tenantId: 3 });
+      expect(String(fetchMock.mock.calls[0][0])).toContain('rag-gemini.example.com');
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+      process.env.GEMINI_BASE_URL = prevGeminiBaseUrl;
+      process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL = prevRagGeminiBaseUrl;
       vi.unstubAllGlobals();
       logSpy.mockRestore();
     }

@@ -114,6 +114,11 @@ prisma.travelCurriculumMapping = {
   ...(prisma.travelCurriculumMapping || {}),
   findMany: vi.fn(),
 };
+// RAG knowledge-base sidecar lookup (2026-08-04).
+prisma.travelDiagnosticRagResult = {
+  ...(prisma.travelDiagnosticRagResult || {}),
+  findUnique: vi.fn(),
+};
 prisma.contact = {
   ...(prisma.contact || {}),
   findUnique: vi.fn(),
@@ -207,6 +212,7 @@ beforeEach(() => {
   prisma.travelDiagnostic.update.mockReset().mockResolvedValue({ id: 500 });
   prisma.travelDiagnostic.count.mockReset().mockResolvedValue(0);
   prisma.travelCurriculumMapping.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelDiagnosticRagResult.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.create.mockReset().mockResolvedValue({ id: 900, tenantId: 1 });

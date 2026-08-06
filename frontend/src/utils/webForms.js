@@ -9,7 +9,7 @@
 
 export function buildPublicUrl(form, origin) {
   const base = String(origin || (typeof window !== 'undefined' ? window.location.origin : 'https://crm.globusdemos.com')).replace(/\/+$/, '');
-  return `${base}/api/forms/public/${encodeURIComponent(form?.slug || '')}`;
+  return `${base}/embed/web-form.html?slug=${encodeURIComponent(form?.slug || '')}`;
 }
 
 export function buildWebFormEmbedCode(form, origin) {

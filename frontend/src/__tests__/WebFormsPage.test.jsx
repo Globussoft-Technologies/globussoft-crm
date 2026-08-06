@@ -308,7 +308,7 @@ describe('WebForms builder page', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Get embed code and URL/i }));
 
-    expect(screen.getAllByDisplayValue(/api\/forms\/public\/brand-intake/).length).toBeGreaterThan(0);
+    expect(screen.getAllByDisplayValue(/embed\/web-form\.html\?slug=brand-intake/).length).toBeGreaterThan(0);
 
     expect(screen.getAllByDisplayValue(/iframe src=/i).length).toBeGreaterThan(0);
 

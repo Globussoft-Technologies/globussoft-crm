@@ -18048,6 +18048,108 @@ export default function WebForms() {
 
 
 
+        .wf-embed-modal {
+          background: var(--surface-color) !important;
+          color: var(--text-primary);
+          border-color: var(--border-color) !important;
+          box-shadow: 0 28px 90px rgba(0, 0, 0, 0.34) !important;
+        }
+        .wf-embed-modal-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 18px;
+          padding: 20px 22px 18px;
+          border-bottom: 1px solid var(--border-color);
+          background: var(--surface-color);
+        }
+        .wf-embed-modal-head strong {
+          display: block;
+          color: var(--text-primary);
+          font-size: 1.05rem;
+          font-weight: 800;
+        }
+        .wf-embed-modal-head p {
+          margin: 0.35rem 0 0;
+          color: var(--text-secondary);
+          line-height: 1.45;
+        }
+        .wf-modal-close {
+          min-width: 42px;
+          min-height: 42px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0;
+        }
+        .wf-embed-modal-body {
+          display: grid;
+          gap: 16px;
+          padding: 20px 22px 22px;
+          background: var(--surface-color);
+        }
+        .wf-copy-field {
+          display: grid;
+          gap: 8px;
+        }
+        .wf-copy-field > span {
+          color: var(--text-secondary);
+          font-size: 0.8rem;
+          font-weight: 700;
+        }
+        .wf-copy-row {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 10px;
+          align-items: stretch;
+        }
+        .wf-embed-modal .input-field,
+        .wf-embed-modal textarea.input-field {
+          width: 100%;
+          min-width: 0;
+          background: var(--surface-2, var(--surface-hover)) !important;
+          color: var(--text-primary) !important;
+          border: 1px solid var(--border-color) !important;
+          box-shadow: none !important;
+        }
+        .wf-embed-modal .input-field:read-only,
+        .wf-embed-modal textarea.input-field:read-only {
+          opacity: 1;
+          cursor: text;
+        }
+        .wf-embed-textarea {
+          min-height: 156px;
+          resize: vertical;
+          font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+          font-size: 0.82rem;
+          line-height: 1.45;
+        }
+        .wf-embed-modal-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        :root[data-theme="light"] .wf-embed-modal .input-field,
+        :root[data-theme="light"] .wf-embed-modal textarea.input-field {
+          background: #ffffff !important;
+        }
+        @media (max-width: 640px) {
+          .wf-copy-row {
+            grid-template-columns: 1fr;
+          }
+          .wf-embed-modal-head,
+          .wf-embed-modal-body {
+            padding-left: 16px;
+            padding-right: 16px;
+          }
+          .wf-embed-modal-actions .btn-secondary,
+          .wf-embed-modal-actions .btn-primary {
+            flex: 1 1 160px;
+            justify-content: center;
+          }
+        }
+
         .wf-link-popover {
           position: fixed;
           z-index: 10000;
@@ -23385,452 +23487,35 @@ export default function WebForms() {
       ), document.body) : null}
 
       {showEmbed && selectedForm ? (
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         <div style={modalShellStyle()}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-          <div style={modalCardStyle(920)}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "1rem 1.1rem", borderBottom: "1px solid var(--border-color, rgba(255,255,255,0.08))" }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              <strong>Embed code and URL</strong>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              <button type="button" className="btn-secondary" onClick={() => setShowEmbed(false)}><X size={16} /></button>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-            <div style={{ padding: 16, display: "grid", gap: 12 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              <label style={{ display: "grid", gap: 6 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Public URL</span>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                  <input className="input-field" readOnly value={publicUrl} />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                  <button type="button" className="btn-secondary" onClick={() => copyText(publicUrl, "Public URL")}>Copy URL</button>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              </label>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              <label style={{ display: "grid", gap: 6 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Embed snippet</span>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                <textarea className="input-field" rows={8} readOnly value={embedCode} />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              </label>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                <button type="button" className="btn-secondary" onClick={() => copyText(embedCode, "Embed code")}>Copy embed code</button>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                <button type="button" className="btn-primary" onClick={() => setShowEmbed(false)}>Done</button>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+          <div className="wf-embed-modal" style={modalCardStyle(920)}>
+            <div className="wf-embed-modal-head">
+              <div>
+                <strong>Embed code and URL</strong>
+                <p>Use this public link or iframe snippet anywhere you want to collect submissions.</p>
               </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+              <button type="button" className="btn-secondary wf-modal-close" onClick={() => setShowEmbed(false)} aria-label="Close embed code modal"><X size={16} /></button>
             </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+            <div className="wf-embed-modal-body">
+              <label className="wf-copy-field">
+                <span>Public URL</span>
+                <div className="wf-copy-row">
+                  <input className="input-field" readOnly value={publicUrl} />
+                  <button type="button" className="btn-secondary" onClick={() => copyText(publicUrl, "Public URL")}>Copy URL</button>
+                </div>
+              </label>
+              <label className="wf-copy-field">
+                <span>Embed snippet</span>
+                <textarea className="input-field wf-embed-textarea" rows={8} readOnly value={embedCode} />
+              </label>
+              <div className="wf-embed-modal-actions">
+                <button type="button" className="btn-secondary" onClick={() => copyText(embedCode, "Embed code")}>Copy embed code</button>
+                <button type="button" className="btn-primary" onClick={() => setShowEmbed(false)}>Done</button>
+              </div>
+            </div>
           </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
       ) : null}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
       {showPreview && selectedForm ? (
 

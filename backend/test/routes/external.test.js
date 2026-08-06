@@ -129,6 +129,7 @@ Module._cache[leadSlaPath] = {
 };
 
 const notifyAdminsOfNewLeadMock = vi.fn().mockResolvedValue([]);
+const notifyAdminsOfBlockedLeadOriginMock = vi.fn().mockResolvedValue([]);
 const leadNotificationsPath = requireCJS.resolve("../../lib/leadNotifications.js");
 Module._cache[leadNotificationsPath] = {
   id: leadNotificationsPath,
@@ -136,6 +137,26 @@ Module._cache[leadNotificationsPath] = {
   loaded: true,
   exports: {
     notifyAdminsOfNewLead: notifyAdminsOfNewLeadMock,
+    notifyAdminsOfBlockedLeadOrigin: notifyAdminsOfBlockedLeadOriginMock,
+    isEmbedOriginAllowed: (origin, allowlistJson) => {
+      if (!allowlistJson) return true;
+      try {
+        const list = typeof allowlistJson === "string" ? JSON.parse(allowlistJson) : allowlistJson;
+        if (!Array.isArray(list) || list.length === 0) return true;
+        return list.includes(origin);
+      } catch (_err) {
+        return true;
+      }
+    },
+    normalizeEmbedOrigin: (origin) => {
+      if (!origin) return null;
+      try {
+        const parsed = new URL(origin);
+        return `${parsed.protocol}//${parsed.host}`.toLowerCase();
+      } catch (_err) {
+        return null;
+      }
+    },
   },
 };
 
@@ -259,7 +280,7 @@ beforeEach(() => {
   prisma.visit.create.mockReset();
   prisma.tenant.findUnique
     .mockReset()
-    .mockResolvedValue({ callifiedAutoCampaignId: null });
+    .mockResolvedValue({ callifiedAutoCampaignId: null, embedAllowlistJson: null });
 
   classifyLeadMock.mockReset().mockResolvedValue({
     isJunk: false,
@@ -299,6 +320,7 @@ beforeEach(() => {
     userId: 4,
     tenantId: 7,
   };
+  notifyAdminsOfBlockedLeadOriginMock.mockReset().mockResolvedValue([]);
 });
 
 describe("GET /api/v1/external/health — public reachability", () => {
@@ -593,6 +615,113 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     }));
   });
 
+  test("blocked partner origin → 403 ORIGIN_NOT_ALLOWED and admin notification", async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      vertical: "wellness",
+      callifiedAutoCampaignId: null,
+      embedAllowlistJson: JSON.stringify(["https://allowed.example.com"]),
+    });
+
+    const app = makeApp();
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "Blocked Origin Lead",
+      phone: "+919900112233",
+      email: "blocked@example.com",
+      source: "website-form",
+      partnerOrigin: "https://blocked.example.com",
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: "Partner origin is not allowed",
+      code: "ORIGIN_NOT_ALLOWED",
+    });
+    expect(classifyLeadMock).not.toHaveBeenCalled();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(notifyAdminsOfBlockedLeadOriginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 7,
+        origin: "https://blocked.example.com",
+      }),
+    );
+    expect(notifyAdminsOfNewLeadMock).not.toHaveBeenCalled();
+  });
+
+  test("origin header only (no partnerOrigin body field) is still enforced", async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      vertical: "wellness",
+      callifiedAutoCampaignId: null,
+      embedAllowlistJson: JSON.stringify(["https://allowed.example.com"]),
+    });
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 61,
+      reasons: [],
+    });
+    pickAssigneeMock.mockResolvedValueOnce({
+      userId: 11,
+      reason: "matched cat=website",
+    });
+    computeFirstResponseDueAtMock.mockResolvedValueOnce({
+      dueAt: new Date("2026-06-01T10:05:00Z"),
+      tier: "medium",
+      minutes: 30,
+    });
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce({
+      id: 777,
+      name: "Allowed Header Lead",
+      email: "allowed-header@example.com",
+      phone: "+919900112299",
+      status: "Lead",
+      source: "website-form",
+      aiScore: 61,
+      assignedToId: 11,
+      tenantId: 7,
+      createdAt: new Date(),
+    });
+
+    const app = makeApp();
+    const res = await request(app)
+      .post("/api/v1/external/leads")
+      .set("Origin", "https://allowed.example.com")
+      .send({
+        name: "Allowed Header Lead",
+        phone: "+919900112299",
+        email: "allowed-header@example.com",
+        source: "website-form",
+      });
+
+    expect(res.status).toBe(201);
+    expect(notifyAdminsOfBlockedLeadOriginMock).not.toHaveBeenCalled();
+    expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("configured allowlist with no origin evidence returns ORIGIN_REQUIRED", async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      vertical: "wellness",
+      callifiedAutoCampaignId: null,
+      embedAllowlistJson: JSON.stringify(["https://allowed.example.com"]),
+    });
+
+    const app = makeApp();
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "Missing Origin Lead",
+      phone: "+919900112233",
+      email: "missing-origin@example.com",
+      source: "website-form",
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: "Partner origin is required",
+      code: "ORIGIN_REQUIRED",
+    });
+    expect(classifyLeadMock).not.toHaveBeenCalled();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(notifyAdminsOfBlockedLeadOriginMock).not.toHaveBeenCalled();
+  });
+
   test("soft-deleted same email is restored so re-registered external lead is visible", async () => {
     classifyLeadMock.mockResolvedValueOnce({
       isJunk: false,
@@ -686,7 +815,7 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     expect(res.status).toBe(201);
     expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
       where: { id: 7 },
-      select: { vertical: true, callifiedAutoCampaignId: true },
+      select: { vertical: true, callifiedAutoCampaignId: true, embedAllowlistJson: true },
     });
     const cArgs = prisma.contact.create.mock.calls[0][0].data;
     expect(cArgs.status).toBe("Lead");

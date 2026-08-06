@@ -34,6 +34,7 @@ import { useNotify } from "../utils/notify";
 import { usePermissions } from "../hooks/usePermissions";
 import { ThemeContext, AuthContext } from "../App";
 import PasswordInput from "../components/PasswordInput";
+import LeadSourceAllowlistCard from "../components/LeadSourceAllowlistCard";
 import WebhookSigningCredential from "../components/WebhookSigningCredential";
 import RoleHistoryDialog from "../components/RoleHistoryDialog";
 import { SUB_BRAND_IDS, subBrandShortLabel, subBrandBackground } from "../utils/travelSubBrand";
@@ -172,6 +173,7 @@ export default function Settings() {
   const [callifiedDirty, setCallifiedDirty] = useState(false);
   const MASKED_CALLIFIED_KEY = "••••••••••••••••";
   const isCallifiedKeyMasked = callifiedApiKey === MASKED_CALLIFIED_KEY;
+  const leadSourceTenantId = tenant?.id ?? ctxTenant?.id ?? null;
 
   useEffect(() => {
     fetchApi("/api/tenant-settings/travel.externalReviewUrl")
@@ -2230,6 +2232,12 @@ export default function Settings() {
               webhooks (GlobusPhone lead-sync). Self-contained admin component;
               ADMIN-only + subscription-gated server-side. */}
           <WebhookSigningCredential />
+
+          {/* External Lead Domains — partner origins allowed to embed lead
+              capture surfaces. Shared across travel, wellness, and generic. */}
+          {hasPermission("settings", "manage") && (
+            <LeadSourceAllowlistCard tenantId={leadSourceTenantId} />
+          )}
 
           {/* Notification Preferences Card */}
           <NotificationPreferencesCard notify={notify} />

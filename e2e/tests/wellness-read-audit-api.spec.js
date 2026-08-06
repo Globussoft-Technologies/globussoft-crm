@@ -311,7 +311,7 @@ test.describe('Wellness PHI-read audit contract — T2.2', () => {
   });
 
   test('staff actorType is implicit user (no _actorType / _patientActorId in details)', async ({ request }) => {
-    const { token } = await getWellnessAdmin(request);
+    const { token, userId } = await getWellnessAdmin(request);
     // Sanity check that the patient-portal indicator stays absent on staff
     // path. PATIENT_DETAIL_READ from /portal/me has _actorType:'patient',
     // _patientActorId:<id> in details; staff reads must NOT carry those

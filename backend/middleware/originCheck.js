@@ -67,6 +67,11 @@
 
 const URL_TOKEN_RE = /^https?:\/\/[^/]+/i;
 
+// Loopback origin with any (or no) port — http://localhost:5174,
+// http://127.0.0.1:5173, etc. Used for the non-production dev bypass in
+// originCheck(); see the comment at that call site.
+const LOOPBACK_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
+
 /**
  * Build the allowlist of origins permitted to make state-changing requests.
  * Mirrors the CORS allowlist build in server.js — same env vars, same fail-safes.
@@ -222,6 +227,17 @@ function originCheck(req, res, next) {
   // chrome-extension: page is not a web origin an attacker's site can
   // forge (extension pages don't load third-party HTML into this context).
   if (claimedOrigin.startsWith("chrome-extension://")) {
+    return next();
+  }
+
+  // Local dev, any port. Vite claims the next free port when its default is
+  // taken (5173 → 5174 → 5175 …), so the moment a second dev server runs the
+  // app's own frontend starts failing the app's own CSRF check — a hardcoded
+  // dev-port list can't keep up with that. Loopback is not an origin a remote
+  // attacker's page can present, so accepting it costs nothing here.
+  // Deliberately gated on NODE_ENV: in production the allowlist stays exact,
+  // and a literal localhost Origin there is not a case we want to wave through.
+  if (process.env.NODE_ENV !== "production" && LOOPBACK_ORIGIN_RE.test(claimedOrigin)) {
     return next();
   }
 

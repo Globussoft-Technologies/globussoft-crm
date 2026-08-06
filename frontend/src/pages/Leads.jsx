@@ -1,7 +1,7 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatDateMedium as formatDate } from '../utils/date';
-import { useState, useEffect, useContext, useCallback } from 'react';
+import { useState, useEffect, useContext, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   UserPlus, Search, ArrowRightCircle, Plus, X, Pencil, Trash2, RefreshCw,
@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { AuthContext } from '../App';
 import ColumnPicker from '../components/ColumnPicker';
+import FilterPanel from '../components/FilterPanel';
 import InlineCellEditor from '../components/InlineCellEditor';
 import TopScrollSync from '../components/TopScrollSync';
 import { SUB_BRAND_IDS, subBrandShortLabel } from '../utils/travelSubBrand';
@@ -173,6 +174,13 @@ const Leads = () => {
   const [campaignFilter, setCampaignFilter] = useState('');
   const [leadStatusFilter, setLeadStatusFilter] = useState('');
   const [assigneeFilter, setAssigneeFilter] = useState('');
+  // Freshsales-style "Filter by" panel (components/FilterPanel.jsx) — a
+  // dynamic field-picker + operator + checkbox-values panel that also
+  // surfaces admin-defined Lead custom fields (Settings > Lead Fields),
+  // separate from the fixed dropdowns above. Applied server-side via
+  // ?filters=<JSON> (backend/routes/contacts.js FILTERABLE_FIELDS) so it
+  // isn't bounded by the same ?limit=500 cap fetchLeads already applies.
+  const [advancedFilters, setAdvancedFilters] = useState([]);
   // Sequential one-by-one call queue
   const [callQueue, setCallQueue] = useState([]);
   const [callQueueActive, setCallQueueActive] = useState(false);
@@ -240,7 +248,10 @@ const Leads = () => {
   const fetchLeads = async ({ background = false } = {}) => {
     if (!background) setLoading(true);
     try {
-      const data = await fetchApi('/api/contacts?status=Lead&limit=500');
+      const filtersQs = advancedFilters.length > 0
+        ? `&filters=${encodeURIComponent(JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
+        : '';
+      const data = await fetchApi(`/api/contacts?status=Lead&limit=500${filtersQs}`);
       const rows = Array.isArray(data) ? data : [];
       setLeads(rows);
       return rows;
@@ -514,6 +525,15 @@ const Leads = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Refetch (server-side) whenever the FilterPanel's filter set changes.
+  // Skips the very first render — the mount effect above already fetched
+  // once with the (empty) initial advancedFilters.
+  const isFirstFiltersRender = useRef(true);
+  useEffect(() => {
+    if (isFirstFiltersRender.current) { isFirstFiltersRender.current = false; return; }
+    fetchLeads();
+  }, [advancedFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // #600  load wellness service catalogue + clinic locations only when the
   // current tenant is the wellness vertical. Avoids 401 / empty-response
@@ -1055,6 +1075,7 @@ const Leads = () => {
     setLeadStatusFilter('');
     setAssigneeFilter('');
     setSearchTerm('');
+    setAdvancedFilters([]);
     setLeadsPage(0);
   };
 
@@ -1572,6 +1593,12 @@ const Leads = () => {
               <option key={s.id} value={String(s.id)}>{s.name || s.email}</option>
             ))}
           </select>
+          <FilterPanel
+            fieldsUrl="/api/contacts/filter-fields?status=Lead"
+            valuesUrl={(field) => `/api/contacts/filter-values/${field}?status=Lead`}
+            filters={advancedFilters}
+            onChange={setAdvancedFilters}
+          />
           <button
             type="button"
             onClick={resetFilters}

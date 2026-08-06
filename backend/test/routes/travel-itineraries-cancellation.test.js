@@ -240,6 +240,28 @@ describe('PATCH /api/travel/itineraries/:id/cancellation — lifecycle guards', 
     expect(prisma.itinerary.update).not.toHaveBeenCalled();
   });
 
+  test('approve after already refunded → 409 NO_PENDING_REQUEST, no write', async () => {
+    prisma.itinerary.findFirst.mockResolvedValue(itin({ cancellationStatus: 'refunded' }));
+    const res = await request(makeApp())
+      .patch('/api/travel/itineraries/55/cancellation')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ decision: 'approve' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NO_PENDING_REQUEST');
+    expect(prisma.itinerary.update).not.toHaveBeenCalled();
+  });
+
+  test('refund again after already refunded → 409 NOT_CANCELLED, no write', async () => {
+    prisma.itinerary.findFirst.mockResolvedValue(itin({ cancellationStatus: 'refunded' }));
+    const res = await request(makeApp())
+      .patch('/api/travel/itineraries/55/cancellation')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ decision: 'refunded' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NOT_CANCELLED');
+    expect(prisma.itinerary.update).not.toHaveBeenCalled();
+  });
+
   test('invalid decision → 400 INVALID_DECISION', async () => {
     prisma.itinerary.findFirst.mockResolvedValue(itin({ cancellationStatus: 'requested' }));
     const res = await request(makeApp())

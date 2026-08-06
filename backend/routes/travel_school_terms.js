@@ -206,6 +206,19 @@ router.get("/check", verifyToken, async (req, res) => {
     if (!date) {
       return res.status(400).json({ error: "date is required (YYYY-MM-DD)", code: "INVALID_DATE" });
     }
+    // Trips can only be scheduled forward, so a past date is a data-entry
+    // slip rather than a question worth answering. Compared in UTC against
+    // UTC midnight because parseDateOrNull turns "YYYY-MM-DD" into UTC
+    // midnight — mixing in local time here would misjudge the boundary by
+    // a day for anyone east or west of the server. Today itself is allowed.
+    const todayUtc = new Date();
+    todayUtc.setUTCHours(0, 0, 0, 0);
+    if (date.getTime() < todayUtc.getTime()) {
+      return res.status(400).json({
+        error: "Pick today or a future date — past dates can't be scheduled.",
+        code: "PAST_DATE",
+      });
+    }
     const where = {
       tenantId: req.user.tenantId,
       isActive: true,
@@ -217,10 +230,23 @@ router.get("/check", verifyToken, async (req, res) => {
     }
     const matches = await prisma.travelSchoolTerm.findMany({ where, orderBy: { startDate: "asc" } });
     const blocking = matches.filter((m) => m.kind === "term" || m.kind === "exam-blackout");
+    // Three distinct outcomes, not two. `ok` alone can't tell "this date is
+    // inside a holiday window, go ahead" apart from "no window covers this
+    // date at all" — both leave `blocking` empty, so a date with no calendar
+    // data was reading as a confirmed green light. `status` separates them:
+    //   blocked — a term / exam-blackout window covers the date
+    //   clear   — a window covers it and none of them block (i.e. a holiday)
+    //   unknown — nothing on file for this date; we can't vouch for it
+    // `ok` and `inWindow` keep their original meaning for existing callers.
+    let status;
+    if (blocking.length > 0) status = "blocked";
+    else if (matches.length > 0) status = "clear";
+    else status = "unknown";
     res.json({
       date: req.query.date,
       inWindow: matches.length > 0,
       ok: blocking.length === 0,
+      status,
       blocking: blocking.map((m) => ({ kind: m.kind, label: m.label, schoolName: m.schoolName })),
       matches: matches.map((m) => ({
         id: m.id,

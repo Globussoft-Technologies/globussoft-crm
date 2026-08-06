@@ -1,4 +1,4 @@
-import {
+﻿import {
   Children,
   Fragment,
   isValidElement,
@@ -2225,6 +2225,7 @@ function renderGenericNav({
       <Link to="/deal-insights" icon={Eye} label="Deal Insights" />
       <Link to="/playbooks" icon={FileText} label="Playbooks" />
       <Link to="/booking-pages" icon={Calendar} label="Booking Pages" />
+      <Link to="/forms" icon={Code} label="Web Forms" />
       <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" />
       <Link to="/signatures" icon={FileSignature} label="E-Signatures" />
       <Link to="/document-templates" icon={FileText} label="Doc Templates" />
@@ -2510,5 +2511,9 @@ const badgeStyle = {
 };
 
 export default Sidebar;
+
+
+
+
 
 

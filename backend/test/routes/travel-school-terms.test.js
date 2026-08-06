@@ -61,11 +61,18 @@ describe('GET /api/travel-school-terms/check', () => {
   });
 
   test('a holiday window → ok:true; an exam window → ok:false + blocking', async () => {
+    // Dates are generated relative to now, not hardcoded — the route rejects
+    // past dates, so a literal like '2026-05-01' silently rots into a 400 the
+    // day it falls behind the clock.
+    const soon = new Date();
+    soon.setUTCDate(soon.getUTCDate() + 30);
+    const soonIso = soon.toISOString().slice(0, 10);
+
     // Holiday match → trips are fine.
     prisma.travelSchoolTerm.findMany.mockResolvedValueOnce([
       { id: 1, kind: 'holiday', label: 'Summer Break', schoolName: null, startDate: new Date(), endDate: new Date() },
     ]);
-    let res = await request(makeApp()).get('/api/travel-school-terms/check?date=2026-05-01');
+    let res = await request(makeApp()).get(`/api/travel-school-terms/check?date=${soonIso}`);
     expect(res.status).toBe(200);
     expect(res.body.inWindow).toBe(true);
     expect(res.body.ok).toBe(true);
@@ -75,12 +82,69 @@ describe('GET /api/travel-school-terms/check', () => {
     prisma.travelSchoolTerm.findMany.mockResolvedValueOnce([
       { id: 2, kind: 'exam-blackout', label: 'Half-yearly Exams', schoolName: 'DPS', startDate: new Date(), endDate: new Date() },
     ]);
-    res = await request(makeApp()).get('/api/travel-school-terms/check?date=2026-09-25&schoolName=DPS');
+    res = await request(makeApp()).get(`/api/travel-school-terms/check?date=${soonIso}&schoolName=DPS`);
     expect(res.body.ok).toBe(false);
     expect(res.body.blocking[0]).toMatchObject({ kind: 'exam-blackout' });
     // The school's own AND baseline (null) windows are queried.
     const where = prisma.travelSchoolTerm.findMany.mock.calls[1][0].where;
     expect(where.OR).toEqual([{ schoolName: 'DPS' }, { schoolName: null }]);
+  });
+
+  // A future date, built at call time so these never age into the past.
+  const futureDate = () => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + 30);
+    return d.toISOString().slice(0, 10);
+  };
+
+  test('a date with NO window on file → status "unknown", not a green light', async () => {
+    // Regression: `ok` is true whenever nothing BLOCKS the date, which is
+    // also true when no window covers it at all — so a date the calendar
+    // knows nothing about rendered identically to a confirmed holiday.
+    prisma.travelSchoolTerm.findMany.mockResolvedValueOnce([]);
+
+    const res = await request(makeApp()).get(`/api/travel-school-terms/check?date=${futureDate()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('unknown');
+    expect(res.body.inWindow).toBe(false);
+    expect(res.body.matches).toHaveLength(0);
+    expect(res.body.blocking).toHaveLength(0);
+  });
+
+  test('a holiday window → status "clear"; a term window → status "blocked"', async () => {
+    prisma.travelSchoolTerm.findMany.mockResolvedValueOnce([
+      { id: 1, kind: 'holiday', label: 'Summer Break', schoolName: null, startDate: new Date(), endDate: new Date() },
+    ]);
+    let res = await request(makeApp()).get(`/api/travel-school-terms/check?date=${futureDate()}`);
+    expect(res.body.status).toBe('clear');
+
+    // `term` blocks just like `exam-blackout` — trips must avoid term-time.
+    prisma.travelSchoolTerm.findMany.mockResolvedValueOnce([
+      { id: 2, kind: 'term', label: 'Autumn Term', schoolName: null, startDate: new Date(), endDate: new Date() },
+    ]);
+    res = await request(makeApp()).get(`/api/travel-school-terms/check?date=${futureDate()}`);
+    expect(res.body.status).toBe('blocked');
+    expect(res.body.ok).toBe(false);
+    expect(res.body.blocking[0]).toMatchObject({ kind: 'term', label: 'Autumn Term' });
+  });
+
+  test('a past date → 400 PAST_DATE, no query issued', async () => {
+    const res = await request(makeApp()).get('/api/travel-school-terms/check?date=2020-01-01');
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PAST_DATE');
+    expect(prisma.travelSchoolTerm.findMany).not.toHaveBeenCalled();
+  });
+
+  test("today itself is allowed — it's not a past date", async () => {
+    prisma.travelSchoolTerm.findMany.mockResolvedValueOnce([]);
+    const today = new Date().toISOString().slice(0, 10);
+
+    const res = await request(makeApp()).get(`/api/travel-school-terms/check?date=${today}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('unknown');
   });
 });
 

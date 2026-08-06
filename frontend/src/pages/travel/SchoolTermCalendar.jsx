@@ -105,9 +105,23 @@ export default function SchoolTermCalendar() {
     }
   };
 
+  // Local calendar day as YYYY-MM-DD — drives the date input's `min` so past
+  // days aren't offerable in the picker. Built from local parts rather than
+  // toISOString(), which converts to UTC first and would hand back yesterday
+  // for anyone sitting east of UTC late in the day.
+  const todayIso = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
+
   const runCheck = async () => {
     if (!checkDate) {
       notify.error("Pick a date to check");
+      return;
+    }
+    // `min` on the input stops the picker, but a typed date bypasses it.
+    if (checkDate < todayIso) {
+      notify.error("Pick today or a future date - past dates can't be scheduled.");
       return;
     }
     try {
@@ -225,18 +239,41 @@ export default function SchoolTermCalendar() {
 
       <div className="glass" style={{ padding: 12, marginBottom: 16, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <Search size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
-        <input type="date" value={checkDate} onChange={(e) => setCheckDate(e.target.value)} style={inp} aria-label="Date to check" />
+        <input type="date" value={checkDate} min={todayIso} onChange={(e) => setCheckDate(e.target.value)} style={inp} aria-label="Date to check" />
         <input type="text" placeholder="School (optional)" value={checkSchool} onChange={(e) => setCheckSchool(e.target.value)} style={inp} />
         <button type="button" onClick={runCheck} style={btn}>Check date</button>
-        {checkResult && (
-          <span style={{
-            padding: "4px 12px", borderRadius: 999, fontWeight: 700, fontSize: 13,
-            background: checkResult.ok ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)",
-            color: checkResult.ok ? "#059669" : "#ef4444",
-          }}>
-            {checkResult.ok ? "OK to schedule" : `Avoid - ${checkResult.blocking.map((b) => b.label).join(", ")}`}
-          </span>
-        )}
+        {checkResult && (() => {
+          // Three outcomes, not two — see the /check route. A date with no
+          // window on file used to render the same green "OK to schedule"
+          // as a real holiday, which read as a confirmation the calendar
+          // could not actually give.
+          const tone = {
+            clear: { bg: "rgba(16,185,129,0.12)", fg: "#059669" },
+            blocked: { bg: "rgba(239,68,68,0.12)", fg: "#ef4444" },
+            unknown: { bg: "rgba(245,158,11,0.12)", fg: "#b45309" },
+          }[checkResult.status] || { bg: "rgba(245,158,11,0.12)", fg: "#b45309" };
+          let text;
+          if (checkResult.status === "blocked") {
+            text = `Avoid - ${checkResult.blocking.map((b) => b.label).join(", ")}`;
+          } else if (checkResult.status === "clear") {
+            text = `OK to schedule - ${checkResult.matches.map((m) => m.label).join(", ")}`;
+          } else {
+            text = "No calendar data for this date";
+          }
+          return (
+            <span
+              title={checkResult.status === "unknown"
+                ? "No term, holiday or exam window on file covers this date, so this is not a confirmation - add the school's windows below to get a definite answer."
+                : undefined}
+              style={{
+                padding: "4px 12px", borderRadius: 999, fontWeight: 700, fontSize: 13,
+                background: tone.bg, color: tone.fg,
+              }}
+            >
+              {text}
+            </span>
+          );
+        })()}
       </div>
 
       <div className="glass" style={{ padding: 14, marginBottom: 16, display: "grid", gap: 12 }}>

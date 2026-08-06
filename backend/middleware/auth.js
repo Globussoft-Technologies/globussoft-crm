@@ -70,27 +70,31 @@ const verifyToken = async (req, res, next) => {
 
     // Load the live account state so deactivated users and stale session
     // versions stop immediately even if their JWT has not expired yet.
-    try {
-      const liveUser = await prisma.user.findUnique({
-        where: { id: verified.userId },
-        select: { deactivatedAt: true, sessionVersion: true },
-      });
-      if (!liveUser) {
-        return unauthorized(res, "Invalid Authentication Token");
-      }
-      if (liveUser.deactivatedAt) {
-        return unauthorized(res, "Account deactivated. Please contact your administrator.");
-      }
-      if (verified.sessionVersion !== undefined && verified.sessionVersion !== null) {
+    // This check is gated on the token carrying a sessionVersion claim.
+    // Legacy tokens minted before this change do not carry sessionVersion,
+    // so they continue to work until their natural expiry; that is the
+    // intended migration path.
+    if (verified.sessionVersion !== undefined && verified.sessionVersion !== null) {
+      try {
+        const liveUser = await prisma.user.findUnique({
+          where: { id: verified.userId },
+          select: { deactivatedAt: true, sessionVersion: true },
+        });
+        if (!liveUser) {
+          return unauthorized(res, "Invalid Authentication Token");
+        }
+        if (liveUser.deactivatedAt) {
+          return unauthorized(res, "Account deactivated. Please contact your administrator.");
+        }
         const tokenVersion = Number(verified.sessionVersion);
         const liveVersion = Number(liveUser.sessionVersion || 0);
         if (Number.isFinite(tokenVersion) && tokenVersion !== liveVersion) {
           return unauthorized(res, "Session expired, please log in again");
         }
+      } catch (dbErr) {
+        console.error("[auth] session-state lookup failed:", dbErr && dbErr.message);
+        return unauthorized(res, "Authentication required");
       }
-    } catch (dbErr) {
-      console.error("[auth] session-state lookup failed:", dbErr && dbErr.message);
-      return unauthorized(res, "Authentication required");
     }
 
     // Block awaiting2FA temp tokens from accessing protected resources

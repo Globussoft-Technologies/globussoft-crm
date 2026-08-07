@@ -9,6 +9,8 @@ const { markFirstResponseIfNeeded } = require("../lib/leadSla");
 const { normalizePhone, computeDuplicateGroupKey, findDuplicateContactFull } = require("../utils/deduplication");
 const { notify } = require('../lib/notificationService');
 const { notifyAdminsOfNewLead } = require('../lib/leadNotifications');
+const { getSetting, KEYS } = require('../lib/tenantSettings');
+const { evaluateAutoCampaignRules } = require('../lib/callifiedAutoCampaignRules');
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed but was never called from any route; rules saved via the
 // FieldPermissions UI had zero effect on read/write payloads. Default
@@ -1173,20 +1175,18 @@ router.post('/', async (req, res) => {
       normalised.assignedToId = req.user.userId;
     }
 
-    // Auto-assign new Leads to the tenant's default Callified campaign when set
-    // and no campaign was supplied explicitly. Covers manual create, import,
-    // extension capture, and webhooks.
+    // Auto-assign new Leads to a matching Callified campaign based on the
+    // tenant's rule configuration when no campaign was supplied explicitly.
+    // Rules are evaluated in order; the first matching column+value wins.
+    // Covers manual create, import, extension capture, and webhooks.
     if (normalised.status === "Lead" && normalised.callifiedCampaignId == null) {
       try {
-        const tenantCfg = await prisma.tenant.findUnique({
-          where: { id: req.user.tenantId },
-          select: { callifiedAutoCampaignId: true },
-        });
-        if (tenantCfg?.callifiedAutoCampaignId) {
-          normalised.callifiedCampaignId = tenantCfg.callifiedAutoCampaignId;
+        const matchedCampaignId = await evaluateAutoCampaignRules(req.user.tenantId, normalised, customFields);
+        if (matchedCampaignId) {
+          normalised.callifiedCampaignId = matchedCampaignId;
         }
       } catch (e) {
-        console.error("[contacts] auto-campaign lookup failed:", e.message);
+        console.error("[contacts] auto-campaign rule evaluation failed:", e.message);
       }
     }
 
@@ -1281,6 +1281,29 @@ router.post('/', async (req, res) => {
     }
     // #179: audit row for new/restored contact.
     await writeAudit('Contact', restoredSoftDeletedContact ? 'RESTORE' : 'CREATE', contact.id, req.user.userId, req.user.tenantId, { name: contact.name, email: contact.email });
+
+    // Auto-dial newly-created Leads that have a Callified campaign + phone,
+    // but only when the tenant has enabled auto-dial for new leads.
+    // Fire-and-forget: never block the create response on an outbound call.
+    if (contact.status === 'Lead' && contact.callifiedCampaignId && contact.phone) {
+      try {
+        const autoDialEnabled = await getSetting(contact.tenantId, KEYS.CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED, {
+          coerce: (v) => String(v).toLowerCase() !== 'false',
+        });
+        if (autoDialEnabled) {
+          const { enqueue } = require('../lib/callifiedAutoDialQueue');
+          enqueue({
+            tenantId: contact.tenantId,
+            contactId: contact.id,
+            campaignId: contact.callifiedCampaignId,
+            userId: req.user.userId,
+          });
+        }
+      } catch (_e) {
+        console.error('[contacts] auto-dial enqueue failed:', _e && _e.message);
+      }
+    }
+
     res.status(restoredSoftDeletedContact ? 200 : 201).json(restoredSoftDeletedContact ? { ...contact, restored: true } : contact);
   } catch (err) {
     // #178: duplicate email should be 409 Conflict, not 500.
@@ -1362,6 +1385,30 @@ router.put('/bulk-assign', verifyRole(['ADMIN']), async (req, res) => {
     });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to bulk assign agent' });
+  }
+});
+
+router.put('/bulk-assign-campaign', verifyRole(['ADMIN']), async (req, res) => {
+  try {
+    const { contactIds, callifiedCampaignId } = req.body;
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({ error: 'No contact IDs provided' });
+    }
+    const ids = contactIds.map((id) => parseInt(id)).filter(Number.isFinite);
+    const nextCampaignId = callifiedCampaignId ? parseInt(callifiedCampaignId) : null;
+
+    if (nextCampaignId !== null && (!Number.isInteger(nextCampaignId) || nextCampaignId <= 0)) {
+      return res.status(400).json({ error: 'Invalid campaign ID', code: 'INVALID_CAMPAIGN_ID' });
+    }
+
+    const { count } = await prisma.contact.updateMany({
+      where: { id: { in: ids }, tenantId: req.user.tenantId },
+      data: { callifiedCampaignId: nextCampaignId },
+    });
+
+    res.json({ updated: count });
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to bulk assign campaign' });
   }
 });
 

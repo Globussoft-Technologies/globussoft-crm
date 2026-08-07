@@ -77,6 +77,8 @@ export default function Diagnostics() {
     const startOffset = reset ? 0 : offsetRef.current;
 
     if (reset) {
+      loadingRef.current = true;
+      loadingMoreRef.current = false;
       setLoading(true);
       setLoadingMore(false);
       setDiagnostics([]);
@@ -88,6 +90,7 @@ export default function Diagnostics() {
       hasMoreRef.current = true;
     } else {
       if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      loadingMoreRef.current = true;
       setLoadingMore(true);
     }
 
@@ -127,6 +130,8 @@ export default function Diagnostics() {
       offsetRef.current = 0;
       hasMoreRef.current = false;
     } finally {
+      loadingRef.current = false;
+      loadingMoreRef.current = false;
       setLoading(false);
       setLoadingMore(false);
     }

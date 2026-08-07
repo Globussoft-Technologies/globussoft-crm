@@ -99,8 +99,11 @@ model Tenant {
   defaultSubBrand    String?   @db.VarChar(50)
   // Round-robin pointer for auto-assigning hot leads to staff users.
   // Stores the last user id that was auto-assigned a hot lead so the next
-  // hot lead gets the following user in the staff list.
+  // hot lead gets the following user in the staff list. When
+  // callifiedLastHotAssignedCount reaches the configured leads-per-user cap,
+  // the pointer advances to the next staff member.
   callifiedLastHotAssignedUserId Int?
+  callifiedLastHotAssignedCount  Int?      @default(0)
   // Default Callified campaign to auto-assign to every new Lead created in
   // the tenant. NULL means auto-assign is turned off.
   callifiedAutoCampaignId Int?
@@ -722,6 +725,12 @@ model Contact {
   callifiedLeadStatusSource   String?
   callifiedLeadStatusReason   String?
   callifiedLeadStatusUpdatedAt DateTime?
+
+  // DNP retry state for the Callified auto-dial retry engine.
+  // Tracks how many automatic retries have been attempted for the current
+  // DNP streak and when the next retry is due.
+  callifiedDnpRetryCount  Int       @default(0)
+  callifiedDnpNextRetryAt DateTime?
 
   // Data enrichment
   industry       String?

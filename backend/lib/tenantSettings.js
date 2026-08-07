@@ -103,6 +103,19 @@ const KEYS = {
   BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS: "budgetCap_booking_expedia_monthly_usd_cents",
   // Generic CRM Leads page — AI transcript classification for Callified calls.
   CALLIFIED_AI_TRANSCRIPT_ENABLED:       "feature.callified.ai_transcript.enabled",
+  // Generic CRM Leads page — auto-dial new leads toggle.
+  CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED:  "feature.callified.auto_dial_new_leads.enabled",
+  // Generic CRM Leads page — DNP retry scheduler settings.
+  CALLIFIED_DNP_RETRY_ENABLED:           "feature.callified.dnp_retry.enabled",
+  CALLIFIED_DNP_RETRY_MAX_RETRIES:       "feature.callified.dnp_retry.max_retries",
+  CALLIFIED_DNP_RETRY_INTERVAL_MINUTES:  "feature.callified.dnp_retry.interval_minutes",
+  // Generic CRM Leads page — auto-campaign assignment rules (replaces the
+  // single tenant.callifiedAutoCampaignId default). Each rule maps a lead
+  // column + normalised value to a Callified campaign id.
+  CALLIFIED_AUTO_CAMPAIGN_RULES:             "feature.callified.auto_campaign_rules",
+  CALLIFIED_ASSIGN_STAFF_ENABLED:          "feature.callified.assign_staff.enabled",
+  CALLIFIED_ASSIGN_STAFF_LOGIC:          "feature.callified.assign_staff.logic",
+  CALLIFIED_ASSIGN_STAFF_LEADS_PER_USER: "feature.callified.assign_staff.leads_per_user",
   // Cron / operational settings (§4.5 hardcoded-value fixes)
   ORCHESTRATOR_DEFAULT_WORKING_MINUTES:  "orchestrator.defaultWorkingMinutes",
   SMS_DEDUP_PHRASE_24H:                  "sms.dedupPhrase24h",
@@ -148,6 +161,18 @@ const DEFAULTS = {
     Number(process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS ?? 10000),
   // Generic CRM Leads page — AI transcript classification enabled by default.
   [KEYS.CALLIFIED_AI_TRANSCRIPT_ENABLED]: "true",
+  // Generic CRM Leads page — auto-dial new leads enabled by default.
+  [KEYS.CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED]: "true",
+  // Generic CRM Leads page — DNP retry defaults.
+  [KEYS.CALLIFIED_DNP_RETRY_ENABLED]: "true",
+  [KEYS.CALLIFIED_DNP_RETRY_MAX_RETRIES]: 3,
+  [KEYS.CALLIFIED_DNP_RETRY_INTERVAL_MINUTES]: 60,
+  // Generic CRM Leads page — auto-campaign assignment rules default.
+  [KEYS.CALLIFIED_AUTO_CAMPAIGN_RULES]: JSON.stringify({ enabled: false, rules: [] }),
+  // Generic CRM Leads page — qualified lead auto-assignment defaults.
+  [KEYS.CALLIFIED_ASSIGN_STAFF_ENABLED]: "true",
+  [KEYS.CALLIFIED_ASSIGN_STAFF_LOGIC]: "round_robin",
+  [KEYS.CALLIFIED_ASSIGN_STAFF_LEADS_PER_USER]: 1,
   // Cron / operational defaults (§4.5 hardcoded-value fixes)
   [KEYS.ORCHESTRATOR_DEFAULT_WORKING_MINUTES]: 660,
   [KEYS.SMS_DEDUP_PHRASE_24H]: "tomorrow at",

@@ -396,7 +396,7 @@ export default function QuotesAdmin() {
     }
   }, [load]);
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
       <header
         style={{
           display: "flex",
@@ -559,7 +559,7 @@ export default function QuotesAdmin() {
             ref={listRef}
             data-testid="quotes-admin-table-scroll"
             onScroll={handleListScroll}
-            style={{ maxHeight: "60vh", overflowY: "auto", overflowX: "hidden" }}
+            style={{ maxHeight: "68vh", overflowY: "auto", overflowX: "hidden" }}
           >
           <TopScrollSync disabled>
           <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>

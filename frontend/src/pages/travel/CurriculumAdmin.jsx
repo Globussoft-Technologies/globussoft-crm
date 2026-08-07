@@ -592,7 +592,7 @@ export default function CurriculumAdmin() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
       {/* Inline style block for the fit-score badge classes. Keeps the
           theme-friendly color values in one place + avoids spraying
           hex codes through inline styles (per Itineraries.jsx pattern). */}
@@ -946,17 +946,17 @@ export default function CurriculumAdmin() {
           <table data-testid="curriculum-mapping-table" style={{ width: '100%', minWidth: '1480px', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
-                <th style={{ ...th, width: '10%' }}>Year</th>
-                <th style={{ ...th, width: '11%' }}>Curriculum</th>
+                <th style={{ ...th, width: '8%' }}>Year</th>
+                <th style={{ ...th, width: '10%' }}>Curriculum</th>
                 <th style={{ ...th, width: '6%' }}>Grade</th>
-                <th style={{ ...th, width: '10%' }}>Subject</th>
-                <th style={{ ...th, width: '10%' }}>Code</th>
-                <th style={{ ...th, width: '18%' }}>Learning outcome</th>
-                <th style={{ ...th, width: '13%' }}>Destination</th>
-                <th style={{ ...th, width: '6%' }}>Fit</th>
-                <th style={{ ...th, width: '7%' }}>Conf.</th>
-                <th style={{ ...th, width: '7%' }}>Active</th>
-                {isAdmin && <th style={{ ...th, width: '12%' }}>Actions</th>}
+                <th style={{ ...th, width: '8%' }}>Subject</th>
+                <th style={{ ...th, width: '7%' }}>Code</th>
+                <th style={{ ...th, width: '19%' }}>Learning outcome</th>
+                <th style={{ ...th, width: '17%' }}>Destination</th>
+                <th style={{ ...th, width: '5%' }}>Fit</th>
+                <th style={{ ...th, width: '5%' }}>Conf.</th>
+                <th style={{ ...th, width: '5%' }}>Active</th>
+                {isAdmin && <th style={{ ...th, width: '15%' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>

@@ -11,8 +11,10 @@ const MAX_OPTIONS = 4;
 
 const pageWrap = {
   padding: 24,
-  maxWidth: 1200,
+  width: "100%",
+  maxWidth: 1480,
   margin: "0 auto",
+  boxSizing: "border-box",
   animation: "fadeIn 0.4s ease-out",
 };
 

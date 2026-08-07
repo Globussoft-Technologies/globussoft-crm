@@ -209,8 +209,7 @@ export default function InvoicesAdmin() {
 
   const [subBrand, setSubBrand] = useState("");
   const [status, setStatus] = useState("");
-  const [contactIdFilter, setContactIdFilter] = useState("");
-  const [quoteIdFilter, setQuoteIdFilter] = useState("");
+  const [customerNameFilter, setCustomerNameFilter] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -287,8 +286,6 @@ export default function InvoicesAdmin() {
     const qs = new URLSearchParams();
     if (subBrand) qs.set("subBrand", subBrand);
     if (status) qs.set("status", status);
-    if (contactIdFilter.trim()) qs.set("contactId", contactIdFilter.trim());
-    if (quoteIdFilter.trim()) qs.set("quoteId", quoteIdFilter.trim());
     const startOffset = reset ? 0 : offsetRef.current;
     if (startOffset > 0) {
       qs.set("limit", String(PAGE_SIZE));
@@ -339,7 +336,7 @@ export default function InvoicesAdmin() {
   useEffect(() => {
     load({ reset: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subBrand, status, contactIdFilter, quoteIdFilter]);
+  }, [subBrand, status]);
 
   const handleTableScroll = (e) => {
     const el = e.currentTarget;
@@ -472,6 +469,15 @@ export default function InvoicesAdmin() {
     const labels = new Set([current, ...next]);
     return INVOICE_STATUSES.filter((s) => s.value && labels.has(s.value));
   };
+
+  const visibleInvoices = customerNameFilter.trim()
+    ? invoices.filter((inv) => {
+        const needle = customerNameFilter.trim().toLowerCase();
+        const contact = contactsById[inv.contactId];
+        const name = String(contact?.name || "").toLowerCase();
+        return name.includes(needle);
+      })
+    : invoices;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -961,19 +967,11 @@ export default function InvoicesAdmin() {
         </select>
         <input
           type="text"
-          placeholder="Filter by contact ID…"
-          value={contactIdFilter}
-          onChange={(e) => setContactIdFilter(e.target.value)}
-          style={{ ...selectStyle, minWidth: 180 }}
-          aria-label="Filter by contact ID"
-        />
-        <input
-          type="text"
-          placeholder="Filter by quote ID…"
-          value={quoteIdFilter}
-          onChange={(e) => setQuoteIdFilter(e.target.value)}
-          style={{ ...selectStyle, minWidth: 180 }}
-          aria-label="Filter by quote ID"
+          placeholder="Filter by customer name…"
+          value={customerNameFilter}
+          onChange={(e) => setCustomerNameFilter(e.target.value)}
+          style={{ ...selectStyle, minWidth: 220 }}
+          aria-label="Filter by customer name"
         />
       </div>
 
@@ -1159,7 +1157,7 @@ export default function InvoicesAdmin() {
               </tr>
             </thead>
             <tbody>
-              {invoices.map((inv) => {
+              {visibleInvoices.map((inv) => {
                 const isVoided = inv.status === "Voided";
                 const canDelete = inv.status === "Draft";
                 return (
@@ -1334,7 +1332,7 @@ export default function InvoicesAdmin() {
                   </tr>
                 );
               })}
-              {invoices.length === 0 && (
+              {visibleInvoices.length === 0 && (
                 <tr>
                   <td
                     colSpan={canWrite ? 9 : 8}
@@ -1378,7 +1376,7 @@ export default function InvoicesAdmin() {
 
       {total > 0 && (
         <div style={{ marginTop: 12, color: "var(--text-secondary)", fontSize: 13 }}>
-          Showing {Math.min(invoices.length, total).toLocaleString()} of {total.toLocaleString()}
+          Showing {Math.min(visibleInvoices.length, total).toLocaleString()} of {total.toLocaleString()}
           {!hasMore ? " - end of table" : ""}
         </div>
       )}

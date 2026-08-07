@@ -18,7 +18,6 @@ import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { SUB_BRAND_IDS, subBrandShortLabel } from "../utils/travelSubBrand";
-import TopScrollSync from "../components/TopScrollSync";
 
 const STATUS_CONFIG = {
   PAID: { color: "#10b981", bg: "rgba(16,185,129,0.15)", label: "Paid" },
@@ -68,6 +67,7 @@ export default function Invoices() {
   const [deals, setDeals] = useState([]);
   const [linkModal, setLinkModal] = useState(null); // { inv, url } | null
   const [linkCopied, setLinkCopied] = useState(false);
+  const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   const [newInvoice, setNewInvoice] = useState({
     invoiceNum: "",
     contactId: "",
@@ -163,15 +163,12 @@ export default function Invoices() {
 
   useEffect(() => {
     setVisibleInvoiceCount(INVOICE_BATCH_SIZE);
-    const scroller = invoiceTableRef.current?.querySelector(
-      ".top-scroll-sync__bottom",
-    );
-    if (scroller) scroller.scrollTop = 0;
+    if (invoiceTableRef.current) invoiceTableRef.current.scrollTop = 0;
   }, [statusFilter, activeSubBrand]);
 
   const handleInvoiceTableScroll = (event) => {
     const scroller = event.target;
-    if (!scroller.classList?.contains("top-scroll-sync__bottom")) return;
+    if (!scroller.classList?.contains("invoice-table-scroll")) return;
 
     const distanceFromBottom =
       scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
@@ -340,6 +337,8 @@ export default function Invoices() {
       <div
         style={{
           display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
           gap: "0.75rem",
           marginBottom: "1.75rem",
           flexWrap: "wrap",
@@ -571,100 +570,107 @@ export default function Invoices() {
             </option>
           </select>
         </div>
+
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => setIsCreateFormOpen(true)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.45rem",
+            padding: "0.65rem 1rem",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <Plus size={16} /> Create Invoice
+        </button>
       </div>
 
-      {/* #481: two-column grid (Create | Ledger) collapses to a single column
-          below 768px so the form labels + helper text don't wrap word-by-word
-          and the ledger isn't squeezed to invisible-bar width. */}
-      <div className="invoices-grid">
-        {/* Create Invoice Panel */}
+      {isCreateFormOpen && (
         <div
-          className="card"
-          style={{ padding: "2rem", height: "fit-content" }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Create Invoice"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsCreateFormOpen(false);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            background: "var(--overlay-bg, rgba(0,0,0,0.6))",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            padding: "2rem 1rem",
+            overflowY: "auto",
+          }}
         >
-          <h3
+          <div
+            onClick={(e) => e.stopPropagation()}
             style={{
-              fontSize: "1.15rem",
-              fontWeight: "600",
-              marginBottom: "1.5rem",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
+              padding: "1.5rem",
+              width: "720px",
+              maxWidth: "100%",
+              height: "max-content",
+              minHeight: 0,
+              maxHeight: "none",
+              overflowY: "visible",
+              margin: "auto 0",
+              boxSizing: "border-box",
+              background: "var(--modal-bg, var(--bg-color))",
+              backgroundColor: "var(--modal-bg, var(--bg-color))",
+              borderRadius: "16px",
+              border: "1px solid var(--border-color)",
+              boxShadow: "0 25px 50px -12px rgba(0,0,0,0.28)",
             }}
           >
-            <Plus size={20} color="var(--accent-color)" /> Create Invoice
-          </h3>
-          <form
-            onSubmit={createInvoice}
-            style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}
-          >
-            {/* #314: Invoice # is server-generated and was being silently
-                overwritten on save, leaving the user confused about why their
-                custom number didn't stick. Make the field read-only and surface
-                the next number that will be assigned, so what the user sees
-                up-front matches what the backend writes. Custom numbering is an
-                admin-only feature and isn't part of this form. */}
-            <div>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: "0.875rem",
-                  marginBottom: "0.5rem",
-                  color: "var(--text-secondary)",
-                }}
-              >
-                Invoice #
-              </label>
-              <input
-                type="text"
-                className="input-field"
-                placeholder="Auto-generated on save"
-                value={nextInvoiceNum}
-                readOnly
-                aria-label="Invoice number (auto-generated on save)"
-                style={{ opacity: 0.75, cursor: "not-allowed" }}
-              />
-              <span
-                style={{
-                  fontSize: "0.7rem",
-                  color: "var(--text-secondary)",
-                  marginTop: "0.25rem",
-                  display: "block",
-                }}
-              >
-                Auto-generated on save
+            <h3
+              style={{
+                fontSize: "1.15rem",
+                fontWeight: "600",
+                marginBottom: "1rem",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "0.5rem",
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <Plus size={20} color="var(--accent-color)" /> Create Invoice
               </span>
-            </div>
-
-            <div>
-              <label
+              <button
+                type="button"
+                onClick={() => setIsCreateFormOpen(false)}
                 style={{
-                  display: "block",
-                  fontSize: "0.875rem",
-                  marginBottom: "0.5rem",
+                  background: "transparent",
+                  border: "1px solid var(--border-color)",
+                  cursor: "pointer",
                   color: "var(--text-secondary)",
+                  padding: "0.45rem",
+                  borderRadius: "6px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                 }}
+                aria-label="Close create invoice form"
               >
-                Contact
-              </label>
-              <select
-                className="input-field"
-                required
-                value={newInvoice.contactId}
-                onChange={(e) => handleFieldChange("contactId", e.target.value)}
-                style={{ background: "var(--input-bg)" }}
-                aria-label="Contact"
-              >
-                <option value="">-- Select Contact --</option>
-                {contacts.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.email})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {isTravel && (
+                <X size={18} />
+              </button>
+            </h3>
+            <form
+              onSubmit={createInvoice}
+              style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}
+            >
+              {/* #314: Invoice # is server-generated and was being silently
+                  overwritten on save, leaving the user confused about why their
+                  custom number didn't stick. Make the field read-only and surface
+                  the next number that will be assigned, so what the user sees
+                  up-front matches what the backend writes. Custom numbering is an
+                  admin-only feature and isn't part of this form. */}
               <div>
                 <label
                   style={{
@@ -674,57 +680,90 @@ export default function Invoices() {
                     color: "var(--text-secondary)",
                   }}
                 >
-                  Sub-brand
+                  Invoice #
+                </label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="Auto-generated on save"
+                  value={nextInvoiceNum}
+                  readOnly
+                  aria-label="Invoice number (auto-generated on save)"
+                  style={{ opacity: 0.75, cursor: "not-allowed" }}
+                />
+                <span
+                  style={{
+                    fontSize: "0.7rem",
+                    color: "var(--text-secondary)",
+                    marginTop: "0.25rem",
+                    display: "block",
+                  }}
+                >
+                  Auto-generated on save
+                </span>
+              </div>
+
+              <div>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: "0.875rem",
+                    marginBottom: "0.5rem",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  Contact
                 </label>
                 <select
                   className="input-field"
                   required
-                  value={newInvoice.subBrand}
-                  onChange={(e) =>
-                    handleFieldChange("subBrand", e.target.value)
-                  }
+                  value={newInvoice.contactId}
+                  onChange={(e) => handleFieldChange("contactId", e.target.value)}
                   style={{ background: "var(--input-bg)" }}
-                  aria-label="Sub-brand"
+                  aria-label="Contact"
                 >
-                  <option value="">-- Select Sub-brand --</option>
-                  {SUB_BRAND_IDS.map((id) => (
-                    <option key={id} value={id}>
-                      {subBrandShortLabel(id)}
+                  <option value="">-- Select Contact --</option>
+                  {contacts.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.email})
                     </option>
                   ))}
                 </select>
               </div>
-            )}
 
-            <div>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: "0.875rem",
-                  marginBottom: "0.5rem",
-                  color: "var(--text-secondary)",
-                }}
-              >
-                Deal (Optional)
-              </label>
-              <select
-                className="input-field"
-                value={newInvoice.dealId}
-                onChange={(e) => handleFieldChange("dealId", e.target.value)}
-                style={{ background: "var(--input-bg)" }}
-                aria-label="Associated deal"
-              >
-                <option value="">-- No Deal --</option>
-                {deals.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.title} - {formatCurrency(d.amount)}
-                  </option>
-                ))}
-              </select>
-            </div>
+              {isTravel && (
+                <div>
+                  <label
+                    style={{
+                      display: "block",
+                      fontSize: "0.875rem",
+                      marginBottom: "0.5rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Sub-brand
+                  </label>
+                  <select
+                    className="input-field"
+                    required
+                    value={newInvoice.subBrand}
+                    onChange={(e) =>
+                      handleFieldChange("subBrand", e.target.value)
+                    }
+                    style={{ background: "var(--input-bg)" }}
+                    aria-label="Sub-brand"
+                  >
+                    <option value="">-- Select Sub-brand --</option>
+                    {SUB_BRAND_IDS.map((id) => (
+                      <option key={id} value={id}>
+                        {subBrandShortLabel(id)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
-            <div style={{ display: "flex", gap: "1rem" }}>
-              <div style={{ flex: 1 }}>
+              <div>
                 <label
                   style={{
                     display: "block",
@@ -733,21 +772,71 @@ export default function Invoices() {
                     color: "var(--text-secondary)",
                   }}
                 >
-                  Amount ({currencySymbol()})
+                  Deal (Optional)
                 </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  required
+                <select
                   className="input-field"
-                  placeholder="0.00"
-                  value={newInvoice.amount}
-                  onChange={(e) => handleFieldChange("amount", e.target.value)}
-                  aria-label="Invoice amount"
-                />
+                  value={newInvoice.dealId}
+                  onChange={(e) => handleFieldChange("dealId", e.target.value)}
+                  style={{ background: "var(--input-bg)" }}
+                  aria-label="Associated deal"
+                >
+                  <option value="">-- No Deal --</option>
+                  {deals.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.title} - {formatCurrency(d.amount)}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <div style={{ flex: 1 }}>
+
+              <div style={{ display: "flex", gap: "1rem" }}>
+                <div style={{ flex: 1 }}>
+                  <label
+                    style={{
+                      display: "block",
+                      fontSize: "0.875rem",
+                      marginBottom: "0.5rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Amount ({currencySymbol()})
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    required
+                    className="input-field"
+                    placeholder="0.00"
+                    value={newInvoice.amount}
+                    onChange={(e) => handleFieldChange("amount", e.target.value)}
+                    aria-label="Invoice amount"
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label
+                    style={{
+                      display: "block",
+                      fontSize: "0.875rem",
+                      marginBottom: "0.5rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Due Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    className="input-field"
+                    value={newInvoice.dueDate}
+                    onChange={(e) => handleFieldChange("dueDate", e.target.value)}
+                    aria-label="Due date"
+                  />
+                </div>
+              </div>
+
+              <div>
                 <label
                   style={{
                     display: "block",
@@ -756,52 +845,42 @@ export default function Invoices() {
                     color: "var(--text-secondary)",
                   }}
                 >
-                  Due Date
+                  Status
                 </label>
-                <input
-                  type="date"
-                  required
+                <select
                   className="input-field"
-                  value={newInvoice.dueDate}
-                  onChange={(e) => handleFieldChange("dueDate", e.target.value)}
-                  aria-label="Due date"
-                />
+                  value={newInvoice.status}
+                  onChange={(e) => handleFieldChange("status", e.target.value)}
+                  style={{ background: "var(--input-bg)" }}
+                  aria-label="Invoice status"
+                >
+                  <option value="UNPAID">Unpaid</option>
+                  <option value="PAID">Paid</option>
+                  <option value="OVERDUE">Overdue</option>
+                </select>
               </div>
-            </div>
 
-            <div>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: "0.875rem",
-                  marginBottom: "0.5rem",
-                  color: "var(--text-secondary)",
-                }}
-              >
-                Status
-              </label>
-              <select
-                className="input-field"
-                value={newInvoice.status}
-                onChange={(e) => handleFieldChange("status", e.target.value)}
-                style={{ background: "var(--input-bg)" }}
-                aria-label="Invoice status"
-              >
-                <option value="UNPAID">Unpaid</option>
-                <option value="PAID">Paid</option>
-                <option value="OVERDUE">Overdue</option>
-              </select>
-            </div>
-
-            <button
-              type="submit"
-              className="btn-primary"
-              style={{ padding: "1rem", marginTop: "0.5rem" }}
-            >
-              Issue Invoice
-            </button>
-          </form>
+              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => setIsCreateFormOpen(false)}
+                  className="btn-secondary"
+                  style={{ flex: "1 1 180px", padding: "1rem" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  style={{ flex: "2 1 240px", padding: "1rem" }}
+                >
+                  Issue Invoice
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
+      )}
 
         {/* Invoice Table */}
         <div className="card" style={{ padding: "2rem" }}>
@@ -868,26 +947,36 @@ export default function Invoices() {
               ref={invoiceTableRef}
               className="invoice-table-scroll"
               onScrollCapture={handleInvoiceTableScroll}
+              style={{
+                 minHeight: "calc(100vh - 380px)",
+                 maxHeight: "calc(100vh - 380px)",
+                 overflowY: "auto",
+                 overflowX: "auto",
+                }}
             >
-              <TopScrollSync>
               {/* #243: table-layout fixed + per-column widths so the Contact
                   cell can no longer expand past its allotted space and bleed
                   on top of the sticky Actions column. The Contact cell itself
                   also truncates with ellipsis (see <td> below). */}
               <table
-                className="stable-table"
-                style={{ borderCollapse: "collapse", fontSize: "0.875rem" }}
+                className="stable-table invoice-table"
+                style={{
+                  borderCollapse: "collapse",
+                  fontSize: "0.875rem",
+                  minWidth: "1340px",
+                  width: "max(100%, 1340px)",
+                }}
                 role="table"
                 aria-label="Invoices table"
               >
                 <colgroup>
-                  <col style={{ width: "120px" }} />
+                  <col style={{ width: "180px" }} />
                   <col style={{ width: "110px" }} />
                   <col style={{ width: "100px" }} />
                   <col style={{ width: "120px" }} />
                   <col style={{ width: "110px" }} />
-                  <col />
-                  <col style={{ width: "260px" }} />
+                  <col style={{ width: "220px" }} />
+                  <col style={{ width: "500px" }} />
                 </colgroup>
                 <thead className="invoice-table-header">
                   <tr
@@ -971,6 +1060,7 @@ export default function Invoices() {
                     {/* #119 polish: sticky right-edge so action buttons are always
                         visible regardless of horizontal scroll position. */}
                     <th
+                      className="invoice-actions-cell"
                       style={{
                         padding: "0.75rem 0.5rem",
                         color: "var(--text-secondary)",
@@ -978,7 +1068,7 @@ export default function Invoices() {
                         fontSize: "0.75rem",
                         textTransform: "uppercase",
                         letterSpacing: "0.05em",
-                        textAlign: "right",
+                        // textAlign: "right",
                       }}
                     >
                       Actions
@@ -1003,8 +1093,9 @@ export default function Invoices() {
                       <td
                         style={{
                           padding: "1rem 0.5rem",
-                          fontWeight: "600",
-                          letterSpacing: "0.03em",
+                          fontWeight: "500",
+                          fontSize: "0.75rem",
+                          letterSpacing: "0.02em",
                         }}
                       >
                         {inv.invoiceNum}
@@ -1086,22 +1177,20 @@ export default function Invoices() {
                           )}
                       </td>
                       <td
+                        className="invoice-actions-cell"
                         style={{
                           padding: "1rem 0.5rem",
-                          textAlign: "right",
+                          // textAlign: "right",
                         }}
                       >
-                        {/* #119 sub-issue: action buttons could overflow the
-                            260px Actions column on narrow viewports. flexWrap
-                            + minWidth:0 lets them stack instead of bleeding
-                            outside the cell. */}
+                        {/* Keep the action controls on one line; horizontal
+                            overflow belongs to the table scroller. */}
                         <div
                           style={{
                             display: "flex",
-                            justifyContent: "flex-end",
                             gap: "0.5rem",
-                            flexWrap: "wrap",
-                            minWidth: 0,
+                            flexWrap: "nowrap",
+                            whiteSpace: "nowrap",
                           }}
                         >
                           <button
@@ -1252,11 +1341,9 @@ export default function Invoices() {
                   )}
                 </tbody>
               </table>
-              </TopScrollSync>
             </div>
           )}
         </div>
-      </div>
 
       {/* #124: Recur modal — replaces the old prompt(). */}
       {recurInvoice && (
@@ -1558,23 +1645,42 @@ export default function Invoices() {
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-        .invoices-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 2rem; }
-        .invoice-table-scroll .top-scroll-sync__bottom {
+        .invoice-table-scroll {
           max-height: calc(100vh - 330px);
           min-height: 240px;
           overflow: auto;
+          overflow-x: scroll !important;
+          scrollbar-gutter: stable;
         }
-        .invoice-table-header th {
+        .invoice-table-scroll .invoice-table {
+          display: table;
+          overflow: visible;
+          border-spacing: 0;
+        }
+        .invoice-table-scroll table.invoice-table .invoice-table-header,
+        .invoice-table-scroll table.invoice-table .invoice-table-header tr {
+          background: var(--bg-color, #15171c) !important;
+          background-color: var(--bg-color, #15171c) !important;
+        }
+        .invoice-table-scroll table.invoice-table .invoice-table-header th {
           position: sticky;
           top: 0;
           z-index: 3;
-          background: var(--bg-color, #0b0c10);
-          background-clip: padding-box;
+          background: var(--bg-color, #15171c) !important;
+          background-color: var(--bg-color, #15171c) !important;
+          background-clip: border-box;
           box-shadow: inset 0 -1px 0 var(--border-color);
         }
+        .invoice-actions-cell {
+          white-space: nowrap;
+          overflow: visible;
+        }
+        .invoice-actions-cell button {
+          flex-shrink: 0;
+          white-space: nowrap;
+        }
         @media (max-width: 768px) {
-          .invoices-grid { grid-template-columns: 1fr; gap: 1.25rem; }
-          .invoice-table-scroll .top-scroll-sync__bottom {
+          .invoice-table-scroll {
             max-height: 70vh;
           }
         }

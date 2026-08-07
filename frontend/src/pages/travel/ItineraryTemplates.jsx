@@ -82,6 +82,7 @@ const BUDGET_TIERS = [
 ];
 
 const PAGE_SIZE = 20;
+const ITINERARY_TABLE_WIDTH = 1800;
 
 // G061 — Parse the template's `templateJson` (String? @db.LongText holding
 // `{ items: [...] }`) into the array MapPreview consumes. Resilient to:
@@ -586,7 +587,7 @@ export default function ItineraryTemplates() {
   }, []);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
+    <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
       <div
         style={{
           display: 'flex',
@@ -1002,12 +1003,13 @@ export default function ItineraryTemplates() {
             data-testid="itinerary-templates-table-scroll"
             onScroll={handleListScroll}
             style={{
-              maxHeight: '60vh',
-              overflowY: 'auto',
-              overflowX: 'hidden',
+              overflow: 'auto',
+              height: 'calc(100vh - 370px)',
+              minHeight: 490,
+              maxHeight: 730,
             }}
           >
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <table style={{ width: '100%', minWidth: ITINERARY_TABLE_WIDTH, borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
                 <th style={th}>Name</th>

@@ -386,6 +386,46 @@ describe('WebForms builder page', () => {
 
   });
 
+  test('allows clearing and saving the form title', async () => {
+
+    renderPage();
+
+
+
+    await openBuilder();
+
+    const [nameField] = await screen.findAllByDisplayValue('Brand intake');
+
+    fireEvent.change(nameField, { target: { value: '' } });
+
+    expect(nameField).toHaveValue('');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+
+
+    await waitFor(() => {
+
+      const saveCall = fetchApiMock.mock.calls.find(
+
+        ([url, opts]) => url === '/api/forms/101' && opts?.method === 'PUT',
+
+      );
+
+      expect(saveCall).toBeTruthy();
+
+      expect(JSON.parse(saveCall[1].body)).toEqual(
+
+        expect.objectContaining({ name: '' }),
+
+      );
+
+    });
+
+    expect(notifySuccess).toHaveBeenCalledWith('Form saved');
+
+  });
+
   test('custom choice fields expose an editable options textarea', async () => {
 
     const customForm = {

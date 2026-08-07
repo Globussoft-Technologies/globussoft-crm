@@ -336,7 +336,7 @@ describe('<SuppliersAdmin /> — load + render lifecycle', () => {
       if (url.startsWith('/api/travel/suppliers/exposure') && method === 'GET') {
         return Promise.resolve(EXPOSURE_DEFAULT);
       }
-      if (url === '/api/travel/suppliers' && method === 'GET') {
+      if (url.startsWith('/api/travel/suppliers') && method === 'GET') {
         return new Promise((res) => { resolveList = res; });
       }
       return Promise.resolve(null);
@@ -349,14 +349,14 @@ describe('<SuppliersAdmin /> — load + render lifecycle', () => {
     expect(screen.queryByText('Loading…')).toBeNull();
   });
 
-  it('GETs /api/travel/suppliers on mount with NO query string when filters are empty', async () => {
+  it('GETs /api/travel/suppliers on mount with pagination query params when filters are empty', async () => {
     renderPage();
     await waitFor(() => {
       const listCall = fetchApiMock.mock.calls.find(([u, o]) =>
         typeof u === 'string' && u.startsWith('/api/travel/suppliers') && (!o?.method || o.method === 'GET'),
       );
       expect(listCall).toBeTruthy();
-      expect(listCall[0]).toBe('/api/travel/suppliers');
+      expect(listCall[0]).toBe('/api/travel/suppliers?limit=20&offset=0');
     });
     // Renders one row per supplier.
     expect(await screen.findByText('Acme Hotels')).toBeInTheDocument();

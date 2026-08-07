@@ -6,7 +6,7 @@
 //   1. Manual row entry
 //   2. CSV / Excel import
 //   3. PDF / image upload of the school's published calendar
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CalendarDays, Trash2, Plus, Search, Upload, FileSpreadsheet, FileText, Download, ExternalLink } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -22,6 +22,7 @@ const KIND_COLOR = {
   term: { bg: "rgba(245,158,11,0.14)", color: "#b45309" },
   "exam-blackout": { bg: "rgba(239,68,68,0.12)", color: "#ef4444" },
 };
+const PAGE_SIZE = 20;
 const BLANK = { schoolName: "", board: "", kind: "holiday", label: "", startDate: "", endDate: "" };
 const BLANK_UPLOAD_META = { schoolName: "", board: "", label: "" };
 
@@ -37,9 +38,12 @@ function fmt(d) {
 export default function SchoolTermCalendar() {
   const notify = useNotify();
   const [rows, setRows] = useState([]);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [uploads, setUploads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingUploads, setLoadingUploads] = useState(true);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
   const [form, setForm] = useState(BLANK);
   const [saving, setSaving] = useState(false);
   const [checkDate, setCheckDate] = useState("");
@@ -51,16 +55,80 @@ export default function SchoolTermCalendar() {
   const [uploadMeta, setUploadMeta] = useState(BLANK_UPLOAD_META);
   const [calendarFile, setCalendarFile] = useState(null);
   const [uploadingCalendar, setUploadingCalendar] = useState(false);
+  const listRef = useRef(null);
+  const rowsRef = useRef([]);
+  const loadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
   const importInputRef = useRef(null);
   const uploadInputRef = useRef(null);
 
-  const loadRows = () => {
-    setLoading(true);
-    fetchApi("/api/travel-school-terms?isActive=true")
-      .then((d) => setRows(Array.isArray(d) ? d : []))
-      .catch((e) => notify.error(e?.message || "Failed to load term calendar"))
-      .finally(() => setLoading(false));
-  };
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const loadRows = useCallback(async ({ reset = false } = {}) => {
+    const startOffset = reset ? 0 : offsetRef.current;
+
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setRows([]);
+      rowsRef.current = [];
+      setOffset(0);
+      setHasMore(true);
+      offsetRef.current = 0;
+      hasMoreRef.current = true;
+      if (listRef.current) listRef.current.scrollTop = 0;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
+
+    const qs = new URLSearchParams({ isActive: "true", limit: String(PAGE_SIZE) });
+    if (startOffset > 0) qs.set("offset", String(startOffset));
+
+    try {
+      const d = await fetchApi(`/api/travel-school-terms?${qs.toString()}`);
+      const nextRows = Array.isArray(d) ? d : [];
+      const mergedRows = reset ? nextRows : [...rowsRef.current, ...nextRows];
+      const nextOffset = startOffset + nextRows.length;
+      const nextHasMore = nextRows.length === PAGE_SIZE;
+
+      rowsRef.current = mergedRows;
+      setRows(mergedRows);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+      offsetRef.current = nextOffset;
+      hasMoreRef.current = nextHasMore;
+    } catch (e) {
+      notify.error(e?.message || "Failed to load term calendar");
+      if (reset) {
+        setRows([]);
+        rowsRef.current = [];
+        setOffset(0);
+        setHasMore(false);
+        offsetRef.current = 0;
+        hasMoreRef.current = false;
+      }
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [notify]);
 
   const loadUploads = () => {
     setLoadingUploads(true);
@@ -71,10 +139,23 @@ export default function SchoolTermCalendar() {
   };
 
   useEffect(() => {
-    loadRows();
+    loadRows({ reset: true });
     loadUploads();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadRows]);
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || loading || loadingMore || !hasMore) return;
+    if (el.scrollHeight <= el.clientHeight + 72) loadRows({ reset: false });
+  }, [rows, hasMore, loading, loadingMore, loadRows]);
+
+  const handleRowsScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 72) {
+      loadRows({ reset: false });
+    }
+  }, [loadRows]);
 
   const addRow = async (e) => {
     e.preventDefault();
@@ -87,7 +168,7 @@ export default function SchoolTermCalendar() {
       await fetchApi("/api/travel-school-terms", { method: "POST", body: JSON.stringify(form) });
       notify.success("Term window added");
       setForm(BLANK);
-      loadRows();
+      loadRows({ reset: true });
     } catch (err) {
       notify.error(err?.message || "Failed to add window");
     } finally {
@@ -99,7 +180,7 @@ export default function SchoolTermCalendar() {
     if (!(await notify.confirm("Remove this term window?"))) return;
     try {
       await fetchApi(`/api/travel-school-terms/${id}`, { method: "DELETE" });
-      loadRows();
+      loadRows({ reset: true });
     } catch (err) {
       notify.error(err?.message || "Failed to remove");
     }
@@ -175,7 +256,7 @@ export default function SchoolTermCalendar() {
       setImportResult(payload);
       setImportFile(null);
       if (importInputRef.current) importInputRef.current.value = "";
-      loadRows();
+      loadRows({ reset: true });
       notify.success(`Imported ${payload.imported || 0}, updated ${payload.updated || 0}, skipped ${payload.skipped || 0}`);
     } catch (err) {
       notify.error(err?.message || "Import failed");
@@ -227,7 +308,7 @@ export default function SchoolTermCalendar() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
       <header style={{ marginBottom: 16 }}>
         <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
           <CalendarDays size={26} aria-hidden /> School Term Calendar
@@ -337,35 +418,55 @@ export default function SchoolTermCalendar() {
         <button type="submit" disabled={saving} style={{ ...btn, opacity: saving ? 0.6 : 1 }}><Plus size={14} aria-hidden /> {saving ? "Adding..." : "Add window"}</button>
       </form>
 
-      <div className="glass" style={{ padding: 0, overflow: "visible", marginBottom: 16 }}>
+      <div className="glass" style={{ padding: 0, overflow: "hidden", marginBottom: 16, background: "var(--surface-color)" }}>
         {loading ? (
           <div style={empty}>Loading...</div>
         ) : rows.length === 0 ? (
           <div style={empty}>No term windows yet - add one above, import a spreadsheet, or upload a school calendar.</div>
         ) : (
           <TopScrollSync>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr>
-                <th style={th}>School</th><th style={th}>Board</th><th style={th}>Type</th><th style={th}>Label</th><th style={th}>From</th><th style={th}>To</th><th style={th}></th>
-              </tr></thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-                    <td style={td}>{r.schoolName || <em style={{ color: "var(--text-secondary)" }}>All schools</em>}</td>
-                    <td style={td}>{r.board || "-"}</td>
-                    <td style={td}><span style={{ ...badge, ...(KIND_COLOR[r.kind] || {}) }}>{r.kind}</span></td>
-                    <td style={td}>{r.label}</td>
-                    <td style={td}>{fmt(r.startDate)}</td>
-                    <td style={td}>{fmt(r.endDate)}</td>
-                    <td style={td}>
-                      <button type="button" onClick={() => removeRow(r.id)} aria-label={`Remove ${r.label}`} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer" }}>
-                        <Trash2 size={16} aria-hidden />
-                      </button>
-                    </td>
+            <div
+              ref={listRef}
+              data-testid="school-terms-table-scroll"
+              onScroll={handleRowsScroll}
+              style={{ maxHeight: "60vh", overflowY: "auto", overflowX: "hidden" }}
+            >
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>School</th>
+                    <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>Board</th>
+                    <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>Type</th>
+                    <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>Label</th>
+                    <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>From</th>
+                    <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}>To</th>
+                    <th style={{ ...th, position: "sticky", top: 0, zIndex: 2, background: "var(--bg-color, #f8fafc)" }}></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+                      <td style={td}>{r.schoolName || <em style={{ color: "var(--text-secondary)" }}>All schools</em>}</td>
+                      <td style={td}>{r.board || "-"}</td>
+                      <td style={td}><span style={{ ...badge, ...(KIND_COLOR[r.kind] || {}) }}>{r.kind}</span></td>
+                      <td style={td}>{r.label}</td>
+                      <td style={td}>{fmt(r.startDate)}</td>
+                      <td style={td}>{fmt(r.endDate)}</td>
+                      <td style={td}>
+                        <button type="button" onClick={() => removeRow(r.id)} aria-label={`Remove ${r.label}`} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer" }}>
+                          <Trash2 size={16} aria-hidden />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {loadingMore && (
+                <div style={{ padding: 12, textAlign: "center", color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
+                  Loading more...
+                </div>
+              )}
+            </div>
           </TopScrollSync>
         )}
       </div>

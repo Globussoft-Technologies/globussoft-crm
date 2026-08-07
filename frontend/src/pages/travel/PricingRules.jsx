@@ -152,7 +152,7 @@ function fmtDate(d) {
 
 export default function PricingRules() {
   return (
-    <div style={{ padding: 24, width: "100%", maxWidth: 1320, margin: "0 auto", boxSizing: "border-box" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
@@ -479,7 +479,15 @@ function SeasonsSection() {
         ) : seasons.length === 0 ? (
           <div style={empty}>No seasons yet. Add one above.</div>
         ) : (
-          <table style={{ width: "100%", minWidth: 1280, borderCollapse: "collapse" }}>
+          <table style={tableStyle}>
+            <colgroup>
+              <col style={{ width: "18%" }} />
+              <col style={{ width: "32%" }} />
+              <col style={{ width: "16%" }} />
+              <col style={{ width: "16%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "8%" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th style={th}>Sub-brand</th>
@@ -498,7 +506,7 @@ function SeasonsSection() {
                   <td style={td}>{fmtDate(s.startDate)}</td>
                   <td style={td}>{fmtDate(s.endDate)}</td>
                   <td style={td}>{s.multiplier != null ? `×${Number(s.multiplier).toFixed(2)}` : <span style={{ color: "var(--text-secondary)" }}>—</span>}</td>
-                  <td style={td}>
+                  <td style={actionsTd}>
                     <button type="button" onClick={() => startEdit(s)} style={iconBtn} aria-label={`Edit ${s.seasonName}`}>
                       <Edit2 size={16} />
                     </button>
@@ -972,7 +980,16 @@ function MarkupRulesSection() {
         ) : rules.length === 0 ? (
           <div style={empty}>No markup rules yet. Add one above.</div>
         ) : (
-          <table style={{ width: "100%", minWidth: 1280, borderCollapse: "collapse" }}>
+          <table style={tableStyle}>
+            <colgroup>
+              <col style={{ width: "15%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "31%" }} />
+              <col style={{ width: "13%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "9%" }} />
+              <col style={{ width: "10%" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th style={th}>Sub-brand</th>
@@ -999,7 +1016,7 @@ function MarkupRulesSection() {
                         : <ToggleLeft size={20} />}
                     </button>
                   </td>
-                  <td style={td}>
+                  <td style={actionsTd}>
                     <button type="button" onClick={() => startEdit(r)} style={iconBtn} aria-label={`Edit rule ${r.id}`}>
                       <Edit2 size={16} />
                     </button>
@@ -1061,10 +1078,15 @@ const formBox = {
 };
 const tableWrap = {
   background: "var(--surface-color)", borderRadius: 8,
-  border: "1px solid var(--border-color)", overflow: "auto",
+  border: "1px solid var(--border-color)", overflowY: "auto", overflowX: "hidden",
   height: "calc((100vh - 360px) / 2)",
   minHeight: 320,
   maxHeight: 460,
+};
+const tableStyle = {
+  width: "100%",
+  tableLayout: "fixed",
+  borderCollapse: "collapse",
 };
 const tableCount = {
   marginTop: 8,
@@ -1092,8 +1114,10 @@ const th = {
   position: "sticky",
   top: 0,
   zIndex: 3,
+  overflowWrap: "anywhere",
 };
-const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
+const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)", overflowWrap: "anywhere" };
+const actionsTd = { ...td, whiteSpace: "nowrap" };
 const trStyle = { borderTop: "1px solid var(--border-light)" };
 const brandBadge = {
   padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,

@@ -2022,7 +2022,7 @@ export default function QuoteBuilder() {
 
   if (loading) {
     return (
-      <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+      <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
         <div style={empty}>Loading&hellip;</div>
       </div>
     );
@@ -2032,8 +2032,10 @@ export default function QuoteBuilder() {
     <div
       style={{
         padding: 24,
-        maxWidth: 1200,
+        width: "100%",
+        maxWidth: 1480,
         margin: "0 auto",
+        boxSizing: "border-box",
         animation: "fadeIn 0.4s ease-out",
       }}
     >

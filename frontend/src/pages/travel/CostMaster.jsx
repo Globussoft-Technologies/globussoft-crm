@@ -798,13 +798,22 @@ export default function CostMaster() {
             data-testid="cost-master-table-scroll"
             onScroll={handleListScroll}
             style={{
-              height: "calc(100vh - 300px)",
-              minHeight: 620,
-              maxHeight: 780,
-              overflow: "auto",
+              maxHeight: "calc(100vh - 475px)",
+              overflowY: "auto",
+              overflowX: "hidden",
             }}
           >
-          <table style={{ width: "100%", minWidth: 1600, borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
+            <colgroup>
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "24%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "20%" }} />
+              <col style={{ width: "7%" }} />
+              <col style={{ width: "9%" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th style={th}>Sub-brand</th>
@@ -834,7 +843,7 @@ export default function CostMaster() {
                     <td style={td}>{r.category}</td>
                     <td style={td}>
                       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <code style={{ fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace", fontSize: 13 }}>{r.routeOrSku}</code>
+                        <code style={{ fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace", fontSize: 13, whiteSpace: "normal", wordBreak: "break-word" }}>{r.routeOrSku}</code>
                         {(r.supplierName || r.seasonName) && (
                           <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
                             {[r.supplierName, r.seasonName].filter(Boolean).join(" � ")}

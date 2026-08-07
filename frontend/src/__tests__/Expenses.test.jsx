@@ -10,7 +10,7 @@
  *
  * Scope:
  *   1. Page chrome: heading, 4 totals chips (Pending / Approved / Reimbursed /
- *      total count), New Expense form heading + Submit-for-Approval button.
+ *      total count), New Expense button + modal form + Submit-for-Approval button.
  *   2. Mount fires GET /api/expenses (component does NOT load /api/contacts).
  *   3. Empty list renders "No expenses recorded yet." + "0 total expenses".
  *   4. Each row renders title + $-formatted amount + CategoryBadge +
@@ -134,6 +134,11 @@ function getDateInput() {
   return el;
 }
 
+async function openCreateExpenseForm() {
+  fireEvent.click(screen.getByRole('button', { name: /New Expense/i }));
+  await screen.findByRole('heading', { name: /New Expense/i });
+}
+
 describe('<Expenses /> — page surface', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
@@ -150,7 +155,7 @@ describe('<Expenses /> — page surface', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders the heading + 4 totals chips + New Expense form + Submit button', async () => {
+  it('renders the heading + 4 totals chips + New Expense button, and opens the form on click', async () => {
     renderExpenses();
     expect(
       await screen.findByRole('heading', { name: /Expense Management/i }),
@@ -160,8 +165,9 @@ describe('<Expenses /> — page surface', () => {
     expect(await screen.findByText(/Approved:\s*\$42\.75/i)).toBeInTheDocument();
     expect(await screen.findByText(/Reimbursed:\s*\$1000\.00/i)).toBeInTheDocument();
     expect(await screen.findByText(/4 total expenses/i)).toBeInTheDocument();
-    // New Expense form section heading + the lone submit button.
-    expect(screen.getByRole('heading', { name: /New Expense/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /New Expense/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /New Expense/i }));
+    expect(await screen.findByRole('heading', { name: /New Expense/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Submit for Approval/i })).toBeInTheDocument();
   });
 
@@ -194,6 +200,7 @@ describe('<Expenses /> — page surface', () => {
   it('renders one row per expense with title, $-formatted amount, category, status, user-or-em-dash, date', async () => {
     renderExpenses();
     expect(await screen.findByText('Office stationery')).toBeInTheDocument();
+    await openCreateExpenseForm();
     expect(screen.getByText('Figma seat')).toBeInTheDocument();
     expect(screen.getByText('Electricity bill')).toBeInTheDocument();
     expect(screen.getByText('AdWords March')).toBeInTheDocument();
@@ -232,6 +239,7 @@ describe('<Expenses /> — page surface', () => {
   it('Category dropdown defaults to "Building Rent" and lists the canonical 21-item CATEGORY_OPTIONS', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
     // The category select is the only <select> on the page; its default
     // value is `CATEGORY_OPTIONS[0]` which is "Building Rent".
     const allSelects = screen.getAllByRole('combobox');
@@ -266,6 +274,7 @@ describe('<Expenses /> — page surface', () => {
   it('Submit for Approval POSTs /api/expenses with the canonical body shape (status:Pending), then success + reload', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
 
     // Fill the three required fields: recipient name, amount, date.
     fireEvent.change(screen.getByPlaceholderText(/Enter recipient name/i), {
@@ -317,6 +326,7 @@ describe('<Expenses /> — page surface', () => {
   it('encodes payment-method breakdown into notes JSON when entered (totals must match Amount)', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
 
     fireEvent.change(screen.getByPlaceholderText(/Enter recipient name/i), {
       target: { value: 'Cafeteria stock' },
@@ -353,6 +363,7 @@ describe('<Expenses /> — page surface', () => {
   it('payment-method total mismatch fires notify.error WITHOUT POSTing', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
 
     fireEvent.change(screen.getByPlaceholderText(/Enter recipient name/i), {
       target: { value: 'Mismatched payment' },
@@ -387,6 +398,7 @@ describe('<Expenses /> — page surface', () => {
   it('Amount input pins type=number + step=0.01 + min=0 + required (browser-validation surface)', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
     const amountInput = screen.getByPlaceholderText(/Enter amount/i);
     expect(amountInput).toHaveAttribute('type', 'number');
     expect(amountInput).toHaveAttribute('step', '0.01');
@@ -397,6 +409,7 @@ describe('<Expenses /> — page surface', () => {
   it('Draft row shows Submit only; Pending shows Approve+Reject; Approved shows Reimburse; every row shows Delete', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
 
     // Submit button — only the Draft row (id=1) renders it.
     expect(screen.getAllByRole('button', { name: /^Submit$/i }).length).toBe(1);
@@ -412,6 +425,7 @@ describe('<Expenses /> — page surface', () => {
   it('clicking Approve PATCHes /api/expenses/:id/approve and fires success toast', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
 
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation((url, opts) => {
@@ -437,6 +451,7 @@ describe('<Expenses /> — page surface', () => {
   it('clicking Reject prompts via notify.prompt; cancel (null) aborts; reason PATCHes /:id/reject with { reason }', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
 
     // First case: prompt resolves null (cancel) → no PATCH.
     notifyPrompt.mockResolvedValueOnce(null);
@@ -475,6 +490,7 @@ describe('<Expenses /> — page surface', () => {
   it('clicking Reimburse PUTs /api/expenses/:id with { status: "Reimbursed" }', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
 
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation((url, opts) => {
@@ -499,6 +515,7 @@ describe('<Expenses /> — page surface', () => {
   it('clicking Delete confirms via notify.confirm; cancel aborts; confirm DELETEs /api/expenses/:id', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
 
     // First case: confirm resolves false (cancel) → no DELETE.
     notifyConfirm.mockResolvedValueOnce(false);
@@ -534,6 +551,7 @@ describe('<Expenses /> — page surface', () => {
   it('failed POST surfaces notify.error AND does NOT clear the form', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
 
     fireEvent.change(screen.getByPlaceholderText(/Enter recipient name/i), {
       target: { value: 'Will fail' },
@@ -566,6 +584,7 @@ describe('<Expenses /> — page surface', () => {
   it('clicking Submit on a Draft row PATCHes /api/expenses/:id/submit and fires success toast', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
 
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation((url, opts) => {
@@ -591,6 +610,7 @@ describe('<Expenses /> — page surface', () => {
   it('whitespace-only recipient name fires notify.error without POSTing (JS-side .trim() check)', async () => {
     renderExpenses();
     await screen.findByText('Office stationery');
+    await openCreateExpenseForm();
 
     // Fill recipientName with whitespace only — satisfies the HTML5 `required`
     // attribute (any non-empty string counts) but the component's
@@ -622,3 +642,4 @@ describe('<Expenses /> — page surface', () => {
     expect(postCall).toBeFalsy();
   });
 });
+

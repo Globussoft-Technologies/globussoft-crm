@@ -188,10 +188,14 @@ router.get("/", verifyToken, async (req, res) => {
     if (req.query.isActive === "true") where.isActive = true;
     if (req.query.isActive === "false") where.isActive = false;
 
+    const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
     const rows = await prisma.travelSchoolTerm.findMany({
       where,
       orderBy: [{ startDate: "desc" }],
-      take: Math.min(parseInt(req.query.limit, 10) || 200, 500),
+      take: limit,
+      skip: offset,
     });
     res.json(rows);
   } catch (e) {

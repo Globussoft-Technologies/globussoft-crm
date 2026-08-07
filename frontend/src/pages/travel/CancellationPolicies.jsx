@@ -461,8 +461,10 @@ export default function CancellationPolicies() {
     <div
       style={{
         padding: 24,
-        maxWidth: 1200,
+        width: "100%",
+        maxWidth: 1480,
         margin: "0 auto",
+        boxSizing: "border-box",
         animation: "fadeIn 0.4s ease-out",
       }}
     >

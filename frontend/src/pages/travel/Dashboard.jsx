@@ -260,7 +260,8 @@ export default function TravelDashboard() {
 
 // ─── Building blocks ────────────────────────────────────────────────
 
-function Tile({ icon: Icon, label, value, footer, accent, link }) {
+function Tile({ icon: Icon, label, value, footer, accent, link, style }) {
+  const [isHovered, setIsHovered] = useState(false);
   const content = (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 13, fontWeight: 600 }}>
@@ -270,32 +271,147 @@ function Tile({ icon: Icon, label, value, footer, accent, link }) {
         {value ?? 0}
       </div>
       {accent != null && accent !== "" && (
-        <div style={{ fontSize: 12, color: "var(--primary-color)", marginTop: 2 }}>{accent}</div>
+        <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>{accent}</div>
       )}
-      {footer && (
-        <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 8, lineHeight: 1.5 }}>
-          {footer}
-        </div>
-      )}
+    {footer && (
+  <div
+    style={{
+      borderTop: "1px solid var(--border-color)",
+      marginTop: 8,
+      paddingTop: 8,
+    }}
+  >
+    <div
+      style={{
+        fontSize: 12,
+        color: "var(--text-secondary)",
+        marginTop: 8,
+        lineHeight: 1.5,
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        columnGap: 0,
+        rowGap: 4,
+      }}
+    >
+      {String(footer)
+        .split(" · ")
+        .map((item, index) => {
+          let rawKey;
+          let value;
+
+          if (item.includes(":")) {
+            // Example: level_1: 123
+            const parts = item.split(":");
+
+            rawKey = parts[0].trim().toLowerCase();
+            value = parts.slice(1).join(":").trim();
+          } else {
+            // Example: 20 seasons / 1 pending
+            const match = item.trim().match(/^(\d+)\s+(.+)$/);
+
+            if (match) {
+              value = match[1];
+              rawKey = match[2].trim().toLowerCase();
+            } else {
+              rawKey = item.trim().toLowerCase();
+              value = "";
+            }
+          }
+
+          const colorMap = {
+            // Trips
+            cancelled: "var(--danger-color)",
+            completed: "var(--success-color)",
+            confirmed: "var(--primary-color)",
+            "in-trip": "var(--warning-color)",
+
+            // Diagnostics
+            level_1: "var(--primary-color)",
+            level_2: "var(--warning-color)",
+            level_3: "var(--success-color)",
+
+            // Itineraries
+            accepted: "var(--success-color)",
+            advance_paid: "var(--primary-color)",
+            draft: "var(--warning-color)",
+            fully_paid: "var(--success-color)",
+            rejected: "var(--danger-color)",
+            revised: "var(--primary-color)",
+            sent: "var(--success-color)",
+
+            // Other cards
+            published: "var(--success-color)",
+            rfu: "var(--primary-color)",
+            tmc: "var(--success-color)",
+            seasons: "var(--primary-color)",
+            "markup rules": "var(--success-color)",
+            delivered: "var(--success-color)",
+            pending: "var(--warning-color)",
+            missed: "var(--danger-color)",
+          };
+
+          const displayLabel =
+  rawKey === "rfu" || rawKey === "tmc"
+    ? rawKey.toUpperCase()
+    : rawKey
+        .replace(/_/g, " ")
+        .replace(/-/g, " ")
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+
+          return (
+            <span
+              key={index}
+              style={{
+                minWidth: 0,
+                overflowWrap: "anywhere",
+                color: colorMap[rawKey] || "var(--text-secondary)",
+                borderLeft:
+                  index % 2 === 1
+                    ? "1px solid var(--border-color)"
+                    : "none",
+                paddingLeft: index % 2 === 1 ? 10 : 0,
+              }}
+            >
+              {displayLabel}: {value}
+            </span>
+          );
+        })}
+    </div>
+  </div>
+)}
     </>
   );
   if (link) {
     return (
-      <Link to={link} style={{ ...tileStyle, ...tileLinkStyle }}>
+      <Link
+        to={link}
+        style={{
+          ...tileStyle,
+          ...style,
+          ...tileLinkStyle,
+          ...(isHovered ? tileLinkHoverStyle : {}),
+        }}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onFocus={() => setIsHovered(true)}
+        onBlur={() => setIsHovered(false)}
+      >
         {content}
       </Link>
     );
   }
-  return <div style={tileStyle}>{content}</div>;
+  return <div style={{ ...tileStyle, ...style }}>{content}</div>;
 }
-
 function byKeyFooter(obj) {
   if (!obj || Object.keys(obj).length === 0) return null;
+
   const entries = Object.entries(obj).filter(([, v]) => v > 0);
   if (entries.length === 0) return null;
-  return entries.map(([k, v]) => `${k}: ${v}`).join(" · ");
-}
 
+  return entries
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(" · ");
+}
 function fmtDate(d) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString();
@@ -341,7 +457,8 @@ function statusBadge(status) {
 
 const gridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 250px), 1fr))",
+  gridAutoRows: "minmax(180px, auto)",
   gap: 12,
   marginTop: 20,
 };
@@ -357,7 +474,12 @@ const tileLinkStyle = {
   color: "inherit",
   display: "block",
   cursor: "pointer",
-  transition: "transform 0.1s, box-shadow 0.1s",
+  transition: "transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background-color 0.16s ease",
+};
+const tileLinkHoverStyle = {
+  transform: "translateY(-4px)",
+  boxShadow: "var(--shadow-md)",
+  
 };
 const card = {
   background: "var(--surface-color)",

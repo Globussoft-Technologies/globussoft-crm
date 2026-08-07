@@ -583,7 +583,7 @@ export default function TmcCatalogueAdmin() {
   // ── Render ───────────────────────────────────────────────────────────
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
       {/* Heading + Add CTA */}
       <div
         style={{

@@ -64,6 +64,11 @@ function renderInvoices(user = ADMIN_USER) {
   );
 }
 
+async function openCreateInvoiceForm() {
+  fireEvent.click(screen.getByRole('button', { name: /Create Invoice/i }));
+  await screen.findByRole('heading', { name: /Create Invoice/i });
+}
+
 const sampleInvoices = [
   {
     id: 1,
@@ -136,15 +141,14 @@ describe('<Invoices /> — page surface', () => {
     fetchApiMock.mockImplementation(defaultFetchMock);
   });
 
-  it('renders the heading + Create Invoice card + Invoice Ledger', async () => {
+  it('renders the heading + Create Invoice button + Invoice Ledger, and opens the form on click', async () => {
     renderInvoices();
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /^Invoices$/i })).toBeInTheDocument();
     });
-    // Create Invoice card title (h3, with the Plus icon).
-    expect(screen.getByRole('heading', { name: /Create Invoice/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Create Invoice/i })).toBeNull();
     expect(screen.getByText(/Invoice Ledger/i)).toBeInTheDocument();
-    // "Issue Invoice" submit button renders inline (no drawer).
+    await openCreateInvoiceForm();
     expect(screen.getByRole('button', { name: /Issue Invoice/i })).toBeInTheDocument();
   });
 
@@ -269,6 +273,7 @@ describe('<Invoices /> — page surface', () => {
   it('submitting the create form POSTs /api/billing with the form payload', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    await openCreateInvoiceForm();
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/billing' && opts?.method === 'POST') {
@@ -314,6 +319,7 @@ describe('<Invoices /> — page surface', () => {
   it('Invoice # field is read-only and seeded from nextInvoiceNum', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    await openCreateInvoiceForm();
 
     // Seed has INV-001, INV-002, INV-003 → next should be INV-004.
     const invInput = screen.getByLabelText(/Invoice number/i);
@@ -325,6 +331,7 @@ describe('<Invoices /> — page surface', () => {
   it('renders the optional Deal dropdown with seeded deals', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    await openCreateInvoiceForm();
 
     const dealSelect = screen.getByLabelText(/Associated deal/i);
     expect(dealSelect).toBeInTheDocument();
@@ -336,6 +343,7 @@ describe('<Invoices /> — page surface', () => {
   it('create-form POST includes dealId when a deal is selected', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    await openCreateInvoiceForm();
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/billing' && opts?.method === 'POST') {
@@ -364,6 +372,7 @@ describe('<Invoices /> — page surface', () => {
   it('create-form: failed POST surfaces a notify.error', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    await openCreateInvoiceForm();
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/billing' && opts?.method === 'POST') {
         return Promise.reject(new Error('boom'));
@@ -628,6 +637,7 @@ describe('<Invoices /> — page surface', () => {
     });
     renderInvoices();
     await waitFor(() => expect(screen.getByText(/No invoices yet/i)).toBeInTheDocument());
+    await openCreateInvoiceForm();
     const invInput = screen.getByLabelText(/Invoice number/i);
     expect(invInput.value).toBe('INV-001');
   });

@@ -3292,7 +3292,7 @@ function normalizeForm(raw, leadFields = []) {
 
 
 
-    name: String(base.name || "Untitled form"),
+    name: String(base.name ?? "Untitled form"),
 
 
 
@@ -20764,7 +20764,7 @@ export default function WebForms() {
 
 
 
-                    <button type="button" className="btn-secondary" onClick={() => addField("custom")}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add custom field</button>
+                    {/* <button type="button" className="btn-secondary" onClick={() => addField("custom")}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add custom field</button> */}
 
                     <button type="button" className="btn-secondary" onClick={() => addField("file")}><Paperclip size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add field for file attachment</button>
 

@@ -364,6 +364,53 @@ describe('PUT /api/forms/:id', () => {
     }));
   });
 
+  test('allows an existing form title to be cleared without regenerating the slug', async () => {
+
+    prisma.webForm.findFirst.mockResolvedValueOnce({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Brand intake',
+      slug: 'brand-intake',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({}),
+    });
+
+    prisma.webForm.update.mockResolvedValue({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: '',
+      slug: 'brand-intake',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({}),
+    });
+
+    const res = await request(makeApp()).put('/api/forms/1').send({
+      name: '',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe('');
+    expect(res.body.slug).toBe('brand-intake');
+    expect(prisma.webForm.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.not.objectContaining({
+        slug: expect.any(String),
+      }),
+    }));
+    expect(prisma.webForm.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: '',
+      }),
+    }));
+  });
+
 });
 
 describe('GET /api/forms/public/:slug', () => {

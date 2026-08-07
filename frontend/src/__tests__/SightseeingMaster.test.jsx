@@ -557,43 +557,51 @@ describe('<SightseeingMaster /> — sub-brand badge + description', () => {
 });
 
 describe('<SightseeingMaster /> — pagination edge cases', () => {
-  it('shows "No results" range copy + both Prev/Next disabled when total=0', async () => {
+  it('shows "No results" range copy when total=0', async () => {
     installFetchMock({ list: { items: [], total: 0, limit: 20, offset: 0 } });
     renderPage();
     expect(await screen.findByText(/No results/i)).toBeInTheDocument();
-    const prev = screen.getByRole('button', { name: /Previous page/i });
-    const next = screen.getByRole('button', { name: /Next page/i });
-    expect(prev).toBeDisabled();
-    expect(next).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /Previous page/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Next page/i })).toBeNull();
   });
 
-  it('shows "Showing 1-N of N" range copy with Next disabled when total ≤ PAGE_SIZE', async () => {
+  it('shows loaded-count range copy when total is within the first page', async () => {
     installFetchMock({
       list: { items: ITEMS_DEFAULT, total: ITEMS_DEFAULT.length, limit: 20, offset: 0 },
     });
     renderPage();
-    expect(await screen.findByText(/Showing 1-3 of 3/i)).toBeInTheDocument();
-    const next = screen.getByRole('button', { name: /Next page/i });
-    expect(next).toBeDisabled();
-    const prev = screen.getByRole('button', { name: /Previous page/i });
-    expect(prev).toBeDisabled(); // offset=0
+    expect(await screen.findByText(/Showing 3 of 3/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Previous page/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Next page/i })).toBeNull();
   });
 
-  it('enables Next when total > offset + PAGE_SIZE; clicking Next re-fetches with ?offset=20', async () => {
+  it('loads the next page when the table is scrolled near the bottom', async () => {
     // 25 items total, first page has 20, second page has 5.
     const page1 = Array.from({ length: 20 }, (_, i) =>
       makeItem({ id: 2000 + i, destinationName: `D${i}`, name: `POI${i}`, durationMinutes: 30, priceReferenceMinor: null, currency: null }),
     );
-    installFetchMock({ list: { items: page1, total: 25, limit: 20, offset: 0 } });
+    const page2 = Array.from({ length: 5 }, (_, i) =>
+      makeItem({ id: 3000 + i, destinationName: `D${20 + i}`, name: `POI${20 + i}`, durationMinutes: 30, priceReferenceMinor: null, currency: null }),
+    );
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/sightseeing?') && method === 'GET') {
+        return Promise.resolve(url.includes('offset=20')
+          ? { items: page2, total: 25, limit: 20, offset: 20 }
+          : { items: page1, total: 25, limit: 20, offset: 0 });
+      }
+      return Promise.resolve(null);
+    });
     renderPage();
     expect(await screen.findByText('POI0')).toBeInTheDocument();
-    expect(screen.getByText(/Showing 1-20 of 25/i)).toBeInTheDocument();
-    const next = screen.getByRole('button', { name: /Next page/i });
-    expect(next).not.toBeDisabled();
+    expect(screen.getByText(/Showing 20 of 25/i)).toBeInTheDocument();
 
     fetchApiMock.mockClear();
-    installFetchMock({ list: { items: page1.slice(0, 5), total: 25, limit: 20, offset: 20 } });
-    fireEvent.click(next);
+    const scroller = screen.getByTestId('sightseeing-table-scroll');
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 });
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 500 });
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, value: 460 });
+    fireEvent.scroll(scroller);
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -605,6 +613,7 @@ describe('<SightseeingMaster /> — pagination edge cases', () => {
       );
       expect(call).toBeTruthy();
     });
+    expect(await screen.findByText('POI24')).toBeInTheDocument();
   });
 });
 

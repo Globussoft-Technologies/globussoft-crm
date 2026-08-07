@@ -144,7 +144,7 @@ beforeEach(() => {
 
   prisma.leadCustomFieldValue.upsert.mockResolvedValue({});
 
-  prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, currency: 'USD' });
+  prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, defaultCurrency: 'USD' });
 
   prisma.user.findFirst.mockResolvedValue(null);
 
@@ -440,6 +440,14 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
     expect(submissionArg.payloadJson).toContain('"interest":["A","B"]');
 
+    expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
+
+      where: { id: TENANT_ID },
+
+      select: { defaultCurrency: true },
+
+    });
+
     expect(prisma.deal.create).toHaveBeenCalled();
 
     expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
@@ -503,6 +511,8 @@ describe('POST /api/forms/public/:slug/submit', () => {
     expect(res.body.contactId).toBe(2002);
 
     expect(prisma.contact.create).not.toHaveBeenCalled();
+
+    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
 
     expect(prisma.webFormSubmission.create).toHaveBeenCalledWith(expect.objectContaining({
 

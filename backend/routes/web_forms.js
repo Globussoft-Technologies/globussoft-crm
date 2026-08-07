@@ -717,8 +717,12 @@ router.get("/public/:slug", async (req, res) => {
 });
 
 router.post("/public/:slug/submit", upload.any(), async (req, res) => {
+  let submitStage = "start";
+
   try {
     const slug = slugify(req.params.slug);
+
+    submitStage = "load_form";
 
     const form = await prisma.webForm.findFirst({
       where: { slug, isActive: true },
@@ -728,6 +732,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
       return res
         .status(404)
         .json({ error: "Form not found", code: "FORM_NOT_FOUND" });
+
+    submitStage = "normalize_form";
 
     const fields = normalizeFields(form.fieldsJson);
 
@@ -879,6 +885,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     if (contactData.source === "") contactData.source = "website-form";
 
+    submitStage = "validate_assignee";
+
     if (contactData.assignedToId) {
       const assignee = await prisma.user.findFirst({
         where: {
@@ -891,15 +899,23 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
       if (!assignee) delete contactData.assignedToId;
     }
 
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: form.tenantId },
+    let tenantCurrency = "USD";
 
-      select: { currency: true },
-    });
+    if (settings.createDeal) {
+      submitStage = "load_tenant_currency";
 
-    const tenantCurrency = tenant?.currency || "USD";
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: form.tenantId },
+
+        select: { defaultCurrency: true },
+      });
+
+      tenantCurrency = tenant?.defaultCurrency || "USD";
+    }
 
     let contact = null;
+
+    submitStage = "find_existing_contact";
 
     if (contactData.email) {
       contact = await prisma.contact.findFirst({
@@ -908,6 +924,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     }
 
     if (!contact) {
+      submitStage = "create_contact";
+
       try {
         contact = await prisma.contact.create({
           data: {
@@ -927,6 +945,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
       }
     }
 
+    submitStage = "write_custom_fields";
+
     if (Object.keys(customFieldValues).length) {
       await writeLeadCustomFieldValues(
         contact.id,
@@ -938,6 +958,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     let deal = null;
 
     if (settings.createDeal) {
+      submitStage = "create_deal";
+
       deal = await prisma.deal.create({
         data: {
           title: `${contact.name} - ${form.name}`,
@@ -954,6 +976,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
         },
       });
     }
+
+    submitStage = "save_attachments";
 
     if (fileRecords.length) {
       for (const file of fileRecords) {
@@ -974,6 +998,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
         });
       }
     }
+
+    submitStage = "create_submission";
 
     const submission = await prisma.webFormSubmission.create({
       data: {
@@ -1001,6 +1027,8 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
         tenantId: form.tenantId,
       },
     });
+
+    submitStage = "send_notification";
 
     if (settings.notificationEnabled && settings.notificationEmail) {
       const lines = [
@@ -1046,9 +1074,18 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
 
     return res.status(201).json(response);
   } catch (err) {
-    console.error("[web-forms/public] submit error:", err && err.message);
+    console.error("[web-forms/public] submit error:", {
+      stage: submitStage,
+      message: err && err.message,
+      code: err && err.code,
+      meta: err && err.meta,
+    });
 
-    res.status(500).json({ error: "Failed to submit form" });
+    res.status(500).json({
+      error: "Failed to submit form",
+      code: "WEB_FORM_SUBMIT_FAILED",
+      stage: submitStage,
+    });
   }
 });
 

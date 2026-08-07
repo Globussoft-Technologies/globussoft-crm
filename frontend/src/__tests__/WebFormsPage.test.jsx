@@ -222,7 +222,9 @@ function installFetchMock(form = FORM_FIXTURE) {
 
 
 
-function renderPage() {
+function renderPage(form = FORM_FIXTURE) {
+
+  installFetchMock(form);
 
   return render(
 
@@ -238,10 +240,10 @@ function renderPage() {
 
 
 
-async function openBuilder() {
-  await screen.findByText('Brand intake');
+async function openBuilder(formName = 'Brand intake') {
+  await screen.findByText(formName);
   fireEvent.click(screen.getByRole('button', { name: /Open builder/i }));
-  await screen.findAllByDisplayValue('Brand intake');
+  await screen.findAllByDisplayValue(formName);
 }
 
 beforeEach(() => {
@@ -384,5 +386,117 @@ describe('WebForms builder page', () => {
 
   });
 
-});
+  test('custom choice fields expose an editable options textarea', async () => {
 
+    const customForm = {
+
+      ...FORM_FIXTURE,
+
+      name: 'Choice form',
+
+      slug: 'choice-form',
+
+      fields: [
+
+        {
+
+          id: 'field-2',
+
+          sourceKind: 'custom',
+
+          sourceKey: 'custom_gender',
+
+          fieldType: 'dropdown',
+
+          label: 'Gender',
+
+          placeholder: '',
+
+          helpText: '',
+
+          required: false,
+
+          hidden: false,
+
+          options: ['Male', 'Female'],
+
+          width: 'full',
+
+        },
+
+      ],
+
+    };
+
+
+
+    renderPage(customForm);
+
+
+
+    await openBuilder('Choice form');
+
+    expect(screen.getByText('Options')).toBeInTheDocument();
+
+    expect(screen.getByDisplayValue('Male, Female')).toBeInTheDocument();
+
+  });
+
+
+
+  test('hidden date fields expose a date picker for the default value', async () => {
+
+    const dateForm = {
+
+      ...FORM_FIXTURE,
+
+      name: 'Date form',
+
+      slug: 'date-form',
+
+      fields: [
+
+        {
+
+          id: 'field-3',
+
+          sourceKind: 'custom',
+
+          sourceKey: 'custom_birth_date',
+
+          fieldType: 'date',
+
+          label: 'Birth date',
+
+          placeholder: '',
+
+          helpText: '',
+
+          required: false,
+
+          hidden: true,
+
+          defaultValue: '',
+
+          options: [],
+
+          width: 'full',
+
+        },
+
+      ],
+
+    };
+
+
+
+    renderPage(dateForm);
+
+
+
+    await openBuilder('Date form');
+
+    expect(document.querySelector('input[type="date"]')).toBeTruthy();
+
+  });
+});

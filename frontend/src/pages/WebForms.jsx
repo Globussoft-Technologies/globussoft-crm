@@ -17,6 +17,11 @@ import { createPortal } from "react-dom";
 
 import { Navigate } from "react-router-dom";
 
+import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+
+
 
 
 
@@ -431,7 +436,7 @@ import { useNotify } from "../utils/notify";
 
 
 
-import { buildPublicUrl, buildWebFormEmbedCode } from "../utils/webForms";
+import { buildPublicUrl, buildWebFormEmbedCode, buildWebFormPreviewUrl, slugifyWebFormName, textOrBlank } from "../utils/webForms";
 
 
 
@@ -1086,6 +1091,30 @@ const CONTACT_FIELD_DEFAULTS = Object.fromEntries(CONTACT_FIELD_OPTIONS.map((ite
 
 
 
+
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function restrictToVerticalAxis({ transform }) {
+  return { ...transform, x: 0 };
+}
+
+function restrictToWebFormsFieldList({ transform, activeNodeRect, containerNodeRect }) {
+  if (!activeNodeRect || !containerNodeRect) return transform;
+
+  const minX = containerNodeRect.left - activeNodeRect.left;
+  const maxX = containerNodeRect.right - activeNodeRect.right;
+  const minY = containerNodeRect.top - activeNodeRect.top;
+  const maxY = containerNodeRect.bottom - activeNodeRect.bottom;
+
+  return {
+    ...transform,
+    x: clamp(transform.x, minX, maxX),
+    y: clamp(transform.y, minY, maxY),
+  };
+}
 
 const FIELD_TYPE_OPTIONS = [
 
@@ -2863,7 +2892,7 @@ function normalizeField(field, index, leadFields = []) {
 
 
 
-  const label = String(field?.label || "").trim() || (sourceKind === "contact" ? contactLabelFor(sourceKey) : sourceKind === "lead_custom" ? leadLabel : `Field ${index + 1}`);
+  const label = field?.label == null ? (sourceKind === "contact" ? contactLabelFor(sourceKey) : sourceKind === "lead_custom" ? leadLabel : `Field ${index + 1}`) : textOrBlank(field.label);
 
 
 
@@ -2991,7 +3020,7 @@ function normalizeField(field, index, leadFields = []) {
 
 
 
-    placeholder: String(field?.placeholder || CONTACT_FIELD_DEFAULTS[sourceKey]?.placeholder || ""),
+    placeholder: field?.placeholder == null ? String(CONTACT_FIELD_DEFAULTS[sourceKey]?.placeholder || "") : textOrBlank(field.placeholder),
 
 
 
@@ -3007,7 +3036,7 @@ function normalizeField(field, index, leadFields = []) {
 
 
 
-    defaultValue: String(field?.defaultValue || ""),
+    defaultValue: field?.defaultValue == null ? "" : textOrBlank(field.defaultValue),
 
 
 
@@ -3023,7 +3052,7 @@ function normalizeField(field, index, leadFields = []) {
 
 
 
-    helpText: String(field?.helpText || ""),
+    helpText: field?.helpText == null ? "" : textOrBlank(field.helpText),
 
 
 
@@ -5425,6 +5454,14 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
   const isChoice = CHOICE_FIELD_TYPES.has(field.fieldType);
 
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(field.id) });
+
+  const fieldCardStyle = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.92 : 1,
+    boxShadow: isDragging ? "0 12px 24px rgba(0, 0, 0, 0.12)" : undefined,
+  };
 
 
 
@@ -5438,6 +5475,10 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
+
+
+
+  const editableFieldTypes = FIELD_TYPE_OPTIONS.filter((item) => item.value !== "file");
 
   const optionList = field.sourceKind === "lead_custom"
 
@@ -5471,7 +5512,11 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-    : CONTACT_FIELD_DEFAULTS[field.sourceKey]?.options || [];
+    : field.sourceKind === "custom"
+
+      ? splitOptions(field.optionsText)
+
+      : CONTACT_FIELD_DEFAULTS[field.sourceKey]?.options || [];
 
 
 
@@ -5583,7 +5628,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-      <div className="wf-field-card wf-file-card">
+      <div ref={setNodeRef} className="wf-field-card wf-file-card" style={fieldCardStyle}>
 
 
 
@@ -5631,7 +5676,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-            <GripVertical size={18} style={{ color: "var(--text-secondary)", flexShrink: 0 }} />
+            <button type="button" aria-label={"Drag " + (field.label || "field") + " to reorder"} title="Drag to reorder" {...attributes} {...listeners} onClick={(e) => e.stopPropagation()} style={{ background: "none", border: "none", padding: 0, color: "var(--text-secondary)", flexShrink: 0, cursor: "grab", touchAction: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><GripVertical size={18} style={{ color: "var(--text-secondary)", flexShrink: 0 }} /></button>
 
 
 
@@ -6767,7 +6812,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-    <div className="wf-field-card">
+    <div ref={setNodeRef} className="wf-field-card" style={fieldCardStyle}>
 
 
 
@@ -6879,7 +6924,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-            <GripVertical size={18} />
+            <button type="button" aria-label={"Drag " + (field.label || "field") + " to reorder"} title="Drag to reorder" {...attributes} {...listeners} onClick={(e) => e.stopPropagation()} style={{ background: "none", border: "none", padding: 0, color: "var(--text-secondary)", cursor: "grab", touchAction: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}><GripVertical size={18} /></button>
 
 
 
@@ -7103,7 +7148,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-        <div style={{ display: "grid", gridTemplateColumns: field.hidden ? "1fr" : "1fr 1fr", gap: 16, minWidth: 0 }}>
+        <div style={{ display: "grid", gridTemplateColumns: field.hidden ? "1fr auto" : "1fr 1fr auto", gap: 16, minWidth: 0 }}>
 
 
 
@@ -7185,388 +7230,110 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
           {field.hidden ? (
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
             <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
               <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Select a default value for this hidden field</span>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
               {isChoice ? (
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
                 <select className="input-field" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
                   <option value="">Click to select</option>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
                   {optionList.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
                 </select>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
               ) : field.fieldType === "checkbox" ? (
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
                 <select className="input-field" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
                   <option value="false">False</option>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
                   <option value="true">True</option>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
                 </select>
 
+              ) : field.fieldType === "date" ? (
 
+                <input className="input-field" type="date" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })} />
 
+              ) : field.fieldType === "number" ? (
 
+                <input className="input-field" type="number" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })} placeholder="Default value" />
 
+              ) : field.fieldType === "url" ? (
 
-
-
-
-
-
-
-
-
+                <input className="input-field" type="url" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })} placeholder="Default value" />
 
               ) : (
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
                 <input className="input-field" value={controlValue} onChange={(e) => onChange(index, { defaultValue: e.target.value })} placeholder="Default value" />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
               )}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
             </label>
 
+          ) : field.sourceKind === "custom" ? (
 
+            <div style={{ display: "grid", gap: 16, minWidth: 0 }}>
 
+              <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
+                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Field type</span>
 
+                <select
+                  className="input-field"
+                  value={field.fieldType}
+                  onChange={(e) => onChange(index, {
+                    fieldType: e.target.value,
+                    optionsText: CHOICE_FIELD_TYPES.has(e.target.value) ? field.optionsText || "" : "",
+                  })}
+                >
+                  {editableFieldTypes.map((item) => (
+                    <option key={item.value} value={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
 
+              </label>
 
+              {isChoice ? (
 
+                <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Options</span>
 
+                  <textarea className="input-field" rows={3} value={field.optionsText} onChange={(e) => onChange(index, { optionsText: e.target.value })} placeholder="Google, Referral, Event" />
 
+                </label>
 
+              ) : (
 
+                <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
 
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Placeholder</span>
+
+                  <input className="input-field" value={field.placeholder} onChange={(e) => onChange(index, { placeholder: e.target.value })} placeholder="E.g. john.smith@acmecorp.com" />
+
+                </label>
+
+              )}
+
+            </div>
 
           ) : (
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
             <label style={{ display: "grid", gap: 6, minWidth: 0 }}>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
               <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>Placeholder</span>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
               <input className="input-field" value={field.placeholder} onChange={(e) => onChange(index, { placeholder: e.target.value })} placeholder="E.g. john.smith@acmecorp.com" />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
             </label>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
           )}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -7776,21 +7543,6 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
         </div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
       </div>
 
 
@@ -7823,7 +7575,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-      {isChoice ? (
+      {field.sourceKind !== "custom" && isChoice ? (
 
 
 
@@ -7984,6 +7736,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
     </div>
+    </div>
 
 
 
@@ -8047,7 +7800,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-function FieldPicker({ open, anchorRef, leadFields, onPick, onClose }) {
+function FieldPicker({ open, anchorRef, leadFields, existingFields = [], onPick, onClose }) {
 
 
 
@@ -8064,6 +7817,8 @@ function FieldPicker({ open, anchorRef, leadFields, onPick, onClose }) {
 
 
   const [search, setSearch] = useState("");
+
+  const existingFieldKeys = new Set((existingFields || []).map((field) => `${field.sourceKind || "custom"}:${String(field.sourceKey || "")}`));
 
 
 
@@ -8479,7 +8234,7 @@ function FieldPicker({ open, anchorRef, leadFields, onPick, onClose }) {
 
 
 
-  const contactItems = CONTACT_FIELD_OPTIONS.filter((item) => matches(item.label, item.value));
+  const contactItems = CONTACT_FIELD_OPTIONS.filter((item) => matches(item.label, item.value) && !existingFieldKeys.has(`contact:${item.value}`));
 
 
 
@@ -8495,7 +8250,7 @@ function FieldPicker({ open, anchorRef, leadFields, onPick, onClose }) {
 
 
 
-  const leadItems = leadFields.filter((item) => matches(item.label, item.fieldKey));
+  const leadItems = leadFields.filter((item) => matches(item.label, item.fieldKey) && !existingFieldKeys.has(`lead_custom:${item.fieldKey}`));
 
 
 
@@ -9448,6 +9203,12 @@ export default function WebForms() {
 
   const fieldPickerButtonRef = useRef(null);
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+
 
 
 
@@ -10246,7 +10007,24 @@ export default function WebForms() {
 
 
 
-      const next = typeof updater === "function" ? updater(current || normalizeForm({}, leadFields)) : { ...(current || {}), ...updater };
+      const base = current || normalizeForm({}, leadFields);
+
+      const draft =
+        typeof updater === "function" ? updater(base) : updater;
+
+      const next = draft ? { ...base, ...draft } : draft;
+
+      if (
+        next &&
+        draft &&
+        typeof draft === "object" &&
+        Object.prototype.hasOwnProperty.call(draft, "name") &&
+        !Object.prototype.hasOwnProperty.call(draft, "slug")
+      ) {
+        const nextName = String(next.name || "").trim();
+
+        if (nextName) next.slug = slugifyWebFormName(nextName);
+      }
 
 
 
@@ -10989,261 +10767,63 @@ export default function WebForms() {
 
 
 
+  const fieldExists = (kind, sourceKey = "") => (selectedForm?.fields || []).some((field) => field.sourceKind === kind && String(field.sourceKey || "") === String(sourceKey || ""));
+
   const addField = (kind, sourceKey = "", fieldType = "text") => {
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+    if ((kind === "contact" || kind === "lead_custom") && fieldExists(kind, sourceKey)) {
+      notifyRef.current?.error?.("That field is already added.");
+      return;
+    }
 
     applyDraft((current) => ({ ...(current || {}), fields: [...(current?.fields || []), emptyFieldFor(kind, leadFields, sourceKey, fieldType)] }));
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
   };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
   const toggleFieldPicker = async () => {
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     const willOpen = !fieldPickerOpen;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     setFieldPickerOpen(willOpen);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     if (willOpen) await refreshLeadFields();
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
   };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
   const handlePickField = (item) => {
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+    if ((item.kind === "contact" || item.kind === "lead_custom") && fieldExists(item.kind, item.sourceKey || "")) {
+      notifyRef.current?.error?.("That field is already added.");
+      return;
+    }
 
     addField(item.kind, item.sourceKey || "", item.fieldType || "text");
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     setFieldPickerOpen(false);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
   };
 
+  const handleDragEnd = ({ active, over }) => {
 
+    if (!over || active.id === over.id) return;
 
+    const currentFields = selectedForm?.fields || [];
 
+    const oldIndex = currentFields.findIndex((field) => String(field.id) === String(active.id));
 
+    const newIndex = currentFields.findIndex((field) => String(field.id) === String(over.id));
 
+    if (oldIndex < 0 || newIndex < 0) return;
 
+    applyDraft((current) => {
 
+      const nextFields = arrayMove([...(current?.fields || [])], oldIndex, newIndex);
 
+      return { ...(current || {}), fields: nextFields };
 
+    });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  };
 
   const removeField = async (index) => {
 
@@ -12610,7 +12190,7 @@ export default function WebForms() {
 
 
 
-  const previewSrc = selectedForm ? `${origin}/embed/web-form.html?slug=${encodeURIComponent(selectedForm.slug)}` : "";
+  const previewSrc = selectedForm ? buildWebFormPreviewUrl(selectedForm, origin) : "";
 
 
 
@@ -16076,6 +15656,8 @@ export default function WebForms() {
 
 
           gap: 12px;
+          overflow: hidden;
+          position: relative;
 
 
 
@@ -20974,7 +20556,7 @@ export default function WebForms() {
 
 
 
-                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 2px 4px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px 14px", marginBottom: 4, borderRadius: 16, background: "var(--surface-color)", border: "1px solid var(--border-color)", boxShadow: "var(--wf-shadow)" }}>
 
 
 
@@ -21182,6 +20764,8 @@ export default function WebForms() {
 
 
 
+                    <button type="button" className="btn-secondary" onClick={() => addField("custom")}><Plus size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add custom field</button>
+
                     <button type="button" className="btn-secondary" onClick={() => addField("file")}><Paperclip size={16} style={{ marginRight: 6, verticalAlign: "middle" }} />Add field for file attachment</button>
 
 
@@ -21198,7 +20782,7 @@ export default function WebForms() {
 
 
 
-                    <FieldPicker open={fieldPickerOpen} anchorRef={fieldPickerButtonRef} leadFields={leadFields} onPick={handlePickField} onClose={() => setFieldPickerOpen(false)} />
+                    <FieldPicker open={fieldPickerOpen} anchorRef={fieldPickerButtonRef} leadFields={leadFields} existingFields={selectedForm?.fields || []} onPick={handlePickField} onClose={() => setFieldPickerOpen(false)} />
 
 
 
@@ -21262,39 +20846,13 @@ export default function WebForms() {
 
 
 
-                    {(selectedForm.fields || []).map((field, index) => (
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                      <FieldCard key={field.id} field={field} index={index} leadFields={leadFields} onChange={updateField} onMove={moveField} onRemove={removeField} />
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                    ))}
+                    <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToVerticalAxis, restrictToWebFormsFieldList]} onDragEnd={handleDragEnd}>
+                      <SortableContext items={(selectedForm.fields || []).map((field) => String(field.id))} strategy={verticalListSortingStrategy}>
+                        {(selectedForm.fields || []).map((field, index) => (
+                          <FieldCard key={field.id} field={field} index={index} leadFields={leadFields} onChange={updateField} onMove={moveField} onRemove={removeField} />
+                        ))}
+                      </SortableContext>
+                    </DndContext>
 
 
 
@@ -23758,6 +23316,9 @@ export default function WebForms() {
 
 
 }
+
+
+
 
 
 

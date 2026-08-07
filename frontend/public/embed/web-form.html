@@ -44,9 +44,13 @@
 
     input:focus,select:focus,textarea:focus{outline:none;border-color:var(--gbs-accent,#12344D);box-shadow:0 0 0 3px rgba(18,52,77,.12)}
 
-    .choices{display:grid;gap:8px}
+    .check{display:inline-flex;align-items:flex-start;gap:8px;color:var(--gbs-text,#111827);font-size:.95rem;cursor:pointer;text-align:left;margin-bottom:0;width:fit-content;max-width:100%}
 
-    .check{display:flex;align-items:flex-start;gap:8px;color:var(--gbs-text,#111827);font-size:.95rem}
+    .check input{flex-shrink:0;width:auto;margin-top:2px}
+
+    .choices{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+
+    .choices .check span{line-height:1.35}
 
     .optin a{color:var(--gbs-accent,#12344D);text-decoration:underline}
 
@@ -104,6 +108,12 @@
 
       function esc(v){ return String(v == null ? '' : v).replace(/[&<>"']/g,function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
 
+      function getFieldOptions(field){
+        var raw = Array.isArray(field && field.options) ? field.options.slice() : [];
+        if (!raw.length && field && typeof field.optionsText === 'string') raw = field.optionsText.split(',');
+        return raw.map(function(v){ return String(v == null ? '' : v).trim(); }).filter(Boolean);
+      }
+
       function postSize(){ try{ parent.postMessage({ source:'gbs-web-form', type:'size', height: document.body.scrollHeight }, '*'); }catch(e){} }
 
       function scheduleSize(){ clearTimeout(resizeTimer); resizeTimer = setTimeout(postSize, 20); }
@@ -138,8 +148,6 @@
 
       }
 
-
-
       function fieldHtml(field){
 
         var name = esc(field.sourceKey || field.id || 'field');
@@ -154,6 +162,8 @@
 
         var required = field.required ? 'required' : '';
 
+        var requiredMark = field.required ? ' <span class="required-star" aria-hidden="true">*</span>' : '';
+
         var widthClass = field.width === 'half' ? 'half' : 'full';
 
         var label = esc(field.label || 'Field');
@@ -162,47 +172,45 @@
 
         var placeholder = esc(field.placeholder || '');
 
-        if (field.fieldType === 'textarea') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + '</label><textarea id="f-' + name + '" name="' + name + '" ' + required + ' placeholder="' + placeholder + '"></textarea>' + help + '</div>';
+        if (field.fieldType === 'textarea') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><textarea id="f-' + name + '" name="' + name + '" ' + required + ' placeholder="' + placeholder + '"></textarea>' + help + '</div>';
 
-        if (field.fieldType === 'number') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + '</label><input id="f-' + name + '" type="number" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" />' + help + '</div>';
+        if (field.fieldType === 'number') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="number" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" />' + help + '</div>';
 
-        if (field.fieldType === 'date') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + '</label><input id="f-' + name + '" type="date" name="' + name + '" ' + required + ' />' + help + '</div>';
+        if (field.fieldType === 'date') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="date" name="' + name + '" ' + required + ' />' + help + '</div>';
 
-        if (field.fieldType === 'url') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + '</label><input id="f-' + name + '" type="url" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" />' + help + '</div>';
+        if (field.fieldType === 'url') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="url" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" />' + help + '</div>';
 
-        if (field.fieldType === 'checkbox') return '<div class="field ' + widthClass + '"><label class="check"><input type="checkbox" name="' + name + '" value="true" ' + required + ' /><span>' + label + '</span></label>' + help + '</div>';
+        if (field.fieldType === 'checkbox') return '<div class="field ' + widthClass + '"><label class="check"><input type="checkbox" name="' + name + '" value="true" ' + required + ' /><span>' + label + requiredMark + '</span></label>' + help + '</div>';
 
         if (field.fieldType === 'dropdown') {
 
-          var opts = (field.optionsText || '').split(',').map(function(v){ return v.trim(); }).filter(Boolean);
+          var opts = getFieldOptions(field);
 
-          return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + '</label><select id="f-' + name + '" name="' + name + '" ' + required + '><option value="">Select one</option>' + opts.map(function(o){ return '<option value="' + esc(o) + '">' + esc(o) + '</option>'; }).join('') + '</select>' + help + '</div>';
+          return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><select id="f-' + name + '" name="' + name + '" ' + required + '><option value="">Select one</option>' + opts.map(function(o){ return '<option value="' + esc(o) + '">' + esc(o) + '</option>'; }).join('') + '</select>' + help + '</div>';
 
         }
 
         if (field.fieldType === 'radio') {
 
-          var ropts = (field.optionsText || '').split(',').map(function(v){ return v.trim(); }).filter(Boolean);
+          var ropts = getFieldOptions(field);
 
-          return '<div class="field ' + widthClass + '"><label>' + label + '</label><div class="choices">' + ropts.map(function(o, i){ var id = 'r-' + name + '-' + i; return '<label class="check" for="' + id + '"><input id="' + id + '" type="radio" name="' + name + '" value="' + esc(o) + '" ' + required + ' /><span>' + esc(o) + '</span></label>'; }).join('') + '</div>' + help + '</div>';
+          return '<div class="field ' + widthClass + '"><label>' + label + requiredMark + '</label><div class="choices">' + ropts.map(function(o, i){ var id = 'r-' + name + '-' + i; return '<label class="check" for="' + id + '"><input id="' + id + '" type="radio" name="' + name + '" value="' + esc(o) + '" ' + required + ' /><span>' + esc(o) + '</span></label>'; }).join('') + '</div>' + help + '</div>';
 
         }
 
         if (field.fieldType === 'multiselect') {
 
-          var mopts = (field.optionsText || '').split(',').map(function(v){ return v.trim(); }).filter(Boolean);
+          var mopts = getFieldOptions(field);
 
-          return '<div class="field ' + widthClass + '"><label>' + label + '</label><div class="choices">' + mopts.map(function(o, i){ var id = 'm-' + name + '-' + i; return '<label class="check" for="' + id + '"><input id="' + id + '" type="checkbox" name="' + name + '" value="' + esc(o) + '" /><span>' + esc(o) + '</span></label>'; }).join('') + '</div>' + help + '</div>';
+          return '<div class="field ' + widthClass + '"><label>' + label + requiredMark + '</label><div class="choices">' + mopts.map(function(o, i){ var id = 'm-' + name + '-' + i; return '<label class="check" for="' + id + '"><input id="' + id + '" type="checkbox" name="' + name + '" value="' + esc(o) + '" /><span>' + esc(o) + '</span></label>'; }).join('') + '</div>' + help + '</div>';
 
         }
 
-        if (field.fieldType === 'file') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + '</label><input id="f-' + name + '" type="file" name="' + name + '" ' + required + ' />' + help + '</div>';
+        if (field.fieldType === 'file') return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="file" name="' + name + '" ' + required + ' />' + help + '</div>';
 
-        return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + '</label><input id="f-' + name + '" type="text" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" />' + help + '</div>';
+        return '<div class="field ' + widthClass + '"><label for="f-' + name + '">' + label + requiredMark + '</label><input id="f-' + name + '" type="text" name="' + name + '" ' + required + ' placeholder="' + placeholder + '" />' + help + '</div>';
 
       }
-
-
 
       function setMessage(kind, text){
 
@@ -325,6 +333,32 @@
 
       async function load(){
 
+        var previewData = '';
+
+        if (location.hash && location.hash.indexOf('preview=') === 1) {
+
+          previewData = decodeURIComponent(location.hash.substring(9));
+
+        }
+
+        if (previewData) {
+
+          try {
+
+            renderForm(JSON.parse(previewData));
+
+            return;
+
+          } catch (err) {
+
+            setMessage('error', err.message || 'Invalid preview data');
+
+            return;
+
+          }
+
+        }
+
         if (!slug) {
 
           setMessage('error', 'Missing form slug.');
@@ -362,4 +396,5 @@
 </body>
 
 </html>
+
 

@@ -236,10 +236,19 @@ export default function Diagnostics() {
               height: 'calc(100vh - 300px)',
               minHeight: 620,
               maxHeight: 780,
-              overflow: 'auto',
+              overflowY: 'auto',
+              overflowX: 'hidden',
             }}
           >
-          <table aria-label="Diagnostics results" style={{ width: '100%', minWidth: 1600, borderCollapse: 'collapse' }}>
+          <table
+            aria-label="Diagnostics results"
+            style={{
+              width: '100%',
+              minWidth: 0,
+              tableLayout: 'fixed',
+              borderCollapse: 'collapse',
+            }}
+          >
             <thead>
               <tr>
                 <th style={th}>Submitted</th>
@@ -361,6 +370,9 @@ const th = {
 const td = {
   padding: '10px 12px', fontSize: 14,
   color: 'var(--text-primary)',
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+  verticalAlign: 'top',
 };
 
 const brandBadge = {

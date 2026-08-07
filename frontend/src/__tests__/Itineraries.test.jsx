@@ -427,6 +427,14 @@ describe('<Itineraries /> — load + render lifecycle', () => {
     expect(screen.getByText('Schengen visa')).toBeInTheDocument();
   });
 
+  it('keeps the table inside the vertical infinite-scroll pane without the extra top scrollbar wrapper', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    const scrollArea = screen.getByTestId('itineraries-scroll-area');
+    expect(scrollArea.querySelector('.top-scroll-sync')).toBeNull();
+    expect(scrollArea.querySelector('table.stable-table')).toBeTruthy();
+  });
+
   it('scrolling the list pane near the bottom requests the second page with offset=10', async () => {
     const firstPage = Array.from({ length: 10 }, (_, i) =>
       makeItin({

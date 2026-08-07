@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   UserPlus, Search, ArrowRightCircle, Plus, X, Pencil, Trash2, RefreshCw,
   ChevronLeft, ChevronRight, Phone, FileText, Filter, SlidersHorizontal, Info,
-  Settings,
+  Settings, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { AuthContext } from '../App';
 import ColumnPicker from '../components/ColumnPicker';
@@ -20,6 +20,20 @@ import CallifiedCallStatusDrawer from '../components/CallifiedCallStatusDrawer';
 import CsvImportExportToolbar from '../components/wellness/CsvImportExportToolbar';
 
 const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website', 'Event', 'Other'];
+// Built-in lead columns available for auto-campaign assignment rules.
+const BUILTIN_RULE_COLUMNS = [
+  { key: 'source', label: 'Source' },
+  { key: 'status', label: 'Status' },
+  { key: 'company', label: 'Company' },
+  { key: 'title', label: 'Title' },
+  { key: 'industry', label: 'Industry' },
+  { key: 'companySize', label: 'Company Size' },
+  { key: 'subBrand', label: 'Sub-brand' },
+  { key: 'name', label: 'Name' },
+  { key: 'email', label: 'Email' },
+  { key: 'phone', label: 'Phone' },
+  { key: 'aiScore', label: 'Lead Score' },
+];
 // #600  wellness vertical replaces the generic CRM source taxonomy with one
 // that matches Patient-intake channels. WhatsApp is the dominant inbound
 // channel for clinics; LinkedIn / Cold Call don't apply.
@@ -105,7 +119,7 @@ const COUNTRY_CODES = [
   { code: '+60', country: 'Malaysia' },
 ];
 
-function buildLeadStatusTooltip(lead) {
+function buildLeadStatusTooltip(lead, { maxRetries = 3 } = {}) {
   const source = lead.callifiedLeadStatusSource;
   const reason = lead.callifiedLeadStatusReason;
   const updatedAt = lead.callifiedLeadStatusUpdatedAt;
@@ -115,9 +129,17 @@ function buildLeadStatusTooltip(lead) {
     ? 'Callified score / appointment'
     : source === 'manual'
     ? 'Manual override'
+    : source === 'auto_dial'
+    ? 'Auto-dial'
     : source || 'Unknown';
   const parts = [`Basis: ${sourceLabel}`];
   if (reason) parts.push(`Reason: ${reason}`);
+  if (
+    lead.callifiedLeadStatus === CALL_STATUS.DNP &&
+    typeof lead.callifiedDnpRetryCount === 'number'
+  ) {
+    parts.push(`Retry: ${lead.callifiedDnpRetryCount}/${maxRetries}`);
+  }
   if (updatedAt) {
     try {
       const d = new Date(updatedAt);
@@ -127,6 +149,41 @@ function buildLeadStatusTooltip(lead) {
     } catch (_) { /* ignore */ }
   }
   return parts.join('\n');
+}
+
+// Canonical call-status values for the generic CRM "Call Status" column.
+// Legacy "hot" / "cold" values are mapped forward so existing rows render
+// correctly without a data migration.
+const CALL_STATUS = {
+  YET_TO_CALL: 'yet_to_call',
+  CONNECTED: 'connected',
+  DNP: 'dnp',
+  QUALIFIED: 'qualified',
+  JUNK: 'junk',
+};
+
+const CALL_STATUS_OPTIONS = [
+  { value: CALL_STATUS.QUALIFIED, label: 'Qualified', color: '#fff', bg: '#22c55e' },
+  { value: CALL_STATUS.JUNK, label: 'Junk', color: '#fff', bg: '#ef4444' },
+  { value: CALL_STATUS.DNP, label: 'DNP', color: '#fff', bg: '#6b7280' },
+  { value: CALL_STATUS.CONNECTED, label: 'Connecting', color: '#fff', bg: '#f59e0b' },
+  { value: CALL_STATUS.YET_TO_CALL, label: 'New', color: 'var(--text-secondary)', bg: 'var(--surface-hover)' },
+];
+
+function normalizeCallStatus(raw) {
+  if (!raw) return CALL_STATUS.YET_TO_CALL;
+  const s = String(raw).toLowerCase().trim().replace(/\s+/g, '_');
+  if (s === 'hot' || s.includes('qualified')) return CALL_STATUS.QUALIFIED;
+  if (s === 'cold' || s.includes('junk')) return CALL_STATUS.JUNK;
+  if (s.includes('dnp') || s.includes('not_picked') || s.includes('no_answer')) return CALL_STATUS.DNP;
+  if (s.includes('connected') || s.includes('in_progress') || s.includes('calling')) return CALL_STATUS.CONNECTED;
+  if (s.includes('yet')) return CALL_STATUS.YET_TO_CALL;
+  return CALL_STATUS.YET_TO_CALL;
+}
+
+function getCallStatusMeta(raw) {
+  const normalized = normalizeCallStatus(raw);
+  return CALL_STATUS_OPTIONS.find(o => o.value === normalized) || CALL_STATUS_OPTIONS.find(o => o.value === CALL_STATUS.YET_TO_CALL);
 }
 
 const Leads = () => {
@@ -154,6 +211,9 @@ const Leads = () => {
   const [pageInput, setPageInput] = useState('1');
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [bulkAgent, setBulkAgent] = useState('');
+  const [bulkCampaignId, setBulkCampaignId] = useState('');
+  const [bulkCampaignDropdownOpen, setBulkCampaignDropdownOpen] = useState(false);
+  const [bulkCampaignSaving, setBulkCampaignSaving] = useState(false);
   // Callified AI calling state
   const [callifiedCallLead, setCallifiedCallLead] = useState(null);
   const [callifiedDetailsLead, setCallifiedDetailsLead] = useState(null);
@@ -162,8 +222,14 @@ const Leads = () => {
   const [callifiedSummaries, setCallifiedSummaries] = useState({});
   const [selectedCampaignIds, setSelectedCampaignIds] = useState([]);
   const [campaignDropdownOpen, setCampaignDropdownOpen] = useState(false);
-  const [autoCampaignId, setAutoCampaignId] = useState('');
-  const [savingAutoCampaign, setSavingAutoCampaign] = useState(false);
+  // Generic CRM Leads page — auto-campaign assignment rules (replaces the
+  // single auto-campaign dropdown). Toolbar dropdown shows a rule grid.
+  const [autoCampaignRulesOpen, setAutoCampaignRulesOpen] = useState(false);
+  const [autoCampaignRulesEnabled, setAutoCampaignRulesEnabled] = useState(false);
+  const [autoCampaignRules, setAutoCampaignRules] = useState([]);
+  const [savedAutoCampaignRuleIds, setSavedAutoCampaignRuleIds] = useState(new Set());
+  const [autoCampaignRulesLoading, setAutoCampaignRulesLoading] = useState(false);
+  const [autoCampaignRulesSaving, setAutoCampaignRulesSaving] = useState(false);
   // #892  Create Lead surface is a header CTA + drawer (not the inline
   // always-visible form). `creating` drives whether the drawer is rendered.
   const [creating, setCreating] = useState(false);
@@ -191,6 +257,29 @@ const Leads = () => {
   const [aiTranscriptEnabled, setAiTranscriptEnabled] = useState(true);
   const [aiTranscriptSaving, setAiTranscriptSaving] = useState(false);
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  // Generic CRM Leads page — DNP retry settings (max retries + interval).
+  const [dnpRetryEnabled, setDnpRetryEnabled] = useState(true);
+  const [dnpMaxRetries, setDnpMaxRetries] = useState(3);
+  const [dnpIntervalMinutes, setDnpIntervalMinutes] = useState(60);
+  const [dnpSettingsLoading, setDnpSettingsLoading] = useState(false);
+  const [dnpSettingsSaving, setDnpSettingsSaving] = useState({
+    enabled: false,
+    maxRetries: false,
+    interval: false,
+  });
+  // Generic CRM Leads page — auto-dial new leads toggle.
+  const [autoDialNewLeadsEnabled, setAutoDialNewLeadsEnabled] = useState(true);
+  const [autoDialNewLeadsSaving, setAutoDialNewLeadsSaving] = useState(false);
+  // Generic CRM Leads page — qualified lead auto-assignment settings.
+  const [assignStaffEnabled, setAssignStaffEnabled] = useState(true);
+  const [assignStaffLogic, setAssignStaffLogic] = useState('round_robin');
+  const [assignStaffLeadsPerUser, setAssignStaffLeadsPerUser] = useState(1);
+  const [assignSettingsLoading, setAssignSettingsLoading] = useState(false);
+  const [assignSettingsSaving, setAssignSettingsSaving] = useState({
+    enabled: false,
+    logic: false,
+    leadsPerUser: false,
+  });
   const [pipelineStages, setPipelineStages] = useState([]);
   const [dealsByContact, setDealsByContact] = useState({});
   const [bookingValueByContact, setBookingValueByContact] = useState({});
@@ -272,46 +361,71 @@ const Leads = () => {
     }
   };
 
-  const loadAutoCampaign = async () => {
+  const loadAutoCampaignRules = useCallback(async () => {
     if (!isGeneric) return;
+    setAutoCampaignRulesLoading(true);
     try {
-      const d = await fetchApi('/api/callified/auto-campaign');
-      const id = d?.callifiedAutoCampaignId ? String(d.callifiedAutoCampaignId) : '';
-      setAutoCampaignId(id);
-      try { localStorage.setItem('callified_auto_campaign_id', id || ''); } catch {}
+      const d = await fetchApi('/api/callified/auto-campaign-rules');
+      const enabled = !!d?.enabled;
+      const rules = Array.isArray(d?.rules)
+        ? d.rules.map((r, idx) => ({ ...r, id: r.id || `rule-${idx}-${Date.now()}` }))
+        : [];
+      setAutoCampaignRulesEnabled(enabled);
+      setAutoCampaignRules(rules);
+      setSavedAutoCampaignRuleIds(new Set(rules.map(r => r.id).filter(Boolean)));
     } catch {
-      // fall back to localStorage only
-      try { setAutoCampaignId(localStorage.getItem('callified_auto_campaign_id') || ''); } catch {}
-    }
-  };
-
-  const saveAutoCampaign = async (campaignId) => {
-    if (!isGeneric) return;
-    setSavingAutoCampaign(true);
-    try {
-      await fetchApi('/api/callified/auto-campaign', {
-        method: 'PUT',
-        body: JSON.stringify({ callifiedAutoCampaignId: campaignId || null }),
-      });
-      setAutoCampaignId(campaignId);
-      try { localStorage.setItem('callified_auto_campaign_id', campaignId || ''); } catch {}
-    } catch (err) {
-      notify.error(err?.message || 'Failed to save auto-assign campaign');
+      // leave existing state intact on error
     } finally {
-      setSavingAutoCampaign(false);
+      setAutoCampaignRulesLoading(false);
     }
-  };
+  }, [isGeneric]);
+
+  const saveAutoCampaignRules = useCallback(async ({ enabled, rules, markSavedId } = {}) => {
+    if (!isGeneric) return;
+    setAutoCampaignRulesSaving(true);
+    const nextEnabled = enabled !== undefined ? enabled : autoCampaignRulesEnabled;
+    const nextRules = rules !== undefined ? rules : autoCampaignRules;
+    const cleanRules = nextRules.map((r) => ({
+      ...(r.id ? { id: String(r.id) } : {}),
+      enabled: !!r.enabled,
+      column: String(r.column || '').trim(),
+      value: String(r.value || '').trim(),
+      campaignId: Number(r.campaignId) || 0,
+    })).filter((r) => r.column && r.campaignId > 0);
+    try {
+      const d = await fetchApi('/api/callified/auto-campaign-rules', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: nextEnabled, rules: cleanRules }),
+      });
+      const returnedRules = Array.isArray(d?.rules) ? d.rules : cleanRules;
+      setAutoCampaignRulesEnabled(!!d?.enabled);
+      setAutoCampaignRules(returnedRules);
+      if (markSavedId) {
+        setSavedAutoCampaignRuleIds(prev => {
+          const next = new Set(prev);
+          next.add(markSavedId);
+          return next;
+        });
+      }
+      notify.success('Auto-assign Callified Campaigns rules saved');
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to save auto-assign rules');
+    } finally {
+      setAutoCampaignRulesSaving(false);
+    }
+  }, [isGeneric, autoCampaignRulesEnabled, autoCampaignRules, notify]);
 
   // Refresh everything visible on the Leads page without a full reload.
-  // Recomputes AI scores and re-classifies Hot/Cold only for leads that were
-  // actually called, so a real call that just completed updates both the Lead
-  // Score and the Lead Status without a browser reload.
+  // Recomputes AI scores and re-classifies Qualified/Junk/DNP only for leads
+  // that were actually called, so a real call that just completed updates both
+  // the Lead Score and the Call Status without a browser reload.
   const refreshAll = async () => {
     const [freshLeads] = await Promise.all([
       fetchLeads(),
       fetchStaff(),
       loadCallifiedCampaigns(),
-      loadAutoCampaign(),
+      loadAutoCampaignRules(),
     ]);
     if (isGeneric && Array.isArray(freshLeads) && freshLeads.length > 0) {
       // Score + classify only leads that were actually called. This avoids
@@ -331,8 +445,8 @@ const Leads = () => {
             body: JSON.stringify({ contactIds: calledLeadIds }),
           });
           const scoredLeads = await fetchLeads({ background: true });
-          // Re-classify called leads so Hot/Cold refreshes from the latest
-          // transcript/score (e.g. a preliminary Cold gets corrected to Hot).
+          // Re-classify called leads so Qualified/Junk/DNP refreshes from the
+          // latest transcript/score (e.g. a preliminary Junk gets corrected to Qualified).
           if (Array.isArray(scoredLeads) && scoredLeads.length > 0) {
             const calledSet = new Set(calledLeadIds);
             classifyVisibleLeads(scoredLeads.filter((l) => calledSet.has(l.id)), { force: true });
@@ -345,26 +459,26 @@ const Leads = () => {
     notify.success('Refreshed');
   };
 
-  // Backfill assignment for hot leads that slipped through without an owner.
+  // Backfill assignment for qualified leads that slipped through without an owner.
   // Handles existing leads created before auto-assignment, transient backend
-  // failures, or leads that became hot outside the normal classify flow.
-  const ensureHotLeadsAssigned = async (leadRows) => {
+  // failures, or leads that became qualified outside the normal classify flow.
+  const ensureQualifiedLeadsAssigned = async (leadRows) => {
     if (!isGeneric || !Array.isArray(leadRows) || leadRows.length === 0) return;
-    const hotUnassigned = leadRows.filter(l =>
+    const qualifiedUnassigned = leadRows.filter(l =>
       l?.id &&
-      l.callifiedLeadStatus === 'hot' &&
+      normalizeCallStatus(l.callifiedLeadStatus) === CALL_STATUS.QUALIFIED &&
       !l.assignedToId
     );
-    if (hotUnassigned.length === 0) return;
+    if (qualifiedUnassigned.length === 0) return;
     try {
-      const ids = hotUnassigned.map(l => l.id);
+      const ids = qualifiedUnassigned.map(l => l.id);
       await fetchApi('/api/callified/leads/ensure-assigned', {
         method: 'POST',
         body: JSON.stringify({ contactIds: ids }),
       });
       await fetchLeads({ background: true });
     } catch (e) {
-      console.error('[leads] ensureHotLeadsAssigned failed:', e?.message);
+      console.error('[leads] ensureQualifiedLeadsAssigned failed:', e?.message);
     }
   };
 
@@ -404,7 +518,7 @@ const Leads = () => {
         }
       }
       // Optimistically merge classification results + auto-assignment into local
-      // state so the Hot/Cold badge and Assigned To column update immediately.
+      // state so the Call Status badge and Assigned To column update immediately.
       if (resultById.size > 0) {
         setLeads(prev => prev.map(l => {
           const r = resultById.get(l.id);
@@ -442,11 +556,11 @@ const Leads = () => {
   useEffect(() => {
     fetchLeads().then(rows => {
       if (isGeneric && Array.isArray(rows) && rows.length > 0) {
-        ensureHotLeadsAssigned(rows);
+        ensureQualifiedLeadsAssigned(rows);
       }
     });
     fetchStaff();
-    loadAutoCampaign();
+    loadAutoCampaignRules();
     if (isTravel) {
       fetchApi('/api/pipeline_stages')
         .then(data => setPipelineStages(Array.isArray(data) ? data : []))
@@ -590,14 +704,21 @@ const Leads = () => {
     try {
       const d = await fetchApi('/api/tenant-settings/feature.callified.ai_transcript.enabled');
       setAiTranscriptEnabled(String(d?.value).toLowerCase() !== 'false');
-    } catch (e) {
+    } catch (_e) {
       setAiTranscriptEnabled(true);
     }
   }, [isGeneric]);
 
-  useEffect(() => {
-    loadAiTranscriptSetting();
-  }, [loadAiTranscriptSetting]);
+  // Generic CRM Leads page — load auto-dial new leads tenant setting.
+  const loadAutoDialNewLeadsSetting = useCallback(async () => {
+    if (!isGeneric) return;
+    try {
+      const d = await fetchApi('/api/tenant-settings/feature.callified.auto_dial_new_leads.enabled');
+      setAutoDialNewLeadsEnabled(String(d?.value).toLowerCase() !== 'false');
+    } catch (_e) {
+      setAutoDialNewLeadsEnabled(true);
+    }
+  }, [isGeneric]);
 
   const saveAiTranscriptEnabled = async (next) => {
     if (!isAdmin) {
@@ -621,7 +742,217 @@ const Leads = () => {
     }
   };
 
-  // #892  close the Create drawer on Escape. Attached only while the drawer
+  // Generic CRM Leads page — load DNP retry tenant settings.
+  const loadDnpRetrySettings = useCallback(async () => {
+    if (!isGeneric) return;
+    setDnpSettingsLoading(true);
+    try {
+      const [enabledRes, maxRes, intervalRes] = await Promise.all([
+        fetchApi('/api/tenant-settings/feature.callified.dnp_retry.enabled'),
+        fetchApi('/api/tenant-settings/feature.callified.dnp_retry.max_retries'),
+        fetchApi('/api/tenant-settings/feature.callified.dnp_retry.interval_minutes'),
+      ]);
+      setDnpRetryEnabled(String(enabledRes?.value).toLowerCase() !== 'false');
+      const parsedMax = Number(maxRes?.value);
+      setDnpMaxRetries(Number.isFinite(parsedMax) ? parsedMax : 3);
+      const parsedInterval = Number(intervalRes?.value);
+      setDnpIntervalMinutes(Number.isFinite(parsedInterval) ? parsedInterval : 60);
+    } catch (_e) {
+      // Keep defaults on error.
+      setDnpRetryEnabled(true);
+      setDnpMaxRetries(3);
+      setDnpIntervalMinutes(60);
+    } finally {
+      setDnpSettingsLoading(false);
+    }
+  }, [isGeneric]);
+
+  const saveDnpRetryEnabled = async (next) => {
+    if (!isAdmin) {
+      notify.info('Only admins can change DNP retry settings.');
+      return;
+    }
+    setDnpSettingsSaving(prev => ({ ...prev, enabled: true }));
+    try {
+      const d = await fetchApi('/api/tenant-settings/feature.callified.dnp_retry.enabled', {
+        method: 'PUT',
+        body: JSON.stringify({ value: next ? 'true' : 'false', category: 'feature-flag' }),
+      });
+      setDnpRetryEnabled(String(d?.value).toLowerCase() !== 'false');
+      notify.success(`DNP auto-retry ${next ? 'enabled' : 'disabled'}`);
+    } catch (e) {
+      notify.error(e?.body?.error || 'Failed to save DNP retry setting');
+      loadDnpRetrySettings();
+    } finally {
+      setDnpSettingsSaving(prev => ({ ...prev, enabled: false }));
+    }
+  };
+
+  const saveDnpMaxRetries = async (next) => {
+    if (!isAdmin) return;
+    const value = Math.max(1, Math.min(Number(next) || 3, 10));
+    setDnpSettingsSaving(prev => ({ ...prev, maxRetries: true }));
+    try {
+      const d = await fetchApi('/api/tenant-settings/feature.callified.dnp_retry.max_retries', {
+        method: 'PUT',
+        body: JSON.stringify({ value: String(value), category: 'feature-flag' }),
+      });
+      const parsed = Number(d?.value);
+      setDnpMaxRetries(Number.isFinite(parsed) ? parsed : value);
+      notify.success(`Max retries set to ${value}`);
+    } catch (e) {
+      notify.error(e?.body?.error || 'Failed to save max retries');
+      loadDnpRetrySettings();
+    } finally {
+      setDnpSettingsSaving(prev => ({ ...prev, maxRetries: false }));
+    }
+  };
+
+  const saveDnpIntervalMinutes = async (next) => {
+    if (!isAdmin) return;
+    const value = Math.max(5, Math.min(Number(next) || 60, 24 * 60));
+    setDnpSettingsSaving(prev => ({ ...prev, interval: true }));
+    try {
+      const d = await fetchApi('/api/tenant-settings/feature.callified.dnp_retry.interval_minutes', {
+        method: 'PUT',
+        body: JSON.stringify({ value: String(value), category: 'feature-flag' }),
+      });
+      const parsed = Number(d?.value);
+      setDnpIntervalMinutes(Number.isFinite(parsed) ? parsed : value);
+      notify.success('Retry interval updated');
+    } catch (e) {
+      notify.error(e?.body?.error || 'Failed to save retry interval');
+      loadDnpRetrySettings();
+    } finally {
+      setDnpSettingsSaving(prev => ({ ...prev, interval: false }));
+    }
+  };
+
+  // Generic CRM Leads page — auto-dial new leads toggle.
+  const saveAutoDialNewLeadsEnabled = async (next) => {
+    if (!isAdmin) {
+      notify.info('Only admins can change call settings.');
+      return;
+    }
+    setAutoDialNewLeadsSaving(true);
+    try {
+      const d = await fetchApi('/api/tenant-settings/feature.callified.auto_dial_new_leads.enabled', {
+        method: 'PUT',
+        body: JSON.stringify({ value: next ? 'true' : 'false', category: 'feature-flag' }),
+      });
+      setAutoDialNewLeadsEnabled(String(d?.value).toLowerCase() !== 'false');
+      notify.success(`Auto-dial new leads ${next ? 'enabled' : 'disabled'}`);
+    } catch (e) {
+      notify.error(e?.body?.error || 'Failed to save auto-dial setting');
+      loadCallSettings();
+    } finally {
+      setAutoDialNewLeadsSaving(false);
+    }
+  };
+
+  // Generic CRM Leads page — qualified lead auto-assignment settings.
+  const loadAssignStaffSettings = useCallback(async () => {
+    if (!isGeneric) return;
+    setAssignSettingsLoading(true);
+    try {
+      const [enabledRes, logicRes, leadsPerUserRes] = await Promise.all([
+        fetchApi('/api/tenant-settings/feature.callified.assign_staff.enabled'),
+        fetchApi('/api/tenant-settings/feature.callified.assign_staff.logic'),
+        fetchApi('/api/tenant-settings/feature.callified.assign_staff.leads_per_user'),
+      ]);
+      setAssignStaffEnabled(String(enabledRes?.value).toLowerCase() !== 'false');
+      const logic = ['round_robin', 'random'].includes(String(logicRes?.value).toLowerCase())
+        ? String(logicRes?.value).toLowerCase()
+        : 'round_robin';
+      setAssignStaffLogic(logic);
+      const parsedLeads = Number(leadsPerUserRes?.value);
+      setAssignStaffLeadsPerUser(Number.isFinite(parsedLeads) ? parsedLeads : 1);
+    } catch (_e) {
+      setAssignStaffEnabled(true);
+      setAssignStaffLogic('round_robin');
+      setAssignStaffLeadsPerUser(1);
+    } finally {
+      setAssignSettingsLoading(false);
+    }
+  }, [isGeneric]);
+
+  const saveAssignStaffEnabled = async (next) => {
+    if (!isAdmin) {
+      notify.info('Only admins can change call settings.');
+      return;
+    }
+    setAssignSettingsSaving(prev => ({ ...prev, enabled: true }));
+    try {
+      const d = await fetchApi('/api/tenant-settings/feature.callified.assign_staff.enabled', {
+        method: 'PUT',
+        body: JSON.stringify({ value: next ? 'true' : 'false', category: 'feature-flag' }),
+      });
+      setAssignStaffEnabled(String(d?.value).toLowerCase() !== 'false');
+      notify.success(`Auto-assign qualified leads ${next ? 'enabled' : 'disabled'}`);
+    } catch (e) {
+      notify.error(e?.body?.error || 'Failed to save assignment setting');
+      loadAssignStaffSettings();
+    } finally {
+      setAssignSettingsSaving(prev => ({ ...prev, enabled: false }));
+    }
+  };
+
+  const saveAssignStaffLogic = async (next) => {
+    if (!isAdmin) return;
+    const value = ['round_robin', 'random'].includes(String(next).toLowerCase()) ? String(next).toLowerCase() : 'round_robin';
+    setAssignSettingsSaving(prev => ({ ...prev, logic: true }));
+    try {
+      const d = await fetchApi('/api/tenant-settings/feature.callified.assign_staff.logic', {
+        method: 'PUT',
+        body: JSON.stringify({ value, category: 'feature-flag' }),
+      });
+      const saved = String(d?.value).toLowerCase();
+      setAssignStaffLogic(['round_robin', 'random'].includes(saved) ? saved : value);
+      notify.success(`Assignment logic set to ${value === 'round_robin' ? 'Round robin' : 'Random'}`);
+    } catch (e) {
+      notify.error(e?.body?.error || 'Failed to save assignment logic');
+      loadAssignStaffSettings();
+    } finally {
+      setAssignSettingsSaving(prev => ({ ...prev, logic: false }));
+    }
+  };
+
+  const saveAssignStaffLeadsPerUser = async (next) => {
+    if (!isAdmin) return;
+    const value = Math.max(1, Math.min(Number(next) || 1, 50));
+    setAssignSettingsSaving(prev => ({ ...prev, leadsPerUser: true }));
+    try {
+      const d = await fetchApi('/api/tenant-settings/feature.callified.assign_staff.leads_per_user', {
+        method: 'PUT',
+        body: JSON.stringify({ value: String(value), category: 'feature-flag' }),
+      });
+      const parsed = Number(d?.value);
+      setAssignStaffLeadsPerUser(Number.isFinite(parsed) ? parsed : value);
+      notify.success(`Leads per user set to ${value}`);
+    } catch (e) {
+      notify.error(e?.body?.error || 'Failed to save leads per user');
+      loadAssignStaffSettings();
+    } finally {
+      setAssignSettingsSaving(prev => ({ ...prev, leadsPerUser: false }));
+    }
+  };
+
+  const dnpIntervalHours = Math.floor(dnpIntervalMinutes / 60);
+  const dnpIntervalMins = dnpIntervalMinutes % 60;
+
+  // Generic CRM Leads page — load all call settings in one place.
+  const loadCallSettings = useCallback(async () => {
+    await Promise.all([
+      loadAiTranscriptSetting(),
+      loadAutoDialNewLeadsSetting(),
+      loadDnpRetrySettings(),
+      loadAssignStaffSettings(),
+    ]);
+  }, [loadAiTranscriptSetting, loadAutoDialNewLeadsSetting, loadDnpRetrySettings, loadAssignStaffSettings]);
+
+  useEffect(() => {
+    loadCallSettings();
+  }, [loadCallSettings]);
   // is open so we don't trap key events for users not actively creating.
   useEffect(() => {
     if (!creating) return undefined;
@@ -763,7 +1094,6 @@ const Leads = () => {
           phone: phoneOut,
           countryCode: undefined,
           skipInitialAssignee: isGeneric ? true : undefined,
-          callifiedCampaignId: isGeneric && autoCampaignId ? Number(autoCampaignId) : undefined,
         }),
       });
       setNewLead({ name: '', email: '', company: '', title: '', countryCode: '+1', phone: '', source: 'Organic', status: 'Lead', customFields: {} });
@@ -869,6 +1199,34 @@ const Leads = () => {
     fetchLeads({ background: true });
   };
 
+  const handleBulkAssignCampaign = async (campaignId) => {
+    if (selectedLeads.length === 0) return;
+    setBulkCampaignSaving(true);
+    const nextId = campaignId ? Number(campaignId) : null;
+    // Optimistically update all selected rows so the UI feels instant.
+    setLeads((prev) =>
+      prev.map((l) => (selectedLeads.includes(l.id) ? { ...l, callifiedCampaignId: nextId } : l))
+    );
+    try {
+      const res = await fetchApi('/api/contacts/bulk-assign-campaign', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactIds: selectedLeads, callifiedCampaignId: nextId }),
+      });
+      notify.success(`Campaign assigned to ${res?.updated || selectedLeads.length} lead${selectedLeads.length === 1 ? '' : 's'}`);
+      setBulkCampaignId('');
+      setBulkCampaignDropdownOpen(false);
+      setSelectedLeads([]);
+      await fetchLeads({ background: true });
+      loadCallifiedCampaigns();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to assign campaign');
+      await fetchLeads({ background: true });
+    } finally {
+      setBulkCampaignSaving(false);
+    }
+  };
+
   const handleCampaignChange = async (lead, campaignId) => {
     const previousId = lead.callifiedCampaignId ? String(lead.callifiedCampaignId) : '';
     const nextId = campaignId ? String(campaignId) : '';
@@ -959,7 +1317,7 @@ const Leads = () => {
     setTimeout(() => setCallQueue([]), 4000);
     const freshLeads = await fetchLeads({ background: true });
     if (isGeneric && completed.length > 0 && freshLeads?.length > 0) {
-      // Re-classify the leads we just called so their Hot/Cold status updates
+      // Re-classify the leads we just called so their Call Status updates
       // from the latest transcript/score without requiring a browser reload.
       const dialedIds = new Set(completed.map(c => c.lead.id));
       classifyVisibleLeads(freshLeads.filter(l => dialedIds.has(l.id)), { force: true });
@@ -1151,7 +1509,7 @@ const Leads = () => {
     if (isTravel && subBrandFilter && lead.subBrand !== subBrandFilter) return false;
     if (isTravel && !leadMatchesStage(lead)) return false;
     if (isGeneric && campaignFilter && String(lead.callifiedCampaignId) !== String(campaignFilter)) return false;
-    if (isGeneric && leadStatusFilter && lead.callifiedLeadStatus !== leadStatusFilter) return false;
+    if (isGeneric && leadStatusFilter && normalizeCallStatus(lead.callifiedLeadStatus) !== leadStatusFilter) return false;
     if (assigneeFilter) {
       if (assigneeFilter === 'unassigned') {
         if (lead.assignedToId) return false;
@@ -1197,10 +1555,10 @@ const Leads = () => {
   }, [isGeneric, filteredLeads.map(l => l.id).join(',')]);
   /* eslint-enable react-hooks/exhaustive-deps */
 
-  // Safety net: any Hot lead that is unassigned (or assigned to a user outside
+  // Safety net: any Qualified lead that is unassigned (or assigned to a user outside
   // the active ADMIN/MANAGER/USER pool used by the round-robin picker) should be
-  // round-robin assigned. This catches existing Hot leads, manually-overridden
-  // Hot leads, and cases where the classify-time assignment missed.
+  // round-robin assigned. This catches existing Qualified leads, manually-overridden
+  // Qualified leads, and cases where the classify-time assignment missed.
   useEffect(() => {
     if (!isGeneric || staff.length === 0 || filteredLeads.length === 0) return;
     const assignableStaffIds = new Set(
@@ -1208,16 +1566,16 @@ const Leads = () => {
         .filter(s => ['ADMIN', 'MANAGER', 'USER'].includes(s.role) && !s.deactivatedAt)
         .map(s => String(s.id))
     );
-    const hotUnassigned = filteredLeads.filter(l =>
-      l.callifiedLeadStatus === 'hot' &&
+    const qualifiedUnassigned = filteredLeads.filter(l =>
+      normalizeCallStatus(l.callifiedLeadStatus) === CALL_STATUS.QUALIFIED &&
       (!l.assignedToId || !assignableStaffIds.has(String(l.assignedToId)))
     );
-    if (hotUnassigned.length === 0) return;
+    if (qualifiedUnassigned.length === 0) return;
 
     let cancelled = false;
     const run = async () => {
       let assignedCount = 0;
-      for (const lead of hotUnassigned) {
+      for (const lead of qualifiedUnassigned) {
         if (cancelled) return;
         try {
           const result = await fetchApi(`/api/callified/leads/${lead.id}/ensure-hot-assigned`, { method: 'POST' });
@@ -1230,11 +1588,11 @@ const Leads = () => {
             ));
           }
         } catch (e) {
-          console.error(`[leads] ensure-hot-assigned ${lead.id} failed:`, e?.body || e?.message);
+          console.error(`[leads] ensure-qualified-assigned ${lead.id} failed:`, e?.body || e?.message);
         }
       }
       if (assignedCount > 0) {
-        notify.success(`Auto-assigned ${assignedCount} hot lead(s)`);
+        notify.success(`Auto-assigned ${assignedCount} qualified lead(s)`);
       }
       // Refresh once at the end so the round-robin pointer and relations are consistent.
       fetchLeads({ background: true });
@@ -1399,23 +1757,339 @@ const Leads = () => {
 
           {isGeneric && callifiedConfigured && (
             <>
-              {/* Auto-assign campaign: applies to every new lead created. */}
-              <select
-                className="input-field"
-                value={autoCampaignId}
-                onChange={e => saveAutoCampaign(e.target.value)}
-                disabled={savingAutoCampaign}
-                style={{ width: 'auto', minWidth: '200px', fontSize: '0.85rem' }}
-                aria-label="Auto-assign new leads to campaign"
-                title="New leads will automatically be assigned to this campaign"
-              >
-                <option value="">Auto-assign campaign: off</option>
-                {callifiedCampaigns.map(c => (
-                  <option key={c.id} value={String(c.id)}>
-                    {c.name || `Campaign ${c.id}`} {c.product_name ? `— ${c.product_name}` : ''}
-                  </option>
-                ))}
-              </select>
+              {/* Auto-assign campaign rules: dropdown shows a grid where each
+                  rule maps a lead column + value to a Callified campaign. */}
+              <div style={{ position: 'relative' }}>
+                <button
+                  type="button"
+                  className="input-field"
+                  onClick={() => setAutoCampaignRulesOpen(o => !o)}
+                  disabled={autoCampaignRulesLoading || autoCampaignRulesSaving}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    minWidth: '200px',
+                    fontSize: '0.85rem',
+                    cursor: 'pointer',
+                    position: 'relative',
+                  }}
+                  aria-label="Auto-assign Callified Campaigns rules"
+                  title="Configure rules to automatically assign Callified campaigns to new leads"
+                >
+                  <Settings size={14} />
+                  Auto-assign Callified Campaigns
+                  {autoCampaignRulesEnabled && (
+                    <span
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        background: 'var(--success-color, #22c55e)',
+                        marginLeft: '0.25rem',
+                      }}
+                    />
+                  )}
+                </button>
+
+                {autoCampaignRulesOpen && (
+                  <>
+                    <div
+                      style={{ position: 'fixed', inset: 0, zIndex: 50 }}
+                      onClick={() => setAutoCampaignRulesOpen(false)}
+                    />
+                    <div
+                      className="card"
+                      onClick={e => e.stopPropagation()}
+                      style={{
+                        position: 'absolute',
+                        top: 'calc(100% + 4px)',
+                        right: 0,
+                        zIndex: 51,
+                        minWidth: 520,
+                        maxWidth: 560,
+                        padding: '1rem',
+                        boxShadow: '0 10px 24px rgba(0,0,0,0.2)',
+                        background: 'var(--bg-color)',
+                        border: '1px solid var(--border-color)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          marginBottom: '0.75rem',
+                        }}
+                      >
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                          Auto-assign Callified Campaigns rules
+                        </span>
+                        <label
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            cursor: isAdmin ? 'pointer' : 'not-allowed',
+                            fontSize: '0.8rem',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={autoCampaignRulesEnabled}
+                            disabled={autoCampaignRulesSaving || !isAdmin}
+                            onChange={() => {
+                              const next = !autoCampaignRulesEnabled;
+                              setAutoCampaignRulesEnabled(next);
+                              saveAutoCampaignRules({ enabled: next, rules: autoCampaignRules });
+                            }}
+                          />
+                          {autoCampaignRulesEnabled ? 'On' : 'Off'}
+                        </label>
+                      </div>
+
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
+                        When a new lead arrives, the first matching rule assigns the chosen campaign.
+                        Values match ignoring case, spaces, and punctuation.
+                      </div>
+
+                      {autoCampaignRulesEnabled && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          <div
+                            style={{
+                              display: 'grid',
+                              gridTemplateColumns: '34px 1fr 1fr 1fr 80px 32px',
+                              gap: '0.5rem',
+                              alignItems: 'center',
+                              fontSize: '0.7rem',
+                              color: 'var(--text-secondary)',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.03em',
+                              padding: '0 0.25rem',
+                            }}
+                          >
+                            <span>On</span>
+                            <span>Lead column</span>
+                            <span>Value</span>
+                            <span>Campaign</span>
+                            <span style={{ textAlign: 'center' }}>Save</span>
+                            <span />
+                          </div>
+
+                          {autoCampaignRules.map((rule) => {
+                            const columnOptions = [
+                              ...BUILTIN_RULE_COLUMNS,
+                              ...customFieldDefs.map(f => ({ key: `cf_${f.fieldKey}`, label: f.label })),
+                            ];
+                            const ruleIsSaved = savedAutoCampaignRuleIds.has(rule.id);
+                            const ruleIsValid = rule.column && String(rule.value || '').trim() && rule.campaignId;
+                            const removeSavedStatus = () => {
+                              setSavedAutoCampaignRuleIds(prev => {
+                                if (!prev.has(rule.id)) return prev;
+                                const next = new Set(prev);
+                                next.delete(rule.id);
+                                return next;
+                              });
+                            };
+                            return (
+                              <div
+                                key={rule.id}
+                                style={{
+                                  display: 'grid',
+                                  gridTemplateColumns: '34px 1fr 1fr 1fr 80px 32px',
+                                  gap: '0.5rem',
+                                  alignItems: 'center',
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={!!rule.enabled}
+                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  onChange={() => {
+                                    const next = autoCampaignRules.map(r =>
+                                      r.id === rule.id ? { ...r, enabled: !r.enabled } : r
+                                    );
+                                    setAutoCampaignRules(next);
+                                    removeSavedStatus();
+                                  }}
+                                  style={{ cursor: isAdmin ? 'pointer' : 'not-allowed' }}
+                                />
+                                <select
+                                  className="input-field"
+                                  value={rule.column || ''}
+                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  onChange={e => {
+                                    const next = autoCampaignRules.map(r =>
+                                      r.id === rule.id ? { ...r, column: e.target.value } : r
+                                    );
+                                    setAutoCampaignRules(next);
+                                    removeSavedStatus();
+                                  }}
+                                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem', minWidth: 0 }}
+                                >
+                                  <option value="">Select column</option>
+                                  {columnOptions.map(col => (
+                                    <option key={col.key} value={col.key}>{col.label}</option>
+                                  ))}
+                                </select>
+                                <input
+                                  type="text"
+                                  value={rule.value || ''}
+                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  placeholder="e.g. web-form"
+                                  onChange={e => {
+                                    const next = autoCampaignRules.map(r =>
+                                      r.id === rule.id ? { ...r, value: e.target.value } : r
+                                    );
+                                    setAutoCampaignRules(next);
+                                    removeSavedStatus();
+                                  }}
+                                  style={{
+                                    padding: '0.35rem 0.5rem',
+                                    fontSize: '0.8rem',
+                                    borderRadius: 6,
+                                    border: '1px solid var(--border-color)',
+                                    background: 'var(--surface)',
+                                    color: 'var(--text-primary)',
+                                    minWidth: 0,
+                                  }}
+                                />
+                                <select
+                                  className="input-field"
+                                  value={rule.campaignId || ''}
+                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  onChange={e => {
+                                    const next = autoCampaignRules.map(r =>
+                                      r.id === rule.id ? { ...r, campaignId: e.target.value } : r
+                                    );
+                                    setAutoCampaignRules(next);
+                                    removeSavedStatus();
+                                  }}
+                                  style={{ padding: '0.35rem 0.5rem', fontSize: '0.8rem', minWidth: 0 }}
+                                >
+                                  <option value="">Select campaign</option>
+                                  {callifiedCampaigns.map(c => (
+                                    <option key={c.id} value={String(c.id)}>
+                                      {c.name || `Campaign ${c.id}`}
+                                    </option>
+                                  ))}
+                                </select>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
+                                  <button
+                                    type="button"
+                                    disabled={!ruleIsValid || autoCampaignRulesSaving || !isAdmin}
+                                    onClick={() => {
+                                      saveAutoCampaignRules({
+                                        enabled: autoCampaignRulesEnabled,
+                                        rules: autoCampaignRules,
+                                        markSavedId: rule.id,
+                                      });
+                                    }}
+                                    style={{
+                                      padding: '0.35rem 0.6rem',
+                                      borderRadius: 6,
+                                      border: '1px solid var(--border-color)',
+                                      background: 'var(--surface)',
+                                      color: 'var(--text-primary)',
+                                      fontSize: '0.75rem',
+                                      cursor: isAdmin && ruleIsValid && !autoCampaignRulesSaving ? 'pointer' : 'not-allowed',
+                                      opacity: ruleIsValid ? 1 : 0.5,
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    Save
+                                  </button>
+                                  {ruleIsSaved && (
+                                    <span
+                                      title="Saved"
+                                      style={{
+                                        width: 8,
+                                        height: 8,
+                                        borderRadius: '50%',
+                                        background: 'var(--success-color, #22c55e)',
+                                        flexShrink: 0,
+                                      }}
+                                    />
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={autoCampaignRulesSaving || !isAdmin}
+                                  onClick={() => {
+                                    const next = autoCampaignRules.filter(r => r.id !== rule.id);
+                                    setAutoCampaignRules(next);
+                                    setSavedAutoCampaignRuleIds(prev => {
+                                      const s = new Set(prev);
+                                      s.delete(rule.id);
+                                      return s;
+                                    });
+                                    saveAutoCampaignRules({ enabled: autoCampaignRulesEnabled, rules: next });
+                                  }}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: 'var(--danger-color, #ef4444)',
+                                    cursor: isAdmin ? 'pointer' : 'not-allowed',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: '0.25rem',
+                                  }}
+                                  title="Remove rule"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            );
+                          })}
+
+                          <button
+                            type="button"
+                            disabled={autoCampaignRulesSaving || !isAdmin}
+                            onClick={() => {
+                              const next = [
+                                ...autoCampaignRules,
+                                { id: `rule-${Date.now()}`, enabled: true, column: '', value: '', campaignId: '' },
+                              ];
+                              setAutoCampaignRules(next);
+                            }}
+                            style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: '0.35rem',
+                                  marginTop: '0.5rem',
+                                  padding: '0.45rem 0.75rem',
+                                  borderRadius: 6,
+                                  border: '1px dashed var(--border-color)',
+                                  background: 'transparent',
+                                  color: 'var(--text-secondary)',
+                                  cursor: isAdmin ? 'pointer' : 'not-allowed',
+                                  fontSize: '0.8rem',
+                                  alignSelf: 'flex-start',
+                                }}
+                          >
+                            <Plus size={14} /> Add rule
+                          </button>
+
+                          {!isAdmin && (
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                              Only admins can change auto-assign rules.
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {autoCampaignRulesSaving && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.75rem' }}>
+                          Saving…
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
 
               {/* Multi-select campaign dropdown for bulk dial. */}
               <div style={{ position: 'relative' }}>
@@ -1534,6 +2208,70 @@ const Leads = () => {
             </button>
           )}
 
+          {isGeneric && selectedLeads.length > 0 && callifiedConfigured && (
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setBulkCampaignDropdownOpen((o) => !o)}
+                disabled={bulkCampaignSaving}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.85rem' }}
+              >
+                <Filter size={14} />
+                {bulkCampaignDropdownOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                Assign Campaign ({selectedLeads.length})
+              </button>
+              {bulkCampaignDropdownOpen && (
+                <>
+                  <div
+                    style={{ position: 'fixed', inset: 0, zIndex: 50 }}
+                    onClick={() => setBulkCampaignDropdownOpen(false)}
+                  />
+                  <div
+                    className="card"
+                    style={{
+                      position: 'absolute',
+                      top: 'calc(100% + 4px)',
+                      right: 0,
+                      zIndex: 51,
+                      minWidth: 260,
+                      maxHeight: 320,
+                      overflowY: 'auto',
+                      padding: '0.5rem',
+                      background: 'var(--bg-color)',
+                      border: '1px solid var(--border-color)',
+                      boxShadow: '0 10px 24px rgba(0,0,0,0.2)',
+                    }}
+                  >
+                    {callifiedCampaigns.length === 0 ? (
+                      <div style={{ padding: '0.5rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>No campaigns</div>
+                    ) : (
+                      <>
+                        <div
+                          style={{ padding: '0.4rem 0.5rem', fontSize: '0.85rem', cursor: 'pointer', borderRadius: 6, color: 'var(--text-secondary)' }}
+                          className="table-row-hover"
+                          onClick={() => handleBulkAssignCampaign(null)}
+                        >
+                          No campaign
+                        </div>
+                        {callifiedCampaigns.map((c) => (
+                          <div
+                            key={c.id}
+                            style={{ padding: '0.4rem 0.5rem', fontSize: '0.85rem', cursor: 'pointer', borderRadius: 6 }}
+                            className="table-row-hover"
+                            onClick={() => handleBulkAssignCampaign(c.id)}
+                          >
+                            {c.name || `Campaign ${c.id}`} {c.product_name ? `— ${c.product_name}` : ''}
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           <button type="button" className="btn-primary" aria-label="Create a new lead" onClick={openCreate} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
             <Plus size={16} /> Create Lead
           </button>
@@ -1573,12 +2311,12 @@ const Leads = () => {
             value={leadStatusFilter}
             onChange={e => { setLeadStatusFilter(e.target.value); setLeadsPage(0); }}
             style={{ width: 'auto', minWidth: 140, fontSize: '0.85rem' }}
-            aria-label="Filter by lead status"
+            aria-label="Filter by call status"
           >
             <option value="">All statuses</option>
-            <option value="hot">Hot</option>
-            <option value="cold">Cold</option>
-            <option value="yet_to_call">Yet to call</option>
+            {CALL_STATUS_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
           </select>
           <select
             className="input-field"
@@ -1587,7 +2325,7 @@ const Leads = () => {
             style={{ width: 'auto', minWidth: 150, fontSize: '0.85rem' }}
             aria-label="Filter by assignee"
           >
-            <option value="">All owners</option>
+            <option value="">Staff</option>
             <option value="unassigned">Unassigned</option>
             {staff.map(s => (
               <option key={s.id} value={String(s.id)}>{s.name || s.email}</option>
@@ -1693,6 +2431,203 @@ const Leads = () => {
             />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {isGeneric && (
+              <div style={{ position: 'relative' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  aria-label="Call settings"
+                  title="Call settings"
+                  onClick={(e) => { e.stopPropagation(); setAiSettingsOpen(o => !o); }}
+                  disabled={aiTranscriptSaving}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                >
+                  <Settings size={14} />
+                  Call Settings
+                </button>
+                {aiSettingsOpen && (
+                  <>
+                    <div style={{ position: 'fixed', inset: 0, zIndex: 50 }} onClick={() => setAiSettingsOpen(false)} />
+                    <div className="card" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 51, padding: '1rem', minWidth: '340px', maxWidth: '380px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
+                      {/* 1. Auto Dial New Leads */}
+                      <div style={{ marginBottom: '1rem' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: '0.5rem' }}>Auto Dial New Leads</div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: isAdmin ? 'pointer' : 'not-allowed', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                          <input
+                            type="checkbox"
+                            checked={autoDialNewLeadsEnabled}
+                            disabled={autoDialNewLeadsSaving || !isAdmin}
+                            onChange={(e) => { saveAutoDialNewLeadsEnabled(e.target.checked); }}
+                          />
+                          Enable automatic dialing for new leads
+                        </label>
+                      </div>
+
+                      <div style={{ height: '1px', background: 'var(--border-color)', margin: '0.75rem 0' }} />
+
+                      {/* 2. DNP Settings */}
+                      <div style={{ marginBottom: '1rem' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: '0.5rem' }}>DNP Settings</div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: isAdmin ? 'pointer' : 'not-allowed', fontSize: '0.85rem', color: 'var(--text-primary)', marginBottom: '0.75rem' }}>
+                          <input
+                            type="checkbox"
+                            checked={dnpRetryEnabled}
+                            disabled={dnpSettingsLoading || dnpSettingsSaving.enabled || !isAdmin}
+                            onChange={(e) => { saveDnpRetryEnabled(e.target.checked); }}
+                          />
+                          Enable automatic DNP retries
+                        </label>
+
+                        {dnpRetryEnabled && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                            <div>
+                              <label htmlFor="dnp-max-retries" style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>Max retries</label>
+                              <input
+                                id="dnp-max-retries"
+                                type="number"
+                                min={1}
+                                max={10}
+                                value={dnpMaxRetries}
+                                disabled={dnpSettingsLoading || dnpSettingsSaving.maxRetries || !isAdmin}
+                                onChange={(e) => { setDnpMaxRetries(Number(e.target.value)); }}
+                                onBlur={(e) => { saveDnpMaxRetries(Number(e.target.value)); }}
+                                style={{ width: '70px', padding: '0.35rem 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface)', color: 'var(--text-primary)' }}
+                              />
+                            </div>
+
+                            <div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Retry interval</span>
+                                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>Retry after {dnpIntervalHours}h {dnpIntervalMins}m</span>
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                <div>
+                                  <label htmlFor="dnp-interval-hours" style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>Hours</label>
+                                  <input
+                                    id="dnp-interval-hours"
+                                    type="number"
+                                    min={0}
+                                    max={24}
+                                    step={1}
+                                    value={dnpIntervalHours}
+                                    disabled={dnpSettingsLoading || dnpSettingsSaving.interval || !isAdmin}
+                                    onChange={(e) => {
+                                      const hours = Math.max(0, Math.min(24, Number(e.target.value) || 0));
+                                      const minutes = hours === 0 ? Math.max(5, dnpIntervalMins) : (hours === 24 ? 0 : dnpIntervalMins);
+                                      const nextMinutes = hours * 60 + minutes;
+                                      setDnpIntervalMinutes(nextMinutes);
+                                      saveDnpIntervalMinutes(nextMinutes);
+                                    }}
+                                    style={{ width: '70px', padding: '0.35rem 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface)', color: 'var(--text-primary)' }}
+                                  />
+                                </div>
+
+                                <div>
+                                  <label htmlFor="dnp-interval-minutes" style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.2rem' }}>Minutes</label>
+                                  <input
+                                    id="dnp-interval-minutes"
+                                    type="number"
+                                    min={dnpIntervalHours === 0 ? 5 : 0}
+                                    max={59}
+                                    step={1}
+                                    value={dnpIntervalMins}
+                                    disabled={dnpSettingsLoading || dnpSettingsSaving.interval || !isAdmin || dnpIntervalHours === 24}
+                                    onChange={(e) => {
+                                      const minutes = dnpIntervalHours === 0
+                                        ? Math.max(5, Math.min(59, Number(e.target.value) || 0))
+                                        : Math.max(0, Math.min(59, Number(e.target.value) || 0));
+                                      const nextMinutes = dnpIntervalHours * 60 + minutes;
+                                      setDnpIntervalMinutes(nextMinutes);
+                                      saveDnpIntervalMinutes(nextMinutes);
+                                    }}
+                                    style={{ width: '70px', padding: '0.35rem 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface)', color: 'var(--text-primary)' }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ height: '1px', background: 'var(--border-color)', margin: '0.75rem 0' }} />
+
+                      {/* 3. Assigning Staff */}
+                      <div style={{ marginBottom: '1rem' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: '0.5rem' }}>Assigning Staff</div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: isAdmin ? 'pointer' : 'not-allowed', fontSize: '0.85rem', color: 'var(--text-primary)', marginBottom: '0.75rem' }}>
+                          <input
+                            type="checkbox"
+                            checked={assignStaffEnabled}
+                            disabled={assignSettingsLoading || assignSettingsSaving.enabled || !isAdmin}
+                            onChange={(e) => { saveAssignStaffEnabled(e.target.checked); }}
+                          />
+                          Auto-assign qualified leads to staff
+                        </label>
+
+                        {assignStaffEnabled && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                            <div>
+                              <label htmlFor="assign-staff-logic" style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>Assign logic</label>
+                              <select
+                                id="assign-staff-logic"
+                                className="input-field"
+                                value={assignStaffLogic}
+                                disabled={assignSettingsLoading || assignSettingsSaving.logic || !isAdmin}
+                                onChange={(e) => { saveAssignStaffLogic(e.target.value); }}
+                                style={{ padding: '0.35rem 0.5rem', borderRadius: '6px', fontSize: '0.85rem', minWidth: '160px', background: 'var(--surface)', color: 'var(--text-primary)' }}
+                              >
+                                <option value="round_robin">Round robin</option>
+                                <option value="random">Randomly assign staff</option>
+                              </select>
+                            </div>
+
+                            {assignStaffLogic === 'round_robin' && (
+                              <div>
+                                <label htmlFor="assign-staff-leads-per-user" style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                                  Leads per user before moving to next
+                                </label>
+                                <input
+                                  id="assign-staff-leads-per-user"
+                                  type="number"
+                                  min={1}
+                                  max={50}
+                                  value={assignStaffLeadsPerUser}
+                                  disabled={assignSettingsLoading || assignSettingsSaving.leadsPerUser || !isAdmin}
+                                  onChange={(e) => { setAssignStaffLeadsPerUser(Number(e.target.value)); }}
+                                  onBlur={(e) => { saveAssignStaffLeadsPerUser(Number(e.target.value)); }}
+                                  style={{ width: '70px', padding: '0.35rem 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface)', color: 'var(--text-primary)' }}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ height: '1px', background: 'var(--border-color)', margin: '0.75rem 0' }} />
+
+                      {/* 4. Qualified Status */}
+                      <div>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: '0.5rem' }}>Qualified Status</div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: isAdmin ? 'pointer' : 'not-allowed', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                          <input
+                            type="checkbox"
+                            checked={aiTranscriptEnabled}
+                            disabled={aiTranscriptSaving || !isAdmin}
+                            onChange={(e) => { saveAiTranscriptEnabled(e.target.checked); }}
+                          />
+                          Use AI to qualify using transcripts
+                        </label>
+                      </div>
+
+                      {!isAdmin && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.75rem' }}>Only admins can change these settings.</div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             {!isWellness && !isTravel && <ColumnPicker tableKey="leads" onColumnsChange={setVisibleColumns} />}
             {isAdmin && selectedLeads.length > 0 && (
               <>
@@ -1740,39 +2675,8 @@ const Leads = () => {
                   {isColVisible('source') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Source</th>}
                   {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', minWidth: '180px' }}>Callified Campaign</th>}
                   {isGeneric && (
-                    <th style={{ position: 'relative', padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', minWidth: '140px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                        <span>Lead Status</span>
-                        <button
-                          type="button"
-                          aria-label="Lead status AI settings"
-                          title="Lead status AI settings"
-                          onClick={(e) => { e.stopPropagation(); setAiSettingsOpen(o => !o); }}
-                          disabled={aiTranscriptSaving}
-                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 2, border: 'none', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', borderRadius: 4 }}
-                        >
-                          <Settings size={14} />
-                        </button>
-                      </div>
-                      {aiSettingsOpen && (
-                        <>
-                          <div style={{ position: 'fixed', inset: 0, zIndex: 50 }} onClick={() => setAiSettingsOpen(false)} />
-                          <div className="card" style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 8, zIndex: 51, padding: '0.75rem', minWidth: '250px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-                              <input
-                                type="checkbox"
-                                checked={aiTranscriptEnabled}
-                                disabled={aiTranscriptSaving || !isAdmin}
-                                onChange={(e) => { saveAiTranscriptEnabled(e.target.checked); }}
-                              />
-                              AI Based transcription classification
-                            </label>
-                            {!isAdmin && (
-                              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>Only admins can change this.</div>
-                            )}
-                          </div>
-                        </>
-                      )}
+                    <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', minWidth: '140px' }}>
+                      Call Status
                     </th>
                   )}
                   {isGeneric && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', width: '110px' }}>Callified AI call</th>}
@@ -1856,55 +2760,67 @@ const Leads = () => {
                   )}
                   {isGeneric && (
                     <td style={{ padding: '1rem', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
-                      {classifyingLeads.has(lead.id) ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.75rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600, background: 'var(--surface-hover)', color: 'var(--text-secondary)' }}>
-                          <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} /> Classifying…
-                        </span>
-                      ) : (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                          <select
-                            className="input-field"
-                            value={lead.callifiedLeadStatus || 'yet_to_call'}
-                            onChange={e => handleLeadStatusChange(lead, e.target.value)}
-                            disabled={!callifiedConfigured}
-                            style={{
-                              padding: '0.25rem 0.6rem',
-                              borderRadius: '999px',
-                              fontSize: '0.75rem',
-                              fontWeight: 600,
-                              border: 'none',
-                              cursor: 'pointer',
-                              minWidth: '90px',
-                              color: lead.callifiedLeadStatus === 'hot' ? '#fff' : lead.callifiedLeadStatus === 'cold' ? '#fff' : 'var(--text-secondary)',
-                              backgroundColor: lead.callifiedLeadStatus === 'hot' ? '#ef4444' : lead.callifiedLeadStatus === 'cold' ? '#3b82f6' : 'var(--surface-hover)',
-                            }}
-                            aria-label={`Lead status for ${lead.name || 'lead'}`}
-                          >
-                            <option value="hot">Hot</option>
-                            <option value="cold">Cold</option>
-                            <option value="yet_to_call">Yet to call</option>
-                          </select>
-                          {lead.callifiedLeadStatus && lead.callifiedLeadStatus !== 'yet_to_call' && (
-                            <span
-                              title={buildLeadStatusTooltip(lead)}
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '18px',
-                                height: '18px',
-                                borderRadius: '50%',
-                                background: lead.callifiedLeadStatus === 'hot' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-                                color: lead.callifiedLeadStatus === 'hot' ? '#ef4444' : '#3b82f6',
-                                cursor: 'help',
-                                marginLeft: '0.15rem',
-                              }}
-                            >
-                              <Info size={12} />
+                      {(() => {
+                        const queueItem = callQueue.find(q => q.lead.id === lead.id);
+                        const isConnected = queueItem && (queueItem.status === 'calling' || queueItem.status === 'waiting_for_completion');
+                        if (isConnected) {
+                          return (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.75rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600, background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
+                              <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} /> Connected
                             </span>
-                          )}
-                        </span>
-                      )}
+                          );
+                        }
+                        if (classifyingLeads.has(lead.id)) {
+                          return (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.25rem 0.75rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600, background: 'var(--surface-hover)', color: 'var(--text-secondary)' }}>
+                              <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} /> Classifying…
+                            </span>
+                          );
+                        }
+                        const meta = getCallStatusMeta(lead.callifiedLeadStatus);
+                        return (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <select
+                              className="input-field"
+                              value={normalizeCallStatus(lead.callifiedLeadStatus)}
+                              onChange={e => handleLeadStatusChange(lead, e.target.value)}
+                              disabled={!callifiedConfigured}
+                              style={{
+                                padding: '0.25rem 0.6rem',
+                                borderRadius: '999px',
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                border: 'none',
+                                cursor: 'pointer',
+                                minWidth: '90px',
+                                color: meta.color,
+                                backgroundColor: meta.bg,
+                              }}
+                              aria-label={`Call status for ${lead.name || 'lead'}`}
+                            >
+                              {CALL_STATUS_OPTIONS.map(o => (
+                                <option key={o.value} value={o.value}>{o.label}</option>
+                              ))}
+                            </select>
+                            {lead.callifiedLeadStatus && normalizeCallStatus(lead.callifiedLeadStatus) !== CALL_STATUS.YET_TO_CALL && (
+                              <span
+                                title={buildLeadStatusTooltip(lead, { maxRetries: dnpMaxRetries })}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  color: 'var(--text-secondary)',
+                                  cursor: 'help',
+                                  marginLeft: '0.25rem',
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <Info size={14} />
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })()}
                     </td>
                   )}
                   {isGeneric && (

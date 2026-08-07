@@ -29,6 +29,8 @@ const {
   notifyAdminsOfNewLead,
   normalizeEmbedOrigin,
 } = require("../lib/leadNotifications");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
+const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules");
 
 const router = express.Router();
 
@@ -472,12 +474,18 @@ router.post("/leads", async (req, res) => {
       tenantId: req.tenantId,
     };
 
-    // Auto-assign new Leads to the tenant's default Callified campaign when set
-    // and no campaign was supplied explicitly. Mirrors the logic in contacts.js
-    // so external API leads are dialable by Callified just like manually added leads.
+    // Auto-assign new Leads to a matching Callified campaign based on the
+    // tenant's rule configuration when no campaign was supplied explicitly.
+    // Mirrors the logic in contacts.js so external API leads are dialable by
+    // Callified just like manually added leads.
     if (contactData.status === "Lead" && req.body.callifiedCampaignId == null) {
-      if (tenantCfg?.callifiedAutoCampaignId) {
-        contactData.callifiedCampaignId = tenantCfg.callifiedAutoCampaignId;
+      try {
+        const matchedCampaignId = await evaluateAutoCampaignRules(req.tenantId, contactData, storageCustomFields);
+        if (matchedCampaignId) {
+          contactData.callifiedCampaignId = matchedCampaignId;
+        }
+      } catch (e) {
+        console.error("[external] auto-campaign rule evaluation failed:", e.message);
       }
     } else if (req.body.callifiedCampaignId != null) {
       contactData.callifiedCampaignId = Number(req.body.callifiedCampaignId);
@@ -533,6 +541,26 @@ router.post("/leads", async (req, res) => {
       await notifyAdminsOfNewLead({ tenantId: req.tenantId, contact, io: req.io });
     }
 
+    // Auto-dial newly-created external Leads that have a Callified campaign + phone.
+    // Mirrors the manual-create path in contacts.js.
+    if (contact.status === "Lead" && contact.callifiedCampaignId && contact.phone) {
+      try {
+        const autoDialEnabled = await getSetting(contact.tenantId, KEYS.CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED, {
+          coerce: (v) => String(v).toLowerCase() !== "false",
+        });
+        if (autoDialEnabled) {
+          const { enqueue } = require('../lib/callifiedAutoDialQueue');
+          enqueue({
+            tenantId: contact.tenantId,
+            contactId: contact.id,
+            campaignId: contact.callifiedCampaignId,
+            userId: null,
+          });
+        }
+      } catch (_e) {
+        console.error('[external] auto-dial enqueue failed:', _e && _e.message);
+      }
+    }
 
     // Attach an activity so the CRM's inbox shows the origin + junk verdict.
     // NOTE: this is a *system* activity, not a real human first-response —

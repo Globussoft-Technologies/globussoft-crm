@@ -318,6 +318,54 @@ describe('POST /api/forms', () => {
 
 
 
+describe('PUT /api/forms/:id', () => {
+
+  test('renames a form and regenerates the slug when one is not provided', async () => {
+
+    prisma.webForm.findFirst
+      .mockResolvedValueOnce({
+        id: 1,
+        tenantId: TENANT_ID,
+        createdByUserId: USER_ID,
+        name: 'Untitled form - 06 Aug 2026, 18:18',
+        slug: 'untitled-form-06-aug-2026-18-18',
+        description: '',
+        isActive: true,
+        fieldsJson: JSON.stringify([]),
+        styleJson: JSON.stringify({}),
+        settingsJson: JSON.stringify({}),
+      })
+      .mockResolvedValueOnce(null);
+
+    prisma.webForm.update.mockResolvedValue({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'EmpMonitor Demo',
+      slug: 'empmonitor-demo',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({}),
+    });
+
+    const res = await request(makeApp()).put('/api/forms/1').send({
+      name: 'EmpMonitor Demo',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.slug).toBe('empmonitor-demo');
+    expect(prisma.webForm.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: 'EmpMonitor Demo',
+        slug: 'empmonitor-demo',
+      }),
+    }));
+  });
+
+});
+
 describe('GET /api/forms/public/:slug', () => {
 
   test('returns the active form with embed code', async () => {

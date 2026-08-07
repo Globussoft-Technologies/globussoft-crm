@@ -371,6 +371,15 @@
       "reason": "Part of the archiver chain under whatsapp-web.js. Same mitigation as archiver above; runtime exposure is zero.",
       "addedOn": "2026-07-27",
       "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": "GHSA-5p4m-2wfm-xmqj",
+      "package": "js-yaml",
+      "severity": "high",
+      "title": "js-yaml: unsafe deserialization of objects produced by parse",
+      "reason": "Transitive dependency used for YAML parsing in internal tooling (Swagger/OpenAPI spec loading, config parsing). The unsafe deserialization vector requires attacker-controlled YAML input; our runtime callsites only parse literal/known configuration or generate specs from code, not user-submitted YAML. Long-term: upgrade transitive js-yaml to a patched version or replace yamljs with a maintained parser.",
+      "addedOn": "2026-08-07",
+      "sunsetBy": "2026-11-07"
     }
   ]
 }

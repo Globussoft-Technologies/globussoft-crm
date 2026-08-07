@@ -100,7 +100,7 @@ export default function TravelReports() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
       <header style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>

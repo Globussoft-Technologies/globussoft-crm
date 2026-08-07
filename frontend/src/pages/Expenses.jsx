@@ -99,6 +99,7 @@ function CategoryBadge({ category }) {
       padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.7rem',
       fontWeight: '600', backgroundColor: cfg.bg, color: cfg.color,
       border: `1px solid ${cfg.color}33`,
+      whiteSpace: 'nowrap',
     }}>
       {category}
     </span>
@@ -126,6 +127,7 @@ export default function Expenses() {
     pendingAmount: null,
   });
   const [form, setForm] = useState(EMPTY_FORM);
+  const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
   const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
   const tableScrollRef = useRef(null);
@@ -377,117 +379,190 @@ export default function Expenses() {
       </header>
 
       {/* Summary Stats */}
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
-        <span style={{
-          padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-          background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
-          display: 'flex', alignItems: 'center', gap: '0.4rem',
-        }}>
-          <IndianRupee size={12} /> Pending: {formatMoney(totalPending)}
-        </span>
-        <span style={{
-          padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-          background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
-          display: 'flex', alignItems: 'center', gap: '0.4rem',
-        }}>
-          <CheckCircle2 size={12} /> Approved: {formatMoney(totalApproved)}
-        </span>
-        <span style={{
-          padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-          background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)',
-          display: 'flex', alignItems: 'center', gap: '0.4rem',
-        }}>
-          <IndianRupee size={12} /> Reimbursed: {formatMoney(totalReimbursed)}
-        </span>
-        <span style={{
-          padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
-          background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
-        }}>
-          {expenseStats.total ?? expenses.length} total expenses
-        </span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <span style={{
+            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+            background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
+            display: 'flex', alignItems: 'center', gap: '0.4rem',
+          }}>
+            <IndianRupee size={12} /> Pending: {formatMoney(totalPending)}
+          </span>
+          <span style={{
+            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+            background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
+            display: 'flex', alignItems: 'center', gap: '0.4rem',
+          }}>
+            <CheckCircle2 size={12} /> Approved: {formatMoney(totalApproved)}
+          </span>
+          <span style={{
+            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+            background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)',
+            display: 'flex', alignItems: 'center', gap: '0.4rem',
+          }}>
+            <IndianRupee size={12} /> Reimbursed: {formatMoney(totalReimbursed)}
+          </span>
+          <span style={{
+            padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
+            background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
+          }}>
+            {expenseStats.total ?? expenses.length} total expenses
+          </span>
+        </div>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => setIsCreateFormOpen(true)}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.65rem 1rem', whiteSpace: 'nowrap' }}
+        >
+          <Plus size={16} /> New Expense
+        </button>
       </div>
 
-      <div className="expenses-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
-
-        {/* Create Expense Form */}
-        <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
-          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Plus size={20} color="var(--accent-color)" /> New Expense
-          </h3>
-          <form onSubmit={(e) => createExpense(e, 'Pending')} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
-                Recipient Name <span style={{ color: '#ef4444' }}>*</span>
-              </label>
-              <input type="text" required className="input-field" placeholder="Enter recipient name"
-                value={form.recipientName} onChange={e => setForm({ ...form, recipientName: e.target.value })} />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Description</label>
-              <input type="text" className="input-field" placeholder="Enter description"
-                value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
-                Category <span style={{ color: '#ef4444' }}>*</span>
-              </label>
-              <select className="input-field" value={form.category}
-                onChange={e => setForm({ ...form, category: e.target.value })}
-                style={{ background: 'var(--input-bg)' }}>
-                {CATEGORY_OPTIONS.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
-                Amount ({currencySymbol()}) <span style={{ color: '#ef4444' }}>*</span>
-              </label>
-              <input type="number" step="0.01" min="0" required className="input-field" placeholder="Enter amount"
-                value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
-                Transaction Date <span style={{ color: '#ef4444' }}>*</span>
-              </label>
-              <input type="date" required className="input-field" value={form.expenseDate}
-                onChange={e => setForm({ ...form, expenseDate: e.target.value })} />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.75rem', color: 'var(--text-secondary)' }}>
-                Payment Method <span style={{ color: '#ef4444' }}>*</span>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
-                  (split across one or more — total must equal Amount)
-                </span>
-              </label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-                {PAYMENT_METHODS.map(method => (
-                  <div key={method}>
-                    <label style={{ display: 'block', fontSize: '0.75rem', marginBottom: '0.3rem', color: 'var(--text-secondary)', textTransform: 'capitalize' }}>
-                      {method === 'upi' ? 'UPI' : method}
-                    </label>
-                    <input type="number" step="0.01" min="0" className="input-field" placeholder="0.00"
-                      value={form.payment[method]}
-                      onChange={e => setForm({ ...form, payment: { ...form.payment, [method]: e.target.value } })} />
-                  </div>
-                ))}
+      {isCreateFormOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Create Expense"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsCreateFormOpen(false);
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            background: 'var(--overlay-bg, rgba(0,0,0,0.6))',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'center',
+            padding: '2rem 1rem',
+            overflowY: 'auto',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              padding: '1.5rem',
+              width: '720px',
+              maxWidth: '100%',
+              height: 'max-content',
+              minHeight: 0,
+              maxHeight: 'none',
+              overflowY: 'visible',
+              margin: 'auto 0',
+              boxSizing: 'border-box',
+              background: 'var(--modal-bg, var(--bg-color))',
+              backgroundColor: 'var(--modal-bg, var(--bg-color))',
+              borderRadius: '16px',
+              border: '1px solid var(--border-color)',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.28)',
+            }}
+          >
+            <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Plus size={20} color="var(--accent-color)" /> New Expense
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsCreateFormOpen(false)}
+                style={{
+                  background: 'transparent', border: '1px solid var(--border-color)', cursor: 'pointer',
+                  color: 'var(--text-secondary)', padding: '0.45rem', borderRadius: '6px',
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                aria-label="Close create expense form"
+              >
+                <XCircle size={18} />
+              </button>
+            </h3>
+            <form onSubmit={(e) => createExpense(e, 'Pending')} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                  Recipient Name <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <input type="text" required className="input-field" placeholder="Enter recipient name"
+                  value={form.recipientName} onChange={e => setForm({ ...form, recipientName: e.target.value })} />
               </div>
-            </div>
 
-            <button
-              type="submit"
-              className="btn-primary"
-              style={{ padding: '1rem', width: '100%' }}
-            >
-              Submit for Approval
-            </button>
-          </form>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Description</label>
+                <input type="text" className="input-field" placeholder="Enter description"
+                  value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                  Category <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <select className="input-field" value={form.category}
+                  onChange={e => setForm({ ...form, category: e.target.value })}
+                  style={{ background: 'var(--input-bg)' }}>
+                  {CATEGORY_OPTIONS.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                  Amount ({currencySymbol()}) <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <input type="number" step="0.01" min="0" required className="input-field" placeholder="Enter amount"
+                  value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>
+                  Transaction Date <span style={{ color: '#ef4444' }}>*</span>
+                </label>
+                <input type="date" required className="input-field" value={form.expenseDate}
+                  onChange={e => setForm({ ...form, expenseDate: e.target.value })} />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.75rem', color: 'var(--text-secondary)' }}>
+                  Payment Method <span style={{ color: '#ef4444' }}>*</span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
+                    (split across one or more — total must equal Amount)
+                  </span>
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  {PAYMENT_METHODS.map(method => (
+                    <div key={method}>
+                      <label style={{ display: 'block', fontSize: '0.75rem', marginBottom: '0.3rem', color: 'var(--text-secondary)', textTransform: 'capitalize' }}>
+                        {method === 'upi' ? 'UPI' : method}
+                      </label>
+                      <input type="number" step="0.01" min="0" className="input-field" placeholder="0.00"
+                        value={form.payment[method]}
+                        onChange={e => setForm({ ...form, payment: { ...form.payment, [method]: e.target.value } })} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => setIsCreateFormOpen(false)}
+                  className="btn-secondary"
+                  style={{ flex: '1 1 180px', padding: '1rem' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  style={{ flex: '2 1 240px', padding: '1rem', width: '100%' }}
+                >
+                  Submit for Approval
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
+      )}
 
-        {/* Expenses Table */}
+      {/* Expenses Table */}
         <div className="card" style={{ padding: '2rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.5rem' }}>
             <h3 style={{ fontSize: '1.15rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -538,13 +613,15 @@ export default function Expenses() {
               onScroll={handleTableScroll}
               style={{
                 overflow: 'auto',
-                maxHeight: 'calc(100vh - 330px)',
+                overflowX: 'auto',
+                minHeight: 'calc(100vh - 380px)',
+                maxHeight: 'calc(100vh - 380px)',
                 border: '1px solid var(--border-color)',
                 borderRadius: 8,
                 background: 'var(--surface-color)',
               }}
             >
-              <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem' }}>
+              <table style={{ width: '100%', minWidth: '1200px', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem',tableLayout: 'fixed' }}>
                 <thead>
                   <tr style={{ textAlign: 'left' }}>
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Title</th>
@@ -556,6 +633,15 @@ export default function Expenses() {
                     <th style={{ position: 'sticky', top: 0, zIndex: 3, padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600', background: 'var(--bg-color)', backgroundClip: 'padding-box', boxShadow: 'inset 0 -1px 0 var(--border-color)' }}>Actions</th>
                   </tr>
                 </thead>
+                  <colgroup>
+                    <col style={{ width: '220px' }} /> {/* Title */}
+                    <col style={{ width: '140px' }} /> {/* Amount */}
+                    <col style={{ width: '150px' }} /> {/* Category */}
+                    <col style={{ width: '130px' }} /> {/* Status */}
+                    <col style={{ width: '220px' }} /> {/* User */}
+                    <col style={{ width: '150px' }} /> {/* Date */}
+                    <col style={{ width: '300px' }} /> {/* Actions */}
+                  </colgroup>
                 <tbody>
                   {visibleExpenses.map(exp => (
                     <tr key={exp.id} style={{ borderBottom: '1px solid var(--border-color)', transition: '0.15s' }}
@@ -565,7 +651,7 @@ export default function Expenses() {
                       <td style={{ padding: '0.75rem 0.5rem', fontWeight: '600', color: '#10b981' }}>
                         {formatMoney(exp.amount)}
                       </td>
-                      <td style={{ padding: '0.75rem 0.5rem' }}>
+                      <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>
                         <CategoryBadge category={exp.category} />
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem' }}>
@@ -577,8 +663,8 @@ export default function Expenses() {
                       <td style={{ padding: '0.75rem 0.5rem', color: 'var(--text-secondary)' }}>
                         {formatDate(exp.expenseDate)}
                       </td>
-                      <td style={{ padding: '0.75rem 0.5rem' }}>
-                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                      <td style={{ padding: '0.75rem 0.5rem', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'nowrap' }}>
                           {exp.status === 'Draft' && (
                             <>
                               <button
@@ -672,7 +758,6 @@ export default function Expenses() {
             </div>
           )}
         </div>
-      </div>
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }

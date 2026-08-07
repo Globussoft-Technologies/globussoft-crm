@@ -659,7 +659,7 @@ export default function CommissionProfilesAdmin() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
       <header
         style={{
           display: "flex",

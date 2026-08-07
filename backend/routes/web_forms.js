@@ -1245,12 +1245,7 @@ router.put("/:id", verifyToken, async (req, res) => {
     let nextName = existing.name;
 
     if (body.name !== undefined) {
-      const name = textOr(body.name);
-
-      if (!name)
-        return res
-          .status(400)
-          .json({ error: "name is required", code: "NAME_REQUIRED" });
+      const name = String(body.name == null ? "" : body.name).trim();
 
       data.name = name;
       nextName = name;
@@ -1260,7 +1255,7 @@ router.put("/:id", verifyToken, async (req, res) => {
       const slug = await ensureUniqueSlug(body.slug || existing.slug, existing.id);
 
       data.slug = slug;
-    } else if (body.name !== undefined) {
+    } else if (body.name !== undefined && nextName) {
       data.slug = await ensureUniqueSlug(nextName, existing.id);
     }
 

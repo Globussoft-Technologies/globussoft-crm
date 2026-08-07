@@ -280,11 +280,14 @@ describe('<InvoicesAdmin /> — page chrome', () => {
       screen.getByLabelText(/Filter by status/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByLabelText(/Filter by contact ID/i),
+      screen.queryByLabelText(/Filter by contact ID/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByLabelText(/Filter by customer name/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByLabelText(/Filter by quote ID/i),
-    ).toBeInTheDocument();
+      screen.queryByLabelText(/Filter by quote ID/i),
+    ).not.toBeInTheDocument();
     // Wait for mount GET so the dangling promise doesn't leak.
     await waitFor(() => {
       expect(
@@ -439,6 +442,35 @@ describe('<InvoicesAdmin /> — list fetch + filter chrome', () => {
       expect(filtered).toBeTruthy();
       expect(filtered[0]).toBe('/api/travel/invoices?status=Paid');
     });
+  });
+
+  it('customer name filter narrows visible rows by resolved contact name', async () => {
+    installFetchMock({
+      list: {
+        invoices: [
+          makeInvoice({ id: 101, invoiceNum: 'TINV-2026-0001', contactId: 42 }),
+          makeInvoice({ id: 102, invoiceNum: 'TINV-2026-0002', contactId: 43 }),
+        ],
+        total: 2,
+      },
+      contacts: [
+        { id: 42, name: 'Asha Mehta', email: 'asha@example.com' },
+        { id: 43, name: 'Rahul Shah', email: 'rahul@example.com' },
+      ],
+    });
+    renderPage();
+
+    expect(await screen.findByText('TINV-2026-0001')).toBeInTheDocument();
+    expect(await screen.findByText('TINV-2026-0002')).toBeInTheDocument();
+    await screen.findByText('Asha Mehta');
+    await screen.findByText('Rahul Shah');
+
+    fireEvent.change(screen.getByLabelText(/Filter by customer name/i), {
+      target: { value: 'asha' },
+    });
+
+    expect(screen.getByText('TINV-2026-0001')).toBeInTheDocument();
+    expect(screen.queryByText('TINV-2026-0002')).toBeNull();
   });
 });
 

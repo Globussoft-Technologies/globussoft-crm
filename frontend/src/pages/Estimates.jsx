@@ -58,6 +58,7 @@ export default function Estimates() {
   const [deals, setDeals] = useState([]);
   const [form, setForm] = useState(INITIAL_FORM);
   const [lineItems, setLineItems] = useState([{ ...EMPTY_LINE_ITEM }]);
+  const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   // #257: status pills now actually filter the ledger ('all' | 'Draft' | 'Sent').
   const [statusFilter, setStatusFilter] = useState('all');
   const tableScrollRef = useRef(null);
@@ -422,7 +423,8 @@ export default function Estimates() {
       </header>
 
       {/* Summary Stats — pills filter the ledger (#257) */}
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
+      <div className="estimates-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
         <button
           type="button"
           onClick={() => setStatusFilter('all')}
@@ -472,16 +474,76 @@ export default function Estimates() {
         }}>
           <IndianRupee size={14} /> Total Value: {formatCurrency(totalValue)}
         </span>
+        </div>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => setIsCreateFormOpen(true)}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.65rem 1rem', whiteSpace: 'nowrap' }}
+        >
+          <Plus size={16} /> Create Estimate
+        </button>
       </div>
 
-      <div className="estimates-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
-
-        {/* Create Estimate Panel */}
-        <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
-          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Plus size={20} color="var(--accent-color)" /> Create Estimate
-          </h3>
-          <form onSubmit={createEstimate} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+      {isCreateFormOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Create Estimate"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsCreateFormOpen(false);
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            background: 'var(--overlay-bg, rgba(0,0,0,0.6))',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'center',
+            padding: '2rem 1rem',
+            overflowY: 'auto',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+                 padding: '1.25rem',
+                 width: '600px',
+                 maxWidth: '100%',
+                 height: 'max-content',
+                 minHeight: 0,
+                 maxHeight: 'none',
+                 overflowY: 'visible',
+                 margin: 'auto 0',
+                 boxSizing: 'border-box',
+                 background: 'var(--modal-bg, var(--bg-color))',
+                 backgroundColor: 'var(--modal-bg, var(--bg-color))',
+                 borderRadius: '16px',
+                 border: '1px solid var(--border-color)',
+                 boxShadow: '0 25px 50px -12px rgba(0,0,0,0.28)',
+               }}
+          >
+            <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Plus size={20} color="var(--accent-color)" /> Create Estimate
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsCreateFormOpen(false)}
+                style={{
+                  background: 'transparent', border: '1px solid var(--border-color)', cursor: 'pointer',
+                  color: 'var(--text-secondary)', padding: '0.45rem', borderRadius: '6px',
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                aria-label="Close create estimate form"
+              >
+                <X size={18} />
+              </button>
+            </h3>
+            <form onSubmit={createEstimate} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
 
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Title</label>
@@ -555,11 +617,11 @@ export default function Estimates() {
             {/* Line Items */}
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.75rem', color: 'var(--text-secondary)' }}>Line Items</label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 {lineItems.map((item, index) => (
                   <div key={index} style={{
                     display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem',
-                    padding: '1rem', borderRadius: '8px',
+                    padding: '0.8rem', borderRadius: '8px',
                     background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)',
                   }}>
                     <div style={{ gridColumn: '1 / -1' }}>
@@ -666,7 +728,7 @@ export default function Estimates() {
 
               {/* Grand Total — red whenever any line is invalid (negative qty/price) */}
               <div style={{
-                marginTop: '1rem', padding: '0.75rem 1rem', borderRadius: '8px',
+                marginTop: '0.8rem', padding: '0.7rem 0.9rem', borderRadius: '8px',
                 background: hasInvalidLine ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.08)',
                 border: `1px solid ${hasInvalidLine ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.2)'}`,
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -683,24 +745,39 @@ export default function Estimates() {
               )}
             </div>
 
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.25rem', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setIsCreateFormOpen(false)}
+                style={{
+                  padding: '0.9rem 1rem', flex: '1 1 140px',
+                  background: 'transparent', border: '1px solid var(--border-color)',
+                  color: 'var(--text-secondary)', borderRadius: '6px', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
             <button
               type="submit"
               className="btn-primary"
               disabled={hasInvalidLine}
               title={hasInvalidLine ? `Each line needs qty ${QTY_MIN}–${QTY_MAX}, unit price ≤ ${UNIT_PRICE_MAX.toLocaleString()}, discount ${DISCOUNT_MIN}–${DISCOUNT_MAX}%` : ''}
               style={{
-                padding: '1rem', marginTop: '0.5rem',
+                padding: '0.9rem 1rem', flex: '2 1 220px',
                 opacity: hasInvalidLine ? 0.5 : 1,
                 cursor: hasInvalidLine ? 'not-allowed' : 'pointer',
               }}
             >
               Create Estimate
-            </button>
-          </form>
+              </button>
+            </div>
+            </form>
+          </div>
         </div>
+      )}
 
-        {/* Estimates Table */}
-        <div className="card" style={{ padding: '2rem' }}>
+      {/* Estimates Table */}
+      <div className="card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FileSpreadsheet size={20} color="var(--success-color)" /> Estimate Ledger
           </h3>
@@ -735,18 +812,30 @@ export default function Estimates() {
               ref={tableScrollRef}
               onScroll={handleTableScroll}
               style={{
-                overflow: 'auto',
-                maxHeight: 'calc(100vh - 330px)',
+                overflowX: 'auto',
+                overflowY: 'auto',
+                minHeight: 'calc(100vh - 380px)',
+                maxHeight: 'calc(100vh - 380px)',
                 border: '1px solid var(--border-color)',
-                borderRadius: 8,
+                borderRadius: 4,
                 background: 'var(--surface-color)',
               }}
             >
               <table
-                style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem' }}
+                style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem' }}
                 role="table"
                 aria-label="Estimates table"
               >
+                <colgroup>
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '24%' }} />
+                </colgroup>
                 <thead>
                   <tr style={{ textAlign: 'left' }}>
                     {['Est #', 'Title', 'Contact', 'Total', 'Status', 'Valid Until', 'Items', 'Actions'].map(h => (
@@ -759,7 +848,7 @@ export default function Estimates() {
                         background: 'var(--bg-color)',
                         backgroundClip: 'padding-box',
                         boxShadow: 'inset 0 -1px 0 var(--border-color)',
-                        ...(h === 'Actions' ? { textAlign: 'right' } : {}),
+                        // ...(h === 'Actions' ? { textAlign: 'right' } : {}),
                       }}>{h}</th>
                     ))}
                   </tr>
@@ -772,34 +861,34 @@ export default function Estimates() {
                       onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
                       onMouseOut={e => e.currentTarget.style.background = 'transparent'}
                     >
-                      <td style={{ padding: '1rem 0.5rem', fontWeight: '600', letterSpacing: '0.03em' }}>
+                      <td style={{ padding: '1rem 0.5rem',fontSize: "0.75rem", fontWeight: '600', letterSpacing: '0.03em', overflowWrap: 'anywhere' }}>
                         {est.estimateNum}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem' }}>{est.title}</td>
-                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
+                      <td style={{ padding: '1rem 0.5rem', overflowWrap: 'anywhere' }}>{est.title}</td>
+                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
                         {est.contact?.name || '-'}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem' }}>
+                      <td style={{ padding: '1rem 0.5rem', overflowWrap: 'anywhere' }}>
                         {/* #256: removed the hardcoded $ IndianRupee — formatCurrency()
                             already prefixes the right symbol from tenant.defaultCurrency,
                             so wellness/India tenants no longer see '$ ₹100.00'. Mirrors
                             the same fix applied in Invoices.jsx (#242). */}
                         <span style={{ color: 'var(--success-color)', fontWeight: 600 }}>{formatCurrency(est.totalAmount)}</span>
                       </td>
-                      <td style={{ padding: '1rem 0.5rem' }}>
+                      <td style={{ padding: '1rem 0.5rem', overflowWrap: 'anywhere' }}>
                         <StatusBadge status={est.status} />
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
+                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
                         {est.validUntil ? formatDate(est.validUntil) : '-'}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
+                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
                         {est.lineItems?.length || 0}
                       </td>
                       <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
                         {/* #603: per-row PDF / Email / Convert / Delete actions.
                             Mirrors the row-action set already in Invoices.jsx
                             so estimates work matches user expectation. */}
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem', flexWrap: 'nowrap' }}>
                           <button
                             onClick={() => downloadPdf(est.id, est.estimateNum)}
                             style={{
@@ -878,8 +967,6 @@ export default function Estimates() {
             </div>
           )}
         </div>
-      </div>
-
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         /* #513: collapse the 1fr 2fr two-column layout to a single stack on mobile.

@@ -116,7 +116,7 @@ export default function PoiPendingApprovalQueue() {
 
   // ─── Styles ─────────────────────────────────────────────────────────
 
-  const wrap = { padding: 24, maxWidth: 1200, margin: "0 auto" };
+  const wrap = { padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" };
   const headerStyle = {
     display: "flex", alignItems: "center", gap: 12, marginBottom: 8,
   };

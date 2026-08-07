@@ -333,13 +333,19 @@
 
       async function load(){
 
-        var previewData = params.get('preview') || '';
+        var previewData = '';
+
+        if (location.hash && location.hash.indexOf('preview=') === 1) {
+
+          previewData = decodeURIComponent(location.hash.substring(9));
+
+        }
 
         if (previewData) {
 
           try {
 
-            renderForm(JSON.parse(decodeURIComponent(previewData)));
+            renderForm(JSON.parse(previewData));
 
             return;
 

@@ -26,7 +26,7 @@ export function slugifyWebFormName(value, fallback = "web-form") {
 export function buildWebFormPreviewUrl(form, origin) {
   const base = String(origin || (typeof window !== 'undefined' ? window.location.origin : 'https://crm.globusdemos.com')).replace(/\/+$/, '');
   const preview = encodeURIComponent(JSON.stringify(form || {}));
-  return base + '/embed/web-form.html?preview=' + preview;
+  return base + '/embed/web-form.html#preview=' + preview;
 }
 
 export function buildPublicUrl(form, origin) {

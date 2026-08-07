@@ -18,7 +18,7 @@ describe('buildWebFormPreviewUrl', () => {
   test('embeds the draft payload for previewing unsaved changes', () => {
     const url = buildWebFormPreviewUrl({ name: 'Draft Form', slug: 'draft-form' }, 'https://crm.example.com');
 
-    expect(url).toContain('https://crm.example.com/embed/web-form.html?preview=');
+    expect(url).toContain('https://crm.example.com/embed/web-form.html#preview=');
     expect(url).toContain(encodeURIComponent('Draft Form'));
   });
 });

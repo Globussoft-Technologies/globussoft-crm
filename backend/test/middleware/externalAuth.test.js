@@ -1,11 +1,11 @@
 // Unit tests for backend/middleware/externalAuth.js
 // Covers X-API-Key validation: missing/malformed key 401s, invalid key 401s,
-// inactive tenant 403s, happy path populates req.{apiKey,tenant,tenantId,user}
-// and triggers a best-effort lastUsed update.
+// inactive tenant 403s, missing tenant 403s, happy path populates req.{apiKey,
+// tenant, tenantId,user} and triggers a best-effort lastUsed update.
 //
 // Mocking note: vi.mock can't reliably intercept the SUT's CJS
 // `require('../lib/prisma')` here, so we monkey-patch the relevant prisma
-// methods on the shared client. Prisma connects lazily — no live DB hit
+// methods on the shared client. Prisma connects lazily - no live DB hit
 // because we never invoke the real method.
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -230,7 +230,7 @@ describe('externalAuth', () => {
   });
 
   test('returns 401 malformed when hex segment is shorter than 48 chars', async () => {
-    // Per regex /^glbs_[a-f0-9]{48,96}$/i — 31 hex chars fails.
+    // Per regex /^glbs_[a-f0-9]{48,96}$/i - 31 hex chars fails.
     const { req, res, next } = makeReqResNext({
       headers: { 'x-api-key': 'glbs_' + 'a'.repeat(31) },
     });
@@ -276,7 +276,6 @@ describe('externalAuth', () => {
     });
     await externalAuth(req, res, next);
     expect(next).toHaveBeenCalledOnce();
-    // Confirm the trimmed token (not the padded form) was used in the DB lookup.
     expect(findUniqueMock).toHaveBeenCalledWith({
       where: { keySecret: cleanKey },
       include: { tenant: true },
@@ -297,7 +296,6 @@ describe('externalAuth', () => {
     await externalAuth(req, res, next);
     expect(next).toHaveBeenCalledOnce();
     expect(req.apiKeySubBrand).toBeNull();
-    // A tenant-wide key should accept any sub-brand target.
     expect(typeof req.requireSubBrandMatch).toBe('function');
     expect(req.requireSubBrandMatch('rfu')).toBe(true);
     expect(req.requireSubBrandMatch('tmc')).toBe(true);
@@ -317,9 +315,7 @@ describe('externalAuth', () => {
     await externalAuth(req, res, next);
     expect(next).toHaveBeenCalledOnce();
     expect(req.apiKeySubBrand).toBe('rfu');
-    // Match path: returns true.
     expect(req.requireSubBrandMatch('rfu')).toBe(true);
-    // Mismatch path through the *OrSend variant: writes 403 SUB_BRAND_MISMATCH and returns false.
     const fakeRes = {
       status: vi.fn().mockReturnThis(),
       json: vi.fn().mockReturnThis(),
@@ -334,20 +330,16 @@ describe('externalAuth', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Wrong-secret detection wave: the glbs_ prefix is required again (the
-  // f9cfd96f raw-hex leniency never matched a real key — all three ApiKey
-  // insert sites mint glbs_-prefixed secrets). A bare 64-hex value is the
-  // exact shape of the per-tenant webhook signing secret (routes/settings.js,
-  // shown once on the Settings page) and gets a specific 401 pointing at
-  // Developer → API Keys; other bare hex stays generic "Malformed API key".
-  // Neither reaches the DB lookup.
+  // Wrong-secret detection wave: the glbs_ prefix is required again. A bare
+  // 64-hex value is the exact shape of the per-tenant webhook signing secret
+  // and gets a specific 401 pointing at Developer → API Keys; other bare hex
+  // stays generic "Malformed API key". Neither reaches the DB lookup.
   // -------------------------------------------------------------------------
 
   const WEBHOOK_SECRET_ERROR =
     'This looks like a webhook signing secret, not an API key. API keys start with glbs_ — generate one from Developer → API Keys.';
 
   test('bare 64-hex (webhook signing secret shape) returns the wrong-secret 401 without a DB lookup', async () => {
-    // crypto.randomBytes(32).toString('hex') shape — what Settings hands out.
     const webhookSecretShaped = 'b'.repeat(32) + '0'.repeat(32);
     const { req, res, next } = makeReqResNext({
       headers: { 'x-api-key': webhookSecretShaped },
@@ -390,8 +382,6 @@ describe('externalAuth', () => {
   });
 
   test('glbs_-prefixed 64-hex is format-valid and proceeds to the DB lookup', async () => {
-    // Guard: the prefix check dominates — a prefixed key whose hex segment
-    // happens to be 64 chars must NOT trip the wrong-secret branch.
     findUniqueMock.mockResolvedValueOnce(null);
     const prefixed64 = 'glbs_' + 'd'.repeat(64);
     const { req, res, next } = makeReqResNext({

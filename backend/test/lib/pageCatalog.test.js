@@ -248,6 +248,13 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     expect(paths).toContain('/travel/suppliers-admin');
   });
 
+  it('travel vertical keeps only the travel commission profiles page', () => {
+    const pages = getCatalogForVertical('travel');
+    const paths = pages.map((p) => p.path);
+    expect(paths).toContain('/travel/commission-profiles');
+    expect(paths).not.toContain('/commission-profiles');
+  });
+
   it('wellness vertical excludes every /travel/* path', () => {
     const pages = getCatalogForVertical('wellness');
     const travelPaths = pages.filter(

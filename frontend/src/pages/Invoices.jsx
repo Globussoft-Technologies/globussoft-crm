@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useContext } from "react";
+import React, { useState, useEffect, useMemo, useContext, useRef } from "react";
 import {
   Receipt,
   Plus,
@@ -51,6 +51,8 @@ import { formatDate } from "../utils/date";
 const formatCurrency = (v) =>
   formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
+const INVOICE_BATCH_SIZE = 25;
+
 export default function Invoices() {
   const notify = useNotify();
   // Travel vertical only — invoices get tagged + filtered by sub-brand. For
@@ -81,6 +83,10 @@ export default function Invoices() {
   const [recurInvoice, setRecurInvoice] = useState(null);
   const [recurFreq, setRecurFreq] = useState("monthly");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [visibleInvoiceCount, setVisibleInvoiceCount] = useState(
+    INVOICE_BATCH_SIZE,
+  );
+  const invoiceTableRef = useRef(null);
 
   // Re-fetch when the travel sub-brand filter changes (no-op for other
   // verticals — activeSubBrand stays undefined there).
@@ -148,6 +154,33 @@ export default function Invoices() {
     if (statusFilter === "ALL") return invoices;
     return invoices.filter((inv) => inv.status === statusFilter);
   }, [invoices, statusFilter]);
+
+  const visibleInvoices = useMemo(
+    () => filteredInvoices.slice(0, visibleInvoiceCount),
+    [filteredInvoices, visibleInvoiceCount],
+  );
+  const hasMoreInvoices = visibleInvoiceCount < filteredInvoices.length;
+
+  useEffect(() => {
+    setVisibleInvoiceCount(INVOICE_BATCH_SIZE);
+    const scroller = invoiceTableRef.current?.querySelector(
+      ".top-scroll-sync__bottom",
+    );
+    if (scroller) scroller.scrollTop = 0;
+  }, [statusFilter, activeSubBrand]);
+
+  const handleInvoiceTableScroll = (event) => {
+    const scroller = event.target;
+    if (!scroller.classList?.contains("top-scroll-sync__bottom")) return;
+
+    const distanceFromBottom =
+      scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    if (distanceFromBottom <= 160) {
+      setVisibleInvoiceCount((count) =>
+        Math.min(count + INVOICE_BATCH_SIZE, filteredInvoices.length),
+      );
+    }
+  };
 
   const nextInvoiceNum = useMemo(() => {
     if (invoices.length === 0) return "INV-001";
@@ -831,7 +864,12 @@ export default function Invoices() {
               </p>
             </div>
           ) : (
-            <TopScrollSync>
+            <div
+              ref={invoiceTableRef}
+              className="invoice-table-scroll"
+              onScrollCapture={handleInvoiceTableScroll}
+            >
+              <TopScrollSync>
               {/* #243: table-layout fixed + per-column widths so the Contact
                   cell can no longer expand past its allotted space and bleed
                   on top of the sticky Actions column. The Contact cell itself
@@ -851,7 +889,7 @@ export default function Invoices() {
                   <col />
                   <col style={{ width: "260px" }} />
                 </colgroup>
-                <thead>
+                <thead className="invoice-table-header">
                   <tr
                     style={{
                       borderBottom: "1px solid var(--border-color)",
@@ -948,7 +986,7 @@ export default function Invoices() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredInvoices.map((inv) => (
+                  {visibleInvoices.map((inv) => (
                     <tr
                       key={inv.id}
                       style={{
@@ -1198,9 +1236,24 @@ export default function Invoices() {
                       </td>
                     </tr>
                   ))}
+                  {hasMoreInvoices && (
+                    <tr aria-live="polite">
+                      <td
+                        colSpan={7}
+                        style={{
+                          padding: "1rem 0.5rem",
+                          textAlign: "center",
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        Scroll to load more invoices
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
-            </TopScrollSync>
+              </TopScrollSync>
+            </div>
           )}
         </div>
       </div>
@@ -1506,8 +1559,24 @@ export default function Invoices() {
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         .invoices-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 2rem; }
+        .invoice-table-scroll .top-scroll-sync__bottom {
+          max-height: calc(100vh - 330px);
+          min-height: 240px;
+          overflow: auto;
+        }
+        .invoice-table-header th {
+          position: sticky;
+          top: 0;
+          z-index: 3;
+          background: var(--bg-color, #0b0c10);
+          background-clip: padding-box;
+          box-shadow: inset 0 -1px 0 var(--border-color);
+        }
         @media (max-width: 768px) {
           .invoices-grid { grid-template-columns: 1fr; gap: 1.25rem; }
+          .invoice-table-scroll .top-scroll-sync__bottom {
+            max-height: 70vh;
+          }
         }
       `}</style>
     </div>

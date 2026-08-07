@@ -86,7 +86,7 @@ const DIAGNOSTIC_NO_BRIEF = {
   classification: 'level_3',
   classificationLabel: 'High-intent qualified',
   recommendedTier: 'premium',
-  reportPdfUrl: '/uploads/diagnostics/diag-42-abc.pdf',
+  reportPdfUrl: '/api/uploads/diagnostics/diag-42-abc.pdf',
   talkingPointsJson: null,
   createdAt: '2026-05-22T09:00:00.000Z',
 };
@@ -184,14 +184,22 @@ function renderPage({ role = 'ADMIN' } = {}) {
 }
 
 describe('DiagnosticDetail  advisor brief UI (PRD 4.1 + 4.2)', () => {
-  it('report PDF button POSTs to report-pdf/regen and opens the result', async () => {
-    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+  it('report PDF button POSTs to report-pdf/regen and downloads the result', async () => {
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(['pdf-bytes'], { type: 'application/pdf' }),
+    });
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:diag-pdf');
+    URL.revokeObjectURL = vi.fn();
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined || opts.method === 'GET')) {
         return Promise.resolve(DIAGNOSTIC_NO_BRIEF);
       }
       if (url === '/api/travel/diagnostics/42/report-pdf/regen' && opts?.method === 'POST') {
-        return Promise.resolve({ reportPdfUrl: '/uploads/diagnostics/diag-42-new.pdf' });
+        return Promise.resolve({ reportPdfUrl: '/api/uploads/diagnostics/diag-42-new.pdf' });
       }
       return Promise.resolve(null);
     });
@@ -204,8 +212,14 @@ describe('DiagnosticDetail  advisor brief UI (PRD 4.1 + 4.2)', () => {
       );
       expect(post).toBeTruthy();
     });
-    expect(openSpy).toHaveBeenCalledWith('/uploads/diagnostics/diag-42-new.pdf', '_blank', 'noopener,noreferrer');
-    openSpy.mockRestore();
+    expect(fetchSpy).toHaveBeenCalledWith('/api/uploads/diagnostics/diag-42-new.pdf', expect.objectContaining({
+      headers: { Authorization: 'Bearer test-token' },
+    }));
+    expect(clickSpy).toHaveBeenCalled();
+    fetchSpy.mockRestore();
+    clickSpy.mockRestore();
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
   });
 
   it('share panel opens and posts the public share payload', async () => {
@@ -413,9 +427,27 @@ describe('DiagnosticDetail  advisor brief UI (PRD 4.1 + 4.2)', () => {
     expect(screen.getByText('8.50')).toBeTruthy();
     // Recommended tier value rendered alongside its label.
     expect(screen.getByText('premium')).toBeTruthy();
-    // PDF link points at the diagnostic's reportPdfUrl.
-    const pdfLink = screen.getByRole('link', { name: /Download report PDF/i });
-    expect(pdfLink.getAttribute('href')).toBe('/uploads/diagnostics/diag-42-abc.pdf');
+    // PDF download button fetches the PDF with auth and triggers a blob save.
+    const pdfButton = screen.getByRole('button', { name: /Download report PDF/i });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(['pdf-bytes'], { type: 'application/pdf' }),
+    });
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:diag-pdf');
+    URL.revokeObjectURL = vi.fn();
+    expect(pdfButton).toBeTruthy();
+    fireEvent.click(pdfButton);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith('/api/uploads/diagnostics/diag-42-abc.pdf', expect.objectContaining({
+      headers: { Authorization: 'Bearer test-token' },
+    })));
+    expect(clickSpy).toHaveBeenCalled();
+    fetchSpy.mockRestore();
+    clickSpy.mockRestore();
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
   });
 
   it('renders the sub-brand label and classification chip in the header', async () => {
@@ -1138,7 +1170,7 @@ describe('DiagnosticDetail  advisor brief UI (PRD 4.1 + 4.2)', () => {
     expect(screen.queryByTestId('human-pick-select')).toBeNull();
     expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
     expect(screen.queryByTestId('engine-output-expanded')).toBeNull();
-    expect(screen.queryByText('Senior reviewer — human pick')).toBeNull();
+    expect(screen.queryByText('Senior reviewer ? human pick')).toBeNull();
   });
 
   it('T11: Save with no selection surfaces a "pick first" notify + does NOT PATCH', async () => {

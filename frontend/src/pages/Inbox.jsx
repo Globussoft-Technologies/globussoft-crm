@@ -19,6 +19,48 @@ import {
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 
+function getInboxPageSize() {
+  if (typeof window === "undefined") return 24;
+  const usableHeight = Math.max(window.innerHeight - 340, 480);
+  return Math.max(12, Math.min(40, Math.ceil(usableHeight / 92)));
+}
+
+function mergeUniqueById(previous, next) {
+  const seen = new Set();
+  const merged = [];
+  for (const item of [...previous, ...next]) {
+    if (!item || item.id == null || seen.has(item.id)) continue;
+    seen.add(item.id);
+    merged.push(item);
+  }
+  return merged;
+}
+
+function extractPagedRows(payload, primaryKey) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.[primaryKey])) return payload[primaryKey];
+  if (Array.isArray(payload?.messages)) return payload.messages;
+  return [];
+}
+
+function extractPagination(payload, fallbackPage, fallbackLimit, rows) {
+  const meta = payload?.pagination || {};
+  const limit = Number.isFinite(meta.limit) && meta.limit > 0 ? meta.limit : fallbackLimit;
+  const page = Number.isFinite(meta.page) && meta.page > 0 ? meta.page : fallbackPage;
+  const total = Number.isFinite(meta.total) && meta.total >= 0 ? meta.total : rows.length;
+  const hasMore =
+    typeof meta.hasMore === "boolean"
+      ? meta.hasMore
+      : page * limit < total;
+  return {
+    page,
+    limit,
+    total,
+    pages: Number.isFinite(meta.pages) && meta.pages > 0 ? meta.pages : Math.max(1, Math.ceil(total / limit)),
+    hasMore,
+  };
+}
+
 export default function Inbox() {
   const notify = useNotify();
   const [emails, setEmails] = useState([]);
@@ -58,6 +100,44 @@ export default function Inbox() {
   // #624 — Sent folder UI: a sub-tab on the Emails tab toggles the
   // backend folder filter (?folder=sent | ?folder=inbox | omitted=all).
   const [emailFolder, setEmailFolder] = useState("all"); // 'all' | 'inbox' | 'sent'
+  const [emailPagination, setEmailPagination] = useState(() => ({
+    page: 0,
+    limit: getInboxPageSize(),
+    total: 0,
+    pages: 0,
+    hasMore: true,
+    loading: false,
+    loadingMore: false,
+  }));
+  const [callPagination, setCallPagination] = useState(() => ({
+    page: 0,
+    limit: getInboxPageSize(),
+    total: 0,
+    pages: 0,
+    hasMore: true,
+    loading: false,
+    loadingMore: false,
+  }));
+  const [smsPagination, setSmsPagination] = useState(() => ({
+    page: 0,
+    limit: getInboxPageSize(),
+    total: 0,
+    pages: 0,
+    hasMore: true,
+    loading: false,
+    loadingMore: false,
+  }));
+  const [waPagination, setWaPagination] = useState(() => ({
+    page: 0,
+    limit: getInboxPageSize(),
+    total: 0,
+    pages: 0,
+    hasMore: true,
+    loading: false,
+    loadingMore: false,
+  }));
+  const inboxScrollRef = useRef(null);
+  const loadMoreLockRef = useRef(false);
 
   // SMS Compose modal state
   const [showComposeSms, setShowComposeSms] = useState(false);
@@ -127,48 +207,172 @@ export default function Inbox() {
       ? "/api/communications/inbox"
       : `/api/communications/inbox?folder=${emailFolder}`;
 
+  const didInitialLoadRef = useRef(false);
+
+  const loadEmailsPage = async ({ page = 1, reset = false } = {}) => {
+    if ((page > 1 && !emailPagination.hasMore) || emailPagination.loading || emailPagination.loadingMore) return;
+    setEmailPagination((prev) => ({
+      ...prev,
+      loading: reset || page === 1,
+      loadingMore: !reset && page > 1,
+    }));
+    const pageSize = emailPagination.limit;
+    const pageUrl = page > 1
+      ? `${inboxPath}${inboxPath.includes("?") ? "&" : "?"}page=${page}&limit=${pageSize}`
+      : inboxPath;
+    const data = await fetchApi(pageUrl);
+    const rows = extractPagedRows(data, "emails");
+    const pagination = extractPagination(data, page, pageSize, rows);
+    setEmails((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
+    setEmailPagination((prev) => ({
+      ...prev,
+      ...pagination,
+      loading: false,
+      loadingMore: false,
+    }));
+    return rows;
+  };
+
+  const loadCallsPage = async ({ page = 1, reset = false } = {}) => {
+    if ((page > 1 && !callPagination.hasMore) || callPagination.loading || callPagination.loadingMore) return;
+    setCallPagination((prev) => ({
+      ...prev,
+      loading: reset || page === 1,
+      loadingMore: !reset && page > 1,
+    }));
+    const pageSize = callPagination.limit;
+    const pageUrl = page > 1
+      ? `/api/communications/calls?page=${page}&limit=${pageSize}`
+      : '/api/communications/calls';
+    const data = await fetchApi(pageUrl);
+    const rows = extractPagedRows(data, "calls");
+    const pagination = extractPagination(data, page, pageSize, rows);
+    setCalls((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
+    setCallPagination((prev) => ({
+      ...prev,
+      ...pagination,
+      loading: false,
+      loadingMore: false,
+    }));
+    return rows;
+  };
+
+  const loadSmsPage = async ({ page = 1, reset = false } = {}) => {
+    if ((page > 1 && !smsPagination.hasMore) || smsPagination.loading || smsPagination.loadingMore) return;
+    setSmsPagination((prev) => ({
+      ...prev,
+      loading: reset || page === 1,
+      loadingMore: !reset && page > 1,
+    }));
+    const pageSize = smsPagination.limit;
+    const pageUrl = page > 1
+      ? `/api/sms/messages?page=${page}&limit=${pageSize}`
+      : '/api/sms/messages';
+    const data = await fetchApi(pageUrl, { silent: true })
+      .catch(() => ({ messages: [], pagination: { page, limit: pageSize, total: 0, hasMore: false } }));
+    const rows = extractPagedRows(data, "messages");
+    const pagination = extractPagination(data, page, pageSize, rows);
+    setSmsMessages((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
+    setSmsPagination((prev) => ({
+      ...prev,
+      ...pagination,
+      loading: false,
+      loadingMore: false,
+    }));
+    return rows;
+  };
+
+  const loadWaPage = async ({ page = 1, reset = false } = {}) => {
+    if ((page > 1 && !waPagination.hasMore) || waPagination.loading || waPagination.loadingMore) return;
+    setWaPagination((prev) => ({
+      ...prev,
+      loading: reset || page === 1,
+      loadingMore: !reset && page > 1,
+    }));
+    const pageSize = waPagination.limit;
+    const pageUrl = page > 1
+      ? `/api/whatsapp/messages?page=${page}&limit=${pageSize}`
+      : '/api/whatsapp/messages';
+    const data = await fetchApi(pageUrl, { silent: true })
+      .catch(() => ({ messages: [], pagination: { page, limit: pageSize, total: 0, hasMore: false } }));
+    const rows = extractPagedRows(data, "messages");
+    const pagination = extractPagination(data, page, pageSize, rows);
+    setWaMessages((prev) => (reset || page === 1 ? rows : mergeUniqueById(prev, rows)));
+    setWaPagination((prev) => ({
+      ...prev,
+      ...pagination,
+      loading: false,
+      loadingMore: false,
+    }));
+    return rows;
+  };
+
   useEffect(() => {
-    Promise.all([
-      fetchApi(inboxPath),
-      fetchApi("/api/communications/calls"),
-      fetchApi("/api/contacts"),
-      // {silent:true} suppresses the global error toast — the .catch() below
-      // already swallows the rejection, but fetchApi fires the toast BEFORE
-      // the catch runs unless silent is set. SMS / WhatsApp can 403 when the
-      // provider isn't configured; /api/wellness/patients 403s on non-wellness
-      // tenants (e.g. travel) because verifyWellnessRole gates by tenant
-      // vertical. None of those are real failures for the Unified Inbox.
-      fetchApi("/api/sms/messages", { silent: true }).catch(() => []),
-      fetchApi("/api/whatsapp/messages", { silent: true }).catch(() => []),
-      fetchApi("/api/wellness/patients", { silent: true }).catch(() => ({
-        patients: [],
-      })),
-    ])
-      .then(
-        ([emailData, callData, contactData, smsData, waData, patientData]) => {
-          setEmails(Array.isArray(emailData) ? emailData : []);
-          setCalls(Array.isArray(callData) ? callData : []);
-          setContacts(Array.isArray(contactData) ? contactData : []);
-          const patientList = patientData?.patients || patientData;
-          setPatients(Array.isArray(patientList) ? patientList : []);
-          setSmsMessages(
-            Array.isArray(smsData?.messages || smsData)
-              ? smsData?.messages || smsData
-              : [],
-          );
-          setWaMessages(
-            Array.isArray(waData?.messages || waData)
-              ? waData?.messages || waData
-              : [],
-          );
+    let cancelled = false;
+    loadMoreLockRef.current = false;
+    const bootstrap = async () => {
+      try {
+        setLoading(true);
+        const [emailRows, callRows, smsRows, waRows, contactData, patientData] = await Promise.all([
+          loadEmailsPage({ page: 1, reset: true }),
+          loadCallsPage({ page: 1, reset: true }),
+          loadSmsPage({ page: 1, reset: true }),
+          loadWaPage({ page: 1, reset: true }),
+          fetchApi("/api/contacts"),
+          fetchApi("/api/wellness/patients", { silent: true }).catch(() => ({ patients: [] })),
+        ]);
+        if (cancelled) return;
+        setEmails(Array.isArray(emailRows) ? emailRows : []);
+        setCalls(Array.isArray(callRows) ? callRows : []);
+        setSmsMessages(Array.isArray(smsRows) ? smsRows : []);
+        setWaMessages(Array.isArray(waRows) ? waRows : []);
+        setContacts(Array.isArray(contactData) ? contactData : []);
+        const patientList = patientData?.patients || patientData;
+        setPatients(Array.isArray(patientList) ? patientList : []);
+      } catch (err) {
+        if (!cancelled) console.error(err);
+      } finally {
+        if (!cancelled) {
           setLoading(false);
-        },
-      )
-      .catch((err) => {
-        console.error(err);
-        setLoading(false);
-      });
+          didInitialLoadRef.current = true;
+        }
+      }
+    };
+    bootstrap();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!didInitialLoadRef.current) return;
+    loadEmailsPage({ page: 1, reset: true }).catch((err) => console.error(err));
   }, [inboxPath]);
+
+  const handleInboxScroll = async (event) => {
+    const el = event.currentTarget;
+    if (el.scrollTop + el.clientHeight < el.scrollHeight - 140) return;
+    if (loadMoreLockRef.current) return;
+
+    let nextLoad = null;
+    if (activeTab === "emails" && emailPagination.hasMore) {
+      nextLoad = () => loadEmailsPage({ page: emailPagination.page + 1 });
+    } else if (activeTab === "calls" && callPagination.hasMore) {
+      nextLoad = () => loadCallsPage({ page: callPagination.page + 1 });
+    } else if (activeTab === "sms" && smsPagination.hasMore) {
+      nextLoad = () => loadSmsPage({ page: smsPagination.page + 1 });
+    } else if (activeTab === "whatsapp" && waPagination.hasMore) {
+      nextLoad = () => loadWaPage({ page: waPagination.page + 1 });
+    }
+
+    if (!nextLoad) return;
+    loadMoreLockRef.current = true;
+    try {
+      await nextLoad();
+    } finally {
+      loadMoreLockRef.current = false;
+    }
+  };
 
   const handleSendEmail = async (e) => {
     e.preventDefault();
@@ -201,8 +405,7 @@ export default function Inbox() {
 
     closeCompose();
     // Refresh
-    const data = await fetchApi(inboxPath);
-    setEmails(Array.isArray(data) ? data : []);
+    await loadEmailsPage({ page: 1, reset: true });
   };
 
   const handlePickAttachments = (e) => {
@@ -538,8 +741,7 @@ export default function Inbox() {
       setDialerData({ contactId: "", toNumber: "", notes: "" });
       // Refresh the call-log tab so the new INITIATED entry appears
       try {
-        const fresh = await fetchApi("/api/communications/calls");
-        setCalls(Array.isArray(fresh) ? fresh : []);
+        await loadCallsPage({ page: 1, reset: true });
       } catch {
         /* ignore */
       }
@@ -576,6 +778,7 @@ export default function Inbox() {
         height: "100%",
         display: "flex",
         flexDirection: "column",
+        overflowX: "hidden",
         animation: "fadeIn 0.5s ease-out",
       }}
     >
@@ -673,7 +876,7 @@ export default function Inbox() {
             transition: "var(--transition)",
           }}
         >
-          Emails ({emails.length})
+          Emails ({emailPagination.total || emails.length})
         </button>
         <button
           onClick={() => setActiveTab("calls")}
@@ -694,7 +897,7 @@ export default function Inbox() {
             transition: "var(--transition)",
           }}
         >
-          Call Logs ({calls.length})
+          Call Logs ({callPagination.total || calls.length})
         </button>
         <button
           onClick={() => setActiveTab("sms")}
@@ -716,7 +919,7 @@ export default function Inbox() {
             size={16}
             style={{ verticalAlign: "middle", marginRight: "0.25rem" }}
           />{" "}
-          SMS ({smsMessages.length})
+          SMS ({smsPagination.total || smsMessages.length})
         </button>
         <button
           onClick={() => setActiveTab("whatsapp")}
@@ -739,13 +942,22 @@ export default function Inbox() {
             size={16}
             style={{ verticalAlign: "middle", marginRight: "0.25rem" }}
           />{" "}
-          WhatsApp ({waMessages.length})
+          WhatsApp ({waPagination.total || waMessages.length})
         </button>
       </div>
 
       <div
         className="card"
-        style={{ flex: 1, overflowY: "auto", padding: "1rem" }}
+        ref={inboxScrollRef}
+        onScroll={handleInboxScroll}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          height: "calc(100vh - 320px)",
+          overflowY: "auto",
+          overflowX: "hidden",
+          padding: "1rem",
+        }}
       >
         {loading ? (
           <p
@@ -759,7 +971,7 @@ export default function Inbox() {
           </p>
         ) : activeTab === "sms" ? (
           <div
-            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+            style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
           >
             {smsMessages.length === 0 && (
               <p
@@ -792,6 +1004,7 @@ export default function Inbox() {
                   display: "flex",
                   gap: "1rem",
                   alignItems: "flex-start",
+                  minWidth: 0,
                   cursor: "pointer",
                 }}
               >
@@ -809,7 +1022,7 @@ export default function Inbox() {
                 >
                   <MessageSquare size={18} />
                 </div>
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
                       display: "flex",
@@ -817,7 +1030,7 @@ export default function Inbox() {
                       marginBottom: "0.375rem",
                     }}
                   >
-                    <span style={{ fontWeight: "600" }}>
+                    <span style={{ fontWeight: "600", overflowWrap: "anywhere" }}>
                       {msg.direction === "INBOUND"
                         ? msg.from || msg.to
                         : msg.to}
@@ -835,6 +1048,7 @@ export default function Inbox() {
                     style={{
                       color: "var(--text-secondary)",
                       fontSize: "0.9rem",
+                      overflowWrap: "anywhere",
                     }}
                   >
                     {msg.body}
@@ -848,10 +1062,15 @@ export default function Inbox() {
                 </div>
               </div>
             ))}
+            {smsPagination.loadingMore && (
+              <p style={{ textAlign: "center", color: "var(--text-secondary)", padding: "0.75rem 0" }}>
+                Loading more SMS...
+              </p>
+            )}
           </div>
         ) : activeTab === "whatsapp" ? (
           <div
-            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+            style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
           >
             {waMessages.length === 0 && (
               <p
@@ -885,6 +1104,7 @@ export default function Inbox() {
                   display: "flex",
                   gap: "1rem",
                   alignItems: "flex-start",
+                  minWidth: 0,
                   cursor: "pointer",
                 }}
               >
@@ -902,7 +1122,7 @@ export default function Inbox() {
                 >
                   <MessageCircle size={18} />
                 </div>
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
                       display: "flex",
@@ -910,7 +1130,7 @@ export default function Inbox() {
                       marginBottom: "0.375rem",
                     }}
                   >
-                    <span style={{ fontWeight: "600" }}>
+                    <span style={{ fontWeight: "600", overflowWrap: "anywhere" }}>
                       {msg.direction === "INBOUND"
                         ? msg.from || msg.to
                         : msg.to}
@@ -928,6 +1148,7 @@ export default function Inbox() {
                     style={{
                       color: "var(--text-secondary)",
                       fontSize: "0.9rem",
+                      overflowWrap: "anywhere",
                     }}
                   >
                     {msg.body || `Template: ${msg.templateName}`}
@@ -952,10 +1173,15 @@ export default function Inbox() {
                 </div>
               </div>
             ))}
+            {waPagination.loadingMore && (
+              <p style={{ textAlign: "center", color: "var(--text-secondary)", padding: "0.75rem 0" }}>
+                Loading more WhatsApp...
+              </p>
+            )}
           </div>
         ) : activeTab === "emails" ? (
           <div
-            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+            style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
           >
             {/* #624 — folder sub-tabs (All / Inbox / Sent). Backend filter
                 is applied via /api/communications/inbox?folder=<v>. The
@@ -1045,6 +1271,8 @@ export default function Inbox() {
                     : "rgba(59, 130, 246, 0.05)",
                   display: "flex",
                   gap: "1.5rem",
+                  minWidth: 0,
+                  flexWrap: "wrap",
                   cursor: "pointer",
                 }}
               >
@@ -1062,7 +1290,7 @@ export default function Inbox() {
                 >
                   <User size={20} color="#fff" />
                 </div>
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{
                       display: "flex",
@@ -1070,7 +1298,7 @@ export default function Inbox() {
                       marginBottom: "0.5rem",
                     }}
                   >
-                    <p style={{ fontWeight: "bold", fontSize: "1.1rem" }}>
+                    <p style={{ fontWeight: "bold", fontSize: "1.1rem", overflowWrap: "anywhere" }}>
                       {email.from}{" "}
                       <ArrowRight size={14} style={{ margin: "0 0.5rem" }} />{" "}
                       {email.to}
@@ -1089,6 +1317,7 @@ export default function Inbox() {
                       fontWeight: "600",
                       marginBottom: "0.5rem",
                       color: "var(--text-primary)",
+                      overflowWrap: "anywhere",
                     }}
                   >
                     {email.subject}
@@ -1098,6 +1327,7 @@ export default function Inbox() {
                       color: "var(--text-secondary)",
                       fontSize: "0.9rem",
                       lineHeight: "1.5",
+                      overflowWrap: "anywhere",
                     }}
                   >
                     {email.body}
@@ -1116,10 +1346,15 @@ export default function Inbox() {
                 )}
               </div>
             ))}
+            {emailPagination.loadingMore && (
+              <p style={{ textAlign: "center", color: "var(--text-secondary)", padding: "0.75rem 0" }}>
+                Loading more emails...
+              </p>
+            )}
           </div>
         ) : (
           <div
-            style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+            style={{ display: "flex", flexDirection: "column", gap: "1rem", minWidth: 0 }}
           >
             {calls.length === 0 && (
               <p
@@ -1154,6 +1389,7 @@ export default function Inbox() {
                   gap: "1.5rem",
                   alignItems: "center",
                   flexWrap: "wrap",
+                  minWidth: 0,
                   cursor: "pointer",
                 }}
               >
@@ -1181,7 +1417,7 @@ export default function Inbox() {
                       marginBottom: "0.5rem",
                     }}
                   >
-                    <p style={{ fontWeight: "bold" }}>{call.direction} CALL</p>
+                    <p style={{ fontWeight: "bold", overflowWrap: "anywhere" }}>{call.direction} CALL</p>
                     <span
                       style={{
                         fontSize: "0.8rem",
@@ -1202,7 +1438,7 @@ export default function Inbox() {
                       {new Date(call.createdAt).toLocaleString()}
                     </span>
                   </div>
-                  <p style={{ color: "var(--text-secondary)" }}>
+                  <p style={{ color: "var(--text-secondary)", overflowWrap: "anywhere" }}>
                     {call.notes || "No notes logged for this call."}
                   </p>
                 </div>
@@ -1266,6 +1502,11 @@ export default function Inbox() {
                 )}
               </div>
             ))}
+            {callPagination.loadingMore && (
+              <p style={{ textAlign: "center", color: "var(--text-secondary)", padding: "0.75rem 0" }}>
+                Loading more calls...
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -2820,3 +3061,4 @@ export default function Inbox() {
     </div>
   );
 }
+

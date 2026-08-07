@@ -1,7 +1,7 @@
 // TripsResolver — the /trips public entry point.
 //
 // Resolution flow:
-//   1. GET /api/landing-pages/public/featured-html (no auth).
+//   1. GET /api/landing-pages/public/featured-html?vertical=travel (no auth).
 //      Returns rendered HTML of the live trip, or 404 if nothing published.
 //   2. On 200 → write the HTML into the current document (replaces the SPA
 //      shell entirely). URL stays at /trips. No redirect, no proxy needed.
@@ -22,7 +22,7 @@ export default function TripsResolver() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch("/api/landing-pages/public/featured-html", {
+        const r = await fetch("/api/landing-pages/public/featured-html?vertical=travel", {
           method: "GET",
           headers: { Accept: "text/html" },
         });

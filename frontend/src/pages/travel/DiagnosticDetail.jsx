@@ -55,7 +55,7 @@ import {
   ChevronLeft, ClipboardCheck, RefreshCw, FileText, Send, Copy, Share2,
   AlertTriangle, Sparkles, CheckCircle, XCircle, Eye, EyeOff, UserCheck,
 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 
@@ -181,16 +181,27 @@ function formatAnswer(value) {
 
 // Back-compat: older diagnostics may store either /uploads/diagnostics/... or
 // /api/uploads/diagnostics/... depending on when the PDF was generated.
-// Normalize both forms to the public /uploads/diagnostics/... path.
+// Normalize both forms to the canonical /api/uploads/diagnostics/... path.
 function normalizeDiagnosticPdfUrl(url) {
   if (!url || typeof url !== "string") return url;
-  if (url.startsWith("/api/uploads/diagnostics/")) {
-    return `/uploads/diagnostics/${url.slice("/api/uploads/diagnostics/".length)}`;
-  }
   if (url.startsWith("/uploads/diagnostics/")) {
+    return `/api${url}`;
+  }
+  if (url.startsWith("/api/uploads/diagnostics/")) {
     return url;
   }
   return url;
+}
+
+function getDiagnosticPdfFilename(url, fallback = "diagnostic-report.pdf") {
+  if (!url || typeof url !== "string") return fallback;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.pathname.split("/").filter(Boolean).pop() || fallback;
+  } catch {
+    const cleaned = url.split("?")[0].split("#")[0];
+    return cleaned.split("/").filter(Boolean).pop() || fallback;
+  }
 }
 
 export default function DiagnosticDetail() {
@@ -210,6 +221,7 @@ export default function DiagnosticDetail() {
 
   const [regenInFlight, setRegenInFlight] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfDownloadBusy, setPdfDownloadBusy] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [shareInfo, setShareInfo] = useState(null);
@@ -336,7 +348,52 @@ export default function DiagnosticDetail() {
     }
   };
 
-  const regenReportPdf = async () => {
+  const fetchDiagnosticPdfBlob = async (url) => {
+    const normalized = normalizeDiagnosticPdfUrl(url);
+    const token = typeof getAuthToken === "function" ? getAuthToken() : null;
+    const res = await fetch(normalized, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        if (body?.error) detail = body.error;
+      } catch {
+        // ignore non-JSON error bodies
+      }
+      throw new Error(detail);
+    }
+    return res.blob();
+  };
+
+  const downloadBlob = (blob, filename) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  };
+
+  const downloadReportPdf = async () => {
+    const url = normalizeDiagnosticPdfUrl(diag?.reportPdfUrl);
+    if (!url) {
+      notify.error("No report PDF is available yet.");
+      return;
+    }
+    setPdfDownloadBusy(true);
+    try {
+      const blob = await fetchDiagnosticPdfBlob(url);
+      downloadBlob(blob, getDiagnosticPdfFilename(url));
+    } finally {
+      setPdfDownloadBusy(false);
+    }
+  };
+
+  const regenReportPdf = async ({ successMessage = "Report PDF generated" } = {}) => {
     setPdfBusy(true);
     try {
       const res = await fetchApi(`/api/travel/diagnostics/${diagId}/report-pdf/regen`, {
@@ -346,8 +403,9 @@ export default function DiagnosticDetail() {
       if (res?.reportPdfUrl) {
         const normalized = normalizeDiagnosticPdfUrl(res.reportPdfUrl);
         setDiag((d) => (d ? { ...d, reportPdfUrl: normalized } : d));
-        notify.success("Report PDF generated");
-        window.open(normalized, "_blank", "noopener,noreferrer");
+        notify.success(successMessage);
+        const blob = await fetchDiagnosticPdfBlob(normalized);
+        downloadBlob(blob, getDiagnosticPdfFilename(normalized));
       } else {
         notify.error("PDF generation returned no URL");
       }
@@ -604,56 +662,46 @@ export default function DiagnosticDetail() {
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {diag.reportPdfUrl && (
-              <a
-                href={normalizeDiagnosticPdfUrl(diag.reportPdfUrl)}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={pdfLink}
+              <button
+                type="button"
+                onClick={downloadReportPdf}
+                disabled={pdfDownloadBusy}
+                style={{
+                  ...pdfLink,
+                  cursor: pdfDownloadBusy ? "not-allowed" : "pointer",
+                  opacity: pdfDownloadBusy ? 0.7 : 1,
+                  background: "none",
+                }}
               >
-                <FileText size={14} aria-hidden /> Download report PDF
-              </a>
+                <FileText size={14} aria-hidden /> {pdfDownloadBusy ? "Downloading..." : "Download report PDF"}
+              </button>
             )}
             <button
               type="button"
-              onClick={() => setShareOpen((open) => !open)}
-              title="Open the share panel"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "6px 10px",
-                borderRadius: 6,
-                fontWeight: 600,
-                fontSize: 13,
-                background: "var(--surface-color)",
-                color: "var(--primary-color)",
-                border: "1px solid var(--primary-color)",
-                whiteSpace: "nowrap",
-                cursor: "pointer",
-              }}
-            >
-              <Share2 size={14} aria-hidden />
-              {shareOpen ? "Hide share panel" : "Share report"}
-            </button>
-            <button
-              type="button"
-              onClick={regenReportPdf}
+              onClick={() => regenReportPdf()}
               disabled={pdfBusy}
               title="Build the branded report PDF from this diagnostic"
               style={{
-                ...pdfLink,
-                background: "none",
-                border: "1px solid var(--border-color, #2a2a2a)",
+                ...reportSecondaryBtn,
                 cursor: pdfBusy ? "not-allowed" : "pointer",
                 opacity: pdfBusy ? 0.6 : 1,
               }}
             >
-              <RefreshCw size={14} aria-hidden />{" "}
+              <RefreshCw size={15} aria-hidden />
               {pdfBusy
                 ? "Generating..."
                 : diag.reportPdfUrl
                   ? "Regenerate PDF"
                   : "Generate report PDF"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShareOpen((open) => !open)}
+              title="Open the share panel"
+              style={reportGhostBtn}
+            >
+              <Share2 size={15} aria-hidden />
+              {shareOpen ? "Hide share panel" : "Share report"}
             </button>
           </div>
         </div>
@@ -1447,6 +1495,95 @@ const shareCode = {
   background: "var(--bg-color)",
   fontSize: 12,
   wordBreak: "break-all",
+};
+const reportActionsCard = {
+  marginTop: 14,
+  padding: 18,
+  borderRadius: 16,
+  border: "1px solid color-mix(in srgb, var(--primary-color) 24%, var(--border-color))",
+  background: "linear-gradient(135deg, color-mix(in srgb, var(--primary-color) 12%, var(--surface-color)) 0%, var(--surface-color) 58%, color-mix(in srgb, var(--accent-color, var(--primary-color)) 8%, var(--surface-color)) 100%)",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 18,
+  alignItems: "center",
+  justifyContent: "space-between",
+};
+const reportEyebrow = {
+  ...kvLabel,
+  color: "var(--primary-color)",
+};
+const reportTitleRow = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 10,
+  alignItems: "center",
+};
+const reportHelperText = {
+  margin: 0,
+  color: "var(--text-secondary)",
+  fontSize: 13,
+  lineHeight: 1.5,
+  maxWidth: 560,
+};
+const reportPillBase = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "4px 10px",
+  borderRadius: 999,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.3,
+  whiteSpace: "nowrap",
+};
+const reportReadyPill = {
+  ...reportPillBase,
+  background: "rgba(47, 122, 77, 0.14)",
+  color: "#2F7A4D",
+  border: "1px solid rgba(47, 122, 77, 0.32)",
+};
+const reportDraftPill = {
+  ...reportPillBase,
+  background: "rgba(200, 154, 78, 0.16)",
+  color: "#9A6F2E",
+  border: "1px solid rgba(154, 111, 46, 0.3)",
+};
+const reportActionsRow = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 10,
+  alignItems: "center",
+  justifyContent: "flex-end",
+};
+const reportButtonBase = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  minHeight: 42,
+  padding: "9px 14px",
+  borderRadius: 999,
+  fontWeight: 700,
+  fontSize: 13,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+};
+const reportPrimaryLink = {
+  ...reportButtonBase,
+  background: "var(--primary-color, var(--accent-color))",
+  color: "#fff",
+  border: "1px solid transparent",
+};
+const reportSecondaryBtn = {
+  ...reportButtonBase,
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-color)",
+};
+const reportGhostBtn = {
+  ...reportButtonBase,
+  background: "transparent",
+  color: "var(--primary-color)",
+  border: "1px dashed color-mix(in srgb, var(--primary-color) 44%, var(--border-color))",
+  cursor: "pointer",
 };
 const pdfLink = {
   marginLeft: "auto",

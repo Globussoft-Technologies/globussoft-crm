@@ -1,11 +1,11 @@
 // @ts-check
 /**
- * Unit tests for backend/routes/payments.js — pin the gateway-agnostic
+ * Unit tests for backend/routes/payments.js â€” pin the gateway-agnostic
  * payment surface (Stripe + Razorpay + tenant-scoped list/get/config) that
  * backs the Billing page checkout flow.
  *
  * Why this file exists
- * ────────────────────
+ * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  * payments.js is 515 LOC of multi-tenant gateway plumbing with several
  * historically-rotten contracts that broke release-validation before. The
  * existing backend/test/integration/stripe-webhook.test.js drives the
@@ -15,56 +15,56 @@
  * /confirm-razorpay`, `POST /webhook/razorpay`) were entirely untested.
  *
  * What this file pins (14 cases across 7 describe blocks)
- * ───────────────────────────────────────────────────────
- *   1. GET / — tenant-scoped list with status/gateway filters; cross-tenant
+ * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+ *   1. GET / â€” tenant-scoped list with status/gateway filters; cross-tenant
  *      rows never appear because where.tenantId = req.user.tenantId is the
  *      first key in the where clause.
- *   2. GET / — ?invoiceId flows through as parseInt; status uppercased,
+ *   2. GET / â€” ?invoiceId flows through as parseInt; status uppercased,
  *      gateway lowercased (canonical wire shape the Billing UI sends).
- *   3. GET / — ?from + ?to date-range filter (#846): both bounds optional +
+ *   3. GET / â€” ?from + ?to date-range filter (#846): both bounds optional +
  *      independent, date-only `to` pushed to end-of-day for inclusive
- *      semantics, unparseable values → 400 with code INVALID_DATE_RANGE.
- *   4. GET /:id — 200 with serialized payment (metadata JSON-parsed); 404
+ *      semantics, unparseable values â†’ 400 with code INVALID_DATE_RANGE.
+ *   4. GET /:id â€” 200 with serialized payment (metadata JSON-parsed); 404
  *      on cross-tenant id (where.tenantId mismatch).
- *   5. GET /config — every authenticated caller sees
+ *   5. GET /config â€” every authenticated caller sees
  *      `{stripe.configured, razorpay.configured}` (boolean); ADMIN ALSO
  *      sees `stripe.webhookConfigured` + `razorpay.keyId` 8-char prefix
- *      mask. #650 — non-ADMIN gets MASKED disclosure (no keyId leak).
- *   6. GET /config — every call writes a PaymentConfig.READ audit row
+ *      mask. #650 â€” non-ADMIN gets MASKED disclosure (no keyId leak).
+ *   6. GET /config â€” every call writes a PaymentConfig.READ audit row
  *      capturing role + disclosed=("full" or "masked").
- *   7. POST /create-stripe-intent — 400 when amount missing; 503 when
+ *   7. POST /create-stripe-intent â€” 400 when amount missing; 503 when
  *      Stripe not configured; happy path creates a Payment row + returns
  *      `{clientSecret, paymentId, intentId}`.
- *   8. POST /create-razorpay-order — 400 when amount missing; 503 when
+ *   8. POST /create-razorpay-order â€” 400 when amount missing; 503 when
  *      Razorpay not configured.
- *   9. POST /confirm-razorpay — verifies HMAC-SHA256 of
+ *   9. POST /confirm-razorpay â€” verifies HMAC-SHA256 of
  *      `${order_id}|${payment_id}` against the body's signature; flips
  *      payment to FAILED + 400 on mismatch; flips to SUCCESS + 200 on
  *      match and updates linked Invoice to PAID.
- *  10. POST /confirm-razorpay — 400 when required fields missing; 404 when
+ *  10. POST /confirm-razorpay â€” 400 when required fields missing; 404 when
  *      paymentId doesn't belong to req.user.tenantId.
- *  11. POST /webhook/razorpay — 400 when x-razorpay-signature doesn't
+ *  11. POST /webhook/razorpay â€” 400 when x-razorpay-signature doesn't
  *      HMAC-SHA256 the raw body; 200 + payment.update({SUCCESS}) +
  *      invoice.update({PAID}) when signature matches and event is
  *      `payment.captured`.
- *  12. POST /webhook/razorpay — `payment.failed` event flips payment to
+ *  12. POST /webhook/razorpay â€” `payment.failed` event flips payment to
  *      FAILED but DOES NOT touch invoice (invoice stays in its prior
- *      state — wallet/retry flow handles re-attempt).
- *  13. POST /webhook/razorpay — 503 when no RAZORPAY_WEBHOOK_SECRET or
+ *      state â€” wallet/retry flow handles re-attempt).
+ *  13. POST /webhook/razorpay â€” 503 when no RAZORPAY_WEBHOOK_SECRET or
  *      RAZORPAY_KEY_SECRET configured (early-exit before signature check).
- *  14. Cross-cutting tenant isolation — every read-path endpoint
+ *  14. Cross-cutting tenant isolation â€” every read-path endpoint
  *      (list/get/confirm) scopes by req.user.tenantId.
  *
  * Test pattern
- * ────────────
+ * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  * Mirrors backend/test/routes/funnel.test.js and the existing
- * backend/test/integration/stripe-webhook.test.js — prisma singleton
+ * backend/test/integration/stripe-webhook.test.js â€” prisma singleton
  * monkey-patch BEFORE requiring the router (vi.mock doesn't reliably
  * intercept CJS require in this repo's vitest config), env vars set
  * pre-import for the lazy SDK factories, supertest with a fake auth
  * middleware that sets req.user. The real Razorpay HMAC path is exercised
  * end-to-end (no signature mocking) because that's exactly what we need
- * to pin — a future refactor that breaks the HMAC compute would silently
+ * to pin â€” a future refactor that breaks the HMAC compute would silently
  * accept forged webhooks otherwise.
  *
  * Stripe SDK loading: we set STRIPE_SECRET_KEY pre-import so getStripe()
@@ -78,14 +78,14 @@
 import { describe, test, expect, beforeAll, beforeEach, vi } from 'vitest';
 import crypto from 'node:crypto';
 
-// ── env MUST be set before importing the route ─────────────────────────
+// â”€â”€ env MUST be set before importing the route â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // The route's getStripe() / getRazorpay() factories are lazy and cache.
 process.env.STRIPE_SECRET_KEY = 'sk_test_payments_route_fixture';
 process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_payments_route_fixture';
 process.env.RAZORPAY_KEY_ID = 'rzp_test_payments_route';
 process.env.RAZORPAY_KEY_SECRET = 'rzp_secret_payments_route_fixture';
 
-// ── prisma singleton patching ──────────────────────────────────────────
+// â”€â”€ prisma singleton patching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 import prisma from '../../lib/prisma.js';
 
 prisma.payment = prisma.payment || {};
@@ -93,6 +93,7 @@ prisma.payment.findMany = vi.fn();
 prisma.payment.findFirst = vi.fn();
 prisma.payment.create = vi.fn();
 prisma.payment.update = vi.fn();
+prisma.payment.aggregate = vi.fn();
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.findFirst = vi.fn();
 prisma.invoice.findMany = vi.fn();
@@ -103,21 +104,21 @@ prisma.visit.findMany = vi.fn();
 prisma.visit.update = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
-// eventBus.emitEvent reads automationRule.findMany — stub so the
+// eventBus.emitEvent reads automationRule.findMany â€” stub so the
 // best-effort emit doesn't blow up the unit_tests env (no DATABASE_URL).
 prisma.automationRule = prisma.automationRule || {};
 prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
-// writeAudit reads/writes AuditLog — stub to no-op for assertion capture.
+// writeAudit reads/writes AuditLog â€” stub to no-op for assertion capture.
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
-// #848 — customer-payment endpoints now load the TENANT's own Razorpay keys
+// #848 â€” customer-payment endpoints now load the TENANT's own Razorpay keys
 // from PaymentGatewayConfig (BYOK) instead of the platform env vars. The
 // default mock below models a tenant whose configured keys mirror the env
 // fixtures, so the HMAC fixtures in these tests keep matching.
 prisma.paymentGatewayConfig = prisma.paymentGatewayConfig || {};
 prisma.paymentGatewayConfig.findFirst = vi.fn();
-// TMC instalment webhook path — stubs so new itinerary-status flip doesn't throw.
+// TMC instalment webhook path â€” stubs so new itinerary-status flip doesn't throw.
 prisma.tripInstalmentPayment = prisma.tripInstalmentPayment || {};
 prisma.tripInstalmentPayment.findFirst = vi.fn().mockResolvedValue(null);
 prisma.tripInstalmentPayment.findMany = vi.fn().mockResolvedValue([]);
@@ -127,6 +128,16 @@ prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
 prisma.itinerary = prisma.itinerary || {};
 prisma.itinerary.findFirst = vi.fn().mockResolvedValue(null);
 prisma.itinerary.update = vi.fn().mockResolvedValue({});
+prisma.travelQuote = prisma.travelQuote || {};
+prisma.travelQuote.findFirst = vi.fn().mockResolvedValue(null);
+prisma.travelQuote.updateMany = vi.fn().mockResolvedValue({ count: 0 });
+prisma.travelInvoice = prisma.travelInvoice || {};
+prisma.travelInvoice.findFirst = vi.fn().mockResolvedValue(null);
+prisma.travelInvoice.update = vi.fn().mockResolvedValue({});
+prisma.travelPaymentSchedule = prisma.travelPaymentSchedule || {};
+prisma.travelPaymentSchedule.findFirst = vi.fn().mockResolvedValue(null);
+prisma.travelPaymentSchedule.update = vi.fn().mockResolvedValue({});
+prisma.travelPaymentSchedule.updateMany = vi.fn().mockResolvedValue({ count: 0 });
 
 import express from 'express';
 import request from 'supertest';
@@ -140,13 +151,13 @@ const stripe = stripeLib(process.env.STRIPE_SECRET_KEY);
 // The route destructures `writeAudit` from lib/audit at module-load, so a
 // vi.spyOn(auditMod, 'writeAudit') replacement applied AFTER the route's
 // require would not intercept the destructured local binding (a classic
-// CJS-shape gotcha — the route holds a stable reference to the original
+// CJS-shape gotcha â€” the route holds a stable reference to the original
 // function). Instead we assert audit emission via the writeAudit's
 // downstream prisma.auditLog.create call, which is stubbed above.
 
 function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   const app = express();
-  // Webhooks need raw body — the route installs express.raw per-route,
+  // Webhooks need raw body â€” the route installs express.raw per-route,
   // so we MUST NOT install a global JSON parser ahead of /webhook/*.
   // Apply express.json only for the non-webhook handlers; we mount it
   // AFTER the router for the /webhook/* paths and BEFORE for others by
@@ -169,6 +180,7 @@ beforeEach(() => {
   prisma.payment.findFirst.mockReset();
   prisma.payment.create.mockReset();
   prisma.payment.update.mockReset();
+  prisma.payment.aggregate.mockReset().mockResolvedValue({ _sum: { amount: 0 } });
   prisma.invoice.findFirst.mockReset();
   prisma.invoice.findMany.mockReset().mockResolvedValue([]);
   prisma.invoice.update.mockReset();
@@ -182,11 +194,18 @@ beforeEach(() => {
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.update.mockReset().mockResolvedValue({});
+  prisma.travelQuote.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelQuote.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.travelInvoice.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelInvoice.update.mockReset().mockResolvedValue({});
+  prisma.travelPaymentSchedule.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelPaymentSchedule.update.mockReset().mockResolvedValue({});
+  prisma.travelPaymentSchedule.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.visit.findFirst.mockReset().mockResolvedValue(null);
   prisma.visit.findMany.mockReset().mockResolvedValue([]);
   prisma.visit.update.mockReset().mockResolvedValue({});
 
-  // Sensible defaults — each test overrides what it cares about.
+  // Sensible defaults â€” each test overrides what it cares about.
   prisma.payment.findMany.mockResolvedValue([]);
   prisma.payment.findFirst.mockResolvedValue(null);
   prisma.payment.create.mockResolvedValue({ id: 1, status: 'PENDING' });
@@ -204,11 +223,11 @@ beforeEach(() => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
-// GET / — list payments
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// GET / â€” list payments
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('GET / — list payments under tenant scope', () => {
+describe('GET / â€” list payments under tenant scope', () => {
   test('returns serialized payments with metadata JSON-parsed, scoped by req.user.tenantId', async () => {
     prisma.payment.findMany.mockResolvedValue([
       {
@@ -242,7 +261,7 @@ describe('GET / — list payments under tenant scope', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
     expect(res.body[0].metadata).toEqual({ clientSecret: 'cs_x' });
-    expect(res.body[1].metadata).toEqual({}); // null → {} fallback
+    expect(res.body[1].metadata).toEqual({}); // null â†’ {} fallback
     expect(prisma.payment.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1 },
       orderBy: { createdAt: 'desc' },
@@ -275,7 +294,7 @@ describe('GET / — list payments under tenant scope', () => {
     const call = prisma.payment.findMany.mock.calls[0][0];
     expect(call.where.tenantId).toBe(1);
     expect(call.where.createdAt.gte).toEqual(new Date('2026-01-01'));
-    // `to=2026-06-30` (date-only) → pushed to 23:59:59.999 of that day
+    // `to=2026-06-30` (date-only) â†’ pushed to 23:59:59.999 of that day
     const lte = call.where.createdAt.lte;
     expect(lte.getUTCFullYear()).toBe(2026);
     // The route uses local-time setHours, so we just verify the tail-of-day
@@ -335,11 +354,11 @@ describe('GET / — list payments under tenant scope', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
-// GET /:id — payment details
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// GET /:id â€” payment details
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('GET /:id — single payment', () => {
+describe('GET /:id â€” single payment', () => {
   test('200 with serialized payment scoped by id + tenantId', async () => {
     prisma.payment.findFirst.mockResolvedValue({
       id: 5,
@@ -362,7 +381,7 @@ describe('GET /:id — single payment', () => {
   });
 
   test('404 when payment id belongs to a different tenant (cross-tenant isolation)', async () => {
-    // Payment exists for tenant 99 but we're tenant 1 — findFirst returns null
+    // Payment exists for tenant 99 but we're tenant 1 â€” findFirst returns null
     // because its where clause includes tenantId: 1.
     prisma.payment.findFirst.mockResolvedValue(null);
 
@@ -376,11 +395,11 @@ describe('GET /:id — single payment', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
-// GET /config — role-gated configuration disclosure (#650)
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// GET /config â€” role-gated configuration disclosure (#650)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('GET /config — role-gated disclosure (#650)', () => {
+describe('GET /config â€” role-gated disclosure (#650)', () => {
   test('non-ADMIN gets MASKED disclosure (no keyId, no webhookConfigured)', async () => {
     const res = await request(makeApp({ role: 'USER' })).get('/api/payments/config');
 
@@ -397,7 +416,7 @@ describe('GET /config — role-gated disclosure (#650)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.stripe.webhookConfigured).toBe(true);
-    // keyId is 8-char prefix + '...' — never the full key.
+    // keyId is 8-char prefix + '...' â€” never the full key.
     expect(res.body.razorpay.keyId).toBe('rzp_test...');
     expect(res.body.razorpay.keyId).not.toContain(process.env.RAZORPAY_KEY_SECRET);
   });
@@ -406,11 +425,11 @@ describe('GET /config — role-gated disclosure (#650)', () => {
     await request(makeApp({ role: 'USER', userId: 42, tenantId: 9 }))
       .get('/api/payments/config');
 
-    // writeAudit is fire-and-forget — flush microtasks so the async
+    // writeAudit is fire-and-forget â€” flush microtasks so the async
     // auditLog.create lands before we assert.
     await new Promise((r) => setImmediate(r));
 
-    // Assert via the downstream prisma.auditLog.create — the writeAudit
+    // Assert via the downstream prisma.auditLog.create â€” the writeAudit
     // helper serializes its details arg into the data.details column.
     expect(prisma.auditLog.create).toHaveBeenCalled();
     const lastCall = prisma.auditLog.create.mock.calls.at(-1)[0];
@@ -434,11 +453,11 @@ describe('GET /config — role-gated disclosure (#650)', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // POST /create-stripe-intent
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('POST /create-stripe-intent — validation surface', () => {
+describe('POST /create-stripe-intent â€” validation surface', () => {
   test('returns 400 when amount is missing', async () => {
     const res = await request(makeApp())
       .post('/api/payments/create-stripe-intent')
@@ -459,11 +478,11 @@ describe('POST /create-stripe-intent — validation surface', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // POST /create-razorpay-order
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('POST /create-razorpay-order — validation surface', () => {
+describe('POST /create-razorpay-order â€” validation surface', () => {
   test('returns 400 when amount is missing', async () => {
     const res = await request(makeApp())
       .post('/api/payments/create-razorpay-order')
@@ -475,11 +494,11 @@ describe('POST /create-razorpay-order — validation surface', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
-// POST /confirm-razorpay — HMAC verification + invoice mark-paid
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// POST /confirm-razorpay â€” HMAC verification + invoice mark-paid
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('POST /confirm-razorpay — signature verification', () => {
+describe('POST /confirm-razorpay â€” signature verification', () => {
   test('returns 400 + missing-fields error when required body fields are absent', async () => {
     const res = await request(makeApp())
       .post('/api/payments/confirm-razorpay')
@@ -584,7 +603,7 @@ describe('POST /confirm-razorpay — signature verification', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/signature/i);
-    // Defensive — payment flipped to FAILED so retries don't keep
+    // Defensive â€” payment flipped to FAILED so retries don't keep
     // attempting on the same bad signature.
     expect(prisma.payment.update).toHaveBeenCalledWith({
       where: { id: 7 },
@@ -595,14 +614,14 @@ describe('POST /confirm-razorpay — signature verification', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
-// #848 — customer payments require the TENANT's own Razorpay config (BYOK).
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// #848 â€” customer payments require the TENANT's own Razorpay config (BYOK).
 // When the tenant hasn't configured/activated keys, the endpoints refuse with
 // 503 GATEWAY_NOT_CONFIGURED rather than silently charging the platform's
 // account. No env fallback for customer payments.
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 describe('customer payments require tenant Razorpay config (no env fallback)', () => {
-  test('create-razorpay-order → 503 GATEWAY_NOT_CONFIGURED when tenant has no config', async () => {
+  test('create-razorpay-order â†’ 503 GATEWAY_NOT_CONFIGURED when tenant has no config', async () => {
     prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
     const res = await request(makeApp({ tenantId: 1 }))
       .post('/api/payments/create-razorpay-order')
@@ -612,7 +631,7 @@ describe('customer payments require tenant Razorpay config (no env fallback)', (
     expect(prisma.payment.create).not.toHaveBeenCalled();
   });
 
-  test('create-razorpay-order → 503 when tenant config exists but is inactive', async () => {
+  test('create-razorpay-order â†’ 503 when tenant config exists but is inactive', async () => {
     prisma.paymentGatewayConfig.findFirst.mockResolvedValue({
       keyId: 'rzp_live_abc',
       keySecret: 'secret',
@@ -625,7 +644,7 @@ describe('customer payments require tenant Razorpay config (no env fallback)', (
     expect(res.body.code).toBe('GATEWAY_NOT_CONFIGURED');
   });
 
-  test('confirm-razorpay → 503 GATEWAY_NOT_CONFIGURED when tenant has no config', async () => {
+  test('confirm-razorpay â†’ 503 GATEWAY_NOT_CONFIGURED when tenant has no config', async () => {
     prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
     const res = await request(makeApp({ tenantId: 1 }))
       .post('/api/payments/confirm-razorpay')
@@ -640,11 +659,11 @@ describe('customer payments require tenant Razorpay config (no env fallback)', (
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
-// POST /webhook/razorpay — HMAC + event dispatch
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// POST /webhook/razorpay â€” HMAC + event dispatch
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('POST /webhook/razorpay — signature verification + event dispatch', () => {
+describe('POST /webhook/razorpay â€” signature verification + event dispatch', () => {
   test('400 + Invalid signature when x-razorpay-signature does not match', async () => {
     const eventBody = JSON.stringify({
       event: 'payment.captured',
@@ -760,23 +779,23 @@ describe('POST /webhook/razorpay — signature verification + event dispatch', (
       .send(bodyStr);
 
     expect(res.status).toBe(200);
-    // Payment marked FAILED…
+    // Payment marked FAILEDâ€¦
     expect(prisma.payment.update).toHaveBeenCalledWith({
       where: { id: 12 },
       data: { status: 'FAILED' },
     });
-    // …but invoice MUST NOT be marked PAID on a failed payment.
+    // â€¦but invoice MUST NOT be marked PAID on a failed payment.
     expect(prisma.invoice.update).not.toHaveBeenCalled();
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
-// POST /webhook/razorpay — payment_link.paid with kind=tmc-instalment
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// POST /webhook/razorpay â€” payment_link.paid with kind=tmc-instalment
 // Pins the new itinerary-status flip that makes the Leads Amount column
 // show a non-zero value after a TMC trip instalment is paid.
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('POST /webhook/razorpay — payment_link.paid tmc-instalment reconciliation', () => {
+describe('POST /webhook/razorpay â€” payment_link.paid tmc-instalment reconciliation', () => {
   function makePlinkPaidEvent(notes) {
     return {
       event: 'payment_link.paid',
@@ -790,7 +809,7 @@ describe('POST /webhook/razorpay — payment_link.paid tmc-instalment reconcilia
         payment: {
           entity: {
             id: 'pay_tmc_test',
-            amount: 5000000, // paise → ₹50,000
+            amount: 5000000, // paise â†’ â‚¹50,000
             captured_at: Math.floor(Date.now() / 1000),
           },
         },
@@ -798,6 +817,51 @@ describe('POST /webhook/razorpay — payment_link.paid tmc-instalment reconcilia
     };
   }
 
+  test('marks order-based travel instalment paid and flips linked itinerary to advance_paid when webhook fires', async () => {
+    const notes = {
+      tenantId: '1',
+      kind: 'travel-trip-installment',
+      instalmentId: '200',
+      participantId: '5',
+      tripId: '100',
+    };
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 200, participantId: 5, status: 'pending', amount: 50000,
+    });
+    prisma.tripInstalmentPayment.update.mockResolvedValue({ id: 200, status: 'paid', paidAmount: 50000 });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([{ paidAmount: 50000, amount: 50000 }]);
+    prisma.tripParticipant.findFirst.mockResolvedValue({ parentEmail: 'parent@example.com' });
+    prisma.itinerary.findFirst.mockResolvedValue({ id: 77, advancePaidAmount: 0, status: 'sent' });
+    prisma.itinerary.update.mockResolvedValue({ id: 77, status: 'advance_paid', advancePaidAmount: 50000 });
+    prisma.payment.findFirst.mockResolvedValue(null);
+
+    const eventObj = makePlinkPaidEvent(notes);
+    const bodyStr = JSON.stringify(eventObj);
+    const sig = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(bodyStr)
+      .digest('hex');
+
+    const res = await request(makeApp())
+      .post('/api/payments/webhook/razorpay')
+      .set('content-type', 'application/json')
+      .set('x-razorpay-signature', sig)
+      .send(bodyStr);
+
+    expect(res.status).toBe(200);
+    expect(prisma.tripInstalmentPayment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 200 },
+        data: expect.objectContaining({ status: 'paid', paidAmount: 50000 }),
+      }),
+    );
+    expect(prisma.itinerary.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 77 },
+        data: expect.objectContaining({ status: 'advance_paid' }),
+      }),
+    );
+  });
   test('marks instalment paid and flips linked itinerary to advance_paid when webhook fires', async () => {
     const notes = {
       tenantId: '1',
@@ -810,13 +874,13 @@ describe('POST /webhook/razorpay — payment_link.paid tmc-instalment reconcilia
       id: 200, participantId: 5, status: 'pending', amount: 50000,
     });
     prisma.tripInstalmentPayment.update.mockResolvedValue({ id: 200, status: 'paid', paidAmount: 50000 });
-    // findMany is called after update to recompute the total for idempotency — return the
+    // findMany is called after update to recompute the total for idempotency â€” return the
     // single paid instalment so trueTotal=50000 and itinerary.update fires.
     prisma.tripInstalmentPayment.findMany.mockResolvedValue([{ paidAmount: 50000, amount: 50000 }]);
     prisma.tripParticipant.findFirst.mockResolvedValue({ parentEmail: 'parent@example.com' });
     prisma.itinerary.findFirst.mockResolvedValue({ id: 77, advancePaidAmount: 0, status: 'sent' });
     prisma.itinerary.update.mockResolvedValue({ id: 77, status: 'advance_paid', advancePaidAmount: 50000 });
-    // Payment row lookup for the standard plink path — return null so it skips that branch.
+    // Payment row lookup for the standard plink path â€” return null so it skips that branch.
     prisma.payment.findFirst.mockResolvedValue(null);
 
     const eventObj = makePlinkPaidEvent(notes);
@@ -876,8 +940,8 @@ describe('POST /webhook/razorpay — payment_link.paid tmc-instalment reconcilia
     expect(prisma.itinerary.update).not.toHaveBeenCalled();
   });
 
-  test('old link (no instalmentId in notes) resolved via payment_link.short_url → paymentLinkUrl match', async () => {
-    // Old links were generated before paymentLink.js fix — notes has kind but no instalmentId.
+  test('old link (no instalmentId in notes) resolved via payment_link.short_url â†’ paymentLinkUrl match', async () => {
+    // Old links were generated before paymentLink.js fix â€” notes has kind but no instalmentId.
     // The webhook must still find the instalment via the short_url stored on the row.
     const notes = {
       tenantId: '1',
@@ -938,7 +1002,7 @@ describe('POST /webhook/razorpay — payment_link.paid tmc-instalment reconcilia
     );
   });
 
-  test('itinerary flip is non-fatal — webhook still returns 200 if itinerary lookup fails', async () => {
+  test('itinerary flip is non-fatal â€” webhook still returns 200 if itinerary lookup fails', async () => {
     const notes = {
       tenantId: '1',
       kind: 'tmc-instalment',
@@ -971,13 +1035,13 @@ describe('POST /webhook/razorpay — payment_link.paid tmc-instalment reconcilia
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
-// POST /webhook/razorpay — payment_link.paid for wellness visits
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// POST /webhook/razorpay â€” payment_link.paid for wellness visits
 // When a visit-linked payment link is paid, the Visit row must flip to
 // paymentStatus='paid' so the Log Visit UI disables the copy action.
-// ─────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-describe('POST /webhook/razorpay — payment_link.paid wellness-visit reconciliation', () => {
+describe('POST /webhook/razorpay â€” payment_link.paid wellness-visit reconciliation', () => {
   function makePlinkPaidEvent(plinkId) {
     return {
       event: 'payment_link.paid',

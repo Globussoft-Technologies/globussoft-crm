@@ -20,9 +20,9 @@
 // - subBrand — optional, defaults to "tmc"; sub-brand isolation enforced
 //   server-side via getSubBrandAccessSet.
 
-import { useEffect, useMemo, useState, useContext, useCallback, useRef } from "react";
-import { Link } from "react-router-dom";
-import { Receipt, Pencil, Trash2, Calculator } from "lucide-react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Receipt, Pencil, Trash2, Calculator, UserPlus } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { usePermissions } from "../../hooks/usePermissions";
@@ -49,7 +49,10 @@ const QUOTE_STATUSES = [
   { value: "Draft", label: "Draft" },
   { value: "Sent", label: "Sent" },
   { value: "Accepted", label: "Accepted" },
+  { value: "advance_paid", label: "Advance paid" },
+  { value: "fully_paid", label: "Fully paid" },
   { value: "Rejected", label: "Rejected" },
+  { value: "Expired", label: "Expired" },
 ];
 
 // SUB_BRAND_BG now imported from ../../utils/travelSubBrand (rule-of-3
@@ -63,12 +66,14 @@ const STATUS_BG = {
   Sent: "rgba(59, 130, 246, 0.18)",       // blue
   Accepted: "rgba(34, 197, 94, 0.18)",    // green
   Rejected: "rgba(244, 63, 94, 0.18)",    // rose
+  Expired: "rgba(245, 158, 11, 0.18)",     // amber
 };
 const STATUS_COLOR = {
   Draft: "var(--text-secondary)",
   Sent: "#3b82f6",
   Accepted: "var(--success-color, #22c55e)",
   Rejected: "var(--danger-color, #f43f5e)",
+  Expired: "var(--warning-color, #f59e0b)",
 };
 
 const EMPTY_FORM = {
@@ -98,6 +103,8 @@ function formatDate(iso) {
 
 export default function QuotesAdmin() {
   const notify = useNotify();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
   // G102: BrandKit lookup. Module-level cache means re-mounts of QuotesAdmin
@@ -114,7 +121,8 @@ export default function QuotesAdmin() {
   const canDelete = hasPermission("quotes", "delete");
   // Combined for table-column rendering — show the Actions column if
   // ANY mutation is permitted.
-  const canWrite = canCreate || canEdit || canDelete;
+  const canAssign = user?.role === "ADMIN" && canEdit;
+  const canWrite = canCreate || canEdit || canDelete || canAssign;
 
   // Sub-brand the create/edit form may assign. Single-brand users are locked
   // to their one brand (field rendered read-only); multi-brand users get a
@@ -128,12 +136,18 @@ export default function QuotesAdmin() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
+  const [reachedEnd, setReachedEnd] = useState(false);
   // #829 — distinguish 403 from genuine empty so the empty-state copy
   // honestly says "Access restricted" instead of "No quotes match."
   const [permissionDenied, setPermissionDenied] = useState(false);
+  const [assignableUsers, setAssignableUsers] = useState([]);
 
-  const [subBrand, setSubBrand] = useState("");
-  const [status, setStatus] = useState("");
+  const initialQuery = new URLSearchParams(location.search);
+  const openedFromReports = initialQuery.get("source") === "reports";
+  const reportsBackTo = "/travel/reports";
+  const quotesListPath = `${location.pathname}${location.search}`;
+  const [subBrand, setSubBrand] = useState(openedFromReports ? (initialQuery.get("subBrand") || "") : "");
+  const [status, setStatus] = useState(openedFromReports ? (initialQuery.get("status") || "") : "");
   const [nameFilter, setNameFilter] = useState("");
 
   const [showForm, setShowForm] = useState(false);
@@ -178,6 +192,7 @@ export default function QuotesAdmin() {
       setOffset(0);
       setHasMore(true);
       setPermissionDenied(false);
+      setReachedEnd(false);
       if (listRef.current) listRef.current.scrollTop = 0;
     } else {
       if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
@@ -185,29 +200,41 @@ export default function QuotesAdmin() {
     }
     const qs = new URLSearchParams();
     if (subBrand) qs.set("subBrand", subBrand);
-    if (status) qs.set("status", status);
-    qs.set("limit", String(PAGE_SIZE));
+    if (status && status !== "Expired") qs.set("status", status);
+    const pageSize = status === "Expired" ? 200 : PAGE_SIZE;
+    qs.set("limit", String(pageSize));
     qs.set("offset", String(startOffset));
+    const baseUrl = status === "Expired" ? "/api/travel/quotes/expired" : "/api/travel/quotes";
+    const url = `${baseUrl}?${qs.toString()}`;
     try {
-      const d = await fetchApi(`/api/travel/quotes?${qs.toString()}`);
-      const rows = Array.isArray(d?.quotes) ? d.quotes : [];
+      const d = await fetchApi(url);
+      const rows = (Array.isArray(d?.quotes) ? d.quotes : [])
+        .map((q) => (status === "Expired" ? { ...q, status: "Expired" } : q));
       const totalCount = Number.isFinite(Number(d?.total)) ? Number(d.total) : rows.length;
       const nextQuotes = reset ? rows : [...quotesRef.current, ...rows];
       const nextOffset = startOffset + rows.length;
-      const nextHasMore = Number.isFinite(totalCount) ? nextOffset < totalCount : rows.length === PAGE_SIZE;
+      const nextHasMore = Number.isFinite(totalCount)
+        ? nextOffset < totalCount
+        : rows.length === pageSize;
       quotesRef.current = nextQuotes;
       setQuotes(nextQuotes);
       setTotal(totalCount);
       setOffset(nextOffset);
       setHasMore(nextHasMore);
+      offsetRef.current = nextOffset;
+      hasMoreRef.current = nextHasMore;
       setPermissionDenied(false);
     } catch (err) {
-      setQuotes([]);
-      quotesRef.current = [];
-      setTotal(0);
-      setOffset(0);
-      setHasMore(false);
-      setPermissionDenied(err?.status === 403);
+      if (reset) {
+        setQuotes([]);
+        quotesRef.current = [];
+        setTotal(0);
+        setOffset(0);
+        setHasMore(false);
+        offsetRef.current = 0;
+        hasMoreRef.current = false;
+        setPermissionDenied(err?.status === 403);
+      }
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -229,12 +256,39 @@ export default function QuotesAdmin() {
   // and the other travel modules. Without this the page ignored the global
   // selector entirely (only the in-page dropdown filtered).
   useEffect(() => {
+    const query = new URLSearchParams(location.search);
+    if (query.get("source") === "reports") {
+      setSubBrand(query.get("subBrand") || "");
+      setStatus(query.get("status") || "");
+      return;
+    }
     setSubBrand(activeSubBrand || "");
-  }, [activeSubBrand]);
+  }, [activeSubBrand, location.search]);
 
   useEffect(() => {
     load({ reset: true });
   }, [load]);
+  useEffect(() => {
+    if (!canAssign) {
+      setAssignableUsers([]);
+      return;
+    }
+    fetchApi("/api/auth/users", { silent: true })
+      .then((rows) => {
+        const users = Array.isArray(rows) ? rows : [];
+        setAssignableUsers(users.filter((u) => u?.id && u.role !== "ADMIN"));
+      })
+      .catch(() => setAssignableUsers([]));
+  }, [canAssign]);
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || loading || loadingMore || !hasMore) return;
+    const threshold = 72;
+    if (el.scrollHeight <= el.clientHeight + threshold) {
+      load({ reset: false });
+    }
+  }, [quotes, hasMore, loading, loadingMore, load]);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -305,9 +359,23 @@ export default function QuotesAdmin() {
     }
   };
 
+
+  const handleAssign = async (q, assignedToUserId) => {
+    try {
+      const resp = await fetchApi(`/api/travel/quotes/${q.id}/assignment`, {
+        method: "PUT",
+        body: JSON.stringify({ assignedToUserId: assignedToUserId || null }),
+      });
+      const nextQuote = resp?.quote;
+      setQuotes((prev) => prev.map((row) => (row.id === q.id ? { ...row, ...nextQuote } : row)));
+      notify.success(assignedToUserId ? `Quote #${q.id} assigned` : `Quote #${q.id} unassigned`);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Assignment failed");
+    }
+  };
   const handleDelete = async (q) => {
     const contactName = q.contact?.name || "this contact";
-    if (!confirm(`Delete quote #${q.id} for ${contactName}? (Hard delete - no undo.)`)) return;
+    if (!confirm(`Delete quote #${q.id} for ${contactName}? (Hard delete — no undo.)`)) return;
     try {
       await fetchApi(`/api/travel/quotes/${q.id}`, { method: "DELETE" });
       notify.success(`Quote #${q.id} deleted`);
@@ -321,11 +389,12 @@ export default function QuotesAdmin() {
     const el = e.currentTarget;
     if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
     const threshold = 72;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+    setReachedEnd(atBottom);
+    if (atBottom) {
       load({ reset: false });
     }
   }, [load]);
-
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
       <header
@@ -339,6 +408,11 @@ export default function QuotesAdmin() {
         }}
       >
         <div>
+          {openedFromReports && (
+            <button type="button" onClick={() => navigate(reportsBackTo)} style={{ ...secondaryBtn, marginBottom: 10 }}>
+              Back to reports
+            </button>
+          )}
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, fontSize: "1.75rem", fontWeight: 600 }}>
             <Receipt size={26} aria-hidden /> Travel Quotes
           </h1>
@@ -478,7 +552,7 @@ export default function QuotesAdmin() {
         className="glass"
         style={{ padding: 0, overflow: "visible" }}
       >
-        {loading && quotes.length === 0 ? (
+        {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : (
           <div
@@ -488,23 +562,35 @@ export default function QuotesAdmin() {
             style={{ maxHeight: "60vh", overflowY: "auto", overflowX: "hidden" }}
           >
           <TopScrollSync disabled>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <colgroup>
+              <col style={{ width: "16%" }} />
+              <col style={{ width: "9%" }} />
+              <col style={{ width: "11%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "11%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "16%" }} />
+              <col style={{ width: "10%" }} />
+              {canWrite && <col style={{ width: "9%" }} />}
+            </colgroup>
             <thead>
-              <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                <th style={th}>Contact</th>
+              <tr>
+                <th style={{ ...th, whiteSpace: "nowrap" }}>Contact</th>
                 <th style={th}>Status</th>
                 <th style={th}>Total</th>
                 <th style={th}>Currency</th>
-                <th style={th}>Valid Until</th>
+                <th style={{ ...th, whiteSpace: "nowrap" }}>Valid Until</th>
                 <th style={th}>Sub-brand</th>
-                <th style={th}>Created</th>
+                <th style={th}>Assigned to</th>
+                <th style={{ ...th, whiteSpace: "nowrap" }}>Created</th>
                 {canWrite && <th style={{ ...th, textAlign: "center" }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
               {visibleQuotes.map((q) => (
                 <tr key={q.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-                  <td style={td}>
+                  <td style={{ ...td, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     <strong>{q.contact?.name || "—"}</strong>
                   </td>
                   <td style={td}>
@@ -520,24 +606,38 @@ export default function QuotesAdmin() {
                   </td>
                   <td style={td}>{formatMoney(q.totalAmount, { currency: q.currency || "INR" })}</td>
                   <td style={td}>{q.currency || "—"}</td>
-                  <td style={td}>{formatDate(q.validUntil)}</td>
+                  <td style={{ ...td, whiteSpace: "nowrap" }}>{formatDate(q.validUntil)}</td>
                   <td style={td}>
                     <span style={{ ...brandBadge, background: SUB_BRAND_BG[q.subBrand] || "rgba(255,255,255,0.08)" }}>
                       {q.subBrand || "—"}
                     </span>
                   </td>
-                  <td style={td}>{formatDate(q.createdAt)}</td>
+                  <td style={td}>
+                    {canAssign ? (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <UserPlus size={14} aria-hidden />
+                        <select
+                          value={q.assignedToUserId || ""}
+                          onChange={(e) => handleAssign(q, e.target.value)}
+                          style={{ ...selectStyle, minWidth: 150, padding: "4px 8px" }}
+                          aria-label={`Assign quote #${q.id}`}
+                        >
+                          <option value="">Unassigned</option>
+                          {assignableUsers.map((u) => (
+                            <option key={u.id} value={u.id}>{u.name || u.email || `User #${u.id}`}</option>
+                          ))}
+                        </select>
+                      </span>
+                    ) : (
+                      q.assignedToUser?.name || q.assignedToUser?.email || "Unassigned"
+                    )}
+                  </td>
+                  <td style={{ ...td, whiteSpace: "nowrap" }}>{formatDate(q.createdAt)}</td>
                   {canWrite && (
                     <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
-                      {/* Per-action gating — Edit and Delete have
-                          independent catalog actions (quotes.update vs
-                          quotes.delete), so a role with update-only
-                          shouldn't see Delete and vice-versa. */}
-                      {/* Open the FULL builder (plan trip, flight/hotel/transfer
-                          search, line + room editing) for this quote — the inline
-                          pencil only edits the header fields. */}
                       <Link
                         to={`/travel/quotes/builder/${q.id}`}
+                        state={{ backTo: quotesListPath, backLabel: openedFromReports ? "Back to report results" : "Back to quotes" }}
                         title={`Open quote #${q.id} in the builder`}
                         aria-label={`Open quote #${q.id} in the builder`}
                         style={{ ...iconBtn, display: "inline-flex", textDecoration: "none", color: "var(--primary-color, var(--accent-color))" }}
@@ -573,7 +673,7 @@ export default function QuotesAdmin() {
               {visibleQuotes.length === 0 && (
                 <tr>
                   <td
-                    colSpan={canWrite ? 8 : 7}
+                    colSpan={canWrite ? 9 : 8}
                     style={{
                       ...td,
                       textAlign: "center",
@@ -581,7 +681,6 @@ export default function QuotesAdmin() {
                       padding: permissionDenied ? "2rem 1rem" : "1.5rem 1rem",
                     }}
                   >
-                    {/* #829 — honest empty-state when API returned 403. */}
                     {permissionDenied ? (
                       <>
                         <strong>Access restricted.</strong>
@@ -609,6 +708,11 @@ export default function QuotesAdmin() {
           {!loadingMore && hasMore && (
             <div data-testid="quotes-admin-scroll-sentinel" style={{ height: 1 }} />
           )}
+          {reachedEnd && !hasMore && total > 0 && (
+            <div style={{ padding: "12px 0", textAlign: "center", color: "var(--text-secondary)", fontSize: 12 }}>
+              You&apos;ve reached the end of the quotes.
+            </div>
+          )}
           </div>
         )}
       </div>
@@ -619,7 +723,7 @@ export default function QuotesAdmin() {
 const th = {
   position: "sticky",
   top: 0,
-  zIndex: 10,
+  zIndex: 3,
   textAlign: "left",
   padding: "10px 12px",
   fontSize: 12,
@@ -627,7 +731,9 @@ const th = {
   letterSpacing: 0.5,
   color: "var(--text-secondary)",
   borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)",
+  background: "var(--bg-color)",
+  backgroundClip: "padding-box",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
   fontWeight: 600,
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };

@@ -57,18 +57,54 @@ prisma.travelDiagnostic = {
   ...(prisma.travelDiagnostic || {}),
   groupBy: vi.fn(),
 };
+prisma.travelQuote = {
+  ...(prisma.travelQuote || {}),
+  groupBy: vi.fn(),
+  findMany: vi.fn(),
+};
+prisma.travelQuoteLine = {
+  ...(prisma.travelQuoteLine || {}),
+  findMany: vi.fn(),
+};
+prisma.travelQuoteSnapshot = {
+  ...(prisma.travelQuoteSnapshot || {}),
+  findMany: vi.fn(),
+};
+prisma.travelInvoice = {
+  ...(prisma.travelInvoice || {}),
+  groupBy: vi.fn(),
+  findMany: vi.fn(),
+};
+prisma.payment = {
+  ...(prisma.payment || {}),
+  findMany: vi.fn(),
+};
+prisma.itineraryItem = {
+  ...(prisma.itineraryItem || {}),
+  findMany: vi.fn(),
+};
+prisma.visaApplication = {
+  ...(prisma.visaApplication || {}),
+  groupBy: vi.fn(),
+};
+prisma.webCheckin = {
+  ...(prisma.webCheckin || {}),
+  groupBy: vi.fn(),
+};
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
 });
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+prisma.user.findMany = vi.fn().mockResolvedValue([]);
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   create: vi.fn().mockResolvedValue({ id: 1 }),
   findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
 };
 
 import express from 'express';
@@ -102,6 +138,18 @@ function installDefaults() {
   prisma.itinerary.groupBy.mockResolvedValue([]);
   prisma.deal.groupBy.mockResolvedValue([]);
   prisma.travelDiagnostic.groupBy.mockResolvedValue([]);
+  prisma.travelQuote.groupBy.mockResolvedValue([]);
+  prisma.travelQuote.findMany.mockResolvedValue([]);
+  prisma.travelQuoteLine.findMany.mockResolvedValue([]);
+  prisma.travelQuoteSnapshot.findMany.mockResolvedValue([]);
+  prisma.travelInvoice.groupBy.mockResolvedValue([]);
+  prisma.travelInvoice.findMany.mockResolvedValue([]);
+  prisma.payment.findMany.mockResolvedValue([]);
+  prisma.itineraryItem.findMany.mockResolvedValue([]);
+  prisma.visaApplication.groupBy.mockResolvedValue([]);
+  prisma.webCheckin.groupBy.mockResolvedValue([]);
+  prisma.auditLog.findMany.mockResolvedValue([]);
+  prisma.user.findMany.mockResolvedValue([]);
 }
 
 beforeEach(() => {
@@ -111,6 +159,17 @@ beforeEach(() => {
   prisma.itinerary.groupBy.mockReset();
   prisma.deal.groupBy.mockReset();
   prisma.travelDiagnostic.groupBy.mockReset();
+  prisma.travelQuote.groupBy.mockReset();
+  prisma.travelQuote.findMany.mockReset();
+  prisma.travelQuoteLine.findMany.mockReset();
+  prisma.travelQuoteSnapshot.findMany.mockReset();
+  prisma.travelInvoice.groupBy.mockReset();
+  prisma.travelInvoice.findMany.mockReset();
+  prisma.payment.findMany.mockReset();
+  prisma.itineraryItem.findMany.mockReset();
+  prisma.visaApplication.groupBy.mockReset();
+  prisma.webCheckin.groupBy.mockReset();
+  prisma.auditLog.findMany.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -181,6 +240,17 @@ describe('GET /api/travel/reports/summary — happy path', () => {
         { subBrand: 'rfu', stage: 'won', _sum: { amount: 300000 } },
       ]);
 
+    prisma.auditLog.findMany.mockResolvedValue([
+      { userId: 55, action: 'CREATE' },
+      { userId: 55, action: 'CREATE' },
+      { userId: 55, action: 'UPDATE' },
+      { userId: 55, action: 'QUOTE_SHARE' },
+      { userId: 55, action: 'TRAVEL_QUOTE_ACCEPTED' },
+      { userId: 55, action: 'TRAVEL_QUOTE_ACCEPTED' },
+      { userId: 55, action: 'TRAVEL_QUOTE_DECLINED' },
+    ]);
+    prisma.user.findMany.mockResolvedValue([{ id: 55, name: 'Asha Advisor', email: 'asha@test.local' }]);
+
     const res = await request(makeApp())
       .get('/api/travel/reports/summary')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
@@ -203,6 +273,16 @@ describe('GET /api/travel/reports/summary — happy path', () => {
       totalWonRevenue: 800000,
       conversionPct: 80,
       currency: 'INR',
+    });
+    expect(res.body.agentProductivity.agents[0]).toMatchObject({
+      userId: 55,
+      name: 'Asha Advisor',
+      totalActions: 7,
+      createdQuotes: 2,
+      sentQuotes: 1,
+      acceptedQuotes: 2,
+      declinedQuotes: 1,
+      updatedQuotes: 1,
     });
     expect(typeof res.body.generatedAt).toBe('string');
     // Sections must NOT carry the source endpoints' deep drill-down
@@ -241,6 +321,111 @@ describe('GET /api/travel/reports/summary — cross-tenant', () => {
 
 // ─── Sub-brand restriction (graceful per-section) ──────────────────
 
+
+
+describe('GET /api/travel/reports/summary - paid quote statuses', () => {
+  test('advance_paid and fully_paid count as accepted quote states', async () => {
+    prisma.travelQuote.groupBy.mockImplementation((args) => {
+      const by = Array.isArray(args?.by) ? args.by : [];
+      if (by.includes('subBrand') && by.includes('status') && args?._count) {
+        return Promise.resolve([
+          { subBrand: 'rfu', status: 'advance_paid', _count: { _all: 1 } },
+          { subBrand: 'rfu', status: 'fully_paid', _count: { _all: 1 } },
+          { subBrand: 'rfu', status: 'Rejected', _count: { _all: 1 } },
+        ]);
+      }
+      if (by.includes('subBrand') && by.includes('status') && args?._sum) {
+        return Promise.resolve([
+          { subBrand: 'rfu', status: 'advance_paid', _sum: { totalAmount: 100000 } },
+          { subBrand: 'rfu', status: 'fully_paid', _sum: { totalAmount: 200000 } },
+          { subBrand: 'rfu', status: 'Rejected', _sum: { totalAmount: 50000 } },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/reports/summary')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.salesFunnel).toMatchObject({
+      total: 3,
+      accepted: 2,
+      rejected: 1,
+      conversionPct: 66.67,
+    });
+    expect(res.body.salesFunnel.bySubBrand.rfu).toMatchObject({
+      total: 3,
+      accepted: 2,
+      revenue: 300000,
+    });
+  });
+});
+describe('GET /api/travel/reports/summary - agent productivity attribution', () => {
+  test('customer acceptance is credited to the advisor who shared the quote', async () => {
+    prisma.auditLog.findMany.mockResolvedValue([
+      { userId: 77, action: 'CREATE', entityId: 501, createdAt: new Date('2026-08-01T10:00:00Z') },
+      { userId: 77, action: 'QUOTE_SHARE', entityId: 501, createdAt: new Date('2026-08-01T10:05:00Z') },
+    ]);
+    prisma.travelQuoteSnapshot.findMany.mockResolvedValue([
+      { quoteId: 501, statusAfter: 'Accepted', createdAt: new Date('2026-08-01T10:10:00Z') },
+    ]);
+    prisma.user.findMany.mockResolvedValue([{ id: 77, name: 'RFU Advisor', email: 'rfu@test.local' }]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/reports/summary')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.agentProductivity.agents).toEqual([
+      expect.objectContaining({
+        userId: 77,
+        name: 'RFU Advisor',
+        totalActions: 3,
+        createdQuotes: 1,
+        sentQuotes: 1,
+        acceptedQuotes: 1,
+      }),
+    ]);
+  });
+
+  test('customer payment is credited to the advisor who shared the quote', async () => {
+    prisma.auditLog.findMany.mockResolvedValue([
+      { userId: 77, action: 'CREATE', entityId: 501, createdAt: new Date('2026-08-01T10:00:00Z') },
+      { userId: 77, action: 'QUOTE_SHARE', entityId: 501, createdAt: new Date('2026-08-01T10:05:00Z') },
+    ]);
+    prisma.payment.findMany.mockResolvedValue([
+      {
+        id: 9001,
+        invoiceId: null,
+        amount: 100000,
+        paidAt: new Date('2026-08-03T08:00:00Z'),
+        createdAt: new Date('2026-08-03T08:00:00Z'),
+        metadata: JSON.stringify({ type: 'travel-quote-advance', quoteId: 501, subBrand: 'rfu' }),
+        description: 'Quote #501 advance',
+      },
+    ]);
+    prisma.user.findMany.mockResolvedValue([{ id: 77, name: 'RFU Advisor', email: 'rfu@test.local' }]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/reports/summary')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.agentProductivity.agents).toEqual([
+      expect.objectContaining({
+        userId: 77,
+        name: 'RFU Advisor',
+        totalActions: 3,
+        createdQuotes: 1,
+        sentQuotes: 1,
+        paidQuotes: 1,
+        paymentAmount: 100000,
+      }),
+    ]);
+  });
+});
 describe('GET /api/travel/reports/summary — sub-brand graceful degradation', () => {
   test('MANAGER with subBrandAccess=["rfu"] → tmc and crossBrand sub-narrowed; only rfu populated', async () => {
     prisma.user.findUnique.mockResolvedValue({
@@ -377,5 +562,98 @@ describe('GET /api/travel/reports/summary — generatedAt', () => {
     const t = parsed.getTime();
     expect(t).toBeGreaterThanOrEqual(before - 5000);
     expect(t).toBeLessThanOrEqual(after + 5000);
+  });
+});
+
+describe('GET /api/travel/reports/pnl - detail report', () => {
+  test('returns brand profit/loss totals plus invoice and itinerary cost rows', async () => {
+    prisma.travelInvoice.findMany.mockResolvedValue([
+      {
+        id: 11,
+        invoiceNum: 'TINV-1',
+        subBrand: 'tmc',
+        status: 'Paid',
+        totalAmount: 100000,
+        currency: 'INR',
+        dueDate: null,
+        paidAt: null,
+        createdAt: new Date('2026-01-10T00:00:00.000Z'),
+        contactId: 5,
+        quoteId: 7,
+        itineraryId: 9,
+      },
+      {
+        id: 12,
+        invoiceNum: 'RINV-1',
+        subBrand: 'rfu',
+        status: 'Issued',
+        totalAmount: 50000,
+        currency: 'INR',
+        dueDate: null,
+        paidAt: null,
+        createdAt: new Date('2026-01-11T00:00:00.000Z'),
+        contactId: 6,
+        quoteId: null,
+        itineraryId: 10,
+      },
+    ]);
+    prisma.itineraryItem.findMany.mockResolvedValue([
+      {
+        id: 21,
+        itemType: 'hotel',
+        description: 'Hotel block',
+        supplierId: 3,
+        unitCost: 20000,
+        quantity: 2,
+        totalPrice: 55000,
+        createdAt: new Date('2026-01-12T00:00:00.000Z'),
+        itinerary: { id: 9, subBrand: 'tmc', destination: 'Jaipur', status: 'accepted', totalAmount: 100000, currency: 'INR', startDate: null, endDate: null },
+      },
+      {
+        id: 22,
+        itemType: 'flight',
+        description: 'Flight tickets',
+        supplierId: 4,
+        unitCost: 30000,
+        quantity: 1,
+        totalPrice: 35000,
+        createdAt: new Date('2026-01-12T00:00:00.000Z'),
+        itinerary: { id: 10, subBrand: 'rfu', destination: 'Makkah', status: 'accepted', totalAmount: 50000, currency: 'INR', startDate: null, endDate: null },
+      },
+    ]);
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      {
+        id: 31,
+        quoteId: 41,
+        lineType: 'flight',
+        description: 'Quoted flight package',
+        quantity: 2,
+        unitPrice: 25000,
+        amount: 50000,
+        currency: 'INR',
+        supplierId: 4,
+        createdAt: new Date('2026-01-13T00:00:00.000Z'),
+        quote: { subBrand: 'tmc', status: 'Accepted', totalAmount: 50000, currency: 'INR' },
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/reports/pnl')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.totals).toMatchObject({ revenue: 150000, capturedCost: 70000, quoteValue: 50000, grossProfit: 80000 });
+    expect(res.body.brands).toEqual(expect.arrayContaining([
+      expect.objectContaining({ subBrand: 'tmc', revenue: 100000, capturedCost: 40000, quoteValue: 50000, grossProfit: 60000, invoiceCount: 1, costLineCount: 1, quoteLineCount: 1 }),
+      expect.objectContaining({ subBrand: 'rfu', revenue: 50000, capturedCost: 30000, grossProfit: 20000, invoiceCount: 1, costLineCount: 1 }),
+    ]));
+    expect(res.body.revenueRows[0]).toMatchObject({ invoiceNum: 'TINV-1', amount: 100000 });
+    expect(res.body.costRows[0]).toMatchObject({ destination: 'Jaipur', capturedCost: 40000 });
+    expect(prisma.travelQuoteLine.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        quote: expect.objectContaining({ status: { in: ['Accepted', 'advance_paid', 'fully_paid'] } }),
+      }),
+    }));
+    expect(res.body.quoteRows[0]).toMatchObject({ quoteStatus: 'Accepted', lineType: 'flight', description: 'Quoted flight package', amount: 50000 });
   });
 });

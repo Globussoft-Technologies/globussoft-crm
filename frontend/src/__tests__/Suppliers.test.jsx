@@ -35,7 +35,7 @@
  *      asserts document.body.innerHTML does not contain it.
  *   6. Reveal flow: clicking the Reveal button POSTs to
  *      /api/travel/supplier-credentials/:id/reveal, then opens a
- *      role="dialog" modal containing the plaintext loginId + password.
+ *      role="dialog" modal containing the plaintext username/email + password.
  *   7. Reveal modal close: clicking the X button (aria-label "Close") OR
  *      the overlay backdrop dismisses the modal; clicking the dialog body
  *      does NOT propagate to the overlay (stopPropagation).
@@ -45,7 +45,7 @@
  *      type="password" (the browser masks the field while typing — pin
  *      this so a regression to type="text" is caught).
  *  10. Add validation: missing supplierName / loginId / password surfaces
- *      notify.error("supplierName + loginId + password required") and
+ *      notify.error("supplierName + username/email + password required") and
  *      does NOT fire POST.
  *  11. Add happy path: filling all 3 required fields + clicking Save POSTs
  *      /api/travel/supplier-credentials with the form body; on success,
@@ -178,7 +178,7 @@ function makeCred(overrides = {}) {
 }
 
 const CREDS_DEFAULT = [
-  makeCred({ id: 501, category: 'airline', supplierName: 'Airline Portal' }),
+  makeCred({ id: 501, category: 'airline', supplierName: 'Airline Portal', portalUrl: 'https://airline.example.com' }),
   makeCred({ id: 502, category: 'hotel', supplierName: 'Hotel Reservations', lastUsedAt: null }),
   makeCred({ id: 503, category: 'visa-portal', supplierName: 'Visa Govt Portal' }),
 ];
@@ -362,7 +362,7 @@ describe('<Suppliers /> — category filter', () => {
 });
 
 describe('<Suppliers /> — reveal flow (the one place plaintext appears)', () => {
-  it('clicking Reveal POSTs /:id/reveal and opens a dialog modal with the plaintext loginId + password', async () => {
+  it('clicking Reveal POSTs /:id/reveal and opens a dialog modal with the plaintext username/email + password', async () => {
     renderPage();
     await screen.findByText('Airline Portal');
     // Before click: no dialog. No plaintext anywhere.
@@ -416,8 +416,8 @@ describe('<Suppliers /> — add + delete', () => {
     expect(screen.queryByPlaceholderText(/^Supplier name$/i)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Add credential/i }));
     // After click, form surfaces.
-    expect(screen.getByPlaceholderText(/^Supplier name$/i)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/^Login ID$/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Supplier name')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Username / email')).toBeInTheDocument();
     const pwInput = screen.getByPlaceholderText(/^Password$/i);
     expect(pwInput).toBeInTheDocument();
     // CRITICAL: password input must be type="password" (security regression
@@ -425,7 +425,7 @@ describe('<Suppliers /> — add + delete', () => {
     expect(pwInput.getAttribute('type')).toBe('password');
   });
 
-  it('validation: blank fields surface notify.error("supplierName + loginId + password required") and do NOT fire POST', async () => {
+  it('validation: blank fields surface notify.error("supplierName + username/email + password required") and do NOT fire POST', async () => {
     renderPage();
     await screen.findByText('Airline Portal');
     fireEvent.click(screen.getByRole('button', { name: /Add credential/i }));
@@ -434,7 +434,7 @@ describe('<Suppliers /> — add + delete', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/supplierName \+ loginId \+ password required/i),
+        expect.stringMatching(/supplierName \+ username\/email \+ password required/i),
       );
     });
     const posts = fetchApiMock.mock.calls.filter(
@@ -443,12 +443,12 @@ describe('<Suppliers /> — add + delete', () => {
     expect(posts.length).toBe(0);
   });
 
-  it('happy path: filled form POSTs body with category/supplierName/loginId/password, then re-fetches list', async () => {
+  it('happy path: filled form POSTs body with category/supplierName/username/email/password, then re-fetches list', async () => {
     renderPage();
     await screen.findByText('Airline Portal');
     fireEvent.click(screen.getByRole('button', { name: /Add credential/i }));
-    fireEvent.change(screen.getByPlaceholderText(/^Supplier name$/i), { target: { value: 'New Portal' } });
-    fireEvent.change(screen.getByPlaceholderText(/^Login ID$/i), { target: { value: 'agent-99' } });
+    fireEvent.change(screen.getByPlaceholderText('Supplier name'), { target: { value: 'New Portal' } });
+    fireEvent.change(screen.getByPlaceholderText('Username / email'), { target: { value: 'agent-99' } });
     fireEvent.change(screen.getByPlaceholderText(/^Password$/i), { target: { value: 'fresh-pw' } });
     fetchApiMock.mockClear();
     installFetchMock();

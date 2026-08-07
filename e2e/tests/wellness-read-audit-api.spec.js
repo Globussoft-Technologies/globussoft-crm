@@ -98,14 +98,14 @@ async function put(request, token, path, body) {
 // Find the most-recent audit row for (entity, action) in the requester's
 // tenant whose createdAt >= afterMs. Returns null if not found within
 // the first /api/audit page (cap=100 per routes/audit.js).
-async function findAuditRow(request, token, entity, action, afterMs) {
+async function findAuditRow(request, token, entity, action, afterMs, userId) {
   const r = await get(request, token, `/api/audit?entity=${encodeURIComponent(entity)}&action=${encodeURIComponent(action)}`);
   if (!r.ok()) return null;
   const rows = await r.json();
   const list = Array.isArray(rows) ? rows : (rows.audit || rows.data || []);
   const candidates = list.filter((row) => {
     const created = row.createdAt ? new Date(row.createdAt).getTime() : 0;
-    return created >= afterMs;
+    return created >= afterMs && (!userId || Number(row.userId) === Number(userId));
   });
   // Newest first (server returns desc) — pick the first match.
   return candidates[0] || null;
@@ -198,7 +198,7 @@ test.describe('Wellness PHI-read audit contract — T2.2', () => {
     // INSERT commit on a busy demo).
     let row = null;
     for (let i = 0; i < 5 && !row; i++) {
-      row = await findAuditRow(request, token, 'Visit', 'VISIT_LIST_READ', before);
+      row = await findAuditRow(request, token, 'Visit', 'VISIT_LIST_READ', before, userId);
       if (!row) await new Promise((res) => setTimeout(res, 200));
     }
 
@@ -221,7 +221,7 @@ test.describe('Wellness PHI-read audit contract — T2.2', () => {
 
     let row = null;
     for (let i = 0; i < 5 && !row; i++) {
-      row = await findAuditRow(request, token, 'Visit', 'VISIT_CONSUMPTIONS_READ', before);
+      row = await findAuditRow(request, token, 'Visit', 'VISIT_CONSUMPTIONS_READ', before, userId);
       if (!row) await new Promise((res) => setTimeout(res, 200));
     }
 
@@ -242,7 +242,7 @@ test.describe('Wellness PHI-read audit contract — T2.2', () => {
 
     let row = null;
     for (let i = 0; i < 5 && !row; i++) {
-      row = await findAuditRow(request, token, 'Prescription', 'PRESCRIPTION_LIST_READ', before);
+      row = await findAuditRow(request, token, 'Prescription', 'PRESCRIPTION_LIST_READ', before, userId);
       if (!row) await new Promise((res) => setTimeout(res, 200));
     }
 
@@ -260,7 +260,7 @@ test.describe('Wellness PHI-read audit contract — T2.2', () => {
 
     let row = null;
     for (let i = 0; i < 5 && !row; i++) {
-      row = await findAuditRow(request, token, 'ConsentForm', 'CONSENT_LIST_READ', before);
+      row = await findAuditRow(request, token, 'ConsentForm', 'CONSENT_LIST_READ', before, userId);
       if (!row) await new Promise((res) => setTimeout(res, 200));
     }
 
@@ -278,7 +278,7 @@ test.describe('Wellness PHI-read audit contract — T2.2', () => {
 
     let row = null;
     for (let i = 0; i < 5 && !row; i++) {
-      row = await findAuditRow(request, token, 'TreatmentPlan', 'TREATMENT_PLAN_LIST_READ', before);
+      row = await findAuditRow(request, token, 'TreatmentPlan', 'TREATMENT_PLAN_LIST_READ', before, userId);
       if (!row) await new Promise((res) => setTimeout(res, 200));
     }
 
@@ -297,7 +297,7 @@ test.describe('Wellness PHI-read audit contract — T2.2', () => {
 
     let row = null;
     for (let i = 0; i < 5 && !row; i++) {
-      row = await findAuditRow(request, token, 'TreatmentPlan', 'TREATMENT_PLAN_READ', before);
+      row = await findAuditRow(request, token, 'TreatmentPlan', 'TREATMENT_PLAN_READ', before, userId);
       if (!row) await new Promise((res) => setTimeout(res, 200));
     }
 
@@ -311,7 +311,7 @@ test.describe('Wellness PHI-read audit contract — T2.2', () => {
   });
 
   test('staff actorType is implicit user (no _actorType / _patientActorId in details)', async ({ request }) => {
-    const { token } = await getWellnessAdmin(request);
+    const { token, userId } = await getWellnessAdmin(request);
     // Sanity check that the patient-portal indicator stays absent on staff
     // path. PATIENT_DETAIL_READ from /portal/me has _actorType:'patient',
     // _patientActorId:<id> in details; staff reads must NOT carry those
@@ -322,7 +322,7 @@ test.describe('Wellness PHI-read audit contract — T2.2', () => {
 
     let row = null;
     for (let i = 0; i < 5 && !row; i++) {
-      row = await findAuditRow(request, token, 'Visit', 'VISIT_LIST_READ', before);
+      row = await findAuditRow(request, token, 'Visit', 'VISIT_LIST_READ', before, userId);
       if (!row) await new Promise((res) => setTimeout(res, 200));
     }
     expect(row, 'staff VISIT_LIST_READ row found').toBeTruthy();

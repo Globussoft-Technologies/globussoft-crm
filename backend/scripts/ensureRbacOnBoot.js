@@ -323,11 +323,22 @@ async function ensureRole(stats, { tenantId, key, name, description, isSystem, u
     // → first accessible page → /home. No backfill needed.
     return { role: existing, wasCreated: false };
   }
-  const created = await prisma.role.create({
-    data: { tenantId, key, name, description, isSystem, isActive: true, userType, landingPath: landingPath || null },
-  });
-  stats.rolesCreated++;
-  return { role: created, wasCreated: true };
+  try {
+    const created = await prisma.role.create({
+      data: { tenantId, key, name, description, isSystem, isActive: true, userType, landingPath: landingPath || null },
+    });
+    stats.rolesCreated++;
+    return { role: created, wasCreated: true };
+  } catch (err) {
+    if (err && err.code === 'P2002') {
+      const raced = await prisma.role.findFirst({ where: { tenantId, key } });
+      if (raced) {
+        stats.rolesExisting++;
+        return { role: raced, wasCreated: false };
+      }
+    }
+    throw err;
+  }
 }
 
 async function ensureRolePermission(stats, roleId, module, action) {
@@ -338,8 +349,16 @@ async function ensureRolePermission(stats, roleId, module, action) {
     stats.permsExisting++;
     return;
   }
-  await prisma.rolePermission.create({ data: { roleId, module, action } });
-  stats.permsCreated++;
+  try {
+    await prisma.rolePermission.create({ data: { roleId, module, action } });
+    stats.permsCreated++;
+  } catch (err) {
+    if (err && err.code === 'P2002') {
+      stats.permsExisting++;
+      return;
+    }
+    throw err;
+  }
 }
 
 async function ensureUserRole(stats, userId, roleId) {
@@ -353,8 +372,16 @@ async function ensureUserRole(stats, userId, roleId) {
     stats.assignmentsExisting++;
     return;
   }
-  await prisma.userRole.create({ data: { userId, roleId } });
-  stats.assignmentsCreated++;
+  try {
+    await prisma.userRole.create({ data: { userId, roleId } });
+    stats.assignmentsCreated++;
+  } catch (err) {
+    if (err && err.code === 'P2002') {
+      stats.assignmentsExisting++;
+      return;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -424,7 +451,7 @@ async function ensureRbacOnBoot() {
     usersSkipped: 0,
   };
 
-  const ownerRole = await ensureRole(stats, {
+  const { role: ownerRole } = await ensureRole(stats, {
     tenantId: null,
     key: 'OWNER',
     name: 'Platform Owner',

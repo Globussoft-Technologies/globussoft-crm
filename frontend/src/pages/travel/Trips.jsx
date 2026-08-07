@@ -8,12 +8,11 @@
 // No creation flow here — trips spawn from the linked Deal in the sales
 // pipeline (Day 7+ Deal-extension lands later).
 
-import { useEffect, useState, useMemo, useCallback, useRef } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X, Trash2, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
-import TopScrollSync from "../../components/TopScrollSync";
 
 // School is captured as free-text so the operator doesn't have to pre-create
 // a Contact row for every new school. The backend POST /api/travel/trips
@@ -28,9 +27,6 @@ const STATUSES = [
   { value: "completed", label: "Completed" },
   { value: "cancelled", label: "Cancelled" },
 ];
-
-const BRAND_LABEL = "TMC";
-const SUB_BRAND_LABEL = "School trips";
 
 const STATUS_COLORS = {
   confirmed: { bg: "rgba(47,122,77,0.14)", color: "#2F7A4D" },
@@ -57,20 +53,27 @@ const EMPTY_FORM = {
   departDate: "", returnDate: "", pricePerStudent: "", status: "confirmed",
 };
 
+const BRAND_LABEL = "TMC";
+const SUB_BRAND_LABEL = "School trips";
 const PAGE_SIZE = 10;
 
 export default function Trips() {
   const notify = useNotify();
+  const location = useLocation();
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const initialStatus = searchParams.get("status") || "";
-  const [loadingMore, setLoadingMore] = useState(false);
+  const initialSearch = searchParams.get("search") || "";
+  const fromReports = searchParams.get("from") === "reports" || searchParams.get("source") === "reports";
+  const tripsListPath = `${location.pathname}${location.search}`;
   const [status, setStatus] = useState(initialStatus);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearch);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
+  const [reachedEnd, setReachedEnd] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
@@ -117,7 +120,9 @@ export default function Trips() {
 
   useEffect(() => {
     const nextStatus = searchParams.get("status") || "";
+    const nextSearch = searchParams.get("search") || "";
     setStatus((current) => (current === nextStatus ? current : nextStatus));
+    setSearch((current) => (current === nextSearch ? current : nextSearch));
   }, [searchParams]);
 
   useEffect(() => {
@@ -140,6 +145,18 @@ export default function Trips() {
     hasMoreRef.current = hasMore;
   }, [hasMore]);
 
+  useEffect(() => {
+    if (loading || loadingMore || !listRef.current) return;
+    if (hasMore) {
+      setReachedEnd(false);
+      return;
+    }
+    const el = listRef.current;
+    const threshold = 72;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+    setReachedEnd(atBottom);
+  }, [trips, hasMore, loading, loadingMore]);
+
   const load = useCallback(async ({ reset = false } = {}) => {
     const startOffset = reset ? 0 : offsetRef.current;
 
@@ -151,6 +168,7 @@ export default function Trips() {
       setTotal(0);
       setOffset(0);
       setHasMore(true);
+      setReachedEnd(false);
       offsetRef.current = 0;
       hasMoreRef.current = true;
       if (listRef.current) {
@@ -160,7 +178,6 @@ export default function Trips() {
       if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
       setLoadingMore(true);
     }
-
     const qs = new URLSearchParams();
     if (status) qs.set("status", status);
     qs.set("limit", String(PAGE_SIZE));
@@ -206,7 +223,9 @@ export default function Trips() {
     const el = e.currentTarget;
     if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
     const threshold = 72;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+    setReachedEnd(atBottom);
+    if (atBottom) {
       load({ reset: false });
     }
   }, [load]);
@@ -277,6 +296,11 @@ export default function Trips() {
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
+          {fromReports && (
+            <Link to="/travel/reports" style={{ ...backLink, marginBottom: 10 }}>
+              Back to reports
+            </Link>
+          )}
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, marginBottom: 4 }}>
             <Luggage size={28} aria-hidden /> TMC Trips
           </h1>
@@ -313,10 +337,19 @@ export default function Trips() {
         <button type="button" onClick={() => load({ reset: true })} style={refreshBtn} aria-label="Reload list">Refresh</button>
       </div>
 
-      <div style={{
-        background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)",
-      }}>
+      <div
+        ref={listRef}
+        data-testid="trips-table-scroll"
+        onScroll={handleListScroll}
+        style={{
+          background: "var(--surface-color)", borderRadius: 8,
+          border: "1px solid var(--border-color)",
+          overflow: "auto",
+          height: "calc(100vh - 300px)",
+          minHeight: 620,
+          maxHeight: 780,
+        }}
+      >
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : trips.length === 0 ? (
@@ -326,22 +359,29 @@ export default function Trips() {
         ) : visibleTrips.length === 0 ? (
           <div style={empty}>No trips match &ldquo;{search}&rdquo;.</div>
         ) : (
-          <div
-            ref={listRef}
-            data-testid="trips-table-scroll"
-            onScroll={handleListScroll}
-            style={{
-              maxHeight: "60vh",
-              overflowY: "auto",
-              overflowX: "hidden",
-            }}
-          >
-            <TopScrollSync>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead style={{position: "sticky", top: 0,background: "#fff",zIndex: 10,}}>
+          <>
+            <table
+              className="stable-table"
+              style={{ width: "100%", minWidth: 1520, borderCollapse: "collapse", tableLayout: "fixed" }}
+            >
+              <colgroup>
+                <col style={{ width: 170 }} />
+                <col style={{ width: 260 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 140 }} />
+                <col style={{ width: 220 }} />
+                <col style={{ width: 240 }} />
+                <col style={{ width: 130 }} />
+                <col style={{ width: 150 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 90 }} />
+              </colgroup>
+              <thead>
                 <tr>
                   <th style={th}>Trip code</th>
                   <th style={th}>Destination</th>
+                  <th style={th}>Brand</th>
+                  <th style={th}>Sub-brand</th>
                   <th style={th}>Dates</th>
                   <th style={th}>School</th>
                   <th style={th}>Participants</th>
@@ -356,7 +396,11 @@ export default function Trips() {
                   return (
                     <tr key={t.id} style={{ borderTop: "1px solid var(--border-light)" }}>
                     <td style={td}>
-                      <Link to={`/travel/trips/${t.id}`} style={{ color: "var(--primary-color)", textDecoration: "none", fontWeight: 600 }}>
+                      <Link
+                        to={`/travel/trips/${t.id}`}
+                        state={{ backTo: tripsListPath, backLabel: fromReports ? "Back to reports results" : "Back to trips" }}
+                        style={{ color: "var(--primary-color)", textDecoration: "none", fontWeight: 600 }}
+                      >
                         {t.tripCode}
                       </Link>
                     </td>
@@ -413,21 +457,20 @@ export default function Trips() {
                 })}
               </tbody>
             </table>
-            {total > 0 && (
-              <div style={{ padding: "12px 0", textAlign: "center", color: "var(--text-secondary)", fontSize: 12 }}>
-                {hasMore ? "Scroll to load more trips." : "You've reached the end of the trips."}
+            {loadingMore && (
+              <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
+                Loading more&hellip;
               </div>
             )}
-            </TopScrollSync>
-            <div style={{ paddingTop: 12 }}>
-              {loadingMore && (
-                <div style={empty}>Loading more&hellip;</div>
-              )}
-              {!loadingMore && hasMore && (
-                <div aria-hidden="true" data-testid="trips-table-sentinel" style={{ height: 1 }} />
-              )}
-            </div>
-          </div>
+            {!loadingMore && hasMore && (
+              <div aria-hidden="true" data-testid="trips-table-sentinel" style={{ height: 1 }} />
+            )}
+            {total > 0 && reachedEnd && !hasMore && (
+              <div style={{ padding: "10px 16px", textAlign: "center", color: "var(--text-secondary)", fontSize: 12, borderTop: "1px solid var(--border-color)" }}>
+                You&apos;ve reached the end of the trips.
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -538,6 +581,12 @@ const selectStyle = {
   background: "var(--surface-color)", color: "var(--text-primary)",
   minWidth: 160, fontSize: 13,
 };
+const backLink = {
+  display: "inline-flex", alignItems: "center", gap: 4,
+  fontSize: 13, color: "var(--text-secondary)",
+  textDecoration: "none", padding: "6px 12px", borderRadius: 6,
+  border: "1px solid var(--border-color)",
+};
 const refreshBtn = {
   padding: "6px 12px", borderRadius: 6,
   border: "1px solid var(--border-color)",
@@ -579,19 +628,29 @@ const empty = {
   padding: 32, textAlign: "center",
   color: "var(--text-secondary)", fontSize: 14,
 };
-const th = {
-  textAlign: "left", padding: "10px 12px", fontSize: 12,
-  textTransform: "uppercase", letterSpacing: 0.5,
-  color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)",
-};
-const td = {
-  padding: "10px 12px", fontSize: 14,
-  color: "var(--text-primary)",
-};
 const brandBadge = {
   display: "inline-flex", alignItems: "center", justifyContent: "center",
   padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700,
   letterSpacing: 0.5, textTransform: "uppercase",
   background: "rgba(91,110,225,0.14)", color: "var(--primary-color)",
+};
+const th = {
+  textAlign: "left", padding: "10px 12px", fontSize: 12,
+  textTransform: "uppercase", letterSpacing: 0.5,
+  color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
+  position: "sticky",
+  top: 0,
+  zIndex: 10,
+  background: "var(--modal-bg, var(--bg-color))",
+  backgroundColor: "var(--modal-bg, var(--bg-color))",
+  backgroundClip: "padding-box",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+  whiteSpace: "nowrap",
+};
+const td = {
+  padding: "10px 12px", fontSize: 14,
+  color: "var(--text-primary)",
+  verticalAlign: "middle",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
 };

@@ -326,7 +326,7 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     // so production (where the SPA catches "/uploads/*" before the backend static
     // mount) still serves the file. Backend stores the bare "/uploads/..." form,
     // so the mock keeps that; the rendered href is the normalized "/api/..." form.
-    const viewLink = screen.getByRole('link', { name: /^View$/ });
+    const viewLink = screen.getByRole('link', { name: /^View file$/ });
     expect(viewLink.getAttribute('href')).toBe('/api/uploads/boarding-passes/bp-xyz.pdf');
     expect(viewLink.getAttribute('target')).toBe('_blank');
     expect(viewLink.getAttribute('rel')).toMatch(/noopener/);

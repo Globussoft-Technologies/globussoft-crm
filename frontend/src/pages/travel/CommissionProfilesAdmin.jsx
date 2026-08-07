@@ -102,6 +102,11 @@ const PROFILE_TYPES = [
   { value: "hybrid", label: "Hybrid" },
 ];
 
+const RELEASE_MODES = [
+  { value: "on_booking", label: "On booking" },
+  { value: "on_trip_completion", label: "On trip completion" },
+];
+
 // Style hint for the profile-type column badge.
 const PROFILE_TYPE_BADGE_BG = {
   flat_percent: "rgba(34, 197, 94, 0.18)",
@@ -137,6 +142,10 @@ function brandedButtonBorder(background) {
 const EMPTY_FORM = {
   name: "",
   subBrand: "",
+  agentUserId: "",
+  validFrom: "",
+  validTo: "",
+  releaseMode: "on_booking",
   profileType: "flat_percent",
   notes: "",
   // type-specific sub-form fields — only the relevant subset is consumed
@@ -232,6 +241,28 @@ function buildProfileJson(form, notifyErr) {
 // Parse an existing profileJson string back into the form's flat fields so
 // edit pre-fill works. Defensive — partial / malformed JSON yields blank
 // fields rather than throwing.
+function toDateInputValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+function formatScopeWindow(validFrom, validTo) {
+  if (!validFrom && !validTo) return "Always";
+  const fmt = (value) => {
+    if (!value) return "";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
+  };
+  const from = fmt(validFrom);
+  const to = fmt(validTo);
+  if (from && to) return `${from} – ${to}`;
+  if (from) return `From ${from}`;
+  if (to) return `Until ${to}`;
+  return "Always";
+}
+
 function parseProfileJsonForForm(profileType, raw) {
   let parsed = {};
   if (typeof raw === "string" && raw) {
@@ -283,6 +314,7 @@ export default function CommissionProfilesAdmin() {
   };
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
   const canDelete = user?.role === "ADMIN";
+  const [staffOptions, setStaffOptions] = useState([]);
 
   // Sub-brand access scoping (mirrors Leads.jsx). myBrands = the sub-brands
   // this user may act on (ADMIN → all 4; restricted user → their granted
@@ -353,6 +385,19 @@ export default function CommissionProfilesAdmin() {
 
   useEffect(load, [subBrandFilter, activeOnly]);
 
+  useEffect(() => {
+    fetchApi("/api/staff?fields=summary", { silent: true })
+      .then((data) => setStaffOptions(Array.isArray(data) ? data : []))
+      .catch(() => setStaffOptions([]));
+  }, []);
+
+  const staffNameById = new Map(
+    staffOptions.map((member) => [
+      String(member.id),
+      member.name || member.email || `User #${member.id}`,
+    ]),
+  );
+
   const resetForm = () => {
     setForm(EMPTY_FORM);
     setEditingId(null);
@@ -372,6 +417,10 @@ export default function CommissionProfilesAdmin() {
     setForm({
       name: p.name || "",
       subBrand: p.subBrand || "",
+      agentUserId: p.agentUserId != null ? String(p.agentUserId) : "",
+      validFrom: toDateInputValue(p.validFrom),
+      validTo: toDateInputValue(p.validTo),
+      releaseMode: p.releaseMode || "on_booking",
       profileType: p.profileType || "flat_percent",
       notes: p.notes || "",
       ...subFields,
@@ -394,6 +443,10 @@ export default function CommissionProfilesAdmin() {
       const payload = {
         name: trimmedName,
         subBrand: form.subBrand || null,
+        agentUserId: form.agentUserId || null,
+        validFrom: form.validFrom || null,
+        validTo: form.validTo || null,
+        releaseMode: form.releaseMode || "on_booking",
         profileType: form.profileType,
         profileJson: JSON.stringify(profileObj),
         notes: form.notes ? form.notes.trim() || null : null,
@@ -625,6 +678,9 @@ export default function CommissionProfilesAdmin() {
             Named agent-payout shapes consumed by the commission calculator. {total.toLocaleString()} profile
             {total === 1 ? "" : "s"}.
           </p>
+          <p style={{ color: "var(--text-secondary)", marginTop: 4, fontSize: "0.82rem" }}>
+            Each profile can be scoped by sub-brand, agent, active date window, and release timing.
+          </p>
         </div>
         {canWrite && (
           <button
@@ -737,6 +793,53 @@ export default function CommissionProfilesAdmin() {
             >
               {PROFILE_TYPES.map((t) => (
                 <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+          </label>
+          <label style={fieldLabel}>
+            <span>Agent</span>
+            <select
+              value={form.agentUserId}
+              onChange={(e) => setForm({ ...form, agentUserId: e.target.value })}
+              style={inputStyle}
+              aria-label="Agent"
+            >
+              <option value="">All agents</option>
+              {staffOptions.map((s) => (
+                <option key={s.id} value={String(s.id)}>{s.name || s.email || ('User #' + s.id)}</option>
+              ))}
+            </select>
+          </label>
+          <label style={fieldLabel}>
+            <span>Valid from</span>
+            <input
+              type="date"
+              value={form.validFrom}
+              onChange={(e) => setForm({ ...form, validFrom: e.target.value })}
+              style={inputStyle}
+              aria-label="Valid from"
+            />
+          </label>
+          <label style={fieldLabel}>
+            <span>Valid to</span>
+            <input
+              type="date"
+              value={form.validTo}
+              onChange={(e) => setForm({ ...form, validTo: e.target.value })}
+              style={inputStyle}
+              aria-label="Valid to"
+            />
+          </label>
+          <label style={fieldLabel}>
+            <span>Release mode</span>
+            <select
+              value={form.releaseMode}
+              onChange={(e) => setForm({ ...form, releaseMode: e.target.value })}
+              style={inputStyle}
+              aria-label="Release mode"
+            >
+              {RELEASE_MODES.map((mode) => (
+                <option key={mode.value} value={mode.value}>{mode.label}</option>
               ))}
             </select>
           </label>
@@ -1194,6 +1297,7 @@ export default function CommissionProfilesAdmin() {
                     <th style={th}>Deal</th>
                     <th style={th}>Contact</th>
                     <th style={th}>Stage</th>
+                    <th style={th}>Release</th>
                     <th style={{ ...th, textAlign: "right" }}>Deal value</th>
                     <th style={{ ...th, textAlign: "right" }}>Commission</th>
                     <th style={th}>Created</th>
@@ -1230,6 +1334,29 @@ export default function CommissionProfilesAdmin() {
                           {entry.dealStage || "—"}
                         </span>
                       </td>
+                      <td style={td}>
+                        <span
+                          style={{
+                            ...statusBadge,
+                            background: entry.released
+                              ? "rgba(34, 197, 94, 0.18)"
+                              : "rgba(245, 158, 11, 0.18)",
+                            color: entry.released
+                              ? "var(--success-color, #22c55e)"
+                              : "var(--warning-color, #f59e0b)",
+                          }}
+                        >
+                          {entry.released ? "Released" : "Pending"}
+                        </span>
+                        <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 3 }}>
+                          {entry.releaseMode === "on_trip_completion" ? "Trip completion" : "Booking"}
+                        </div>
+                        {entry.releaseReason && (
+                          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
+                            {entry.releaseReason}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                         {Number(entry.dealAmount || 0).toLocaleString(undefined, {
                           minimumFractionDigits: 2,
@@ -1251,9 +1378,7 @@ export default function CommissionProfilesAdmin() {
                         })}
                       </td>
                       <td style={{ ...td, color: "var(--text-secondary)", fontSize: 12 }}>
-                        {entry.createdAt
-                          ? new Date(entry.createdAt).toLocaleDateString()
-                          : "—"}
+                        {entry.createdAt ? new Date(entry.createdAt).toLocaleDateString() : "—"}
                       </td>
                     </tr>
                   ))}
@@ -1275,6 +1400,9 @@ export default function CommissionProfilesAdmin() {
                 <th style={th}>Name</th>
                 <th style={th}>Type</th>
                 <th style={th}>Sub-brand</th>
+                <th style={th}>Agent</th>
+                <th style={th}>Validity</th>
+                <th style={th}>Release</th>
                 <th style={th}>Status</th>
                 {canWrite && <th style={{ ...th, textAlign: "center" }}>Actions</th>}
               </tr>
@@ -1319,6 +1447,16 @@ export default function CommissionProfilesAdmin() {
                     >
                       {p.subBrand || "all"}
                     </span>
+                  </td>
+                  <td style={td}>
+                    {p.agentUserId != null
+                      ? (staffNameById.get(String(p.agentUserId)) || `User #${p.agentUserId}`)
+                      : "All agents"}
+                  </td>
+                  <td style={td}>{formatScopeWindow(p.validFrom, p.validTo)}</td>
+                  <td style={td}>
+                    {(RELEASE_MODES.find((mode) => mode.value === p.releaseMode) || {}).label
+                      || "On booking"}
                   </td>
                   <td style={td}>
                     <span
@@ -1384,7 +1522,7 @@ export default function CommissionProfilesAdmin() {
               {profiles.length === 0 && (
                 <tr>
                   <td
-                    colSpan={canWrite ? 5 : 4}
+                    colSpan={canWrite ? 8 : 7}
                     style={{
                       ...td,
                       textAlign: "center",
@@ -1518,3 +1656,7 @@ const statusBadge = {
   fontSize: 11,
   fontWeight: 600,
 };
+
+
+
+

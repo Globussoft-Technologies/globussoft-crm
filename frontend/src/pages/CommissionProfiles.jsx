@@ -18,7 +18,8 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Pencil, Trash2, Award, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import TopScrollSync from '../components/TopScrollSync';
+
+const COMMISSION_PAGE_SIZE = 12;
 
 const BASIS_OPTIONS = [
   { value: 'PER_SERVICE', label: 'Per service' },
@@ -102,6 +103,8 @@ export default function CommissionProfiles() {
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('rules'); // 'rules' or 'data'
   const [products, setProducts] = useState([]); // products list
+  const [visibleRulesCount, setVisibleRulesCount] = useState(COMMISSION_PAGE_SIZE);
+  const [visibleDataCount, setVisibleDataCount] = useState(COMMISSION_PAGE_SIZE);
 
   const load = async () => {
     setLoading(true);
@@ -122,6 +125,23 @@ export default function CommissionProfiles() {
   };
 
   useEffect(() => { load(); }, []);
+  useEffect(() => setVisibleRulesCount(COMMISSION_PAGE_SIZE), [rows.length]);
+  useEffect(() => setVisibleDataCount(COMMISSION_PAGE_SIZE), [commissionData.length]);
+
+  const visibleRows = rows.slice(0, visibleRulesCount);
+  const visibleCommissionData = commissionData.slice(0, visibleDataCount);
+  const handleRulesScroll = (event) => {
+    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 80) {
+      setVisibleRulesCount((count) => Math.min(count + COMMISSION_PAGE_SIZE, rows.length));
+    }
+  };
+  const handleDataScroll = (event) => {
+    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 80) {
+      setVisibleDataCount((count) => Math.min(count + COMMISSION_PAGE_SIZE, commissionData.length));
+    }
+  };
 
   const openCreate = () => setEditing(emptyForm());
   const openEdit = (row) => setEditing({
@@ -226,7 +246,7 @@ export default function CommissionProfiles() {
   };
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto' }}>
+    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem', margin: 0 }}>
@@ -246,18 +266,20 @@ export default function CommissionProfiles() {
       </header>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0' }}>
+      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0' }}>
         <button
           onClick={() => setActiveTab('rules')}
           style={{
-            padding: '0.75rem 1rem',
-            background: 'transparent',
-            border: 'none',
-            color: activeTab === 'rules' ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary)',
-            borderBottom: activeTab === 'rules' ? '2px solid var(--primary-color, var(--accent-color))' : 'none',
+            padding: '0.65rem 1rem',
+            background: activeTab === 'rules' ? 'var(--accent-color)' : 'transparent',
+            border: '1px solid transparent',
+            borderBottom: activeTab === 'rules' ? '2px solid var(--accent-color)' : '2px solid transparent',
+            borderRadius: '10px 10px 0 0',
+            color: activeTab === 'rules' ? 'var(--accent-text, #F5F1E8)' : 'var(--text-primary)',
             cursor: 'pointer',
             fontWeight: activeTab === 'rules' ? 600 : 400,
             fontSize: '0.95rem',
+            marginBottom: '-1px',
           }}
         >
           Commission Rules ({rows.length})
@@ -265,14 +287,16 @@ export default function CommissionProfiles() {
         <button
           onClick={() => setActiveTab('data')}
           style={{
-            padding: '0.75rem 1rem',
-            background: 'transparent',
-            border: 'none',
-            color: activeTab === 'data' ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary)',
-            borderBottom: activeTab === 'data' ? '2px solid var(--primary-color, var(--accent-color))' : 'none',
+            padding: '0.65rem 1rem',
+            background: activeTab === 'data' ? 'var(--accent-color)' : 'transparent',
+            border: '1px solid transparent',
+            borderBottom: activeTab === 'data' ? '2px solid var(--accent-color)' : '2px solid transparent',
+            borderRadius: '10px 10px 0 0',
+            color: activeTab === 'data' ? 'var(--accent-text, #F5F1E8)' : 'var(--text-primary)',
             cursor: 'pointer',
             fontWeight: activeTab === 'data' ? 600 : 400,
             fontSize: '0.95rem',
+            marginBottom: '-1px',
           }}
         >
           Historical Data ({commissionData.length})
@@ -281,8 +305,7 @@ export default function CommissionProfiles() {
 
       {/* Rules Tab */}
       {activeTab === 'rules' && (
-        <div className="card" style={{ padding: 0, overflow: 'visible' }}>
-          <TopScrollSync>
+        <div className="card" onScroll={handleRulesScroll} style={{ padding: 0, maxHeight: 'calc(100vh - 23rem)', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
@@ -302,7 +325,7 @@ export default function CommissionProfiles() {
                 <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
                   No commission profiles yet. Click &quot;New profile&quot; to add one.
                 </td></tr>
-              ) : rows.map((row) => (
+              ) : visibleRows.map((row) => (
                 <tr key={row.id} style={{ borderTop: '1px solid var(--border-color)' }} data-testid={`profile-row-${row.id}`}>
                   <td style={{ ...td, fontWeight: 600 }}>{row.name}</td>
                   <td style={td}>{BASIS_OPTIONS.find((b) => b.value === row.basis)?.label || row.basis}</td>
@@ -335,14 +358,12 @@ export default function CommissionProfiles() {
               ))}
             </tbody>
           </table>
-          </TopScrollSync>
         </div>
       )}
 
       {/* Data Tab */}
       {activeTab === 'data' && (
-        <div className="card" style={{ padding: 0, overflow: 'visible' }}>
-          <TopScrollSync>
+        <div className="card" onScroll={handleDataScroll} style={{ padding: 0, maxHeight: 'calc(100vh - 23rem)', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem', tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '20%' }} />
@@ -371,7 +392,7 @@ export default function CommissionProfiles() {
                 <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
                   No commission data available.
                 </td></tr>
-              ) : commissionData.map((record) => (
+              ) : visibleCommissionData.map((record) => (
                 <tr key={record.id} style={{ borderTop: '1px solid var(--border-color)' }}>
                   <td style={{ ...td, fontSize: '0.85rem', verticalAlign: 'middle' }}>
                     {new Date(record.periodStart).toLocaleDateString()} - {new Date(record.periodEnd).toLocaleDateString()}
@@ -386,7 +407,6 @@ export default function CommissionProfiles() {
               ))}
             </tbody>
           </table>
-          </TopScrollSync>
         </div>
       )}
 
@@ -551,7 +571,7 @@ export default function CommissionProfiles() {
 
 function Field({ label, children }) {
   return (
-    <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+    <label style={{ fontSize: '0.8rem', color: 'var(--text-primary)' }}>
       {label}
       {children}
     </label>
@@ -578,5 +598,9 @@ const th = {
   textTransform: 'uppercase',
   letterSpacing: '0.05em',
   color: 'var(--text-secondary)',
+  position: 'sticky',
+  top: 0,
+  zIndex: 2,
+  background: 'var(--bg-color)',
 };
 const td = { padding: '0.75rem 1rem', fontSize: '0.875rem' };

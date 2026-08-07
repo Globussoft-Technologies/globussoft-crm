@@ -77,6 +77,25 @@ function applyRupeeCapableFonts(doc) {
   return displayFont;
 }
 
+// Travel diagnostic PDFs need the rupee glyph for the submitted answer line,
+// but we do NOT want to remap the standard Helvetica family because that
+// changes the layout metrics of the whole page. Register a separate alias so
+// only the budget answer uses the rupee-capable font.
+function registerTravelRupeeFont(doc) {
+  try {
+    const fsMod = require("fs");
+    if (process.env.NODE_ENV !== "test"
+      && fsMod.existsSync(QUOTE_FONTS.regular) && fsMod.existsSync(QUOTE_FONTS.semibold)) {
+      doc.registerFont("TravelRupee", QUOTE_FONTS.regular);
+      doc.registerFont("TravelRupee-Bold", QUOTE_FONTS.semibold);
+      return true;
+    }
+  } catch (_e) {
+    // fall back to built-in Helvetica when the embedded font is unavailable
+  }
+  return false;
+}
+
 // Slice 8 of the #902 GST & Compliance module — surfaces per-line SAC
 // codes + CGST/SGST/IGST split + HSN/SAC summary in the travel invoice
 // PDF. We require the two helpers as `module.exports.<fn>` indirection
@@ -1182,6 +1201,7 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
 //                                line into the rendered consent form.
 async function renderConsentPdf(consent, patient, service, clinic, signatureDataUrl, opts = {}) {
   const doc = new PDFDocument({ size: "A4", margin: 50 });
+  applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica drops/mangles this in diagnostic PDFs
   const bufPromise = streamToBuffer(doc);
 
   // Travel-vertical consent: opt into the brand-kit header band when
@@ -2863,7 +2883,7 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   const sub = itinerary.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
   const { branding } = resolveTravelHeaderBrandKit(sub, opts);
-  const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
+  const accent = "#0B5345";
   const currency = itinerary.currency || "INR";
   const items = Array.isArray(itinerary.items) ? itinerary.items : [];
 
@@ -3233,7 +3253,7 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   const sub = diagnostic.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
   const { branding } = resolveTravelHeaderBrandKit(sub, opts);
-  const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
+  const accent = "#0B5345";
 
   let questions = [];
   try {
@@ -3257,6 +3277,7 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
+  const rupeeAnswerFont = registerTravelRupeeFont(doc) ? "TravelRupee" : "Helvetica";
 
   // PRD §4.7 (gap A3) — per-viewer watermark, opt-in via
   // opts.viewerWatermark. Default OFF (existing diagnostic callers and
@@ -3267,89 +3288,173 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   }
 
   // ── Header band: brand logo (left) + label ──────────────────────────
-  const headerH = 66;
+  const pageMargin = 50;
+  const contentW = doc.page.width - pageMargin * 2;
+  const softBg = "#F7F9FC";
+  const borderSoft = "#D9E2EC";
+  const textDark = "#14213D";
+  const textMuted = "#6B7280";
+  const answerBg = "#FCFDFE";
+  const accentSoft = "#E8F4F1";
+  const accentDeeper = "#0E5B50";
+  const metricShadow = "#EEF3F8";
+  const headerH = 96;
+
+  function drawMetricCard({ x, y, w, label, value, tone = accent, soft = "#FFFFFF", valueColor = textDark }) {
+    const valueText = String(value || "N/A");
+    const valueFontSize = valueText.length > 24 ? 10.5 : valueText.length > 16 ? 12.5 : 15;
+    doc.roundedRect(x + 2, y + 4, w, 54, 14).fill(metricShadow);
+    doc.roundedRect(x, y, w, 54, 14).fillAndStroke(soft, borderSoft);
+    doc.roundedRect(x + 1, y + 1, w - 2, 7, 12).fill(tone);
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(textMuted)
+      .text(label, x + 14, y + 15, { width: w - 28, lineBreak: false });
+    doc.font("Helvetica-Bold").fontSize(valueFontSize).fillColor(valueColor)
+      .text(valueText, x + 14, y + 28, { width: w - 28 });
+  }
+
+  function ensureAnswerSpace(requiredHeight = 96) {
+    if (doc.y + requiredHeight <= doc.page.height - doc.page.margins.bottom) return;
+    doc.addPage();
+    doc.y = pageMargin;
+  }
+
   doc.rect(0, 0, doc.page.width, headerH).fill(accent);
+  doc.save();
+  doc.rect(0, headerH - 10, doc.page.width, 10).fillOpacity(0.10).fill("#000000");
+  doc.restore();
   let headerTextX = 50;
-  // Logo priority: opts.logoBuffer (route-resolved S3 / tenant — pre-S65) →
-  // branding.thumbnailUrl fetched via S65 cache → bundled asset → emblem
-  // badge. The diagnostic renderer keeps its left-aligned 36×36 emblem slot
-  // (existing layout) — that's distinct from S65's 80×40 top-right slot
-  // used by the other 4 sibling renderers, because the diagnostic header
-  // band was designed left-anchored before S65.
+  // Logo priority: opts.logoBuffer (route-resolved S3 / tenant) ->
+  // branding.thumbnailUrl fetched via S65 cache -> bundled asset -> emblem
+  // badge. The diagnostic renderer keeps its left-aligned emblem slot,
+  // which is distinct from the top-right placement used by sibling PDFs.
   const logoBuf = opts.logoBuffer || brandKitLogoBuf || loadTravelHeaderLogo();
   let logoDrawn = false;
   if (logoBuf) {
     try {
-      doc.image(logoBuf, 50, 15, { fit: [36, 36] });
+      doc.image(logoBuf, 50, 18, { fit: [42, 42] });
       logoDrawn = true;
-      headerTextX = 98;
+      headerTextX = 106;
     } catch {
       logoDrawn = false;
     }
   }
   if (!logoDrawn) {
-    // Emblem fallback: white rounded badge + brand initial in the accent.
-    const bx = 50, by = 15, bs = 36;
-    doc.roundedRect(bx, by, bs, bs, 8).fill("#ffffff");
+    const bx = 50, by = 18, bs = 42;
+    doc.roundedRect(bx, by, bs, bs, 10).fill("#ffffff");
     const initial = (brandLabel || "T").trim().charAt(0).toUpperCase();
-    doc.font("Helvetica-Bold").fontSize(20).fillColor(accent)
-      .text(initial, bx, by + 8, { width: bs, align: "center" });
-    headerTextX = 98;
+    doc.font("Helvetica-Bold").fontSize(22).fillColor(accent)
+      .text(initial, bx, by + 10, { width: bs, align: "center" });
+    headerTextX = 106;
   }
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff").text(brandLabel, headerTextX, 18);
-  doc.font("Helvetica").fontSize(10).fillColor("#fff").text("Diagnostic Report", headerTextX, 42);
+  doc.font("Helvetica-Bold").fontSize(25).fillColor("#FFFFFF")
+    .text(brandLabel, headerTextX, 22, { width: 350 });
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#D6F0EA")
+    .text("Diagnostic Report", headerTextX, 54, { width: 220, characterSpacing: 0.4 });
 
-  // ── Body: flow downward from just below the header band ──────────────
-  doc.fillColor("#111");
-  doc.x = 50;
-  doc.y = headerH + 24;
-  doc.font("Helvetica-Bold").fontSize(14).fillColor("#111").text(contact?.name || "Customer");
-  const metaLine = [contact?.email, contact?.phone].filter(Boolean).join("  •  ");
-  if (metaLine) doc.font("Helvetica").fontSize(10).fillColor("#555").text(metaLine);
-  doc.font("Helvetica").fontSize(10).fillColor("#555");
-  doc.text(`Bank version: v${bank?.version ?? "?"}`);
-  doc.text(`Submitted: ${formatDate(diagnostic.createdAt || new Date())}`);
-  doc.moveDown(0.8);
-
-  // ── Classification box: draw at current y, render inside, then advance ──
-  const boxTop = doc.y;
-  const boxH = 74;
-  doc.rect(50, boxTop, doc.page.width - 100, boxH).fillAndStroke("#f4f6f8", accent);
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#555").text("Classification", 62, boxTop + 12);
-  doc.font("Helvetica-Bold").fontSize(16).fillColor(accent)
-    .text(diagnostic.classificationLabel || diagnostic.classification || "—", 62, boxTop + 28);
-  doc.font("Helvetica").fontSize(10).fillColor("#333")
-    .text(`Score: ${diagnostic.score != null ? Number(diagnostic.score).toFixed(2) : "—"}`, 62, boxTop + 52);
-  if (diagnostic.recommendedTier) {
-    doc.font("Helvetica").fontSize(10).fillColor("#333")
-      .text(`Recommended tier: ${diagnostic.recommendedTier}`, 300, boxTop + 52);
+  doc.x = pageMargin;
+  doc.y = headerH + 20;
+  const profileTop = doc.y;
+  const profileH = 80;
+  const infoCardW = 96;
+  const infoCardH = 40;
+  const infoGap = 10;
+  const infoStartX = pageMargin + contentW - (infoCardW * 2) - infoGap - 18;
+  const profileMetaWidth = Math.max(190, infoStartX - pageMargin - 34);
+  const metaLine = [contact?.email, contact?.phone].filter(Boolean).join("  |  ");
+  const infoCardY = profileTop + Math.round((profileH - infoCardH) / 2);
+  doc.roundedRect(pageMargin + 2, profileTop + 4, contentW, profileH, 18).fill(metricShadow);
+  doc.roundedRect(pageMargin, profileTop, contentW, profileH, 18).fillAndStroke("#FFFFFF", borderSoft);
+  doc.roundedRect(pageMargin, profileTop, 6, profileH, 3).fill(accent);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(textMuted)
+    .text("CLIENT PROFILE", pageMargin + 22, profileTop + 14, { characterSpacing: 1.1 });
+  doc.font("Helvetica-Bold").fontSize(19).fillColor(textDark)
+    .text(contact?.name || "Customer", pageMargin + 22, profileTop + 30, { width: profileMetaWidth });
+  if (metaLine) {
+    doc.font("Helvetica").fontSize(10.5).fillColor(textMuted)
+      .text(metaLine, pageMargin + 22, profileTop + 54, { width: profileMetaWidth, lineGap: 2 });
   }
-  doc.x = 50;
-  doc.y = boxTop + boxH + 18;
-  doc.fillColor("#111");
 
-  doc.font("Helvetica-Bold").fontSize(12).fillColor("#111").text("Your answers", { underline: false });
-  doc.moveDown(0.3);
-  doc.font("Helvetica").fontSize(10).fillColor("#111");
+  doc.roundedRect(infoStartX, infoCardY, infoCardW, infoCardH, 12).fillAndStroke(accentSoft, borderSoft);
+  doc.font("Helvetica-Bold").fontSize(7.5).fillColor(textMuted)
+    .text("BANK VERSION", infoStartX + 12, infoCardY + 8, { width: infoCardW - 24, align: "center" });
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(textDark)
+    .text(`v${bank?.version ?? "?"}`, infoStartX + 12, infoCardY + 20, { width: infoCardW - 24, align: "center" });
 
+  doc.roundedRect(infoStartX + infoCardW + infoGap, infoCardY, infoCardW, infoCardH, 12).fillAndStroke(accentSoft, borderSoft);
+  doc.font("Helvetica-Bold").fontSize(7.5).fillColor(textMuted)
+    .text("SUBMITTED", infoStartX + infoCardW + infoGap + 12, infoCardY + 8, { width: infoCardW - 24, align: "center" });
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(textDark)
+    .text(formatDate(diagnostic.createdAt || new Date()), infoStartX + infoCardW + infoGap + 12, infoCardY + 20, { width: infoCardW - 24, align: "center" });
+  doc.y = profileTop + profileH + 14;
+
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
+    .text("AT A GLANCE", pageMargin, doc.y, { characterSpacing: 1.4 });
+  doc.y += 12;
+  const metricGap = 14;
+  const metricW = (contentW - metricGap * 2) / 3;
+  const metricsTop = doc.y;
+  drawMetricCard({
+    x: pageMargin,
+    y: metricsTop,
+    w: metricW,
+    label: "Classification",
+    value: diagnostic.classificationLabel || diagnostic.classification || "N/A",
+    tone: accentDeeper,
+    soft: accentSoft,
+    valueColor: accentDeeper,
+  });
+  drawMetricCard({
+    x: pageMargin + metricW + metricGap,
+    y: metricsTop,
+    w: metricW,
+    label: "Score",
+    value: diagnostic.score != null ? Number(diagnostic.score).toFixed(2) : "N/A",
+    tone: accent,
+  });
+  drawMetricCard({
+    x: pageMargin + (metricW + metricGap) * 2,
+    y: metricsTop,
+    w: metricW,
+    label: "Recommended tier",
+    value: diagnostic.recommendedTier || "Advisor review",
+    tone: accent,
+  });
+  doc.y = metricsTop + 66;
+
+  doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark).text("Submitted answers");
+  doc.y += 8;
   if (questions.length === 0) {
-    doc.fillColor("#777").text("(No question bank snapshot available.)");
+    doc.roundedRect(pageMargin, doc.y, contentW, 48, 14).fillAndStroke(answerBg, borderSoft);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(textDark)
+      .text("No question snapshot available", pageMargin + 18, doc.y + 12);
+    doc.font("Helvetica").fontSize(10).fillColor(textMuted)
+      .text("Only the summary classification is available in this PDF version.", pageMargin + 18, doc.y + 28, { width: contentW - 36 });
+    doc.y += 60;
   } else {
     questions.forEach((q, idx) => {
       const num = idx + 1;
       const qText = q?.text || `Question ${num}`;
       const ans = resolveAnswerLabel(q, answers[q?.id]);
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#333")
-        .text(`${num}. ${qText}`);
-      doc.font("Helvetica").fontSize(10).fillColor("#111")
-        .text(`   ${ans}`);
-      doc.moveDown(0.4);
+      doc.font("Helvetica-Bold").fontSize(10.5);
+      const qHeight = doc.heightOfString(qText, { width: contentW - 70, lineGap: 2 });
+      doc.font(rupeeAnswerFont).fontSize(10.5);
+      const aHeight = doc.heightOfString(String(ans || "N/A"), { width: contentW - 70, lineGap: 2 });
+      const cardH = Math.max(68, 24 + qHeight + aHeight + 18);
+      ensureAnswerSpace(cardH + 10);
+      const cardTop = doc.y;
+      doc.roundedRect(pageMargin, cardTop, contentW, cardH, 14).fillAndStroke("#FFFFFF", borderSoft);
+      doc.circle(pageMargin + 22, cardTop + 20, 10).fill(accent);
+      doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#FFFFFF")
+        .text(String(num), pageMargin + 18, cardTop + 14, { width: 8, align: "center", lineBreak: false });
+      doc.font("Helvetica-Bold").fontSize(10.5).fillColor(textDark)
+        .text(qText, pageMargin + 42, cardTop + 12, { width: contentW - 60, lineGap: 2 });
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(textMuted)
+        .text("RESPONSE", pageMargin + 42, cardTop + 16 + qHeight, { characterSpacing: 1.1 });
+      doc.font(rupeeAnswerFont).fontSize(10.5).fillColor("#23303F")
+        .text(String(ans || "N/A"), pageMargin + 42, cardTop + 29 + qHeight, { width: contentW - 60, lineGap: 2 });
+      doc.y = cardTop + cardH + 10;
     });
   }
-
-  // PRD_TMC_CURRICULUM_MAPPING §3 FR-7 — "Why these destinations fit your
-  // curriculum" section, driven by the cached curriculumFitJson snapshot.
-  // Rendered only when present; non-TMC reports (null cache) are unchanged.
   let curriculumFit = null;
   try {
     curriculumFit = diagnostic.curriculumFitJson ? JSON.parse(diagnostic.curriculumFitJson) : null;
@@ -3531,15 +3636,55 @@ async function renderTmcReadinessReport({
   const pageW = doc.page.width;
   const pageMargin = 50;
   const contentW = pageW - pageMargin * 2;
+  const summaryGap = 14;
+  const summaryCardW = (contentW - summaryGap * 2) / 3;
+  const insightBg = "#F7F9FC";
+  const accentSoft = "#EAF2F8";
+  const coverBandH = 132;
+
+  function fitReadinessText(value, max = 110) {
+    const s = String(value || "").trim();
+    if (!s) return "—";
+    return s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s;
+  }
+
+  function drawTopMetricCard({ x, y, label, value, tone = accent, note = "" }) {
+    doc.roundedRect(x, y, summaryCardW, 72, 12).fillAndStroke("#FFFFFF", BRAND.border);
+    doc.roundedRect(x + 1, y + 1, summaryCardW - 2, 10, 10).fill(tone);
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(BRAND.textMuted)
+      .text(label, x + 14, y + 18, { width: summaryCardW - 28, lineBreak: false });
+    doc.font("Helvetica-Bold").fontSize(15).fillColor(BRAND.textDark)
+      .text(fitReadinessText(value, 48), x + 14, y + 34, { width: summaryCardW - 28 });
+    if (note) {
+      doc.font("Helvetica").fontSize(8.5).fillColor(BRAND.textMuted)
+        .text(fitReadinessText(note, 84), x + 14, y + 54, { width: summaryCardW - 28 });
+    }
+  }
+
+  function drawInsightPanel({ x, y, w, title, body }) {
+    const panelBody = String(body || "").trim() || "—";
+    const panelHeight = 88;
+    doc.roundedRect(x, y, w, panelHeight, 14).fillAndStroke(insightBg, BRAND.borderSoft);
+    doc.roundedRect(x + 12, y + 14, 6, panelHeight - 28, 3).fill(accent);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
+      .text(title, x + 30, y + 16, { width: w - 44 });
+    doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
+      .text(panelBody, x + 30, y + 34, { width: w - 44, lineGap: 2 });
+  }
 
   // ── Section 1: Cover ────────────────────────────────────────────────
-  doc.rect(0, 0, pageW, 110).fill(accent);
-  doc.fillColor("#fff").font("Helvetica-Bold").fontSize(20)
-    .text("TMC", pageMargin, 30, { align: "left" });
+  doc.rect(0, 0, pageW, coverBandH).fill(accent);
+  doc.save();
+  doc.rect(0, coverBandH - 10, pageW, 10).fillOpacity(0.16).fill("#000");
+  doc.restore();
+  doc.fillColor("#fff").font("Helvetica-Bold").fontSize(13)
+    .text("TMC", pageMargin, 28, { align: "left", characterSpacing: 1.8 });
+  doc.font("Helvetica-Bold").fontSize(26)
+    .text("Student Readiness Report", pageMargin, 48, { width: 320 });
   doc.fillColor("#fff").font("Helvetica").fontSize(11)
-    .text("Student experiential readiness profile", pageMargin, 56);
+    .text("A diagnostic-led summary for school leadership teams.", pageMargin, 86, { width: 330 });
   doc.fillColor("#fff").font("Helvetica").fontSize(9)
-    .text("Diagnostic-led, never destination-led.", pageMargin, 74);
+    .text("Built for one-shot reading: what this means, why it matters, and what to do next.", pageMargin, 104, { width: 360 });
 
   // S65 — embed brand logo in the cover band's top-right (80×40 fit box at
   // right edge). The 110px-tall cover band gives more vertical room than
@@ -3550,7 +3695,7 @@ async function renderTmcReadinessReport({
       const LOGO_W = 80;
       const LOGO_H = 40;
       const LOGO_X = pageW - LOGO_W - pageMargin;
-      const LOGO_Y = 30;
+      const LOGO_Y = 36;
       doc.image(tmcLogoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -3560,21 +3705,98 @@ async function renderTmcReadinessReport({
     }
   }
 
-  doc.fillColor(BRAND.textDark).font("Helvetica-Bold").fontSize(16)
-    .text(schoolName, pageMargin, 140, { width: contentW });
+  doc.roundedRect(pageMargin, 156, contentW, 88, 18).fillAndStroke("#FFFFFF", BRAND.border);
+  doc.fillColor(BRAND.textDark).font("Helvetica-Bold").fontSize(18)
+    .text(schoolName, pageMargin + 18, 176, { width: contentW - 36 });
   doc.font("Helvetica").fontSize(10).fillColor(BRAND.textMuted)
-    .text(`Prepared for ${contactName || "the leadership team"}${contactRole ? `, ${contactRole}` : ""}`, pageMargin, 168, { width: contentW });
-  doc.text(`Date: ${formatDate(new Date())}`, pageMargin, 184, { width: contentW });
+    .text(`Prepared for ${contactName || "the leadership team"}${contactRole ? `, ${contactRole}` : ""}`, pageMargin + 18, 202, { width: contentW - 36 });
+  doc.roundedRect(pageMargin + 18, 222, 150, 42, 10).fillAndStroke("#FFFFFF", BRAND.borderSoft);
+  doc.font("Helvetica-Bold").fontSize(7.5).fillColor(BRAND.textMuted)
+    .text("REPORT DATE", pageMargin + 30, 232, { width: 126, lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(10.5).fillColor(BRAND.textDark)
+    .text(formatDate(new Date()), pageMargin + 30, 243, { width: 126 });
+  doc.roundedRect(pageMargin + 178, 222, 160, 42, 10).fillAndStroke("#FFFFFF", BRAND.borderSoft);
+  doc.font("Helvetica-Bold").fontSize(7.5).fillColor(BRAND.textMuted)
+    .text("READINESS STATE", pageMargin + 190, 232, { width: 136, lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(10.5).fillColor(BRAND.textDark)
+    .text(eState ? eState.replace(/_/g, " ") : "profile generated", pageMargin + 190, 243, { width: 136 });
+  doc.roundedRect(pageMargin + 348, 222, 148, 42, 10).fillAndStroke("#FFFFFF", BRAND.borderSoft);
+  doc.font("Helvetica-Bold").fontSize(7.5).fillColor(BRAND.textMuted)
+    .text("AUDIENCE", pageMargin + 360, 232, { width: 124, lineBreak: false });
+  doc.font("Helvetica-Bold").fontSize(10.5).fillColor(BRAND.textDark)
+    .text("School leadership", pageMargin + 360, 243, { width: 124 });
   if (eState) {
     const stateLabel = eState === "strong_match"
       ? "Strong readiness fit identified"
       : eState === "partial_match"
         ? "Partial readiness fit — see report"
         : "Custom concept recommended";
-    doc.fillColor(accent).font("Helvetica-Bold").fontSize(10).text(stateLabel, pageMargin, 200);
+    doc.fillColor(accent).font("Helvetica-Bold").fontSize(10).text(stateLabel, pageMargin + 18, 174);
   }
   doc.moveDown(2);
-  doc.y = Math.max(doc.y, 230);
+  doc.y = Math.max(doc.y, 270);
+
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
+    .text("AT A GLANCE", pageMargin, doc.y, { characterSpacing: 1.2 });
+  doc.y += 18;
+  drawTopMetricCard({
+    x: pageMargin,
+    y: doc.y,
+    label: "Readiness state",
+    value: eState
+      ? eState.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+      : "Profile generated",
+    note: readinessStateNote(eState),
+  });
+  drawTopMetricCard({
+    x: pageMargin + summaryCardW + summaryGap,
+    y: doc.y,
+    label: "Recommended tier",
+    value: sa.recommended_tier || sa.recommendedTier || n.recommended_tier || "Advisor review",
+    note: "Use this as the planning lane, not a destination pitch.",
+  });
+  drawTopMetricCard({
+    x: pageMargin + (summaryCardW + summaryGap) * 2,
+    y: doc.y,
+    label: "Next conversation",
+    value: resolvedBookingUrl ? "Book the walkthrough" : "Advisor follow-up",
+    note: resolvedBookingUrl ? "PDF + call should move together." : "Executive shares the calendar next.",
+  });
+  doc.y += 92;
+
+  drawInsightPanel({
+    x: pageMargin,
+    y: doc.y,
+    w: contentW,
+    title: "What this report is for",
+    body: "This is a readiness summary for the leadership team. It helps you decide whether to move now, what kind of programme your students are ready for, and what governance conversations need to happen next.",
+  });
+  doc.y += 104;
+
+  const ambitionPreview = String(n.ambition_restatement || "").trim();
+  const waitingPreview = String(n.cost_of_waiting || "").trim();
+  const halfInsightW = (contentW - 14) / 2;
+  drawInsightPanel({
+    x: pageMargin,
+    y: doc.y,
+    w: halfInsightW,
+    title: "Core ambition",
+    body: fitReadinessText(
+      ambitionPreview || "The ambition summary appears here once the narrative is generated.",
+      180,
+    ),
+  });
+  drawInsightPanel({
+    x: pageMargin + halfInsightW + 14,
+    y: doc.y,
+    w: halfInsightW,
+    title: "Why timing matters",
+    body: fitReadinessText(
+      waitingPreview || "The report explains the calendar and growth cost of waiting.",
+      180,
+    ),
+  });
+  doc.y += 108;
 
   // ── Section 2: Your ambition, in your words ─────────────────────────
   renderTmcReportSection(doc, {
@@ -3681,31 +3903,35 @@ async function renderTmcReadinessReport({
     doc.addPage();
     doc.y = pageMargin;
   } else {
-    doc.y += 8;
+    doc.y += 12;
   }
-  doc.font("Helvetica-Bold").fontSize(13).fillColor(accent)
-    .text("Your students are ready.", pageMargin, doc.y, { width: contentW });
+  doc.roundedRect(pageMargin, doc.y, contentW, resolvedBookingUrl ? 106 : 92, 16)
+    .fillAndStroke(accentSoft, BRAND.borderSoft);
+  doc.font("Helvetica-Bold").fontSize(15).fillColor(accent)
+    .text("Your next step", pageMargin + 18, doc.y + 16, { width: contentW - 36 });
+  doc.font("Helvetica-Bold").fontSize(13).fillColor(BRAND.textDark)
+    .text("Your students are ready.", pageMargin + 18, doc.y + 38, { width: contentW - 36 });
   doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
     .text(
       "The calendar is the only thing between this profile and a programme that runs next year. " +
       "Book a 30-minute conversation with the TMC team to walk through this report together.",
-      pageMargin,
-      doc.y + 6,
-      { width: contentW },
+      pageMargin + 18,
+      doc.y + 56,
+      { width: contentW - 36 },
     );
   if (resolvedBookingUrl) {
     doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
-      .text(`Book your slot: ${resolvedBookingUrl}`, pageMargin, doc.y + 6, { width: contentW });
+      .text(`Book your slot: ${resolvedBookingUrl}`, pageMargin + 18, doc.y + 78, { width: contentW - 36 });
   } else {
     doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
       .text(
         "Your TMC executive will reach out within one working day to share their calendar.",
-        pageMargin,
-        doc.y + 6,
-        { width: contentW },
+        pageMargin + 18,
+        doc.y + 78,
+        { width: contentW - 36 },
       );
   }
-  doc.moveDown(0.8);
+  doc.y += resolvedBookingUrl ? 118 : 104;
 
   // Footer with attribution.
   const footerY = doc.page.height - doc.page.margins.bottom - 28;
@@ -3731,24 +3957,47 @@ function renderTmcReportSection(doc, { num, title, body, accent }) {
   const pageMargin = 50;
   const pageW = doc.page.width;
   const contentW = pageW - pageMargin * 2;
+  const sectionSoft = "#F7F9FC";
+  const text = String(body || "").trim() || "�";
+  const textHeight = doc.heightOfString(text, {
+    width: contentW - 32,
+    align: "left",
+    lineGap: 3,
+  });
+  const sectionHeight = Math.max(84, 42 + textHeight + 20);
 
   // Soft page-break guard — drop to next page if the section header
   // would otherwise sit at the very bottom.
-  if (doc.y > doc.page.height - 120) doc.addPage();
+  if (doc.y + sectionHeight > doc.page.height - doc.page.margins.bottom - 28) {
+    doc.addPage();
+    doc.y = pageMargin;
+  }
 
-  doc.y = Math.max(doc.y, doc.y + 6);
+  doc.y = Math.max(doc.y, doc.y + 10);
+  const startY = doc.y;
+  doc.roundedRect(pageMargin, startY, contentW, sectionHeight, 14).fillAndStroke("#FFFFFF", BRAND.borderSoft);
+  doc.roundedRect(pageMargin, startY, contentW, 28, 14).fill(sectionSoft);
+  doc.circle(pageMargin + 16, startY + 13, 9).fill(accent);
+  doc.font("Helvetica-Bold").fontSize(9).fillColor("#FFFFFF")
+    .text(String(num), pageMargin + 13, startY + 7, { width: 6, align: "center", lineBreak: false });
   doc.font("Helvetica-Bold").fontSize(12).fillColor(accent)
-    .text(`${num}. ${title}`, pageMargin, doc.y, { width: contentW });
-  doc.moveDown(0.3);
+    .text(title, pageMargin + 34, startY + 8, { width: contentW - 48, lineBreak: false });
+  doc.y = startY + 34;
 
-  const text = String(body || "").trim() || "—";
   doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
-    .text(text, pageMargin, doc.y, {
-      width: contentW,
+    .text(text, pageMargin + 16, doc.y, {
+      width: contentW - 32,
       align: "left",
-      lineGap: 2,
+      lineGap: 3,
     });
-  doc.moveDown(0.7);
+  doc.y = startY + sectionHeight + 10;
+}
+
+function readinessStateNote(state) {
+  if (state === "strong_match") return "Clear signal to move to planning.";
+  if (state === "partial_match") return "Good fit, with a few points to resolve.";
+  if (state === "custom_concept") return "Needs a more tailored concept discussion.";
+  return "Use the summary below to guide the next conversation.";
 }
 
 // ── Travel CRM — quote PDF (DD-5.6) ─────────────────────────────────

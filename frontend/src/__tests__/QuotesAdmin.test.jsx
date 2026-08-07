@@ -173,9 +173,9 @@ function installFetchMock({
   });
 }
 
-function renderPage(user = ADMIN_USER) {
+function renderPage(user = ADMIN_USER, initialEntries = ['/travel/quotes-admin']) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false }}>
         <QuotesAdmin />
       </AuthContext.Provider>
@@ -304,6 +304,22 @@ describe('<QuotesAdmin /> — filter behavior', () => {
       );
       expect(call).toBeTruthy();
     });
+  });
+
+  it('report Expired filter uses the expired-quotes endpoint without sending invalid status to list API', async () => {
+    installFetchMock({ list: { quotes: [makeQuote({ id: 201, subBrand: 'tmc', status: 'Sent', contact: { id: 5009, name: 'Expired Customer' }, validUntil: '2026-01-01T00:00:00.000Z' })], count: 1 } });
+    renderPage(ADMIN_USER, ['/travel/quotes-admin?source=reports&subBrand=tmc&status=Expired']);
+
+    expect(await screen.findByText('Expired Customer')).toBeInTheDocument();
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u, o]) =>
+        typeof u === 'string' && u.startsWith('/api/travel/quotes/expired') && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+      expect(call[0]).toContain('subBrand=tmc');
+      expect(call[0]).not.toContain('status=Expired');
+    });
+    expect(screen.getAllByText('Expired').length).toBeGreaterThanOrEqual(1);
   });
 
   it('selecting status "Sent" re-fetches with ?status=Sent in the URL', async () => {

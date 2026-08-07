@@ -16,11 +16,14 @@ import PageHeader from '../../components/PageHeader';
 import { AuthContext } from '../../App';
 import { loadEvents } from './QRGenerator';
 
+const QR_LIST_PAGE_SIZE = 10;
+
 export default function EventsHistory() {
   const notify = useNotify();
   const { tenant } = useContext(AuthContext) || {};
   const [events, setEvents] = useState([]);
   const [expandedIds, setExpandedIds] = useState(new Set());
+  const [visibleQrCounts, setVisibleQrCounts] = useState({});
 
   useEffect(() => {
     let cancelled = false;
@@ -30,6 +33,7 @@ export default function EventsHistory() {
         const list = data?.events || [];
         if (!cancelled) {
           setEvents(list);
+          setVisibleQrCounts({});
           if (list.length > 0) {
             setExpandedIds(new Set([list[0].id]));
           }
@@ -51,6 +55,17 @@ export default function EventsHistory() {
       else next.add(id);
       return next;
     });
+  };
+
+  const getVisibleQrCount = (eventId) => visibleQrCounts[eventId] || QR_LIST_PAGE_SIZE;
+
+  const handleQrListScroll = (eventId, total) => (event) => {
+    const el = event.currentTarget;
+    if (el.scrollTop + el.clientHeight < el.scrollHeight - 80) return;
+    setVisibleQrCounts((prev) => ({
+      ...prev,
+      [eventId]: Math.min((prev[eventId] || QR_LIST_PAGE_SIZE) + QR_LIST_PAGE_SIZE, total),
+    }));
   };
 
   const handleDownloadQr = async (qr) => {
@@ -94,6 +109,8 @@ export default function EventsHistory() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {events.map((event) => {
             const isExpanded = expandedIds.has(event.id);
+            const eventQrs = Array.isArray(event.qrs) ? event.qrs : [];
+            const visibleEventQrs = eventQrs.slice(0, getVisibleQrCount(event.id));
             return (
               <div key={event.id} className="glass" style={cardStyle}>
                 <button
@@ -107,19 +124,19 @@ export default function EventsHistory() {
                     {event.name}
                   </span>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                    {event.qrs.length} QR{event.qrs.length === 1 ? '' : 's'}
+                    {eventQrs.length} QR{eventQrs.length === 1 ? '' : 's'}
                   </span>
                 </button>
 
                 {isExpanded && (
                   <div style={{ paddingTop: '1rem' }}>
-                    {event.qrs.length === 0 ? (
+                    {eventQrs.length === 0 ? (
                       <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                         No QR codes for this event yet.
                       </p>
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                        {event.qrs.map((qr) => (
+                      <div data-testid={`event-qr-list-${event.id}`} onScroll={handleQrListScroll(event.id, eventQrs.length)} style={qrListScrollStyle}>
+                        {visibleEventQrs.map((qr) => (
                           <div
                             key={qr.id}
                             style={{
@@ -180,6 +197,15 @@ const cardStyle = {
   padding: '1rem 1.25rem',
   borderRadius: 12,
   border: '1px solid var(--border-color)',
+};
+
+const qrListScrollStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '0.75rem',
+  maxHeight: '300px',
+  overflowY: 'auto',
+  paddingRight: '0.25rem',
 };
 
 const eventHeader = {

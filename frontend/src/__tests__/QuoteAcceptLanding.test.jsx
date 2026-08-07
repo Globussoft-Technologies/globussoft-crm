@@ -124,8 +124,38 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
       /50,000/.test(content) || /50000/.test(content),
     );
     expect(totalNode).toBeInTheDocument();
+    expect(screen.getByText(/per night/i)).toBeInTheDocument();
+    expect(screen.getByText(/per item/i)).toBeInTheDocument();
   });
 
+  it('2b. hides internal pricing breakdown even when the public envelope includes it', async () => {
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(makeEnvelope({
+          breakdown: {
+            baseSubtotal: 42000,
+            seasonMultiplier: 0.9,
+            matchedSeasonName: 'lean',
+            subtotal: 37800,
+            markupApplied: [{ ruleId: 1, ruleName: 'Supplier markup', amount: 5000 }],
+            total: 50000,
+          },
+        })),
+      }),
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByText(/Quote #42/i)).toBeInTheDocument(),
+    );
+
+    expect(screen.queryByText(/How your quote is calculated/i)).toBeNull();
+    expect(screen.queryByText(/Base subtotal/i)).toBeNull();
+    expect(screen.queryByText(/Season/i)).toBeNull();
+    expect(screen.queryByText(/Markups/i)).toBeNull();
+    expect(screen.queryByText(/Total with markup/i)).toBeNull();
+  });
   it('3. 404 → friendly "expired or no longer available" message', async () => {
     fetchSpy.mockImplementation(() =>
       Promise.resolve({

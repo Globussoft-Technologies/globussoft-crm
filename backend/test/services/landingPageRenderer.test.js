@@ -1,4 +1,4 @@
-// Unit tests for backend/services/landingPageRenderer.js ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pure HTML
+// Unit tests for backend/services/landingPageRenderer.js  pure HTML
 // renderer with no I/O. The actual exported surface is just `renderPage`,
 // which takes a LandingPage row (already fetched) and produces a full
 // HTML document. Component dispatch + HTML escaping are covered.
@@ -13,7 +13,7 @@ describe('module shape', () => {
   });
 
   test('does NOT export prisma-backed lookup or analytics helpers', () => {
-    // Renderer is pure ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it operates on a LandingPage row passed in by the
+    // Renderer is pure  it operates on a LandingPage row passed in by the
     // caller. Lookup + analytics live in routes/landing_pages.js, not here.
     expect(landing.findBySlug).toBeUndefined();
     expect(landing.recordVisitorAnalytics).toBeUndefined();
@@ -21,7 +21,7 @@ describe('module shape', () => {
   });
 });
 
-describe('renderPage ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â top-level document', () => {
+describe('renderPage  top-level document', () => {
   test('returns a full HTML5 document', () => {
     const html = renderPage({ title: 'Hello', slug: 'hello', content: '[]' });
     expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
@@ -69,7 +69,7 @@ describe('renderPage ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â top-level document',
 
   test('omits override style block when no cssOverrides', () => {
     const html = renderPage({ title: 't', content: '[]' });
-    // there is one main <style>ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦</style> block from base CSS ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â we just
+    // there is one main <style></style> block from base CSS  we just
     // want to check we didn't add a 2nd identifier-empty block.
     const styleCount = (html.match(/<style>/g) || []).length;
     expect(styleCount).toBe(1);
@@ -89,7 +89,7 @@ describe('renderPage ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â top-level document',
   test('handles missing content (no body components)', () => {
     const html = renderPage({ title: 't' });
     expect(html).toContain('<div class="lp-container">');
-    // No components to render ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â but the document is still valid.
+    // No components to render  but the document is still valid.
     expect(html).toContain('</body>');
   });
 
@@ -147,7 +147,7 @@ describe('renderPage ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â top-level document',
   });
 });
 
-describe('renderPage ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â XSS / HTML escaping in chrome', () => {
+describe('renderPage  XSS / HTML escaping in chrome', () => {
   test('escapes <script> in metaTitle', () => {
     const html = renderPage({
       metaTitle: '<script>alert(1)</script>',
@@ -474,24 +474,24 @@ describe('component: unknown type', () => {
   });
 });
 
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ #447 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â URL scheme allowlist ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+//  #447  URL scheme allowlist 
 //
 // QA pass on 2026-05-04 found that Image / Button / Video components
 // accepted javascript: + data:text/html + vbscript: schemes verbatim.
 // The renderer's only defence was escapeHtml on the attribute VALUE,
 // which prevents `"` injection but leaves the scheme untouched. In
-// particular the button component renders `<a href="...">` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and a
+// particular the button component renders `<a href="...">`  and a
 // `<a href="javascript:alert(1)">` link DOES execute when clicked.
 //
 // The fix added `safeUrl(input, kind)` to the renderer with three
 // kinds: 'image-src' (most permissive, allows data:image/*),
 // 'link-href' (allows mailto:/tel:/sms: in addition to http(s):), and
-// 'iframe-src' (most restrictive ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â http(s): only). Tests below pin
+// 'iframe-src' (most restrictive  http(s): only). Tests below pin
 // the contract.
 
 const { safeUrl, renderComponent } = landing;
 
-describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â image-src allowlist (#447)', () => {
+describe('safeUrl  image-src allowlist (#447)', () => {
   test.each([
     ['https://example.com/photo.png'],
     ['http://example.com/photo.jpg'],
@@ -516,7 +516,7 @@ describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â image-src allowlist (#4
     'file:///etc/passwd',
     'about:blank',
     'jar:http://x/!/',
-  ])('rejects dangerous %s ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ falls back to ""', (input) => {
+  ])('rejects dangerous %s ??  falls back to ""', (input) => {
     expect(safeUrl(input, 'image-src')).toBe('');
   });
 
@@ -527,7 +527,7 @@ describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â image-src allowlist (#4
   });
 });
 
-describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â link-href allowlist (#447 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the bigger XSS surface)', () => {
+describe('safeUrl  link-href allowlist (#447  the bigger XSS surface)', () => {
   test.each([
     'https://example.com',
     'http://example.com',
@@ -551,7 +551,7 @@ describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â link-href allowlist (#4
     'data:image/png;base64,xyz',
     'file:///etc/passwd',
     'jar:http://x/!/',
-  ])('rejects dangerous %s ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ falls back to "#"', (input) => {
+  ])('rejects dangerous %s ??  falls back to "#"', (input) => {
     expect(safeUrl(input, 'link-href')).toBe('#');
   });
 
@@ -562,7 +562,7 @@ describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â link-href allowlist (#4
   });
 });
 
-describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â iframe-src allowlist (most restrictive)', () => {
+describe('safeUrl  iframe-src allowlist (most restrictive)', () => {
   test.each([
     'https://www.youtube.com/embed/abc',
     'http://example.com/video',
@@ -578,12 +578,12 @@ describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â iframe-src allowlist (m
     'data:image/svg+xml,<svg onload=alert(1)>',
     'mailto:a@b.co',
     'file:///etc/passwd',
-  ])('rejects %s ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ falls back to "about:blank"', (input) => {
+  ])('rejects %s ??  falls back to "about:blank"', (input) => {
     expect(safeUrl(input, 'iframe-src')).toBe('about:blank');
   });
 });
 
-describe('renderComponent ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â image with malicious src (#447)', () => {
+describe('renderComponent  image with malicious src (#447)', () => {
   test('javascript: src is stripped before reaching the rendered HTML', () => {
     const html = renderComponent({ type: 'image', props: { src: 'javascript:alert(1)', alt: 'x' } }, 'slug-1');
     expect(html).not.toMatch(/javascript:/i);
@@ -603,7 +603,7 @@ describe('renderComponent ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â image with mali
   });
 });
 
-describe('renderComponent ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â button with malicious href (#447 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â confirms the actually-executable XSS)', () => {
+describe('renderComponent  button with malicious href (#447  confirms the actually-executable XSS)', () => {
   test('javascript: href is stripped to "#"', () => {
     const html = renderComponent({ type: 'button', props: { url: 'javascript:alert(1)', text: 'click' } }, 'slug-1');
     expect(html).not.toMatch(/javascript:/i);
@@ -622,7 +622,7 @@ describe('renderComponent ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â button with mal
   });
 });
 
-describe('renderComponent ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â video iframe with malicious src (#447)', () => {
+describe('renderComponent  video iframe with malicious src (#447)', () => {
   test('javascript: iframe src falls back to about:blank', () => {
     const html = renderComponent({ type: 'video', props: { url: 'javascript:alert(1)' } }, 'slug-1');
     expect(html).not.toMatch(/javascript:/i);
@@ -636,7 +636,7 @@ describe('renderComponent ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â video iframe wi
   });
 });
 
-describe('renderPage ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â full integration (#447 surfaces never appear in final HTML)', () => {
+describe('renderPage  full integration (#447 surfaces never appear in final HTML)', () => {
   test('image + button + video components with all-malicious URLs emit zero javascript:/script', () => {
     const lp = {
       title: 'Test Page',
@@ -653,15 +653,15 @@ describe('renderPage ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â full integration (#4
   });
 });
 
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Form submission flow + successRedirectUrl validation (#451) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+//  Form submission flow + successRedirectUrl validation (#451) 
 //
 // The form component embeds inline JS that POSTs to /p/:slug/submit
 // and either reveals the thank-you panel or redirects to a configured URL.
-// The redirect URL is validated AT RENDER TIME ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â invalid URLs (javascript:,
+// The redirect URL is validated AT RENDER TIME  invalid URLs (javascript:,
 // mailto:, malformed) silently fall back to the thank-you panel mode so a
 // bad URL never reaches the browser's location.assign.
 
-describe('form ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â submit JS + successRedirectUrl validation', () => {
+describe('form  submit JS + successRedirectUrl validation', () => {
   test('default success path reveals the thank-you panel (no redirect)', () => {
     const html = renderPage({
       slug: 'p',
@@ -716,7 +716,7 @@ describe('form ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â submit JS + successRedirec
       }],
     });
     // The validator URL ctor accepts the parse but the protocol check
-    // rejects it ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ fall back to the thank-you-panel branch.
+    // rejects it ??  fall back to the thank-you-panel branch.
     expect(html).not.toContain('window.location.assign');
     expect(html).not.toMatch(/javascript:alert/i);
     expect(html).toContain('_thanks');
@@ -759,7 +759,7 @@ describe('form ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â submit JS + successRedirec
         type: 'form',
         props: {
           fields: [{ name: 'email' }],
-          // Not a valid absolute URL ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ URL ctor throws ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ caught ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ fallback
+          // Not a valid absolute URL ??  URL ctor throws ??  caught ??  fallback
           successRedirectUrl: 'not a url at all',
         },
       }],
@@ -797,7 +797,7 @@ describe('form ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â submit JS + successRedirec
   });
 });
 
-describe('form ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTCHA / Turnstile (#451)', () => {
+describe('form  CAPTCHA / Turnstile (#451)', () => {
   test('without enableCaptcha, no Turnstile script or widget rendered', () => {
     const html = renderPage({
       slug: 'p',
@@ -855,19 +855,19 @@ describe('form ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â CAPTCHA / Turnstile (#451)
   });
 });
 
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ safeUrl edge cases ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â percent-encoded XSS, CR/LF, bizarre schemes ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+//  safeUrl edge cases  percent-encoded XSS, CR/LF, bizarre schemes 
 //
 // Browsers normalize whitespace and percent-encoding before scheme parsing.
 // safeUrl does not URL-decode, so a percent-encoded "javascript:" stays
 // embedded verbatim and lands in the no-scheme-match relative-path branch.
 // We pin the contract so future "should we URL-decode?" refactors notice.
 
-describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â percent-encoded / malformed / exotic edge cases', () => {
+describe('safeUrl  percent-encoded / malformed / exotic edge cases', () => {
   test('percent-encoded "javascript%3A" does NOT match the dangerous scheme regex (passes through as relative)', () => {
-    // Trimmed value starts with "javascript%3A..." ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no `:` at the
+    // Trimmed value starts with "javascript%3A..."  no `:` at the
     // unencoded scheme position, so the scheme regex doesn't match.
     // It falls through to the no-scheme branch which treats it as relative.
-    // This is the documented contract ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â caller is responsible for further
+    // This is the documented contract  caller is responsible for further
     // decoding if URL-decoded interpretation is needed.
     const out = safeUrl('javascript%3Aalert(1)', 'link-href');
     // Verify it is NOT rejected (i.e. it didn't fall back to '#').
@@ -875,9 +875,9 @@ describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â percent-encoded / malfo
     expect(out).toBe('javascript%3Aalert(1)');
   });
 
-  test('CR-LF in URL is preserved (no scheme match ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ treated as relative)', () => {
+  test('CR-LF in URL is preserved (no scheme match ??  treated as relative)', () => {
     const out = safeUrl('foo\nbar.png', 'image-src');
-    // Input doesn't start with a denied scheme ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â passes through.
+    // Input doesn't start with a denied scheme  passes through.
     expect(out).toBe('foo\nbar.png');
   });
 
@@ -897,13 +897,13 @@ describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â percent-encoded / malfo
     // The safeUrl signature accepts a `kind` string; the kind-specific
     // branches (image-src/link-href/iframe-src) each return the input on
     // success. An unknown kind falls through past every branch to the
-    // final `return SAFE_FALLBACK[kind] ?? ''` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which yields '' because
+    // final `return SAFE_FALLBACK[kind] ?? ''`  which yields '' because
     // SAFE_FALLBACK has no key for unknown kinds.
     expect(safeUrl('https://example.com', 'unknown-kind')).toBe('');
-    // Null input + unknown kind ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ '' too (early-return uses same
+    // Null input + unknown kind ??  '' too (early-return uses same
     // SAFE_FALLBACK[kind] ?? '' fallback).
     expect(safeUrl(null, 'unknown-kind')).toBe('');
-    // Empty input + unknown kind ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ '' likewise.
+    // Empty input + unknown kind ??  '' likewise.
     expect(safeUrl('', 'unknown-kind')).toBe('');
   });
 
@@ -926,7 +926,7 @@ describe('safeUrl ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â percent-encoded / malfo
   test('data:image/svg+xml IS accepted for image-src (SVG can self-XSS but the matcher is permissive by design)', () => {
     // Note: the implementation allows ANY data:image/* (including SVG, which
     // can host JS via <script> tags inside the SVG body). This is the
-    // current contract ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pinning it for review. A tighter implementation
+    // current contract  pinning it for review. A tighter implementation
     // would limit to data:image/(png|jpe?g|gif|webp) only.
     expect(safeUrl('data:image/svg+xml,<svg/>', 'image-src')).toBe('data:image/svg+xml,<svg/>');
   });

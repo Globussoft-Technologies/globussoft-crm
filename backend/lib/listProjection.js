@@ -180,6 +180,9 @@ const PROJECTIONS = Object.freeze({
     // contactId is kept for backwards-compat/detail navigation; name is joined
     // here so list callers don't need a second fetch to render the customer.
     contact: { select: { id: true, name: true } },
+    // Intentionally DROPPED: assignedToUserId / assignedToUser. Assignment is
+    // visible on the detail endpoint and full-shape list; the slim summary
+    // projection used by picker/dashboard tiles should not carry it.
   }),
 
   TravelInvoice: Object.freeze({

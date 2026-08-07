@@ -1,6 +1,6 @@
-// @ts-check
+﻿// @ts-check
 /**
- * backend/routes/travel_trip_billing.js — TMC trip billing surface contract pin.
+ * backend/routes/travel_trip_billing.js â€” TMC trip billing surface contract pin.
  *
  * What's pinned
  * -------------
@@ -32,19 +32,19 @@
  *       DELETE /trips/:tripId/instalments/:id            ADMIN only
  *
  * Pinned guards (all routes go through these in order):
- *   verifyToken → [requirePermission?] → requireTravelTenant → requireTmcAccess → handler
+ *   verifyToken â†’ [requirePermission?] â†’ requireTravelTenant â†’ requireTmcAccess â†’ handler
  *
  * Failure-path codes pinned by the route source as of this commit:
  *   400 INVALID_ID / INVALID_ROOM_ID / MISSING_FIELDS / INVALID_ROOM_TYPE /
  *       ROOM_CAPACITY_EXCEEDED / PARTICIPANTS_OFF_TRIP / INVALID_PARTICIPANTS /
  *       EMPTY_BODY / INVALID_JSON / EMPTY_INSTALMENTS / INVALID_STATUS /
  *       INVALID_INPUT / INVALID_DATE / INVALID_AMOUNT / PARTICIPANT_OFF_TRIP
- *   401 — verifyToken (missing Authorization)
- *   403 SUB_BRAND_DENIED / WRONG_VERTICAL — guard stack
- *   404 TRIP_NOT_FOUND / ROOM_NOT_FOUND / NOT_FOUND — cross-trip / cross-tenant
+ *   401 â€” verifyToken (missing Authorization)
+ *   403 SUB_BRAND_DENIED / WRONG_VERTICAL â€” guard stack
+ *   404 TRIP_NOT_FOUND / ROOM_NOT_FOUND / NOT_FOUND â€” cross-trip / cross-tenant
  *
  * Test pattern mirrors backend/test/routes/travel-cost-master.test.js (commit
- * 5ddb82d1) — patch the prisma singleton with vi.fn() shapes BEFORE requiring
+ * 5ddb82d1) â€” patch the prisma singleton with vi.fn() shapes BEFORE requiring
  * the router, then drive supertest with real HS256 JWTs signed with the same
  * fallback secret the middleware uses in dev. The full guard chain
  * (verifyToken + requirePermission + requireTravelTenant + requireTmcAccess) is
@@ -83,6 +83,7 @@ prisma.tripInstalmentPayment = {
   findMany: vi.fn(),
   findFirst: vi.fn(),
   create: vi.fn(),
+  createMany: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
 };
@@ -145,6 +146,7 @@ beforeEach(() => {
   prisma.tripInstalmentPayment.findMany.mockReset();
   prisma.tripInstalmentPayment.findFirst.mockReset();
   prisma.tripInstalmentPayment.create.mockReset();
+  prisma.tripInstalmentPayment.createMany.mockReset();
   prisma.tripInstalmentPayment.update.mockReset();
   prisma.tripInstalmentPayment.delete.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
@@ -158,7 +160,7 @@ beforeEach(() => {
 });
 
 // -----------------------------------------------------------------------------
-// GET /api/travel/trips/:tripId/rooming — list
+// GET /api/travel/trips/:tripId/rooming â€” list
 // -----------------------------------------------------------------------------
 
 describe('GET /api/travel/trips/:tripId/rooming', () => {
@@ -218,7 +220,7 @@ describe('GET /api/travel/trips/:tripId/rooming', () => {
 });
 
 // -----------------------------------------------------------------------------
-// POST /api/travel/trips/:tripId/rooming — create
+// POST /api/travel/trips/:tripId/rooming â€” create
 // -----------------------------------------------------------------------------
 
 describe('POST /api/travel/trips/:tripId/rooming', () => {
@@ -293,7 +295,7 @@ describe('POST /api/travel/trips/:tripId/rooming', () => {
   });
 
   test('participantIds off-trip returns 400 PARTICIPANTS_OFF_TRIP', async () => {
-    // Count returns 1 but we sent 2 ids — one isn't on this trip.
+    // Count returns 1 but we sent 2 ids â€” one isn't on this trip.
     prisma.tripParticipant.count.mockResolvedValue(1);
     const res = await request(makeApp())
       .post('/api/travel/trips/100/rooming')
@@ -329,7 +331,7 @@ describe('POST /api/travel/trips/:tripId/rooming', () => {
 });
 
 // -----------------------------------------------------------------------------
-// PATCH /api/travel/trips/:tripId/rooming/:roomId — amend
+// PATCH /api/travel/trips/:tripId/rooming/:roomId â€” amend
 // -----------------------------------------------------------------------------
 
 describe('PATCH /api/travel/trips/:tripId/rooming/:roomId', () => {
@@ -382,7 +384,7 @@ describe('PATCH /api/travel/trips/:tripId/rooming/:roomId', () => {
     prisma.roomingAssignment.findFirst.mockResolvedValue({
       id: 50, tripId: 100, roomNumber: '101', roomType: 'quad', participantIds: '[1,2,3,4]',
     });
-    // Shrinking quad → single while keeping 2 ids should fail single's cap of 1.
+    // Shrinking quad â†’ single while keeping 2 ids should fail single's cap of 1.
     const res = await request(makeApp())
       .patch('/api/travel/trips/100/rooming/50')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
@@ -405,7 +407,7 @@ describe('PATCH /api/travel/trips/:tripId/rooming/:roomId', () => {
 });
 
 // -----------------------------------------------------------------------------
-// DELETE /api/travel/trips/:tripId/rooming/:roomId — ADMIN only
+// DELETE /api/travel/trips/:tripId/rooming/:roomId â€” ADMIN only
 // -----------------------------------------------------------------------------
 
 describe('DELETE /api/travel/trips/:tripId/rooming/:roomId', () => {
@@ -443,7 +445,7 @@ describe('DELETE /api/travel/trips/:tripId/rooming/:roomId', () => {
 });
 
 // -----------------------------------------------------------------------------
-// GET /api/travel/trips/:tripId/rooming/export.xlsx — XLSX stream
+// GET /api/travel/trips/:tripId/rooming/export.xlsx â€” XLSX stream
 // -----------------------------------------------------------------------------
 
 describe('GET /api/travel/trips/:tripId/rooming/export.xlsx', () => {
@@ -512,7 +514,48 @@ describe('GET /api/travel/trips/:tripId/payment-plan', () => {
 });
 
 // -----------------------------------------------------------------------------
-// PUT /api/travel/trips/:tripId/payment-plan — upsert
+// -----------------------------------------------------------------------------
+// POST /api/travel/trips/:tripId/instalments/from-plan — materialise
+// -----------------------------------------------------------------------------
+
+describe('POST /api/travel/trips/:tripId/instalments/from-plan', () => {
+  test('materialises missing pending rows for every participant', async () => {
+    prisma.tripPaymentPlan.findUnique.mockResolvedValue({
+      id: 9,
+      tripId: 100,
+      instalmentsJson: JSON.stringify([
+        { dueDate: '2026-09-01', amount: 1200 },
+        { dueDate: '2026-10-01', amount: 800 },
+      ]),
+    });
+    prisma.tripParticipant.findMany.mockResolvedValue([{ id: 11 }, { id: 12 }]);
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { participantId: 11, instalmentIndex: 0 },
+    ]);
+    prisma.tripInstalmentPayment.createMany.mockResolvedValue({ count: 3 });
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/instalments/from-plan')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      materialised: 3,
+      skipped: 1,
+      participants: 2,
+      instalmentsPerParticipant: 2,
+    });
+    expect(prisma.tripInstalmentPayment.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({ tripId: 100, participantId: 11, instalmentIndex: 1, status: 'pending' }),
+          expect.objectContaining({ tripId: 100, participantId: 12, instalmentIndex: 0, status: 'pending' }),
+        ]),
+      }),
+    );
+  });
+});
+// PUT /api/travel/trips/:tripId/payment-plan â€” upsert
 // -----------------------------------------------------------------------------
 
 describe('PUT /api/travel/trips/:tripId/payment-plan', () => {
@@ -577,7 +620,7 @@ describe('PUT /api/travel/trips/:tripId/payment-plan', () => {
 });
 
 // -----------------------------------------------------------------------------
-// DELETE /api/travel/trips/:tripId/payment-plan — ADMIN only
+// DELETE /api/travel/trips/:tripId/payment-plan â€” ADMIN only
 // -----------------------------------------------------------------------------
 
 describe('DELETE /api/travel/trips/:tripId/payment-plan', () => {
@@ -613,7 +656,7 @@ describe('DELETE /api/travel/trips/:tripId/payment-plan', () => {
 });
 
 // -----------------------------------------------------------------------------
-// GET /api/travel/trips/:tripId/instalments — list (filtered)
+// GET /api/travel/trips/:tripId/instalments â€” list (filtered)
 // -----------------------------------------------------------------------------
 
 describe('GET /api/travel/trips/:tripId/instalments', () => {
@@ -659,7 +702,7 @@ describe('GET /api/travel/trips/:tripId/instalments', () => {
 });
 
 // -----------------------------------------------------------------------------
-// POST /api/travel/trips/:tripId/instalments — create
+// POST /api/travel/trips/:tripId/instalments â€” create
 // -----------------------------------------------------------------------------
 
 describe('POST /api/travel/trips/:tripId/instalments', () => {
@@ -748,7 +791,7 @@ describe('POST /api/travel/trips/:tripId/instalments', () => {
 });
 
 // -----------------------------------------------------------------------------
-// PATCH /api/travel/trips/:tripId/instalments/:id — amend
+// PATCH /api/travel/trips/:tripId/instalments/:id â€” amend
 // -----------------------------------------------------------------------------
 
 describe('PATCH /api/travel/trips/:tripId/instalments/:id', () => {
@@ -826,7 +869,7 @@ describe('PATCH /api/travel/trips/:tripId/instalments/:id', () => {
 });
 
 // -----------------------------------------------------------------------------
-// DELETE /api/travel/trips/:tripId/instalments/:id — ADMIN only
+// DELETE /api/travel/trips/:tripId/instalments/:id â€” ADMIN only
 // -----------------------------------------------------------------------------
 
 describe('DELETE /api/travel/trips/:tripId/instalments/:id', () => {
@@ -869,8 +912,8 @@ describe('DELETE /api/travel/trips/:tripId/instalments/:id', () => {
 
 describe('POST /api/travel/trips/:tripId/instalments/:id/sync-payment', () => {
   test('already_paid instalment returns synced:true and still triggers itinerary update', async () => {
-    // Previously returned synced:false without updating the itinerary — that caused
-    // the Leads Amount column to stay "—" when both instalments were already PAID
+    // Previously returned synced:false without updating the itinerary â€” that caused
+    // the Leads Amount column to stay "â€”" when both instalments were already PAID
     // before the fix was deployed. Now it always syncs the itinerary even if
     // the instalment row is already marked paid.
     prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
@@ -1003,3 +1046,6 @@ describe('auth + vertical guard', () => {
     expect(prisma.tmcTrip.findFirst).not.toHaveBeenCalled();
   });
 });
+
+
+

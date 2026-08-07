@@ -18,6 +18,7 @@
  */
 
 const prisma = require("./prisma");
+const { normalizeDataScope, parseSubBrandScope } = require("./rbacScope");
 
 /**
  * Resolve the primary role for a user.
@@ -55,6 +56,8 @@ async function resolvePrimaryRole(user) {
         key: userRole.role.key,
         name: userRole.role.name,
         landingPath: userRole.role.landingPath || null,
+        dataScope: normalizeDataScope(userRole.role.dataScope),
+        subBrandScope: parseSubBrandScope(userRole.role.subBrandScopeJson),
       };
     }
 
@@ -65,7 +68,7 @@ async function resolvePrimaryRole(user) {
     if (user.role && user.tenantId) {
       const role = await prisma.role.findFirst({
         where: { tenantId: user.tenantId, key: user.role },
-        select: { id: true, key: true, name: true, landingPath: true },
+        select: { id: true, key: true, name: true, landingPath: true, dataScope: true, subBrandScopeJson: true },
       });
       if (role) {
         return {
@@ -73,6 +76,8 @@ async function resolvePrimaryRole(user) {
           key: role.key,
           name: role.name,
           landingPath: role.landingPath || null,
+          dataScope: normalizeDataScope(role.dataScope),
+          subBrandScope: parseSubBrandScope(role.subBrandScopeJson),
         };
       }
     }

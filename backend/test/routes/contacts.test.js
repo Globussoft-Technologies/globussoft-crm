@@ -94,6 +94,17 @@ Module._cache[eventBusPath] = {
   },
 };
 
+const notifyAdminsOfNewLeadMock = vi.fn().mockResolvedValue([]);
+const leadNotificationsPath = requireCJS.resolve('../../lib/leadNotifications.js');
+Module._cache[leadNotificationsPath] = {
+  id: leadNotificationsPath,
+  filename: leadNotificationsPath,
+  loaded: true,
+  exports: {
+    notifyAdminsOfNewLead: notifyAdminsOfNewLeadMock,
+  },
+};
+
 const findDuplicateMock = vi.fn();
 const dedupPath = requireCJS.resolve('../../utils/deduplication.js');
 Module._cache[dedupPath] = {
@@ -164,6 +175,7 @@ authMw.verifyRole = (roles) => (req, res, next) => {
 prisma.contact = prisma.contact || {};
 prisma.contact.findMany = vi.fn();
 prisma.contact.findFirst = vi.fn();
+prisma.contact.findUnique = vi.fn();
 prisma.contact.create = vi.fn();
 prisma.contact.update = vi.fn();
 prisma.patient = prisma.patient || {};
@@ -237,6 +249,7 @@ function makeApp({ tenantId = TENANT_ID, userId = USER_ID, role = 'ADMIN', skipA
 beforeEach(() => {
   prisma.contact.findMany.mockReset().mockResolvedValue([SAMPLE_CONTACT]);
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.create.mockReset();
   prisma.contact.update.mockReset();
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
@@ -251,6 +264,7 @@ beforeEach(() => {
   writeAuditMock.mockReset().mockResolvedValue(undefined);
   diffFieldsMock.mockReset().mockReturnValue({});
   emitEventMock.mockReset();
+  notifyAdminsOfNewLeadMock.mockReset().mockResolvedValue([]);
   findDuplicateMock.mockReset().mockResolvedValue(null);
   authState.useReal = false;
 });
@@ -436,6 +450,10 @@ describe('POST /api/contacts — create', () => {
     expect(auditArgs[2]).toBe(12345);
     expect(emitEventMock).toHaveBeenCalledOnce();
     expect(emitEventMock.mock.calls[0][0]).toBe('contact.created');
+    expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: TENANT_ID,
+      contact: created,
+    }));
   });
 
   test('empty strings for optional wellness/Int/Date fields are normalized to null → 201 (generic CRM create lead form)', async () => {
@@ -500,6 +518,50 @@ describe('POST /api/contacts — create', () => {
     expect(data.status).toBe('Lead');
   });
 
+  test('soft-deleted same email is restored as a visible Lead instead of creating a duplicate', async () => {
+    const deletedContact = {
+      ...SAMPLE_CONTACT,
+      id: 7777,
+      email: 'restore@example.com',
+      deletedAt: new Date('2026-08-01T10:00:00Z'),
+    };
+    const restored = {
+      ...deletedContact,
+      name: 'Restored Lead',
+      phone: '+919811000777',
+      status: 'Lead',
+      deletedAt: null,
+    };
+    findDuplicateMock.mockResolvedValueOnce(null);
+    prisma.contact.findUnique.mockResolvedValueOnce(deletedContact);
+    prisma.contact.update.mockResolvedValueOnce(restored);
+
+    const res = await request(makeApp())
+      .post('/api/contacts')
+      .send({
+        name: 'Restored Lead',
+        email: 'restore@example.com',
+        phone: '+919811000777',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 7777, restored: true, deletedAt: null });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 7777 },
+      data: expect.objectContaining({
+        email: 'restore@example.com',
+        status: 'Lead',
+        deletedAt: null,
+        tenantId: TENANT_ID,
+      }),
+    });
+    expect(writeAuditMock.mock.calls[0][1]).toBe('RESTORE');
+    expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: TENANT_ID,
+      contact: restored,
+    }));
+  });
   test('missing required email → 400 EMAIL_REQUIRED (#160); prisma NOT called', async () => {
     const res = await request(makeApp())
       .post('/api/contacts')

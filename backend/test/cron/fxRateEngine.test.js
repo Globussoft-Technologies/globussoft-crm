@@ -2,7 +2,7 @@
 // (PRD_TRAVEL_QUOTE_BUILDER G018 / DD-5.4).
 //
 // Coverage:
-//   1. Empty pair list → { fetched: 0, errors: [] }, no DB calls.
+//   1. Empty pair list → { fetched: 0, skipped: 0, errors: [] }, no DB calls.
 //   2. Successful fetch on every pair → fetched === pair count.
 //   3. Fetch failure on one pair does NOT abort the others.
 //   4. Upsert failure on one pair captured as error; other pairs proceed.
@@ -23,10 +23,11 @@ function fakePrisma() {
 }
 
 describe('fxRateEngine.tick — happy path', () => {
-  test('returns { fetched: 0, errors: [] } when pair list empty', async () => {
+  test('returns { fetched: 0, skipped: 0, errors: [] } when pair list empty', async () => {
     const prisma = fakePrisma();
     const r = await tick({ prisma, pairs: [] });
     expect(r.fetched).toBe(0);
+    expect(r.skipped).toBe(0);
     expect(r.errors).toEqual([]);
     expect(prisma.fxRate.create).not.toHaveBeenCalled();
   });
@@ -40,6 +41,7 @@ describe('fxRateEngine.tick — happy path', () => {
     const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ rates: { USD: 0.012, EUR: 0.011 } }) }));
     const r = await tick({ prisma, pairs, fetchImpl });
     expect(r.fetched).toBe(2);
+    expect(r.skipped).toBe(0);
     expect(r.errors).toEqual([]);
     expect(prisma.fxRate.create).toHaveBeenCalledTimes(2);
   });
@@ -61,8 +63,8 @@ describe('fxRateEngine.tick — fault tolerance', () => {
     });
     const r = await tick({ prisma, pairs, fetchImpl });
     expect(r.fetched).toBe(2);
-    expect(r.errors.length).toBe(1);
-    expect(r.errors[0]).toMatchObject({ stage: 'fetch' });
+    expect(r.skipped).toBe(1);
+    expect(r.errors).toEqual([]);
   });
 
   test('upsert failure on one pair captured as error', async () => {
@@ -86,7 +88,8 @@ describe('fxRateEngine.tick — fault tolerance', () => {
     const fetchImpl = vi.fn(async () => { throw new Error('net'); });
     const r = await tick({ prisma, pairs, fetchImpl });
     expect(r.fetched).toBe(0);
-    expect(r.errors.length).toBe(1);
+    expect(r.skipped).toBe(1);
+    expect(r.errors).toEqual([]);
   });
 });
 

@@ -1159,22 +1159,72 @@ router.post("/public/confirm-payment", async (req, res) => {
       existingMeta = JSON.parse(payment.metadata || "{}");
     } catch (_) {}
 
-    if (payment.status !== "SUCCESS") {
+    const callbackPaymentId = razorpay_payment_id ? String(razorpay_payment_id) : null;
+    const isDifferentCapturedPayment =
+      payment.status === "SUCCESS" &&
+      callbackPaymentId &&
+      payment.gatewayId &&
+      payment.gatewayId !== callbackPaymentId;
+
+    if (isDifferentCapturedPayment) {
+      const existingCapture = await prisma.payment.findFirst({
+        where: {
+          tenantId: payment.tenantId,
+          gateway: "razorpay",
+          gatewayId: callbackPaymentId,
+        },
+      });
+      if (existingCapture) {
+        payment = existingCapture;
+        try {
+          existingMeta = JSON.parse(payment.metadata || "{}");
+        } catch (_) {
+          existingMeta = {};
+        }
+      } else {
+        payment = await prisma.payment.create({
+          data: {
+            tenantId: payment.tenantId,
+            invoiceId: payment.invoiceId || null,
+            contactId: payment.contactId || null,
+            description: payment.description || null,
+            amount: 0,
+            currency: payment.currency || "INR",
+            gateway: "razorpay",
+            gatewayId: callbackPaymentId,
+            status: "SUCCESS",
+            paidAt: new Date(),
+            metadata: JSON.stringify({
+              ...existingMeta,
+              mode: "payment_link",
+              plinkId: razorpay_payment_link_id,
+              razorpayPaymentId: callbackPaymentId,
+            }),
+          },
+        });
+      }
+    } else if (payment.status !== "SUCCESS") {
       // MERGE into existing metadata so travelInvoiceId / scheduleId set by
       // paymentLink.js are not lost when confirm-payment reconciles the record.
       await prisma.payment.update({
         where: { id: payment.id },
         data: {
+          gatewayId: callbackPaymentId || payment.gatewayId,
           status: "SUCCESS",
           paidAt: new Date(),
           metadata: JSON.stringify({
             ...existingMeta,
             mode: "payment_link",
             plinkId: razorpay_payment_link_id,
-            razorpayPaymentId: razorpay_payment_id,
+            razorpayPaymentId: callbackPaymentId,
           }),
         },
       });
+      payment = {
+        ...payment,
+        gatewayId: callbackPaymentId || payment.gatewayId,
+        status: "SUCCESS",
+      };
       // Mark billing invoice paid (non-travel path)
       if (payment.invoiceId) {
         const inv = await prisma.invoice.findFirst({
@@ -1427,13 +1477,23 @@ router.post("/public/confirm-payment", async (req, res) => {
             const totalDue = Number(travelInv.totalAmount || 0);
             const invoiceStatus =
               totalDue > 0 && totalPaid >= totalDue ? "Paid" : "Partial";
-            await prisma.travelInvoice.update({
-              where: { id: travelInv.id },
-              data: {
-                status: invoiceStatus,
-                ...(invoiceStatus === "Paid" ? { paidAt: new Date() } : {}),
-              },
-            });
+            const cumulativeQuoteStatus =
+              totalQuote > 0 && totalPaid >= totalQuote
+                ? "fully_paid"
+                : "advance_paid";
+            await Promise.all([
+              prisma.travelInvoice.update({
+                where: { id: travelInv.id },
+                data: {
+                  status: invoiceStatus,
+                  ...(invoiceStatus === "Paid" ? { paidAt: new Date() } : {}),
+                },
+              }),
+              prisma.travelQuote.update({
+                where: { id: quote.id },
+                data: { status: cumulativeQuoteStatus },
+              }),
+            ]);
           } else if (
             paidMajor > 0 &&
             paidMajor !== Number(payment.amount || 0)

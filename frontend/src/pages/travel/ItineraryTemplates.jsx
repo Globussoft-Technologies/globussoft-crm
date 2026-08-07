@@ -106,6 +106,30 @@ function parseTemplateItems(tpl) {
   }
 }
 
+function parseTemplateItemDetails(item) {
+  if (!item?.detailsJson) return null;
+  try {
+    const parsed = typeof item.detailsJson === "string" ? JSON.parse(item.detailsJson) : item.detailsJson;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+function summarizeTemplateConnections(items) {
+  const summary = { sightseeing: 0, costLinked: 0, pricingLinked: 0, supplierLinked: 0 };
+  (items || []).forEach((item) => {
+    if (!item) return;
+    const details = parseTemplateItemDetails(item);
+    const masterRefs = details?.masterRefs && typeof details.masterRefs === "object" ? details.masterRefs : null;
+    if (String(item.itemType || "").toLowerCase() === "sightseeing") summary.sightseeing += 1;
+    if (masterRefs?.costMasterId != null) summary.costLinked += 1;
+    if (details?.pricingLink) summary.pricingLinked += 1;
+    if ((masterRefs?.supplierId != null) || (item.supplierId != null && item.supplierId !== "")) summary.supplierLinked += 1;
+  });
+  return summary;
+}
+
 const EMPTY_FORM = {
   name: '',
   destinationName: '',
@@ -577,16 +601,13 @@ export default function ItineraryTemplates() {
             <FileText size={28} aria-hidden /> Itinerary Template Library
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
-            Pre-loaded itinerary templates — destination, duration, base price, sub-brand
-            affinity. Operators clone these into new itineraries via the builder. The
-            sightseeing catalogue lives in{' '}
-            <Link
-              to="/travel/sightseeing"
-              style={{ color: 'var(--primary-color, var(--accent-color))' }}
-            >
-              Sightseeing Master
-            </Link>
-            .
+            Pre-loaded itinerary templates - destination, duration, base price, sub-brand
+            affinity, with preserved sightseeing, supplier cost, and pricing-rule context.
+            Operators clone these into new itineraries via the builder. Linked master
+            data lives in{' '}
+            <Link to="/travel/sightseeing" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Sightseeing Master</Link>,{' '}
+            <Link to="/travel/cost-master" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Cost Master</Link>, and{' '}
+            <Link to="/travel/pricing-rules" style={{ color: 'var(--primary-color, var(--accent-color))' }}>Pricing Rules</Link>.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -988,7 +1009,7 @@ export default function ItineraryTemplates() {
           >
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ position: "sticky", top: 0, background: "#fff", zIndex: 10 }}>
+                <tr>
                 <th style={th}>Name</th>
                 <th style={th}>Destination</th>
                 <th style={th}>Duration</th>
@@ -1317,6 +1338,34 @@ function TemplatePreviewModal({
           </div>
         )}
 
+        {/* Linked data summary */}
+        <div
+          style={{
+            padding: 16,
+            borderBottom: '1px solid var(--border-color)',
+            display: "grid",
+            gap: 8,
+          }}
+          data-testid="preview-linked-data-section"
+        >
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)" }}>
+            Linked data
+          </div>
+          {(() => {
+            const summary = summarizeTemplateConnections(items);
+            return (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 12, color: "var(--text-primary)" }}>
+                <span style={metaPill}>Sightseeing: {summary.sightseeing}</span>
+                <span style={metaPill}>Cost-linked: {summary.costLinked}</span>
+                <span style={metaPill}>Pricing-linked: {summary.pricingLinked}</span>
+                <span style={metaPill}>Supplier-linked: {summary.supplierLinked}</span>
+              </div>
+            );
+          })()}
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+            Review the source masters in <Link to="/travel/sightseeing">Sightseeing Master</Link>, <Link to="/travel/cost-master">Cost Master</Link>, and <Link to="/travel/pricing-rules">Pricing Rules</Link>.
+          </div>
+        </div>
         {/* Map preview */}
         <div
           style={{
@@ -1507,6 +1556,15 @@ function Field({ label, children }) {
   );
 }
 
+const metaPill = {
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "4px 10px",
+  borderRadius: 999,
+  background: "var(--subtle-bg)",
+  border: "1px solid var(--border-color)",
+};
+
 const inputStyle = {
   padding: '8px 10px',
   borderRadius: 6,
@@ -1536,7 +1594,7 @@ const emptyStyle = {
 const th = {
   position: 'sticky',
   top: 0,
-  zIndex: 10,
+  zIndex: 3,
   textAlign: 'left',
   padding: '10px 12px',
   fontSize: 12,
@@ -1544,7 +1602,9 @@ const th = {
   letterSpacing: 0.5,
   color: 'var(--text-secondary)',
   borderBottom: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg)',
+  background: 'var(--modal-bg, var(--bg-color))',
+  backgroundClip: 'padding-box',
+  boxShadow: 'inset 0 -1px 0 var(--border-color)',
 };
 const td = { padding: '10px 12px', fontSize: 14, color: 'var(--text-primary)' };
 const brandBadge = {

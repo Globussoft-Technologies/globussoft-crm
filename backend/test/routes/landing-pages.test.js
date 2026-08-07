@@ -783,6 +783,112 @@ describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
   });
 });
 
+describe('GET /api/landing-pages/public/featured-full (no auth, full published payload)', () => {
+  test('200 returns the featured PUBLISHED row with parsed content for external hosts', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50,
+      slug: 'europe-2026',
+      title: 'Europe 2026',
+      status: 'PUBLISHED',
+      templateType: 'wanderlux-v1',
+      destination: 'Europe',
+      subBrand: 'tmc',
+      metaTitle: 'Europe 2026',
+      metaDescription: 'Trip page',
+      featuredAt: new Date('2026-08-01T10:00:00Z'),
+      publishedAt: new Date('2026-08-01T10:00:00Z'),
+      updatedAt: new Date('2026-08-02T10:00:00Z'),
+      content: JSON.stringify({ theme: { brandColor: '#0F1B3D' }, brand: { subBrand: 'TMC' } }),
+    });
+
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured-full?subBrand=tmc');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 50,
+      slug: 'europe-2026',
+      title: 'Europe 2026',
+      templateType: 'wanderlux-v1',
+      publicUrl: '/p/europe-2026',
+      content: {
+        theme: { brandColor: '#0F1B3D' },
+        brand: { subBrand: 'TMC' },
+      },
+    });
+    const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
+    expect(findArgs.where.subBrand).toBe('tmc');
+    expect(findArgs.orderBy).toEqual({ featuredAt: 'desc' });
+  });
+
+  test('500 when featured page content is malformed JSON', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50,
+      slug: 'broken-page',
+      title: 'Broken',
+      status: 'PUBLISHED',
+      templateType: 'wanderlux-v1',
+      destination: 'Europe',
+      subBrand: 'tmc',
+      metaTitle: 'Broken',
+      metaDescription: 'Broken',
+      featuredAt: new Date('2026-08-01T10:00:00Z'),
+      publishedAt: new Date('2026-08-01T10:00:00Z'),
+      updatedAt: new Date('2026-08-02T10:00:00Z'),
+      content: '{bad json',
+    });
+
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured-full');
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/not valid JSON/);
+  });
+});
+
+describe('GET /api/landing-pages/public/by-slug/:slug (no auth, full published payload)', () => {
+  test('200 returns the exact published page payload with parsed content', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 77,
+      slug: 'modern-classroom',
+      title: 'The Modern Classroom',
+      status: 'PUBLISHED',
+      templateType: 'wanderlux-v1',
+      destination: 'Europe',
+      subBrand: 'tmc',
+      metaTitle: 'The Modern Classroom',
+      metaDescription: 'Landing page',
+      featuredAt: new Date('2026-08-01T10:00:00Z'),
+      publishedAt: new Date('2026-08-01T10:00:00Z'),
+      updatedAt: new Date('2026-08-02T10:00:00Z'),
+      content: JSON.stringify({ hero: { headline: 'Where Textbooks Come Alive' } }),
+    });
+
+    const res = await request(makeApp()).get('/api/landing-pages/public/by-slug/modern-classroom');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 77,
+      slug: 'modern-classroom',
+      publicUrl: '/p/modern-classroom',
+      content: {
+        hero: { headline: 'Where Textbooks Come Alive' },
+      },
+    });
+    expect(prisma.landingPage.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { slug: 'modern-classroom', status: 'PUBLISHED' },
+      }),
+    );
+  });
+
+  test('404 when the slug is not published', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp()).get('/api/landing-pages/public/by-slug/missing-page');
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NO_PAGE_PUBLISHED');
+  });
+});
 describe('GET /api/landing-pages/public/featured (no auth, /trips resolver)', () => {
   test('200 returns the featured PUBLISHED row by default', async () => {
     prisma.landingPage.findFirst.mockResolvedValue({

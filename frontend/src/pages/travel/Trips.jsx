@@ -219,6 +219,15 @@ export default function Trips() {
     load({ reset: true });
   }, [load]);
 
+  useEffect(() => {
+    if (loading || loadingMore || !hasMore || !listRef.current) return;
+    const el = listRef.current;
+    const threshold = 72;
+    if (el.scrollHeight <= el.clientHeight + threshold) {
+      load({ reset: false });
+    }
+  }, [trips, hasMore, loading, loadingMore, load]);
+
   const handleListScroll = useCallback((e) => {
     const el = e.currentTarget;
     if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
@@ -293,7 +302,7 @@ export default function Trips() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: 24, maxWidth: 1480, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
           {fromReports && (
@@ -347,7 +356,7 @@ export default function Trips() {
           overflow: "auto",
           height: "calc(100vh - 300px)",
           minHeight: 620,
-          maxHeight: 780,
+          maxHeight: 720,
         }}
       >
         {loading ? (
@@ -362,18 +371,23 @@ export default function Trips() {
           <>
             <table
               className="stable-table"
-              style={{ width: "100%", minWidth: 1520, borderCollapse: "collapse", tableLayout: "fixed" }}
+              style={{
+                width: "100%",
+                minWidth: 1560,
+                borderCollapse: "collapse",
+                tableLayout: "fixed",
+              }}
             >
               <colgroup>
-                <col style={{ width: 170 }} />
-                <col style={{ width: 260 }} />
-                <col style={{ width: 120 }} />
-                <col style={{ width: 140 }} />
-                <col style={{ width: 220 }} />
+                <col style={{ width: 160 }} />
                 <col style={{ width: 240 }} />
-                <col style={{ width: 130 }} />
-                <col style={{ width: 150 }} />
+                <col style={{ width: 90 }} />
                 <col style={{ width: 120 }} />
+                <col style={{ width: 190 }} />
+                <col style={{ width: 230 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 130 }} />
+                <col style={{ width: 110 }} />
                 <col style={{ width: 90 }} />
               </colgroup>
               <thead>
@@ -387,7 +401,7 @@ export default function Trips() {
                   <th style={th}>Participants</th>
                   <th style={th}>Per-student</th>
                   <th style={th}>Status</th>
-                  <th style={{ ...th, width: 60, textAlign: "right" }} aria-label="Actions"></th>
+                  <th style={{ ...th, width: 90, textAlign: "right" }} aria-label="Actions">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -456,7 +470,7 @@ export default function Trips() {
                   );
                 })}
               </tbody>
-            </table>
+              </table>
             {loadingMore && (
               <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
                 Loading more&hellip;
@@ -640,11 +654,15 @@ const th = {
   color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
   position: "sticky",
   top: 0,
-  zIndex: 10,
+  zIndex: 3,
   background: "var(--modal-bg, var(--bg-color))",
   backgroundColor: "var(--modal-bg, var(--bg-color))",
   backgroundClip: "padding-box",
   boxShadow: "inset 0 -1px 0 var(--border-color)",
+  opacity: 1,
+  backgroundImage: "none",
+  isolation: "isolate",
+  backdropFilter: "none",
   whiteSpace: "nowrap",
 };
 const td = {

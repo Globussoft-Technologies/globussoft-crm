@@ -328,7 +328,6 @@ export default function Itineraries() {
   const loadingMoreRef = useRef(false);
   const offsetRef = useRef(0);
   const hasMoreRef = useRef(true);
-  const pendingScrollRestoreRef = useRef(null);
   const selectedItinerary = useMemo(
     () => (selectedItineraryId
       ? items.find((it) => it.id === selectedItineraryId)
@@ -366,18 +365,6 @@ export default function Itineraries() {
   useEffect(() => {
     hasMoreRef.current = hasMore;
   }, [hasMore]);
-
-  useEffect(() => {
-    const el = tableScrollRef.current;
-    const snapshot = pendingScrollRestoreRef.current;
-    if (!el || !snapshot || loadingMore) return;
-
-    el.scrollTop = Math.max(
-      0,
-      el.scrollHeight - el.clientHeight - snapshot.distanceFromBottom,
-    );
-    pendingScrollRestoreRef.current = null;
-  }, [items, loadingMore]);
   // Items array passed to MapPreview. When the itinerary has geocoded items
   // those are used directly. When there are none we geocode the destination
   // city names via Nominatim (same OSM data used for tiles) and show those
@@ -677,7 +664,6 @@ export default function Itineraries() {
       setHasMore(true);
       offsetRef.current = 0;
       hasMoreRef.current = true;
-      pendingScrollRestoreRef.current = null;
       if (tableScrollRef.current) {
         tableScrollRef.current.scrollTop = 0;
       }
@@ -735,11 +721,8 @@ export default function Itineraries() {
   const handleTableScroll = useCallback((e) => {
     const el = e.currentTarget;
     if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
-    const threshold = 72;
+    const threshold = 24;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
-      pendingScrollRestoreRef.current = {
-        distanceFromBottom: el.scrollHeight - el.scrollTop - el.clientHeight,
-      };
       load({ reset: false });
     }
   }, [load]);
@@ -923,12 +906,12 @@ export default function Itineraries() {
             onScroll={handleTableScroll}
             style={{
               overflow: "auto",
-              height: "calc(100vh - 340px)",
-              minHeight: 520,
-              maxHeight: 760,
+              height: "calc(100vh - 300px)",
+              minHeight: 620,
+              maxHeight: 720,
             }}
           >
-            <table style={{ width: "100%", minWidth: ITINERARY_TABLE_WIDTH, borderCollapse: "collapse" }}>
+            <table className="stable-table" style={{ width: "100%", minWidth: ITINERARY_TABLE_WIDTH, borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={th}>Destination</th>
@@ -1085,12 +1068,12 @@ export default function Itineraries() {
                 );
               })}
             </tbody>
-          </table>
-            {loadingMore && (
-              <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
-                Loading more&hellip;
-              </div>
-            )}
+            </table>
+          {loadingMore && (
+            <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
+              Loading more&hellip;
+            </div>
+          )}
           </div>
         )}
       </div>

@@ -24,7 +24,7 @@
 
 import { useEffect, useMemo, useState, useRef } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { ArrowLeft, Filter, Ticket, Calendar as CalendarIcon, Upload, Send, UserCheck, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, Filter, Ticket, Calendar as CalendarIcon, Upload, Send, UserCheck, RefreshCw } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
@@ -109,7 +109,14 @@ export default function WebCheckinQueue() {
     fetchApi(url)
       .then((res) => {
         const list = Array.isArray(res?.webcheckins) ? res.webcheckins : [];
-        setRows(list);
+        setRows((prev) => {
+          if (upcomingOnly || offset === 0) return list;
+          const merged = [...prev];
+          for (let i = 0; i < list.length; i += 1) {
+            merged[offset + i] = list[i];
+          }
+          return merged;
+        });
         setTotal(Number.isFinite(res?.total) ? res.total : list.length);
       })
       .catch((e) => {
@@ -119,7 +126,10 @@ export default function WebCheckinQueue() {
           setTotal(0);
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        scrolledPage.current = false;
+      });
   };
 
   // Staff list for the reassign dropdown — loaded once. /api/staff is
@@ -136,10 +146,16 @@ export default function WebCheckinQueue() {
   // on a smaller filtered result-set.
   const onStatusChange = (v) => {
     setStatus(v);
+    setRows([]);
+    setTotal(0);
+    scrolledPage.current = false;
     setOffset(0);
   };
   const onUpcomingToggle = (e) => {
     setUpcomingOnly(e.target.checked);
+    setRows([]);
+    setTotal(0);
+    scrolledPage.current = false;
     setOffset(0);
   };
 
@@ -238,10 +254,6 @@ export default function WebCheckinQueue() {
 
   // ─── Render ──────────────────────────────────────────────────────
 
-  const showingPagination = !upcomingOnly && total > PAGE_SIZE;
-  const fromIdx = total === 0 ? 0 : offset + 1;
-  const toIdx = Math.min(offset + rows.length, total);
-
   return (
     <div style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box" }}>
       {openedFromReports ? (
@@ -294,11 +306,6 @@ export default function WebCheckinQueue() {
         >
           <RefreshCw size={14} aria-hidden style={{ marginRight: 4 }} /> Refresh
         </button>
-        {showingPagination && (
-          <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-secondary)" }}>
-            {fromIdx}&ndash;{toIdx} of {total}
-          </span>
-        )}
       </div>
 
       {/* Table */}
@@ -307,7 +314,8 @@ export default function WebCheckinQueue() {
         onScroll={handleTableScroll}
         style={{
           background: "var(--surface-color)", borderRadius: 8,
-          border: "1px solid var(--border-color)", overflow: "auto",
+          border: "1px solid var(--border-color)", overflowY: "auto",
+          overflowX: "hidden",
           height: "calc(100vh - 300px)",
           minHeight: 620,
           maxHeight: 780,
@@ -321,17 +329,17 @@ export default function WebCheckinQueue() {
             flights are accepted.
           </div>
         ) : (
-          <table className="stable-table webcheckins-table" style={{ width: "100%", minWidth: 1700, borderCollapse: "collapse", tableLayout: "fixed" }}>
+          <table className="stable-table webcheckins-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: "130px" }} />
-              <col style={{ width: "96px" }} />
-              <col style={{ width: "100px" }} />
-              <col style={{ width: "95px" }} />
+              <col style={{ width: "116px" }} />
+              <col style={{ width: "88px" }} />
+              <col style={{ width: "90px" }} />
+              <col style={{ width: "78px" }} />
+              <col style={{ width: "138px" }} />
               <col style={{ width: "150px" }} />
-              <col style={{ width: "170px" }} />
-              <col style={{ width: "98px" }} />
-              <col style={{ width: "132px" }} />
-              <col />
+              <col style={{ width: "92px" }} />
+              <col style={{ width: "118px" }} />
+              <col style={{ width: "320px" }} />
             </colgroup>
             <thead>
               <tr>
@@ -418,7 +426,7 @@ export default function WebCheckinQueue() {
                       )}
                     </td>
                     <td style={td}>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", minWidth: 0 }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "nowrap", alignItems: "center", minWidth: 0 }}>
                         <button
                           type="button"
                           onClick={() => onUploadClick(r.id)}
@@ -475,32 +483,6 @@ export default function WebCheckinQueue() {
         )}
       </div>
 
-      {/* Pagination — only when not in upcoming mode and total exceeds page. */}
-      {showingPagination && (
-        <div style={{
-          display: "flex", justifyContent: "flex-end", alignItems: "center",
-          gap: 8, marginTop: 12,
-        }}>
-          <button
-            type="button"
-            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-            disabled={offset === 0}
-            style={pagerBtn}
-            aria-label="Previous page"
-          >
-            <ChevronLeft size={14} aria-hidden /> Prev
-          </button>
-          <button
-            type="button"
-            onClick={() => setOffset(offset + PAGE_SIZE)}
-            disabled={offset + rows.length >= total}
-            style={pagerBtn}
-            aria-label="Next page"
-          >
-            Next <ChevronRight size={14} aria-hidden />
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -522,7 +504,7 @@ const miniSelectStyle = {
   padding: "3px 6px", borderRadius: 4,
   border: "1px solid var(--border-color)",
   background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 12, minWidth: 110, height: 28, flexShrink: 0,
+  fontSize: 12, minWidth: 104, height: 28, flexShrink: 0,
 };
 const refreshBtn = {
   display: "inline-flex", alignItems: "center",
@@ -533,17 +515,10 @@ const refreshBtn = {
 };
 const actionBtn = {
   display: "inline-flex", alignItems: "center", justifyContent: "center",
-  padding: "4px 10px", borderRadius: 4,
+  padding: "4px 8px", borderRadius: 4,
   border: "1px solid var(--border-color)",
   background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 12, cursor: "pointer", height: 28, minWidth: 75, whiteSpace: "nowrap", flexShrink: 0,
-};
-const pagerBtn = {
-  display: "inline-flex", alignItems: "center", gap: 2,
-  padding: "6px 12px", borderRadius: 6,
-  border: "1px solid var(--border-color)",
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 13, cursor: "pointer",
+  fontSize: 12, cursor: "pointer", height: 28, minWidth: 72, whiteSpace: "nowrap", flexShrink: 0,
 };
 const empty = {
   padding: 32, textAlign: "center",

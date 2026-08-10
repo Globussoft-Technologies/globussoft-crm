@@ -572,8 +572,19 @@ describe('POST /applications ? validation + happy path', () => {
     expect(prisma.visaApplication.create).not.toHaveBeenCalled();
   });
 
-  test('contact exists with any sub-brand → 201 existing contact is accepted', async () => {
+  test('contact exists but is not visasure → 403 NOT_VISA_SURE', async () => {
     prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'other-brand' });
+    const res = await request(makeApp())
+      .post('/api/travel/visa/applications')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ contactId: 11, applicationType: 'umrah', destinationCountry: 'SA' });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'NOT_VISA_SURE' });
+    expect(prisma.visaApplication.create).not.toHaveBeenCalled();
+  });
+
+  test('contact exists with visasure sub-brand → 201 existing contact is accepted', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
     prisma.visaApplication.create.mockResolvedValue({
       id: 101, tenantId: 1, contactId: 11, applicationType: 'umrah',
       destinationCountry: 'SA', status: 'intake',
@@ -701,7 +712,7 @@ describe('POST /applications ? validation + happy path', () => {
   });
 
   test('happy path: 201 returns created row with status=intake; create called with tenant + fields', async () => {
-    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'other-brand' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
     prisma.passportIdentity.findFirst.mockResolvedValue({ id: 444 });
     prisma.visaApplication.create.mockResolvedValue({
       id: 101, tenantId: 1, contactId: 11, applicationType: 'tourist',
@@ -733,7 +744,7 @@ describe('POST /applications ? validation + happy path', () => {
   });
 
   test('happy path with trip binding: validates trip + participant and stores both on the application', async () => {
-    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'other-brand' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
     prisma.tmcTrip.findFirst.mockResolvedValue({ id: 9001 });
     prisma.tripParticipant.findFirst.mockResolvedValue({ id: 501 });
     prisma.passportIdentity.findFirst.mockResolvedValue(null);
@@ -787,7 +798,7 @@ describe('POST /applications ? validation + happy path', () => {
   });
 
   test('snapshot-backed create returns checklist snapshot fields', async () => {
-    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'other-brand' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
     prisma.passportIdentity.findFirst.mockResolvedValue(null);
     prisma.visaChecklistTemplate.findMany.mockResolvedValue([
       { docType: 'Passport', required: true, sortOrder: 0, notes: null },

@@ -6959,6 +6959,8 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
   try {
 
+    console.log(`[LandingPage][submit] slug=${req.params.slug} method=${req.method} bodyKeys=${req.body ? Object.keys(req.body).join(',') : 'null'}`);
+
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
 
     if (!page) return res.status(404).json({ error: "Page not found" });
@@ -7223,9 +7225,9 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
   } catch (err) {
 
-    console.error("[LandingPage] Submit error:", err);
+    console.error("[LandingPage] Submit error:", err?.message || err, err?.stack || "");
 
-    res.status(500).json({ error: "Submission failed" });
+    res.status(500).json({ error: "Submission failed", code: err?.code || "INTERNAL_ERROR" });
 
   }
 

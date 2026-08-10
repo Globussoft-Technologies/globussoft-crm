@@ -201,6 +201,9 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
     if (!contact) {
       return { error: { status: 404, body: { error: "Contact not found on this tenant", code: "NOT_FOUND" } } };
     }
+    if (contact.subBrand !== VISA_SUB_BRAND) {
+      return { error: { status: 403, body: { error: "Contact is not a Visa Sure contact", code: "NOT_VISA_SURE" } } };
+    }
     return { contactId: contact.id, contactMode: "existing" };
   }
 

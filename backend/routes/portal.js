@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -1658,7 +1658,7 @@ router.get("/travel/visa/checklist-preview", verifyPortalToken, requireTravelPor
       return res.status(400).json({ error: "applicationType and destinationCountry are required", code: "MISSING_FIELDS" });
     }
     const items = await prisma.visaChecklistTemplate.findMany({
-      where: { tenantId: req.portal.tenantId, applicationType, destinationCountry, isActive: true },
+      where: { tenantId: req.portal.tenantId, applicationType, destinationCountry },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       select: { docType: true, required: true, notes: true },
     });

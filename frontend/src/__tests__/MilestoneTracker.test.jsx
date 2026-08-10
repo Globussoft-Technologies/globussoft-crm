@@ -297,6 +297,9 @@ describe('<MilestoneTracker /> — filter chrome', () => {
     fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), {
       target: { value: 'tmc' },
     });
+    fireEvent.change(screen.getByLabelText(/Window \(days from now\)/i), {
+      target: { value: '7' },
+    });
     fetchApiMock.mockClear();
 
     fireEvent.change(screen.getByLabelText(/Window \(days from now\)/i), {

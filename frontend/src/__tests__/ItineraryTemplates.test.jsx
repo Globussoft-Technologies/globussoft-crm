@@ -718,14 +718,15 @@ describe('<ItineraryTemplates /> — formatting helpers (cell render)', () => {
     expect(within(zeroRow).getAllByText('0').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders isActive=false rows with Active="No"', async () => {
+  it('renders explicit status badges for active, inactive, and archived rows', async () => {
     installFetchMock({
       list: {
         items: [
           makeItem({ id: 1201, name: 'Active Template', isActive: true }),
-          makeItem({ id: 1202, name: 'Archived Template', isActive: false }),
+          makeItem({ id: 1202, name: 'Inactive Template', isActive: false }),
+          makeItem({ id: 1203, name: 'Archived Template', isActive: false, archivedAt: '2026-06-01T10:00:00.000Z' }),
         ],
-        total: 2,
+        total: 3,
         limit: 20,
         offset: 0,
       },
@@ -734,10 +735,13 @@ describe('<ItineraryTemplates /> — formatting helpers (cell render)', () => {
     await screen.findByText('Active Template');
 
     const activeRow = screen.getByText('Active Template').closest('tr');
-    expect(within(activeRow).getByText('Yes')).toBeInTheDocument();
+    expect(within(activeRow).getByText('Active')).toBeInTheDocument();
+
+    const inactiveRow = screen.getByText('Inactive Template').closest('tr');
+    expect(within(inactiveRow).getByText('Inactive')).toBeInTheDocument();
 
     const archivedRow = screen.getByText('Archived Template').closest('tr');
-    expect(within(archivedRow).getByText('No')).toBeInTheDocument();
+    expect(within(archivedRow).getByText('Archived')).toBeInTheDocument();
   });
 });
 
@@ -941,8 +945,8 @@ describe('<ItineraryTemplates /> — error surfacing', () => {
 });
 
 // ---------------------------------------------------------------------------
-// G048 + G058 — Archive/Restore toggle + Export CSV + Include archived
-// filter. The new UI surface from this slice's PRD §3.5 round-trip.
+// G048 + G058 — Archive/Restore toggle + Export CSV. The new UI surface
+// from this slice's PRD §3.5 round-trip.
 // ---------------------------------------------------------------------------
 describe('<ItineraryTemplates /> — G048/G058 new UI', () => {
   it('renders "Export CSV" CTA in the page header', async () => {
@@ -954,9 +958,7 @@ describe('<ItineraryTemplates /> — G048/G058 new UI', () => {
 
   it('renders "Include archived" filter checkbox', async () => {
     renderPage();
-    expect(
-      screen.getByLabelText(/Include archived/i),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/Include archived/i)).toBeInTheDocument();
   });
 
   it('toggling "Include archived" re-fires GET with ?includeArchived=true', async () => {

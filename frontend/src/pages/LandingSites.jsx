@@ -82,6 +82,68 @@ function buildTemplateType(sectorKey) {
 
 }
 
+const EVENT_DATE_FORMATTER = new Intl.DateTimeFormat('en-GB', {
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric',
+});
+
+function normalizeDateInputValue(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return '';
+
+  return [
+    parsed.getFullYear(),
+    String(parsed.getMonth() + 1).padStart(2, '0'),
+    String(parsed.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function normalizeTimeInputValue(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^\d{2}:\d{2}$/.test(text)) return text;
+
+  const rangeMatch = text.match(/^(.+?)(?:\s*-\s*.+)?$/);
+  const candidate = String(rangeMatch?.[1] || text).trim();
+  const ampmMatch = candidate.match(/^(\d{1,2})(?::(\d{2}))?\s*([AaPp][Mm])$/);
+  if (ampmMatch) {
+    let hour = Number(ampmMatch[1]);
+    const minute = Number(ampmMatch[2] || '0');
+    const suffix = ampmMatch[3].toUpperCase();
+    if (suffix === 'PM' && hour !== 12) hour += 12;
+    if (suffix === 'AM' && hour === 12) hour = 0;
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  }
+
+  return '';
+}
+
+function formatDateForPrompt(value) {
+  const normalized = normalizeDateInputValue(value);
+  if (!normalized) return String(value || '').trim();
+
+  const [year, month, day] = normalized.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  return EVENT_DATE_FORMATTER.format(date);
+}
+
+function formatTimeForPrompt(value) {
+  const normalized = normalizeTimeInputValue(value);
+  if (!normalized) return String(value || '').trim();
+
+  const [hourText, minuteText] = normalized.split(':');
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, '0')} ${suffix}`;
+}
+
 function useDocumentTheme() {
   const [theme, setTheme] = useState(() => (
     typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark'
@@ -418,9 +480,9 @@ export default function LandingSites() {
 
           location: form.location.trim(),
 
-          eventDate: form.eventDate.trim(),
+          eventDate: formatDateForPrompt(form.eventDate),
 
-          eventTime: form.eventTime.trim(),
+          eventTime: formatTimeForPrompt(form.eventTime),
 
           eventLocation: form.eventLocation.trim() || form.location.trim(),
 
@@ -918,7 +980,7 @@ export default function LandingSites() {
 
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event date</span>
 
-                <input className="input-field" value={form.eventDate} onChange={(e) => setForm((s) => ({ ...s, eventDate: e.target.value }))} placeholder="12 August 2026" />
+                <input type="date" className="input-field" value={normalizeDateInputValue(form.eventDate)} onChange={(e) => setForm((s) => ({ ...s, eventDate: e.target.value }))} />
 
               </label>
 
@@ -926,7 +988,7 @@ export default function LandingSites() {
 
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event time</span>
 
-                <input className="input-field" value={form.eventTime} onChange={(e) => setForm((s) => ({ ...s, eventTime: e.target.value }))} placeholder="10:00 AM - 4:00 PM" />
+                <input type="time" className="input-field" value={normalizeTimeInputValue(form.eventTime)} onChange={(e) => setForm((s) => ({ ...s, eventTime: e.target.value }))} />
 
               </label>
 

@@ -178,14 +178,14 @@ describe('<TravelStallDashboard /> — page chrome', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders the Cluster F integration footer note', () => {
+  it('does not render the removed footer note', () => {
     renderPage();
     expect(
-      screen.getByText(/Travel Stall surfaces share data with the broader Travel CRM/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/Travel Stall surfaces share data with the broader Travel CRM/i),
+    ).toBeNull();
     expect(
-      screen.getByText(/dedicated lead-capture\s+form \(voyagr CMS embed\) lands in the Cluster F integration follow-up/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/dedicated lead-capture\s+form \(voyagr CMS embed\) lands in the Cluster F integration follow-up/i),
+    ).toBeNull();
   });
 });
 

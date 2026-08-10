@@ -332,6 +332,9 @@ describe('<Drugs /> — mount fetch + list render', () => {
     await waitFor(() => {
       expect(screen.getByText('Crocin 500')).toBeInTheDocument();
     });
+    await waitFor(() => {
+      expect(intersectionCallback).toBeTruthy();
+    });
 
     await act(async () => {
       intersectionCallback?.([{ isIntersecting: true }]);

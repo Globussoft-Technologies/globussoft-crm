@@ -4292,7 +4292,7 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
     };
     if (wantFullShape) {
       rxFindArgs.include = {
-        patient: { select: { id: true, name: true } },
+        patient: { select: { id: true, name: true, phone: true } },
         doctor: { select: { id: true, name: true } },
       };
     } else {

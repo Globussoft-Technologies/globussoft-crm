@@ -11,8 +11,9 @@
  *   - Happy path: returns milestone rows with joined invoiceNum/subBrand/
  *     contactId fields hoisted onto each row (not nested under .invoice).
  *   - ?status=pending narrows the prisma where filter.
- *   - ?overdueOnly=true filters dueDate < now (overrides ?within).
- *   - ?within=7 filters dueDate <= now + 7 days.
+ *   - ?overdueOnly=true filters past-due unsettled milestones
+ *     (overrides ?within).
+ *   - ?within=7 filters a true future window: now <= dueDate <= now + 7 days.
  *   - ?subBrand=tmc adds a nested invoice.subBrand filter.
  *   - summary.byStatus counts match the milestones returned.
  *   - summary.totalExpected = sum of expectedAmount across the returned page.
@@ -250,12 +251,12 @@ describe('GET /api/travel/payment-schedules/upcoming', () => {
     expect(callArg.where.status).toBe('pending');
   });
 
-  test('?overdueOnly=true filters dueDate < now (overrides ?within)', async () => {
+  test('?overdueOnly=true filters past-due unsettled milestones (overrides ?within and ?allDates)', async () => {
     prisma.travelPaymentSchedule.findMany.mockResolvedValue([]);
     prisma.travelPaymentSchedule.count.mockResolvedValue(0);
 
     const res = await request(makeApp())
-      .get('/api/travel/payment-schedules/upcoming?overdueOnly=true&within=30')
+      .get('/api/travel/payment-schedules/upcoming?overdueOnly=true&allDates=true&within=30')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
 
     expect(res.status).toBe(200);
@@ -263,25 +264,84 @@ describe('GET /api/travel/payment-schedules/upcoming', () => {
     expect(callArg.where.dueDate).toHaveProperty('lt');
     expect(callArg.where.dueDate).not.toHaveProperty('lte');
     expect(callArg.where.dueDate.lt).toBeInstanceOf(Date);
+    expect(callArg.where.status).toEqual({
+      notIn: ['paid', 'waived'],
+    });
   });
 
-  test('?within=7 filters dueDate <= now+7days', async () => {
+  test('?status=pending&overdueOnly=true preserves the explicit status while still filtering by dueDate < now', async () => {
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([]);
+    prisma.travelPaymentSchedule.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .get('/api/travel/payment-schedules/upcoming?status=pending&overdueOnly=true')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.travelPaymentSchedule.findMany.mock.calls[0][0];
+    expect(callArg.where.status).toBe('pending');
+    expect(callArg.where.dueDate).toHaveProperty('lt');
+    expect(callArg.where.dueDate.lt).toBeInstanceOf(Date);
+  });
+
+  test('?status=partial&overdueOnly=true also preserves the explicit status', async () => {
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([]);
+    prisma.travelPaymentSchedule.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .get('/api/travel/payment-schedules/upcoming?status=partial&overdueOnly=true')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.travelPaymentSchedule.findMany.mock.calls[0][0];
+    expect(callArg.where.status).toBe('partial');
+    expect(callArg.where.dueDate).toHaveProperty('lt');
+    expect(callArg.where.dueDate.lt).toBeInstanceOf(Date);
+  });
+
+  test.each([
+    ['default / no within uses the 30-day future window', '', 30],
+    ['?within=7 uses the 7-day future window', '?within=7', 7],
+    ['?within=14 uses the 14-day future window', '?within=14', 14],
+    ['?within=30 uses the 30-day future window', '?within=30', 30],
+    ['?within=60 uses the 60-day future window', '?within=60', 60],
+    ['?within=90 uses the 90-day future window', '?within=90', 90],
+  ])('%s', async (_label, query, days) => {
     prisma.travelPaymentSchedule.findMany.mockResolvedValue([]);
     prisma.travelPaymentSchedule.count.mockResolvedValue(0);
 
     const before = Date.now();
     const res = await request(makeApp())
-      .get('/api/travel/payment-schedules/upcoming?within=7')
+      .get(`/api/travel/payment-schedules/upcoming${query}`)
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     const after = Date.now();
 
     expect(res.status).toBe(200);
     const callArg = prisma.travelPaymentSchedule.findMany.mock.calls[0][0];
+    expect(callArg.where.dueDate).toHaveProperty('gte');
     expect(callArg.where.dueDate).toHaveProperty('lte');
+    const gteMs = callArg.where.dueDate.gte.getTime();
     const lteMs = callArg.where.dueDate.lte.getTime();
-    // Should be ~7 days from now (allow generous slack for slow CI).
-    expect(lteMs).toBeGreaterThanOrEqual(before + 7 * 86_400_000 - 5_000);
-    expect(lteMs).toBeLessThanOrEqual(after + 7 * 86_400_000 + 5_000);
+    // Should be ~N days from now (allow generous slack for slow CI).
+    expect(gteMs).toBeGreaterThanOrEqual(before - 5_000);
+    expect(gteMs).toBeLessThanOrEqual(after + 5_000);
+    expect(lteMs).toBeGreaterThanOrEqual(before + days * 86_400_000 - 5_000);
+    expect(lteMs).toBeLessThanOrEqual(after + days * 86_400_000 + 5_000);
+  });
+
+  test('?allDates=true removes dueDate restriction while preserving other filters', async () => {
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([]);
+    prisma.travelPaymentSchedule.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .get('/api/travel/payment-schedules/upcoming?allDates=true&status=paid&subBrand=tmc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.travelPaymentSchedule.findMany.mock.calls[0][0];
+    expect(callArg.where.status).toBe('paid');
+    expect(callArg.where.invoice).toMatchObject({ is: { subBrand: 'tmc' } });
+    expect(callArg.where.dueDate).toBeUndefined();
   });
 
   test('?subBrand=tmc nests an invoice.subBrand filter through the join', async () => {
@@ -316,6 +376,72 @@ describe('GET /api/travel/payment-schedules/upcoming', () => {
       overdue: 1,
       partial: 1,
     });
+  });
+
+  test('summary.byStatus keeps partial separate while overdue also counts past-due unsettled rows', async () => {
+    const rows = [
+      makeMilestone({
+        id: 1,
+        status: 'pending',
+        dueDate: new Date(Date.now() - 3 * 86_400_000),
+      }),
+      makeMilestone({
+        id: 2,
+        status: 'partial',
+        dueDate: new Date(Date.now() - 1 * 86_400_000),
+      }),
+      makeMilestone({
+        id: 3,
+        status: 'pending',
+        dueDate: new Date(Date.now() + 4 * 86_400_000),
+      }),
+      makeMilestone({
+        id: 4,
+        status: 'paid',
+        dueDate: new Date(Date.now() - 10 * 86_400_000),
+      }),
+    ];
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue(rows);
+    prisma.travelPaymentSchedule.count.mockResolvedValue(4);
+
+    const res = await request(makeApp())
+      .get('/api/travel/payment-schedules/upcoming')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.body.summary.byStatus).toEqual({
+      overdue: 2,
+      pending: 2,
+      partial: 1,
+      paid: 1,
+    });
+  });
+
+  test('summary is computed from the full filtered set, not the paged slice', async () => {
+    const pageRows = [
+      makeMilestone({ id: 1, status: 'pending', expectedAmount: '10000.00' }),
+      makeMilestone({ id: 2, status: 'partial', expectedAmount: '20000.00' }),
+    ];
+    const summaryRows = [
+      ...pageRows,
+      makeMilestone({ id: 3, status: 'pending', expectedAmount: '5000.00' }),
+      makeMilestone({ id: 4, status: 'overdue', expectedAmount: '15000.00' }),
+    ];
+    prisma.travelPaymentSchedule.findMany
+      .mockResolvedValueOnce(pageRows)
+      .mockResolvedValueOnce(summaryRows);
+    prisma.travelPaymentSchedule.count.mockResolvedValue(4);
+
+    const res = await request(makeApp())
+      .get('/api/travel/payment-schedules/upcoming?limit=2&offset=0')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.body.milestones).toHaveLength(2);
+    expect(res.body.summary.byStatus).toEqual({
+      pending: 2,
+      partial: 1,
+      overdue: 1,
+    });
+    expect(res.body.summary.totalExpected).toBe('50000.00');
   });
 
   test('summary.totalExpected sums expectedAmount across the page', async () => {

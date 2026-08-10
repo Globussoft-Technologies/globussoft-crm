@@ -1482,6 +1482,7 @@ describe('<PatientCreateModal /> — S97 structured intake (firstName + lastName
     await user.type(screen.getByLabelText('First name'), 'Priya');
     await user.type(screen.getByLabelText('Last name'), 'Reddy');
     await user.type(screen.getByPlaceholderText('+91 9876543210'), '+919876500001');
+    await user.click(screen.getByRole('button', { name: 'Female' }));
     await user.click(screen.getByRole('button', { name: /Add customer/i }));
 
     await waitFor(() => {
@@ -1501,6 +1502,7 @@ describe('<PatientCreateModal /> — S97 structured intake (firstName + lastName
     await user.type(screen.getByLabelText('First name'), 'Aishwarya');
     // Intentionally leave lastName empty.
     await user.type(screen.getByPlaceholderText('+91 9876543210'), '+919876500002');
+    await user.click(screen.getByRole('button', { name: 'Female' }));
     await user.click(screen.getByRole('button', { name: /Add customer/i }));
 
     await waitFor(() => {
@@ -1561,6 +1563,7 @@ describe('<PatientCreateModal /> — S97 structured intake (firstName + lastName
       firstName: 'Priya',
       lastName: 'Reddy',
       phone: '+919876500007',
+      gender: 'F',
     });
     // Change lastName from "Reddy" → "Sharma".
     const lastName = screen.getByLabelText('Last name');
@@ -1568,6 +1571,7 @@ describe('<PatientCreateModal /> — S97 structured intake (firstName + lastName
     await user.type(lastName, 'Sharma');
     // The preview now reads "Priya Sharma".
     expect(screen.getByTestId('patient-name-preview')).toHaveValue('Priya Sharma');
+    await user.click(screen.getByRole('button', { name: 'Female' }));
 
     await user.click(screen.getByRole('button', { name: /Save changes/i }));
 

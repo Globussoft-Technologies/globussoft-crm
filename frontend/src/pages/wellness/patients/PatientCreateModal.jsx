@@ -106,6 +106,7 @@ export default function PatientCreateModal({ locations, onClose, onCreated, edit
     .filter(Boolean)
     .join(" ");
   const [submitting, setSubmitting] = useState(false);
+  const [genderError, setGenderError] = useState("");
 
   const submit = async (e) => {
     e.preventDefault();
@@ -122,6 +123,12 @@ export default function PatientCreateModal({ locations, onClose, onCreated, edit
       notify.error("Enter a valid Indian mobile (10 digits, starting 6-9; +91 optional).");
       return;
     }
+    if (!form.gender) {
+      notify.error("Gender is required");
+      setGenderError("Gender is required");
+      return;
+    }
+    setGenderError("");
     const emailRaw = (form.email || "").trim();
     if (emailRaw && !EMAIL_RE.test(emailRaw)) {
       notify.error("Enter a valid email address (e.g. customer@example.com).");
@@ -224,11 +231,11 @@ export default function PatientCreateModal({ locations, onClose, onCreated, edit
             />
           </FormField>
         </div>
-        <FormField label="Full name (auto)">
+        <FormField label="Full name">
           <input
             readOnly
             tabIndex={-1}
-            aria-label="Full name preview"
+            aria-label="Full name"
             data-testid="patient-name-preview"
             value={derivedName}
             placeholder="Will be derived from First + Last"
@@ -240,7 +247,7 @@ export default function PatientCreateModal({ locations, onClose, onCreated, edit
             }}
           />
         </FormField>
-        <FormField label="Gender">
+        <FormField label="Gender" required>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             {[
               { value: "M", label: "Male" },
@@ -250,7 +257,10 @@ export default function PatientCreateModal({ locations, onClose, onCreated, edit
               <button
                 key={g.value}
                 type="button"
-                onClick={() => setForm({ ...form, gender: g.value })}
+                onClick={() => {
+                  setForm({ ...form, gender: g.value });
+                  setGenderError("");
+                }}
                 aria-pressed={form.gender === g.value}
                 style={{
                   flex: "1 1 90px",
@@ -268,6 +278,11 @@ export default function PatientCreateModal({ locations, onClose, onCreated, edit
               </button>
             ))}
           </div>
+          {genderError && (
+            <span style={{ color: "#e57373", fontSize: "0.8rem" }}>
+              {genderError}
+            </span>
+          )}
         </FormField>
         <FormField label="Email" icon={<MailIcon size={14} />}>
           <input

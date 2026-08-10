@@ -6571,15 +6571,18 @@ router.post(
 //
 // Query params (all optional):
 //   ?status=pending|partial|paid|overdue|waived  — filter (default: all)
-//   ?within=7|14|30|60|90                        — dueDate within N days from
-//                                                  now (default: 30). Accepts
-//                                                  any positive integer; the
-//                                                  documented presets are
-//                                                  conveniences not constraints.
+//   ?allDates=true                               — no dueDate restriction.
+//   ?within=7|14|30|60|90                        — dueDate within N future
+//                                                  days from now (default: 30).
+//                                                  Accepts any positive
+//                                                  integer; the documented
+//                                                  presets are conveniences,
+//                                                  not constraints.
 //   ?subBrand=tmc|rfu|travelstall|visasure       — filter to one sub-brand
 //                                                  (within the caller's allowed
 //                                                  set; outside-allowed → empty).
-//   ?overdueOnly=true                            — dueDate < now (overrides
+//   ?overdueOnly=true                            — past-due unsettled
+//                                                  milestones (overrides
 //                                                  ?within when truthy).
 //   ?limit=N (default 100, clamped to [1, 500]).
 //   ?offset=N (default 0).
@@ -6607,10 +6610,9 @@ router.post(
 //     Negative ⇒ overdue. NULL dueDate ⇒ daysUntilDue is null. Also NULL for
 //     status paid/waived — a settled milestone's original dueDate would
 //     otherwise still read as "N days overdue" next to its own Paid badge.
-//   - summary is computed across the SAME page returned (post-limit/offset),
-//     not the full unpaginated set — operator pagers want the current-page
-//     totals. Callers wanting full-population totals should iterate pages
-//     or pass limit=500.
+//   - summary is computed across the FULL filtered set (pre-pagination) so
+//     the KPI cards stay stable while the operator scrolls through pages.
+//     The table itself still respects ?limit / ?offset.
 //   - totalExpected/totalReceived/currencyBreakdown emit as decimal STRINGS
 //     (toFixed(2)) for Prisma Decimal-string compatibility; JS Number
 //     precision would round 60000.005 + 0.005 silently. Mirrors the
@@ -6679,8 +6681,8 @@ router.get(
 
       const overdueOnly =
         req.query.overdueOnly === "true" || req.query.overdueOnly === true;
+      const allDates = req.query.allDates === "true" || req.query.allDates === true;
 
-      const withinDays = parseWithinDays(req.query.within);
       const limit = parseLimitForSummary(req.query.limit);
       const offset = parseOffsetForSummary(req.query.offset);
 
@@ -6688,12 +6690,20 @@ router.get(
       const where = { tenantId: req.travelTenant.id };
       if (status) where.status = status;
 
-      // Date window: overdueOnly overrides ?within.
+      // Date window: overdueOnly means "past-due unsettled milestones" and
+      // only widens to a settled-state exclusion when no explicit status is
+      // already supplied.
       if (overdueOnly) {
         where.dueDate = { lt: now };
+        if (!status) {
+          where.status = { notIn: ["paid", "waived"] };
+        }
+      } else if (allDates) {
+        // Intentionally no dueDate constraint.
       } else {
+        const withinDays = parseWithinDays(req.query.within);
         const upper = new Date(now.getTime() + withinDays * 86_400_000);
-        where.dueDate = { lte: upper };
+        where.dueDate = { gte: now, lte: upper };
       }
 
       // Sub-brand filtering joins through the parent invoice. Prisma can't
@@ -6720,7 +6730,7 @@ router.get(
         where.invoice = { is: invoiceFilter };
       }
 
-      const [rows, total] = await Promise.all([
+      const [rows, total, summaryRows] = await Promise.all([
         prisma.travelPaymentSchedule.findMany({
           where,
           include: {
@@ -6733,6 +6743,16 @@ router.get(
           skip: offset,
         }),
         prisma.travelPaymentSchedule.count({ where }),
+        prisma.travelPaymentSchedule.findMany({
+          where,
+          select: {
+            status: true,
+            dueDate: true,
+            expectedAmount: true,
+            receivedAmount: true,
+            expectedCurrency: true,
+          },
+        }),
       ]);
 
       const nowMs = now.getTime();
@@ -6803,13 +6823,24 @@ router.get(
         }
       }
 
-      // Summary aggregates — computed over the returned page (see header note).
+      // Summary aggregates — computed over the full filtered set so the KPI
+      // cards reflect the entire window, not just the current page.
       const byStatus = {};
       const currencyBreakdown = {};
       let totalExpected = "0.00";
       let totalReceived = "0.00";
-      for (const m of milestones) {
+      for (const m of summaryRows) {
         byStatus[m.status] = (byStatus[m.status] || 0) + 1;
+        const dueMs =
+          m.dueDate instanceof Date
+            ? m.dueDate.getTime()
+            : m.dueDate
+              ? new Date(m.dueDate).getTime()
+              : null;
+        const isSettled = m.status === "paid" || m.status === "waived";
+        if (!isSettled && (m.status === "overdue" || (dueMs != null && dueMs < nowMs))) {
+          byStatus.overdue = (byStatus.overdue || 0) + 1;
+        }
         totalExpected = addDecimal(totalExpected, m.expectedAmount);
         totalReceived = addDecimal(totalReceived, m.receivedAmount);
         const cur = m.expectedCurrency || "INR";

@@ -330,7 +330,7 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     renderPage();
     await screen.findByText(/12 departing in 30 days/);
     // DASHBOARD_DEFAULT has landingPages: { total: 8, published: 5 }
-    expect(screen.getByText('5 published')).toBeInTheDocument();
+    expect(screen.getByText('Published: 5')).toBeInTheDocument();
   });
 
   it('renders landing pages footer with correct published count', async () => {
@@ -341,14 +341,16 @@ describe('<TravelDashboard /> — KPI tiles', () => {
       },
     });
     renderPage();
-    await screen.findByText('3 published');
+    await screen.findByText('Published: 3');
   });
 
   it('renders the web check-ins footer breakdown and missed accent', async () => {
     installFetchMock();
     renderPage();
     await screen.findByText('Web check-ins');
-    expect(screen.getByText('5 delivered · 3 pending · 1 missed')).toBeInTheDocument();
+    expect(screen.getByText('Delivered: 5')).toBeInTheDocument();
+    expect(screen.getByText('Pending: 3')).toBeInTheDocument();
+    expect(screen.getByText('Missed: 1')).toBeInTheDocument();
     // Danger-color accent shows the missed count.
     expect(screen.getByText('1 missed')).toBeInTheDocument();
   });
@@ -362,7 +364,9 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     });
     renderPage();
     await screen.findByText('Web check-ins');
-    expect(screen.getByText('2 delivered · 1 pending · 0 missed')).toBeInTheDocument();
+    expect(screen.getByText('Delivered: 2')).toBeInTheDocument();
+    expect(screen.getByText('Pending: 1')).toBeInTheDocument();
+    expect(screen.getByText('Missed: 0')).toBeInTheDocument();
     // The footer contains "0 missed" as a substring, but the danger-color
     // accent (an exact text node of "0 missed") must not render.
     expect(screen.queryByText('0 missed')).not.toBeInTheDocument();

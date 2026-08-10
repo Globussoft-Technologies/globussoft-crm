@@ -61,6 +61,7 @@ prisma.tripParticipant = {
 prisma.itinerary = {
   ...(prisma.itinerary || {}),
   groupBy: vi.fn(),
+  findMany: vi.fn(),
 };
 prisma.deal = {
   ...(prisma.deal || {}),
@@ -70,18 +71,39 @@ prisma.travelDiagnostic = {
   ...(prisma.travelDiagnostic || {}),
   groupBy: vi.fn(),
 };
+prisma.travelQuote = {
+  ...(prisma.travelQuote || {}),
+  groupBy: vi.fn(),
+  findMany: vi.fn(),
+};
+prisma.travelQuoteSnapshot = {
+  ...(prisma.travelQuoteSnapshot || {}),
+  findMany: vi.fn(),
+};
+prisma.travelInvoice = {
+  ...(prisma.travelInvoice || {}),
+  findMany: vi.fn(),
+};
+prisma.payment = {
+  ...(prisma.payment || {}),
+  findMany: vi.fn(),
+};
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
 });
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+prisma.user.findMany = vi.fn().mockResolvedValue([]);
+prisma.contact = prisma.contact || {};
+prisma.contact.findMany = vi.fn().mockResolvedValue([]);
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 prisma.auditLog = {
   ...(prisma.auditLog || {}),
   create: vi.fn().mockResolvedValue({ id: 1 }),
   findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
 };
 
 import express from 'express';
@@ -117,8 +139,17 @@ function installDefaults() {
   prisma.tmcTrip.findMany.mockResolvedValue([]);
   prisma.tripParticipant.groupBy.mockResolvedValue([]);
   prisma.itinerary.groupBy.mockResolvedValue([]);
+  prisma.itinerary.findMany.mockResolvedValue([]);
   prisma.deal.groupBy.mockResolvedValue([]);
   prisma.travelDiagnostic.groupBy.mockResolvedValue([]);
+  prisma.travelQuote.groupBy.mockResolvedValue([]);
+  prisma.travelQuote.findMany.mockResolvedValue([]);
+  prisma.travelQuoteSnapshot.findMany.mockResolvedValue([]);
+  prisma.travelInvoice.findMany.mockResolvedValue([]);
+  prisma.payment.findMany.mockResolvedValue([]);
+  prisma.auditLog.findMany.mockResolvedValue([]);
+  prisma.user.findMany.mockResolvedValue([]);
+  prisma.contact.findMany.mockResolvedValue([]);
 }
 
 beforeEach(() => {
@@ -126,8 +157,17 @@ beforeEach(() => {
   prisma.tmcTrip.findMany.mockReset();
   prisma.tripParticipant.groupBy.mockReset();
   prisma.itinerary.groupBy.mockReset();
+  prisma.itinerary.findMany.mockReset();
   prisma.deal.groupBy.mockReset();
   prisma.travelDiagnostic.groupBy.mockReset();
+  prisma.travelQuote.groupBy.mockReset();
+  prisma.travelQuote.findMany.mockReset();
+  prisma.travelQuoteSnapshot.findMany.mockReset();
+  prisma.travelInvoice.findMany.mockReset();
+  prisma.payment.findMany.mockReset();
+  prisma.auditLog.findMany.mockReset();
+  prisma.user.findMany.mockReset();
+  prisma.contact.findMany.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -382,9 +422,14 @@ describe('GET /api/travel/reports/tmc — happy path', () => {
     // needed for revenue computation).
     expect(findManyArgs.select).toEqual({
       id: true,
+      tripCode: true,
       destination: true,
+      status: true,
+      departDate: true,
+      returnDate: true,
       pricePerStudent: true,
       schoolContactId: true,
+      updatedAt: true,
     });
   });
 
@@ -419,6 +464,54 @@ describe('GET /api/travel/reports/rfu — happy path', () => {
       customers: { unique: 0, repeat: 0, repeatRatePct: 0 },
       currency: 'INR',
     });
+  });
+
+  test('credits quote payment collection to the RFU advisor who shared the quote', async () => {
+    prisma.auditLog.findMany.mockResolvedValue([
+      { userId: 77, action: 'CREATE', entityId: 501, createdAt: new Date('2026-08-01T10:00:00Z') },
+      { userId: 77, action: 'QUOTE_SHARE', entityId: 501, createdAt: new Date('2026-08-01T10:05:00Z') },
+    ]);
+    prisma.travelQuote.findMany.mockResolvedValue([{ id: 501, status: 'advance_paid', totalAmount: 198257.15, currency: 'INR', contactId: 12 }]);
+    prisma.payment.findMany.mockResolvedValue([
+      {
+        id: 9001,
+        invoiceId: null,
+        amount: 100000,
+        paidAt: new Date('2026-08-03T08:00:00Z'),
+        createdAt: new Date('2026-08-03T08:00:00Z'),
+        metadata: JSON.stringify({ type: 'travel-quote-advance', quoteId: 501, subBrand: 'rfu' }),
+        description: 'Quote #501 advance',
+      },
+    ]);
+    prisma.user.findMany.mockResolvedValue([{ id: 77, name: 'RFU Advisor', email: 'rfu@test.local' }]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/reports/rfu')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.agentProductivity.agents).toEqual([
+      expect.objectContaining({
+        userId: 77,
+        name: 'RFU Advisor',
+        totalActions: 3,
+        createdQuotes: 1,
+        sentQuotes: 1,
+        paidQuotes: 1,
+        paymentAmount: 100000,
+      }),
+    ]);
+    expect(res.body.agentProductivity.payments).toEqual([
+      expect.objectContaining({
+        paymentId: 9001,
+        userId: 77,
+        agentName: 'RFU Advisor',
+        quoteId: 501,
+        quoteStatus: 'advance_paid',
+        quoteTotal: 198257.15,
+        amount: 100000,
+      }),
+    ]);
   });
 
   test('flattens itinerary count + sum aggregates into byStatus / amountByStatus', async () => {

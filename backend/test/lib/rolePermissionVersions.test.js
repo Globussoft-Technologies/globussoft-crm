@@ -21,6 +21,8 @@ prisma.rolePermissionVersion = {
 };
 prisma.rolePermission = prisma.rolePermission || { findMany: vi.fn() };
 prisma.rolePermission.findMany = vi.fn();
+prisma.user = prisma.user || { findMany: vi.fn() };
+prisma.user.findMany = vi.fn();
 
 import {
   canonicalisePermissions,
@@ -36,6 +38,7 @@ beforeEach(() => {
   prisma.rolePermissionVersion.findMany.mockReset();
   prisma.rolePermissionVersion.findUnique.mockReset();
   prisma.rolePermission.findMany.mockReset();
+  prisma.user.findMany.mockReset();
 });
 
 describe('canonicalisePermissions', () => {
@@ -182,19 +185,24 @@ describe('listRolePermissionVersions', () => {
         restoredFromVersionId: null,
         changedAt: new Date(),
         note: null,
-        changedBy: { id: 7, name: 'Yasin', email: 'y@x' },
+        changedById: 7,
         permissionsJson: JSON.stringify([
           { module: 'contacts', action: 'read' },
           { module: 'roles', action: 'manage' },
         ]),
       },
     ]);
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 7, name: 'Yasin', email: 'y@x' }]);
     const out = await listRolePermissionVersions({ roleId: 100 });
     expect(out).toHaveLength(1);
     expect(out[0].permissions).toEqual([
       { module: 'contacts', action: 'read' },
       { module: 'roles', action: 'manage' },
     ]);
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: { id: { in: [7] } },
+      select: { id: true, name: true, email: true },
+    });
     expect(out[0].changedBy.name).toBe('Yasin');
   });
 
@@ -209,10 +217,11 @@ describe('listRolePermissionVersions', () => {
         restoredFromVersionId: null,
         changedAt: new Date(),
         note: null,
-        changedBy: null,
+        changedById: null,
         permissionsJson: 'not-json',
       },
     ]);
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 7, name: 'Yasin', email: 'y@x' }]);
     const out = await listRolePermissionVersions({ roleId: 100 });
     expect(out[0].permissions).toEqual([]);
   });
@@ -254,3 +263,6 @@ describe('getRolePermissionVersion', () => {
     expect(r.permissions).toEqual([{ module: 'roles', action: 'manage' }]);
   });
 });
+
+
+

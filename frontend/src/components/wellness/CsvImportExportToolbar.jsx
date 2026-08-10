@@ -1,23 +1,24 @@
-// Issue #816 — Reusable CSV Import / Export toolbar for wellness list pages.
-//
+﻿
+// Issue #816 - Reusable CSV import / export toolbar for wellness list pages.
+
 // Renders two header-level buttons:
-//   ⬇ Export CSV  →  GET /api/wellness/csv/:entity/export?<filters>
+//   Export CSV -> GET /api/wellness/csv/:entity/export<filters>
 //                    Downloads the filtered current view as CSV.
-//   ⬆ Import CSV  →  opens a modal with: template download, file picker,
+//   Import CSV -> opens a modal with: template download, file picker,
 //                    client-side preview, validation, error report.
-//
+
 // Props:
-//   entity     — string (services | packages | products | customers | bookings)
-//   filters    — object whose keys become querystring params on /export.
+//   entity     - string (services | packages | products | customers | bookings)
+//   filters    - object whose keys become querystring params on /export.
 //                Mirrors whatever the parent page already filters by.
-//   label      — optional plain-English entity label for the modal header
+//   label      - optional plain-English entity label for the modal header
 //                (defaults to titlecased entity name).
-//   onImported — optional () => void callback fired AFTER a successful sync
+//   onImported - optional () => void callback fired AFTER a successful sync
 //                import completes, so the parent can refresh its list.
-//
+
 // Auth: piggy-backs on fetchApi's Bearer-token plumbing. Export uses a manual
-// fetch to honour the Authorization header on the blob download; the
-// "<a href=…>" path would skip the header and 401.
+// fetch to honor the Authorization header on the blob download; the
+// "<a href=...>" path would skip the header and 401.
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -29,6 +30,9 @@ const ENTITY_LABELS = {
   services: "Services",
   packages: "Packages",
   products: "Drugs / Products",
+  "product-categories": "Product Categories",
+  "inventory-products": "Products",
+  "auto-consumption-rules": "Auto-consumption rules",
   customers: "Patients",
   bookings: "Bookings",
 };
@@ -48,7 +52,7 @@ export default function CsvImportExportToolbar({
   // becomes a dropdown and the Import modal offers both template formats.
   // Other entities keep the default single-CSV UX.
   formats = ["csv"],
-  // Optional endpoint overrides — Patients routes to the new
+  // Optional endpoint overrides - Patients routes to the new
   // /api/wellness/patients/{export,import-template} routes that understand
   // the source/gender/tags/dates filters; other entities stay on the
   // generic /api/wellness/csv/:entity/{export,template} pipeline.
@@ -60,13 +64,14 @@ export default function CsvImportExportToolbar({
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const exportMenuRef = useRef(null);
   const displayLabel = label || ENTITY_LABELS[entity] || entity;
+  const safeEndpoints = endpoints || {};
 
-  const exportUrl = endpoints?.export || `/api/wellness/csv/${entity}/export`;
-  const templateUrl = endpoints?.template || `/api/wellness/csv/${entity}/template`;
-  const metaUrl = endpoints?.meta || `/api/wellness/csv/${entity}`;
-  const importUrl = endpoints?.import || `/api/wellness/csv/${entity}/import`;
-  const importAsyncUrl = endpoints?.importAsync || `/api/wellness/csv/${entity}/import/async`;
-  const jobUrl = endpoints?.job || ((jobId) => `/api/wellness/csv/jobs/${jobId}`);
+  const exportUrl = safeEndpoints.export || `/api/wellness/csv/${entity}/export`;
+  const templateUrl = safeEndpoints.template || `/api/wellness/csv/${entity}/template`;
+  const metaUrl = safeEndpoints.meta || `/api/wellness/csv/${entity}`;
+  const importUrl = safeEndpoints.import || `/api/wellness/csv/${entity}/import`;
+  const importAsyncUrl = safeEndpoints.importAsync || `/api/wellness/csv/${entity}/import/async`;
+  const jobUrl = safeEndpoints.job || ((jobId) => `/api/wellness/csv/jobs/${jobId}`);
 
   const buildQueryString = (extra = {}) => {
     const parts = [];
@@ -103,7 +108,7 @@ export default function CsvImportExportToolbar({
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      const ext = FORMAT_META[format]?.ext || "csv";
+      const ext = FORMAT_META[format].ext || "csv";
       a.download = `${entity}-${new Date().toISOString().slice(0, 10)}.${ext}`;
       document.body.appendChild(a);
       a.click();
@@ -145,7 +150,7 @@ export default function CsvImportExportToolbar({
               aria-label={`Export ${displayLabel}`}
               style={secondaryBtnStyle}
             >
-              <Download size={14} /> {exporting ? "Exporting…" : "Export"}
+              <Download size={14} /> {exporting ? "Exporting..." : "Export"}
               <ChevronDown size={12} style={{ marginLeft: "0.15rem" }} />
             </button>
             {exportMenuOpen && (
@@ -162,7 +167,7 @@ export default function CsvImportExportToolbar({
                     onClick={() => doExport(f)}
                     style={dropdownItemStyle}
                   >
-                    {FORMAT_META[f]?.label || f.toUpperCase()}
+                    {FORMAT_META[f].label || f.toUpperCase()}
                   </button>
                 ))}
               </div>
@@ -176,7 +181,7 @@ export default function CsvImportExportToolbar({
             aria-label={`Export ${displayLabel} as CSV`}
             style={secondaryBtnStyle}
           >
-            <Download size={14} /> {exporting ? "Exporting…" : "Export CSV"}
+            <Download size={14} /> {exporting ? "Exporting..." : "Export CSV"}
           </button>
         )}
         <button
@@ -202,7 +207,7 @@ export default function CsvImportExportToolbar({
           onClose={() => setShowImport(false)}
           onImported={(result) => {
             // Only refresh the parent's list if at least one row landed.
-            if (onImported && (result?.inserted || result?.imported || result?.updated)) onImported(result);
+            if (onImported && (result.inserted || result.imported || result.updated)) onImported(result);
           }}
         />
       )}
@@ -210,7 +215,7 @@ export default function CsvImportExportToolbar({
   );
 }
 
-// ── Import modal ──────────────────────────────────────────────────
+// -- Import modal --------------------------------------------------
 
 function ImportModal({
   entity,
@@ -244,15 +249,15 @@ function ImportModal({
         setExpectedHeaders(meta.headers || []);
         if (meta.thresholds) setThresholds(meta.thresholds);
       })
-      .catch(() => { /* gate denied — submit will show the real error */ });
+      .catch(() => { /* gate denied - submit will show the real error */ });
   }, [entity, metaUrl]);
 
   const downloadTemplate = async (format = "csv") => {
     try {
       const token = getAuthToken();
       const base = templateUrl || `/api/wellness/csv/${entity}/template`;
-      // Multi-format template endpoints accept ?format=csv|xlsx. The legacy
-      // single-format endpoint ignores the param (always returns CSV) — fine.
+      // Multi-format template endpoints accept format=csv|xlsx. The legacy
+      // single-format endpoint ignores the param (always returns CSV) - fine.
       const url = formats.length > 1 ? `${base}?format=${encodeURIComponent(format)}` : base;
       const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -265,7 +270,7 @@ function ImportModal({
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      const ext = FORMAT_META[format]?.ext || "csv";
+      const ext = FORMAT_META[format].ext || "csv";
       a.download = `${entity}-template.${ext}`;
       document.body.appendChild(a);
       a.click();
@@ -284,7 +289,7 @@ function ImportModal({
     setPreviewRows([]);
     setPreviewHeaders([]);
     if (!f) return;
-    // XLSX is binary — we don't ship a SheetJS bundle to the client just for
+    // XLSX is binary - we don't ship a SheetJS bundle to the client just for
     // preview. The header + per-row validation still runs server-side on
     // submit, and any errors come back in the result.errors[] envelope.
     const looksXlsx = /\.xlsx$/i.test(f.name || "")
@@ -315,8 +320,8 @@ function ImportModal({
     const tooLong = previewRows.length === 10 && file.size > 100 * 1024; // heuristic; the row count is properly checked server-side
 
     const useAsync = tooBig || tooLong;
-    const endpoint = useAsync
-      ? (importAsyncUrl || `/api/wellness/csv/${entity}/import/async`)
+    const endpoint = useAsync ?
+      (importAsyncUrl || `/api/wellness/csv/${entity}/import/async`)
       : (importUrl || `/api/wellness/csv/${entity}/import`);
 
     try {
@@ -336,15 +341,15 @@ function ImportModal({
       }
       if (useAsync) {
         setJobId(body.jobId);
-        notify.info("Large file queued — you'll be emailed when it finishes.");
+        notify.info("Large file queued - you'll be emailed when it finishes.");
       } else {
         setResult(body);
         if (body.inserted || body.updated) {
           notify.success(
-            `Imported: ${body.inserted} new, ${body.updated} updated${body.errors?.length ? `, ${body.errors.length} errors` : ""}`,
+            `Imported: ${body.inserted} new, ${body.updated} updated${body.errors.length ? `, ${body.errors.length} errors` : ""}`,
           );
           onImported(body);
-        } else if (body.errors?.length) {
+        } else if (body.errors.length) {
           notify.error(`Import had ${body.errors.length} row error(s).`);
         }
       }
@@ -366,7 +371,7 @@ function ImportModal({
       if (j.status === "done" || j.status === "failed") {
         setResult(j.result || { errors: [{ row: 0, column: "(job)", value: "", message: j.error || "Job failed" }], inserted: 0, updated: 0, skipped: 0 });
         setJobId(null);
-        if (j.status === "done" && (j.result?.inserted || j.result?.updated)) onImported(j.result);
+        if (j.status === "done" && (j.result.inserted || j.result.updated)) onImported(j.result);
       }
     };
     const id = setInterval(tick, 1500);
@@ -375,14 +380,14 @@ function ImportModal({
   }, [jobId, jobUrl, onImported]);
 
   const downloadErrorReport = () => {
-    if (!result?.errors?.length) return;
+    if (!result.errors.length) return;
     const headers = ["row", "column", "value", "message"];
     const lines = [headers.join(",")];
     for (const e of result.errors) {
       const cells = headers.map((h) => csvCell(e[h]));
       lines.push(cells.join(","));
     }
-    const blob = new Blob(["﻿" + lines.join("\r\n") + "\r\n"], { type: "text/csv;charset=utf-8" });
+    const blob = new Blob(["" + lines.join("\r\n") + "\r\n"], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `${entity}-import-errors-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -396,7 +401,7 @@ function ImportModal({
   // viewport, not to an ancestor with backdrop-filter / transform / filter.
   // PageHeader's `.glass` class applies backdrop-filter, which would
   // otherwise contain `position: fixed` inside the header's bounding box
-  // — the modal's `inset: 0` would cover only the header rectangle, the
+  // - the modal's `inset: 0` would cover only the header rectangle, the
   // dark backdrop wouldn't span the page, and the Cancel / Confirm buttons
   // would sit over the search-bar row and have their clicks intercepted.
   // (#1120)
@@ -425,10 +430,7 @@ function ImportModal({
           overflow: "auto",
           padding: "2rem",
           position: "relative",
-          // Theme-adaptive: drop the hardcoded dark fallback; rely on .glass
-          // for the background (cream-tinted in light, dark-teal-tinted in
-          // dark). Explicit text colour so the modal body inherits the
-          // theme's foreground regardless of where it's portalled to.
+          background: "var(--surface-color, rgba(250, 246, 237, 0.95))",
           color: "var(--text-primary, inherit)",
           border: "1px solid var(--border-color, rgba(0,0,0,0.1))",
           boxShadow: "var(--shadow-lg, 0 24px 60px rgba(0,0,0,0.25))",
@@ -458,7 +460,7 @@ function ImportModal({
 
         <p style={{ color: "var(--text-secondary)", marginBottom: "1rem" }}>
           Upload a {formats.length > 1 ? "CSV or Excel (XLSX) file" : "CSV"} with these columns:{" "}
-          <code style={{ fontSize: "0.85em" }}>{expectedHeaders.join(", ") || "(loading…)"}</code>.
+          <code style={codePillStyle}>{expectedHeaders.join(", ") || "(loading...)"}</code>.
           Extra columns are ignored. Files over {Math.round(thresholds.bytes / (1024 * 1024))}MB or {thresholds.rows.toLocaleString()} rows are processed in the background and emailed when done.
         </p>
 
@@ -468,9 +470,9 @@ function ImportModal({
               key={f}
               type="button"
               onClick={() => downloadTemplate(f)}
-              style={linkBtnStyle}
+              style={templateBtnStyle}
             >
-              <FileText size={14} /> Download {FORMAT_META[f]?.label || f.toUpperCase()} template
+              <FileText size={14} /> Download {FORMAT_META[f].label || f.toUpperCase()} template
             </button>
           ))}
         </div>
@@ -482,19 +484,31 @@ function ImportModal({
             accept={formats.length > 1
               ? ".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               : ".csv,text/csv"}
-            onChange={(e) => handleFile(e.target.files?.[0] || null)}
-            style={{ width: "100%" }}
+            onChange={(e) => handleFile(e.target.files[0] || null)}
+            style={{ display: "none" }}
             aria-label={formats.length > 1 ? "Select CSV or Excel file" : "Select CSV file"}
           />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            style={filePickerBtnStyle}
+          >
+            <Upload size={14} />
+            {file ? "Change file" : (formats.length > 1 ? "Choose CSV or Excel file" : "Choose CSV file")}
+          </button>
+          <div style={fileMetaStyle}>
+            <span>{file ? `Selected: ${file.name}` : "No file selected yet."}</span>
+            <span>{formats.length > 1 ? "Accepted: CSV, XLSX" : "Accepted: CSV"}</span>
+          </div>
           {file && /\.xlsx$/i.test(file.name || "") && !result && (
             <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", marginTop: "0.4rem" }}>
-              Excel file selected — column + row validation runs on the server when you click Confirm.
+              Excel file selected - column + row validation runs on the server when you click Confirm.
             </p>
           )}
         </div>
 
         {previewError && (
-          <div role="alert" style={{ ...alertStyle, background: "rgba(239,68,68,0.15)", borderColor: "#ef4444" }}>
+          <div role="alert" style={getAlertStyle("error")}>
             <AlertTriangle size={16} style={{ verticalAlign: "middle", marginRight: 6 }} /> {previewError}
           </div>
         )}
@@ -502,12 +516,12 @@ function ImportModal({
         {previewRows.length > 0 && !result && (
           <div style={{ marginBottom: "1rem" }}>
             <h3 style={{ fontSize: "0.95rem", marginBottom: "0.4rem" }}>Preview (first {previewRows.length} rows)</h3>
-            <div style={{ maxHeight: 200, overflow: "auto", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6 }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+            <div style={{ ...panelStyle, maxHeight: 200, overflow: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", color: "var(--text-primary, inherit)" }}>
                 <thead>
                   <tr>
                     {previewHeaders.map((h) => (
-                      <th key={h} style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.08)", textAlign: "left", background: "rgba(255,255,255,0.04)" }}>{h}</th>
+                      <th key={h} style={tableHeaderCellStyle}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -515,7 +529,7 @@ function ImportModal({
                   {previewRows.map((r, i) => (
                     <tr key={i}>
                       {previewHeaders.map((h) => (
-                        <td key={h} style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{String(r[h] ?? "")}</td>
+                        <td key={h} style={tableCellStyle}>{String(r[h] || "")}</td>
                       ))}
                     </tr>
                   ))}
@@ -527,36 +541,36 @@ function ImportModal({
 
         {result && (
           <div style={{ marginBottom: "1rem" }}>
-            <div role="status" style={{ ...alertStyle, background: result.errors?.length ? "rgba(245,158,11,0.15)" : "rgba(16,185,129,0.15)", borderColor: result.errors?.length ? "#f59e0b" : "#10b981" }}>
+            <div role="status" style={getAlertStyle(result.errors.length ? "warning" : "success")}>
               <CheckCircle2 size={16} style={{ verticalAlign: "middle", marginRight: 6 }} />
-              Inserted <strong>{result.inserted ?? result.imported ?? 0}</strong>, updated <strong>{result.updated ?? 0}</strong>, skipped <strong>{result.skipped ?? 0}</strong>{result.errors?.length ? `, errors ${result.errors.length}` : ""}
+              Inserted <strong>{result.inserted ?? result.imported ?? 0}</strong>, updated <strong>{result.updated ?? 0}</strong>, skipped <strong>{result.skipped ?? 0}</strong>{result.errors.length ? `, errors ${result.errors.length}` : ""}
             </div>
 
-            {result.errors?.length > 0 && (
+            {result.errors.length > 0 && (
               <>
                 <h3 style={{ fontSize: "0.95rem", margin: "0.6rem 0 0.4rem" }}>Row-level errors</h3>
-                <div style={{ maxHeight: 240, overflow: "auto", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 6 }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                <div style={{ ...panelStyle, maxHeight: 240, overflow: "auto", borderColor: "rgba(168, 50, 63, 0.35)" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", color: "var(--text-primary, inherit)" }}>
                     <thead>
                       <tr>
                         {["row", "column", "value", "message"].map((h) => (
-                          <th key={h} style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.08)", textAlign: "left", background: "rgba(239,68,68,0.10)" }}>{h}</th>
+                          <th key={h} style={{ ...tableHeaderCellStyle, background: "rgba(168, 50, 63, 0.12)" }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {result.errors.slice(0, 200).map((e, i) => (
                         <tr key={i}>
-                          <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{e.row}</td>
-                          <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{e.column}</td>
-                          <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{String(e.value ?? "")}</td>
-                          <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{e.message}</td>
+                          <td style={tableCellStyle}>{e.row}</td>
+                          <td style={tableCellStyle}>{e.column}</td>
+                          <td style={tableCellStyle}>{String(e.value || "")}</td>
+                          <td style={tableCellStyle}>{e.message}</td>
                         </tr>
                       ))}
                       {result.errors.length > 200 && (
                         <tr>
                           <td colSpan={4} style={{ padding: "0.4rem", color: "var(--text-secondary)", textAlign: "center" }}>
-                            … {result.errors.length - 200} more — download the error report for the full list.
+                            ... {result.errors.length - 200} more - download the error report for the full list.
                           </td>
                         </tr>
                       )}
@@ -572,8 +586,8 @@ function ImportModal({
         )}
 
         {jobId && !result && (
-          <div role="status" style={{ ...alertStyle, background: "rgba(99,102,241,0.15)", borderColor: "#6366f1" }}>
-            Background job <code>{jobId}</code> queued. You&apos;ll be emailed when it finishes; this dialog will update too.
+          <div role="status" style={getAlertStyle("info")}>
+            Background job <code style={codePillStyle}>{jobId}</code> queued. You'll be emailed when it finishes; this dialog will update too.
           </div>
         )}
 
@@ -588,7 +602,7 @@ function ImportModal({
               onClick={doImport}
               style={{ ...primaryBtnStyle, opacity: !file || submitting || previewError ? 0.5 : 1 }}
             >
-              {submitting ? "Importing…" : "Confirm import"}
+              {submitting ? "Importing..." : "Confirm import"}
             </button>
           )}
         </div>
@@ -598,7 +612,7 @@ function ImportModal({
   );
 }
 
-// ── Inline tiny CSV utilities for the preview pane ───────────────
+// -- Inline tiny CSV utilities for the preview pane ---------------
 //
 // Mirrors backend/lib/csvIO.js's parse contract for the bits we need on the
 // client (header detection + first-10-row preview). Kept self-contained so
@@ -655,53 +669,145 @@ function csvCell(value) {
   return s;
 }
 
-// ── Styles ─────────────────────────────────────────────────────────
+// -- Styles ---------------------------------------------------------
+
+const themedBorder = "1px solid var(--border-color, rgba(0,0,0,0.14))";
 
 const secondaryBtnStyle = {
   display: "inline-flex",
   alignItems: "center",
   gap: "0.3rem",
   padding: "0.5rem 0.9rem",
-  background: "transparent",
+  background: "var(--surface-color, rgba(255,255,255,0.9))",
   color: "var(--text-primary, inherit)",
-  border: "1px solid var(--border-soft, rgba(255,255,255,0.18))",
+  border: themedBorder,
   borderRadius: 8,
   cursor: "pointer",
   fontSize: "0.85rem",
+  fontWeight: 600,
 };
 
 const primaryBtnStyle = {
   display: "inline-flex",
   alignItems: "center",
   gap: "0.3rem",
-  padding: "0.5rem 1rem",
-  background: "var(--primary-color, var(--accent-color))",
-  color: "#fff",
+  padding: "0.55rem 1rem",
+  background: "linear-gradient(135deg, var(--accent-peach, var(--accent-color, #C9A063)) 0%, var(--accent-color, #C9A063) 100%)",
+  color: "var(--accent-text, #fff)",
   border: "none",
   borderRadius: 8,
   cursor: "pointer",
   fontSize: "0.9rem",
+  fontWeight: 700,
+  boxShadow: "var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.12))",
 };
 
 const linkBtnStyle = {
   display: "inline-flex",
   alignItems: "center",
   gap: "0.3rem",
-  padding: 0,
-  background: "transparent",
-  border: "none",
-  color: "var(--primary-color, var(--accent-color))",
+  padding: "0.55rem 0.8rem",
+  background: "var(--surface-color, rgba(255,255,255,0.9))",
+  border: themedBorder,
+  borderRadius: 8,
+  color: "var(--accent-color, var(--text-primary))",
   cursor: "pointer",
-  fontSize: "0.9rem",
-  textDecoration: "underline",
+  fontSize: "0.85rem",
+  fontWeight: 600,
+  textDecoration: "none",
+};
+
+const templateBtnStyle = linkBtnStyle;
+
+const filePickerBtnStyle = {
+  width: "100%",
+  padding: "0.75rem 0.9rem",
+  borderRadius: 8,
+  border: "2px dashed var(--border-color, rgba(0,0,0,0.18))",
+  background: "var(--surface-color, rgba(255,255,255,0.9))",
+  color: "var(--accent-color, var(--text-primary))",
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "0.5rem",
+  fontSize: "0.95rem",
+  fontWeight: 600,
+};
+
+const fileMetaStyle = {
+  display: "flex",
+  gap: "0.5rem",
+  justifyContent: "space-between",
+  flexWrap: "wrap",
+  marginTop: "0.45rem",
+  color: "var(--text-secondary)",
+  fontSize: "0.82rem",
+};
+
+const codePillStyle = {
+  display: "inline-block",
+  padding: "0.1rem 0.35rem",
+  borderRadius: 6,
+  border: themedBorder,
+  background: "var(--subtle-bg, rgba(0,0,0,0.03))",
+  color: "var(--text-primary, inherit)",
+  fontSize: "0.85em",
 };
 
 const alertStyle = {
   padding: "0.6rem 0.8rem",
-  borderRadius: 6,
-  border: "1px solid",
+  borderRadius: 8,
+  border: themedBorder,
   marginBottom: "0.8rem",
   fontSize: "0.9rem",
+  color: "var(--text-primary, inherit)",
+  background: "var(--subtle-bg, rgba(0,0,0,0.03))",
+};
+
+const alertVariants = {
+  error: {
+    background: "rgba(168, 50, 63, 0.12)",
+    borderColor: "rgba(168, 50, 63, 0.45)",
+  },
+  warning: {
+    background: "rgba(212, 146, 59, 0.12)",
+    borderColor: "rgba(212, 146, 59, 0.45)",
+  },
+  success: {
+    background: "rgba(74, 124, 89, 0.12)",
+    borderColor: "rgba(74, 124, 89, 0.45)",
+  },
+  info: {
+    background: "rgba(99, 102, 241, 0.12)",
+    borderColor: "rgba(99, 102, 241, 0.45)",
+  },
+};
+
+function getAlertStyle(variant) {
+  return { ...alertStyle, ...(alertVariants[variant] || {}) };
+}
+
+const panelStyle = {
+  border: themedBorder,
+  borderRadius: 8,
+  background: "var(--surface-color, rgba(255,255,255,0.9))",
+  overflow: "hidden",
+};
+
+const tableHeaderCellStyle = {
+  padding: "0.4rem",
+  borderBottom: themedBorder,
+  textAlign: "left",
+  background: "var(--subtle-bg, rgba(0,0,0,0.03))",
+  color: "var(--text-primary, inherit)",
+  fontWeight: 600,
+};
+
+const tableCellStyle = {
+  padding: "0.4rem",
+  borderBottom: "1px solid var(--border-light, rgba(0,0,0,0.06))",
+  color: "var(--text-primary, inherit)",
 };
 
 const dropdownMenuStyle = {

@@ -260,9 +260,12 @@ function installFetchMock({
 // Render at /travel/trips/101 with the Routes + Route wrapper so useParams
 // reads { id: '101' }. The SUT does NOT consume AuthContext (no role gate),
 // so no Provider is needed.
-function renderPage(tripId = 101) {
+function renderPage(tripId = 101, entryState = null) {
+  const entry = entryState
+    ? { pathname: `/travel/trips/${tripId}`, state: entryState }
+    : `/travel/trips/${tripId}`;
   return render(
-    <MemoryRouter initialEntries={[`/travel/trips/${tripId}`]}>
+    <MemoryRouter initialEntries={[entry]}>
       <Routes>
         <Route path="/travel/trips/:id" element={<TripDetail />} />
       </Routes>
@@ -325,7 +328,7 @@ describe('<TripDetail /> — load lifecycle', () => {
     installFetchMock({ trip: null });
     renderPage();
     expect(await screen.findByText(/Trip not found\./i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Back to trips/i })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Trips/i })).toHaveAttribute(
       'href',
       '/travel/trips',
     );
@@ -367,6 +370,15 @@ describe('<TripDetail /> — header + status badge', () => {
 });
 
 describe('<TripDetail /> — tab strip', () => {
+  it('uses preserved report result URL when opened from Reports drill-down', async () => {
+    renderPage(101, { backTo: '/travel/trips?status=confirmed&from=reports', backLabel: 'Back to reports results' });
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    expect(screen.getByRole('link', { name: /Back to reports results/i })).toHaveAttribute(
+      'href',
+      '/travel/trips?status=confirmed&from=reports',
+    );
+  });
+
   it('renders all 5 tabs with role="tab" + Overview selected by default', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
@@ -1200,6 +1212,20 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
     expect(puts.length).toBe(0);
   });
 
+
+  it('renders CRM portal link buttons per instalment and no participant Razorpay link generation', async () => {
+    installPaymentMock();
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
+    await screen.findByRole('heading', { name: /Edit payment plan/i });
+
+    expect(screen.getByRole('button', { name: /Copy instalment 1 payment link/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy instalment 2 payment link/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Copy instalment 3 payment link/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Generate payment link/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/rzp\.io/i)).not.toBeInTheDocument();
+  });
   it('per-participant instalments section renders rows from /instalments response', async () => {
     const perPartFixture = [
       {

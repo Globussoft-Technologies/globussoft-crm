@@ -88,12 +88,25 @@ function formatMoney(amount, currency = "INR") {
 // flights) — bare "×2" was confusing.
 function qtyLabel(l) {
   const q = Number(l.quantity) || 1;
-  if (l.lineType === "hotel") return `Hotel · ${q} night${q === 1 ? "" : "s"}`;
-  if (l.lineType === "flight") return `Flight · ${q} traveller${q === 1 ? "" : "s"}`;
+  if (l.lineType === "hotel") return `Hotel � ${q} night${q === 1 ? "" : "s"}`;
+  if (l.lineType === "flight") return `Flight � ${q} traveller${q === 1 ? "" : "s"}`;
   if (l.lineType === "transport") return "Transfer";
   return l.lineType;
 }
 
+function unitPriceLabel(l, currency) {
+  const q = Number(l.quantity) || 1;
+  const rawUnit = l.unitPrice != null ? Number(l.unitPrice) : (Number(l.amount) || 0) / q;
+  if (!Number.isFinite(rawUnit) || rawUnit <= 0) return null;
+  const unitName = l.lineType === "hotel"
+    ? "night"
+    : l.lineType === "flight"
+      ? "traveller"
+      : q > 1
+        ? "unit"
+        : "item";
+  return `${formatMoney(rawUnit, currency)} per ${unitName}`;
+}
 function formatDate(iso) {
   if (!iso) return "—";
   try {
@@ -280,7 +293,7 @@ export default function QuoteAcceptLanding() {
     );
   }
 
-  const { quote, lines = [], customer, breakdown } = data;
+  const { quote, lines = [], customer } = data;
   const totalDisplay = quote?.totalAmount != null
     ? formatMoney(quote.totalAmount, quote.currency)
     : formatMoney(linesTotal, quote?.currency);
@@ -314,6 +327,7 @@ export default function QuoteAcceptLanding() {
                         <div style={{ fontWeight: 600, fontSize: 15, color: "#111827", letterSpacing: 0.1 }}>{l.description}</div>
                         <div style={{ fontSize: 12, color: "var(--text-muted, #6b7280)", marginTop: 2 }}>
                           {qtyLabel(l)}
+                          {unitPriceLabel(l, l.currency || quote.currency) ? ` � ${unitPriceLabel(l, l.currency || quote.currency)}` : ""}
                         </div>
                       </div>
                       <div style={{ fontWeight: 800, fontSize: 15, whiteSpace: "nowrap", color: "#111827" }}>{formatMoney(l.amount, l.currency || quote.currency)}</div>
@@ -328,46 +342,6 @@ export default function QuoteAcceptLanding() {
             </div>
           </section>
 
-          {breakdown && (
-            <section aria-label="Pricing breakdown" style={{ marginBottom: 24 }}>
-              <h2 style={{ ...subHeadingStyle, marginTop: 0 }}>How your quote is calculated</h2>
-              <div style={{ background: "var(--bg-color, #f9fafb)", borderRadius: 10, padding: 16, border: "1px solid var(--border-color, #e5e7eb)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                  <span style={{ color: "var(--text-muted, #6b7280)" }}>Base subtotal</span>
-                  <span style={{ fontWeight: 500 }}>{formatMoney(breakdown.baseSubtotal, quote.currency)}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                  <span style={{ color: "var(--text-muted, #6b7280)" }}>Season</span>
-                  <span style={{ fontWeight: 500 }}>
-                    {breakdown.seasonMultiplier && breakdown.seasonMultiplier !== 1
-                      ? `×${breakdown.seasonMultiplier}${breakdown.matchedSeasonName ? ` (${breakdown.matchedSeasonName})` : ""}`
-                      : breakdown.tripDate
-                        ? "No season matched"
-                        : "—"}
-                  </span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                  <span style={{ color: "var(--text-muted, #6b7280)" }}>After season</span>
-                  <span style={{ fontWeight: 500 }}>{formatMoney(breakdown.subtotal, quote.currency)}</span>
-                </div>
-                {breakdown.markupApplied.length > 0 && (
-                  <div style={{ marginBottom: 8 }}>
-                    <div style={{ color: "var(--text-muted, #6b7280)", marginBottom: 4 }}>Markups</div>
-                    {breakdown.markupApplied.map((m) => (
-                      <div key={m.ruleId} style={{ display: "flex", justifyContent: "space-between", paddingLeft: 12, fontSize: 13 }}>
-                        <span>{m.ruleName}</span>
-                        <span>{formatMoney(m.amount, quote.currency)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--border-color, #e5e7eb)", paddingTop: 10, marginTop: 8, fontWeight: 700 }}>
-                  <span>Total with markup</span>
-                  <span>{formatMoney(breakdown.total, quote.currency)}</span>
-                </div>
-              </div>
-            </section>
-          )}
 
         {error && (
           <div role="alert" style={errorBoxStyle}>

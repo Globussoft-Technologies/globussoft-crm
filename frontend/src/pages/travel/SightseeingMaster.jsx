@@ -22,16 +22,14 @@
 //   - Prompt referenced `useNotify` at `../hooks/useNotify`; actual hook lives
 //     at `../utils/notify` (CostMaster.jsx + every other Travel admin page
 //     imports from there). Following code reality, not prompt language.
-//   - Prompt referenced "pagination Prev/Next/page-size"; using a single
-//     offset+limit pair (Prev/Next, limit=20) keeps the page lean and
-//     mirrors the Phase-1 admin-table shape across travel/* siblings.
+//   - Prompt referenced pagination; this page keeps the backend offset+limit
+//     contract and loads additional rows as the table scrolls.
 
 import React, { useState, useEffect, useCallback, useContext, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Edit2, Filter, MapPin, Plus, Trash2, Upload, X } from 'lucide-react';
-import { fetchApi } from '../../utils/api';
+import { Download, Edit2, Filter, MapPin, Plus, Trash2, Upload, X } from 'lucide-react';
+import { fetchApi, getActiveTenantId, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
-import TopScrollSync from '../../components/TopScrollSync';
 import { AuthContext } from '../../App';
 import { useActiveSubBrand } from '../../utils/subBrand';
 import {
@@ -82,6 +80,8 @@ export default function SightseeingMaster() {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
 
   // Filter state
   const [destinationFilter, setDestinationFilter] = useState('');
@@ -94,8 +94,17 @@ export default function SightseeingMaster() {
   const [editingId, setEditingId] = useState(null);
 
   // Image upload
+  const listRef = useRef(null);
+  const itemsRef = useRef([]);
+  const loadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(false);
   const imgInputRef = useRef(null);
+  const importInputRef = useRef(null);
   const [uploadingImg, setUploadingImg] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState(null);
 
   const pickImageFile = async (e) => {
     const file = e.target.files?.[0];
@@ -115,31 +124,129 @@ export default function SightseeingMaster() {
     }
   };
 
-  const fetchItems = useCallback(() => {
-    setLoading(true);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const fetchItems = useCallback((targetOffset = offsetRef.current) => {
+    if (targetOffset === 0) {
+      setLoading(true);
+      setLoadingMore(false);
+      itemsRef.current = [];
+      setItems([]);
+      if (listRef.current) listRef.current.scrollTop = 0;
+    } else if (!loadingRef.current) {
+      setLoadingMore(true);
+    }
     const qs = new URLSearchParams();
     if (destinationFilter.trim()) qs.set('destinationName', destinationFilter.trim());
     if (categoryFilter) qs.set('category', categoryFilter);
     if (activeOnly) qs.set('isActive', 'true');
     else qs.set('isActive', 'false');
     qs.set('limit', String(PAGE_SIZE));
-    qs.set('offset', String(offset));
+    qs.set('offset', String(targetOffset));
     fetchApi(`/api/travel/sightseeing?${qs.toString()}`)
       .then((res) => {
-        setItems(Array.isArray(res?.items) ? res.items : []);
-        setTotal(Number(res?.total) || 0);
+        const rows = Array.isArray(res?.items) ? res.items : [];
+        const totalCount = Number(res?.total) || 0;
+        const nextItems = targetOffset === 0 ? rows : [...itemsRef.current, ...rows];
+        const nextOffset = targetOffset + rows.length;
+        const nextHasMore = Number.isFinite(totalCount) ? nextOffset < totalCount : rows.length === PAGE_SIZE;
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+        setTotal(totalCount);
+        setHasMore(nextHasMore);
       })
       .catch((e) => {
         notify.error(e?.body?.error || 'Failed to load sightseeing entries');
         setItems([]);
         setTotal(0);
+        setHasMore(false);
       })
-      .finally(() => setLoading(false));
-  }, [destinationFilter, categoryFilter, activeOnly, offset, notify]);
+      .finally(() => {
+        setLoading(false);
+        setLoadingMore(false);
+      });
+  }, [destinationFilter, categoryFilter, activeOnly, notify]);
 
   useEffect(() => {
-    fetchItems();
+    fetchItems(offset);
+  }, [fetchItems, offset]);
+
+  const reloadFirstPage = useCallback(() => {
+    if (offsetRef.current === 0) {
+      fetchItems(0);
+    } else {
+      setOffset(0);
+    }
   }, [fetchItems]);
+  const downloadTemplate = async (format) => {
+    try {
+      const ext = format === 'xlsx' ? 'xlsx' : 'csv';
+      const label = format === 'xlsx' ? 'Excel template' : 'CSV template';
+      const res = await fetch(`/api/travel/sightseeing/import-template?format=${ext}`, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      if (!res.ok) throw new Error(`Failed to download ${label.toLowerCase()}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `travel-sightseeing-template.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      notify.error(err?.message || `Failed to download ${format} template`);
+    }
+  };
+
+  const importCsv = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/travel/sightseeing/import.csv', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+        body: formData,
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `Import failed (${res.status})`);
+      setImportSummary(body);
+      const summary = `Imported ${body.imported || 0}, updated ${body.updated || 0}, skipped ${body.skipped || 0}`;
+      if (body.errors?.length) {
+        notify.error(`${summary}. First error row ${body.errors[0].rowNumber}: ${body.errors[0].reason}`);
+      } else {
+        notify.success(summary);
+      }
+      reloadFirstPage();
+    } catch (err) {
+      notify.error(err?.message || 'Import failed');
+    } finally {
+      setImporting(false);
+      if (event.target) event.target.value = '';
+    }
+  };
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -212,7 +319,7 @@ export default function SightseeingMaster() {
         notify.success('Sightseeing entry added');
       }
       resetForm();
-      fetchItems();
+      reloadFirstPage();
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to save entry');
     }
@@ -226,7 +333,7 @@ export default function SightseeingMaster() {
     try {
       await fetchApi(`/api/travel/sightseeing/${item.id}`, { method: 'DELETE' });
       notify.success('Sightseeing entry removed');
-      fetchItems();
+      reloadFirstPage();
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to delete entry');
     }
@@ -249,13 +356,19 @@ export default function SightseeingMaster() {
     return rem === 0 ? `${h}h` : `${h}h ${rem}m`;
   };
 
-  const canPrev = offset > 0;
-  const canNext = offset + PAGE_SIZE < total;
-  const fromIdx = total === 0 ? 0 : offset + 1;
-  const toIdx = Math.min(offset + items.length, total);
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+      setOffset((curr) => curr + PAGE_SIZE);
+    }
+  }, []);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
+    <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
       <div
         style={{
           display: 'flex',
@@ -278,14 +391,63 @@ export default function SightseeingMaster() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button type="button" onClick={() => downloadTemplate('csv')} style={secondaryBtn}>
+            <Download size={14} /> CSV template
+          </button>
+          <button type="button" onClick={() => downloadTemplate('xlsx')} style={secondaryBtn}>
+            <Download size={14} /> Excel template
+          </button>
+          <button
+            type="button"
+            onClick={() => importInputRef.current?.click()}
+            style={secondaryBtn}
+            disabled={importing}
+            title="Bulk-import sightseeing rows from CSV or Excel using the shared template."
+          >
+            <Upload size={14} /> {importing ? 'Importing...' : 'Import CSV/Excel'}
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            onChange={importCsv}
+            style={{ display: 'none' }}
+            aria-label="Upload sightseeing CSV or Excel file"
+          />
           {!showForm && (
             <button type="button" onClick={openCreate} style={primaryBtn}>
               <Plus size={14} /> Add sightseeing
             </button>
           )}
-        </div>
-      </div>
+        </div>      </div>
 
+
+      {importSummary && (
+        <div
+          style={{
+            background: 'var(--surface-color)',
+            padding: 12,
+            borderRadius: 8,
+            border: '1px solid var(--border-color)',
+            marginTop: 12,
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>
+            Last import
+          </div>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.5 }}>
+            Imported {importSummary.imported || 0}, updated {importSummary.updated || 0}, skipped {importSummary.skipped || 0} of {importSummary.total || 0} rows.
+          </div>
+          {Array.isArray(importSummary.errors) && importSummary.errors.length > 0 && (
+            <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>
+              {importSummary.errors.slice(0, 3).map((err) => (
+                <div key={`${err.rowNumber}-${err.reason}`}>Row {err.rowNumber}: {err.reason}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {/* Filters */}
       <div
         style={{
@@ -580,7 +742,17 @@ export default function SightseeingMaster() {
         ) : items.length === 0 ? (
           <div style={emptyStyle}>No sightseeing entries yet. Add one above.</div>
         ) : (
-          <TopScrollSync>
+          <div
+            ref={listRef}
+            data-testid="sightseeing-table-scroll"
+            onScroll={handleListScroll}
+            style={{
+              overflow: 'auto',
+              height: 'calc(100vh - 370px)',
+              minHeight: 490,
+              maxHeight: 730,
+            }}
+          >
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
@@ -655,18 +827,21 @@ export default function SightseeingMaster() {
                   </td>
                 </tr>
               ))}
-            </tbody>
+          </tbody>
           </table>
-          </TopScrollSync>
+          {loadingMore && (
+            <div style={{ padding: '10px 16px', fontSize: 12, color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)' }}>
+              Loading more&hellip;
+            </div>
+          )}
+          </div>
         )}
       </div>
-
-      {/* Pagination */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-start',
           marginTop: 12,
           fontSize: 13,
           color: 'var(--text-secondary)',
@@ -675,27 +850,7 @@ export default function SightseeingMaster() {
         <div>
           {total === 0
             ? 'No results'
-            : `Showing ${fromIdx}-${toIdx} of ${total}`}
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            type="button"
-            onClick={() => canPrev && setOffset(Math.max(0, offset - PAGE_SIZE))}
-            disabled={!canPrev}
-            style={canPrev ? secondaryBtn : disabledBtn}
-            aria-label="Previous page"
-          >
-            <ChevronLeft size={14} /> Prev
-          </button>
-          <button
-            type="button"
-            onClick={() => canNext && setOffset(offset + PAGE_SIZE)}
-            disabled={!canNext}
-            style={canNext ? secondaryBtn : disabledBtn}
-            aria-label="Next page"
-          >
-            Next <ChevronRight size={14} />
-          </button>
+            : `Showing ${Math.min(items.length, total)} of ${total}`}
         </div>
       </div>
     </div>
@@ -745,7 +900,12 @@ const th = {
   letterSpacing: 0.5,
   color: 'var(--text-secondary)',
   borderBottom: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg)',
+  background: 'var(--bg-color, #111318)',
+  backgroundClip: 'padding-box',
+  position: 'sticky',
+  top: 0,
+  zIndex: 2,
+  boxShadow: '0 1px 0 var(--border-color)',
 };
 const td = { padding: '10px 12px', fontSize: 14, color: 'var(--text-primary)' };
 const brandBadge = {
@@ -784,7 +944,6 @@ const secondaryBtn = {
   border: '1px solid var(--border-color)',
   cursor: 'pointer',
 };
-const disabledBtn = { ...secondaryBtn, opacity: 0.5, cursor: 'not-allowed' };
 const iconBtn = {
   padding: 4,
   borderRadius: 4,

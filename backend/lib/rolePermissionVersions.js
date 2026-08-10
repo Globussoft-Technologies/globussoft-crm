@@ -180,18 +180,46 @@ async function ensureInitialSnapshot({
  * List versions for a role, newest first. Default page size 50.
  * Hydrates `permissions` from the JSON-stringified column.
  */
+async function hydrateChangedByUsers(rows) {
+  const changedByIds = [...new Set(
+    rows
+      .map((row) => row.changedById)
+      .filter((id) => Number.isInteger(id)),
+  )];
+  if (changedByIds.length === 0) return new Map();
+  const users = await prisma.user.findMany({
+    where: { id: { in: changedByIds } },
+    select: { id: true, name: true, email: true },
+  });
+  return new Map(users.map((user) => [user.id, user]));
+}
+
+/**
+ * List versions for a role, newest first. Default page size 50.
+ * Hydrates permissions from the JSON-stringified column and resolves
+ * changedBy via a direct user lookup so missing historical users do not
+ * block the audit trail.
+ */
 async function listRolePermissionVersions({ roleId, take = 50, skip = 0 }) {
   const rows = await prisma.rolePermissionVersion.findMany({
     where: { roleId },
     orderBy: { versionNumber: "desc" },
     take: Math.min(Math.max(parseInt(take, 10) || 50, 1), 200),
     skip: Math.max(parseInt(skip, 10) || 0, 0),
-    include: {
-      changedBy: {
-        select: { id: true, name: true, email: true },
-      },
+    select: {
+      id: true,
+      roleId: true,
+      versionNumber: true,
+      permissionCount: true,
+      changeType: true,
+      restoredFromVersionId: true,
+      changedAt: true,
+      note: true,
+      changedById: true,
+      permissionsJson: true,
     },
   });
+  const changedByMap = await hydrateChangedByUsers(rows);
   return rows.map((r) => ({
     id: r.id,
     roleId: r.roleId,
@@ -201,27 +229,32 @@ async function listRolePermissionVersions({ roleId, take = 50, skip = 0 }) {
     restoredFromVersionId: r.restoredFromVersionId,
     changedAt: r.changedAt,
     note: r.note,
-    changedBy: r.changedBy || null,
-    // Hydrate the permission array — small enough that returning
+    changedBy: changedByMap.get(r.changedById) || null,
+    // Hydrate the permission array - small enough that returning
     // every row's full set is fine for the list UI. The "Diff with
     // current" widget consumes this directly.
     permissions: hydratePermissions(r.permissionsJson),
   }));
 }
-
-/**
- * Load a single version row + hydrate. Used by the restore endpoint.
- * Throws (caught by route) if not found or roleId mismatch.
- */
 async function getRolePermissionVersion({ versionId, roleId }) {
   const row = await prisma.rolePermissionVersion.findUnique({
     where: { id: parseInt(versionId, 10) },
-    include: {
-      changedBy: { select: { id: true, name: true, email: true } },
+    select: {
+      id: true,
+      roleId: true,
+      versionNumber: true,
+      permissionCount: true,
+      changeType: true,
+      restoredFromVersionId: true,
+      changedAt: true,
+      note: true,
+      changedById: true,
+      permissionsJson: true,
     },
   });
   if (!row) return null;
   if (row.roleId !== roleId) return null;
+  const changedByMap = await hydrateChangedByUsers([row]);
   return {
     id: row.id,
     roleId: row.roleId,
@@ -231,11 +264,10 @@ async function getRolePermissionVersion({ versionId, roleId }) {
     restoredFromVersionId: row.restoredFromVersionId,
     changedAt: row.changedAt,
     note: row.note,
-    changedBy: row.changedBy || null,
+    changedBy: changedByMap.get(row.changedById) || null,
     permissions: hydratePermissions(row.permissionsJson),
   };
 }
-
 function hydratePermissions(json) {
   if (!json) return [];
   try {

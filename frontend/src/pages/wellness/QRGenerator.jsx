@@ -33,6 +33,7 @@ import PageHeader from '../../components/PageHeader';
 import { AuthContext } from '../../App';
 
 const ERROR_LEVELS = ['L', 'M', 'Q', 'H'];
+const QR_LIST_PAGE_SIZE = 10;
 
 /* eslint-disable react-refresh/only-export-components */
 const QR_EVENTS_API = '/api/wellness/qr-events';
@@ -87,6 +88,7 @@ export default function QRGenerator() {
   const [editingQrId, setEditingQrId] = useState(null);
   const [dataUrl, setDataUrl] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [visibleQrCount, setVisibleQrCount] = useState(QR_LIST_PAGE_SIZE);
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -99,6 +101,18 @@ export default function QRGenerator() {
     () => events.find((e) => e.id === selectedEventId) || null,
     [events, selectedEventId],
   );
+  const selectedEventQrs = Array.isArray(selectedEvent?.qrs) ? selectedEvent.qrs : [];
+  const visibleSelectedQrs = selectedEventQrs.slice(0, visibleQrCount);
+
+  useEffect(() => {
+    setVisibleQrCount(QR_LIST_PAGE_SIZE);
+  }, [selectedEventId, selectedEventQrs.length]);
+
+  const handleQrListScroll = (event) => {
+    const el = event.currentTarget;
+    if (el.scrollTop + el.clientHeight < el.scrollHeight - 80) return;
+    setVisibleQrCount((count) => Math.min(count + QR_LIST_PAGE_SIZE, selectedEventQrs.length));
+  };
 
   // Close the dropdown when clicking outside.
   useEffect(() => {
@@ -706,13 +720,13 @@ export default function QRGenerator() {
             </button>
           </div>
 
-          {selectedEvent && selectedEvent.qrs.length > 0 && (
+          {selectedEvent && selectedEventQrs.length > 0 && (
             <div className="glass" style={cardStyle}>
               <h3 style={{ margin: '0 0 1rem', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Clock size={18} /> {selectedEvent.name} — Generated QRs
               </h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {selectedEvent.qrs.map((qr) => (
+              <div data-testid="generated-qr-list" onScroll={handleQrListScroll} style={qrListScrollStyle}>
+                {visibleSelectedQrs.map((qr) => (
                   <div
                     key={qr.id}
                     style={{
@@ -790,6 +804,15 @@ const cardStyle = {
   padding: '1.5rem',
   borderRadius: 12,
   border: '1px solid var(--border-color)',
+};
+
+const qrListScrollStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '0.75rem',
+  maxHeight: '280px',
+  overflowY: 'auto',
+  paddingRight: '0.25rem',
 };
 
 const inputStyle = {

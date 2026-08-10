@@ -6,15 +6,14 @@
  *   - Page header renders.
  *   - Empty state renders the PRD-correct messaging.
  *   - Data rows render PNR / flight / passenger / status badge.
- *   - Status badge renders for every enum value (pending|reminded|
- *     in-progress|done|fallback-agent|failed).
+ *   - Status badge renders for pending and done enum values.
  *   - Upload boarding pass triggers multipart POST to
  *     /api/travel/webcheckins/:id/upload-boarding-pass.
  *   - Deliver action confirms + POSTs /deliver; 409 NO_BOARDING_PASS
  *     surfaces a friendly toast.
  *   - Filter dropdown changes the fetch URL (status query param).
  *   - "Upcoming only" toggle switches to the /upcoming endpoint.
- *   - Pagination Next updates the offset query param.
+ *   - No pagination footer renders; the list stays on a single visible page.
  *
  * Mock stability: useNotify and fetchApi mocks are stable references
  * per CLAUDE.md feedback rule (fresh refs in useCallback / useEffect
@@ -70,7 +69,7 @@ const SAMPLE_STAFF = [
 function defaultFetchImpl(rows = SAMPLE_ROWS) {
   return (url, opts) => {
     if (url.startsWith('/api/travel/webcheckins?')) {
-      return Promise.resolve({ webcheckins: rows, total: rows.length, limit: 50, offset: 0 });
+      return Promise.resolve({ webcheckins: rows, total: rows.length, limit: 200, offset: 0 });
     }
     if (url === '/api/travel/webcheckins/upcoming') {
       return Promise.resolve({ webcheckins: rows.filter(r => r.status === 'pending' || r.status === 'reminded'), total: 1 });
@@ -226,13 +225,13 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     await screen.findByText('ABC123');
 
     const filterSelect = screen.getByLabelText(/Filter by status/i);
-    fireEvent.change(filterSelect, { target: { value: 'reminded' } });
+    fireEvent.change(filterSelect, { target: { value: 'done' } });
 
     await waitFor(() => {
-      const remindedCall = fetchApiMock.mock.calls.find(
-        ([u]) => typeof u === 'string' && u.includes('status=reminded'),
+      const doneCall = fetchApiMock.mock.calls.find(
+        ([u]) => typeof u === 'string' && u.includes('status=done'),
       );
-      expect(remindedCall).toBeTruthy();
+      expect(doneCall).toBeTruthy();
     });
   });
 
@@ -252,63 +251,70 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     });
   });
 
-  it('Next-page button updates the offset query param', async () => {
-    // Need >50 total to render the pager.
-    const manyRows = Array.from({ length: 50 }, (_, i) => ({
-      id: i + 1, pnr: `PNR${i}`, airlineCode: '6E', flightNumber: `6E-${100 + i}`,
-      departureAt: '2026-06-01T10:30:00.000Z',
-      windowOpenAt: '2026-05-31T10:30:00.000Z',
-      passengerName: `Passenger ${i}`, status: 'pending',
-      boardingPassUrl: null, deliveredAt: null, assignedAgentId: null,
-    }));
-    fetchApiMock.mockImplementation((url) => {
-      if (url.startsWith('/api/travel/webcheckins?')) {
-        return Promise.resolve({ webcheckins: manyRows, total: 120, limit: 50, offset: url.includes('offset=50') ? 50 : 0 });
-      }
-      if (url === '/api/staff') return Promise.resolve(SAMPLE_STAFF);
-      return Promise.resolve({});
-    });
+  it('table width shrinks to content instead of leaving blank horizontal runway', async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
     renderPage();
-    await screen.findByText('PNR0');
+    await screen.findByText('ABC123');
 
-    const nextBtn = screen.getByRole('button', { name: /Next page/i });
-    fireEvent.click(nextBtn);
+    const table = document.querySelector('table.webcheckins-table');
+    expect(table).toBeTruthy();
+    expect(table.style.width).toBe('max-content');
+    expect(table.style.minWidth).toBe('');
+  });
+  it('keeps the scroll wrapper shrink-wrapped while preserving horizontal overflow', async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
+    renderPage();
+    await screen.findByText('ABC123');
 
-    await waitFor(() => {
-      const nextCall = fetchApiMock.mock.calls.find(
-        ([u]) => typeof u === 'string' && u.includes('offset=50'),
-      );
-      expect(nextCall).toBeTruthy();
-    });
+    const scrollArea = screen.getByTestId('webcheckins-table-scroll');
+    expect(scrollArea.style.display).toBe('inline-block');
+    expect(scrollArea.style.minWidth).toBe('100%');
+    expect(scrollArea.style.overflowX).toBe('auto');
+  });
+  it('does not render pagination controls', async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
+    renderPage();
+    await screen.findByText('ABC123');
+
+    expect(screen.queryByRole('button', { name: /Next page/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Previous page/i })).toBeNull();
   });
 
-  // ─── Extended coverage (2026-05-26 test-cron) ────────────────────
-  //
-  // SUT is 464L; original test covered 9 cases. These extend to cover
-  // remaining enum badge values, deliver-disabled-after-delivered,
-  // declined-confirm path, reassign PATCH (assign + unassign), upload
-  // error, /api/staff fetch failure, fetchApi catch (non-401), invalid
-  // dates rendering "—", boarding-pass View link, status-filter
-  // disabled-during-upcoming, and pagination range display.
 
-  it('renders status badges for all six enum values', async () => {
+  it('renders statuses for multiple rows', async () => {
     const allStatusRows = [
-      { id: 1, pnr: 'P1', airlineCode: '6E', flightNumber: '6E-1', departureAt: '2026-06-01T10:30:00.000Z', windowOpenAt: '2026-05-31T10:30:00.000Z', passengerName: 'A', status: 'pending', boardingPassUrl: null, deliveredAt: null, assignedAgentId: null },
-      { id: 2, pnr: 'P2', airlineCode: '6E', flightNumber: '6E-2', departureAt: '2026-06-01T10:30:00.000Z', windowOpenAt: '2026-05-31T10:30:00.000Z', passengerName: 'B', status: 'reminded', boardingPassUrl: null, deliveredAt: null, assignedAgentId: null },
-      { id: 3, pnr: 'P3', airlineCode: '6E', flightNumber: '6E-3', departureAt: '2026-06-01T10:30:00.000Z', windowOpenAt: '2026-05-31T10:30:00.000Z', passengerName: 'C', status: 'in-progress', boardingPassUrl: null, deliveredAt: null, assignedAgentId: null },
-      { id: 4, pnr: 'P4', airlineCode: '6E', flightNumber: '6E-4', departureAt: '2026-06-01T10:30:00.000Z', windowOpenAt: '2026-05-31T10:30:00.000Z', passengerName: 'D', status: 'done', boardingPassUrl: null, deliveredAt: null, assignedAgentId: null },
-      { id: 5, pnr: 'P5', airlineCode: '6E', flightNumber: '6E-5', departureAt: '2026-06-01T10:30:00.000Z', windowOpenAt: '2026-05-31T10:30:00.000Z', passengerName: 'E', status: 'fallback-agent', boardingPassUrl: null, deliveredAt: null, assignedAgentId: null },
-      { id: 6, pnr: 'P6', airlineCode: '6E', flightNumber: '6E-6', departureAt: '2026-06-01T10:30:00.000Z', windowOpenAt: '2026-05-31T10:30:00.000Z', passengerName: 'F', status: 'failed', boardingPassUrl: null, deliveredAt: null, assignedAgentId: null },
+      {
+        id: 1,
+        pnr: 'P1',
+        airlineCode: '6E',
+        flightNumber: '6E-1',
+        departureAt: '2026-06-01T10:30:00.000Z',
+        windowOpenAt: '2026-05-31T10:30:00.000Z',
+        passengerName: 'A',
+        status: 'pending',
+        boardingPassUrl: null,
+        deliveredAt: null,
+        assignedAgentId: null,
+      },
+      {
+        id: 2,
+        pnr: 'P2',
+        airlineCode: '6E',
+        flightNumber: '6E-2',
+        departureAt: '2026-06-01T10:30:00.000Z',
+        windowOpenAt: '2026-05-31T10:30:00.000Z',
+        passengerName: 'B',
+        status: 'done',
+        boardingPassUrl: null,
+        deliveredAt: null,
+        assignedAgentId: null,
+      },
     ];
     fetchApiMock.mockImplementation(defaultFetchImpl(allStatusRows));
     renderPage();
     await screen.findByText('P1');
     expect(screen.getByTestId('status-badge-1').textContent).toBe('pending');
-    expect(screen.getByTestId('status-badge-2').textContent).toBe('reminded');
-    expect(screen.getByTestId('status-badge-3').textContent).toBe('in-progress');
-    expect(screen.getByTestId('status-badge-4').textContent).toBe('done');
-    expect(screen.getByTestId('status-badge-5').textContent).toBe('fallback-agent');
-    expect(screen.getByTestId('status-badge-6').textContent).toBe('failed');
+    expect(screen.getByTestId('status-badge-2').textContent).toBe('done');
   });
 
   it('renders boarding-pass "View" link when URL present and "—" when absent', async () => {
@@ -320,7 +326,7 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     // so production (where the SPA catches "/uploads/*" before the backend static
     // mount) still serves the file. Backend stores the bare "/uploads/..." form,
     // so the mock keeps that; the rendered href is the normalized "/api/..." form.
-    const viewLink = screen.getByRole('link', { name: /^View$/ });
+    const viewLink = screen.getByRole('link', { name: /^View file$/ });
     expect(viewLink.getAttribute('href')).toBe('/api/uploads/boarding-passes/bp-xyz.pdf');
     expect(viewLink.getAttribute('target')).toBe('_blank');
     expect(viewLink.getAttribute('rel')).toMatch(/noopener/);
@@ -478,7 +484,7 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     });
   });
 
-  it('renders pagination range "1–50 of 120" when total exceeds page size', async () => {
+  it('scrolling the queue does not request another page', async () => {
     const manyRows = Array.from({ length: 50 }, (_, i) => ({
       id: i + 1, pnr: `RNG${i}`, airlineCode: '6E', flightNumber: `6E-${100 + i}`,
       departureAt: '2026-06-01T10:30:00.000Z',
@@ -488,18 +494,23 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     }));
     fetchApiMock.mockImplementation((url) => {
       if (url.startsWith('/api/travel/webcheckins?')) {
-        return Promise.resolve({ webcheckins: manyRows, total: 120, limit: 50, offset: 0 });
+        return Promise.resolve({ webcheckins: manyRows, total: 120, limit: 200, offset: 0 });
       }
       if (url === '/api/staff') return Promise.resolve(SAMPLE_STAFF);
       return Promise.resolve({});
     });
     renderPage();
     await screen.findByText('RNG0');
-    // Range text uses an HTML en-dash entity (–); accept either form.
-    const rangeText = screen.getByText(/1.{1,3}50 of 120/);
-    expect(rangeText).toBeTruthy();
-    // Prev button should be disabled at offset 0.
-    const prevBtn = screen.getByRole('button', { name: /Previous page/i });
-    expect(prevBtn.disabled).toBe(true);
+
+    const scrollArea = screen.getByTestId('webcheckins-table-scroll');
+    fireEvent.scroll(scrollArea);
+
+    await waitFor(() => {
+      const listCalls = fetchApiMock.mock.calls.filter(
+        ([u]) => typeof u === 'string' && u.startsWith('/api/travel/webcheckins?'),
+      );
+      expect(listCalls).toHaveLength(1);
+    });
   });
+
 });

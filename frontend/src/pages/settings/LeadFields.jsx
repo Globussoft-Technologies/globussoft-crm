@@ -1,32 +1,35 @@
 /**
- * /settings/lead-fields � Lead Custom Fields admin page.
+ * /settings/lead-fields — Lead Custom Fields admin page.
  *
  * Backend: /api/lead-custom-fields (routes/lead_custom_fields.js).
  * ADMIN-only page (RoleGuard wrap at the App.jsx route). Generic vertical
- * only � wellness/travel tenants never see this page's Settings link, and
+ * only — wellness/travel tenants never see this page's Settings link, and
  * the route itself is additionally guarded here so a direct URL visit from
  * a non-generic tenant is redirected rather than rendering.
  *
  * Lets an ADMIN define extra fields that then appear on every Lead's
  * create/edit form + detail view (Leads.jsx, ContactDetail.jsx) for THIS
  * tenant only. Field type (text/number/dropdown/date/checkbox) is chosen
- * once at creation time and cannot be changed afterward � see the backend
+ * once at creation time and cannot be changed afterward — see the backend
  * route's comment for why (it would orphan/misinterpret already-stored
  * values).
  *
  * Styling mirrors the app's real shared design system (.card / .btn-primary
  * / .btn-secondary / .input-field / .stable-table / EmptyState / FormField)
- * rather than hand-rolled inline styles � see Currencies.jsx for the sibling
+ * rather than hand-rolled inline styles — see Currencies.jsx for the sibling
  * settings-CRUD page this pattern was pulled from.
  */
 
 import { useContext, useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
-import { Plus, Trash2, Loader, ListChecks, ArrowUp, ArrowDown, Pencil } from "lucide-react";
+import { Plus, Trash2, Loader, ListChecks, ArrowUp, ArrowDown, Pencil, GripVertical } from "lucide-react";
+import { DndContext, PointerSensor, KeyboardSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { AuthContext } from "../../App";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
-import { EmptyState, FormField, Modal } from "../../components/ui";
+import { EmptyState, FormField } from "../../components/ui";
 import TopScrollSync from "../../components/TopScrollSync";
 
 const FIELD_TYPE_OPTIONS = [
@@ -45,9 +48,159 @@ const FIELD_TYPES_WITH_OPTIONS = new Set(["dropdown", "radio", "multiselect"]);
 
 const FIELD_TYPE_LABELS = Object.fromEntries(FIELD_TYPE_OPTIONS.map((o) => [o.value, o.label]));
 
-const th = { padding: "0.75rem 1rem", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-secondary)", fontWeight: 600 };
+const th = {
+  padding: "0.75rem 1rem",
+  fontSize: "0.78rem",
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+  color: "var(--text-secondary)",
+  fontWeight: 600,
+  // Theme-driven, not a fixed dark hex. --subtle-bg composites over the
+  // table body's --bg-color to sit a shade apart from the rows in BOTH
+  // themes (white 5% over near-black in dark, black 4% over #f0f2f5 in
+  // light). A hardcoded #23262d kept the header dark under the light
+  // theme while the text colours followed the theme and went dark too,
+  // leaving the labels unreadable.
+  background: "var(--subtle-bg)",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+};
 const td = { padding: "0.75rem 1rem", fontSize: "0.9rem" };
 const iconBtn = { background: "var(--subtle-bg)", border: "1px solid var(--border-color)", borderRadius: 6, padding: "0.375rem 0.5rem", cursor: "pointer", display: "inline-flex", alignItems: "center" };
+
+function normalizeFieldOrder(list) {
+  return list.map((field, displayOrder) => ({ ...field, displayOrder }));
+}
+
+function SortableLeadFieldRow({
+  field,
+  index,
+  total,
+  reordering,
+  onMove,
+  onEdit,
+  onDelete,
+  onToggleRequired,
+  deletingId,
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: String(field.id) });
+
+  return (
+    <tr
+      ref={setNodeRef}
+      style={{
+        borderTop: "1px solid var(--border-color)",
+        display: "table",
+        width: "100%",
+        tableLayout: "fixed",
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.88 : 1,
+        boxShadow: isDragging ? "0 10px 22px rgba(0, 0, 0, 0.22)" : "none",
+        background: isDragging ? "rgba(37, 99, 235, 0.06)" : "transparent",
+      }}>
+      <td style={{ ...td, display: "flex", gap: "0.15rem", alignItems: "center" }}>
+        <button
+          type="button"
+          aria-label={`Drag ${field.label} to reorder`}
+          title="Drag to reorder"
+          disabled={reordering}
+          {...attributes}
+          {...listeners}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            background: "none",
+            border: "1px solid transparent",
+            padding: "0.2rem",
+            color: reordering ? "var(--border-color)" : "var(--text-secondary)",
+            cursor: reordering ? "not-allowed" : "grab",
+            touchAction: "none",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <GripVertical size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onMove(index, -1)}
+          disabled={index === 0 || reordering}
+          aria-label={`Move ${field.label} up`}
+          title="Move up"
+          style={{
+            background: "none",
+            border: "none",
+            padding: "0.2rem",
+            color: index === 0 ? "var(--border-color)" : "var(--text-secondary)",
+            cursor: index === 0 ? "default" : "pointer",
+          }}
+        >
+          <ArrowUp size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onMove(index, 1)}
+          disabled={index === total - 1 || reordering}
+          aria-label={`Move ${field.label} down`}
+          title="Move down"
+          style={{
+            background: "none",
+            border: "none",
+            padding: "0.2rem",
+            color: index === total - 1 ? "var(--border-color)" : "var(--text-secondary)",
+            cursor: index === total - 1 ? "default" : "pointer",
+          }}
+        >
+          <ArrowDown size={14} />
+        </button>
+      </td>
+      <td style={{ ...td, fontWeight: 500 }}>{field.label}</td>
+      <td style={td}>{FIELD_TYPE_LABELS[field.fieldType] || field.fieldType}</td>
+      <td title={`cf_${field.fieldKey}`} style={{ ...td, fontFamily: "monospace", color: "var(--text-secondary)", whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: "170px" }}>{`cf_${field.fieldKey}`}</td>
+      <td style={{ ...td, color: "var(--text-secondary)" }}>
+        {FIELD_TYPES_WITH_OPTIONS.has(field.fieldType) ? (Array.isArray(field.options) ? field.options.join(", ") : "") : ""}
+      </td>
+      <td style={td}>
+        <input
+          type="checkbox"
+          checked={Boolean(field.isRequired)}
+          onChange={() => onToggleRequired(field)}
+          style={{ cursor: "pointer" }}
+        />
+      </td>
+      <td style={{ ...td, textAlign: "right" }}>
+        <div style={{ display: "inline-flex", gap: "0.4rem" }}>
+          <button
+            type="button"
+            onClick={() => onEdit(field)}
+            aria-label={`Edit ${field.label}`}
+            title="Edit field"
+            style={iconBtn}
+          >
+            <Pencil size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(field)}
+            disabled={deletingId === field.id}
+            aria-label={`Delete ${field.label}`}
+            title="Delete field"
+            style={{ ...iconBtn, color: "var(--danger-color, #ef4444)" }}
+          >
+            {deletingId === field.id ? <Loader size={14} className="spin" /> : <Trash2 size={14} />}
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
 
 function getOptionsText(options) {
   return Array.isArray(options) ? options.join(", ") : "";
@@ -146,32 +299,40 @@ export default function LeadFields() {
   const [savingNew, setSavingNew] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [reordering, setReordering] = useState(false);
-  const [editingField, setEditingField] = useState(null);
-  const [editLabel, setEditLabel] = useState("");
-  const [editOptionsText, setEditOptionsText] = useState("");
-  const [editTooltip, setEditTooltip] = useState("");
-  const [editPlaceholder, setEditPlaceholder] = useState("");
-  const [editRequired, setEditRequired] = useState(false);
-  const [savingEdit, setSavingEdit] = useState(false);
+  // Editing options (add/rename/remove choices) for a dropdown/radio/
+  // multiselect field. Renaming or removing a choice that's already stored
+  // on some lead's value doesn't retroactively fix that lead's data (the
+  // stored string just stops matching any option) — surfaced as a one-time
+  // warning on save rather than blocked outright, since adding options is
+  // always safe and blocking the whole editor would punish the safe case too.
+  const [editingOptionsId, setEditingOptionsId] = useState(null);
+  const [editingOptionsText, setEditingOptionsText] = useState("");
+  const [savingOptions, setSavingOptions] = useState(false);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
-  const load = async () => {
-    setLoading(true);
+  const load = async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const data = await fetchApi("/api/lead-custom-fields");
       setFields(Array.isArray(data) ? data : []);
     } catch (err) {
       notify.error(err?.message || "Failed to load lead fields");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (isWellness || isTravel) return;
+    if (isWellness || isTravel) return; // gated below anyway; skip the fetch
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Generic-vertical-only feature — redirect wellness/travel tenants away
+  // rather than rendering an inapplicable admin page for them.
   if (isWellness || isTravel) {
     return <Navigate to="/settings" replace />;
   }
@@ -219,7 +380,7 @@ export default function LeadFields() {
       });
       notify.success("Field created");
       resetCreateForm();
-      await load();
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to create field");
     } finally {
@@ -239,7 +400,7 @@ export default function LeadFields() {
     try {
       await fetchApi(`/api/lead-custom-fields/${field.id}`, { method: "DELETE" });
       notify.success("Field deleted");
-      await load();
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to delete field");
     } finally {
@@ -253,71 +414,78 @@ export default function LeadFields() {
         method: "PUT",
         body: JSON.stringify({ isRequired: !field.isRequired }),
       });
-      await load();
+      await load({ silent: true });
     } catch (err) {
       notify.error(err?.message || "Failed to update field");
+    }
+  };
+
+  // No bulk /reorder endpoint exists for this resource, so we sync the full
+  // ordering through the existing per-field PUT. The field set is small enough
+  // that the extra calls are an acceptable tradeoff for a much smoother UX.
+  const syncFieldOrder = async (nextFields) => {
+    if (!Array.isArray(nextFields) || !nextFields.length || reordering) return;
+    const orderedFields = normalizeFieldOrder(nextFields);
+    setFields(orderedFields);
+    setReordering(true);
+    try {
+      await Promise.all(
+        orderedFields.map((field) =>
+          fetchApi(`/api/lead-custom-fields/${field.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ displayOrder: field.displayOrder }),
+          }),
+        ),
+      );
+      await load({ silent: true });
+    } catch (err) {
+      notify.error(err?.message || "Failed to reorder fields");
+      await load({ silent: true });
+    } finally {
+      setReordering(false);
     }
   };
 
   const handleMoveField = async (index, direction) => {
     const swapIndex = index + direction;
     if (swapIndex < 0 || swapIndex >= fields.length || reordering) return;
-    const a = fields[index];
-    const b = fields[swapIndex];
-    const reordered = [...fields];
-    [reordered[index], reordered[swapIndex]] = [reordered[swapIndex], reordered[index]];
-    setFields(reordered);
-    setReordering(true);
-    try {
-      await Promise.all([
-        fetchApi(`/api/lead-custom-fields/${a.id}`, { method: "PUT", body: JSON.stringify({ displayOrder: b.displayOrder }) }),
-        fetchApi(`/api/lead-custom-fields/${b.id}`, { method: "PUT", body: JSON.stringify({ displayOrder: a.displayOrder }) }),
-      ]);
-      await load();
-    } catch (err) {
-      notify.error(err?.message || "Failed to reorder fields");
-      await load();
-    } finally {
-      setReordering(false);
-    }
+    await syncFieldOrder(arrayMove(fields, index, swapIndex));
+  };
+
+  const handleDragEnd = async ({ active, over }) => {
+    if (!over || active.id === over.id || reordering) return;
+    const oldIndex = fields.findIndex((field) => String(field.id) === String(active.id));
+    const newIndex = fields.findIndex((field) => String(field.id) === String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    await syncFieldOrder(arrayMove(fields, oldIndex, newIndex));
   };
 
   const openEditModal = (field) => {
-    setEditingField(field);
-    setEditLabel(field.label || "");
-    setEditOptionsText(getOptionsText(field.options));
-    setEditTooltip(field.tooltip || "");
-    setEditPlaceholder(field.placeholder || "");
-    setEditRequired(Boolean(field.isRequired));
-  };
-
-  const closeEditModal = () => {
-    if (savingEdit) return;
-    setEditingField(null);
-    setEditLabel("");
-    setEditOptionsText("");
-    setEditTooltip("");
-    setEditPlaceholder("");
-    setEditRequired(false);
-  };
-
-  const editOptions = editOptionsText.split(",").map((o) => o.trim()).filter(Boolean);
-
-  const handleSaveEdit = async () => {
-    if (!editingField) return;
-    const trimmedLabel = editLabel.trim();
-    if (!trimmedLabel) {
-      notify.error("Label is required");
+    if (FIELD_TYPES_WITH_OPTIONS.has(field.fieldType)) {
+      openOptionsEditor(field);
       return;
     }
-    if (FIELD_TYPES_WITH_OPTIONS.has(editingField.fieldType) && !editOptions.length) {
+    notify.info("Editing is currently available for option-based fields from this table.");
+  };
+  const openOptionsEditor = (field) => {
+    setEditingOptionsId(field.id);
+    setEditingOptionsText(Array.isArray(field.options) ? field.options.join(", ") : "");
+  };
+
+  const cancelOptionsEditor = () => {
+    setEditingOptionsId(null);
+    setEditingOptionsText("");
+  };
+
+  const handleSaveOptions = async (field) => {
+    const newOpts = editingOptionsText.split(",").map((o) => o.trim()).filter(Boolean);
+    if (!newOpts.length) {
       notify.error("Enter at least one option, separated by commas");
       return;
     }
-
-    const oldOpts = Array.isArray(editingField.options) ? editingField.options : [];
-    const removedOrRenamed = oldOpts.filter((option) => !editOptions.includes(option));
-    if (FIELD_TYPES_WITH_OPTIONS.has(editingField.fieldType) && removedOrRenamed.length) {
+    const oldOpts = Array.isArray(field.options) ? field.options : [];
+    const removedOrRenamed = oldOpts.filter((o) => !newOpts.includes(o));
+    if (removedOrRenamed.length) {
       const ok = await notify.confirm({
         title: "Some existing choices are being removed",
         message: `"${removedOrRenamed.join('", "')}" ${removedOrRenamed.length > 1 ? "are" : "is"} no longer in the list. Any lead that already has one of these values saved will keep showing it, but it won't match any selectable option going forward. Continue?`,
@@ -326,38 +494,27 @@ export default function LeadFields() {
       });
       if (!ok) return;
     }
-
-    const body = {
-      label: trimmedLabel,
-      tooltip: editTooltip.trim(),
-      placeholder: editPlaceholder.trim(),
-      isRequired: editRequired,
-    };
-    if (FIELD_TYPES_WITH_OPTIONS.has(editingField.fieldType)) {
-      body.options = editOptions;
-    }
-
-    setSavingEdit(true);
+    setSavingOptions(true);
     try {
-      await fetchApi(`/api/lead-custom-fields/${editingField.id}`, {
+      await fetchApi(`/api/lead-custom-fields/${field.id}`, {
         method: "PUT",
-        body: JSON.stringify(body),
+        body: JSON.stringify({ options: newOpts }),
       });
-      notify.success("Field updated");
-      closeEditModal();
-      await load();
+      notify.success("Options updated");
+      cancelOptionsEditor();
+      await load({ silent: true });
     } catch (err) {
-      notify.error(err?.message || "Failed to update field");
+      notify.error(err?.message || "Failed to update options");
     } finally {
-      setSavingEdit(false);
+      setSavingOptions(false);
     }
   };
 
   return (
-    <div style={{ padding: "2rem", maxWidth: "860px", margin: "0 auto", animation: "fadeIn 0.3s ease" }}>
+    <div style={{ padding: "2rem", paddingBottom: "3rem", maxWidth: "860px", margin: "0 auto", animation: "fadeIn 0.3s ease" }}>
       <h1 style={{ fontSize: "1.5rem", fontWeight: "bold", marginBottom: "0.25rem" }}>Lead Fields</h1>
       <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
-        Add extra fields to your Leads. Once created, a field appears on every lead&apos;s create/edit form and detail view for your organization only.
+        Add extra fields to your Leads. Once created, a field appears on every lead&rsquo;s create/edit form and detail view for your organization only.
       </p>
 
       <div className="card" style={{ padding: 0, overflow: "hidden", marginBottom: "1.5rem" }}>
@@ -366,7 +523,7 @@ export default function LeadFields() {
         </div>
         {loading ? (
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--text-secondary)", padding: "1.5rem" }}>
-            <Loader size={16} className="spin" /> Loading...
+            <Loader size={16} className="spin" /> Loading…
           </div>
         ) : fields.length === 0 ? (
           <EmptyState
@@ -375,94 +532,43 @@ export default function LeadFields() {
             body="Add your first field below to start capturing extra details on every lead."
           />
         ) : (
-          <div style={{ marginTop: "0.75rem" }}>
+          <div style={{ marginTop: "0.75rem", paddingBottom: "0.5rem" }}>
             <TopScrollSync>
-              <table className="stable-table" style={{ borderCollapse: "collapse", width: "100%" }}>
-                <thead>
-                  <tr style={{ background: "var(--subtle-bg)" }}>
-                    <th style={{ ...th, width: "72px" }}>Order</th>
-                    <th style={th}>Label</th>
-                    <th style={th}>Type</th>
-                    <th style={th}>Key</th>
-                    <th style={th}>Options</th>
-                    <th style={th}>Required</th>
-                    <th style={{ ...th, textAlign: "right" }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fields.map((f, index) => (
-                    <tr key={f.id} style={{ borderTop: "1px solid var(--border-color)" }}>
-                      <td style={{ ...td, display: "flex", gap: "0.15rem" }}>
-                        <button
-                          onClick={() => handleMoveField(index, -1)}
-                          disabled={index === 0 || reordering}
-                          aria-label={`Move ${f.label} up`}
-                          title="Move up"
-                          style={{
-                            background: "none",
-                            border: "none",
-                            padding: "0.2rem",
-                            color: index === 0 ? "var(--border-color)" : "var(--text-secondary)",
-                            cursor: index === 0 ? "default" : "pointer",
-                          }}
-                        >
-                          <ArrowUp size={14} />
-                        </button>
-                        <button
-                          onClick={() => handleMoveField(index, 1)}
-                          disabled={index === fields.length - 1 || reordering}
-                          aria-label={`Move ${f.label} down`}
-                          title="Move down"
-                          style={{
-                            background: "none",
-                            border: "none",
-                            padding: "0.2rem",
-                            color: index === fields.length - 1 ? "var(--border-color)" : "var(--text-secondary)",
-                            cursor: index === fields.length - 1 ? "default" : "pointer",
-                          }}
-                        >
-                          <ArrowDown size={14} />
-                        </button>
-                      </td>
-                      <td style={{ ...td, fontWeight: 500 }}>{f.label}</td>
-                      <td style={td}>{FIELD_TYPE_LABELS[f.fieldType] || f.fieldType}</td>
-                      <td title={`cf_${f.fieldKey}`} style={{ ...td, fontFamily: "monospace", color: "var(--text-secondary)", whiteSpace: "normal", wordBreak: "break-word", overflowWrap: "anywhere", minWidth: "170px" }}>{`cf_${f.fieldKey}`}</td>
-                      <td style={{ ...td, color: "var(--text-secondary)" }}>
-                        {FIELD_TYPES_WITH_OPTIONS.has(f.fieldType) ? (Array.isArray(f.options) ? f.options.join(", ") : "") : ""}
-                      </td>
-                      <td style={td}>
-                        <input
-                          type="checkbox"
-                          checked={Boolean(f.isRequired)}
-                          onChange={() => handleToggleRequired(f)}
-                          style={{ cursor: "pointer" }}
-                        />
-                      </td>
-                      <td style={{ ...td, textAlign: "right" }}>
-                        <div style={{ display: "inline-flex", gap: "0.4rem" }}>
-                          <button
-                            onClick={() => openEditModal(f)}
-                            aria-label={`Edit ${f.label}`}
-                            title="Edit field"
-                            style={iconBtn}
-                          >
-                            <Pencil size={14} />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(f)}
-                            disabled={deletingId === f.id}
-                            aria-label={`Delete ${f.label}`}
-                            title="Delete field"
-                            style={{ ...iconBtn, color: "var(--danger-color, #ef4444)" }}
-                          >
-                            {deletingId === f.id ? <Loader size={14} className="spin" /> : <Trash2 size={14} />}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div style={{ background: "var(--bg-color)" }}>
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                  <table className="stable-table" style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", tableLayout: "fixed" }}>
+                    <thead>
+                      <tr style={{ background: "var(--subtle-bg)", display: "table", width: "100%", tableLayout: "fixed" }}>
+                        <th style={{ ...th, width: "88px" }}>Order</th>
+                        <th style={th}>Label</th>
+                        <th style={th}>Type</th>
+                        <th style={th}>Key</th>
+                        <th style={th}>Options</th>
+                        <th style={th}>Required</th>
+                        <th style={{ ...th, textAlign: "right" }}></th>
+                      </tr>
+                    </thead>
+                    <SortableContext items={fields.map((field) => String(field.id))} strategy={verticalListSortingStrategy}>
+                      <tbody style={{ display: "block", maxHeight: "clamp(280px, calc(100vh - 430px), 720px)", overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" }}>
+                        {fields.map((field, index) => (
+                          <SortableLeadFieldRow
+                            key={field.id}
+                            field={field}
+                            index={index}
+                            total={fields.length}
+                            reordering={reordering}
+                            onMove={handleMoveField}
+                            onEdit={openEditModal}
+                            onDelete={handleDelete}
+                            onToggleRequired={handleToggleRequired}
+                            deletingId={deletingId}
+                          />
+                        ))}
+                      </tbody>
+                    </SortableContext>
+                  </table>
+                </DndContext>
+              </div>
             </TopScrollSync>
           </div>
         )}
@@ -555,7 +661,7 @@ export default function LeadFields() {
 
             <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.25rem" }}>
               <button onClick={handleCreate} disabled={savingNew} className="btn-primary">
-                {savingNew ? "Saving..." : "Save Field"}
+                {savingNew ? "Saving…" : "Save Field"}
               </button>
               <button onClick={resetCreateForm} disabled={savingNew} className="btn-secondary">
                 Cancel
@@ -564,141 +670,11 @@ export default function LeadFields() {
           </div>
         )}
       </div>
-
-      <Modal
-        open={Boolean(editingField)}
-        title={editingField ? `Edit ${editingField.label}` : "Edit field"}
-        onClose={closeEditModal}
-        size="large"
-        footer={(
-          <>
-            <button onClick={closeEditModal} disabled={savingEdit} className="btn-secondary">
-              Cancel
-            </button>
-            <button onClick={handleSaveEdit} disabled={savingEdit} className="btn-primary">
-              {savingEdit ? "Saving..." : "Save Changes"}
-            </button>
-          </>
-        )}
-      >
-        {editingField && (
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.5fr) minmax(260px, 1fr)", gap: "1.25rem" }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <FormField label="Label" htmlFor="lf-edit-label">
-                <input
-                  id="lf-edit-label"
-                  type="text"
-                  className="input-field"
-                  value={editLabel}
-                  onChange={(e) => setEditLabel(e.target.value)}
-                  maxLength={80}
-                  autoFocus
-                />
-              </FormField>
-
-              <FormField label="Field Type" htmlFor="lf-edit-type" hint="Field type cannot be changed after creation.">
-                <input
-                  id="lf-edit-type"
-                  type="text"
-                  className="input-field"
-                  value={FIELD_TYPE_LABELS[editingField.fieldType] || editingField.fieldType}
-                  disabled
-                />
-              </FormField>
-
-              <FormField label="Stored Key" htmlFor="lf-edit-key" hint="This is the custom-field key used across lead records and table columns.">
-                <input
-                  id="lf-edit-key"
-                  type="text"
-                  className="input-field"
-                  value={`cf_${editingField.fieldKey}`}
-                  disabled
-                />
-              </FormField>
-
-              {FIELD_TYPES_WITH_OPTIONS.has(editingField.fieldType) && (
-                <FormField label="Options" hint="Comma-separated, e.g. Google, Referral, Event" htmlFor="lf-edit-options">
-                  <textarea
-                    id="lf-edit-options"
-                    className="input-field"
-                    value={editOptionsText}
-                    onChange={(e) => setEditOptionsText(e.target.value)}
-                    placeholder="Google, Referral, Event"
-                    rows={4}
-                  />
-                </FormField>
-              )}
-
-              <FormField label="Tooltip" hint="Shown near the input to explain what this field is for" htmlFor="lf-edit-tooltip">
-                <input
-                  id="lf-edit-tooltip"
-                  type="text"
-                  className="input-field"
-                  value={editTooltip}
-                  onChange={(e) => setEditTooltip(e.target.value)}
-                  maxLength={255}
-                />
-              </FormField>
-
-              <FormField label="Placeholder" hint="Hint text shown inside the input when empty" htmlFor="lf-edit-placeholder">
-                <input
-                  id="lf-edit-placeholder"
-                  type="text"
-                  className="input-field"
-                  value={editPlaceholder}
-                  onChange={(e) => setEditPlaceholder(e.target.value)}
-                  maxLength={255}
-                />
-              </FormField>
-
-              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem", color: "var(--text-primary)" }}>
-                <input
-                  type="checkbox"
-                  checked={editRequired}
-                  onChange={(e) => setEditRequired(e.target.checked)}
-                  style={{ cursor: "pointer" }}
-                />
-                Required on lead create and edit forms
-              </label>
-            </div>
-
-            <div
-              style={{
-                border: "1px solid var(--border-color)",
-                borderRadius: 12,
-                padding: "1rem",
-                background: "var(--subtle-bg-2, rgba(255,255,255,0.02))",
-                alignSelf: "start",
-              }}
-            >
-              <div style={{ marginBottom: "0.75rem" }}>
-                <div style={{ fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-secondary)", marginBottom: "0.35rem" }}>
-                  Preview
-                </div>
-                <div style={{ fontSize: "0.95rem", fontWeight: 600 }}>
-                  {editLabel.trim() || "Field label"}
-                  {editRequired ? " *" : ""}
-                </div>
-                {editTooltip.trim() ? (
-                  <div style={{ marginTop: "0.35rem", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-                    {editTooltip.trim()}
-                  </div>
-                ) : null}
-              </div>
-              {renderFieldPreview(
-                {
-                  ...editingField,
-                  placeholder: editPlaceholder.trim(),
-                },
-                editOptionsText,
-              )}
-            </div>
-          </div>
-        )}
-      </Modal>
     </div>
   );
 }
+
+
 
 
 

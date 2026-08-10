@@ -994,7 +994,11 @@ describe('G048 — list filtering (isLatest + archivedAt)', () => {
     expect(res.status).toBe(200);
     const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
     expect(where.isLatest).toBe(true);
-    expect(where.archivedAt).toBeUndefined();
+    expect(where.AND).toHaveLength(1);
+    expect(where.AND[0].OR).toEqual([
+      { archivedAt: { not: null } },
+      { archivedAt: null, isActive: true },
+    ]);
   });
 
   test('?includeAllVersions=true drops isLatest filter', async () => {
@@ -1016,7 +1020,11 @@ describe('G048 — list filtering (isLatest + archivedAt)', () => {
     expect(res.status).toBe(200);
     const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
     expect(where.isLatest).toBeUndefined();
-    expect(where.archivedAt).toBeUndefined();
+    expect(where.AND).toHaveLength(1);
+    expect(where.AND[0].OR).toEqual([
+      { archivedAt: { not: null } },
+      { archivedAt: null, isActive: true },
+    ]);
   });
 });
 
@@ -1270,7 +1278,11 @@ describe('G058 — GET /api/travel/itinerary-templates/analytics.csv', () => {
 
     const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
     expect(where.isLatest).toBe(true);
-    expect(where.archivedAt).toBeUndefined();
+    expect(where.AND).toHaveLength(1);
+    expect(where.AND[0].OR).toEqual([
+      { archivedAt: { not: null } },
+      { archivedAt: null, isActive: true },
+    ]);
   });
 
   test('MANAGER subBrandAccess=[] → empty CSV (header only, no 403)', async () => {

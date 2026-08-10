@@ -53,7 +53,7 @@ describe('lazyWithRetry', () => {
 
   it('does NOT retry non-chunk errors (real bug should fail fast)', async () => {
     const importFn = vi.fn(() => Promise.reject(new TypeError('undefined is not a function')));
-    const Lazy = lazyWithRetry(importFn);
+    const _Lazy = lazyWithRetry(importFn);
 
     // React's lazy throws into the nearest error boundary; we can't render
     // it directly without one, so test the inner promise via importFn.

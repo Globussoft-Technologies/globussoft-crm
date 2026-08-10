@@ -42,6 +42,17 @@ function assertValidScope(s) {
   }
 }
 
+function parseListLimit(input, fallback = 200) {
+  const value = parseInt(input, 10);
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.min(value, 500);
+}
+
+function parseListOffset(input) {
+  const value = parseInt(input, 10);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 // ─── Seasons ─────────────────────────────────────────────────────────
 
 router.get("/seasons", verifyToken, requireTravelTenant, async (req, res) => {
@@ -54,9 +65,14 @@ router.get("/seasons", verifyToken, requireTravelTenant, async (req, res) => {
     const rows = await prisma.travelSeasonCalendar.findMany({
       where,
       orderBy: [{ subBrand: "asc" }, { startDate: "asc" }],
-      take: 200,
+      take: parseListLimit(req.query.limit),
+      skip: parseListOffset(req.query.offset),
     });
-    res.json({ seasons: rows });
+    const total =
+      typeof prisma.travelSeasonCalendar.count === "function"
+        ? await prisma.travelSeasonCalendar.count({ where })
+        : rows.length;
+    res.json({ seasons: rows, total });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-pricing] seasons list error:", e.message);
@@ -230,9 +246,14 @@ router.get("/markup-rules", verifyToken, requireTravelTenant, async (req, res) =
     const rows = await prisma.travelMarkupRule.findMany({
       where,
       orderBy: [{ subBrand: "asc" }, { priority: "asc" }],
-      take: 200,
+      take: parseListLimit(req.query.limit),
+      skip: parseListOffset(req.query.offset),
     });
-    res.json({ rules: rows });
+    const total =
+      typeof prisma.travelMarkupRule.count === "function"
+        ? await prisma.travelMarkupRule.count({ where })
+        : rows.length;
+    res.json({ rules: rows, total });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-pricing] rules list error:", e.message);

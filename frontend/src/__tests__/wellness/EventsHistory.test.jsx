@@ -110,6 +110,41 @@ describe('EventsHistory', () => {
     expect(screen.getByText('0 QRs')).toBeInTheDocument();
   });
 
+  it('loads more QRs when an expanded event list is scrolled', async () => {
+    mockEvents = [
+      {
+        id: 1,
+        name: 'Large Camp',
+        createdAt: new Date().toISOString(),
+        qrs: Array.from({ length: 12 }, (_, index) => ({
+          id: index + 1,
+          name: `History QR ${index + 1}`,
+          text: `https://example.com/history-${index + 1}`,
+          size: 256,
+          fgColor: '#000000',
+          bgColor: '#ffffff',
+          errorLevel: 'M',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })),
+      },
+    ];
+
+    renderPage();
+    expect(await screen.findByText('History QR 10')).toBeInTheDocument();
+    expect(screen.queryByText('History QR 11')).not.toBeInTheDocument();
+
+    const list = screen.getByTestId('event-qr-list-1');
+    Object.defineProperty(list, 'scrollTop', { value: 1000, configurable: true });
+    Object.defineProperty(list, 'clientHeight', { value: 300, configurable: true });
+    Object.defineProperty(list, 'scrollHeight', { value: 1000, configurable: true });
+    fireEvent.scroll(list);
+
+    await waitFor(() => {
+      expect(screen.getByText('History QR 11')).toBeInTheDocument();
+    });
+  });
+
   it('expands and collapses an event to show its QRs', async () => {
     mockEvents = [
       {

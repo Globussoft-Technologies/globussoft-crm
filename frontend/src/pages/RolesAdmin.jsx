@@ -20,6 +20,13 @@ import { ROLE_KEY_DESCRIPTION, validateRoleKey } from '../utils/roleKey';
 // RoleHistoryDialog ensures every role's history UI — current and
 // future — renders identically here AND on the Settings page.
 import RoleHistoryDialog from '../components/RoleHistoryDialog';
+import { SUB_BRAND_LABEL, subBrandShortLabel } from '../utils/travelSubBrand';
+import { useActiveSubBrand } from '../utils/subBrand';
+
+const DATA_SCOPE_OPTIONS = ['OWN', 'TEAM', 'ALL'];
+const SUB_BRAND_OPTIONS = Object.entries(SUB_BRAND_LABEL);
+
+const ROLES_PAGE_SIZE = 12;
 
 // Admin UI for the RBAC role + permission system. Mirrors the endpoints
 // under /api/roles (see backend/routes/roles.js). Tenant scoping is enforced
@@ -454,10 +461,14 @@ export default function RolesAdmin() {
   // instead of leaking "Patient + customer …" from wellness.
   const { tenant } = useContext(AuthContext) || {};
   const tenantVertical = (tenant && tenant.vertical) || 'generic';
+  const isTravel = tenantVertical === 'travel';
+  const { activeSubBrand } = useActiveSubBrand();
+  const activeSubBrandLabel = activeSubBrand ? subBrandShortLabel(activeSubBrand) : null;
 
   const [roles, setRoles] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [visibleRoleCount, setVisibleRoleCount] = useState(ROLES_PAGE_SIZE);
   const [permissionModules, setPermissionModules] = useState(
     PERMISSION_MODULES_FALLBACK,
   );
@@ -470,6 +481,14 @@ export default function RolesAdmin() {
   const [usersRole, setUsersRole] = useState(null);
   const [editRole, setEditRole] = useState(null);
   const [widgetsRole, setWidgetsRole] = useState(null);
+
+  const visibleRoles = useMemo(() => {
+    if (!isTravel || !activeSubBrand) return roles;
+    return roles.filter((role) => {
+      const scope = Array.isArray(role?.subBrandScope) ? role.subBrandScope : [];
+      return scope.length === 0 || scope.includes(activeSubBrand);
+    });
+  }, [roles, isTravel, activeSubBrand]);
 
   const notify = useNotify();
 
@@ -524,6 +543,13 @@ export default function RolesAdmin() {
   useEffect(() => {
     if (!permLoading && canRead) loadRoles();
   }, [permLoading, canRead, loadRoles]);
+  useEffect(() => setVisibleRoleCount(ROLES_PAGE_SIZE), [roles.length]);
+  const handleRolesTableScroll = (event) => {
+    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 80) {
+      setVisibleRoleCount((count) => Math.min(count + ROLES_PAGE_SIZE, roles.length));
+    }
+  };
 
   if (permLoading) {
     return (
@@ -588,6 +614,11 @@ export default function RolesAdmin() {
             Manage RBAC roles and their permission grants for this tenant.
             System roles cannot be modified.
           </p>
+          {isTravel && activeSubBrandLabel && (
+            <div style={{ marginTop: '0.45rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              Filtering to roles available in <strong>{activeSubBrandLabel}</strong>.
+            </div>
+          )}
         </div>
         {canManage && (
           <button
@@ -620,13 +651,17 @@ export default function RolesAdmin() {
         style={{
           border: '1px solid var(--border-color)',
           borderRadius: 12,
+          background: 'var(--bg-color)',
+          maxHeight: 'calc(100vh - 17rem)',
           overflow: 'auto',
         }}
+        onScroll={handleRolesTableScroll}
       >
         <table
           style={{
             width: '100%',
-            borderCollapse: 'collapse',
+            borderCollapse: 'separate',
+            borderSpacing: 0,
             fontSize: '0.9rem',
             // Bumped from 760 → 1100 after adding the Landing path column +
             // 3-button Actions cell. Below 1100 the parent's overflow:auto
@@ -661,7 +696,7 @@ export default function RolesAdmin() {
                 </Td>
               </tr>
             )}
-            {!isLoading && roles.length === 0 && (
+            {!isLoading && visibleRoles.length === 0 && (
               <tr>
                 <Td colSpan={8} center>
                   No roles yet.
@@ -669,7 +704,7 @@ export default function RolesAdmin() {
               </tr>
             )}
             {!isLoading &&
-              roles.map((r) => (
+              visibleRoles.map((r) => (
                 <tr
                   key={r.id}
                   style={{ borderTop: '1px solid var(--border-color)' }}
@@ -697,6 +732,7 @@ export default function RolesAdmin() {
                     ) : (
                       <Badge color="blue">Custom</Badge>
                     )}
+
                   </Td>
                   <Td>
                     {r.landingPath ? (
@@ -816,6 +852,8 @@ export default function RolesAdmin() {
 
       {createOpen && (
         <CreateRoleModal
+          isTravel={isTravel}
+          activeSubBrand={activeSubBrand}
           onClose={() => setCreateOpen(false)}
           onSuccess={async () => {
             setCreateOpen(false);
@@ -848,6 +886,8 @@ export default function RolesAdmin() {
       {editRole && (
         <EditRoleModal
           role={editRole}
+          isTravel={isTravel}
+          activeSubBrand={activeSubBrand}
           onClose={() => setEditRole(null)}
           onSuccess={async () => {
             setEditRole(null);
@@ -868,13 +908,15 @@ export default function RolesAdmin() {
 
 // ───────────────────────── Create role modal ─────────────────────────
 
-function CreateRoleModal({ onClose, onSuccess }) {
+function CreateRoleModal({ isTravel, activeSubBrand, onClose, onSuccess }) {
   const [form, setForm] = useState({
     name: '',
     key: '',
     description: '',
     userType: 'STAFF',
     landingPath: '',
+    dataScope: 'ALL',
+    subBrandScope: isTravel && activeSubBrand ? [activeSubBrand] : [],
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -917,6 +959,8 @@ function CreateRoleModal({ onClose, onSuccess }) {
           description: form.description.trim() || undefined,
           userType: form.userType,
           landingPath: form.landingPath.trim() || null,
+          dataScope: form.dataScope,
+          subBrandScope: form.subBrandScope,
         }),
       });
       notify.success?.(`Role "${form.name.trim()}" created`);
@@ -981,6 +1025,51 @@ function CreateRoleModal({ onClose, onSuccess }) {
             <option value="CUSTOMER">Customer</option>
           </select>
         </Field>
+        <Field label="Data scope" help="How much data holders of this role can see by default.">
+          <select
+            className="input-field"
+            aria-label="Data scope"
+            value={form.dataScope}
+            onChange={(e) => setForm({ ...form, dataScope: e.target.value })}
+            disabled={isLoading}
+          >
+            {DATA_SCOPE_OPTIONS.map((scope) => (
+              <option key={scope} value={scope}>
+                {scope === 'OWN' ? 'Own data only' : scope === 'TEAM' ? 'Team data' : 'All data'}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {isTravel && (
+          <Field label="Travel sub-brand scope" help="Leave empty to allow all travel sub-brands.">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginTop: '0.25rem' }}>
+              {SUB_BRAND_OPTIONS.map(([value, label]) => {
+                const active = form.subBrandScope.includes(value);
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    className="btn-secondary"
+                    disabled={isLoading}
+                    aria-pressed={active}
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      subBrandScope: active
+                        ? prev.subBrandScope.filter((item) => item !== value)
+                        : [...prev.subBrandScope, value],
+                    }))}
+                    style={{
+                      borderColor: active ? 'var(--accent-color)' : 'var(--border-color)',
+                      background: active ? 'color-mix(in srgb, var(--accent-color) 14%, transparent)' : 'transparent',
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
+        )}
         <LandingPathField
           value={form.landingPath}
           onChange={(value) => setForm({ ...form, landingPath: value })}
@@ -1005,11 +1094,13 @@ function CreateRoleModal({ onClose, onSuccess }) {
 
 // ───────────────────────── Edit role modal ───────────────────────────
 
-function EditRoleModal({ role, onClose, onSuccess }) {
+function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
   const [form, setForm] = useState({
     name: role.name || '',
     description: role.description || '',
     landingPath: role.landingPath || '',
+    dataScope: role.dataScope || 'ALL',
+    subBrandScope: Array.isArray(role.subBrandScope) ? role.subBrandScope : [],
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -1034,6 +1125,8 @@ function EditRoleModal({ role, onClose, onSuccess }) {
           name: form.name.trim(),
           description: form.description.trim() || null,
           landingPath: form.landingPath.trim() || null,
+          dataScope: form.dataScope,
+          subBrandScope: form.subBrandScope,
         }),
       });
       notify.success?.(`Role "${form.name.trim()}" updated`);
@@ -1083,6 +1176,51 @@ function EditRoleModal({ role, onClose, onSuccess }) {
             style={{ resize: 'vertical', minHeight: 60 }}
           />
         </Field>
+        <Field label="Data scope" help="Default visibility for users assigned to this role.">
+          <select
+            className="input-field"
+            aria-label="Data scope"
+            value={form.dataScope}
+            onChange={(e) => setForm({ ...form, dataScope: e.target.value })}
+            disabled={isLoading}
+          >
+            {DATA_SCOPE_OPTIONS.map((scope) => (
+              <option key={scope} value={scope}>
+                {scope === 'OWN' ? 'Own data only' : scope === 'TEAM' ? 'Team data' : 'All data'}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {isTravel && (
+          <Field label="Travel sub-brand scope" help="Leave empty to allow all travel sub-brands.">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginTop: '0.25rem' }}>
+              {SUB_BRAND_OPTIONS.map(([value, label]) => {
+                const active = form.subBrandScope.includes(value);
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    className="btn-secondary"
+                    disabled={isLoading}
+                    aria-pressed={active}
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      subBrandScope: active
+                        ? prev.subBrandScope.filter((item) => item !== value)
+                        : [...prev.subBrandScope, value],
+                    }))}
+                    style={{
+                      borderColor: active ? 'var(--accent-color)' : 'var(--border-color)',
+                      background: active ? 'color-mix(in srgb, var(--accent-color) 14%, transparent)' : 'transparent',
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
+        )}
         <LandingPathField
           value={form.landingPath}
           onChange={(value) => setForm({ ...form, landingPath: value })}
@@ -2780,6 +2918,11 @@ function Th({ children }) {
         textTransform: 'uppercase',
         letterSpacing: '0.04em',
         color: 'var(--text-secondary)',
+        position: 'sticky',
+        top: 0,
+        zIndex: 5,
+        background: 'var(--bg-color)',
+        boxShadow: '0 1px 0 var(--border-color)',
         // Headers should never wrap — at narrow viewports the parent's
         // overflow:auto gives a horizontal scrollbar instead of breaking
         // a header like "LANDING PATH" into 2 lines.

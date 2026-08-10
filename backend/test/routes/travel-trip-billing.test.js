@@ -1,4 +1,4 @@
-// @ts-check
+﻿// @ts-check
 /**
  * backend/routes/travel_trip_billing.js — TMC trip billing surface contract pin.
  *
@@ -83,6 +83,7 @@ prisma.tripInstalmentPayment = {
   findMany: vi.fn(),
   findFirst: vi.fn(),
   create: vi.fn(),
+  createMany: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
 };
@@ -145,6 +146,7 @@ beforeEach(() => {
   prisma.tripInstalmentPayment.findMany.mockReset();
   prisma.tripInstalmentPayment.findFirst.mockReset();
   prisma.tripInstalmentPayment.create.mockReset();
+  prisma.tripInstalmentPayment.createMany.mockReset();
   prisma.tripInstalmentPayment.update.mockReset();
   prisma.tripInstalmentPayment.delete.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
@@ -512,6 +514,47 @@ describe('GET /api/travel/trips/:tripId/payment-plan', () => {
 });
 
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// POST /api/travel/trips/:tripId/instalments/from-plan — materialise
+// -----------------------------------------------------------------------------
+
+describe('POST /api/travel/trips/:tripId/instalments/from-plan', () => {
+  test('materialises missing pending rows for every participant', async () => {
+    prisma.tripPaymentPlan.findUnique.mockResolvedValue({
+      id: 9,
+      tripId: 100,
+      instalmentsJson: JSON.stringify([
+        { dueDate: '2026-09-01', amount: 1200 },
+        { dueDate: '2026-10-01', amount: 800 },
+      ]),
+    });
+    prisma.tripParticipant.findMany.mockResolvedValue([{ id: 11 }, { id: 12 }]);
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([
+      { participantId: 11, instalmentIndex: 0 },
+    ]);
+    prisma.tripInstalmentPayment.createMany.mockResolvedValue({ count: 3 });
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/instalments/from-plan')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      materialised: 3,
+      skipped: 1,
+      participants: 2,
+      instalmentsPerParticipant: 2,
+    });
+    expect(prisma.tripInstalmentPayment.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({ tripId: 100, participantId: 11, instalmentIndex: 1, status: 'pending' }),
+          expect.objectContaining({ tripId: 100, participantId: 12, instalmentIndex: 0, status: 'pending' }),
+        ]),
+      }),
+    );
+  });
+});
 // PUT /api/travel/trips/:tripId/payment-plan — upsert
 // -----------------------------------------------------------------------------
 
@@ -1003,3 +1046,6 @@ describe('auth + vertical guard', () => {
     expect(prisma.tmcTrip.findFirst).not.toHaveBeenCalled();
   });
 });
+
+
+

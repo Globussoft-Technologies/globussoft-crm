@@ -280,6 +280,9 @@ describe('<CancellationPolicies /> — page chrome + filter bar', () => {
     expect(
       screen.getByRole('button', { name: /New Policy/i }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Policy only/i }),
+    ).toBeInTheDocument();
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(
         ([u]) =>
@@ -296,6 +299,7 @@ describe('<CancellationPolicies /> — page chrome + filter bar', () => {
       expect(fetchApiMock).toHaveBeenCalled();
     });
     expect(screen.queryByRole('button', { name: /New Policy/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Policy only/i })).toBeNull();
     await screen.findByText('TMC Default');
     expect(
       screen.queryByRole('columnheader', { name: /Actions/i }),
@@ -474,6 +478,35 @@ describe('<CancellationPolicies /> — new-policy modal + create POST', () => {
     ).toBeInTheDocument();
   });
 
+  it('clicking "Policy only" opens a tenant-wide draft with no trip scope', async () => {
+    renderPage();
+    await screen.findByText('TMC Default');
+    fireEvent.click(screen.getByRole('button', { name: /Policy only/i }));
+    expect(screen.getByLabelText(/^Policy name$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Sub-brand$/i).value).toBe('');
+    const tripSelect = screen.getByLabelText(/^Trip$/i);
+    expect(tripSelect).toBeDisabled();
+    expect(
+      within(tripSelect).getByRole('option', { name: /Select a sub-brand first/i }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^Policy name$/i), {
+      target: { value: 'Tenant Wide Policy' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          u === '/api/travel/cancellation-policies' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.name).toBe('Tenant Wide Policy');
+      expect(body.subBrand).toBeNull();
+      expect(body.itineraryId).toBeNull();
+    });
+  });
   it('tier preview updates live inside the form modal', async () => {
     renderPage();
     await screen.findByText('TMC Default');

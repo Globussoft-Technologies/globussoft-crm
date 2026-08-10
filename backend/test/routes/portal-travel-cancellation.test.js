@@ -95,3 +95,38 @@ describe('request-cancellation — departure guard', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('request-cancellation — lifecycle guard (no re-request once resolved)', () => {
+  test('cancellationStatus=requested → 409 ALREADY_REQUESTED, no write', async () => {
+    prisma.itinerary.findFirst.mockResolvedValue(itin({ cancellationStatus: 'requested' }));
+    const res = await request(makeApp())
+      .post('/api/portal/travel/itineraries/9/request-cancellation')
+      .set('Authorization', portalBearer())
+      .send({ reason: 'changed plans again' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ALREADY_REQUESTED');
+    expect(prisma.itinerary.update).not.toHaveBeenCalled();
+  });
+
+  test('cancellationStatus=cancelled → 409 ALREADY_REQUESTED, no write', async () => {
+    prisma.itinerary.findFirst.mockResolvedValue(itin({ cancellationStatus: 'cancelled' }));
+    const res = await request(makeApp())
+      .post('/api/portal/travel/itineraries/9/request-cancellation')
+      .set('Authorization', portalBearer())
+      .send({ reason: 'still want out' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ALREADY_REQUESTED');
+    expect(prisma.itinerary.update).not.toHaveBeenCalled();
+  });
+
+  test('cancellationStatus=refunded → 409 ALREADY_REFUNDED, no write', async () => {
+    prisma.itinerary.findFirst.mockResolvedValue(itin({ cancellationStatus: 'refunded' }));
+    const res = await request(makeApp())
+      .post('/api/portal/travel/itineraries/9/request-cancellation')
+      .set('Authorization', portalBearer())
+      .send({ reason: 'want to cancel again' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ALREADY_REFUNDED');
+    expect(prisma.itinerary.update).not.toHaveBeenCalled();
+  });
+});

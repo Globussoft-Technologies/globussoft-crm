@@ -22,6 +22,7 @@ import TrialBanner from "./TrialBanner";
 // user cannot dismiss it until they pay (or sign out).
 import SubscriptionGate from "./SubscriptionGate";
 import { AuthContext, ThemeContext } from "../App";
+import { useNotify } from "../utils/notify";
 import { fetchApi } from "../utils/api";
 import { setupPush } from "../utils/pushSetup";
 
@@ -145,6 +146,7 @@ const Layout = () => {
   // in the app, addressing the QA observation that the only theme control
   // was buried in /settings.
   const { theme, toggleTheme } = useContext(ThemeContext) || {};
+  const notify = useNotify();
   const navigate = useNavigate();
   const location = useLocation();
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
@@ -237,6 +239,16 @@ const Layout = () => {
   }, [user]);
 
   const handleLogout = async () => {
+    const confirmed = await notify.confirm({
+      title: "Sign out?",
+      message: "Are you sure you want to sign out of your account?",
+      confirmText: "Sign out",
+      cancelText: "Cancel",
+      destructive: true,
+    });
+
+    if (!confirmed) return;
+
     // #528 (CRIT-03 fix): revoke the JWT SERVER-SIDE before clearing local
     // state. POST /api/auth/logout reads req.user.jti and adds it to the
     // RevokedToken denylist (verifyToken middleware checks it on every

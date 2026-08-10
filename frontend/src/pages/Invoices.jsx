@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useContext } from "react";
+import { useState, useEffect, useMemo, useContext, useCallback } from "react";
 import {
   Receipt,
   Plus,
@@ -51,6 +51,8 @@ import { formatDate } from "../utils/date";
 const formatCurrency = (v) =>
   formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
+const INVOICE_TABLE_MIN_WIDTH = 940;
+
 export default function Invoices() {
   const notify = useNotify();
   // Travel vertical only — invoices get tagged + filtered by sub-brand. For
@@ -66,6 +68,7 @@ export default function Invoices() {
   const [deals, setDeals] = useState([]);
   const [linkModal, setLinkModal] = useState(null); // { inv, url } | null
   const [linkCopied, setLinkCopied] = useState(false);
+  const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   const [newInvoice, setNewInvoice] = useState({
     invoiceNum: "",
     contactId: "",
@@ -82,24 +85,10 @@ export default function Invoices() {
   const [recurFreq, setRecurFreq] = useState("monthly");
   const [statusFilter, setStatusFilter] = useState("ALL");
 
+
   // Re-fetch when the travel sub-brand filter changes (no-op for other
   // verticals — activeSubBrand stays undefined there).
-  useEffect(() => {
-    loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSubBrand]);
-
-  // Default the create-form brand to the currently-active sub-brand (travel).
-  useEffect(() => {
-    if (isTravel && activeSubBrand) {
-      setNewInvoice((p) =>
-        p.subBrand ? p : { ...p, subBrand: activeSubBrand },
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTravel, activeSubBrand]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const qs =
         isTravel && activeSubBrand
@@ -113,10 +102,23 @@ export default function Invoices() {
       setInvoices(Array.isArray(invs) ? invs : []);
       setContacts(Array.isArray(c) ? c : []);
       setDeals(Array.isArray(d) ? d : []);
-    } catch (err) {
+    } catch (_err) {
       // Network or auth error handled by fetchApi
     }
-  };
+  }, [activeSubBrand, isTravel]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Default the create-form brand to the currently-active sub-brand (travel).
+  useEffect(() => {
+    if (isTravel && activeSubBrand) {
+      setNewInvoice((p) =>
+        p.subBrand ? p : { ...p, subBrand: activeSubBrand },
+      );
+    }
+  }, [isTravel, activeSubBrand]);
 
   const stats = useMemo(() => {
     const now = new Date();
@@ -148,6 +150,9 @@ export default function Invoices() {
     if (statusFilter === "ALL") return invoices;
     return invoices.filter((inv) => inv.status === statusFilter);
   }, [invoices, statusFilter]);
+
+  const visibleInvoices = filteredInvoices;
+
 
   const nextInvoiceNum = useMemo(() => {
     if (invoices.length === 0) return "INV-001";
@@ -194,7 +199,7 @@ export default function Invoices() {
         subBrand: isTravel ? activeSubBrand || "" : "",
       });
       loadData();
-    } catch (err) {
+    } catch (_err) {
       notify.error("Failed to create invoice");
     }
   };
@@ -207,7 +212,7 @@ export default function Invoices() {
       // refetch keeps the Outstanding/Paid totals consistent with what the
       // user sees in the table.
       await loadData();
-    } catch (err) {
+    } catch (_err) {
       notify.error("Failed to mark invoice as paid");
     }
   };
@@ -260,7 +265,7 @@ export default function Invoices() {
     try {
       await fetchApi(`/api/billing/${inv.id}/void`, { method: "PUT" });
       loadData();
-    } catch (err) {
+    } catch (_err) {
       notify.error("Failed to void invoice");
     }
   };
@@ -307,6 +312,8 @@ export default function Invoices() {
       <div
         style={{
           display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
           gap: "0.75rem",
           marginBottom: "1.75rem",
           flexWrap: "wrap",
@@ -316,7 +323,7 @@ export default function Invoices() {
           style={{
             padding: "0.4rem 1rem",
             borderRadius: "999px",
-            fontSize: "0.8rem",
+            fontSize: "0.75rem",
             fontWeight: "600",
             background: "rgba(245,158,11,0.1)",
             color: "#f59e0b",
@@ -333,7 +340,7 @@ export default function Invoices() {
           style={{
             padding: "0.4rem 1rem",
             borderRadius: "999px",
-            fontSize: "0.8rem",
+            fontSize: "0.75rem",
             fontWeight: "600",
             background: "rgba(16,185,129,0.1)",
             color: "#10b981",
@@ -351,7 +358,7 @@ export default function Invoices() {
             style={{
               padding: "0.4rem 1rem",
               borderRadius: "999px",
-              fontSize: "0.8rem",
+              fontSize: "0.75rem",
               fontWeight: "600",
               background: "rgba(239,68,68,0.1)",
               color: "#ef4444",
@@ -368,7 +375,7 @@ export default function Invoices() {
           style={{
             padding: "0.4rem 1rem",
             borderRadius: "999px",
-            fontSize: "0.8rem",
+            fontSize: "0.75rem",
             background: "var(--subtle-bg-4)",
             color: "var(--text-secondary)",
             border: "1px solid var(--border-color)",
@@ -398,7 +405,7 @@ export default function Invoices() {
             <label
               htmlFor="invoice-subbrand-filter"
               style={{
-                fontSize: "0.8rem",
+                fontSize: "0.75rem",
                 color: "var(--text-secondary)",
                 fontWeight: 600,
               }}
@@ -416,7 +423,7 @@ export default function Invoices() {
                 background: "transparent",
                 border: "none",
                 color: "var(--text-primary)",
-                fontSize: "0.8rem",
+                fontSize: "0.75rem",
                 fontWeight: 600,
                 cursor: "pointer",
                 outline: "none",
@@ -464,7 +471,7 @@ export default function Invoices() {
           <label
             htmlFor="invoice-status-filter"
             style={{
-              fontSize: "0.8rem",
+              fontSize: "0.75rem",
               color: "var(--text-secondary)",
               fontWeight: 600,
             }}
@@ -481,7 +488,7 @@ export default function Invoices() {
               background: "transparent",
               border: "none",
               color: "var(--text-primary)",
-              fontSize: "0.8rem",
+              fontSize: "0.75rem",
               fontWeight: 600,
               cursor: "pointer",
               outline: "none",
@@ -538,100 +545,107 @@ export default function Invoices() {
             </option>
           </select>
         </div>
+
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => setIsCreateFormOpen(true)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.45rem",
+            padding: "0.65rem 1rem",
+            whiteSpace: "nowrap",
+          }}
+        >
+          <Plus size={16} /> Create Invoice
+        </button>
       </div>
 
-      {/* #481: two-column grid (Create | Ledger) collapses to a single column
-          below 768px so the form labels + helper text don't wrap word-by-word
-          and the ledger isn't squeezed to invisible-bar width. */}
-      <div className="invoices-grid">
-        {/* Create Invoice Panel */}
+      {isCreateFormOpen && (
         <div
-          className="card"
-          style={{ padding: "2rem", height: "fit-content" }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Create Invoice"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsCreateFormOpen(false);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            background: "var(--overlay-bg, rgba(0,0,0,0.6))",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            padding: "2rem 1rem",
+            overflowY: "auto",
+          }}
         >
-          <h3
+          <div
+            onClick={(e) => e.stopPropagation()}
             style={{
-              fontSize: "1.15rem",
-              fontWeight: "600",
-              marginBottom: "1.5rem",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
+              padding: "1.5rem",
+              width: "720px",
+              maxWidth: "100%",
+              height: "max-content",
+              minHeight: 0,
+              maxHeight: "none",
+              overflowY: "visible",
+              margin: "auto 0",
+              boxSizing: "border-box",
+              background: "var(--modal-bg, var(--bg-color))",
+              backgroundColor: "var(--modal-bg, var(--bg-color))",
+              borderRadius: "16px",
+              border: "1px solid var(--border-color)",
+              boxShadow: "0 25px 50px -12px rgba(0,0,0,0.28)",
             }}
           >
-            <Plus size={20} color="var(--accent-color)" /> Create Invoice
-          </h3>
-          <form
-            onSubmit={createInvoice}
-            style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}
-          >
-            {/* #314: Invoice # is server-generated and was being silently
-                overwritten on save, leaving the user confused about why their
-                custom number didn't stick. Make the field read-only and surface
-                the next number that will be assigned, so what the user sees
-                up-front matches what the backend writes. Custom numbering is an
-                admin-only feature and isn't part of this form. */}
-            <div>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: "0.875rem",
-                  marginBottom: "0.5rem",
-                  color: "var(--text-secondary)",
-                }}
-              >
-                Invoice #
-              </label>
-              <input
-                type="text"
-                className="input-field"
-                placeholder="Auto-generated on save"
-                value={nextInvoiceNum}
-                readOnly
-                aria-label="Invoice number (auto-generated on save)"
-                style={{ opacity: 0.75, cursor: "not-allowed" }}
-              />
-              <span
-                style={{
-                  fontSize: "0.7rem",
-                  color: "var(--text-secondary)",
-                  marginTop: "0.25rem",
-                  display: "block",
-                }}
-              >
-                Auto-generated on save
+            <h3
+              style={{
+                fontSize: "1.15rem",
+                fontWeight: "600",
+                marginBottom: "1rem",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "0.5rem",
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <Plus size={20} color="var(--accent-color)" /> Create Invoice
               </span>
-            </div>
-
-            <div>
-              <label
+              <button
+                type="button"
+                onClick={() => setIsCreateFormOpen(false)}
                 style={{
-                  display: "block",
-                  fontSize: "0.875rem",
-                  marginBottom: "0.5rem",
+                  background: "transparent",
+                  border: "1px solid var(--border-color)",
+                  cursor: "pointer",
                   color: "var(--text-secondary)",
+                  padding: "0.45rem",
+                  borderRadius: "6px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                 }}
+                aria-label="Close create invoice form"
               >
-                Contact
-              </label>
-              <select
-                className="input-field"
-                required
-                value={newInvoice.contactId}
-                onChange={(e) => handleFieldChange("contactId", e.target.value)}
-                style={{ background: "var(--input-bg)" }}
-                aria-label="Contact"
-              >
-                <option value="">-- Select Contact --</option>
-                {contacts.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.email})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {isTravel && (
+                <X size={18} />
+              </button>
+            </h3>
+            <form
+              onSubmit={createInvoice}
+              style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}
+            >
+              {/* #314: Invoice # is server-generated and was being silently
+                  overwritten on save, leaving the user confused about why their
+                  custom number didn't stick. Make the field read-only and surface
+                  the next number that will be assigned, so what the user sees
+                  up-front matches what the backend writes. Custom numbering is an
+                  admin-only feature and isn't part of this form. */}
               <div>
                 <label
                   style={{
@@ -641,57 +655,90 @@ export default function Invoices() {
                     color: "var(--text-secondary)",
                   }}
                 >
-                  Sub-brand
+                  Invoice #
+                </label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="Auto-generated on save"
+                  value={nextInvoiceNum}
+                  readOnly
+                  aria-label="Invoice number (auto-generated on save)"
+                  style={{ opacity: 0.75, cursor: "not-allowed" }}
+                />
+                <span
+                  style={{
+                    fontSize: "0.7rem",
+                    color: "var(--text-secondary)",
+                    marginTop: "0.25rem",
+                    display: "block",
+                  }}
+                >
+                  Auto-generated on save
+                </span>
+              </div>
+
+              <div>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: "0.875rem",
+                    marginBottom: "0.5rem",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  Contact
                 </label>
                 <select
                   className="input-field"
                   required
-                  value={newInvoice.subBrand}
-                  onChange={(e) =>
-                    handleFieldChange("subBrand", e.target.value)
-                  }
+                  value={newInvoice.contactId}
+                  onChange={(e) => handleFieldChange("contactId", e.target.value)}
                   style={{ background: "var(--input-bg)" }}
-                  aria-label="Sub-brand"
+                  aria-label="Contact"
                 >
-                  <option value="">-- Select Sub-brand --</option>
-                  {SUB_BRAND_IDS.map((id) => (
-                    <option key={id} value={id}>
-                      {subBrandShortLabel(id)}
+                  <option value="">-- Select Contact --</option>
+                  {contacts.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.email})
                     </option>
                   ))}
                 </select>
               </div>
-            )}
 
-            <div>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: "0.875rem",
-                  marginBottom: "0.5rem",
-                  color: "var(--text-secondary)",
-                }}
-              >
-                Deal (Optional)
-              </label>
-              <select
-                className="input-field"
-                value={newInvoice.dealId}
-                onChange={(e) => handleFieldChange("dealId", e.target.value)}
-                style={{ background: "var(--input-bg)" }}
-                aria-label="Associated deal"
-              >
-                <option value="">-- No Deal --</option>
-                {deals.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.title} - {formatCurrency(d.amount)}
-                  </option>
-                ))}
-              </select>
-            </div>
+              {isTravel && (
+                <div>
+                  <label
+                    style={{
+                      display: "block",
+                      fontSize: "0.875rem",
+                      marginBottom: "0.5rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Sub-brand
+                  </label>
+                  <select
+                    className="input-field"
+                    required
+                    value={newInvoice.subBrand}
+                    onChange={(e) =>
+                      handleFieldChange("subBrand", e.target.value)
+                    }
+                    style={{ background: "var(--input-bg)" }}
+                    aria-label="Sub-brand"
+                  >
+                    <option value="">-- Select Sub-brand --</option>
+                    {SUB_BRAND_IDS.map((id) => (
+                      <option key={id} value={id}>
+                        {subBrandShortLabel(id)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
-            <div style={{ display: "flex", gap: "1rem" }}>
-              <div style={{ flex: 1 }}>
+              <div>
                 <label
                   style={{
                     display: "block",
@@ -700,21 +747,71 @@ export default function Invoices() {
                     color: "var(--text-secondary)",
                   }}
                 >
-                  Amount ({currencySymbol()})
+                  Deal (Optional)
                 </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  required
+                <select
                   className="input-field"
-                  placeholder="0.00"
-                  value={newInvoice.amount}
-                  onChange={(e) => handleFieldChange("amount", e.target.value)}
-                  aria-label="Invoice amount"
-                />
+                  value={newInvoice.dealId}
+                  onChange={(e) => handleFieldChange("dealId", e.target.value)}
+                  style={{ background: "var(--input-bg)" }}
+                  aria-label="Associated deal"
+                >
+                  <option value="">-- No Deal --</option>
+                  {deals.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.title} - {formatCurrency(d.amount)}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <div style={{ flex: 1 }}>
+
+              <div style={{ display: "flex", gap: "1rem" }}>
+                <div style={{ flex: 1 }}>
+                  <label
+                    style={{
+                      display: "block",
+                      fontSize: "0.875rem",
+                      marginBottom: "0.5rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Amount ({currencySymbol()})
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    required
+                    className="input-field"
+                    placeholder="0.00"
+                    value={newInvoice.amount}
+                    onChange={(e) => handleFieldChange("amount", e.target.value)}
+                    aria-label="Invoice amount"
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label
+                    style={{
+                      display: "block",
+                      fontSize: "0.875rem",
+                      marginBottom: "0.5rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Due Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    className="input-field"
+                    value={newInvoice.dueDate}
+                    onChange={(e) => handleFieldChange("dueDate", e.target.value)}
+                    aria-label="Due date"
+                  />
+                </div>
+              </div>
+
+              <div>
                 <label
                   style={{
                     display: "block",
@@ -723,60 +820,50 @@ export default function Invoices() {
                     color: "var(--text-secondary)",
                   }}
                 >
-                  Due Date
+                  Status
                 </label>
-                <input
-                  type="date"
-                  required
+                <select
                   className="input-field"
-                  value={newInvoice.dueDate}
-                  onChange={(e) => handleFieldChange("dueDate", e.target.value)}
-                  aria-label="Due date"
-                />
+                  value={newInvoice.status}
+                  onChange={(e) => handleFieldChange("status", e.target.value)}
+                  style={{ background: "var(--input-bg)" }}
+                  aria-label="Invoice status"
+                >
+                  <option value="UNPAID">Unpaid</option>
+                  <option value="PAID">Paid</option>
+                  <option value="OVERDUE">Overdue</option>
+                </select>
               </div>
-            </div>
 
-            <div>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: "0.875rem",
-                  marginBottom: "0.5rem",
-                  color: "var(--text-secondary)",
-                }}
-              >
-                Status
-              </label>
-              <select
-                className="input-field"
-                value={newInvoice.status}
-                onChange={(e) => handleFieldChange("status", e.target.value)}
-                style={{ background: "var(--input-bg)" }}
-                aria-label="Invoice status"
-              >
-                <option value="UNPAID">Unpaid</option>
-                <option value="PAID">Paid</option>
-                <option value="OVERDUE">Overdue</option>
-              </select>
-            </div>
-
-            <button
-              type="submit"
-              className="btn-primary"
-              style={{ padding: "1rem", marginTop: "0.5rem" }}
-            >
-              Issue Invoice
-            </button>
-          </form>
+              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => setIsCreateFormOpen(false)}
+                  className="btn-secondary"
+                  style={{ flex: "1 1 180px", padding: "1rem" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  style={{ flex: "2 1 240px", padding: "1rem" }}
+                >
+                  Issue Invoice
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
+      )}
 
         {/* Invoice Table */}
-        <div className="card" style={{ padding: "2rem" }}>
+        <div className="card" style={{ padding: "1.5rem" }}>
           <h3
             style={{
               fontSize: "1.15rem",
               fontWeight: "600",
-              marginBottom: "1.5rem",
+              marginBottom: "1rem",
               display: "flex",
               alignItems: "center",
               gap: "0.5rem",
@@ -789,7 +876,7 @@ export default function Invoices() {
             <div
               style={{
                 textAlign: "center",
-                padding: "4rem 2rem",
+                padding: "2.5rem 1.5rem",
                 background: "var(--subtle-bg-2)",
                 border: "1px dashed var(--border-color)",
                 borderRadius: "8px",
@@ -811,7 +898,7 @@ export default function Invoices() {
             <div
               style={{
                 textAlign: "center",
-                padding: "4rem 2rem",
+                padding: "2.5rem 1.5rem",
                 background: "var(--subtle-bg-2)",
                 border: "1px dashed var(--border-color)",
                 borderRadius: "8px",
@@ -831,27 +918,34 @@ export default function Invoices() {
               </p>
             </div>
           ) : (
-            <TopScrollSync>
+            <div className="invoice-table-scroll">
+              <TopScrollSync scrollWidth={`${INVOICE_TABLE_MIN_WIDTH}px`}>
               {/* #243: table-layout fixed + per-column widths so the Contact
                   cell can no longer expand past its allotted space and bleed
                   on top of the sticky Actions column. The Contact cell itself
                   also truncates with ellipsis (see <td> below). */}
               <table
                 className="stable-table"
-                style={{ borderCollapse: "collapse", fontSize: "0.875rem" }}
+                style={{
+                  width: "100%",
+                  minWidth: `${INVOICE_TABLE_MIN_WIDTH}px`,
+                  borderCollapse: "collapse",
+                  fontSize: "0.875rem",
+                  tableLayout: "fixed",
+                }}
                 role="table"
                 aria-label="Invoices table"
               >
                 <colgroup>
-                  <col style={{ width: "120px" }} />
                   <col style={{ width: "110px" }} />
-                  <col style={{ width: "100px" }} />
-                  <col style={{ width: "120px" }} />
-                  <col style={{ width: "110px" }} />
-                  <col />
-                  <col style={{ width: "260px" }} />
+                  <col style={{ width: "104px" }} />
+                  <col style={{ width: "96px" }} />
+                  <col style={{ width: "108px" }} />
+                  <col style={{ width: "108px" }} />
+                  <col style={{ width: "170px" }} />
+                  <col style={{ width: "244px" }} />
                 </colgroup>
-                <thead>
+                <thead className="invoice-table-header">
                   <tr
                     style={{
                       borderBottom: "1px solid var(--border-color)",
@@ -860,7 +954,7 @@ export default function Invoices() {
                   >
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -872,7 +966,7 @@ export default function Invoices() {
                     </th>
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -884,7 +978,7 @@ export default function Invoices() {
                     </th>
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -896,7 +990,7 @@ export default function Invoices() {
                     </th>
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -908,7 +1002,7 @@ export default function Invoices() {
                     </th>
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -920,7 +1014,7 @@ export default function Invoices() {
                     </th>
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -933,14 +1027,15 @@ export default function Invoices() {
                     {/* #119 polish: sticky right-edge so action buttons are always
                         visible regardless of horizontal scroll position. */}
                     <th
+                      className="invoice-actions-cell"
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
                         textTransform: "uppercase",
                         letterSpacing: "0.05em",
-                        textAlign: "right",
+                        // textAlign: "right",
                       }}
                     >
                       Actions
@@ -948,7 +1043,7 @@ export default function Invoices() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredInvoices.map((inv) => (
+                  {visibleInvoices.map((inv) => (
                     <tr
                       key={inv.id}
                       style={{
@@ -964,14 +1059,14 @@ export default function Invoices() {
                     >
                       <td
                         style={{
-                          padding: "1rem 0.5rem",
+                          padding: "0.75rem 0.4rem",
                           fontWeight: "600",
                           letterSpacing: "0.03em",
                         }}
                       >
                         {inv.invoiceNum}
                       </td>
-                      <td style={{ padding: "1rem 0.5rem" }}>
+                      <td style={{ padding: "0.75rem 0.4rem" }}>
                         {/* #242: removed the hardcoded $ IndianRupee icon — formatCurrency()
                             already prefixes the right symbol (₹ for INR tenants, $ for USD,
                             etc.). Stacking the icon caused "$ ₹1,500.00" on Indian tenants. */}
@@ -984,12 +1079,12 @@ export default function Invoices() {
                           {formatCurrency(inv.amount)}
                         </span>
                       </td>
-                      <td style={{ padding: "1rem 0.5rem" }}>
+                      <td style={{ padding: "0.75rem 0.4rem" }}>
                         <StatusBadge status={inv.status} />
                       </td>
                       <td
                         style={{
-                          padding: "1rem 0.5rem",
+                          padding: "0.75rem 0.4rem",
                           color: "var(--text-secondary)",
                         }}
                       >
@@ -997,7 +1092,7 @@ export default function Invoices() {
                           style={{
                             display: "flex",
                             alignItems: "center",
-                            gap: "0.3rem",
+                            gap: "0.25rem",
                           }}
                         >
                           <Clock size={13} />
@@ -1006,7 +1101,7 @@ export default function Invoices() {
                       </td>
                       <td
                         style={{
-                          padding: "1rem 0.5rem",
+                          padding: "0.75rem 0.4rem",
                           color: "var(--text-secondary)",
                         }}
                       >
@@ -1015,7 +1110,7 @@ export default function Invoices() {
                       </td>
                       <td
                         style={{
-                          padding: "1rem 0.5rem",
+                          padding: "0.75rem 0.4rem",
                           color: "var(--text-secondary)",
                           whiteSpace: "nowrap",
                           overflow: "hidden",
@@ -1048,20 +1143,19 @@ export default function Invoices() {
                           )}
                       </td>
                       <td
+                        className="invoice-actions-cell"
                         style={{
-                          padding: "1rem 0.5rem",
+                          padding: "0.75rem 0.4rem",
                           textAlign: "right",
                         }}
                       >
-                        {/* #119 sub-issue: action buttons could overflow the
-                            260px Actions column on narrow viewports. flexWrap
-                            + minWidth:0 lets them stack instead of bleeding
-                            outside the cell. */}
+                        {/* Keep the action controls on one line; horizontal
+                            overflow belongs to the table scroller. */}
                         <div
                           style={{
                             display: "flex",
                             justifyContent: "flex-end",
-                            gap: "0.5rem",
+                            gap: "0.35rem",
                             flexWrap: "wrap",
                             minWidth: 0,
                           }}
@@ -1075,9 +1169,9 @@ export default function Invoices() {
                               cursor: "pointer",
                               display: "flex",
                               alignItems: "center",
-                              gap: "0.3rem",
-                              fontSize: "0.8rem",
-                              padding: "0.4rem 0.75rem",
+                              gap: "0.25rem",
+                              fontSize: "0.75rem",
+                              padding: "0.32rem 0.55rem",
                               borderRadius: "6px",
                             }}
                             onMouseOver={(e) =>
@@ -1099,12 +1193,12 @@ export default function Invoices() {
                                 style={{
                                   display: "flex",
                                   alignItems: "center",
-                                  gap: "0.3rem",
+                                  gap: "0.25rem",
                                   background: "#3b82f6",
                                   color: "#fff",
                                   border: "none",
-                                  padding: "0.4rem 0.75rem",
-                                  fontSize: "0.8rem",
+                                  padding: "0.32rem 0.55rem",
+                                  fontSize: "0.75rem",
                                   borderRadius: "6px",
                                   cursor: "pointer",
                                 }}
@@ -1118,12 +1212,12 @@ export default function Invoices() {
                                 style={{
                                   display: "flex",
                                   alignItems: "center",
-                                  gap: "0.3rem",
+                                  gap: "0.25rem",
                                   background: "var(--success-color)",
                                   color: "#fff",
                                   border: "none",
-                                  padding: "0.4rem 0.75rem",
-                                  fontSize: "0.8rem",
+                                  padding: "0.32rem 0.55rem",
+                                  fontSize: "0.75rem",
                                   borderRadius: "6px",
                                   cursor: "pointer",
                                 }}
@@ -1155,9 +1249,9 @@ export default function Invoices() {
                                 cursor: "pointer",
                                 display: "flex",
                                 alignItems: "center",
-                                gap: "0.3rem",
-                                fontSize: "0.8rem",
-                                padding: "0.4rem 0.75rem",
+                                gap: "0.25rem",
+                                fontSize: "0.75rem",
+                                padding: "0.32rem 0.55rem",
                                 borderRadius: "6px",
                               }}
                             >
@@ -1177,9 +1271,9 @@ export default function Invoices() {
                                 cursor: "pointer",
                                 display: "flex",
                                 alignItems: "center",
-                                gap: "0.3rem",
-                                fontSize: "0.8rem",
-                                padding: "0.4rem 0.75rem",
+                                gap: "0.25rem",
+                                fontSize: "0.75rem",
+                                padding: "0.32rem 0.55rem",
                                 borderRadius: "6px",
                               }}
                               onMouseOver={(e) =>
@@ -1200,10 +1294,10 @@ export default function Invoices() {
                   ))}
                 </tbody>
               </table>
-            </TopScrollSync>
+              </TopScrollSync>
+            </div>
           )}
         </div>
-      </div>
 
       {/* #124: Recur modal — replaces the old prompt(). */}
       {recurInvoice && (
@@ -1297,7 +1391,7 @@ export default function Invoices() {
                   }}
                 >
                   A new invoice will be auto-generated every{" "}
-                  {recurFreq.replace("ly", "")} starting from this invoice's due
+                  {recurFreq.replace("ly", "")} starting from this invoice due
                   date.
                 </p>
               </>
@@ -1505,9 +1599,35 @@ export default function Invoices() {
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-        .invoices-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 2rem; }
+        .invoices-grid { display: grid; grid-template-columns: minmax(360px, 420px) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+        .invoices-grid > .card { align-self: start; }
+        .invoice-table-scroll .top-scroll-sync__bottom {
+          max-height: none;
+          min-height: 0;
+          overflow-y: visible;
+        }
+        .invoice-table-header th {
+          position: sticky;
+          top: 0;
+          z-index: 3;
+          background: var(--bg-color, #15171c) !important;
+          background-color: var(--bg-color, #15171c) !important;
+          background-clip: border-box;
+          box-shadow: inset 0 -1px 0 var(--border-color);
+        }
+        .invoice-actions-cell {
+          white-space: nowrap;
+          overflow: visible;
+        }
+        .invoice-actions-cell button {
+          flex-shrink: 0;
+          white-space: nowrap;
+        }
         @media (max-width: 768px) {
           .invoices-grid { grid-template-columns: 1fr; gap: 1.25rem; }
+          .invoice-table-scroll .top-scroll-sync__bottom {
+            max-height: none;
+          }
         }
       `}</style>
     </div>

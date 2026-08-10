@@ -240,6 +240,7 @@ export default function CancellationPolicies() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [policyScope, setPolicyScope] = useState("scoped");
   const [tripOptions, setTripOptions] = useState([]);
   const [tripOptionsLoading, setTripOptionsLoading] = useState(false);
   const [tripOptionsError, setTripOptionsError] = useState(null);
@@ -270,7 +271,7 @@ export default function CancellationPolicies() {
   useEffect(() => {
     let cancelled = false;
 
-    const effectiveTripBrand = form.subBrand || subBrand;
+    const effectiveTripBrand = editingId ? form.subBrand : (policyScope === "tenant" ? form.subBrand : (form.subBrand || subBrand));
 
     const loadTrips = async () => {
       if (!showForm || !effectiveTripBrand) {
@@ -300,19 +301,21 @@ export default function CancellationPolicies() {
     return () => {
       cancelled = true;
     };
-  }, [showForm, form.subBrand, subBrand, editingId]);
+  }, [showForm, form.subBrand, subBrand, editingId, policyScope]);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
+    setPolicyScope("scoped");
     setEditingId(null);
   };
 
-  const openCreate = () => {
+  const openCreate = (mode = "scoped") => {
     setEditingId(null);
+    setPolicyScope(mode);
     setForm({
       ...EMPTY_FORM,
       tiers: DEFAULT_TIERS.map((t) => ({ ...t })),
-      subBrand: subBrand || defaultSubBrandFor(user, activeSubBrand) || "tmc",
+      subBrand: mode === "tenant" ? "" : (subBrand || defaultSubBrandFor(user, activeSubBrand) || "tmc"),
       itineraryId: "",
     });
     setShowForm(true);
@@ -324,7 +327,7 @@ export default function CancellationPolicies() {
       if (current.subBrand === subBrand) return current;
       return { ...current, subBrand, itineraryId: "" };
     });
-  }, [showForm, editingId, subBrand]);
+  }, [showForm, editingId, subBrand, policyScope]);
 
   const openEdit = (p) => {
     const parsed = parseTiers(p.tiersJson) || [];
@@ -337,6 +340,7 @@ export default function CancellationPolicies() {
       isActive: p.isActive !== false,
     });
     setEditingId(p.id);
+    setPolicyScope("scoped");
     setShowForm(true);
   };
 
@@ -451,16 +455,20 @@ export default function CancellationPolicies() {
     }
   };
 
+  const tripBrand = editingId ? form.subBrand : (policyScope === "tenant" ? form.subBrand : (form.subBrand || subBrand));
+
   return (
     <div
       style={{
         padding: 24,
-        maxWidth: 1200,
+        width: "100%",
+        maxWidth: 1480,
         margin: "0 auto",
+        boxSizing: "border-box",
         animation: "fadeIn 0.4s ease-out",
       }}
     >
-      <header
+            <header
         style={{
           display: "flex",
           justifyContent: "space-between",
@@ -490,14 +498,27 @@ export default function CancellationPolicies() {
               fontSize: "0.9rem",
             }}
           >
-            Per-sub-brand refund ladders for travel invoice voids.{" "}
+            Per-sub-brand refund ladders for travel invoice voids. {" "}
             {total.toLocaleString()} polic{total === 1 ? "y" : "ies"}.
           </p>
         </div>
         {canWrite && (
-          <button type="button" onClick={openCreate} style={primaryBtn}>
-            <Plus size={14} /> New Policy
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={() => openCreate("scoped")}
+              style={primaryBtn}
+            >
+              <Plus size={14} /> New Policy
+            </button>
+            <button
+              type="button"
+              onClick={() => openCreate("tenant")}
+              style={secondaryBtn}
+            >
+              <Plus size={14} /> Policy only
+            </button>
+          </div>
         )}
       </header>
 
@@ -589,9 +610,9 @@ export default function CancellationPolicies() {
             onChange={(e) => setForm({ ...form, itineraryId: e.target.value })}
             style={inputStyle}
             aria-label="Trip"
-            disabled={!(editingId ? form.subBrand : (subBrand || form.subBrand)) || tripOptionsLoading}
+            disabled={!tripBrand || tripOptionsLoading}
           >
-            <option value="">{(editingId ? form.subBrand : (subBrand || form.subBrand)) ? "No trip selected" : "Select a sub-brand first"}</option>
+            <option value="">{tripBrand ? "No trip selected" : "Select a sub-brand first"}</option>
             {tripOptionsLoading && <option value="">Loading trips...</option>}
             {tripOptions.map((trip) => (
               <option key={trip.id} value={trip.id}>
@@ -761,6 +782,7 @@ export default function CancellationPolicies() {
               onClick={() => {
                 setShowForm(false);
                 resetForm();
+                setPolicyScope("scoped");
                 setTripOptions([]);
                 setTripOptionsError(null);
               }}
@@ -777,157 +799,157 @@ export default function CancellationPolicies() {
           <div style={empty}>Loading&hellip;</div>
         ) : (
           <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                <th style={th}>Name</th>
-                <th style={th}>Sub-brand</th>
-                <th style={th}>Trip</th>
-                <th style={th}>Tiers</th>
-                <th style={th}>Preview</th>
-                <th style={th}>Active</th>
-                <th style={th}>Updated</th>
-                {canWrite && (
-                  <th style={{ ...th, textAlign: "center" }}>Actions</th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {policies.map((p) => {
-                const parsed = parseTiers(p.tiersJson);
-                const tierCount = parsed ? parsed.length : "—";
-                const preview = parsed ? renderTierPreview(parsed) : "—";
-                return (
-                  <tr
-                    key={p.id}
-                    style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
-                  >
-                    <td style={td}>
-                      <strong>{p.name}</strong>
-                    </td>
-                    <td style={td}>
-                      <span
-                        style={{
-                          ...brandBadge,
-                          background:
-                            SUB_BRAND_BG[p.subBrand] ||
-                            "rgba(255,255,255,0.08)",
-                        }}
-                      >
-                        {p.subBrand || "tenant"}
-                      </span>
-                    </td>
-                    <td style={td} title={formatItineraryLabel(p.itinerary)}>
-                      {formatItineraryLabel(p.itinerary)}
-                    </td>
-                    <td style={td}>{tierCount}</td>
-                    <td
-                      style={{
-                        ...td,
-                        fontFamily: "monospace",
-                        fontSize: 12,
-                        color: "var(--text-secondary)",
-                        maxWidth: 360,
-                      }}
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr
+                  style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+                >
+                  <th style={th}>Name</th>
+                  <th style={th}>Sub-brand</th>
+                  <th style={th}>Trip</th>
+                  <th style={th}>Tiers</th>
+                  <th style={th}>Preview</th>
+                  <th style={th}>Active</th>
+                  <th style={th}>Updated</th>
+                  {canWrite && <th style={th}>Actions</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {policies.map((p) => {
+                  const parsed = parseTiers(p.tiersJson);
+                  const tierCount = parsed ? parsed.length : "—";
+                  const preview = parsed ? renderTierPreview(parsed) : "—";
+                  return (
+                    <tr
+                      key={p.id}
+                      style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
                     >
-                      {preview}
-                    </td>
-                    <td style={td}>
-                      <span
-                        style={{
-                          ...statusBadge,
-                          background: p.isActive
-                            ? "rgba(34, 197, 94, 0.18)"
-                            : "rgba(148, 163, 184, 0.18)",
-                          color: p.isActive
-                            ? "var(--success-color, #22c55e)"
-                            : "var(--text-secondary)",
-                        }}
-                      >
-                        {p.isActive ? "Active" : "Inactive"}
-                      </span>
-                    </td>
-                    <td style={td}>{formatDate(p.updatedAt || p.createdAt)}</td>
-                    {canWrite && (
+                      <td style={td}>
+                        <strong>{p.name}</strong>
+                      </td>
+                      <td style={td}>
+                        <span
+                          style={{
+                            ...brandBadge,
+                            background:
+                              SUB_BRAND_BG[p.subBrand] ||
+                              "rgba(255,255,255,0.08)",
+                          }}
+                        >
+                          {p.subBrand || "tenant"}
+                        </span>
+                      </td>
+                      <td style={td} title={formatItineraryLabel(p.itinerary)}>
+                        {formatItineraryLabel(p.itinerary)}
+                      </td>
+                      <td style={td}>{tierCount}</td>
                       <td
                         style={{
                           ...td,
-                          textAlign: "center",
-                          whiteSpace: "nowrap",
+                          fontFamily: "monospace",
+                          fontSize: 12,
+                          color: "var(--text-secondary)",
+                          maxWidth: 360,
                         }}
                       >
-                        <button
-                          type="button"
-                          onClick={() => openEdit(p)}
-                          title={`Edit policy ${p.name}`}
-                          aria-label={`Edit policy ${p.name}`}
-                          style={iconBtn}
-                        >
-                          <Pencil size={16} />
-                        </button>
-                        {canDelete && (
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(p)}
-                            title={`Delete policy ${p.name}`}
-                            aria-label={`Delete policy ${p.name}`}
-                            style={{
-                              ...iconBtn,
-                              color: "var(--danger-color, #f43f5e)",
-                            }}
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        )}
+                        {preview}
                       </td>
-                    )}
-                  </tr>
-                );
-              })}
-              {policies.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={canWrite ? 7 : 6}
-                    style={{
-                      ...td,
-                      textAlign: "center",
-                      color: permissionDenied
-                        ? "var(--warning-color, #f59e0b)"
-                        : "var(--text-secondary)",
-                      padding: permissionDenied
-                        ? "2rem 1rem"
-                        : "1.5rem 1rem",
-                    }}
-                  >
-                    {permissionDenied ? (
-                      <>
-                        <strong>Access restricted.</strong>
-                        <div
+                      <td style={td}>
+                        <span
                           style={{
-                            fontSize: "0.85rem",
-                            marginTop: "0.5rem",
-                            color: "var(--text-secondary)",
+                            ...statusBadge,
+                            background: p.isActive
+                              ? "rgba(34, 197, 94, 0.18)"
+                              : "rgba(148, 163, 184, 0.18)",
+                            color: p.isActive
+                              ? "var(--success-color, #22c55e)"
+                              : "var(--text-secondary)",
                           }}
                         >
-                          Your role does not have permission to view
-                          cancellation policies. Ask an Admin to grant access
-                          if you need it.
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <ShieldOff
-                          size={20}
-                          style={{ opacity: 0.4, marginBottom: 6 }}
-                        />
-                        <div>No policies match.</div>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                          {p.isActive ? "Active" : "Inactive"}
+                        </span>
+                      </td>
+                      <td style={td}>{formatDate(p.updatedAt || p.createdAt)}</td>
+                      {canWrite && (
+                        <td
+                          style={{
+                            ...td,
+                            textAlign: "center",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => openEdit(p)}
+                            title={`Edit policy ${p.name}`}
+                            aria-label={`Edit policy ${p.name}`}
+                            style={iconBtn}
+                          >
+                            <Pencil size={16} />
+                          </button>
+                          {canDelete && (
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(p)}
+                              title={`Delete policy ${p.name}`}
+                              aria-label={`Delete policy ${p.name}`}
+                              style={{
+                                ...iconBtn,
+                                color: "var(--danger-color, #f43f5e)",
+                              }}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+                {policies.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={canWrite ? 8 : 7}
+                      style={{
+                        ...td,
+                        textAlign: "center",
+                        color: permissionDenied
+                          ? "var(--warning-color, #f59e0b)"
+                          : "var(--text-secondary)",
+                        padding: permissionDenied
+                          ? "2rem 1rem"
+                          : "1.5rem 1rem",
+                      }}
+                    >
+                      {permissionDenied ? (
+                        <>
+                          <strong>Access restricted.</strong>
+                          <div
+                            style={{
+                              fontSize: "0.85rem",
+                              marginTop: "0.5rem",
+                              color: "var(--text-secondary)",
+                            }}
+                          >
+                            Your role does not have permission to view
+                            cancellation policies. Ask an Admin to grant access
+                            if you need it.
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <ShieldOff
+                            size={20}
+                            style={{ opacity: 0.4, marginBottom: 6 }}
+                          />
+                          <div>No policies match.</div>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </TopScrollSync>
         )}
       </div>

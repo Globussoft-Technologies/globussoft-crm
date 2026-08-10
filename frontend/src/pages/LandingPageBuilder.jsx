@@ -12,11 +12,11 @@ import LandingPageWellnessEditor from './LandingPageWellnessEditor';
 import { TeeDecisionPanel } from '../components/TeeDecisionPanel';
 import { AuthContext } from '../App';
 
-// Phase D1 � registered travel-page template ids. When a page's
+// Phase D1 ? registered travel-page template ids. When a page's
 // templateType matches one of these, the builder mounts the
 // LandingPageTemplateEditor (form-based, content-as-object) instead
 // of the block-array canvas. The list is kept in sync with the
-// backend registry at backend/services/templates/index.js � adding a
+// backend registry at backend/services/templates/index.js ? adding a
 // new template needs both ends to know about it.
 const TEMPLATE_TYPE_IDS = new Set([
   'educational-trip-v1',
@@ -24,7 +24,7 @@ const TEMPLATE_TYPE_IDS = new Set([
   'religious-tour-v1',
   'luxury-tour-v1',
   'family-trip-v1',
-  // Road A (2026-06-23) � Wanderlux dynamic generator. Stores content as a
+  // Road A (2026-06-23) ? Wanderlux dynamic generator. Stores content as a
   // CONFIG OBJECT (not block array). Without this entry, the builder fell
   // into the block-array branch and crashed with "components.map is not a
   // function" on every wanderlux page (e.g. /landing-pages/builder/18?ai=1).
@@ -44,27 +44,27 @@ import { useBrandKit, brandLogoUrl, brandPrimaryColor } from '../hooks/useBrandK
 // What/why: drag-free WYSIWYG builder for the LandingPage admin surface.
 // The single .jsx ships every component-type renderer (preview-side) and
 // every property editor (right rail). Public render is owned by
-// backend/services/landingPageRenderer.js � keep the two in sync.
+// backend/services/landingPageRenderer.js ? keep the two in sync.
 //
-// Recent issue closures (commit `fix(landing-page-builder)` �):
-//   #446 � Image block: "Upload" button next to the URL field. POSTs to
+// Recent issue closures (commit `fix(landing-page-builder)` ?):
+//   #446 ? Image block: "Upload" button next to the URL field. POSTs to
 //          /api/landing-pages/upload (multer, 5 MB, image/* MIMEs only),
 //          drops the returned url straight into props.src.
-//   #449 � Layout cleanup. Hides the global app sidebar while the builder
+//   #449 ? Layout cleanup. Hides the global app sidebar while the builder
 //          is mounted (body class `body--builder-fullscreen`); aligns the
 //          top-bar; groups the right-rail properties into "Component" +
 //          "Page" sections so the user can see what's editable.
-//   #450 � Undo / Redo. useReducer-backed history stack (up to 50 states)
+//   #450 ? Undo / Redo. useReducer-backed history stack (up to 50 states)
 //          with Ctrl+Z / Ctrl+Y bindings. Property edits debounce at 500ms
 //          so a single field change produces ONE history entry, not 30.
-//   #451-remainder � Form component now has Lead-Routing rule selector,
+//   #451-remainder ? Form component now has Lead-Routing rule selector,
 //          enableCaptcha checkbox, successRedirectUrl override. The
 //          public renderer + submit handler honour all three.
 //
 // Standing rules respected:
 //   - Body strips: stripDangerous middleware deletes id/createdAt/etc
 //     from every PUT body. We use targetUserId-style names for ids. (N/A
-//     here � no userId references.)
+//     here ? no userId references.)
 //   - JWT key: req.user.userId, never req.user.id (backend concern).
 //   - Sanitize: HTML in landing-page content is sanitized in the route
 //     already; no second layer here.
@@ -87,9 +87,9 @@ const COMPONENT_TYPES = [
   // render. defaultProps mirror the seed shape the AI generator
   // emits so previews are immediate.
   { type: 'destinationHero', label: 'Destination Hero', icon: MapPin, group: 'travel', defaultProps: { destination: '', headline: '', subhead: '', posterUrl: null, countdownTo: null, ctaText: 'Reserve Your Spot', ctaScrollTarget: '', palette: { bg: '#1f1a17', fg: '#ffffff', accent: '#b8893b' } } },
-  { type: 'cityCards', label: 'City Cards', icon: Building2, group: 'travel', defaultProps: { title: 'Where You�ll Go', subtitle: '', cards: [{ tag: '', title: '', img: null, body: '' }] } },
+  { type: 'cityCards', label: 'City Cards', icon: Building2, group: 'travel', defaultProps: { title: 'Where You?ll Go', subtitle: '', cards: [{ tag: '', title: '', img: null, body: '' }] } },
   { type: 'highlightsGrid', label: 'Highlights', icon: Sparkles, group: 'travel', defaultProps: { title: 'Why This Destination', subtitle: '', items: [{ icon: '?', title: '', body: '' }] } },
-  { type: 'inclusionsGrid', label: 'Inclusions', icon: ListChecks, group: 'travel', defaultProps: { title: 'What�s Included', subtitle: '', items: [''] } },
+  { type: 'inclusionsGrid', label: 'Inclusions', icon: ListChecks, group: 'travel', defaultProps: { title: 'What?s Included', subtitle: '', items: [''] } },
   { type: 'itineraryTimeline', label: 'Itinerary', icon: CalendarDays, group: 'travel', defaultProps: { title: 'Day-by-day', subtitle: '', days: [{ day: 1, title: '', bullets: [''] }] } },
   { type: 'tierPricing', label: 'Tier Pricing', icon: IndianRupee, group: 'travel', defaultProps: { title: 'Investment', subtitle: '', currency: '?', tiers: [{ step: 1, label: '', subtitle: '', amount: null, dueDate: null, vendor: null, tag: null }] } },
   { type: 'faqAccordion', label: 'FAQ', icon: HelpCircle, group: 'travel', defaultProps: { title: 'Frequently Asked Questions', subtitle: '', categories: [{ id: 'all', label: 'All', icon: '?' }], faqs: [{ cat: '', q: '', a: '' }] } },
@@ -98,7 +98,7 @@ const COMPONENT_TYPES = [
   // operator-added (AI never emits URLs); safetyFeatures + contactFooter
   // are emitted by the AI as shells.
   { type: 'travelVideo', label: 'Video', icon: Film, group: 'travel', defaultProps: { title: 'See the Experience', subtitle: '', url: '', aspectRatio: '16:9' } },
-  { type: 'safetyFeatures', label: 'Safety', icon: Shield, group: 'travel', defaultProps: { title: 'Engineered for Safety', subtitle: '', items: [{ icon: '?', title: '', body: '' }, { icon: '?', title: '', body: '' }, { icon: '�', title: '', body: '' }] } },
+  { type: 'safetyFeatures', label: 'Safety', icon: Shield, group: 'travel', defaultProps: { title: 'Engineered for Safety', subtitle: '', items: [{ icon: '?', title: '', body: '' }, { icon: '?', title: '', body: '' }, { icon: '?', title: '', body: '' }] } },
   { type: 'brochureDownload', label: 'Brochure', icon: FileDown, group: 'travel', defaultProps: { title: 'Download the Brochure', subtitle: '', ctaText: 'Get the Brochure', fileUrl: null, formFields: [{ label: 'Full name', name: 'name', type: 'text', required: true }, { label: 'Email', name: 'email', type: 'email', required: true }, { label: 'Phone', name: 'phone', type: 'tel', required: false }] } },
   { type: 'contactFooter', label: 'Contact Footer', icon: PhoneCall, group: 'travel', defaultProps: { brandName: '', phone: null, email: null, ctaText: 'Reserve Your Spot', ctaUrl: '' } },
   // Audience-aware registration form. defaultProps seed from the TMC
@@ -110,16 +110,16 @@ const COMPONENT_TYPES = [
   { type: 'registrationForm', label: 'Registration Form', icon: UserPlus, group: 'travel', defaultProps: regFormDefaultPropsFor('tmc') },
 ];
 
-// -- #450 � undo / redo reducer ---------------------------------------
+// -- #450 ? undo / redo reducer ---------------------------------------
 //
 // State shape: { past: Component[][], present: Component[], future: Component[][] }
 // Action types:
-//   SET           � replace `present` (e.g. initial load). Clears future,
+//   SET           ? replace `present` (e.g. initial load). Clears future,
 //                   pushes prior present onto past.
-//   COMMIT        � push the current present to past, set new present.
+//   COMMIT        ? push the current present to past, set new present.
 //                   Used by add / move / remove / debounced-prop-edit.
-//   UNDO / REDO   � shift one entry between past <-> future.
-//   RESET         � used after save when you want to clear the dirty
+//   UNDO / REDO   ? shift one entry between past <-> future.
+//   RESET         ? used after save when you want to clear the dirty
 //                   delta; we don't currently expose this since most
 //                   workflows want to keep undoability after save.
 //
@@ -156,7 +156,7 @@ function historyReducer(state, action) {
 }
 
 // Human-readable labels for the LandingPageVersion.source enum. Mirrors
-// the VERSION_SOURCES set in backend/lib/landingPageVersions.js � keep
+// the VERSION_SOURCES set in backend/lib/landingPageVersions.js ? keep
 // the two in sync when adding a new source.
 function formatVersionSource(source) {
   switch (source) {
@@ -197,7 +197,7 @@ export default function LandingPageBuilder() {
   const isWellnessLandingSite = isGenericLandingSites && isWellnessTenant && page && typeof page.templateType === 'string' && page.templateType.startsWith('generic-site-');
   const [history, dispatch] = useReducer(historyReducer, { past: [], present: [], future: [] });
   const components = history.present;
-  // Phase D1 � template-driven page content (JSON object, not array).
+  // Phase D1 ? template-driven page content (JSON object, not array).
   // Used when page.templateType is a registered template id. Sibling
   // state of `components` so block-based pages stay untouched.
   const [templateContent, setTemplateContent] = useState(null);
@@ -217,7 +217,7 @@ export default function LandingPageBuilder() {
   // tenant has no rules configured (UI surfaces a hint instead of an
   // empty dropdown).
   const [routingRules, setRoutingRules] = useState([]);
-  // Trip-link picker � populated only when the operator is on the TMC
+  // Trip-link picker ? populated only when the operator is on the TMC
   // sub-brand (the only sub-brand that owns trips today). Empty array
   // for non-TMC pages so the picker stays hidden.
   const [tmcTrips, setTmcTrips] = useState([]);
@@ -227,7 +227,7 @@ export default function LandingPageBuilder() {
   const tripPickerRef = useRef(null);
   // #454: dirty-state tracking + beforeunload guard.
   const [isDirty, setIsDirty] = useState(false);
-  // Version-history drawer state. Lightweight versioning per PRD �
+  // Version-history drawer state. Lightweight versioning per PRD ?
   // snapshots are captured server-side on create / manual save /
   // publish / AI generation / restore; the drawer just lists them
   // and offers a Restore button per row.
@@ -260,7 +260,7 @@ export default function LandingPageBuilder() {
   useEffect(() => {
     fetchApi(`/api/landing-pages/${id}`).then(data => {
       setPage(data);
-      // Phase D1 � template pages store content as a JSON OBJECT
+      // Phase D1 ? template pages store content as a JSON OBJECT
       // keyed to template slots (hero/programme/cultural/etc).
       // Detect and route to the matching state slot.
       if (isTemplatePageType(data.templateType)) {
@@ -316,10 +316,10 @@ export default function LandingPageBuilder() {
   }, [page?.tripId]);
 
   // Link / unlink the page to a TMC trip via the existing PUT endpoint.
-  // Schema enforces 1:1 (LandingPage.tripId @unique) � server returns
+  // Schema enforces 1:1 (LandingPage.tripId @unique) ? server returns
   // 409 TRIP_ALREADY_LINKED if another page already claims this trip.
   const handleLinkToTrip = async (nextTripId) => {
-    // nextTripId === '' means "unlink" � translate to null for the API
+    // nextTripId === '' means "unlink" ? translate to null for the API
     const payload = nextTripId === '' || nextTripId === null
       ? { tripId: null }
       : { tripId: parseInt(nextTripId, 10) };
@@ -333,7 +333,7 @@ export default function LandingPageBuilder() {
       setPage(updated);
       setLinkingTripId(updated.tripId ?? null);
       if (payload.tripId == null) {
-        notify.success('Unlinked � wizard submissions will fall back to lead capture.');
+        notify.success('Unlinked ? wizard submissions will fall back to lead capture.');
       } else {
         const trip = tmcTrips.find(t => t.id === payload.tripId);
         notify.success(`Linked to ${trip ? trip.tripCode : `trip #${payload.tripId}`}`);
@@ -404,7 +404,7 @@ export default function LandingPageBuilder() {
     }
     setSaving(true);
     try {
-      // Phase D1 � when the page is in template mode, the persisted
+      // Phase D1 ? when the page is in template mode, the persisted
       // content is the object payload (not the block array). Block-
       // based pages keep their existing array shape.
       const contentSerialized = isTemplateMode
@@ -442,7 +442,7 @@ export default function LandingPageBuilder() {
     setSaving(false);
   };
 
-  // Publish flow � save first, then run the backend readiness check,
+  // Publish flow ? save first, then run the backend readiness check,
   // then call /publish. The /publish endpoint also enforces the gate
   // server-side; the client preview lets the user see the issues
   // immediately without a publish attempt.
@@ -552,7 +552,7 @@ export default function LandingPageBuilder() {
     await loadVersions();
   };
 
-  // PR-E Phase 2.3 � preview a historical version snapshot without
+  // PR-E Phase 2.3 ? preview a historical version snapshot without
   // restoring first. Mints a fresh preview token (5-min single-use)
   // and appends ?version=N so the production renderer renders the
   // snapshot instead of the live state. Used by the "Preview" button
@@ -608,7 +608,7 @@ export default function LandingPageBuilder() {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '');
     if (!baseSlug) {
-      notify.error('Set a title first � slug needs at least one alphanumeric character to derive from.');
+      notify.error('Set a title first ? slug needs at least one alphanumeric character to derive from.');
       return;
     }
     setPage({ ...page, slug: baseSlug.slice(0, 50) });
@@ -1162,7 +1162,7 @@ export default function LandingPageBuilder() {
         />
       )}
 
-      {/* Version-history drawer. Lightweight per PRD � list + Restore.
+      {/* Version-history drawer. Lightweight per PRD ? list + Restore.
           Snapshots are captured server-side on the 5 mutation events
           (create / manual save / publish / AI generation / restore).
           No diff view, no branching, no merge. */}
@@ -1241,7 +1241,7 @@ function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, o
         }}>
           {loading ? (
             <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
-              Loading versions�
+              Loading versions?
             </div>
           ) : versions.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
@@ -1319,7 +1319,7 @@ function VersionHistoryModal({ versions, loading, restoringVersionId, onClose, o
                           }}
                           title="Restore this version"
                         >
-                          <RotateCcw size={13} /> {restoring ? '�' : 'Restore'}
+                          <RotateCcw size={13} /> {restoring ? '?' : 'Restore'}
                         </button>
                       )}
                     </div>
@@ -1436,7 +1436,7 @@ function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, 
   );
 }
 
-// #450: undo/redo button styling � disabled state visibly different.
+// #450: undo/redo button styling ? disabled state visibly different.
 const iconBarBtnStyle = (enabled) => ({
   display: 'flex',
   alignItems: 'center',
@@ -1663,13 +1663,13 @@ function PropertyEditor({ comp, updateProp, routingRules }) {
   }
 }
 
-// -- #446 � Image property editor with upload button -----------------
+// -- #446 ? Image property editor with upload button -----------------
 //
 // Adds an "Upload" button next to the existing URL input. Clicking it
 // opens a hidden <input type="file"> picker. On selection we POST the
 // file to /api/landing-pages/upload (multipart/form-data, field
 // "image"); the backend returns { url, ... } which we drop into
-// props.src. We use raw fetch � fetchApi forces Content-Type:
+// props.src. We use raw fetch ? fetchApi forces Content-Type:
 // application/json which corrupts multipart bodies.
 function ImagePropertyEditor({ p, updateProp, field }) {
   const fileRef = useRef(null);
@@ -1686,7 +1686,7 @@ function ImagePropertyEditor({ p, updateProp, field }) {
       const fd = new FormData();
       fd.append('image', file);
       // Bypass fetchApi (it sets Content-Type: application/json which
-      // breaks multipart). We still need the bearer token � use
+      // breaks multipart). We still need the bearer token ? use
       // getAuthToken from utils/api.
       const token = getAuthToken();
       const r = await fetch('/api/landing-pages/upload', {
@@ -1726,7 +1726,7 @@ function ImagePropertyEditor({ p, updateProp, field }) {
           />
         ) : (
           <div style={{ display: 'flex', gap: '0.3rem' }}>
-            <input className="input-field" type="text" value={p.src || ''} onChange={e => updateProp('src', e.target.value)} style={{ flex: 1, padding: '0.4rem', fontSize: '0.85rem' }} placeholder="https://� or /uploads/�" />
+            <input className="input-field" type="text" value={p.src || ''} onChange={e => updateProp('src', e.target.value)} style={{ flex: 1, padding: '0.4rem', fontSize: '0.85rem' }} placeholder="https://? or /uploads/?" />
             <button
               type="button"
               onClick={onPick}
@@ -1743,7 +1743,7 @@ function ImagePropertyEditor({ p, updateProp, field }) {
           <div style={{ marginTop: '0.3rem', fontSize: '0.7rem', color: '#ef4444' }}>{uploadError}</div>
         )}
         <div style={{ marginTop: '0.25rem', fontSize: '0.65rem', color: 'var(--text-secondary)', opacity: 0.85 }}>
-          PNG � JPG � WebP � GIF � max 5 MB
+          PNG ? JPG ? WebP ? GIF ? max 5 MB
         </div>
       </div>
       {field('Alt Text', 'alt')}
@@ -1752,15 +1752,15 @@ function ImagePropertyEditor({ p, updateProp, field }) {
   );
 }
 
-// -- #451-remainder � Form property editor with extras ----------------
+// -- #451-remainder ? Form property editor with extras ----------------
 //
 // Adds three new property blocks:
 //   1. Lead Routing rule selector (dropdown of LeadRoutingRule rows from
 //      /api/lead-routing). If unset, falls through to tenant-level rules.
-//   2. enableCaptcha checkbox � when true, the public renderer emits a
+//   2. enableCaptcha checkbox ? when true, the public renderer emits a
 //      Cloudflare Turnstile widget and the submit handler verifies the
 //      token via challenges.cloudflare.com/turnstile/v0/siteverify.
-//   3. successRedirectUrl text input � when set, the renderer redirects
+//   3. successRedirectUrl text input ? when set, the renderer redirects
 //      to this URL on successful submit instead of showing the static
 //      thank-you panel.
 function FormPropertyEditor({ p, updateProp, field, routingRules }) {
@@ -1825,7 +1825,7 @@ function FormPropertyEditor({ p, updateProp, field, routingRules }) {
           onChange={e => updateProp('leadRoutingRuleId', e.target.value)}
           style={{ width: '100%', padding: '0.4rem', fontSize: '0.85rem' }}
         >
-          <option value="">� Use tenant-level routing �</option>
+          <option value="">? Use tenant-level routing ?</option>
           {routingRules && routingRules.map(r => (
             <option key={r.id} value={r.id}>{r.name} (priority {r.priority || 0})</option>
           ))}
@@ -1878,7 +1878,7 @@ function FormPropertyEditor({ p, updateProp, field, routingRules }) {
 // -- Travel block sub-components --------------------------------------
 //
 // Each travel block exports a paired Preview + Editor below. The previews
-// mirror � at a smaller fidelity � what the server's
+// mirror ? at a smaller fidelity ? what the server's
 // landingPageRenderer.travel.css will produce on the public page. Inline
 // styles use the same palette tokens (`#1f1a17` / `#b8893b` / `#6f655c`)
 // the public CSS uses so the builder canvas and the public render don't
@@ -1949,7 +1949,7 @@ function TravelImageField({ label, value, onChange, hint }) {
             value={value || ''}
             onChange={e => onChange(e.target.value || null)}
             style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
-            placeholder="https://� or /uploads/�"
+            placeholder="https://? or /uploads/?"
           />
           <button
             type="button"
@@ -1958,7 +1958,7 @@ function TravelImageField({ label, value, onChange, hint }) {
             title="Upload an image (PNG/JPG/WebP/GIF, max 5 MB)"
             style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.4rem 0.6rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.75rem' }}
           >
-            <Upload size={11} /> {uploading ? '�' : 'Upload'}
+            <Upload size={11} /> {uploading ? '?' : 'Upload'}
           </button>
         </div>
       )}
@@ -1966,7 +1966,7 @@ function TravelImageField({ label, value, onChange, hint }) {
       {err && <div style={{ marginTop: '0.25rem', fontSize: '0.7rem', color: '#ef4444' }}>{err}</div>}
       {empty && !err && (
         <div style={{ marginTop: '0.25rem', fontSize: '0.7rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-          <AlertCircle size={11} /> No image set � publish is blocked until uploaded.
+          <AlertCircle size={11} /> No image set ? publish is blocked until uploaded.
         </div>
       )}
       {hint && <div style={{ marginTop: '0.2rem', fontSize: '0.65rem', color: 'var(--text-secondary)', opacity: 0.8 }}>{hint}</div>}
@@ -2014,7 +2014,7 @@ function DestinationHeroPreview({ p }) {
       <button style={{ background: accent, color: '#fff', padding: '0.65rem 1.4rem', border: 'none', borderRadius: 2, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontSize: '0.75rem', cursor: 'default' }}>{p.ctaText || 'Reserve'}</button>
       {!p.posterUrl && (
         <div style={{ marginTop: '0.85rem', fontSize: '0.7rem', color: '#f59e0b', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-          <AlertCircle size={11} /> Hero image not set � upload before publishing.
+          <AlertCircle size={11} /> Hero image not set ? upload before publishing.
         </div>
       )}
     </div>
@@ -2061,7 +2061,7 @@ function CityCardsPreview({ p }) {
             </div>
             <div style={{ padding: '0.5rem 0.7rem' }}>
               {c.tag && <div style={{ fontSize: '0.55rem', letterSpacing: '0.18em', color: '#b8893b', fontWeight: 700, textTransform: 'uppercase' }}>{c.tag}</div>}
-              <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.95rem' }}>{c.title || '�'}</div>
+              <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.95rem' }}>{c.title || '?'}</div>
               {c.body && <div style={{ fontSize: '0.7rem', color: '#6f655c', marginTop: '0.2rem', lineHeight: 1.4 }}>{c.body}</div>}
               {c.benefit && <div style={{ fontSize: '0.65rem', color: '#1f1a17', fontStyle: 'italic', marginTop: '0.35rem', borderTop: '1px dashed #e3d9c8', paddingTop: '0.3rem' }}>&ldquo;{c.benefit}&rdquo;</div>}
             </div>
@@ -2091,7 +2091,7 @@ function CityCardsEditor({ p, updateProp, field }) {
           <input className="input-field" placeholder="Tag (e.g. ICONIC)" value={c.tag || ''} onChange={e => setCard(i, { tag: e.target.value })} style={{ width: '100%', padding: '0.3rem', fontSize: '0.75rem', marginBottom: '0.3rem' }} />
           <input className="input-field" placeholder="City title" value={c.title || ''} onChange={e => setCard(i, { title: e.target.value })} style={{ width: '100%', padding: '0.3rem', fontSize: '0.8rem', marginBottom: '0.3rem' }} />
           <textarea className="input-field" placeholder="What you'll experience in this city" value={c.body || ''} onChange={e => setCard(i, { body: e.target.value })} rows={3} style={{ width: '100%', padding: '0.3rem', fontSize: '0.75rem', marginBottom: '0.3rem', resize: 'vertical' }} />
-          <textarea className="input-field" placeholder="Derived benefit (pull quote � optional)" value={c.benefit || ''} onChange={e => setCard(i, { benefit: e.target.value })} rows={2} style={{ width: '100%', padding: '0.3rem', fontSize: '0.72rem', marginBottom: '0.3rem', resize: 'vertical', fontStyle: 'italic' }} />
+          <textarea className="input-field" placeholder="Derived benefit (pull quote ? optional)" value={c.benefit || ''} onChange={e => setCard(i, { benefit: e.target.value })} rows={2} style={{ width: '100%', padding: '0.3rem', fontSize: '0.72rem', marginBottom: '0.3rem', resize: 'vertical', fontStyle: 'italic' }} />
           <TravelImageField label="City image" value={c.img} onChange={(v) => setCard(i, { img: v })} hint="4:3 photo recommended." />
         </div>
       ))}
@@ -2110,7 +2110,7 @@ function HighlightsGridPreview({ p }) {
         {items.map((it, i) => (
           <div key={i} style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '1.4rem', color: '#b8893b', marginBottom: '0.25rem' }}>{it.icon || '?'}</div>
-            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.85rem' }}>{it.title || '�'}</div>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.85rem' }}>{it.title || '?'}</div>
             {it.body && <div style={{ fontSize: '0.7rem', color: '#6f655c', marginTop: '0.15rem' }}>{it.body}</div>}
           </div>
         ))}
@@ -2154,7 +2154,7 @@ function InclusionsGridPreview({ p }) {
         {items.map((s, i) => (
           <li key={i} style={{ display: 'flex', gap: '0.4rem', fontSize: '0.85rem' }}>
             <span style={{ color: '#b8893b', fontWeight: 700 }}>?</span>
-            <span>{s || '�'}</span>
+            <span>{s || '?'}</span>
           </li>
         ))}
       </ul>
@@ -2194,7 +2194,7 @@ function ItineraryTimelinePreview({ p }) {
             <div style={{ flex: 1 }}>
               <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.9rem' }}>{d.title || `Day ${d.day || i + 1}`}</div>
               {(d.bullets || []).filter(Boolean).slice(0, 3).map((b, bi) => (
-                <div key={bi} style={{ fontSize: '0.7rem', color: '#6f655c' }}>� {b}</div>
+                <div key={bi} style={{ fontSize: '0.7rem', color: '#6f655c' }}>? {b}</div>
               ))}
               {d.notes && <div style={{ fontSize: '0.65rem', color: '#6f655c', fontStyle: 'italic', marginTop: '0.25rem', paddingLeft: '0.7rem', borderLeft: '2px solid #e3d9c8' }}>{d.notes}</div>}
             </div>
@@ -2265,7 +2265,7 @@ function TierPricingPreview({ p }) {
               </span>
             )}
             <div style={{ fontSize: '0.6rem', letterSpacing: '0.22em', color: '#b8893b', fontWeight: 700, textTransform: 'uppercase' }}>Step {t.step ?? i + 1}</div>
-            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.95rem', margin: '0.25rem 0 0.4rem' }}>{t.label || '�'}</div>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.95rem', margin: '0.25rem 0 0.4rem' }}>{t.label || '?'}</div>
             {t.amount ? (
               <div style={{ fontFamily: 'Georgia, serif', fontSize: '1.25rem', fontWeight: 600 }}>{currency}{t.amount}</div>
             ) : (
@@ -2297,7 +2297,7 @@ function TierPricingEditor({ p, updateProp, field }) {
       </div>
       <div style={{ padding: '0.5rem 0.6rem', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 6, marginBottom: '0.75rem', display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.72rem', color: 'var(--text-primary)' }}>
         <AlertCircle size={14} style={{ color: '#f59e0b', flexShrink: 0, marginTop: 1 }} />
-        <span>AI never fills pricing values. Enter the amount for every tier manually � the publish gate blocks pages with empty tier amounts.</span>
+        <span>AI never fills pricing values. Enter the amount for every tier manually ? the publish gate blocks pages with empty tier amounts.</span>
       </div>
       <p style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tiers</p>
       {tiers.map((t, i) => (
@@ -2330,12 +2330,12 @@ function TierPricingEditor({ p, updateProp, field }) {
               }}
               style={{ flex: 1, padding: '0.3rem', fontSize: '0.75rem' }}
             >
-              <option value="">� None �</option>
+              <option value="">? None ?</option>
               <option value="Most Popular">Most Popular</option>
               <option value="Early Bird">Early Bird</option>
               <option value="Recommended">Recommended</option>
               <option value="Best Value">Best Value</option>
-              <option value="Custom">Custom�</option>
+              <option value="Custom">Custom?</option>
             </select>
           </div>
           {t.badge && !['Most Popular','Early Bird','Recommended','Best Value'].includes(t.badge) && (
@@ -2365,7 +2365,7 @@ function FaqAccordionPreview({ p }) {
       {cats.length > 0 && (
         <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '0.3rem', marginBottom: '0.6rem' }}>
           {cats.map(c => (
-            <span key={c.id} style={{ fontSize: '0.6rem', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#6f655c', border: '1px solid #e3d9c8', padding: '0.2rem 0.55rem', borderRadius: 2 }}>{c.icon || '�'} {c.label}</span>
+            <span key={c.id} style={{ fontSize: '0.6rem', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#6f655c', border: '1px solid #e3d9c8', padding: '0.2rem 0.55rem', borderRadius: 2 }}>{c.icon || '?'} {c.label}</span>
           ))}
         </div>
       )}
@@ -2398,7 +2398,7 @@ function FaqAccordionEditor({ p, updateProp, field }) {
           <button onClick={() => updateProp('categories', cats.filter((_, j) => j !== i))} title="Remove category" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={12} /></button>
         </div>
       ))}
-      <button onClick={() => updateProp('categories', [...cats, { id: 'cat_' + Date.now(), label: 'New', icon: '�' }])} style={{ fontSize: '0.72rem', color: 'var(--accent-color)', background: 'none', border: 'none', cursor: 'pointer', marginBottom: '0.6rem' }}>+ Add Category</button>
+      <button onClick={() => updateProp('categories', [...cats, { id: 'cat_' + Date.now(), label: 'New', icon: '?' }])} style={{ fontSize: '0.72rem', color: 'var(--accent-color)', background: 'none', border: 'none', cursor: 'pointer', marginBottom: '0.6rem' }}>+ Add Category</button>
       <p style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.4rem', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>FAQs</p>
       {faqs.map((f, i) => (
         <div key={i} style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '0.5rem', marginBottom: '0.45rem' }}>
@@ -2429,7 +2429,7 @@ function ReviewCarouselPreview({ p }) {
           <div key={i} style={{ background: '#fffdf8', border: '1px solid #e3d9c8', padding: '0.9rem', textAlign: 'center', borderRadius: 4 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#b8893b', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Georgia, serif', fontWeight: 600, marginBottom: '0.4rem' }}>{(r.initial || (r.name || '?')[0] || '?').toUpperCase()}</div>
             <div style={{ fontSize: '0.78rem', fontStyle: 'italic', color: '#1f1a17' }}>&ldquo;{r.text || '(empty)'}&rdquo;</div>
-            <div style={{ fontSize: '0.65rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: '#6f655c', marginTop: '0.4rem' }}>{r.name || '�'}</div>
+            <div style={{ fontSize: '0.65rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: '#6f655c', marginTop: '0.4rem' }}>{r.name || '?'}</div>
           </div>
         ))}
       </div>
@@ -2444,7 +2444,7 @@ function ReviewCarouselEditor({ p, updateProp, field }) {
     <>
       <div style={{ padding: '0.55rem 0.65rem', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, marginBottom: '0.75rem', fontSize: '0.72rem', color: 'var(--text-primary)', display: 'flex', alignItems: 'flex-start', gap: '0.4rem' }}>
         <MessageSquare size={14} style={{ color: '#3b82f6', flexShrink: 0, marginTop: 1 }} />
-        <span>Reviews are manual-only. The AI generator never emits this block � type each review verbatim from a real source.</span>
+        <span>Reviews are manual-only. The AI generator never emits this block ? type each review verbatim from a real source.</span>
       </div>
       {field('Section title', 'title')}
       {field('Subtitle', 'subtitle', 'textarea')}
@@ -2456,7 +2456,7 @@ function ReviewCarouselEditor({ p, updateProp, field }) {
             <input className="input-field" value={r.name || ''} onChange={e => setRev(i, { name: e.target.value })} placeholder="Reviewer name" style={{ flex: 1, padding: '0.3rem', fontSize: '0.8rem' }} />
             <button onClick={() => updateProp('reviews', reviews.filter((_, j) => j !== i))} title="Remove review" style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={12} /></button>
           </div>
-          <textarea className="input-field" value={r.text || ''} onChange={e => setRev(i, { text: e.target.value })} placeholder="Review text � verbatim, from a real source" rows={3} style={{ width: '100%', padding: '0.3rem', fontSize: '0.78rem', resize: 'vertical' }} />
+          <textarea className="input-field" value={r.text || ''} onChange={e => setRev(i, { text: e.target.value })} placeholder="Review text ? verbatim, from a real source" rows={3} style={{ width: '100%', padding: '0.3rem', fontSize: '0.78rem', resize: 'vertical' }} />
         </div>
       ))}
       <button onClick={() => updateProp('reviews', [...reviews, { name: '', initial: '', text: '' }])} style={{ fontSize: '0.75rem', color: 'var(--accent-color)', background: 'none', border: 'none', cursor: 'pointer' }}>+ Add Review</button>
@@ -2466,11 +2466,11 @@ function ReviewCarouselEditor({ p, updateProp, field }) {
 
 // -- PR-C: travelVideo ------------------------------------------------
 //
-// Frontend mirror of backend/lib/videoUrl.js � same patterns, kept tiny
+// Frontend mirror of backend/lib/videoUrl.js ? same patterns, kept tiny
 // so the preview reflects what the public renderer will actually show
 // (YouTube Shorts / watch / youtu.be ? /embed; Vimeo ? player.vimeo).
 // Mismatch between this and the backend would cause "preview works,
-// public render shows 'refused to connect'" � keep them in sync.
+// public render shows 'refused to connect'" ? keep them in sync.
 const LOCAL_VIDEO_UPLOAD_PREFIX = '/api/uploads/landing-page-videos/';
 const LEGACY_LOCAL_VIDEO_UPLOAD_PREFIX = '/uploads/landing-page-videos/';
 function isLocalVideoUpload(url) {
@@ -2496,7 +2496,7 @@ function normalizeVideoEmbedUrl(url) {
   return trimmed;
 }
 
-// Generic (non-travel) video block � same normalisation + upload story
+// Generic (non-travel) video block ? same normalisation + upload story
 // as the travel variant, but without the travel chrome. Used by the
 // vanilla "Video" component-palette entry.
 function GenericVideoPreview({ p }) {
@@ -2578,7 +2578,7 @@ function GenericVideoEditor({ p, updateProp, field }) {
               type="url"
               value={p.url || ''}
               onChange={(e) => updateProp('url', e.target.value)}
-              placeholder="https://youtube.com/� or upload"
+              placeholder="https://youtube.com/? or upload"
               style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
             />
             <button
@@ -2648,7 +2648,7 @@ function TravelVideoEditor({ p, updateProp, field }) {
     try {
       const fd = new FormData();
       fd.append('video', file);
-      // Raw fetch � fetchApi forces application/json which breaks
+      // Raw fetch ? fetchApi forces application/json which breaks
       // multipart bodies. Mirrors ImagePropertyEditor's pattern above.
       const token = getAuthToken();
       const r = await fetch('/api/landing-pages/upload-video', {
@@ -2700,7 +2700,7 @@ function TravelVideoEditor({ p, updateProp, field }) {
               type="url"
               value={p.url || ''}
               onChange={(e) => updateProp('url', e.target.value)}
-              placeholder="https://youtube.com/watch?v=�  or  https://youtu.be/�"
+              placeholder="https://youtube.com/watch?v=?  or  https://youtu.be/?"
               style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }}
             />
             <button
@@ -2724,13 +2724,13 @@ function TravelVideoEditor({ p, updateProp, field }) {
           </div>
         )}
         <div style={{ marginTop: '0.25rem', fontSize: '0.65rem', color: 'var(--text-secondary)', opacity: 0.85 }}>
-          Paste any YouTube (watch / Shorts / youtu.be) or Vimeo URL � we auto-convert to the embed form. Or upload MP4/WebM/MOV (max 50 MB).
+          Paste any YouTube (watch / Shorts / youtu.be) or Vimeo URL ? we auto-convert to the embed form. Or upload MP4/WebM/MOV (max 50 MB).
         </div>
       </div>
       <div style={{ marginBottom: '0.75rem' }}>
         <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>Aspect ratio</label>
         <select className="input-field" value={p.aspectRatio || '16:9'} onChange={(e) => updateProp('aspectRatio', e.target.value)} style={{ width: '100%', padding: '0.4rem', fontSize: '0.85rem' }}>
-          <option value="16:9">16:9 (default � most YouTube videos)</option>
+          <option value="16:9">16:9 (default ? most YouTube videos)</option>
           <option value="9:16">9:16 (vertical / reels)</option>
           <option value="4:3">4:3 (legacy)</option>
         </select>
@@ -2749,7 +2749,7 @@ function SafetyFeaturesPreview({ p }) {
         {items.map((it, i) => (
           <div key={i} style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '1.4rem', color: '#b8893b', marginBottom: '0.25rem' }}>{it.icon || '?'}</div>
-            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.85rem', color: '#f4efe6' }}>{it.title || '�'}</div>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: '0.85rem', color: '#f4efe6' }}>{it.title || '?'}</div>
             {it.body && <div style={{ fontSize: '0.7rem', color: '#d6cdb6', marginTop: '0.15rem' }}>{it.body}</div>}
           </div>
         ))}
@@ -2794,7 +2794,7 @@ function BrochureDownloadPreview({ p }) {
           {p.ctaText || 'Get the Brochure'}
         </button>
         <div style={{ marginTop: '0.5rem', fontSize: '0.65rem', color: p.fileUrl ? '#10b981' : '#f59e0b' }}>
-          {p.fileUrl ? '? Brochure uploaded � direct download' : 'No brochure uploaded � visitors fill the lead-capture form'}
+          {p.fileUrl ? '? Brochure uploaded ? direct download' : 'No brochure uploaded ? visitors fill the lead-capture form'}
         </div>
       </div>
     </TravelPreviewBox>
@@ -2843,9 +2843,9 @@ function BrochureDownloadEditor({ p, updateProp, field }) {
       <div style={{ marginBottom: '0.75rem' }}>
         <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>Brochure file URL</label>
         <div style={{ display: 'flex', gap: '0.3rem' }}>
-          <input className="input-field" type="text" value={p.fileUrl || ''} onChange={(e) => updateProp('fileUrl', e.target.value || null)} placeholder="https://� or /uploads/�" style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }} />
+          <input className="input-field" type="text" value={p.fileUrl || ''} onChange={(e) => updateProp('fileUrl', e.target.value || null)} placeholder="https://? or /uploads/?" style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }} />
           <button type="button" onClick={onPick} disabled={uploading} title="Upload a PDF brochure" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.4rem 0.6rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'var(--subtle-bg)', color: 'var(--text-primary)', cursor: uploading ? 'wait' : 'pointer', fontSize: '0.75rem' }}>
-            <Upload size={11} /> {uploading ? '�' : 'Upload'}
+            <Upload size={11} /> {uploading ? '?' : 'Upload'}
           </button>
           <input ref={fileRef} type="file" accept="application/pdf,.pdf" onChange={onFile} style={{ display: 'none' }} />
         </div>
@@ -2906,9 +2906,9 @@ function RegistrationFormEditor({ p, updateProp, field, routingRules }) {
     updateProp('fields', next.fields);
     updateProp('submitText', next.submitText);
     updateProp('thankYouMessage', next.thankYouMessage);
-    // Title stays only if currently equal to a preset label � otherwise
+    // Title stays only if currently equal to a preset label ? otherwise
     // we don't clobber the operator's custom title.
-    const presetTitles = Object.values(REG_FORM_PRESETS).map((v) => v.label.replace(/ �.*/, ''));
+    const presetTitles = Object.values(REG_FORM_PRESETS).map((v) => v.label.replace(/ ?.*/, ''));
     if (!p.title || presetTitles.includes(p.title)) {
       updateProp('title', next.title);
     }
@@ -3004,7 +3004,7 @@ function RegistrationFormEditor({ p, updateProp, field, routingRules }) {
           onChange={(e) => updateProp('leadRoutingRuleId', e.target.value)}
           style={{ width: '100%', padding: '0.4rem', fontSize: '0.85rem' }}
         >
-          <option value="">� Use tenant-level routing �</option>
+          <option value="">? Use tenant-level routing ?</option>
           {routingRules && routingRules.map((r) => (
             <option key={r.id} value={r.id}>{r.name} (priority {r.priority || 0})</option>
           ))}
@@ -3052,7 +3052,7 @@ function ContactFooterPreview({ p }) {
           <span style={{ color: p.phone ? '#b8893b' : '#6f655c', fontStyle: p.phone ? 'normal' : 'italic' }}>
             {p.phone || '[Add phone]'}
           </span>
-          <span style={{ color: '#6f655c' }}>�</span>
+          <span style={{ color: '#6f655c' }}>?</span>
           <span style={{ color: p.email ? '#b8893b' : '#6f655c', fontStyle: p.email ? 'normal' : 'italic' }}>
             {p.email || '[Add email]'}
           </span>
@@ -3083,7 +3083,7 @@ function ContactFooterEditor({ p, updateProp, field }) {
       {field('CTA button text (optional)', 'ctaText')}
       <div style={{ marginBottom: '0.75rem' }}>
         <label style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>CTA URL (optional)</label>
-        <input className="input-field" type="url" value={p.ctaUrl || ''} onChange={(e) => updateProp('ctaUrl', e.target.value)} placeholder="https://�" style={{ width: '100%', padding: '0.4rem', fontSize: '0.8rem' }} />
+        <input className="input-field" type="url" value={p.ctaUrl || ''} onChange={(e) => updateProp('ctaUrl', e.target.value)} placeholder="https://?" style={{ width: '100%', padding: '0.4rem', fontSize: '0.8rem' }} />
       </div>
     </>
   );

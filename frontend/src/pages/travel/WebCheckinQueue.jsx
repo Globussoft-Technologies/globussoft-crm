@@ -22,8 +22,18 @@
 // new-tab link to boardingPassUrl, not an inline iframe (lighter UI,
 // PDF + image both handled by the browser).
 
-import { useEffect, useState, useRef } from "react";
-import { Filter, Ticket, Calendar as CalendarIcon, Upload, Send, UserCheck, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { useEffect, useMemo, useState, useRef } from "react";
+import { Link, useLocation } from "react-router-dom";
+import {
+  ArrowLeft,
+  Filter,
+  Ticket,
+  Calendar as CalendarIcon,
+  Upload,
+  Send,
+  UserCheck,
+  RefreshCw,
+} from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
@@ -60,7 +70,12 @@ const STATUS_COLORS = {
   failed: { bg: "rgba(168,50,63,0.18)", color: "#A8323F" },
 };
 
-const PAGE_SIZE = 50;
+const empty = {
+  padding: 32,
+  textAlign: "center",
+  color: "var(--text-secondary)",
+  fontSize: 14,
+};
 
 function fmtDateTime(d) {
   if (!d) return "—";
@@ -71,12 +86,15 @@ function fmtDateTime(d) {
 
 export default function WebCheckinQueue() {
   const notify = useNotify();
+  const location = useLocation();
+  const openedFromReports = useMemo(
+    () => new URLSearchParams(location.search).get("source") === "reports",
+    [location.search],
+  );
   const [rows, setRows] = useState([]);
-  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
   const [upcomingOnly, setUpcomingOnly] = useState(false);
-  const [offset, setOffset] = useState(0);
   const [staff, setStaff] = useState([]);
   const [uploadingId, setUploadingId] = useState(null);
   const [deliveringId, setDeliveringId] = useState(null);
@@ -91,24 +109,23 @@ export default function WebCheckinQueue() {
       : (() => {
           const qs = new URLSearchParams();
           if (status) qs.set("status", status);
-          qs.set("limit", String(PAGE_SIZE));
-          qs.set("offset", String(offset));
+          qs.set("limit", String(200));
           return `/api/travel/webcheckins?${qs.toString()}`;
         })();
     fetchApi(url)
       .then((res) => {
         const list = Array.isArray(res?.webcheckins) ? res.webcheckins : [];
         setRows(list);
-        setTotal(Number.isFinite(res?.total) ? res.total : list.length);
       })
       .catch((e) => {
         // fetchApi already toasted; just zero the state.
         if (e?.status !== 401) {
           setRows([]);
-          setTotal(0);
         }
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+      });
   };
 
   // Staff list for the reassign dropdown — loaded once. /api/staff is
@@ -119,17 +136,14 @@ export default function WebCheckinQueue() {
       .catch(() => setStaff([]));
   }, []);
 
-  useEffect(load, [status, upcomingOnly, offset]);
+  useEffect(load, [status, upcomingOnly]);
 
-  // Filter changes reset offset to 0 so the user doesn't land mid-page
-  // on a smaller filtered result-set.
+  // Filter changes keep the visible list in sync.
   const onStatusChange = (v) => {
     setStatus(v);
-    setOffset(0);
   };
   const onUpcomingToggle = (e) => {
     setUpcomingOnly(e.target.checked);
-    setOffset(0);
   };
 
   // ─── Per-row actions ──────────────────────────────────────────────
@@ -149,11 +163,14 @@ export default function WebCheckinQueue() {
       // Multipart upload — fetchApi forces Content-Type: application/json
       // which would corrupt the multipart boundary, so use raw fetch +
       // manual Authorization header (same pattern as TripDetail.jsx).
-      const res = await fetch(`/api/travel/webcheckins/${id}/upload-boarding-pass`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${getAuthToken()}` },
-        body: form,
-      });
+      const res = await fetch(
+        `/api/travel/webcheckins/${id}/upload-boarding-pass`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${getAuthToken()}` },
+          body: form,
+        },
+      );
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         const msg = body?.error || `Upload failed (${res.status})`;
@@ -202,7 +219,9 @@ export default function WebCheckinQueue() {
     try {
       await fetchApi(`/api/travel/webcheckins/${row.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ assignedAgentId: agentId ? parseInt(agentId, 10) : null }),
+        body: JSON.stringify({
+          assignedAgentId: agentId ? parseInt(agentId, 10) : null,
+        }),
       });
       notify.success(agentId ? "Reassigned." : "Unassigned.");
       load();
@@ -212,16 +231,31 @@ export default function WebCheckinQueue() {
       setReassigningId(null);
     }
   };
-
   // ─── Render ──────────────────────────────────────────────────────
-
-  const showingPagination = !upcomingOnly && total > PAGE_SIZE;
-  const fromIdx = total === 0 ? 0 : offset + 1;
-  const toIdx = Math.min(offset + rows.length, total);
-
   return (
-    <div style={{ padding: 24, maxWidth: 1400, margin: "0 auto" }}>
-      <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, marginBottom: 4 }}>
+    <div
+      style={{
+        padding: 24,
+        width: "100%",
+        maxWidth: 1440,
+        margin: "0 auto",
+        boxSizing: "border-box",
+      }}
+    >
+      {openedFromReports ? (
+        <Link to="/travel/reports" style={backLinkStyle}>
+          <ArrowLeft size={15} aria-hidden /> Back to reports
+        </Link>
+      ) : null}
+      <h1
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          margin: 0,
+          marginBottom: 4,
+        }}
+      >
         <Ticket size={28} aria-hidden /> Web Check-ins
       </h1>
       <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
@@ -231,12 +265,24 @@ export default function WebCheckinQueue() {
       </p>
 
       {/* Filter bar */}
-      <div style={{
-        display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center",
-        background: "var(--surface-color)", padding: 12, borderRadius: 8,
-        border: "1px solid var(--border-color)", marginBottom: 16,
-      }}>
-        <Filter size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
+      <div
+        style={{
+          display: "flex",
+          gap: 12,
+          flexWrap: "wrap",
+          alignItems: "center",
+          background: "var(--surface-color)",
+          padding: 12,
+          borderRadius: 8,
+          border: "1px solid var(--border-color)",
+          marginBottom: 16,
+        }}
+      >
+        <Filter
+          size={16}
+          aria-hidden
+          style={{ color: "var(--text-secondary)" }}
+        />
         <select
           value={status}
           onChange={(e) => onStatusChange(e.target.value)}
@@ -244,12 +290,22 @@ export default function WebCheckinQueue() {
           aria-label="Filter by status"
           disabled={upcomingOnly}
         >
-          {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          {STATUSES.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
         </select>
-        <label style={{
-          display: "inline-flex", alignItems: "center", gap: 6,
-          fontSize: 13, color: "var(--text-primary)", cursor: "pointer",
-        }}>
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 13,
+            color: "var(--text-primary)",
+            cursor: "pointer",
+          }}
+        >
           <input
             type="checkbox"
             checked={upcomingOnly}
@@ -266,27 +322,47 @@ export default function WebCheckinQueue() {
         >
           <RefreshCw size={14} aria-hidden style={{ marginRight: 4 }} /> Refresh
         </button>
-        {showingPagination && (
-          <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-secondary)" }}>
-            {fromIdx}&ndash;{toIdx} of {total}
-          </span>
-        )}
       </div>
 
       {/* Table */}
-      <div style={{
-        background: "var(--surface-color)", borderRadius: 8,
-        border: "1px solid var(--border-color)", overflow: "auto",
-      }}>
+      <div
+        data-testid="webcheckins-table-scroll"
+        style={{
+          background: "var(--surface-color)",
+          borderRadius: 8,
+          border: "1px solid var(--border-color)",
+          overflowX: "auto",
+          overflowY: "visible",
+          display: "inline-block",
+          minWidth: "100%",
+        }}
+      >
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : rows.length === 0 ? (
           <div style={empty}>
-            No web check-ins yet. They appear automatically when itineraries with
-            flights are accepted.
+            No web check-ins yet. They appear automatically when itineraries
+            with flights are accepted.
           </div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
+          <table
+            className="stable-table webcheckins-table"
+            style={{
+              width: "max-content",
+              borderCollapse: "collapse",
+            }}
+          >
+            <colgroup>
+              <col style={{ width: "116px" }} />
+              <col style={{ width: "88px" }} />
+              <col style={{ width: "90px" }} />
+              <col style={{ width: "78px" }} />
+              <col style={{ width: "138px" }} />
+              <col style={{ width: "150px" }} />
+              <col style={{ width: "170px" }} />
+              <col style={{ width: "140px" }} />
+              <col style={{ width: "370px" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th style={th}>Window opens</th>
@@ -302,16 +378,30 @@ export default function WebCheckinQueue() {
             </thead>
             <tbody>
               {rows.map((r) => {
-                const sc = STATUS_COLORS[r.status] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
+                const sc = STATUS_COLORS[r.status] || {
+                  bg: "var(--subtle-bg)",
+                  color: "var(--text-secondary)",
+                };
                 return (
-                  <tr key={r.id} style={{ borderTop: "1px solid var(--border-light)" }}>
+                  <tr
+                    key={r.id}
+                    style={{ borderTop: "1px solid var(--border-light)" }}
+                  >
                     <td style={td}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                        }}
+                      >
                         <CalendarIcon size={12} aria-hidden />
                         {fmtDateTime(r.windowOpenAt)}
                       </span>
                     </td>
-                    <td style={td}><code>{r.pnr}</code></td>
+                    <td style={td}>
+                      <code>{r.pnr}</code>
+                    </td>
                     <td style={td}>{r.flightNumber}</td>
                     <td style={td}>{r.airlineCode}</td>
                     <td style={td}>{fmtDateTime(r.departureAt)}</td>
@@ -320,10 +410,18 @@ export default function WebCheckinQueue() {
                       <span
                         data-testid={`status-badge-${r.id}`}
                         style={{
-                          background: sc.bg, color: sc.color,
-                          padding: "4px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-                          textTransform: "uppercase", letterSpacing: 0.5,
-                          display: "inline-flex", alignItems: "center", height: 24, whiteSpace: "nowrap",
+                          background: sc.bg,
+                          color: sc.color,
+                          padding: "4px 8px",
+                          borderRadius: 4,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.5,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          height: 24,
+                          whiteSpace: "nowrap",
                         }}
                       >
                         {r.status}
@@ -335,29 +433,77 @@ export default function WebCheckinQueue() {
                           href={normalizeUploadUrl(r.boardingPassUrl)}
                           target="_blank"
                           rel="noopener noreferrer"
-                          style={{ color: "var(--primary-color)", textDecoration: "none", fontWeight: 600 }}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "4px 8px",
+                            borderRadius: 4,
+                            border: "1px solid rgba(47,122,77,0.35)",
+                            background: "rgba(47,122,77,0.10)",
+                            color: "var(--text-primary)",
+                            textDecoration: "none",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            whiteSpace: "nowrap",
+                          }}
                         >
-                          View
+                          View file
                         </a>
                       ) : (
-                        <span style={{ color: "var(--text-secondary)" }}>—</span>
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            padding: "4px 8px",
+                            borderRadius: 4,
+                            border: "1px solid var(--border-color)",
+                            background: "var(--subtle-bg)",
+                            color: "var(--text-secondary)",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Not uploaded
+                        </span>
                       )}
                     </td>
                     <td style={td}>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "nowrap", alignItems: "center", minWidth: 0, overflow: "auto" }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 6,
+                          flexWrap: "nowrap",
+                          alignItems: "center",
+                          minWidth: 0,
+                        }}
+                      >
                         <button
                           type="button"
                           onClick={() => onUploadClick(r.id)}
                           style={actionBtn}
                           disabled={uploadingId === r.id}
                           aria-label={`Upload boarding pass for ${r.pnr}`}
-                          title={uploadingId === r.id ? "Uploading…" : "Upload boarding pass"}
+                          title={
+                            uploadingId === r.id
+                              ? "Uploading…"
+                              : "Upload boarding pass"
+                          }
                         >
-                          <Upload size={12} aria-hidden style={{ marginRight: 3, flexShrink: 0 }} />
-                          <span style={{ whiteSpace: "nowrap" }}>{uploadingId === r.id ? "Uploading…" : "Upload"}</span>
+                          <Upload
+                            size={12}
+                            aria-hidden
+                            style={{ marginRight: 3, flexShrink: 0 }}
+                          />
+                          <span style={{ whiteSpace: "nowrap" }}>
+                            {uploadingId === r.id ? "Uploading…" : "Upload"}
+                          </span>
                         </button>
                         <input
-                          ref={(el) => { fileInputs.current[r.id] = el; }}
+                          ref={(el) => {
+                            fileInputs.current[r.id] = el;
+                          }}
                           type="file"
                           accept="application/pdf,image/*"
                           style={{ display: "none" }}
@@ -370,13 +516,44 @@ export default function WebCheckinQueue() {
                           style={actionBtn}
                           disabled={deliveringId === r.id || !!r.deliveredAt}
                           aria-label={`Deliver boarding pass for ${r.pnr}`}
-                          title={r.deliveredAt ? "Already delivered" : (deliveringId === r.id ? "Sending…" : "Send to passenger")}
+                          title={
+                            r.deliveredAt
+                              ? "Already delivered"
+                              : deliveringId === r.id
+                                ? "Sending…"
+                                : "Send to passenger"
+                          }
                         >
-                          <Send size={12} aria-hidden style={{ marginRight: 3, flexShrink: 0 }} />
-                          <span style={{ whiteSpace: "nowrap" }}>{r.deliveredAt ? "Delivered" : (deliveringId === r.id ? "Sending…" : "Deliver")}</span>
+                          <Send
+                            size={12}
+                            aria-hidden
+                            style={{ marginRight: 3, flexShrink: 0 }}
+                          />
+                          <span style={{ whiteSpace: "nowrap" }}>
+                            {r.deliveredAt
+                              ? "Delivered"
+                              : deliveringId === r.id
+                                ? "Sending…"
+                                : "Deliver"}
+                          </span>
                         </button>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, minWidth: 0, flexShrink: 0 }}>
-                          <UserCheck size={12} aria-hidden style={{ color: "var(--text-secondary)", flexShrink: 0 }} />
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            minWidth: 0,
+                            flexShrink: 0,
+                          }}
+                        >
+                          <UserCheck
+                            size={12}
+                            aria-hidden
+                            style={{
+                              color: "var(--text-secondary)",
+                              flexShrink: 0,
+                            }}
+                          />
                           <select
                             value={r.assignedAgentId ?? ""}
                             onChange={(e) => onReassign(r, e.target.value)}
@@ -387,7 +564,9 @@ export default function WebCheckinQueue() {
                           >
                             <option value="">Unassigned</option>
                             {staff.map((u) => (
-                              <option key={u.id} value={u.id}>{u.name || u.email}</option>
+                              <option key={u.id} value={u.id}>
+                                {u.name || u.email}
+                              </option>
                             ))}
                           </select>
                         </span>
@@ -400,81 +579,87 @@ export default function WebCheckinQueue() {
           </table>
         )}
       </div>
-
-      {/* Pagination — only when not in upcoming mode and total exceeds page. */}
-      {showingPagination && (
-        <div style={{
-          display: "flex", justifyContent: "flex-end", alignItems: "center",
-          gap: 8, marginTop: 12,
-        }}>
-          <button
-            type="button"
-            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-            disabled={offset === 0}
-            style={pagerBtn}
-            aria-label="Previous page"
-          >
-            <ChevronLeft size={14} aria-hidden /> Prev
-          </button>
-          <button
-            type="button"
-            onClick={() => setOffset(offset + PAGE_SIZE)}
-            disabled={offset + rows.length >= total}
-            style={pagerBtn}
-            aria-label="Next page"
-          >
-            Next <ChevronRight size={14} aria-hidden />
-          </button>
-        </div>
-      )}
     </div>
   );
 }
 
-const selectStyle = {
-  padding: "6px 10px", borderRadius: 6,
+const th = {
+  padding: "10px 12px",
+  textAlign: "left",
+  fontSize: 12,
+  fontWeight: 600,
+  color: "var(--text-secondary)",
+  textTransform: "uppercase",
+  letterSpacing: 0.4,
+  borderBottom: "1px solid var(--border-color)",
+};
+
+const td = {
+  padding: "10px 12px",
+  verticalAlign: "top",
+  fontSize: 13,
+  color: "var(--text-primary)",
+  minWidth: 0,
+};
+const backLinkStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  marginBottom: 12,
+  padding: "6px 10px",
+  borderRadius: 6,
+  textDecoration: "none",
   border: "1px solid var(--border-color)",
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  minWidth: 160, fontSize: 13,
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  fontSize: 13,
+  fontWeight: 600,
+};
+
+const selectStyle = {
+  padding: "6px 10px",
+  borderRadius: 6,
+  border: "1px solid var(--border-color)",
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  minWidth: 160,
+  fontSize: 13,
 };
 const miniSelectStyle = {
-  padding: "3px 6px", borderRadius: 4,
+  padding: "3px 6px",
+  borderRadius: 4,
   border: "1px solid var(--border-color)",
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 12, minWidth: 110, height: 28, flexShrink: 0,
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  fontSize: 12,
+  minWidth: 104,
+  height: 28,
+  flexShrink: 0,
 };
 const refreshBtn = {
-  display: "inline-flex", alignItems: "center",
-  padding: "6px 12px", borderRadius: 6,
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "6px 12px",
+  borderRadius: 6,
   border: "1px solid var(--border-color)",
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 13, cursor: "pointer",
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  fontSize: 13,
+  cursor: "pointer",
 };
 const actionBtn = {
-  display: "inline-flex", alignItems: "center", justifyContent: "center",
-  padding: "4px 10px", borderRadius: 4,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "4px 8px",
+  borderRadius: 4,
   border: "1px solid var(--border-color)",
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 12, cursor: "pointer", height: 28, minWidth: 75, whiteSpace: "nowrap", flexShrink: 0,
-};
-const pagerBtn = {
-  display: "inline-flex", alignItems: "center", gap: 2,
-  padding: "6px 12px", borderRadius: 6,
-  border: "1px solid var(--border-color)",
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 13, cursor: "pointer",
-};
-const empty = {
-  padding: 32, textAlign: "center",
-  color: "var(--text-secondary)", fontSize: 14,
-};
-const th = {
-  textAlign: "left", padding: "12px 12px", fontSize: 12,
-  textTransform: "uppercase", letterSpacing: 0.5,
-  color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)", whiteSpace: "nowrap", fontWeight: 600,
-};
-const td = {
-  padding: "12px 12px", fontSize: 14,
-  color: "var(--text-primary)", verticalAlign: "middle", minWidth: 0,
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  fontSize: 12,
+  cursor: "pointer",
+  height: 28,
+  minWidth: 75,
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };

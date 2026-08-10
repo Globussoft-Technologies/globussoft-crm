@@ -50,6 +50,7 @@ import { AuthContext } from "../../App";
 // router for tests).
 const STATUS_ACTIVE = "active";
 const STATUS_ARCHIVED = "archived";
+const PAGE_SIZE = 10;
 
 // Sub-set of TmcTripCatalogue fields surfaced in the create/edit form.
 // JSON array fields are surfaced as comma-separated strings for ease of
@@ -129,8 +130,12 @@ export default function TmcCatalogueAdmin() {
   const canWrite = isAdmin || role === "MANAGER";
 
   const [tab, setTab] = useState(STATUS_ACTIVE); // active | archived
+  const [total, setTotal] = useState(0);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
   const [showForm, setShowForm] = useState(false);
@@ -144,35 +149,124 @@ export default function TmcCatalogueAdmin() {
   const [bulkImportResult, setBulkImportResult] = useState(null);
   const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
   const [pendingReviewTripIds, setPendingReviewTripIds] = useState(() => new Set());
+  const listContainerRef = useRef(null);
+  const requestSeqRef = useRef(0);
   const bulkFileInputRef = useRef(null);
+  const rowsRef = useRef([]);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    setLoadError(null);
-    fetchApi(`/api/travel-tmc-catalogue?status=${tab}`)
-      .then((res) => {
-        // Tolerate both shaped + bare list shapes (sibling pages do the
-        // same for resilience against future shape evolution).
-        const items = Array.isArray(res)
-          ? res
-          : Array.isArray(res?.catalogue)
-            ? res.catalogue
-            : Array.isArray(res?.items)
-              ? res.items
-              : [];
-        setRows(items);
-      })
-      .catch((e) => {
-        const msg = e?.body?.error || e?.message || "Failed to load catalogue";
-        setLoadError(msg);
-        notify.error(msg);
-        setRows([]);
-      })
-      .finally(() => setLoading(false));
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  const load = useCallback(async ({ reset = false } = {}) => {
+    const requestSeq = ++requestSeqRef.current;
+    const startOffset = reset ? 0 : offsetRef.current;
+
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setLoadError(null);
+      setRows([]);
+      setTotal(0);
+      setOffset(0);
+      setHasMore(true);
+      rowsRef.current = [];
+      offsetRef.current = 0;
+      hasMoreRef.current = true;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
+
+    const params = new URLSearchParams();
+    params.set("status", tab);
+    params.set("limit", String(PAGE_SIZE));
+    params.set("offset", String(startOffset));
+
+    try {
+      const res = await fetchApi(`/api/travel-tmc-catalogue?${params.toString()}`);
+      if (requestSeq !== requestSeqRef.current) return;
+
+      // Tolerate both shaped + bare list shapes (sibling pages do the
+      // same for resilience against future shape evolution).
+      const items = Array.isArray(res)
+        ? res
+        : Array.isArray(res?.catalogue)
+          ? res.catalogue
+          : Array.isArray(res?.items)
+            ? res.items
+            : [];
+      const totalCount = Number.isFinite(Number(res?.total))
+        ? Number(res.total)
+        : items.length;
+      const nextRows = reset ? items : [...rowsRef.current, ...items];
+      const nextOffset = startOffset + items.length;
+      const nextHasMore = Number.isFinite(totalCount)
+        ? nextOffset < totalCount
+        : items.length === PAGE_SIZE;
+
+      rowsRef.current = nextRows;
+      offsetRef.current = nextOffset;
+      hasMoreRef.current = nextHasMore;
+
+      setRows(nextRows);
+      setTotal(totalCount);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+    } catch (e) {
+      if (requestSeq !== requestSeqRef.current) return;
+      const msg = e?.body?.error || e?.message || "Failed to load catalogue";
+      setLoadError(msg);
+      notify.error(msg);
+      setRows([]);
+      setTotal(0);
+      setHasMore(false);
+      rowsRef.current = [];
+      offsetRef.current = 0;
+      hasMoreRef.current = false;
+    } finally {
+      if (requestSeq === requestSeqRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    }
   }, [tab, notify]);
 
   useEffect(() => {
-    load();
+    load({ reset: true });
+  }, [load]);
+
+  const reload = useCallback(() => {
+    load({ reset: true });
+  }, [load]);
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      load({ reset: false });
+    }
   }, [load]);
 
   const resetForm = () => {
@@ -308,7 +402,7 @@ export default function TmcCatalogueAdmin() {
       if (!editingId && tab !== STATUS_ARCHIVED) {
         setTab(STATUS_ARCHIVED);
       } else {
-        load();
+        reload();
       }
     } catch (err) {
       notify.error(
@@ -334,7 +428,7 @@ export default function TmcCatalogueAdmin() {
         method: "DELETE",
       });
       notify.success("Catalogue entry archived");
-      load();
+      reload();
     } catch (err) {
       notify.error(
         err?.body?.error || err?.message || "Failed to archive entry",
@@ -359,6 +453,7 @@ export default function TmcCatalogueAdmin() {
       // Drop the promoted row from this tab's view; the user can flip to
       // Active to see it in its new home.
       setRows((prev) => prev.filter((r) => r.id !== row.id));
+      rowsRef.current = rowsRef.current.filter((r) => r.id !== row.id);
       setPendingReviewTripIds((prev) => {
         const next = new Set(prev);
         next.delete(row.tripId);
@@ -476,7 +571,7 @@ export default function TmcCatalogueAdmin() {
       if (createdTripIds.length > 0 && tab !== STATUS_ARCHIVED) {
         setTab(STATUS_ARCHIVED);
       } else {
-        load();
+        reload();
       }
     } catch (err) {
       notify.error(err?.message || "Failed to import catalogue");
@@ -488,7 +583,7 @@ export default function TmcCatalogueAdmin() {
   // ── Render ───────────────────────────────────────────────────────────
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
       {/* Heading + Add CTA */}
       <div
         style={{
@@ -706,13 +801,26 @@ export default function TmcCatalogueAdmin() {
         </div>
       )}
 
+      <section
+        style={{
+          background: "var(--bg-color, #111318)",
+          border: "1px solid var(--border-color)",
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 16,
+          display: "grid",
+          gap: 16,
+        }}
+      >
       {/* Tabs */}
       <div role="tablist" aria-label="Catalogue status tabs" style={tabRow}>
         <button
           type="button"
           role="tab"
           aria-selected={tab === STATUS_ACTIVE}
-          onClick={() => setTab(STATUS_ACTIVE)}
+          onClick={() => {
+            setTab(STATUS_ACTIVE);
+          }}
           style={tab === STATUS_ACTIVE ? tabActive : tabIdle}
         >
           Active
@@ -721,7 +829,9 @@ export default function TmcCatalogueAdmin() {
           type="button"
           role="tab"
           aria-selected={tab === STATUS_ARCHIVED}
-          onClick={() => setTab(STATUS_ARCHIVED)}
+          onClick={() => {
+            setTab(STATUS_ARCHIVED);
+          }}
           style={tab === STATUS_ARCHIVED ? tabActive : tabIdle}
         >
           Archived
@@ -977,26 +1087,26 @@ export default function TmcCatalogueAdmin() {
                 style={{ ...inputStyle, resize: "vertical" }}
               />
             </Field>
-            <Field label="anchorExperiences (JSON or comma-separated)">
+            <Field label="anchorExperiences (comma-separated)">
               <textarea
                 rows={2}
                 value={form.anchorExperiencesJson}
                 onChange={(e) =>
                   setForm({ ...form, anchorExperiencesJson: e.target.value })
                 }
-                placeholder='[{"name":"Taj Mahal sunrise"}]'
+                placeholder="Taj Mahal sunrise, Qutub Minar walkthrough"
                 aria-label="anchorExperiencesJson"
                 style={{ ...inputStyle, resize: "vertical" }}
               />
             </Field>
-            <Field label="curriculumHooks (JSON or comma-separated)">
+            <Field label="curriculumHooks (comma-separated)">
               <textarea
                 rows={2}
                 value={form.curriculumHooksJson}
                 onChange={(e) =>
                   setForm({ ...form, curriculumHooksJson: e.target.value })
                 }
-                placeholder='[{"board":"CBSE","topic":"Mughal Empire"}]'
+                placeholder="CBSE: Mughal Empire, IGCSE: Ancient India"
                 aria-label="curriculumHooksJson"
                 style={{ ...inputStyle, resize: "vertical" }}
               />
@@ -1062,7 +1172,7 @@ export default function TmcCatalogueAdmin() {
       )}
 
       {/* List */}
-      {loading ? (
+      {loading && rows.length === 0 ? (
         <div style={emptyStyle}>Loading&hellip;</div>
       ) : loadError ? (
         <div
@@ -1079,8 +1189,18 @@ export default function TmcCatalogueAdmin() {
         </div>
       ) : (
         <div
+          ref={listContainerRef}
+          onScroll={handleListScroll}
           role="list"
           aria-label={`${tab} catalogue entries`}
+          style={{
+            maxHeight: "72vh",
+            overflowY: "auto",
+            paddingRight: 4,
+            scrollBehavior: "smooth",
+          }}
+        >
+        <div
           style={{
             display: "grid",
             gap: 12,
@@ -1212,7 +1332,33 @@ export default function TmcCatalogueAdmin() {
             </div>
           ))}
         </div>
+        <div style={{ paddingTop: 12 }}>
+          {loadingMore && (
+            <div style={{ ...emptyStyle, padding: 16 }}>Loading more&hellip;</div>
+          )}
+          {!loadingMore && hasMore && (
+            <div
+              aria-hidden="true"
+              style={{ height: 1 }}
+              data-testid="tmc-catalogue-scroll-sentinel"
+            />
+          )}
+          {!hasMore && total > 0 && (
+            <div
+              style={{
+                padding: "12px 0",
+                textAlign: "center",
+                color: "var(--text-secondary)",
+                fontSize: 12,
+              }}
+            >
+              You&apos;ve reached the end of the catalogue.
+            </div>
+          )}
+        </div>
+        </div>
       )}
+      </section>
     </div>
   );
 }

@@ -25,13 +25,13 @@ const SUB_BRAND = "travelstall";
 
 // Back-compat: older diagnostics may store either /uploads/diagnostics/... or
 // /api/uploads/diagnostics/... depending on when the PDF was generated.
-// Normalize both forms to the public /uploads/diagnostics/... path.
+// Normalize both forms to the canonical /api/uploads/diagnostics/... path.
 function normalizeDiagnosticPdfUrl(url) {
   if (!url || typeof url !== "string") return url;
-  if (url.startsWith("/api/uploads/diagnostics/")) {
-    return `/uploads/diagnostics/${url.slice("/api/uploads/diagnostics/".length)}`;
-  }
   if (url.startsWith("/uploads/diagnostics/")) {
+    return `/api${url}`;
+  }
+  if (url.startsWith("/api/uploads/diagnostics/")) {
     return url;
   }
   return url;

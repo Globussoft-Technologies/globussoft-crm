@@ -27,7 +27,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -100,6 +100,48 @@ describe('<Services /> — Catalog tab', () => {
     // Radius
     expect(screen.getByText(/25 km/)).toBeInTheDocument();
     expect(screen.getByText(/30 km/)).toBeInTheDocument();
+  });
+
+  it('loads additional cards when the catalog scroll container reaches the bottom', async () => {
+    const manyServices = Array.from({ length: 18 }, (_, index) => ({
+      id: 100 + index,
+      name: `Scrollable Service ${index + 1}`,
+      category: 'hair-restoration',
+      ticketTier: index % 2 === 0 ? 'medium' : 'high',
+      basePrice: 5000 + index * 100,
+      durationMin: 30,
+      targetRadiusKm: 30,
+      isActive: true,
+    }));
+
+    fetchApi.mockImplementation((url, opts) => {
+      if (typeof url !== 'string') return Promise.resolve([]);
+      if (url === '/api/wellness/services' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(manyServices);
+      }
+      if (url === '/api/wellness/service-categories?limit=1000') {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve({});
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+
+    await waitFor(() => {
+      expect(screen.getByText('Scrollable Service 1')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('Scrollable Service 13')).not.toBeInTheDocument();
+
+    const scrollContainer = screen.getByTestId('services-catalog-scroll');
+    Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true });
+    Object.defineProperty(scrollContainer, 'scrollHeight', { value: 800, configurable: true });
+    scrollContainer.scrollTop = 728;
+    fireEvent.scroll(scrollContainer);
+
+    expect(
+      await screen.findByText('Scrollable Service 13'),
+    ).toBeInTheDocument();
   });
 
   it('clicking the pencil (Edit) button flips the card to edit mode', async () => {
@@ -846,6 +888,47 @@ describe('<Services /> — Active Treatments populated state', () => {
     expect(screen.getByText(/2\/6 sessions/)).toBeInTheDocument();
     // Active treatments empty-state copy MUST NOT render when rows exist
     expect(screen.queryByText(/No active treatment plans yet\./i)).not.toBeInTheDocument();
+  });
+
+  it('loads additional treatment cards when the scroll container reaches the bottom', async () => {
+    const user = userEvent.setup();
+    const manyTreatments = Array.from({ length: 18 }, (_, index) => ({
+      id: 700 + index,
+      name: `Scrollable treatment ${index + 1}`,
+      status: 'active',
+      totalSessions: 6,
+      completedSessions: 1,
+      totalPrice: 24000,
+      startedAt: '2026-04-01T00:00:00Z',
+      nextDueAt: '2026-06-01T00:00:00Z',
+      patient: { name: `Patient ${index + 1}` },
+      service: { name: 'GFC Hair', durationMin: 90, basePrice: 8500, targetRadiusKm: 25, category: 'hair-restoration' },
+    }));
+
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/wellness/services') return Promise.resolve(services);
+      if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: manyTreatments });
+      return Promise.resolve({});
+    });
+
+    render(<MemoryRouter><Services /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /Active Treatments/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Scrollable treatment 1')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Scrollable treatment 13')).not.toBeInTheDocument();
+
+    const scrollContainer = screen.getByTestId('active-treatments-scroll');
+    Object.defineProperty(scrollContainer, 'clientHeight', { value: 400, configurable: true });
+    Object.defineProperty(scrollContainer, 'scrollHeight', { value: 800, configurable: true });
+    scrollContainer.scrollTop = 728;
+    fireEvent.scroll(scrollContainer);
+
+    expect(
+      await screen.findByText('Scrollable treatment 13'),
+    ).toBeInTheDocument();
   });
 
   it('keeps the cancelled badge inside the treatment card container', async () => {

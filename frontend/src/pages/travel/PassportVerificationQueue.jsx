@@ -188,7 +188,7 @@ function PassportVerificationTab() {
 
   // ── Styles (theme variables) ──────────────────────────────────────
 
-  const wrap = { padding: 24, maxWidth: 1280, margin: "0 auto" };
+  const wrap = { padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" };
   const headerStyle = {
     display: "flex", alignItems: "center", gap: 12, marginBottom: 8,
   };
@@ -1139,7 +1139,7 @@ export default function PassportVerificationQueue() {
   });
 
   return (
-    <div style={{ padding: 24, maxWidth: 1280, margin: '0 auto' }}>
+    <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
         <BadgeCheck size={22} aria-hidden style={{ color: 'var(--primary-color, var(--accent-color))' }} />
         <h1 style={{ margin: 0, fontSize: 22 }}>Passport</h1>

@@ -58,6 +58,9 @@ prisma.travelMarkupRule = {
 prisma.travelSeasonCalendar = {
   findMany: vi.fn(),
 };
+prisma.travelCostMaster = {
+  findMany: vi.fn(),
+};
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
@@ -155,6 +158,7 @@ beforeEach(() => {
   prisma.travelQuoteLine.findMany.mockReset().mockResolvedValue([]);
   prisma.travelMarkupRule.findMany.mockReset().mockResolvedValue([]);
   prisma.travelSeasonCalendar.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelCostMaster.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -235,6 +239,59 @@ describe('GET /api/travel/quotes/:id/pricing-preview — happy paths', () => {
       markupApplied: [],
       lines: [],
       currency: 'INR',
+    });
+  });
+
+  test('existing line link metadata resolves cost-master refs into the preview envelope', async () => {
+    prisma.travelQuote.findFirst.mockResolvedValue(parentQuote());
+    prisma.travelQuoteLine.findMany.mockResolvedValue([
+      makeLine({
+        id: 777,
+        lineType: 'flight',
+        description: 'Flight BLR -> CDG',
+        amount: '25000.00',
+        notes: 'keep aisle seat\n[[QUOTE_LINK_META]]' + Buffer.from(JSON.stringify({
+          masterRefs: { routeOrSku: 'BLR-CDG', supplierId: 91 },
+        }), 'utf8').toString('base64'),
+        supplierId: 91,
+      }),
+    ]);
+    prisma.travelMarkupRule.findMany.mockResolvedValue([
+      makeRule({ id: 31, scope: 'flight', markupPct: '5.0000', matchKeyJson: '{}' }),
+    ]);
+    prisma.travelCostMaster.findMany.mockResolvedValue([
+      {
+        id: 901,
+        tenantId: 1,
+        subBrand: 'tmc',
+        category: 'flight',
+        routeOrSku: 'BLR-CDG',
+        supplierId: 91,
+        baseRate: '20000.0000',
+        currency: 'INR',
+        isActive: true,
+        updatedAt: new Date(),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/quotes/100/pricing-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.lines).toHaveLength(1);
+    expect(res.body.lines[0]).toMatchObject({
+      lineId: 777,
+      costMasterId: 901,
+      supplierId: 91,
+      routeOrSku: 'BLR-CDG',
+      baseRate: 20000,
+      subtotal: 25000,
+      grandTotal: 26250,
+    });
+    expect(res.body.lines[0].linkMeta).toMatchObject({
+      masterRefs: { costMasterId: 901, routeOrSku: 'BLR-CDG', supplierId: 91 },
+      pricingLink: { matchedMarkupRuleId: 31 },
     });
   });
 

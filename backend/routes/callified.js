@@ -24,8 +24,18 @@ const callifiedClient = require("../services/callifiedClient");
 const { writeAudit } = require("../lib/audit");
 const { resolveSubBrand } = require("../lib/subBrandResolve");
 const prisma = require("../lib/prisma");
-const { routeRequest, llmEnabled } = require("../lib/llmRouter");
-const { notify } = require("../lib/notificationService");
+const {
+  CALL_STATUS,
+  VALID_LEAD_STATUSES,
+  normalizeLeadStatus,
+  classifyLeadStatus,
+  assignQualifiedLeadRoundRobin,
+} = require("../lib/callifiedLeadStatus");
+const {
+  clearDnpRetryState,
+  scheduleDnpRetry,
+} = require("../lib/callifiedDnpRetryEngine");
+const { KEYS, getSetting, setSetting } = require("../lib/tenantSettings");
 
 // Sub-brand isolation guard imported from ../lib/subBrandResolve (tick #106
 // rule-of-3 promotion — previously inlined here, in ratehawk.js, and in
@@ -296,6 +306,20 @@ router.post(
         });
       }
 
+      // A manual call takes precedence over any pending DNP retry schedule.
+      await clearDnpRetryState(leadId).catch((e) => {
+        console.error(`[callified] failed to clear DNP retry state for contact ${leadId}:`, e.message);
+      });
+      await prisma.contact.update({
+        where: { id: Number(leadId), tenantId: req.user.tenantId },
+        data: {
+          callifiedLeadStatus: CALL_STATUS.CONNECTED,
+          callifiedLeadStatusSource: "manual",
+          callifiedLeadStatusReason: "Manual call in progress.",
+          callifiedLeadStatusUpdatedAt: new Date(),
+        },
+      });
+
       const result = await callifiedClient.initiateCallForContact({
         tenantId: req.user.tenantId,
         contactId: leadId,
@@ -475,336 +499,14 @@ router.get("/calls/lead/:leadId/latest", verifyToken, async (req, res) => {
   }
 });
 
-const VALID_LEAD_STATUSES = ["hot", "cold", "yet_to_call"];
-
-function normalizeLeadStatus(raw) {
-  if (!raw) return "yet_to_call";
-  const s = String(raw).toLowerCase().trim().replace(/\s+/g, "_");
-  if (s.includes("hot")) return "hot";
-  if (s.includes("cold")) return "cold";
-  return "yet_to_call";
-}
-
-function isTruthy(value) {
-  if (value === true || value === 1) return true;
-  if (typeof value === "string") {
-    const s = value.toLowerCase().trim();
-    return s === "true" || s === "1" || s === "yes";
-  }
-  return false;
-}
-
-async function fetchLatestCallReviewForContact(tenantId, contactId) {
-  const logs = await prisma.callLog.findMany({
-    where: { tenantId, contactId: Number(contactId), provider: "callified" },
-    orderBy: { createdAt: "desc" },
-    take: 20,
-  });
-  if (!logs || logs.length === 0) return { hasCall: false, review: null, transcript: null };
-
-  // Collect every Callified lead id referenced by this contact's call logs.
-  const leadIds = [];
-  for (const log of logs) {
-    let id = log.providerCallId;
-    try {
-      const parsed = JSON.parse(log.notes || "{}");
-      if (parsed.callifiedLeadId) id = String(parsed.callifiedLeadId);
-    } catch (_) {
-      // ignore malformed notes
-    }
-    if (id && !leadIds.includes(id)) leadIds.push(id);
-  }
-
-  if (leadIds.length === 0) return { hasCall: true, log: logs[0], review: null, transcript: null };
-
-  // Fetch fresh details for each unique lead id and keep the newest transcript
-  // + its matching review across all of them.
-  let bestTranscript = null;
-  let bestReview = null;
-  let bestLog = logs[0];
-  for (const callifiedLeadId of leadIds) {
-    const details = await callifiedClient.getCallDetails(tenantId, callifiedLeadId).catch((e) => {
-      console.error(`[callified] getCallDetails failed for lead ${callifiedLeadId}: ${e.message}`);
-      return { transcripts: [], reviews: [] };
-    });
-    const sortedTranscripts = Array.isArray(details.transcripts)
-      ? [...details.transcripts]
-        .filter((t) => t && t.created_at)
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      : [];
-    const latestTranscript = sortedTranscripts[0] || null;
-    const latestReview =
-      details.reviews?.find((r) => r && !r.error && (latestTranscript ? r.transcript_id === latestTranscript.id : true)) ||
-      details.reviews?.find((r) => r && !r.error) ||
-      null;
-
-    if (latestTranscript && (!bestTranscript || new Date(latestTranscript.created_at).getTime() > new Date(bestTranscript.created_at).getTime())) {
-      bestTranscript = latestTranscript;
-      bestReview = latestReview;
-      bestLog = logs.find((l) => {
-        let id = l.providerCallId;
-        try {
-          const parsed = JSON.parse(l.notes || "{}");
-          if (parsed.callifiedLeadId) id = String(parsed.callifiedLeadId);
-        } catch (_) { /* ignore */ }
-        return id === callifiedLeadId;
-      }) || logs[0];
-    }
-  }
-
-  return { hasCall: true, log: bestLog, review: bestReview, transcript: bestTranscript };
-}
-
-async function updateCallLogNotesWithReview(tenantId, contactId, review) {
-  if (!review || !contactId) return;
-  try {
-    const log = await prisma.callLog.findFirst({
-      where: { tenantId, contactId: Number(contactId), provider: "callified" },
-      orderBy: { createdAt: "desc" },
-    });
-    if (!log || !log.notes) return;
-    let notes = {};
-    try {
-      notes = JSON.parse(log.notes);
-    } catch (_) {
-      notes = { raw: log.notes };
-    }
-    if (typeof notes !== "object" || notes === null) notes = {};
-    notes.reviews = [{
-      transcript_id: review.transcript_id || review.transcriptId,
-      sentiment: review.sentiment,
-      quality_score: review.quality_score,
-      summary: review.summary,
-      appointment_booked: review.appointment_booked,
-      what_went_well: review.what_went_well,
-      what_went_wrong: review.what_went_wrong,
-      coaching_insight: review.coaching_insight,
-    }];
-    notes.fetchedAt = new Date().toISOString();
-    await prisma.callLog.update({
-      where: { id: log.id },
-      data: { notes: JSON.stringify(notes) },
-    });
-  } catch (e) {
-    console.error(`[callified] updateCallLogNotesWithReview failed for contact ${contactId}: ${e.message}`);
-  }
-}
-
-function fallbackClassify(review) {
-  if (!review) return { status: "yet_to_call", reason: "No Callified review data available yet." };
-  const score = Number(review.quality_score) || 0;
-  const appointment = isTruthy(review.appointment_booked);
-  if (appointment) {
-    return { status: "hot", reason: `Appointment booked (score ${score}/5).` };
-  }
-  if (score >= 4) {
-    return { status: "hot", reason: `High Callified score ${score}/5.` };
-  }
-  if (score <= 2) {
-    return { status: "cold", reason: `Low Callified score ${score}/5.` };
-  }
-  return { status: "cold", reason: `Neutral Callified score ${score}/5.` };
-}
-
-async function classifyLeadStatus(tenantId, contactId) {
-  const { hasCall, review, transcript } = await fetchLatestCallReviewForContact(tenantId, contactId);
-  if (!hasCall) {
-    return {
-      status: "yet_to_call",
-      source: "score",
-      reason: "No Callified call has been made for this lead yet.",
-    };
-  }
-
-  // Persist the fresh review back to the cached CallLog notes so the
-  // call-summary endpoint (which reads cached notes) serves the latest score
-  // without requiring a details-drawer open.
-  await updateCallLogNotesWithReview(tenantId, contactId, review);
-
-  // Fallback classification is always computed from the Callified review/score.
-  // It acts as the source of truth when Gemini is unavailable, and as a guard
-  // rail when Gemini returns a result that contradicts hard signals.
-  const fallback = fallbackClassify(review);
-
-  // If no Gemini key is configured, use the score/appointment fallback directly.
-  const geminiReady = await llmEnabled("callified-lead-status", tenantId).catch((e) => {
-    console.error(`[callified] llmEnabled check failed for tenant ${tenantId}: ${e.message}`);
-    return false;
-  });
-  if (!geminiReady) {
-    console.log(`[callified] No Gemini key available for tenant ${tenantId}; using score/appointment fallback for contact ${contactId}.`);
-    return { status: fallback.status, source: "score", reason: fallback.reason };
-  }
-
-  const transcriptText = transcript?.transcript_text || transcript?.transcript || transcript?.text || "";
-  const reviewPayload = review
-    ? {
-      sentiment: review.sentiment,
-      quality_score: review.quality_score,
-      appointment_booked: isTruthy(review.appointment_booked),
-      summary: review.summary,
-    }
-    : null;
-
-  const payload = {
-    transcript: transcriptText,
-    review: reviewPayload,
-    hasTranscript: !!transcriptText,
-    hasReview: !!reviewPayload,
-  };
-
-  try {
-    const result = await routeRequest({ task: "callified-lead-status", payload, tenantId });
-    let parsed;
-    try {
-      parsed = JSON.parse(result.text || "{}");
-    } catch (_) {
-      console.error(`[callified] Gemini returned non-JSON for contact ${contactId}: ${result.text}. Falling back to score.`);
-      return { status: fallback.status, source: "score", reason: fallback.reason };
-    }
-    let status = normalizeLeadStatus(parsed.status);
-    let source = "gemini";
-    let reason = parsed.reason || "Classified by Gemini";
-
-    // Guard rail: if Gemini contradicts hard Callified signals, trust the data.
-    const score = Number(review?.quality_score) || 0;
-    const appointmentBooked = isTruthy(review?.appointment_booked);
-    if (appointmentBooked || score >= 4) {
-      if (status !== "hot") {
-        console.log(`[callified] Gemini returned ${status} but review signals hot (appointment=${appointmentBooked}, score=${score}); overriding to hot.`);
-        status = "hot";
-        source = "score";
-        reason = fallback.reason;
-      }
-    } else if (score <= 2 && status === "hot") {
-      console.log(`[callified] Gemini returned hot but review score is low (${score}); overriding to cold.`);
-      status = "cold";
-      source = "score";
-      reason = fallback.reason;
-    }
-
-    console.log(`[callified] classified contact ${contactId} as ${status} (source=${source})`);
-    return { status, source, reason };
-  } catch (e) {
-    console.error(`[callified] Gemini classification failed for contact ${contactId}: ${e.message}`);
-    return { status: fallback.status, source: "score", reason: fallback.reason };
-  }
-}
-
-async function assignHotLeadRoundRobin(tenantId, contactId, status, options = {}) {
-  if (status !== "hot") {
-    console.log(`[callified] assignHotLeadRoundRobin skipped for contact ${contactId}: status is ${status}`);
-    return null;
-  }
-  const { force = false } = options;
-
-  try {
-    const result = await prisma.$transaction(async (tx) => {
-      const contact = await tx.contact.findFirst({
-        where: { id: Number(contactId), tenantId },
-        select: { id: true, assignedToId: true },
-      });
-      if (!contact) {
-        console.log(`[callified] assignHotLeadRoundRobin skipped for contact ${contactId}: contact not found`);
-        return { assignedToId: null, reason: "contact_not_found" };
-      }
-
-      const staff = await tx.user.findMany({
-        where: {
-          tenantId,
-          deactivatedAt: null,
-          role: { in: ["ADMIN", "MANAGER", "USER"] },
-        },
-        orderBy: { id: "asc" },
-        select: { id: true },
-      });
-      if (staff.length === 0) {
-        console.log(`[callified] assignHotLeadRoundRobin skipped for contact ${contactId}: no active staff in tenant ${tenantId}`);
-        return { assignedToId: null, reason: "no_active_staff" };
-      }
-
-      let shouldReassign = force;
-      if (!force && contact.assignedToId) {
-        const currentActive = staff.some((s) => Number(s.id) === Number(contact.assignedToId));
-        if (!currentActive) {
-          console.log(`[callified] assignHotLeadRoundRobin reassigning contact ${contactId}: current owner ${contact.assignedToId} is inactive/not in staff pool`);
-          shouldReassign = true;
-        }
-      }
-
-      if (!shouldReassign && contact.assignedToId) {
-        console.log(`[callified] assignHotLeadRoundRobin skipped for contact ${contactId}: already assigned to active user ${contact.assignedToId}`);
-        return { assignedToId: null, reason: "already_assigned_active" };
-      }
-
-      const tenant = await tx.tenant.findUnique({
-        where: { id: tenantId },
-        select: { callifiedLastHotAssignedUserId: true },
-      });
-
-      const lastId = tenant?.callifiedLastHotAssignedUserId || null;
-      let startIndex = 0;
-      if (lastId) {
-        const idx = staff.findIndex((s) => Number(s.id) === Number(lastId));
-        if (idx >= 0) startIndex = (idx + 1) % staff.length;
-      }
-
-      let nextUser = null;
-      for (let i = 0; i < staff.length; i += 1) {
-        const candidate = staff[(startIndex + i) % staff.length];
-        if (Number(candidate.id) !== Number(lastId)) {
-          nextUser = candidate;
-          break;
-        }
-      }
-      if (!nextUser) nextUser = staff[0];
-
-      await tx.contact.update({
-        where: { id: Number(contactId) },
-        data: { assignedToId: nextUser.id },
-      });
-      await tx.tenant.update({
-        where: { id: tenantId },
-        data: { callifiedLastHotAssignedUserId: nextUser.id },
-      });
-
-      return { assignedToId: nextUser.id, reason: "assigned" };
-    });
-
-    const assignedToId = result.assignedToId;
-    if (!assignedToId) return null;
-
-    try {
-      await notify({
-        userId: assignedToId,
-        tenantId,
-        title: "Hot lead assigned",
-        message: "A hot lead has been auto-assigned to you from Callified AI calls.",
-        type: "info",
-        category: "lead",
-        entityType: "lead",
-        entityId: Number(contactId),
-        link: `/contacts/${contactId}`,
-      });
-    } catch (e) {
-      console.error("[callified] hot lead assignment notify failed:", e.message);
-    }
-
-    console.log(`[callified] assignHotLeadRoundRobin assigned contact ${contactId} to user ${assignedToId}`);
-    return assignedToId;
-  } catch (e) {
-    console.error(`[callified] assignHotLeadRoundRobin failed for contact ${contactId}:`, e.message);
-    return null;
-  }
-}
-
 /**
  * POST /api/callified/leads/:leadId/classify
  *
- * Classifies a CRM lead as hot/cold/yet_to_call based on the latest Callified
- * call transcript. Uses Gemini 2.5 Flash Lite when available; falls back to the
- * Callified review score + appointment_booked flag. Hot leads with no current
- * assignee are automatically assigned to the next staff user in round-robin.
+ * Classifies a CRM lead as qualified/junk/dnp/yet_to_call based on the latest
+ * Callified call transcript. Uses Gemini 2.5 Flash Lite when available; falls
+ * back to the Callified review score + appointment_booked flag. Qualified leads
+ * with no current assignee are automatically assigned to the next staff user in
+ * round-robin.
  */
 router.post("/leads/:leadId/classify", verifyToken, async (req, res) => {
   try {
@@ -818,7 +520,7 @@ router.post("/leads/:leadId/classify", verifyToken, async (req, res) => {
     });
     if (!contact) return res.status(404).json({ error: "Lead not found" });
 
-    const classification = await classifyLeadStatus(req.user.tenantId, leadId);
+    const classification = await classifyLeadStatus(req.user.tenantId, leadId, { userId: req.user.userId });
     const updateData = {
       callifiedLeadStatus: classification.status,
       callifiedLeadStatusSource: classification.source,
@@ -826,26 +528,34 @@ router.post("/leads/:leadId/classify", verifyToken, async (req, res) => {
       callifiedLeadStatusUpdatedAt: new Date(),
     };
 
-    if (classification.status === "hot" && !contact.assignedToId) {
-      const assignedToId = await assignHotLeadRoundRobin(req.user.tenantId, leadId, classification.status);
+    if (classification.status === CALL_STATUS.QUALIFIED && !contact.assignedToId) {
+      const assignedToId = await assignQualifiedLeadRoundRobin(req.user.tenantId, leadId, classification.status);
       if (assignedToId) updateData.assignedToId = assignedToId;
     }
 
-    const updated = await prisma.contact.update({
-      where: { id: leadId },
-      data: updateData,
-      include: { assignedTo: { select: { id: true, name: true, email: true } } },
-    });
+    try {
+      const updated = await prisma.contact.update({
+        where: { id: leadId },
+        data: updateData,
+        include: { assignedTo: { select: { id: true, name: true, email: true } } },
+      });
 
-    res.json({
-      id: updated.id,
-      callifiedLeadStatus: updated.callifiedLeadStatus,
-      callifiedLeadStatusSource: updated.callifiedLeadStatusSource,
-      callifiedLeadStatusUpdatedAt: updated.callifiedLeadStatusUpdatedAt,
-      assignedToId: updated.assignedToId,
-      assignedTo: updated.assignedTo,
-      reason: classification.reason,
-    });
+      res.json({
+        id: updated.id,
+        callifiedLeadStatus: updated.callifiedLeadStatus,
+        callifiedLeadStatusSource: updated.callifiedLeadStatusSource,
+        callifiedLeadStatusUpdatedAt: updated.callifiedLeadStatusUpdatedAt,
+        assignedToId: updated.assignedToId,
+        assignedTo: updated.assignedTo,
+        reason: classification.reason,
+      });
+    } catch (updateErr) {
+      if (updateErr.code === "P2025") {
+        console.error(`[callified] leads/:leadId/classify contact ${leadId} not found during update`);
+        return res.status(404).json({ error: "Lead not found", code: "LEAD_NOT_FOUND" });
+      }
+      throw updateErr;
+    }
   } catch (e) {
     console.error("[callified] leads/:leadId/classify error:", e.message);
     res.status(500).json({ error: "Failed to classify lead" });
@@ -855,8 +565,8 @@ router.post("/leads/:leadId/classify", verifyToken, async (req, res) => {
 /**
  * PUT /api/callified/leads/:leadId/lead-status
  *
- * Manual override of the Callified lead status. Also triggers round-robin
- * assignment when the status is set to hot and the lead is currently unassigned.
+ * Manual override of the Call Status. Also triggers round-robin assignment
+ * when the status is set to qualified and the lead is currently unassigned.
  */
 router.put("/leads/:leadId/lead-status", verifyToken, async (req, res) => {
   try {
@@ -878,8 +588,12 @@ router.put("/leads/:leadId/lead-status", verifyToken, async (req, res) => {
       callifiedLeadStatusReason: "Status changed manually by user.",
       callifiedLeadStatusUpdatedAt: new Date(),
     };
-    if (normalized === "hot" && !contact.assignedToId) {
-      const assignedToId = await assignHotLeadRoundRobin(req.user.tenantId, leadId, normalized);
+    if (normalized === CALL_STATUS.DNP) {
+      // A manual DNP override starts a fresh retry streak.
+      updateData.callifiedDnpRetryCount = 0;
+    }
+    if (normalized === CALL_STATUS.QUALIFIED && !contact.assignedToId) {
+      const assignedToId = await assignQualifiedLeadRoundRobin(req.user.tenantId, leadId, normalized);
       if (assignedToId) updateData.assignedToId = assignedToId;
     }
 
@@ -888,6 +602,17 @@ router.put("/leads/:leadId/lead-status", verifyToken, async (req, res) => {
       data: updateData,
       include: { assignedTo: { select: { id: true, name: true, email: true } } },
     });
+
+    // Sync DNP retry state with the manual status change.
+    if (normalized === CALL_STATUS.DNP) {
+      await scheduleDnpRetry(req.user.tenantId, leadId).catch((e) => {
+        console.error(`[callified] failed to schedule DNP retry for contact ${leadId}:`, e.message);
+      });
+    } else {
+      await clearDnpRetryState(leadId).catch((e) => {
+        console.error(`[callified] failed to clear DNP retry state for contact ${leadId}:`, e.message);
+      });
+    }
 
     res.json({
       id: updated.id,
@@ -927,14 +652,14 @@ router.post("/leads/ensure-assigned", verifyToken, async (req, res) => {
       tenantId,
       status: "Lead",
       deletedAt: null,
-      callifiedLeadStatus: "hot",
+      callifiedLeadStatus: CALL_STATUS.QUALIFIED,
       assignedToId: null,
     };
     if (Array.isArray(contactIds) && contactIds.length > 0) {
       where.id = { in: contactIds.map((id) => Number(id)).filter(Number.isFinite) };
     }
 
-    const hotLeads = await prisma.contact.findMany({
+    const qualifiedLeads = await prisma.contact.findMany({
       where,
       select: { id: true },
       orderBy: { id: "asc" },
@@ -943,8 +668,8 @@ router.post("/leads/ensure-assigned", verifyToken, async (req, res) => {
     const details = [];
     let assigned = 0;
     let skipped = 0;
-    for (const lead of hotLeads) {
-      const assignedToId = await assignHotLeadRoundRobin(tenantId, lead.id, "hot");
+    for (const lead of qualifiedLeads) {
+      const assignedToId = await assignQualifiedLeadRoundRobin(tenantId, lead.id, CALL_STATUS.QUALIFIED);
       if (assignedToId) {
         assigned += 1;
         details.push({ contactId: lead.id, assignedToId, reason: "assigned" });
@@ -957,7 +682,7 @@ router.post("/leads/ensure-assigned", verifyToken, async (req, res) => {
     res.json({ assigned, skipped, details });
   } catch (e) {
     console.error("[callified] leads/ensure-assigned error:", e.message);
-    res.status(500).json({ error: "Failed to ensure hot leads are assigned" });
+    res.status(500).json({ error: "Failed to ensure qualified leads are assigned" });
   }
 });
 
@@ -1055,12 +780,12 @@ router.post("/leads/:leadId/ensure-hot-assigned", verifyToken, verifyRole(["ADMI
       where: { id: leadId, tenantId: req.user.tenantId },
     });
     if (!contact) return res.status(404).json({ error: "Lead not found" });
-    if (contact.callifiedLeadStatus !== "hot") {
-      return res.status(400).json({ error: "Lead is not Hot", code: "NOT_HOT" });
+    if (contact.callifiedLeadStatus !== CALL_STATUS.QUALIFIED) {
+      return res.status(400).json({ error: "Lead is not Qualified", code: "NOT_QUALIFIED" });
     }
 
     console.log(`[callified] ensure-hot-assigned: contact ${leadId} status=${contact.callifiedLeadStatus}, current assignedToId=${contact.assignedToId}`);
-    const assignedToId = await assignHotLeadRoundRobin(req.user.tenantId, leadId, "hot");
+    const assignedToId = await assignQualifiedLeadRoundRobin(req.user.tenantId, leadId, CALL_STATUS.QUALIFIED);
     const updated = await prisma.contact.findUnique({
       where: { id: leadId },
       include: { assignedTo: { select: { id: true, name: true, email: true } } },
@@ -1098,46 +823,92 @@ router.post("/leads/sync-call-statuses", verifyToken, verifyRole(["ADMIN", "MANA
 });
 
 /**
- * GET /api/callified/auto-campaign
+ * GET /api/callified/auto-campaign-rules
  *
- * Returns the tenant's default Callified campaign id (or null) so the generic
- * CRM leads page can pre-select the auto-assign dropdown.
+ * Returns the tenant's auto-campaign assignment rules. The frontend renders
+ * these as a grid: lead column + normalised value -> Callified campaign id.
  */
-router.get("/auto-campaign", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.get("/auto-campaign-rules", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: req.user.tenantId },
-      select: { callifiedAutoCampaignId: true },
+    const config = await getSetting(req.user.tenantId, KEYS.CALLIFIED_AUTO_CAMPAIGN_RULES, {
+      coerce: (v) => {
+        if (!v || v === "" || v === "null") return { enabled: false, rules: [] };
+        try {
+          const parsed = JSON.parse(v);
+          if (parsed && Array.isArray(parsed.rules)) return parsed;
+          return { enabled: false, rules: [] };
+        } catch (_e) {
+          return { enabled: false, rules: [] };
+        }
+      },
+      fallback: { enabled: false, rules: [] },
     });
-    res.json({ callifiedAutoCampaignId: tenant?.callifiedAutoCampaignId || null });
+    res.json({ enabled: !!config.enabled, rules: Array.isArray(config.rules) ? config.rules : [] });
   } catch (e) {
-    console.error("[callified] auto-campaign GET error:", e.message);
-    res.status(500).json({ error: "Failed to read auto-campaign" });
+    console.error("[callified] auto-campaign-rules GET error:", e.message);
+    res.status(500).json({ error: "Failed to read auto-campaign rules" });
   }
 });
 
-/**
- * PUT /api/callified/auto-campaign
- *
- * Sets or clears the tenant's default Callified campaign id. New Leads will be
- * auto-assigned to this campaign by POST /api/contacts when no explicit
- * campaign is supplied.
- */
-router.put("/auto-campaign", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
-  try {
-    const { callifiedAutoCampaignId } = req.body || {};
-    const value = callifiedAutoCampaignId == null || callifiedAutoCampaignId === "" ? null : Number(callifiedAutoCampaignId);
-    if (value != null && (!Number.isFinite(value) || value <= 0)) {
-      return res.status(400).json({ error: "Invalid campaign id", code: "INVALID_CAMPAIGN_ID" });
+function validateAutoCampaignRules(body) {
+  if (!body || typeof body !== "object") return { error: "Invalid body", code: "INVALID_BODY" };
+  const enabled = !!body.enabled;
+  const rules = Array.isArray(body.rules) ? body.rules : [];
+  const seen = new Set();
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i];
+    if (!rule || typeof rule !== "object") {
+      return { error: `Rule ${i + 1} is invalid`, code: "INVALID_RULE" };
     }
-    await prisma.tenant.update({
-      where: { id: req.user.tenantId },
-      data: { callifiedAutoCampaignId: value },
+    if (typeof rule.column !== "string" || rule.column.trim() === "") {
+      return { error: `Rule ${i + 1}: column is required`, code: "INVALID_RULE_COLUMN" };
+    }
+    if (rule.value == null || rule.value === "") {
+      return { error: `Rule ${i + 1}: value is required`, code: "INVALID_RULE_VALUE" };
+    }
+    const campaignId = Number(rule.campaignId);
+    if (!Number.isFinite(campaignId) || campaignId <= 0) {
+      return { error: `Rule ${i + 1}: campaign is required`, code: "INVALID_RULE_CAMPAIGN" };
+    }
+    // Deduplicate exact (column, value, campaignId) triples to avoid accidental duplicates.
+    const key = `${rule.column}|${String(rule.value).trim().toLowerCase()}|${campaignId}`;
+    if (seen.has(key)) {
+      return { error: `Rule ${i + 1}: duplicate rule`, code: "DUPLICATE_RULE" };
+    }
+    seen.add(key);
+  }
+  return { enabled, rules };
+}
+
+/**
+ * PUT /api/callified/auto-campaign-rules
+ *
+ * Saves the tenant's auto-campaign assignment rules. New Leads will be
+ * auto-assigned to the first matching campaign by POST /api/contacts and
+ * POST /api/v1/external/leads when no explicit campaign is supplied.
+ */
+router.put("/auto-campaign-rules", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const validation = validateAutoCampaignRules(req.body || {});
+    if (validation.error) {
+      return res.status(400).json({ error: validation.error, code: validation.code });
+    }
+    const { enabled, rules } = validation;
+    const cleanRules = rules.map((rule) => ({
+      ...(rule.id ? { id: String(rule.id) } : {}),
+      enabled: !!rule.enabled,
+      column: String(rule.column).trim(),
+      value: String(rule.value).trim(),
+      campaignId: Number(rule.campaignId),
+    }));
+    const stored = { enabled, rules: cleanRules };
+    await setSetting(req.user.tenantId, KEYS.CALLIFIED_AUTO_CAMPAIGN_RULES, JSON.stringify(stored), {
+      category: "feature-flag",
     });
-    res.json({ callifiedAutoCampaignId: value });
+    res.json({ enabled, rules: cleanRules });
   } catch (e) {
-    console.error("[callified] auto-campaign PUT error:", e.message);
-    res.status(500).json({ error: "Failed to set auto-campaign" });
+    console.error("[callified] auto-campaign-rules PUT error:", e.message);
+    res.status(500).json({ error: "Failed to save auto-campaign rules" });
   }
 });
 

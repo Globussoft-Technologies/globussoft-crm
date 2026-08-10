@@ -847,7 +847,12 @@ jobs:
             npx prisma db execute --file=/tmp/fix-null-names.sql --schema=prisma/schema.prisma
 
             echo "=== prisma db push (schema sync) ==="
-            npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5
+            if ! npx prisma db push --skip-generate --accept-data-loss > /tmp/prisma-db-push.log 2>&1; then
+              echo "::error::prisma db push failed"
+              cat /tmp/prisma-db-push.log
+              exit 1
+            fi
+            tail -5 /tmp/prisma-db-push.log
 
             # Optional: re-run seed-wellness.js when the operator opts in via
             # workflow_dispatch.seed_wellness=true. Only fires on manual
@@ -1260,7 +1265,12 @@ jobs:
             npx prisma db execute --file=/tmp/fix-null-names.sql --schema=prisma/schema.prisma
 
             echo "=== prisma db push (schema sync) ==="
-            npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5
+            if ! npx prisma db push --skip-generate --accept-data-loss > /tmp/prisma-db-push.log 2>&1; then
+              echo "::error::prisma db push failed"
+              cat /tmp/prisma-db-push.log
+              exit 1
+            fi
+            tail -5 /tmp/prisma-db-push.log
 
             if [ -f prisma/seed-travel.js ]; then
               echo "=== seed-travel (always) ==="

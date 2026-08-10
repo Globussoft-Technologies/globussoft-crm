@@ -1,4 +1,4 @@
-﻿import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -76,88 +76,98 @@ const SECTOR_OPTIONS = [
 
 
 
-function blankBlocks() {
-
-  return [
-
-    { id: `seed-${Date.now()}`, type: 'heading', props: { text: 'Your Headline Here', level: 'h1', align: 'center', color: '#111827' } },
-
-    { id: `seed-${Date.now() + 1}`, type: 'text', props: { text: 'Use the builder to shape this landing site for your sector.', align: 'center', color: '#4b5563', fontSize: '1rem' } },
-
-    { id: `seed-${Date.now() + 2}`, type: 'form', props: { fields: [{ label: 'Name', name: 'name', type: 'text', required: true }, { label: 'Email', name: 'email', type: 'email', required: true }], submitText: 'Submit', thankYouMessage: 'Thank you!', enableCaptcha: false, leadRoutingRuleId: '', successRedirectUrl: '' } },
-
-  ];
-
-}
-
-
-
-function buildStarterBlocks({ sectorKey = 'general', campaignName = 'Untitled Landing Site', audience = 'qualified visitors', location = '', isWellness = false }) {
-
-  if (!isWellness) return blankBlocks();
-
-  const eventSummary = [
-
-    'Date: Add the event date',
-
-    'Time: Add the event time',
-
-    location ? `Location: ${location}` : 'Location: Add the venue',
-
-    `Audience: ${audience}`,
-
-  ].join('\n');
-
-  return [
-
-    { id: `seed-${Date.now()}`, type: 'heading', props: { text: campaignName, level: 'h1', align: 'center', color: '#111827' } },
-
-    { id: `seed-${Date.now() + 1}`, type: 'text', props: { text: 'Use this landing page for a camp, consultation day, or community event. Keep the details clear and the registration form easy to complete.', align: 'center', color: '#4b5563', fontSize: '1rem' } },
-
-    { id: `seed-${Date.now() + 2}`, type: 'columns', props: { gap: '24px', columns: [
-
-      { components: [
-
-        { id: `seed-${Date.now() + 3}`, type: 'heading', props: { text: 'Event details', level: 'h3', align: 'left', color: '#111827' } },
-
-        { id: `seed-${Date.now() + 4}`, type: 'text', props: { text: eventSummary, align: 'left', color: '#4b5563', fontSize: '0.98rem' } },
-
-      ] },
-
-      { components: [
-
-        { id: `seed-${Date.now() + 5}`, type: 'form', props: { fields: [
-
-          { label: 'Full name', name: 'name', type: 'text', required: true },
-
-          { label: 'Email address', name: 'email', type: 'email', required: true },
-
-          { label: 'Phone number', name: 'phone', type: 'tel', required: true },
-
-          { label: 'Preferred time', name: 'preferred_time', type: 'text', required: false },
-
-          { label: 'Notes', name: 'message', type: 'text', required: false },
-
-        ], submitText: 'Register Now', thankYouMessage: `Thanks. We have received your registration for ${campaignName}.`, enableCaptcha: false, leadRoutingRuleId: '', successRedirectUrl: '' } },
-
-      ] },
-
-    ] } },
-
-    { id: `seed-${Date.now() + 6}`, type: 'image', props: { src: '', alt: `${sectorKey} campaign image`, maxWidth: '100%' } },
-
-    { id: `seed-${Date.now() + 7}`, type: 'divider', props: { color: '#e5e7eb', margin: '1.5rem' } },
-
-  ];
-
-}
-
-
-
 function buildTemplateType(sectorKey) {
 
   return `generic-site-${sectorKey}-v1`;
 
+}
+
+const EVENT_DATE_FORMATTER = new Intl.DateTimeFormat('en-GB', {
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric',
+});
+
+function normalizeDateInputValue(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return '';
+
+  return [
+    parsed.getFullYear(),
+    String(parsed.getMonth() + 1).padStart(2, '0'),
+    String(parsed.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function normalizeTimeInputValue(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^\d{2}:\d{2}$/.test(text)) return text;
+
+  const rangeMatch = text.match(/^(.+?)(?:\s*-\s*.+)?$/);
+  const candidate = String(rangeMatch?.[1] || text).trim();
+  const ampmMatch = candidate.match(/^(\d{1,2})(?::(\d{2}))?\s*([AaPp][Mm])$/);
+  if (ampmMatch) {
+    let hour = Number(ampmMatch[1]);
+    const minute = Number(ampmMatch[2] || '0');
+    const suffix = ampmMatch[3].toUpperCase();
+    if (suffix === 'PM' && hour !== 12) hour += 12;
+    if (suffix === 'AM' && hour === 12) hour = 0;
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  }
+
+  return '';
+}
+
+function formatDateForPrompt(value) {
+  const normalized = normalizeDateInputValue(value);
+  if (!normalized) return String(value || '').trim();
+
+  const [year, month, day] = normalized.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  return EVENT_DATE_FORMATTER.format(date);
+}
+
+function formatTimeForPrompt(value) {
+  const normalized = normalizeTimeInputValue(value);
+  if (!normalized) return String(value || '').trim();
+
+  const [hourText, minuteText] = normalized.split(':');
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, '0')} ${suffix}`;
+}
+
+function useDocumentTheme() {
+  const [theme, setTheme] = useState(() => (
+    typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark'
+      ? 'dark'
+      : 'light'
+  ));
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+
+    const root = document.documentElement;
+    const updateTheme = () => {
+      setTheme(root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
+    };
+
+    updateTheme();
+
+    const observer = new MutationObserver(updateTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+
+    return () => observer.disconnect();
+  }, []);
+
+  return theme;
 }
 
 
@@ -173,10 +183,15 @@ export default function LandingSites() {
   const tenantVertical = auth?.user?.tenant?.vertical || auth?.tenant?.vertical || 'generic';
 
   const isWellnessTenant = tenantVertical === 'wellness';
+  const themeName = useDocumentTheme();
+  const isDarkTheme = themeName === 'dark';
 
   const [pages, setPages] = useState([]);
 
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [pageIndex, setPageIndex] = useState(1);
 
   const [dateFilter, setDateFilter] = useState(EMPTY_DATE_FILTER);
 
@@ -187,7 +202,11 @@ export default function LandingSites() {
   const [genError, setGenError] = useState(null);
 
   const [copiedId, setCopiedId] = useState(null);
-
+  const [pinnedPage, setPinnedPage] = useState(null);
+  const scrollContainerRef = useRef(null);
+  const sentinelRef = useRef(null);
+  const requestSeqRef = useRef(0);
+  const PAGE_SIZE = 12;
   const defaultFormState = (wellness = false) => ({
 
     sectorKey: wellness ? 'wellness' : 'general',
@@ -217,6 +236,35 @@ export default function LandingSites() {
   });
 
   const [form, setForm] = useState(defaultFormState(isWellnessTenant));
+  const libraryShellStyle = useMemo(() => ({
+    padding: '1.4rem',
+    border: isDarkTheme ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(200,154,78,0.16)',
+    background: isDarkTheme
+      ? 'linear-gradient(180deg, rgba(16, 19, 25, 0.96), rgba(10, 12, 16, 0.92))'
+      : 'linear-gradient(180deg, rgba(255,255,255,0.66), rgba(255,255,255,0.38))',
+    boxShadow: isDarkTheme ? '0 22px 60px rgba(0, 0, 0, 0.46)' : '0 18px 48px rgba(25, 28, 33, 0.08)',
+    borderRadius: '20px',
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+  }), [isDarkTheme]);
+  const libraryBadgeStyle = useMemo(() => ({
+    width: '38px',
+    height: '38px',
+    borderRadius: '12px',
+    display: 'grid',
+    placeItems: 'center',
+    background: isDarkTheme ? 'rgba(200,154,78,0.14)' : 'rgba(200,154,78,0.12)',
+    color: '#b8893b',
+    border: isDarkTheme ? '1px solid rgba(200,154,78,0.14)' : 'none',
+  }), [isDarkTheme]);
+  const emptyStateStyle = useMemo(() => ({
+    padding: '4rem',
+    textAlign: 'center',
+    background: isDarkTheme ? 'rgba(15, 18, 24, 0.88)' : 'rgba(255,255,255,0.55)',
+    border: isDarkTheme ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(200,154,78,0.12)',
+  }), [isDarkTheme]);
 
 
 
@@ -226,52 +274,81 @@ export default function LandingSites() {
 
   }, [isWellnessTenant]);
 
-
-
-  const loadPages = () => {
-
-    setLoading(true);
-
-    fetchApi('/api/landing-sites')
-
-      .then((data) => {
-
-        const list = Array.isArray(data) ? data : Array.isArray(data?.pages) ? data.pages : [];
-
-        setPages(list);
-
-      })
-
-      .catch(() => setPages([]))
-
-      .finally(() => setLoading(false));
-
-  };
-
-
-
-  useEffect(() => {
-
-    loadPages();
-
-  }, []);
-
-
-
-  const currentPublishedLandingSite = useMemo(() => pages.find((p) => p.status === 'PUBLISHED') || null, [pages]);
-
   const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
 
+  const loadPages = async ({ reset = false, nextPage = 1 } = {}) => {
+    const requestId = ++requestSeqRef.current;
 
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+    } else {
+      setLoadingMore(true);
+    }
+
+    try {
+      const params = new URLSearchParams({
+        page: String(nextPage),
+        limit: String(PAGE_SIZE),
+      });
+      if (rangeStart) params.set('createdAfter', rangeStart.toISOString());
+      if (rangeEnd) params.set('createdBefore', rangeEnd.toISOString());
+
+      const data = await fetchApi(`/api/landing-sites?${params.toString()}`);
+      if (requestId !== requestSeqRef.current) return;
+
+      const list = Array.isArray(data) ? data : Array.isArray(data?.pages) ? data.pages : [];
+      const pinned = !Array.isArray(data) && data?.pinnedPage ? data.pinnedPage : null;
+      const dedupe = (items) => Array.from(new Map(items.map((item) => [item.id, item])).values());
+
+      setPages((current) => (reset ? list : dedupe([...current, ...list])));
+      setPinnedPage(pinned);
+      setHasMore(typeof data?.hasMore === 'boolean' ? data.hasMore : list.length === PAGE_SIZE);
+      setPageIndex(nextPage);
+    } catch {
+      if (requestId !== requestSeqRef.current) return;
+      if (reset) {
+        setPages([]);
+        setPinnedPage(null);
+      }
+      setHasMore(false);
+    } finally {
+      if (requestId === requestSeqRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    setPages([]);
+    setPinnedPage(null);
+    setHasMore(true);
+    setPageIndex(1);
+    loadPages({ reset: true, nextPage: 1 });
+    // `loadPages` intentionally depends on the current date filter and tenant
+    // vertical so the infinite list resets when the wellness date range or
+    // workspace scope changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFilter, isWellnessTenant]);
+
+  const currentPublishedLandingSite = useMemo(
+    () => pinnedPage || pages.find((p) => p.status === 'PUBLISHED') || null,
+    [pages, pinnedPage],
+  );
 
   const visiblePages = useMemo(() => {
 
+    const mergedPages = pinnedPage
+      ? [pinnedPage, ...pages.filter((p) => p.id !== pinnedPage.id)]
+      : pages;
+
     const filteredPages = (rangeStart && rangeEnd)
-      ? pages.filter((p) => {
+      ? mergedPages.filter((p) => {
         const ts = new Date(p.createdAt).getTime();
         return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
       })
-      : pages;
+      : mergedPages;
 
     return [...filteredPages].sort((a, b) => {
 
@@ -283,9 +360,29 @@ export default function LandingSites() {
 
     });
 
-  }, [pages, rangeStart, rangeEnd]);
+  }, [pages, pinnedPage, rangeStart, rangeEnd]);
 
+  useEffect(() => {
+    if (!hasMore || loading || loadingMore) return;
+    const node = sentinelRef.current;
+    const root = scrollContainerRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return;
 
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setPageIndex((currentPage) => {
+        const nextPage = currentPage + 1;
+        loadPages({ reset: false, nextPage });
+        return nextPage;
+      });
+    }, {
+      root,
+      rootMargin: '300px 0px',
+    });
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore, loading, loadingMore, dateFilter, isWellnessTenant]);
 
   const handleCreateBlank = async () => {
 
@@ -305,7 +402,7 @@ export default function LandingSites() {
 
           templateType: buildTemplateType(sectorKey),
 
-          content: JSON.stringify(buildStarterBlocks({ sectorKey, campaignName: isWellnessTenant ? 'Untitled Wellness Event' : 'Untitled Landing Site', isWellness: isWellnessTenant, audience: 'qualified visitors' })),
+          content: JSON.stringify([]),
 
           description: isWellnessTenant ? 'Wellness event landing site' : 'General landing site',
 
@@ -383,9 +480,9 @@ export default function LandingSites() {
 
           location: form.location.trim(),
 
-          eventDate: form.eventDate.trim(),
+          eventDate: formatDateForPrompt(form.eventDate),
 
-          eventTime: form.eventTime.trim(),
+          eventTime: formatTimeForPrompt(form.eventTime),
 
           eventLocation: form.eventLocation.trim() || form.location.trim(),
 
@@ -530,7 +627,7 @@ export default function LandingSites() {
 
   return (
 
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
+    <div style={{ padding: '2rem', height: '100%', minHeight: 0, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'hidden', animation: 'fadeIn 0.3s ease' }}>
 
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.75rem', gap: '1rem', flexWrap: 'wrap' }}>
 
@@ -568,38 +665,64 @@ export default function LandingSites() {
 
 
 
-      {isWellnessTenant && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-          <DateRangeFilter value={dateFilter} onChange={setDateFilter} label="Filter by created date" />
-          {visiblePages.length !== pages.length && (
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-              {visiblePages.length} of {pages.length}
-            </span>
+      <section
+        className="card"
+        style={libraryShellStyle}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <div style={libraryBadgeStyle}>
+              <LayoutGrid size={20} />
+            </div>
+            <div>
+              <h3 style={{ fontSize: '1rem', fontWeight: 800, marginBottom: '0.1rem' }}>Landing Site Library</h3>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>Browse, publish, and manage your wellness landing sites.</p>
+            </div>
+          </div>
+
+          {isWellnessTenant && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <DateRangeFilter value={dateFilter} onChange={setDateFilter} label="Filter by created date" />
+              {visiblePages.length !== pages.length && (
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  {visiblePages.length} of {pages.length}
+                </span>
+              )}
+            </div>
           )}
         </div>
-      )}
 
-      {loading ? (
+        <div
+          ref={scrollContainerRef}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            paddingRight: '0.2rem',
+          }}
+        >
+          {loading ? (
 
-        <p style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-secondary)' }}>Loading...</p>
+            <p style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-secondary)' }}>Loading...</p>
 
-      ) : visiblePages.length === 0 ? (
+          ) : visiblePages.length === 0 ? (
 
-        <div className="card" style={{ padding: '4rem', textAlign: 'center' }}>
+            <div className="card" style={emptyStateStyle}>
 
-          <LayoutGrid size={48} style={{ color: 'var(--text-secondary)', opacity: 0.3, marginBottom: '1rem' }} />
+              <LayoutGrid size={48} style={{ color: 'var(--text-secondary)', opacity: 0.3, marginBottom: '1rem' }} />
 
-          <h3 style={{ marginBottom: '0.5rem' }}>No pages in the selected range.</h3>
+              <h3 style={{ marginBottom: '0.5rem' }}>No pages in the selected range.</h3>
 
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Create a blank site or generate one from a sector brief.</p>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>Create a blank site or generate one from a sector brief.</p>
 
-          <button className="btn-primary" onClick={() => setShowGenerateModal(true)}><Plus size={16} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Generate Landing Site</button>
+              <button className="btn-primary" onClick={() => setShowGenerateModal(true)}><Plus size={16} style={{ marginRight: '0.375rem', verticalAlign: 'middle' }} /> Generate Landing Site</button>
 
-        </div>
+            </div>
 
-      ) : (
+          ) : (
+            <>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.5rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.5rem' }}>
 
           {visiblePages.map((page) => {
 
@@ -753,9 +876,19 @@ export default function LandingSites() {
 
           })}
 
-        </div>
+            </div>
+              <div ref={sentinelRef} aria-hidden="true" style={{ height: '1px' }} />
+              {loadingMore && (
+                <p style={{ marginTop: '1rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                  Loading more landing sites...
+                </p>
+              )}
 
-      )}
+            </>
+          )}
+        </div>
+      </section>
+
 
 
 
@@ -773,7 +906,7 @@ export default function LandingSites() {
 
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.1rem' }}>
 
-              Pick a sector, describe the campaign, and weÃ¢â‚¬â„¢ll draft a public landing site you can edit in the builder.
+              Pick a sector, describe the campaign, and we?ll draft a public landing site you can edit in the builder.
 
             </p>
 
@@ -847,7 +980,7 @@ export default function LandingSites() {
 
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event date</span>
 
-                <input className="input-field" value={form.eventDate} onChange={(e) => setForm((s) => ({ ...s, eventDate: e.target.value }))} placeholder="12 August 2026" />
+                <input type="date" className="input-field" value={normalizeDateInputValue(form.eventDate)} onChange={(e) => setForm((s) => ({ ...s, eventDate: e.target.value }))} />
 
               </label>
 
@@ -855,7 +988,7 @@ export default function LandingSites() {
 
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event time</span>
 
-                <input className="input-field" value={form.eventTime} onChange={(e) => setForm((s) => ({ ...s, eventTime: e.target.value }))} placeholder="10:00 AM - 4:00 PM" />
+                <input type="time" className="input-field" value={normalizeTimeInputValue(form.eventTime)} onChange={(e) => setForm((s) => ({ ...s, eventTime: e.target.value }))} />
 
               </label>
 
@@ -924,6 +1057,8 @@ export default function LandingSites() {
   );
 
 }
+
+
 
 
 

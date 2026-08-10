@@ -107,6 +107,29 @@ router.get("/contact/:contactId", verifyToken, async (req, res) => {
   }
 });
 
+// ─── Batch contact scoring ────────────────────────────────────────────────
+// POST /api/ai_scoring/contacts
+// Body: { contactIds: number[] }
+// Scores up to 100 contacts sequentially for the current tenant.
+router.post("/contacts", verifyToken, async (req, res) => {
+  try {
+    const { contactIds } = req.body || {};
+    if (!Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({ error: "contactIds array is required", code: "MISSING_CONTACT_IDS" });
+    }
+    if (contactIds.length > 100) {
+      return res.status(400).json({ error: "At most 100 contacts can be scored at once", code: "TOO_MANY_CONTACT_IDS" });
+    }
+
+    const { scoreContactsByIds } = require("../cron/leadScoringEngine");
+    const result = await scoreContactsByIds(req.user.tenantId, contactIds, req.io);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to score contacts" });
+  }
+});
+
 // ─── Debug trigger endpoint ─────────────────────────────────────────────────
 router.post("/trigger", async (req, res) => {
   try {

@@ -34,7 +34,7 @@
  *   - useNotify returns a STABLE object reference (per the 2026-05-23
  *     standing rule on RTL hook mocks).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
@@ -152,6 +152,7 @@ const { fetchApiMock } = vi.hoisted(() => ({
   fetchApiMock: vi.fn(),
 }));
 vi.mock('../utils/api', () => ({ fetchApi: fetchApiMock }));
+let consoleErrorSpy;
 
 // Sample page catalog used by the wellness-vertical tests that exercise
 // renderWellnessNav. Every entry mirrors the server's shape
@@ -228,6 +229,18 @@ function renderSidebar({
 }
 
 beforeEach(() => {
+  consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation((...args) => {
+    const first = String(args[0] ?? '');
+    if (
+      first.includes('Warning: An update to Sidebar inside a test was not wrapped in act')
+      || first.includes('When testing, code that causes React state updates should be wrapped into act')
+    ) {
+      return;
+    }
+    // Preserve every other console.error so real regressions still surface.
+    // eslint-disable-next-line no-console
+    console.warn(...args);
+  });
   notifyObj.error.mockReset();
   notifyObj.success.mockReset();
   notifyObj.info.mockReset();
@@ -249,6 +262,10 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => {
+  consoleErrorSpy?.mockRestore();
+});
+
 describe('Sidebar — load-bearing render surface', () => {
   describe('Generic vertical', () => {
     it('renders core generic nav items (Dashboard / Contacts / Pipeline / Leads / Tickets)', () => {
@@ -261,6 +278,13 @@ describe('Sidebar — load-bearing render surface', () => {
       // accept either by checking we have at least one match.
       expect(screen.getAllByText('Leads').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Tickets')).toBeTruthy();
+    });
+
+    it('renders the Web Forms nav entry with href /forms for ADMIN', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const link = screen.getByText('Web Forms').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/forms');
     });
 
     it('renders 40+ links for ADMIN under generic vertical (full enterprise nav)', () => {
@@ -606,6 +630,22 @@ describe('Sidebar — load-bearing render surface', () => {
       // MANAGER should also NOT see it (adminOnly, not managerOnly).
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
       expect(screen.queryByText('CSP Violations')).toBeNull();
+    });
+  });
+
+
+  describe('Travel vertical ? Flight Offer Image hidden', () => {
+    it('does not render /travel/flight-offer-image link under travel (reused by quick-quote)', () => {
+      // The route stays mounted in App.jsx, but the sidebar surface is hidden
+      // because Flight quick-quote now owns the shared implementation.
+      const cases = ['USER', 'MANAGER', 'ADMIN'];
+      cases.forEach((role) => {
+        const { unmount } = renderSidebar({ vertical: 'travel', role });
+        const link = Array.from(document.querySelectorAll('a'))
+          .find((a) => a.getAttribute('href') === '/travel/flight-offer-image');
+        expect(link).toBeFalsy();
+        unmount();
+      });
     });
   });
 
@@ -1680,3 +1720,4 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 });
+

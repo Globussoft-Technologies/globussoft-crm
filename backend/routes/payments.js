@@ -642,10 +642,29 @@ router.post(
                 }
               }
 
-              // Recompute the invoice status from all SUCCESS payments.
+              // Recompute the invoice and quote status from all SUCCESS payments.
               if (travelInvoiceId) {
                 try {
                   await recomputeTravelInvoiceStatus(prisma, tenantIdNum, travelInvoiceId);
+                  const paidAgg = await prisma.payment.aggregate({
+                    where: {
+                      tenantId: tenantIdNum,
+                      status: 'SUCCESS',
+                      OR: [
+                        { invoiceId: travelInvoiceId },
+                        { metadata: { contains: `"travelInvoiceId":${travelInvoiceId}` } },
+                      ],
+                    },
+                    _sum: { amount: true },
+                  });
+                  const totalPaid = Number(paidAgg._sum.amount || 0);
+                  const totalQuote = Number((quote && quote.totalAmount) || 0);
+                  const cumulativeStatus =
+                    totalQuote > 0 && totalPaid >= totalQuote ? 'fully_paid' : 'advance_paid';
+                  await prisma.travelQuote.updateMany({
+                    where: { id: quoteId },
+                    data: { status: cumulativeStatus },
+                  });
                 } catch (e) {
                   console.error('[Payments] travel invoice recompute failed:', e.message);
                 }
@@ -698,13 +717,14 @@ router.post(
           }
         }
 
-        // TMC instalment pay-link: notes.kind = 'tmc-instalment'.
+        // TMC instalment payment: legacy links use notes.kind = 'tmc-instalment';
+        // dynamic Checkout orders use notes.kind = 'travel-trip-installment'.
         // Marks the TripInstalmentPayment row paid/partial.
         // Two lookup strategies:
         //  A) notes.instalmentId — set on new links after the paymentLink.js fix.
         //  B) paymentLinkUrl match — for old links where instalmentId was missing
         //     from notes; the stored short_url matches TripInstalmentPayment.paymentLinkUrl.
-        if (notes && notes.kind === 'tmc-instalment') {
+        if (notes && (notes.kind === 'tmc-instalment' || notes.kind === 'travel-trip-installment')) {
           try {
             const paidPaise = paymentEnt && paymentEnt.amount;
             const paidMajor = paidPaise != null ? paidPaise / 100 : null;

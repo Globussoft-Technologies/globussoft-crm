@@ -1,4 +1,4 @@
-// @ts-check
+﻿// @ts-check
 /**
  * backend/routes/travel_trips.js — TMC trip route contract pin.
  *
@@ -117,8 +117,12 @@ prisma.tripDocumentRequirement = {
   create: vi.fn(),
   delete: vi.fn(),
 };
+prisma.tripPaymentPlan = {
+  findUnique: vi.fn(),
+};
 prisma.tripInstalmentPayment = {
   findMany: vi.fn(),
+  createMany: vi.fn(),
 };
 prisma.roomingAssignment = {
   findMany: vi.fn(),
@@ -175,6 +179,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 const googleDriveClient = requireCJS('../../services/googleDriveClient');
 const digilockerClient = requireCJS('../../services/digilockerClient');
 
+const sendEmailMock = vi.fn();
+requireCJS('../../lib/emailSender').sendEmail = sendEmailMock;
+
 const tripsRouter = requireCJS('../../routes/travel_trips');
 
 function makeApp() {
@@ -212,7 +219,9 @@ beforeEach(() => {
   prisma.tripDocumentRequirement.findMany.mockReset().mockResolvedValue([]);
   prisma.tripDocumentRequirement.create.mockReset();
   prisma.tripDocumentRequirement.delete.mockReset();
+  prisma.tripPaymentPlan.findUnique.mockReset().mockResolvedValue(null);
   prisma.tripInstalmentPayment.findMany.mockReset().mockResolvedValue([]);
+  prisma.tripInstalmentPayment.createMany.mockReset();
   prisma.roomingAssignment.findMany.mockReset().mockResolvedValue([]);
   prisma.digilockerSession.findFirst.mockReset();
   prisma.digilockerSession.create.mockReset();
@@ -233,6 +242,7 @@ beforeEach(() => {
   });
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
+  sendEmailMock.mockReset().mockResolvedValue({ sent: true });
 
   // Default the Drive + DigiLocker stubs to their real synthetic behaviour;
   // individual tests override (e.g. createTripFolder throws for one path).
@@ -1575,6 +1585,67 @@ describe('POST /api/travel/trips/:id/registrations/:rid/approve', () => {
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
+  test('approved registration materializes pending instalments and sends a clean CTA email', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findFirst.mockResolvedValue({
+      id: 9002, tripId: 100, tenantId: 1, status: 'OTP_VERIFIED',
+      studentName: 'Mira Shah', parentName: 'Anita Shah',
+      parentEmail: 'anita@example.com', parentPhone: '+919876543210',
+      passportNumber: 'K1234567', passportExpiry: new Date('2031-09-01'),
+      otpVerifiedAt: new Date(),
+    });
+    prisma.tripPaymentPlan.findUnique.mockResolvedValue({
+      id: 17,
+      tripId: 100,
+      instalmentsJson: JSON.stringify([
+        { dueDate: '2026-09-01', amount: 5000 },
+        { dueDate: '2026-10-01', amount: 5000 },
+      ]),
+    });
+    prisma.tripParticipant.create.mockResolvedValue({
+      id: 4244,
+      tripId: 100,
+      fullName: 'Mira Shah',
+      parentName: 'Anita Shah',
+      parentEmail: 'anita@example.com',
+      applicationStatus: 'approved',
+    });
+    prisma.tripParticipant.findMany.mockResolvedValue([{ id: 4244 }]);
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([]);
+    prisma.tripInstalmentPayment.createMany.mockResolvedValue({ count: 2 });
+    prisma.pendingTripRegistration.update.mockResolvedValue({
+      id: 9002, status: 'CONVERTED', convertedToParticipantId: 4244,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/registrations/9002/approve')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ reviewNotes: 'Approved for payment portal' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      approved: true,
+      participant: { id: 4244, applicationStatus: 'approved' },
+      registration: { id: 9002, status: 'CONVERTED', convertedToParticipantId: 4244 },
+    });
+    expect(prisma.tripInstalmentPayment.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({ tripId: 100, participantId: 4244, instalmentIndex: 0, status: 'pending' }),
+          expect.objectContaining({ tripId: 100, participantId: 4244, instalmentIndex: 1, status: 'pending' }),
+        ]),
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const email = sendEmailMock.mock.calls[0][0];
+    expect(email.text).not.toContain('http://localhost:5173/pay/');
+    expect(email.text).toContain('Click here to proceed for payment:');
+    expect(email.html).toContain('Click here to proceed for payment');
+    expect(email.html).toContain('href="http://localhost:5173/pay/');
+    expect(email.html).not.toContain('display:inline-block');
+    expect(email.html).not.toContain('background:#4f46e5');
+  });
   test('DRAFT (no OTP yet) can be approved — OTP gate relaxed for operator approvals', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
     prisma.pendingTripRegistration.findFirst.mockResolvedValue({
@@ -1718,5 +1789,11 @@ describe('POST /api/travel/trips/:id/registrations/:rid/reject', () => {
     expect(res.body).toMatchObject({ code: 'REGISTRATION_NOT_FOUND' });
   });
 });
+
+
+
+
+
+
 
 

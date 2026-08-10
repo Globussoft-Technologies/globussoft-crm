@@ -317,6 +317,18 @@ function budgetTierWhereClause(budgetTier) {
   return { basePriceMinor: range };
 }
 
+function visibilityClause(activeOnly, includeArchived) {
+  if (!includeArchived) {
+    return { archivedAt: null, isActive: activeOnly };
+  }
+  return {
+    OR: [
+      { archivedAt: { not: null } },
+      { archivedAt: null, isActive: activeOnly },
+    ],
+  };
+}
+
 // POST /api/travel/itinerary-templates/upload-image — S3 thumbnail upload.
 // MUST be declared before /:id so Express matches the literal path first.
 // Returns { success, url, filename } — same shape as /api/wellness/upload/service-image.
@@ -360,15 +372,15 @@ router.post(
 router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
+    const activeOnly = req.query.isActive === undefined
+      ? true
+      : String(req.query.isActive) === "true";
 
     if (req.query.destinationName) {
       where.destinationName = String(req.query.destinationName);
     }
     if (req.query.category) {
       where.category = String(req.query.category);
-    }
-    if (req.query.isActive !== undefined) {
-      where.isActive = String(req.query.isActive) === "true";
     }
 
     // G061 — Budget-tier facet (PRD FR-3.1.c). When ?budgetTier=budget|mid|
@@ -384,15 +396,19 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
     // G048 — version + archive filtering. String comparison against "true"
     // so undefined / any non-"true" value behaves as "filter on". The
     // default-filtered query passes BOTH predicates; ?includeArchived=true
-    // drops only the archivedAt predicate; ?includeAllVersions=true drops
-    // only the isLatest predicate.
+    // broadens visibility to archived rows while still respecting the
+    // active/inactive toggle; ?includeAllVersions=true drops only the
+    // isLatest predicate.
     const includeArchived = String(req.query.includeArchived) === "true";
     const includeAllVersions = String(req.query.includeAllVersions) === "true";
     if (!includeAllVersions) {
       where.isLatest = true;
     }
-    if (!includeArchived) {
-      where.archivedAt = null;
+    const vis = visibilityClause(activeOnly, includeArchived);
+    if (includeArchived) {
+      where.AND = [vis];
+    } else {
+      Object.assign(where, vis);
     }
 
     // Clamp pagination: limit ∈ [1, 200]; offset ≥ 0.
@@ -418,10 +434,17 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
         }
         where.subBrand = String(req.query.subBrand);
       } else {
-        where.OR = [
-          { subBrand: null },
-          { subBrand: { in: [...allowed] } },
-        ];
+        const brandClause = {
+          OR: [
+            { subBrand: null },
+            { subBrand: { in: [...allowed] } },
+          ],
+        };
+        if (includeArchived) {
+          where.AND = [...(where.AND || []), brandClause];
+        } else {
+          where.OR = brandClause.OR;
+        }
       }
     } else if (req.query.subBrand) {
       where.subBrand = String(req.query.subBrand);
@@ -1404,14 +1427,20 @@ router.get(
   async (req, res) => {
     try {
       const where = { tenantId: req.travelTenant.id };
+      const activeOnly = req.query.isActive === undefined
+        ? true
+        : String(req.query.isActive) === "true";
 
       const includeArchived = String(req.query.includeArchived) === "true";
       const includeAllVersions = String(req.query.includeAllVersions) === "true";
       if (!includeAllVersions) {
         where.isLatest = true;
       }
-      if (!includeArchived) {
-        where.archivedAt = null;
+      const vis = visibilityClause(activeOnly, includeArchived);
+      if (includeArchived) {
+        where.AND = [vis];
+      } else {
+        Object.assign(where, vis);
       }
 
       // Sub-brand narrowing — empty access set → empty CSV (header only).
@@ -1421,10 +1450,17 @@ router.get(
       if (allowed instanceof Set && allowed.size === 0) {
         writeEmpty = true;
       } else if (allowed instanceof Set) {
-        where.OR = [
-          { subBrand: null },
-          { subBrand: { in: [...allowed] } },
-        ];
+        const brandClause = {
+          OR: [
+            { subBrand: null },
+            { subBrand: { in: [...allowed] } },
+          ],
+        };
+        if (includeArchived) {
+          where.AND = [...(where.AND || []), brandClause];
+        } else {
+          where.OR = brandClause.OR;
+        }
       }
 
       const HEADER = [

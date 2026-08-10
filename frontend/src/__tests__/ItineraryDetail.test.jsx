@@ -1121,6 +1121,36 @@ describe("ItineraryDetail — S82 geocode-on-create", () => {
   });
 });
 
+describe("ItineraryDetail - cancellation policy fallback copy", () => {
+  it("shows the applied policy name when the refund needs a travel start date", async () => {
+    const response = {
+      ...ITIN_WITH_ITEMS,
+      status: "accepted",
+      cancellationStatus: "requested",
+      startDate: null,
+      cancellationRefund: {
+        policyId: 12,
+        policyName: "TMC Default",
+        currency: "INR",
+        paidAmount: 0,
+        daysRemaining: null,
+        refundPercent: null,
+        retentionPercent: null,
+        refundAmount: null,
+        computable: false,
+      },
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(response));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    expect(
+      screen.getByText(/TMC Default is applied; set a travel start date/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/assign a cancellation policy/i)).toBeNull();
+  });
+});
+
 // ─── S127 — MapPreview wire-in on the detail page ────────────────────
 //
 // Pins the spatial preview block above the day-by-day breakdown. The

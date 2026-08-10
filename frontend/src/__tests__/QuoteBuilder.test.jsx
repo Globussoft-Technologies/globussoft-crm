@@ -197,6 +197,12 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
     expect(screen.queryByRole('button', { name: /Download PDF/i })).toBeNull();
   });
 
+  it('renders the hotel offer image generator below the header', async () => {
+    renderPage();
+    const quoteHeading = await screen.findByRole('heading', { name: /Quote Builder/i });
+    const generatorHeading = await screen.findByRole('heading', { name: /Hotel offer image generator/i });
+    expect(quoteHeading.compareDocumentPosition(generatorHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
   it('NEW mode: no GET to quotes/:id fires on mount; Add-line disabled until save', async () => {
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });
@@ -1345,3 +1351,4 @@ describe('<QuoteBuilder /> — TBO flight/hotel search', () => {
     expect(screen.getByDisplayValue('Makkah Hotel, Makkah — Deluxe')).toBeInTheDocument();
   });
 });
+

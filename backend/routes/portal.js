@@ -1,4 +1,4 @@
-const express = require("express");
+﻿const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -13,6 +13,7 @@ const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring")
 const { notifyMany } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
 const visaDocStore = require("../lib/visaDocStore");
+const visaLetterStore = require("../lib/visaLetterStore");
 const { buildForm: buildReviewForm, validateSubmission: validateReviewSubmission } = require("../lib/travelReviewQuestions");
 const { buildExternalReviewCta } = require("../lib/travelReviewExternal");
 const travelPortalNotifications = require("../lib/travelPortalNotificationService");
@@ -471,10 +472,10 @@ router.get("/travel/itineraries", verifyPortalToken, requireTravelPortalTenant, 
         items: { orderBy: { position: "asc" } },
       },
     });
-    // Attach a web-check-in "due" flag per trip: any active WebCheckin row
-    // (pending/reminded) whose flight departs within the next 36h. Drives the
-    // portal's "Have you checked in? Yes/No" banner (2026-06-16). The Yes
-    // action flips those rows to "done" → flag clears + reminders stop.
+    // Attach a web-check-in "due" flag per trip: any pending WebCheckin row
+    // whose flight departs within the next 36h. Drives the portal's
+    // "Have you checked in? Yes/No" banner (2026-06-16). The Yes action flips
+    // those rows to "done" → flag clears + reminders stop.
     const ids = itineraries.map((i) => i.id);
     let dueByItin = {};
     if (ids.length) {
@@ -484,7 +485,7 @@ router.get("/travel/itineraries", verifyPortalToken, requireTravelPortalTenant, 
         where: {
           tenantId: req.portal.tenantId,
           itineraryId: { in: ids },
-          status: { in: ["pending", "reminded"] },
+          status: "pending",
           departureAt: { gte: now, lte: horizon },
         },
         select: { itineraryId: true },
@@ -727,6 +728,9 @@ router.post("/travel/itineraries/:id/request-cancellation", verifyPortalToken, r
     if (itin.cancellationStatus === "requested" || itin.cancellationStatus === "cancelled") {
       return res.status(409).json({ error: "A cancellation is already in progress for this booking.", code: "ALREADY_REQUESTED" });
     }
+    if (itin.cancellationStatus === "refunded") {
+      return res.status(409).json({ error: "This booking has already been cancelled and refunded.", code: "ALREADY_REFUNDED" });
+    }
     // A trip that has already departed (or ended) can't be cancelled online —
     // there's nothing left to cancel and the cancellation policy keys off
     // days-before-departure (which is now negative). The customer must contact
@@ -833,11 +837,10 @@ router.post("/travel/itineraries/:id/preferred-dates", verifyPortalToken, requir
 // POST /api/portal/travel/itineraries/:id/webcheckin-confirm
 //
 // The customer's "Yes, I've checked in" action for a flight trip (2026-06-16).
-// Flips every still-active WebCheckin row for this trip → status "done" — the
-// SAME rows the existing webCheckinScheduler + the email engine read, so this
-// one confirm stops BOTH (no more reminder emails, no agent-fallback
-// escalation). Ownership verified by loadPortalOwnedItinerary. Idempotent: if
-// no active rows remain it's a no-op success (updated: 0).
+// Flips every still-pending WebCheckin row for this trip → status "done" —
+// the SAME rows the email engine reads, so this one confirm stops reminders.
+// Ownership verified by loadPortalOwnedItinerary. Idempotent: if no pending
+// rows remain it's a no-op success (updated: 0).
 router.post("/travel/itineraries/:id/webcheckin-confirm", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
   try {
     const itin = await loadPortalOwnedItinerary(req, res);
@@ -846,7 +849,7 @@ router.post("/travel/itineraries/:id/webcheckin-confirm", verifyPortalToken, req
       where: {
         itineraryId: itin.id,
         tenantId: req.portal.tenantId,
-        status: { in: ["pending", "reminded"] },
+        status: "pending",
       },
       data: { status: "done" },
     });
@@ -1369,12 +1372,23 @@ async function getPortalContactSubBrand(contactId) {
   return c && c.subBrand ? c.subBrand : null;
 }
 
-// Load the active (highest-version) diagnostic bank for a sub-brand.
+// Load the newest ACTIVE diagnostic bank for a sub-brand that the customer
+// portal can actually score. The portal flow only supports the generic
+// weighted-sum engine; TMC also has a special deterministic bank used by the
+// dedicated readiness flow, so we skip non-weighted banks here instead of
+// crashing the customer submission.
 async function loadActiveBank(tenantId, subBrand) {
-  return prisma.travelDiagnosticQuestionBank.findFirst({
+  const banks = await prisma.travelDiagnosticQuestionBank.findMany({
     where: { tenantId, subBrand, isActive: true },
     orderBy: { version: "desc" },
   });
+  for (const bank of banks) {
+    const { bank: parsed } = parseBank(bank.questionsJson, bank.scoringRulesJson);
+    if (parsed && (parsed.method || "weighted-sum") === "weighted-sum") {
+      return bank;
+    }
+  }
+  return null;
 }
 
 // GET /api/portal/travel/diagnostic-brands
@@ -1387,10 +1401,15 @@ router.get("/travel/diagnostic-brands", verifyPortalToken, requireTravelPortalTe
   try {
     const banks = await prisma.travelDiagnosticQuestionBank.findMany({
       where: { tenantId: req.portal.tenantId, isActive: true },
-      select: { subBrand: true },
+      select: { subBrand: true, questionsJson: true, scoringRulesJson: true },
       orderBy: [{ subBrand: "asc" }],
     });
-    const brands = [...new Set(banks.map((b) => b.subBrand))].map((subBrand) => ({ subBrand }));
+    const brands = [...new Set(
+      banks.filter((bank) => {
+        const { bank: parsed } = parseBank(bank.questionsJson, bank.scoringRulesJson);
+        return parsed && (parsed.method || "weighted-sum") === "weighted-sum";
+      }).map((b) => b.subBrand),
+    )].map((subBrand) => ({ subBrand }));
     const defaultSubBrand = await getPortalContactSubBrand(req.portal.contactId);
     res.json({ brands, defaultSubBrand });
   } catch (err) {
@@ -1421,6 +1440,17 @@ router.get("/travel/diagnostic-bank", verifyPortalToken, requireTravelPortalTena
       id: q.id,
       text: q.text,
       type: q.type,
+      fields: Array.isArray(q.fields)
+        ? q.fields.map((f) => ({
+            id: f.id,
+            label: f.label,
+            type: f.type,
+            required: Boolean(f.required),
+            options: Array.isArray(f.options)
+              ? f.options.map((o) => ({ value: o.value, label: o.label }))
+              : undefined,
+          }))
+        : undefined,
       options: (q.options || []).map((o) => ({ value: o.value, label: o.label })),
     }));
     res.json({ available: true, bankId: bank.id, subBrand, version: bank.version, questions });
@@ -1521,7 +1551,7 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
 // required document. The advisor (AdvisorDashboard) then verifies/rejects each
 // upload; verifying the last required doc auto-advances the application to
 // Filed. Everything here is scoped to the logged-in Contact (req.portal).
-const VISA_SUB_BRAND_PORTAL = "visasure";
+const VISA_SUB_BRAND_PORTAL = null;
 const VISA_APP_TYPES = ["tourist", "business", "student", "work", "umrah", "hajj"];
 
 // multipart handler — JPG / PNG / PDF only (passport scans, photos, supporting
@@ -1552,6 +1582,29 @@ const portalVisaDocUploadHandler = (req, res, next) => {
   });
 };
 
+const portalVisaLetterUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if ((file.mimetype || "").toLowerCase() === "application/pdf") return cb(null, true);
+    cb(new Error("UNSUPPORTED_MIME"));
+  },
+});
+const portalVisaLetterUploadHandler = (req, res, next) => {
+  portalVisaLetterUpload.single("file")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ error: "File too large (max 10 MB)", code: "FILE_TOO_LARGE" });
+      }
+      return res.status(400).json({ error: "Upload error", code: "UPLOAD_ERROR" });
+    }
+    if (err) {
+      return res.status(400).json({ error: "Only PDF files are allowed", code: "UNSUPPORTED_MIME" });
+    }
+    next();
+  });
+};
+
 // Project a checklist item for the customer — their own file URL + status +
 // any advisor note (e.g. a rejection reason) are surfaced; internal ids aren't.
 function projectPortalChecklistItem(i) {
@@ -1566,6 +1619,22 @@ function projectPortalChecklistItem(i) {
     notes: i.notes || null,
   };
 }
+
+function projectPortalVisaLetterDocument(doc) {
+  return {
+    id: doc.id,
+    generationId: doc.generationId,
+    documentType: doc.documentType,
+    docType: doc.documentType,
+    status: doc.status,
+    generatedFileName: doc.generatedFileName,
+    signedFileName: doc.signedFileName || null,
+    generatedAt: doc.generatedAt,
+    sentAt: doc.sentAt || null,
+    signedUploadedAt: doc.signedUploadedAt || null,
+  };
+}
+
 function projectPortalVisaApp(app) {
   return {
     id: app.id,
@@ -1574,6 +1643,7 @@ function projectPortalVisaApp(app) {
     status: app.status,
     createdAt: app.createdAt,
     documentChecklist: (app.documentChecklist || []).map(projectPortalChecklistItem),
+    visaLetters: (app.visaLetterDocuments || []).map(projectPortalVisaLetterDocument),
   };
 }
 
@@ -1588,7 +1658,7 @@ router.get("/travel/visa/checklist-preview", verifyPortalToken, requireTravelPor
       return res.status(400).json({ error: "applicationType and destinationCountry are required", code: "MISSING_FIELDS" });
     }
     const items = await prisma.visaChecklistTemplate.findMany({
-      where: { tenantId: req.portal.tenantId, applicationType, destinationCountry },
+      where: { tenantId: req.portal.tenantId, applicationType, destinationCountry, isActive: true },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       select: { docType: true, required: true, notes: true },
     });
@@ -1607,7 +1677,13 @@ router.get("/travel/visa/applications", verifyPortalToken, requireTravelPortalTe
     const rows = await prisma.visaApplication.findMany({
       where: { tenantId: req.portal.tenantId, contactId: req.portal.contactId },
       orderBy: { createdAt: "desc" },
-      include: { documentChecklist: { orderBy: { createdAt: "asc" } } },
+      include: {
+        documentChecklist: { orderBy: { createdAt: "asc" } },
+        visaLetterDocuments: {
+          where: { status: { in: ["SENT", "SIGNED_UPLOADED"] } },
+          orderBy: [{ generationId: "desc" }, { id: "asc" }],
+        },
+      },
     });
     res.json({ applications: rows.map(projectPortalVisaApp) });
   } catch (err) {
@@ -1634,21 +1710,13 @@ router.post("/travel/visa/applications", verifyPortalToken, requireTravelPortalT
       return res.status(400).json({ error: "destinationCountry is required (1..200 chars)", code: "INVALID_DESTINATION" });
     }
 
-    // The Visa Sure pipeline is sub-brand-scoped: the advisor surface only
-    // shows applications whose Contact.subBrand === "visasure". A customer who
-    // starts a visa application IS a visa customer, so we promote the contact
-    // to visasure here (capturing any prior brand in the audit row) — else
-    // their application would be invisible to visa advisors + unactionable.
-    // Runs BEFORE the idempotency check so a repeat "start" also repairs an
-    // application created before the contact was promoted.
+    // Start a fresh visa application for this contact. The application is
+    // tenant-scoped; we leave the contact's brand unchanged.
     const contact = await prisma.contact.findFirst({
       where: { id: contactId, tenantId },
       select: { id: true, subBrand: true },
     });
     const priorSubBrand = contact ? contact.subBrand : null;
-    if (contact && contact.subBrand !== VISA_SUB_BRAND_PORTAL) {
-      await prisma.contact.update({ where: { id: contactId }, data: { subBrand: VISA_SUB_BRAND_PORTAL } });
-    }
 
     // Always create a fresh application — the customer can hold one per visa.
     const created = await prisma.visaApplication.create({
@@ -1658,7 +1726,7 @@ router.post("/travel/visa/applications", verifyPortalToken, requireTravelPortalT
     // Seed the checklist from the (applicationType × destinationCountry)
     // template — mirrors seedChecklistFromTemplates in routes/travel_visa.js.
     const templates = await prisma.visaChecklistTemplate.findMany({
-      where: { tenantId, applicationType, destinationCountry },
+      where: { tenantId, applicationType, destinationCountry, isActive: true },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       select: { docType: true, required: true, notes: true },
     });
@@ -1684,9 +1752,27 @@ router.post("/travel/visa/applications", verifyPortalToken, requireTravelPortalT
       { actorType: "portal" },
     ).catch(() => {});
 
+    travelPortalNotifications.safeNotifyTravelCustomer({
+      contactId,
+      tenantId,
+      title: "Your visa application is ready",
+      message: "Your visa application has been created. Please sign the letters and upload the signed copies in the Visa section.",
+      type: "system",
+      link: `visa:${created.id}`,
+    }).catch((err) => {
+      console.warn("[Portal][travel/visa/application POST] customer notification failed:", err.message);
+    });
+
+
     const withChecklist = await prisma.visaApplication.findFirst({
       where: { id: created.id },
-      include: { documentChecklist: { orderBy: { createdAt: "asc" } } },
+      include: {
+        documentChecklist: { orderBy: { createdAt: "asc" } },
+        visaLetterDocuments: {
+          where: { status: { in: ["SENT", "SIGNED_UPLOADED"] } },
+          orderBy: [{ generationId: "desc" }, { id: "asc" }],
+        },
+      },
     });
     res.status(201).json({ application: projectPortalVisaApp(withChecklist), created: true });
   } catch (err) {
@@ -1716,7 +1802,7 @@ router.post(
           id: itemId,
           application: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
         },
-        select: { id: true, status: true, attachmentStorage: true, attachmentKey: true },
+        select: { id: true, applicationId: true, docType: true, status: true, attachmentStorage: true, attachmentKey: true },
       });
       if (!item) {
         return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
@@ -1753,6 +1839,38 @@ router.post(
       // Supersede the previous file (re-upload) so we don't orphan it.
       if (item.attachmentKey && item.attachmentKey !== stored.key) {
         await visaDocStore.removeDoc({ storage: item.attachmentStorage, key: item.attachmentKey });
+      }
+
+      try {
+        const [application, staffUserIds, contact] = await Promise.all([
+          prisma.visaApplication.findFirst({
+            where: { id: item.applicationId, tenantId: req.portal.tenantId, contactId: req.portal.contactId },
+            select: { id: true },
+          }),
+          prisma.user.findMany({
+            where: { tenantId: req.portal.tenantId, role: { in: ["ADMIN", "MANAGER"] } },
+            select: { id: true },
+          }).then((rows) => rows.map((u) => u.id)),
+          prisma.contact.findFirst({
+            where: { id: req.portal.contactId, tenantId: req.portal.tenantId },
+            select: { name: true, email: true },
+          }).catch(() => null),
+        ]);
+        if (application && staffUserIds.length > 0) {
+          const who = (contact && (contact.name || contact.email)) || "A customer";
+          const docLabel = item.docType || "visa document";
+          await notifyMany({
+            userIds: staffUserIds,
+            tenantId: req.portal.tenantId,
+            title: "Visa document uploaded",
+            message: `${who} uploaded ${docLabel} for application #${application.id}. Please verify.`,
+            type: "info",
+            link: `/travel/visa/applications/${application.id}`,
+            io: req.io || null,
+          });
+        }
+      } catch (notifyErr) {
+        console.warn("[Portal][travel/visa/documents:upload] staff notification failed:", notifyErr.message);
       }
 
       writeAudit(
@@ -1800,6 +1918,190 @@ router.get("/travel/visa/documents/:itemId/view-url", verifyPortalToken, require
     res.status(500).json({ error: "Failed to open document" });
   }
 });
+
+async function streamPortalVisaLetter(res, descriptor, fileName, { download = false } = {}) {
+  const buffer = await visaLetterStore.readLetterBuffer(descriptor);
+  if (!buffer) {
+    return res.status(404).json({ error: "Letter file not found", code: "NOT_FOUND" });
+  }
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `${download ? "attachment" : "inline"}; filename="${fileName || "visa-letter.pdf"}"`,
+  );
+  return res.send(buffer);
+}
+
+router.get("/travel/visa/letters/:letterId/generated", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const letterId = parseInt(req.params.letterId, 10);
+    if (!Number.isFinite(letterId)) {
+      return res.status(400).json({ error: "letterId must be a number", code: "INVALID_ID" });
+    }
+    const doc = await prisma.visaLetterDocument.findFirst({
+      where: {
+        id: letterId,
+        tenantId: req.portal.tenantId,
+        status: { in: ["SENT", "SIGNED_UPLOADED"] },
+        visaApplication: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
+      },
+    });
+    if (!doc) return res.status(404).json({ error: "Letter not found", code: "NOT_FOUND" });
+    return streamPortalVisaLetter(
+      res,
+      { storage: doc.generatedFileStorage, key: doc.generatedFileKey },
+      doc.generatedFileName,
+      { download: req.query.download === "1" },
+    );
+  } catch (err) {
+    console.error("[Portal][travel/visa/letters generated]", err);
+    return res.status(500).json({ error: "Failed to open letter" });
+  }
+});
+
+router.get("/travel/visa/letters/:letterId/signed", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const letterId = parseInt(req.params.letterId, 10);
+    if (!Number.isFinite(letterId)) {
+      return res.status(400).json({ error: "letterId must be a number", code: "INVALID_ID" });
+    }
+    const doc = await prisma.visaLetterDocument.findFirst({
+      where: {
+        id: letterId,
+        tenantId: req.portal.tenantId,
+        status: "SIGNED_UPLOADED",
+        visaApplication: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
+      },
+    });
+    if (!doc || !doc.signedFileKey) return res.status(404).json({ error: "Signed letter not found", code: "NOT_FOUND" });
+    return streamPortalVisaLetter(
+      res,
+      { storage: doc.signedFileStorage, key: doc.signedFileKey },
+      doc.signedFileName || doc.generatedFileName,
+      { download: req.query.download === "1" },
+    );
+  } catch (err) {
+    console.error("[Portal][travel/visa/letters signed]", err);
+    return res.status(500).json({ error: "Failed to open signed letter" });
+  }
+});
+
+router.post(
+  "/travel/visa/letters/:letterId/signed-upload",
+  verifyPortalToken,
+  requireTravelPortalTenant,
+  portalVisaLetterUploadHandler,
+  async (req, res) => {
+    try {
+      const letterId = parseInt(req.params.letterId, 10);
+      if (!Number.isFinite(letterId)) {
+        return res.status(400).json({ error: "letterId must be a number", code: "INVALID_ID" });
+      }
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: "no file uploaded (field name: 'file')", code: "NO_FILE" });
+      }
+      const doc = await prisma.visaLetterDocument.findFirst({
+        where: {
+          id: letterId,
+          tenantId: req.portal.tenantId,
+          status: { in: ["SENT", "SIGNED_UPLOADED"] },
+          visaApplication: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
+        },
+        select: {
+          id: true,
+          generationId: true,
+          visaApplicationId: true,
+          participantId: true,
+          documentType: true,
+          signedFileKey: true,
+          signedFileStorage: true,
+        },
+      });
+      if (!doc) return res.status(404).json({ error: "Letter not found", code: "NOT_FOUND" });
+
+      let stored;
+      try {
+        stored = await visaLetterStore.storeLetterPdf(req.file.buffer, {
+          applicationId: doc.visaApplicationId,
+          participantId: doc.participantId,
+          kind: "signed",
+          fileName: (req.file.originalname || "signed-visa-letter.pdf").slice(0, 160),
+        });
+      } catch (e) {
+        console.error("[Portal][travel/visa/letters signed-upload] storage error:", e.message);
+        return res.status(502).json({ error: "Couldn't store the uploaded file. Please try again.", code: "STORAGE_FAILED" });
+      }
+
+      const updated = await prisma.visaLetterDocument.update({
+        where: { id: doc.id },
+        data: {
+          status: "SIGNED_UPLOADED",
+          signedFileUrl: stored.url,
+          signedFileKey: stored.key,
+          signedFileStorage: stored.storage,
+          signedFileName: (req.file.originalname || "signed-visa-letter.pdf").slice(0, 255),
+          signedUploadedAt: new Date(),
+          signedUploadedByContactId: req.portal.contactId,
+        },
+      });
+      if (doc.signedFileKey && doc.signedFileKey !== stored.key) {
+        await visaLetterStore.removeLetter({ storage: doc.signedFileStorage, key: doc.signedFileKey });
+      }
+
+      const generationDocs = await prisma.visaLetterDocument.findMany({
+        where: { generationId: doc.generationId, tenantId: req.portal.tenantId },
+        select: { status: true },
+      });
+      const allSigned = generationDocs.length > 0 && generationDocs.every((row) => row.status === "SIGNED_UPLOADED");
+      await prisma.visaLetterGeneration.update({
+        where: { id: doc.generationId },
+        data: { status: allSigned ? "SIGNED_COMPLETE" : "PARTIALLY_SIGNED" },
+      }).catch(() => {});
+
+      try {
+        const [staffUserIds, contact] = await Promise.all([
+          prisma.user.findMany({
+            where: { tenantId: req.portal.tenantId, role: { in: ["ADMIN", "MANAGER"] } },
+            select: { id: true },
+          }).then((rows) => rows.map((u) => u.id)),
+          prisma.contact.findFirst({
+            where: { id: req.portal.contactId, tenantId: req.portal.tenantId },
+            select: { name: true, email: true },
+          }).catch(() => null),
+        ]);
+        if (staffUserIds.length > 0) {
+          const who = (contact && (contact.name || contact.email)) || "A customer";
+          await notifyMany({
+            userIds: staffUserIds,
+            tenantId: req.portal.tenantId,
+            title: "Signed visa letter uploaded",
+            message: `${who} uploaded ${doc.documentType} for application #${doc.visaApplicationId}.`,
+            type: "info",
+            link: `/travel/visa/applications/${doc.visaApplicationId}`,
+            io: req.io || null,
+          });
+        }
+      } catch (notifyErr) {
+        console.warn("[Portal][travel/visa/letters signed-upload] staff notification failed:", notifyErr.message);
+      }
+
+      writeAudit(
+        "VisaLetterDocument",
+        "signed.uploaded",
+        doc.id,
+        null,
+        req.portal.tenantId,
+        { visaApplicationId: doc.visaApplicationId, storage: stored.storage, portalContactId: req.portal.contactId },
+        { actorType: "portal" },
+      ).catch(() => {});
+
+      return res.status(201).json({ letter: projectPortalVisaLetterDocument(updated) });
+    } catch (err) {
+      console.error("[Portal][travel/visa/letters signed-upload]", err);
+      return res.status(500).json({ error: "Failed to upload signed letter" });
+    }
+  },
+);
 
 // DELETE /api/portal/travel/visa/applications/:id — let the customer cancel
 // one of their own applications while it's still early. Allowed only in
@@ -2021,5 +2323,10 @@ router.get("/kyc/status", verifyPortalToken, requireTravelPortalTenant, async (r
 });
 
 module.exports = router;
+
+
+
+
+
 
 

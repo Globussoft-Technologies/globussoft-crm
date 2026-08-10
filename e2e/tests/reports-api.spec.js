@@ -582,7 +582,7 @@ test.describe('Wellness Reports API — regression-coverage-backlog #12', () => 
     test('P&L bucketed visits + unbucketed equal canonical (#281 row-sum invariant)', async ({ request }) => {
       const from = daysAgo(60);
       const to = daysAgo(0);
-      const res = await wAuthGet(request, `/api/wellness/reports/pnl-by-service?from=${from}&to=${to}`);
+      const res = await wAuthGet(request, `/api/wellness/reports/pnl-by-service?from=${from}&to=${to}&limit=100`);
       expect(res.status()).toBe(200);
       const body = await res.json();
       // Header card invariant: bucketed (totals.visits) + unbucketed = canonical.

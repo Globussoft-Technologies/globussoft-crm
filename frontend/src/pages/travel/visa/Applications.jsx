@@ -1,16 +1,16 @@
-/**
- * Visa Sure Applications — Phase 3 list view + Create drawer (cluster B3, V8 SHIPPED).
+﻿/**
+ * Visa Applications — Phase 3 list view + Create drawer (cluster B3, V8 SHIPPED).
  *
  * Graduates V8 from 🟡 PARTIAL (SHELL) → ✅ SHIPPED.
  * Backend GET endpoint at ce5f5db (/api/travel/visa/applications) returns
  * { applications, total, limit, offset } scoped to the caller's tenant
- * AND Contact.subBrand="visasure". Each row has the application + a
+ * AND the tenant's travel contacts. Each row has the application + a
  * decorated { contact: {id, name, email, phone} } projection.
  *
  * Create flow (this commit — wires 6c084cb POST endpoint):
  *   - Header "+ Create Application" CTA (admin/manager visible).
  *   - Drawer with three required fields per the backend contract:
- *       contactId (Int)               — picked from a visasure-scoped list
+ *       contactId (Int)               — picked from the contact list
  *       applicationType (String enum) — one of VALID_APPLICATION_TYPES
  *       destinationCountry (String 1..200)
  *   - Submit → POST /api/travel/visa/applications → on 201: close drawer,
@@ -21,13 +21,10 @@
  * Contact picker fallback: backend /api/contacts does NOT support a
  * ?subBrand= filter today (routes/contacts.js:150 — only status /
  * assignedToId / unassigned / includeDeleted). We fetch with limit=200
- * and filter client-side to subBrand="visasure". This is acceptable for
- * the create-drawer use case (UI is one-shot — picker open, choose,
- * close — not a long-lived list) but means a tenant with >200 contacts
- * total where the visasure ones are not in the newest-200 window won't
- * see all visasure contacts in the dropdown. The empty-state copy
- * surfaces that constraint. The right fix is a server-side filter on
- * /api/contacts; tracked as a follow-up.
+ * and show the batch as-is. The drawer is a one-shot surface (open,
+ * choose, close) so the 200-row ceiling is acceptable for now. If the
+ * tenant needs server-side filtering later, that can be added without
+ * changing the drawer contract.
  *
  * Render:
  *   - Header + Create CTA
@@ -77,7 +74,6 @@ const APPLICATION_TYPES = [
   { value: 'hajj', label: 'Hajj' },
 ];
 
-const VISA_SUB_BRAND = 'visasure';
 
 const EMPTY_FORM = {
   contactId: '',
@@ -85,6 +81,8 @@ const EMPTY_FORM = {
   applicantEmail: '',
   applicantPhone: '',
   applicantBirthDate: '',
+  tripId: '',
+  participantId: '',
   applicationType: 'tourist',
   destinationCountry: '',
 };
@@ -107,6 +105,60 @@ const READINESS_COLORS = {
 function fmt(d) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString();
+}
+
+function formatTripLabel(trip) {
+  if (!trip) return '';
+  const code = trip.tripCode || `Trip #${trip.id}`;
+  const destination = trip.destination ? ` - ${trip.destination}` : '';
+  const depart = trip.departDate ? ` - ${new Date(trip.departDate).toLocaleDateString()}` : '';
+  return `${code}${destination}${depart}`;
+}
+
+function normalizeMatchKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function normalizePhoneForMatch(value) {
+  const digits = String(value || '').replace(/\D+/g, '');
+  if (!digits) return '';
+  return digits.length > 10 ? digits.slice(-10) : digits;
+}
+
+function resolveParticipantForContact(contact, participants) {
+  if (!contact || !Array.isArray(participants) || participants.length === 0) return null;
+  const contactName = normalizeMatchKey(contact.name);
+  const contactEmail = normalizeMatchKey(contact.email);
+  const contactPhone = normalizePhoneForMatch(contact.phone);
+
+  const scored = participants
+    .map((participant) => {
+      const participantName = normalizeMatchKey(participant.fullName);
+      const parentName = normalizeMatchKey(participant.parentName);
+      const parentEmail = normalizeMatchKey(participant.parentEmail);
+      const parentPhone = normalizePhoneForMatch(participant.parentPhone);
+
+      let score = 0;
+      if (contactName && participantName === contactName) score = Math.max(score, 4);
+      if (contactName && parentName === contactName) score = Math.max(score, 3);
+      if (contactEmail && parentEmail === contactEmail) score = Math.max(score, 2);
+      if (contactPhone && parentPhone === contactPhone) score = Math.max(score, 2);
+
+      return { participant, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (scored.length === 0) {
+    return participants.length === 1 ? participants[0] : null;
+  }
+
+  const topScore = scored[0].score;
+  const topMatches = scored.filter((item) => item.score === topScore);
+  return topMatches.length === 1 ? topMatches[0].participant : null;
 }
 
 function StatusBadge({ status }) {
@@ -221,9 +273,13 @@ export default function VisaApplications() {
   const [saving, setSaving] = useState(false);
   const [contacts, setContacts] = useState([]);
   const [contactsLoading, setContactsLoading] = useState(false);
+  const [trips, setTrips] = useState([]);
+  const [tripsLoading, setTripsLoading] = useState(false);
+  const [participants, setParticipants] = useState([]);
+  const [participantsLoading, setParticipantsLoading] = useState(false);
   // Field-level error map keyed by code so the drawer can surface
   // backend validation feedback inline ("destinationCountry is
-  // required" / "Contact is not in the Visa Sure sub-brand").
+  // required" / "contact is required").
   const [formError, setFormError] = useState(null);
 
   const load = () => {
@@ -265,16 +321,96 @@ export default function VisaApplications() {
     fetchApi('/api/contacts?limit=200')
       .then((res) => {
         const list = Array.isArray(res) ? res : (res?.contacts || []);
-        setContacts(list.filter((c) => c?.subBrand === VISA_SUB_BRAND));
+        setContacts(list);
       })
       .catch(() => setContacts([]))
       .finally(() => setContactsLoading(false));
+    setTripsLoading(true);
+    fetchApi('/api/travel/trips?fields=summary&limit=200', { silent: true })
+      .then((res) => {
+        setTrips(Array.isArray(res?.trips) ? res.trips : []);
+      })
+      .catch(() => setTrips([]))
+      .finally(() => setTripsLoading(false));
   };
 
   const closeDrawer = () => {
     setCreating(false);
     setFormError(null);
   };
+
+  const selectedContact = form.contactId
+    ? contacts.find((c) => String(c.id) === String(form.contactId)) || null
+    : null;
+  const selectedTrip = form.tripId
+    ? trips.find((t) => String(t.id) === String(form.tripId)) || null
+    : null;
+  const selectedParticipant = form.participantId
+    ? participants.find((p) => String(p.id) === String(form.participantId)) || null
+    : null;
+  const inferredParticipant = !selectedParticipant
+    ? resolveParticipantForContact(selectedContact, participants)
+    : null;
+  const resolvedParticipant = selectedParticipant || inferredParticipant;
+  const needsParticipantChoice = Boolean(form.tripId) && !resolvedParticipant;
+
+  const onContactChange = (value) => {
+    const contact = contacts.find((c) => String(c.id) === String(value));
+    setForm({
+      ...form,
+      contactId: value,
+      applicantName: contact?.name || '',
+      applicantEmail: contact?.email || '',
+      applicantPhone: contact?.phone || '',
+      applicantBirthDate: contact?.birthDate ? String(contact.birthDate).slice(0, 10) : '',
+      participantId: form.tripId ? String(resolveParticipantForContact(contact, participants)?.id || '') : '',
+    });
+    if (formError?.field === 'contactId') setFormError(null);
+  };
+
+  const onTripChange = (value) => {
+    const trip = trips.find((t) => String(t.id) === String(value));
+    setForm({
+      ...form,
+      tripId: value,
+      participantId: '',
+      destinationCountry: trip?.destination || form.destinationCountry,
+    });
+    setParticipants([]);
+    if (formError?.field === 'tripId' || formError?.field === 'participantId') setFormError(null);
+  };
+
+  useEffect(() => {
+    if (!creating || !form.tripId) {
+      setParticipants([]);
+      return undefined;
+    }
+    let cancelled = false;
+    setParticipantsLoading(true);
+    fetchApi(`/api/travel/trips/${form.tripId}`, { silent: true })
+      .then((res) => {
+        if (cancelled) return;
+        const rows = Array.isArray(res?.participants) ? res.participants : [];
+        setParticipants(rows);
+        const autoParticipant = resolveParticipantForContact(selectedContact, rows);
+        if (autoParticipant) {
+          setForm((prev) => (
+            String(prev.tripId) === String(form.tripId)
+              ? { ...prev, participantId: String(autoParticipant.id) }
+              : prev
+          ));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setParticipants([]);
+      })
+      .finally(() => {
+        if (!cancelled) setParticipantsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [creating, form.tripId, selectedContact?.id]);
 
   const submitCreate = async (e) => {
     e.preventDefault();
@@ -284,11 +420,19 @@ export default function VisaApplications() {
     // INVALID_DESTINATION checks so the user sees the error before the
     // round-trip. Backend is still the source of truth.
     if (!form.contactId && !(form.applicantName || '').trim()) {
-      setFormError({ field: 'contactId', message: 'Pick a Visa Sure contact or enter a new applicant name' });
+      setFormError({ field: 'contactId', message: 'Pick a contact or enter a new applicant name' });
       return;
     }
     if (!form.applicationType) {
       setFormError({ field: 'applicationType', message: 'Application type is required' });
+      return;
+    }
+    if (!form.tripId) {
+      setFormError({ field: 'tripId', message: 'Trip is required' });
+      return;
+    }
+    if (!form.participantId) {
+      setFormError({ field: 'participantId', message: 'Participant is required' });
       return;
     }
     const dest = (form.destinationCountry || '').trim();
@@ -315,6 +459,8 @@ export default function VisaApplications() {
         if ((form.applicantPhone || '').trim()) body.applicantPhone = form.applicantPhone.trim();
         if (form.applicantBirthDate) body.applicantBirthDate = form.applicantBirthDate;
       }
+      body.tripId = parseInt(form.tripId, 10);
+      body.participantId = parseInt(form.participantId, 10);
       await fetchApi('/api/travel/visa/applications', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -348,6 +494,14 @@ export default function VisaApplications() {
           break;
         case 'INVALID_DESTINATION':
           field = 'destinationCountry';
+          break;
+        case 'INVALID_TRIP_ID':
+        case 'TRIP_NOT_FOUND':
+          field = 'tripId';
+          break;
+        case 'INVALID_PARTICIPANT_ID':
+        case 'PARTICIPANT_NOT_FOUND':
+          field = 'participantId';
           break;
         case 'NOT_FOUND':
         case 'NOT_VISA_SURE':
@@ -402,7 +556,7 @@ export default function VisaApplications() {
             <FileText size={28} aria-hidden /> Visa Applications
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
-            All Visa Sure applications across your tenant. Click a row to open the
+            All visa applications across your tenant. Click a row to open the
             advisor dashboard with diagnostic answers, document checklist, and risk
             indicators.
           </p>
@@ -484,8 +638,8 @@ export default function VisaApplications() {
           <div style={empty}>Loading&hellip;</div>
         ) : applications.length === 0 ? (
           <div style={empty}>
-            No visa applications yet. Visa Sure applications appear here once
-            contacts (Contact.subBrand=&quot;visasure&quot;) have applications
+            No visa applications yet. Applications appear here once
+            contacts in your tenant have applications
             created in the system.
           </div>
         ) : (
@@ -647,7 +801,7 @@ export default function VisaApplications() {
                 color: 'var(--text-secondary)',
               }}
             >
-              Creates an application in <strong>intake</strong> state. You can select an existing Visa Sure contact or enter a new applicant here and the CRM will create or reuse the contact automatically.</p>
+              Creates an application in <strong>intake</strong> state. You can select an existing contact or enter a new applicant here and the CRM will create or reuse the contact automatically.</p>
 
             {formError && !formError.field && (
               <div style={errorBanner} role="alert">
@@ -662,10 +816,10 @@ export default function VisaApplications() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <label style={fieldLabel}>
-                Contact (Visa Sure)
+                Contact
                 <select
                   value={form.contactId}
-                  onChange={(e) => setForm({ ...form, contactId: e.target.value })}
+                  onChange={(e) => onContactChange(e.target.value)}
                   style={inputStyle}
                   aria-invalid={formError?.field === 'contactId' ? 'true' : undefined}
                 >
@@ -673,8 +827,8 @@ export default function VisaApplications() {
                     {contactsLoading
                       ? 'Loading contacts...'
                       : contacts.length === 0
-                        ? '(no Visa Sure contacts found)'
-                        : 'Create/reuse from applicant details below'}
+                        ? '(no contacts found)'
+                        : 'Create new applicant manually'}
                   </option>
                   {contacts.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -690,64 +844,194 @@ export default function VisaApplications() {
                 )}
                 {!contactsLoading && contacts.length === 0 && (
                   <span style={fieldHintText}>
-                    No contacts with subBrand="visasure" in the most recent 200. You can still continue by entering the applicant details below.
+                    No contacts were returned in the most recent 200. You can still continue by entering the applicant details below.
                   </span>
                 )}
               </label>
 
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: '1px solid var(--border-color)',
-                  background: 'var(--subtle-bg)',
-                  display: 'grid',
-                  gap: 12,
-                }}
-              >
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  New applicant details
+              {selectedContact ? (
+                <div
+                  data-testid="selected-contact-summary"
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid var(--border-color)',
+                    background: 'var(--subtle-bg)',
+                    display: 'grid',
+                    gap: 4,
+                    fontSize: 12,
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  <strong style={{ color: 'var(--text-primary)' }}>
+                    Using existing contact details
+                  </strong>
+                  <span>{selectedContact.name || `Contact #${selectedContact.id}`}</span>
+                  {selectedContact.email && <span>{selectedContact.email}</span>}
+                  {selectedContact.phone && <span>{selectedContact.phone}</span>}
                 </div>
-                <label style={fieldLabel}>
-                  Applicant name
-                  <input
-                    type="text"
-                    value={form.applicantName}
-                    onChange={(e) => setForm({ ...form, applicantName: e.target.value })}
+              ) : (
+                <div
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid var(--border-color)',
+                    background: 'var(--subtle-bg)',
+                    display: 'grid',
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                    New applicant details
+                  </div>
+                  <label style={fieldLabel}>
+                    Applicant name
+                    <input
+                      type="text"
+                      value={form.applicantName}
+                      onChange={(e) => setForm({ ...form, applicantName: e.target.value })}
+                      style={inputStyle}
+                      placeholder="Enter name for a new applicant"
+                    />
+                  </label>
+                  <label style={fieldLabel}>
+                    Applicant email
+                    <input
+                      type="email"
+                      value={form.applicantEmail}
+                      onChange={(e) => setForm({ ...form, applicantEmail: e.target.value })}
+                      style={inputStyle}
+                      placeholder="Optional"
+                    />
+                  </label>
+                  <label style={fieldLabel}>
+                    Applicant phone
+                    <input
+                      type="text"
+                      value={form.applicantPhone}
+                      onChange={(e) => setForm({ ...form, applicantPhone: e.target.value })}
+                      style={inputStyle}
+                      placeholder="Optional"
+                    />
+                  </label>
+                  <label style={fieldLabel}>
+                    Applicant date of birth
+                    <input
+                      type="date"
+                      value={form.applicantBirthDate}
+                      onChange={(e) => setForm({ ...form, applicantBirthDate: e.target.value })}
+                      style={inputStyle}
+                    />
+                  </label>
+                </div>
+              )}
+
+              <label style={fieldLabel}>
+                Trip
+                <select
+                  data-testid="create-trip-select"
+                  value={form.tripId}
+                  onChange={(e) => onTripChange(e.target.value)}
+                  style={inputStyle}
+                  aria-invalid={formError?.field === 'tripId' ? 'true' : undefined}
+                >
+                  <option value="">
+                    {tripsLoading
+                      ? 'Loading trips...'
+                      : trips.length === 0
+                        ? '(no trips found)'
+                        : 'Select a trip'}
+                  </option>
+                  {trips.map((trip) => (
+                    <option key={trip.id} value={trip.id}>
+                      {formatTripLabel(trip)}
+                    </option>
+                  ))}
+                </select>
+                {formError?.field === 'tripId' && (
+                  <span style={fieldErrorText} role="alert">
+                    {formError.message}
+                  </span>
+                )}
+              </label>
+
+              {selectedTrip && (
+                <div
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    background: 'var(--subtle-bg)',
+                    color: 'var(--text-secondary)',
+                    fontSize: 12,
+                  }}
+                >
+                  Destination will default to <strong>{selectedTrip.destination || 'the selected trip destination'}</strong>.
+                </div>
+              )}
+
+              <label style={fieldLabel}>
+                Participant
+                {needsParticipantChoice ? (
+                  <select
+                    data-testid="create-participant-select"
+                    value={form.participantId}
+                    onChange={(e) => setForm({ ...form, participantId: e.target.value })}
                     style={inputStyle}
-                    placeholder="Enter name if you are not selecting an existing contact"
-                  />
-                </label>
-                <label style={fieldLabel}>
-                  Applicant email
-                  <input
-                    type="email"
-                    value={form.applicantEmail}
-                    onChange={(e) => setForm({ ...form, applicantEmail: e.target.value })}
-                    style={inputStyle}
-                    placeholder="Optional"
-                  />
-                </label>
-                <label style={fieldLabel}>
-                  Applicant phone
-                  <input
-                    type="text"
-                    value={form.applicantPhone}
-                    onChange={(e) => setForm({ ...form, applicantPhone: e.target.value })}
-                    style={inputStyle}
-                    placeholder="Optional"
-                  />
-                </label>
-                <label style={fieldLabel}>
-                  Applicant date of birth
-                  <input
-                    type="date"
-                    value={form.applicantBirthDate}
-                    onChange={(e) => setForm({ ...form, applicantBirthDate: e.target.value })}
-                    style={inputStyle}
-                  />
-                </label>
-              </div>
+                    disabled={!form.tripId || participantsLoading}
+                    aria-invalid={formError?.field === 'participantId' ? 'true' : undefined}
+                  >
+                    <option value="">
+                      {!form.tripId
+                        ? 'Select a trip first'
+                        : participantsLoading
+                          ? 'Loading participants...'
+                          : participants.length === 0
+                            ? '(no participants found)'
+                            : 'Select a participant'}
+                    </option>
+                    {participants.map((participant) => (
+                      <option key={participant.id} value={participant.id}>
+                        {participant.fullName || `Participant #${participant.id}`}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div
+                    data-testid="selected-participant-summary"
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid var(--border-color)',
+                      background: 'var(--subtle-bg)',
+                      display: 'grid',
+                      gap: 4,
+                      fontSize: 12,
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    <strong style={{ color: 'var(--text-primary)' }}>
+                      {resolvedParticipant
+                        ? 'Using matching participant details'
+                        : 'Participant will be chosen after a trip is selected'}
+                    </strong>
+                    {resolvedParticipant ? (
+                      <span>{resolvedParticipant.fullName || `Participant #${resolvedParticipant.id}`}</span>
+                    ) : (
+                      <span>Select a trip to auto-fill the participant.</span>
+                    )}
+                    {resolvedParticipant && (
+                      <span style={{ fontSize: 11, opacity: 0.82 }}>
+                        The advisor can still change the participant later if needed.
+                      </span>
+                    )}
+                  </div>
+                )}
+                {formError?.field === 'participantId' && (
+                  <span style={fieldErrorText} role="alert">
+                    {formError.message}
+                  </span>
+                )}
+              </label>
 
               <label style={fieldLabel}>
                 Application type
@@ -934,3 +1218,6 @@ const td = {
   fontSize: 14,
   color: 'var(--text-primary)',
 };
+
+
+

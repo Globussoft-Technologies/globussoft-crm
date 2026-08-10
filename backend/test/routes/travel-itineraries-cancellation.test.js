@@ -180,6 +180,43 @@ describe('PATCH /api/travel/itineraries/:id/cancellation — paymentOverdueAt cl
   });
 });
 
+describe('GET /api/travel/itineraries/:id — trip-specific cancellation policy precedence', () => {
+  test('requested itinerary surfaces the trip-attached policy instead of a broader fallback', async () => {
+    prisma.itinerary.findFirst.mockResolvedValue(
+      itin({
+        cancellationStatus: 'requested',
+        advancePaidAmount: 120000,
+        startDate: new Date('2026-08-20T00:00:00Z'),
+      }),
+    );
+    prisma.cancellationPolicy.findFirst.mockResolvedValue({
+      id: 901,
+      tenantId: 1,
+      name: 'Quick Trip Policy',
+      subBrand: 'travelstall',
+      itineraryId: 55,
+      isActive: true,
+      tiersJson: JSON.stringify([
+        { daysBeforeServiceStart: 0, refundPercent: 25 },
+      ]),
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/itineraries/55')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.cancellationRefund).toMatchObject({
+      policyId: 901,
+      policyName: 'Quick Trip Policy',
+      refundPercent: 25,
+      refundAmount: 30000,
+      computable: true,
+    });
+    expect(prisma.travelInvoice.findFirst).not.toHaveBeenCalled();
+    expect(prisma.cancellationPolicy.findMany).not.toHaveBeenCalled();
+  });
+});
 describe('PATCH /api/travel/itineraries/:id/cancellation — lifecycle guards', () => {
   test('approve without a pending request → 409 NO_PENDING_REQUEST, no write', async () => {
     prisma.itinerary.findFirst.mockResolvedValue(itin({ cancellationStatus: null }));
@@ -194,6 +231,28 @@ describe('PATCH /api/travel/itineraries/:id/cancellation — lifecycle guards', 
 
   test('refunded before cancelled → 409 NOT_CANCELLED, no write', async () => {
     prisma.itinerary.findFirst.mockResolvedValue(itin({ cancellationStatus: 'requested' }));
+    const res = await request(makeApp())
+      .patch('/api/travel/itineraries/55/cancellation')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ decision: 'refunded' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NOT_CANCELLED');
+    expect(prisma.itinerary.update).not.toHaveBeenCalled();
+  });
+
+  test('approve after already refunded → 409 NO_PENDING_REQUEST, no write', async () => {
+    prisma.itinerary.findFirst.mockResolvedValue(itin({ cancellationStatus: 'refunded' }));
+    const res = await request(makeApp())
+      .patch('/api/travel/itineraries/55/cancellation')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ decision: 'approve' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NO_PENDING_REQUEST');
+    expect(prisma.itinerary.update).not.toHaveBeenCalled();
+  });
+
+  test('refund again after already refunded → 409 NOT_CANCELLED, no write', async () => {
+    prisma.itinerary.findFirst.mockResolvedValue(itin({ cancellationStatus: 'refunded' }));
     const res = await request(makeApp())
       .patch('/api/travel/itineraries/55/cancellation')
       .set('Authorization', `Bearer ${tokenFor()}`)

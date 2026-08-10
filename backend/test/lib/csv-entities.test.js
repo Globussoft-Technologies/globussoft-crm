@@ -194,6 +194,221 @@ describe('products.parseRow', () => {
 
 // ── customers (patients) entity ─────────────────────────────────────
 
+describe('productCategories.parseRow', () => {
+  const productCategories = getEntity('product-categories');
+
+  const ctx = {
+    lookups: {
+      findCategory: (name) => (String(name || '').trim().toLowerCase() === 'consumables' ? 401 : null),
+      categoriesById: new Map([[401, { id: 401, name: 'Consumables' }]]),
+    },
+  };
+
+  test('happy path resolves parentName to parentId', async () => {
+    const { data, errors } = await productCategories.parseRow({
+      name: 'Sterile Consumables',
+      parentName: 'Consumables',
+      imageUrl: 'https://cdn.example.com/category.png',
+      color: '#265855',
+      active: 'true',
+    }, ctx);
+    expect(errors).toEqual([]);
+    expect(data).toMatchObject({
+      name: 'Sterile Consumables',
+      parentId: 401,
+      imageUrl: 'https://cdn.example.com/category.png',
+      color: '#265855',
+      isActive: true,
+    });
+  });
+
+  test('rejects parentName that matches the category name', async () => {
+    const { errors } = await productCategories.parseRow({
+      name: 'Consumables',
+      parentName: 'Consumables',
+      active: 'true',
+    }, ctx);
+    expect(errors.find((e) => e.column === 'parentName')).toBeTruthy();
+  });
+
+  test('serialize maps parentId back to parentName', () => {
+    const cells = productCategories.serialize({
+      name: 'Sterile Consumables',
+      parentId: 401,
+      imageUrl: null,
+      color: null,
+      isActive: false,
+    }, ctx);
+    expect(cells).toEqual(['Sterile Consumables', 'Consumables', '', '', 'false']);
+  });
+
+  test('naturalKey lowercases the name', () => {
+    expect(productCategories.naturalKey({ name: 'Sterile Consumables' })).toBe('sterile consumables');
+  });
+});
+
+describe('inventoryProducts.parseRow', () => {
+  const inventoryProducts = getEntity('inventory-products');
+
+  const ctx = {
+    lookups: {
+      findCategory: (name) => (String(name || '').trim().toLowerCase() === 'consumables' ? 401 : null),
+      categoriesById: new Map([[401, { id: 401, name: 'Consumables' }]]),
+    },
+  };
+
+  test('happy path resolves categoryName and numeric fields', async () => {
+    const { data, errors } = await inventoryProducts.parseRow({
+      name: 'PRP Collection Tube',
+      sku: 'PRP-TUBE-10',
+      description: 'Single-use tube',
+      price: '250',
+      categoryName: 'Consumables',
+      brandName: 'Globus',
+      productType: 'Consumption',
+      productCode: 'PRP-TUBE',
+      hsnCode: '3006',
+      volume: '10',
+      unit: 'ml',
+      discountedPrice: '220',
+      dealerPrice: '210',
+      purchasePrice: '180',
+      manufacturer: 'Globus',
+      tax: '18',
+      isTaxIncluded: 'false',
+      barcode: '890123',
+      imageUrl: '',
+      threshold: '10',
+      currentStock: '25',
+      active: 'true',
+    }, ctx);
+    expect(errors).toEqual([]);
+    expect(data).toMatchObject({
+      name: 'PRP Collection Tube',
+      sku: 'PRP-TUBE-10',
+      categoryId: 401,
+      price: 250,
+      volume: 10,
+      discountedPrice: 220,
+      dealerPrice: 210,
+      purchasePrice: 180,
+      tax: 18,
+      isTaxIncluded: false,
+      threshold: 10,
+      currentStock: 25,
+      isActive: true,
+    });
+  });
+
+  test('rejects unknown categoryName', async () => {
+    const { errors } = await inventoryProducts.parseRow({
+      name: 'PRP Collection Tube',
+      sku: 'PRP-TUBE-10',
+      price: '250',
+      categoryName: 'Missing',
+      isTaxIncluded: 'false',
+      active: 'true',
+    }, ctx);
+    expect(errors.find((e) => e.column === 'categoryName')).toBeTruthy();
+  });
+
+  test('serialize maps categoryId back to category name', () => {
+    const cells = inventoryProducts.serialize({
+      name: 'PRP Collection Tube',
+      sku: 'PRP-TUBE-10',
+      description: 'Single-use tube',
+      price: 250,
+      categoryId: 401,
+      brandName: 'Globus',
+      productType: 'Consumption',
+      productCode: 'PRP-TUBE',
+      hsnCode: '3006',
+      volume: 10,
+      unit: 'ml',
+      discountedPrice: 220,
+      dealerPrice: 210,
+      purchasePrice: 180,
+      manufacturer: 'Globus',
+      tax: 18,
+      isTaxIncluded: true,
+      barcode: '890123',
+      imageUrl: null,
+      threshold: 10,
+      currentStock: 25,
+      isActive: false,
+    }, ctx);
+    expect(cells[4]).toBe('Consumables');
+    expect(cells[16]).toBe('true');
+    expect(cells[21]).toBe('false');
+  });
+
+  test('naturalKey prefers sku and falls back to name', () => {
+    expect(inventoryProducts.naturalKey({ sku: 'PRP-TUBE-10', name: 'PRP Collection Tube' })).toBe('prp-tube-10');
+    expect(inventoryProducts.naturalKey({ sku: '', name: 'PRP Collection Tube' })).toBe('prp collection tube');
+  });
+});
+
+describe('autoConsumptionRules.parseRow', () => {
+  const autoConsumptionRules = getEntity('auto-consumption-rules');
+
+  const ctx = {
+    lookups: {
+      findService: (name) => (String(name || '').trim().toLowerCase() === 'hydrafacial' ? 7 : null),
+      findProductBySku: (sku) => (String(sku || '').trim().toLowerCase() === 'prp-tube-10' ? 901 : null),
+      findProductByName: (name) => (String(name || '').trim().toLowerCase() === 'prp collection tube' ? 901 : null),
+      inventoryProductsById: new Map([[901, { id: 901, name: 'PRP Collection Tube', unit: 'ml' }]]),
+    },
+  };
+
+  test('happy path resolves serviceName and productSku', async () => {
+    const { data, errors } = await autoConsumptionRules.parseRow({
+      serviceName: 'Hydrafacial',
+      productSku: 'PRP-TUBE-10',
+      productName: 'PRP Collection Tube',
+      quantityPerVisit: '2',
+      unit: 'ltr',
+      active: 'true',
+    }, ctx);
+    expect(errors).toEqual([]);
+    expect(data).toMatchObject({
+      serviceId: 7,
+      productId: 901,
+      quantityPerVisit: 2,
+      unit: 'ltr',
+      isActive: true,
+    });
+  });
+
+  test('falls back to productName when productSku is blank', async () => {
+    const { data, errors } = await autoConsumptionRules.parseRow({
+      serviceName: 'Hydrafacial',
+      productSku: '',
+      productName: 'PRP Collection Tube',
+      quantityPerVisit: '1',
+      unit: 'ml',
+      active: 'true',
+    }, ctx);
+    expect(errors).toEqual([]);
+    expect(data.productId).toBe(901);
+  });
+
+  test('rejects a unit that is not convertible to the product unit', async () => {
+    const { errors } = await autoConsumptionRules.parseRow({
+      serviceName: 'Hydrafacial',
+      productSku: 'PRP-TUBE-10',
+      productName: 'PRP Collection Tube',
+      quantityPerVisit: '1',
+      unit: 'piece',
+      active: 'true',
+    }, ctx);
+    expect(errors.find((e) => e.column === 'unit')).toBeTruthy();
+  });
+
+  test('naturalKey combines serviceId and productId', () => {
+    expect(autoConsumptionRules.naturalKey({ serviceId: 7, productId: 901 })).toBe('7::901');
+  });
+});
+
 describe('customers.parseRow', () => {
   const customers = getEntity('customers');
 
@@ -418,8 +633,18 @@ describe('getEntity', () => {
     expect(getEntity('not-a-thing')).toBeNull();
   });
 
-  test('all five registered entities resolve', () => {
-    for (const name of ['services', 'packages', 'products', 'customers', 'bookings']) {
+  test('all registered entities resolve', () => {
+    for (const name of [
+      'services',
+      'packages',
+      'products',
+      'product-categories',
+      'inventory-products',
+      'auto-consumption-rules',
+      'customers',
+      'bookings',
+      'invoices',
+    ]) {
       const def = getEntity(name);
       expect(def).toBeTruthy();
       expect(Array.isArray(def.headers)).toBe(true);

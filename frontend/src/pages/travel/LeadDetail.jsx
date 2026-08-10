@@ -35,6 +35,7 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import TopScrollSync from "../../components/TopScrollSync";
+import TravelContactProfilePanel from "./TravelContactProfilePanel";
 
 const STATUS_COLORS = {
   draft: { bg: "rgba(120,120,120,0.12)", color: "#5C6E82" },
@@ -262,6 +263,8 @@ export default function LeadDetail() {
           </div>
         </section>
       )}
+
+      <TravelContactProfilePanel contactId={contactId} />
 
       {/* ─── Section 2: Diagnostics summary ──────────────────────── */}
       <section style={sectionStyle}>

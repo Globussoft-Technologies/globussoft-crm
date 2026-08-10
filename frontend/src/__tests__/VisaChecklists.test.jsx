@@ -122,6 +122,75 @@ describe('VisaChecklists (template admin)', () => {
 // ── Quotation templates tab (FR-5.2) ──────────────────────────────────
 // The checklist admin page extends to manage quotation templates too, behind
 // a "Quotation templates" tab that lazily loads its own data on first switch.
+
+  it('bulk import controls render and show the import actions', async () => {
+    mockList([]);
+    renderPage();
+    expect(await screen.findByText(/Bulk import/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /CSV template/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /XLSX template/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Import rows/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Import file/i)).toBeInTheDocument();
+  });
+
+  it('shows the source library summary and restore controls for archived sources', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      const method = opts && opts.method;
+      if (url === '/api/travel/visa/checklists' && !method) {
+        return Promise.resolve({
+          items: [],
+          sources: [
+            {
+              id: 31,
+              applicationType: 'tourist',
+              destinationCountry: 'US',
+              sourceName: 'US consulate',
+              sourceUrl: 'https://example.test/checklist.pdf',
+              sourceKind: 'pdf',
+              notes: null,
+              isActive: true,
+            },
+            {
+              id: 32,
+              applicationType: 'tourist',
+              destinationCountry: 'US',
+              sourceName: 'Archived PDF',
+              sourceUrl: 'https://example.test/archived.pdf',
+              sourceKind: 'pdf',
+              notes: 'Old copy',
+              isActive: false,
+            },
+          ],
+          latestSnapshot: {
+            id: 77,
+            versionNumber: 4,
+            itemCount: 2,
+            sourceCount: 1,
+            createdAt: '2026-05-25T00:00:00.000Z',
+          },
+        });
+      }
+      if (url === '/api/travel/visa/checklists/sources/32' && method === 'PUT') {
+        return Promise.resolve({ success: true });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    expect(await screen.findByText(/Source library/i)).toBeInTheDocument();
+    expect(screen.getByText(/Version 4 - 2 items - 1 sources/i)).toBeInTheDocument();
+    expect(screen.getByText('US consulate')).toBeInTheDocument();
+    expect(screen.getByText('Archived PDF')).toBeInTheDocument();
+    expect(screen.getByText('Archived')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Restore/i }));
+    await waitFor(() => {
+      const put = fetchApi.mock.calls.find(
+        (c) => c[0] === '/api/travel/visa/checklists/sources/32' && c[1] && c[1].method === 'PUT',
+      );
+      expect(put).toBeTruthy();
+      expect(JSON.parse(put[1].body)).toMatchObject({ isActive: true });
+    });
+  });
 const QUOTES = [
   {
     id: 11,

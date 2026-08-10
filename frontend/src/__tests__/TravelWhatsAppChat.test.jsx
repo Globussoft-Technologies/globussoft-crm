@@ -180,18 +180,18 @@ describe('<TravelWhatsAppChat /> — WhatsApp Web status strip', () => {
 });
 
 describe('<TravelWhatsAppChat /> — threads + chat flow', () => {
-  it('3. loads threads from the shared tenant-scoped endpoint and renders the rail', async () => {
+  it('3. loads threads from the shared tenant-scoped endpoint without rendering the thread sidebar', async () => {
     installDefaultRoutes();
     renderPage();
-    expect(await screen.findByText('Ahmed Khan')).toBeInTheDocument();
+    expect(await screen.findByText(/is the Umrah package still available/i)).toBeInTheDocument();
+    expect(screen.queryByText('WhatsApp Threads')).not.toBeInTheDocument();
     const threadCalls = fetchApiMock.mock.calls.filter(([u]) => u.startsWith('/api/whatsapp/threads?'));
     expect(threadCalls.length).toBeGreaterThan(0);
   });
 
-  it('4. selecting a thread loads detail and renders both message bubbles', async () => {
+  it('4. auto-opens the first thread and renders both message bubbles', async () => {
     installDefaultRoutes();
     renderPage();
-    fireEvent.click(await screen.findByText('Ahmed Khan'));
     expect(
       await screen.findByText(/is the Umrah package still available/i),
     ).toBeInTheDocument();
@@ -201,7 +201,7 @@ describe('<TravelWhatsAppChat /> — threads + chat flow', () => {
   it('5. reply send POSTs to /api/travel/whatsapp/send (Wati), not the Meta path', async () => {
     installDefaultRoutes();
     renderPage();
-    fireEvent.click(await screen.findByText('Ahmed Khan'));
+    await screen.findByText(/is the Umrah package still available/i);
     const box = await screen.findByPlaceholderText(/Type a message/i);
     fireEvent.change(box, { target: { value: 'On it — sending now' } });
     fireEvent.click(screen.getByTitle(/Send \(Ctrl\+Enter\)/i));
@@ -221,7 +221,7 @@ describe('<TravelWhatsAppChat /> — threads + chat flow', () => {
   it('6. never fetches /api/wellness/patients (travel has no patients)', async () => {
     installDefaultRoutes();
     renderPage();
-    await screen.findByText('Ahmed Khan');
+    await screen.findByText(/is the Umrah package still available/i);
     const patientCalls = fetchApiMock.mock.calls.filter(([u]) => u.includes('/wellness/patients'));
     expect(patientCalls).toHaveLength(0);
   });
@@ -229,7 +229,7 @@ describe('<TravelWhatsAppChat /> — threads + chat flow', () => {
   it('7. socket whatsapp:received triggers a thread-list refetch (live inbound)', async () => {
     installDefaultRoutes();
     renderPage();
-    await screen.findByText('Ahmed Khan');
+    await screen.findByText(/is the Umrah package still available/i);
     await waitFor(() => expect(socketHandlers['whatsapp:received']).toBeTypeOf('function'));
     const before = fetchApiMock.mock.calls.filter(([u]) => u.startsWith('/api/whatsapp/threads?')).length;
     socketHandlers['whatsapp:received']({

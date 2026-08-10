@@ -16,7 +16,7 @@
  * of demo-host clock skew.
  *
  * Contracts pinned by backend/test/cron/fxRateEngine.test.js:
- *   1. Empty supported-pair list → returns { fetched: 0, errors: [] }.
+ *   1. Empty supported-pair list → returns { fetched: 0, skipped: 0, errors: [] }.
  *   2. Successful fetch upserts one FxRate row per pair.
  *   3. fetch failure for a single pair does NOT abort the other pairs.
  *   4. Engine never throws to the cron-scheduler harness.
@@ -28,7 +28,7 @@ const realPrisma = require("../lib/prisma");
 const fxRates = require("../lib/fxRates");
 
 /**
- * One sweep pass. Returns { fetched, errors }.
+ * One sweep pass. Returns { fetched, skipped, errors }.
  *
  * @param {Object} [opts]
  * @param {Object} [opts.prisma] override prisma client for tests
@@ -43,12 +43,13 @@ async function tick({
   now = new Date(),
 } = {}) {
   const errors = [];
+  let skipped = 0;
   let fetched = 0;
   for (const { base, quote } of pairs || []) {
     try {
       const result = await fxRates.fetchLatestRate(base, quote, { fetchImpl });
       if (!result) {
-        errors.push({ base, quote, stage: "fetch", message: "no rate returned" });
+        skipped += 1;
         continue;
       }
       const row = await fxRates.upsertRate(prisma, {
@@ -63,7 +64,7 @@ async function tick({
       errors.push({ base, quote, stage: "upsert", message: e.message });
     }
   }
-  return { fetched, errors };
+  return { fetched, skipped, errors };
 }
 
 async function loggedTick() {

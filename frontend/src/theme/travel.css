@@ -892,7 +892,16 @@ html[data-theme="dark"][data-vertical="travel"],
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+  box-sizing: border-box;
+  line-height: 1.2;
 }
 .travel-itin-status-pill--draft {
   background: rgba(120, 120, 120, 0.12);

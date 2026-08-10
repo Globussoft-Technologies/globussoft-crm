@@ -25,7 +25,8 @@ import { Plus, Pencil, Trash2, Target, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
-import TopScrollSync from '../components/TopScrollSync';
+
+const REVENUE_GOALS_PAGE_SIZE = 12;
 
 const PERIOD_OPTIONS = [
   { value: 'MONTHLY', label: 'Monthly' },
@@ -105,6 +106,7 @@ export default function RevenueGoals() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [visibleGoalCount, setVisibleGoalCount] = useState(REVENUE_GOALS_PAGE_SIZE);
 
   const load = async () => {
     setLoading(true);
@@ -123,6 +125,15 @@ export default function RevenueGoals() {
   };
 
   useEffect(() => { load(); }, []);
+  useEffect(() => setVisibleGoalCount(REVENUE_GOALS_PAGE_SIZE), [rows.length]);
+
+  const visibleRows = rows.slice(0, visibleGoalCount);
+  const handleGoalsTableScroll = (event) => {
+    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 80) {
+      setVisibleGoalCount((count) => Math.min(count + REVENUE_GOALS_PAGE_SIZE, rows.length));
+    }
+  };
 
   const openCreate = () => setEditing(emptyForm());
   const openEdit = (row) => setEditing({
@@ -228,7 +239,7 @@ export default function RevenueGoals() {
   };
 
   return (
-    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto' }}>
+    <div style={{ padding: '2rem', height: '100%', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.75rem', margin: 0 }}>
@@ -252,12 +263,12 @@ export default function RevenueGoals() {
 
       {/* Progress widget — top three under-target goals */}
       {!loading && rows.length > 0 && (
-        <div className="card" style={{ padding: '1rem 1.25rem', marginBottom: '1.5rem' }}>
+        <div className="card" style={{ padding: '1rem 1.25rem', marginBottom: '1.5rem', maxWidth: '100%', boxSizing: 'border-box', overflow: 'hidden' }}>
           <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem', fontWeight: 600 }}>
             Progress at a glance
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.75rem' }}>
-            {rows.slice(0, 6).map((r) => {
+            {rows.slice(0, 3).map((r) => {
               const pct = Math.min(100, (Number(r.achievedAmount || 0) / Math.max(1, Number(r.targetAmount || 1))) * 100);
               return (
                 <div key={r.id} data-testid={`goal-progress-${r.id}`}>
@@ -278,8 +289,7 @@ export default function RevenueGoals() {
         </div>
       )}
 
-      <div className="card" style={{ padding: 0, overflow: 'visible' }}>
-        <TopScrollSync>
+      <div className="card" onScroll={handleGoalsTableScroll} style={{ padding: 0, maxHeight: 'calc(100vh - 26rem)', overflowY: 'auto', overflowX: 'hidden', maxWidth: '100%', boxSizing: 'border-box' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
           <thead>
             <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
@@ -299,7 +309,7 @@ export default function RevenueGoals() {
               <tr><td colSpan={isAdmin ? 7 : 6} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
                 {isAdmin ? 'No revenue goals yet. Click "New goal" to add one.' : 'No goals assigned to you yet.'}
               </td></tr>
-            ) : rows.map((row) => {
+            ) : visibleRows.map((row) => {
               const pct = Math.min(100, (Number(row.achievedAmount || 0) / Math.max(1, Number(row.targetAmount || 1))) * 100);
               return (
                 <tr key={row.id} style={{ borderTop: '1px solid var(--border-color)' }} data-testid={`goal-row-${row.id}`}>
@@ -330,7 +340,6 @@ export default function RevenueGoals() {
             })}
           </tbody>
         </table>
-        </TopScrollSync>
       </div>
 
       {editing && (
@@ -529,5 +538,9 @@ const th = {
   textTransform: 'uppercase',
   letterSpacing: '0.05em',
   color: 'var(--text-secondary)',
+  position: 'sticky',
+  top: 0,
+  zIndex: 2,
+  background: 'var(--bg-color)',
 };
 const td = { padding: '0.75rem 1rem', fontSize: '0.875rem' };

@@ -231,11 +231,11 @@ export default function PatientCreateModal({ locations, onClose, onCreated, edit
             />
           </FormField>
         </div>
-        <FormField label="Full name (auto)">
+        <FormField label="Full name">
           <input
             readOnly
             tabIndex={-1}
-            aria-label="Full name preview"
+            aria-label="Full name"
             data-testid="patient-name-preview"
             value={derivedName}
             placeholder="Will be derived from First + Last"

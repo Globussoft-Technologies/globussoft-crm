@@ -117,6 +117,7 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
+  getActiveTenantId: () => null,
   getAuthToken: () => 'test-token',
 }));
 
@@ -257,9 +258,15 @@ describe('<VisaAdvisorDashboard /> — page chrome + route-param wiring', () => 
 describe('<VisaAdvisorDashboard /> — loading state', () => {
   it('shows "Loading application…" before the GET resolves', async () => {
     let resolveDetail;
-    fetchApiMock.mockImplementation(() =>
-      new Promise((res) => { resolveDetail = res; }),
-    );
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/travel/visa/applications/301') {
+        return new Promise((res) => { resolveDetail = res; });
+      }
+      if (url === '/api/travel/trips?fields=summary&limit=200') {
+        return Promise.resolve({ trips: [] });
+      }
+      return Promise.resolve(null);
+    });
     renderPage();
     // SUT renders "Loading application…" via &hellip; entity (= U+2026).
     await waitFor(() => {
@@ -519,6 +526,108 @@ describe('<VisaAdvisorDashboard /> — application status control', () => {
   });
 });
 
+
+describe('<VisaAdvisorDashboard /> — visa letter packet generator', () => {
+  it('loads trips, auto-selects a single participant, and POSTs the generate payload', async () => {
+    let generateCall = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/trips?fields=summary&limit=200') {
+        return Promise.resolve({
+          trips: [
+            {
+              id: 9001,
+              tripCode: 'tokyo-spring',
+              destination: 'Japan',
+              departDate: '2026-09-10',
+              returnDate: '2026-09-20',
+            },
+          ],
+        });
+      }
+      if (url === '/api/travel/trips/9001/participants?fields=summary') {
+        return Promise.resolve({
+          participants: [
+            { id: 501, fullName: 'Aarav Sharma' },
+          ],
+        });
+      }
+      if (
+        typeof url === 'string' &&
+        url === '/api/travel/visa/applications/301/letters/generate' &&
+        opts && opts.method === 'POST'
+      ) {
+        generateCall = { url, opts };
+        return Promise.resolve({
+          generated: [
+            { id: 1, docType: 'Consent Letter', fileName: 'consent-letter.pdf' },
+          ],
+          skipped: [],
+        });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel/visa/applications/')) {
+        return Promise.resolve(makeDetail());
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    const tripSelect = await screen.findByTestId('letter-trip-select');
+    await screen.findByRole('option', { name: /tokyo-spring/i });
+    fireEvent.change(tripSelect, { target: { value: '9001' } });
+    await waitFor(() =>
+      expect(screen.getByTestId('letter-participant-select')).toHaveValue('501'),
+    );
+    fireEvent.click(screen.getByTestId('generate-letter-packet'));
+    await waitFor(() => expect(generateCall).toBeTruthy());
+    expect(generateCall.url).toBe('/api/travel/visa/applications/301/letters/generate');
+    expect(JSON.parse(generateCall.opts.body)).toEqual({ tripId: 9001, participantId: 501 });
+    expect(await screen.findByTestId('letter-packet-result')).toHaveTextContent(/Generated 1 letter/i);
+  });
+
+  it('Remove on a packet row confirms, DELETEs the row, and refreshes the list', async () => {
+    let appState = makeDetail({
+      visaLetterDocuments: [
+        {
+          id: 11,
+          documentType: 'Parental Consent Letter',
+          docType: 'Parental Consent Letter',
+          status: 'GENERATED',
+          generatedFileName: 'parental-consent-letter.pdf',
+          generatedFileUrl: '/api/uploads/visa-letters/parental-consent-letter.pdf',
+          generatedAt: '2026-08-10T00:00:00.000Z',
+          signedUploadedAt: null,
+        },
+      ],
+    });
+    let deleteCall = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url === '/api/travel/trips?fields=summary&limit=200') {
+        return Promise.resolve({ trips: [] });
+      }
+      if (
+        typeof url === 'string' &&
+        url === '/api/travel/visa/applications/301/letters/11' &&
+        opts && opts.method === 'DELETE'
+      ) {
+        deleteCall = { url, opts };
+        appState = makeDetail({ visaLetterDocuments: [] });
+        return Promise.resolve({ success: true, id: 11, generationId: 77, generationDeleted: true });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel/visa/applications/')) {
+        return Promise.resolve(appState);
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+
+    expect(await screen.findByTestId('letter-doc-11')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /remove/i }));
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled());
+    await waitFor(() => expect(deleteCall).toBeTruthy());
+    expect(deleteCall.url).toBe('/api/travel/visa/applications/301/letters/11');
+    expect(deleteCall.opts.method).toBe('DELETE');
+    await waitFor(() => expect(screen.queryByTestId('letter-doc-11')).toBeNull());
+  });
+});
 describe('<VisaAdvisorDashboard /> — add ad-hoc checklist document', () => {
   it('adding a document POSTs /applications/:id/checklist then refreshes', async () => {
     let postCall = null;

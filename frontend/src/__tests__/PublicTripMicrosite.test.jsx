@@ -202,14 +202,15 @@ describe("<PublicTripMicrosite /> — G095 brand-kit consumer", () => {
 describe("<PublicTripMicrosite /> — document upload", () => {
   // The upload button + modal only appear for a registrant identified by a
   // draftToken. We override window.location for the duration of each test.
-  async function withDraftToken(token, body) {
+  async function withLocation(search, body) {
     const orig = Object.getOwnPropertyDescriptor(window, "location");
     Object.defineProperty(window, "location", {
       configurable: true,
       value: {
-        search: `?draftToken=${token}`,
+        search,
         origin: "http://localhost",
         href: "http://localhost",
+        assign: vi.fn(),
       },
     });
     try {
@@ -217,6 +218,10 @@ describe("<PublicTripMicrosite /> — document upload", () => {
     } finally {
       if (orig) Object.defineProperty(window, "location", orig);
     }
+  }
+
+  async function withDraftToken(token, body) {
+    return withLocation(`?draftToken=${token}`, body);
   }
 
   function installDocMock({
@@ -368,6 +373,38 @@ describe("<PublicTripMicrosite /> — document upload", () => {
       expect(fd.get("aadhaar")).toBeInstanceOf(File);
       expect(fd.get("consentLetter")).toBeInstanceOf(File);
     });
+  });
+
+  it("happy path with portal bridge: redirects to customer register after upload", async () => {
+    installDocMock();
+    await withLocation(
+      `?draftToken=abc123&portalRedirect=${encodeURIComponent("/customer/register?tenantSlug=travel-stall&name=Rohan%20Iyer&email=rohan%40example.com&next=%2Ftravel%2Fportal")}`,
+      async () => {
+        renderPage();
+        fireEvent.click(await screen.findByTestId("microsite-upload-docs-btn"));
+        await screen.findByTestId("microsite-doc-modal");
+
+        fireEvent.change(screen.getByTestId("microsite-doc-passport"), {
+          target: { files: [makeFile("passport.pdf", "application/pdf")] },
+        });
+        fireEvent.change(screen.getByTestId("microsite-doc-aadhaar"), {
+          target: { files: [makeFile("aadhaar.png", "image/png")] },
+        });
+        fireEvent.change(screen.getByTestId("microsite-doc-consent-letter"), {
+          target: { files: [makeFile("consent.pdf", "application/pdf")] },
+        });
+        fireEvent.click(screen.getByRole("checkbox"));
+        fireEvent.click(screen.getByTestId("microsite-doc-submit"));
+
+        expect(await screen.findByTestId("microsite-doc-modal-done")).toBeInTheDocument();
+        expect(window.location.assign).toHaveBeenCalled();
+        const redirectTarget = window.location.assign.mock.calls[0][0];
+        expect(redirectTarget).toContain("/customer/register?tenantSlug=travel-stall");
+        expect(redirectTarget).toContain("name=Rohan");
+        expect(redirectTarget).toContain("email=rohan@example.com");
+        expect(redirectTarget).toContain("next=");
+      },
+    );
   });
 
   it("surfaces a server error inside the modal without closing it", async () => {

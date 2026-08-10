@@ -5,6 +5,7 @@ import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
 import PageHeader from '../../components/PageHeader';
+import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 import TopScrollSync from '../../components/TopScrollSync';
 import Pagination from '../../components/ui/Pagination';
 
@@ -350,6 +351,21 @@ export default function Products() {
           </span>
         ) : null}
       >
+        {canWriteProducts && (
+          <CsvImportExportToolbar
+            entity="inventory-products"
+            label="Products"
+            filters={{
+              q: debouncedSearchTerm || undefined,
+              categoryId: filterCategory || undefined,
+            }}
+            formats={['csv', 'xlsx']}
+            onImported={() => {
+              setPage(1);
+              setReloadTick((tick) => tick + 1);
+            }}
+          />
+        )}
         {canWriteProducts && (
           <button
             onClick={() => handleOpenModal()}

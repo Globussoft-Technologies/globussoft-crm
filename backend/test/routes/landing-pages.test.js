@@ -108,6 +108,8 @@ prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
 prisma.tripParticipant.update = vi.fn().mockResolvedValue({ id: 1 });
 prisma.tripMicrosite = prisma.tripMicrosite || {};
 prisma.tripMicrosite.findUnique = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 // Phase 11 — PUT /:id can set tripId, which validates the trip exists
 // in the requester's tenant before persisting the link.
 prisma.tmcTrip = prisma.tmcTrip || {};
@@ -160,6 +162,7 @@ beforeEach(() => {
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
   prisma.tripParticipant.update.mockReset().mockResolvedValue({ id: 1 });
   prisma.tripMicrosite.findUnique.mockReset();
+  prisma.tenant.findUnique.mockReset();
   prisma.tmcTrip.findFirst.mockReset();
 });
 
@@ -1371,6 +1374,7 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       publishedAt: new Date(),
       expiresAt: null,
     });
+    prisma.tenant.findUnique.mockResolvedValue({ slug: 'travel-stall' });
     prisma.landingPage.update.mockResolvedValue({ id: 50, submissions: 1 });
     prisma.contact.upsert.mockResolvedValue({ id: 8001, tenantId: 1 });
 
@@ -1388,11 +1392,18 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
       draftId: 7001,
       redirect: {
         type: 'microsite',
-        // URL must carry ONLY the opaque draftToken — no PII fields
-        url: expect.stringMatching(/^\/p\/tripmicrosite\/[0-9a-f-]+\?draftToken=[0-9a-f]{64}$/),
+        // URL must carry the opaque draftToken plus the customer-register bridge.
+        url: expect.stringMatching(/^\/p\/tripmicrosite\/[0-9a-f-]+\?draftToken=[0-9a-f]{64}&portalRedirect=.*/),
       },
     });
-    // PII must NOT appear in the redirect URL
+    const redirectUrl = new URL(`http://localhost${res.body.redirect.url}`);
+    expect(redirectUrl.searchParams.get('draftToken')).toMatch(/^[0-9a-f]{64}$/);
+    const portalRedirect = redirectUrl.searchParams.get('portalRedirect');
+    expect(portalRedirect).toContain('/customer/register?tenantSlug=travel-stall');
+    expect(portalRedirect).toContain('name=Rohan');
+    expect(portalRedirect).toContain('email=rohan%40example.com');
+    expect(portalRedirect).toContain('next=');
+    // PII must not appear in the microsite URL directly.
     expect(res.body.redirect.url).not.toContain('Aarav');
     expect(res.body.redirect.url).not.toContain('rohan@example.com');
     expect(res.body.redirect.url).not.toContain('919876543210');

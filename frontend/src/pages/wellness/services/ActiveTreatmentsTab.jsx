@@ -42,7 +42,7 @@ export default function ActiveTreatmentsTab({ treatments, loading, onChanged, on
   return (
     <>
       <h2 style={srOnly}>Active treatment plans</h2>
-      {loading && <div>Loading treatment plansâ€¦</div>}
+      {loading && <div>Loading treatment plans…</div>}
       {!loading && treatments.length === 0 && (
         <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
           No active treatment plans yet.

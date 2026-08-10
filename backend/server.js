@@ -2187,6 +2187,14 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initLeadScoringCron } = require("./cron/leadScoringEngine");
   initLeadScoringCron(io);
 
+  // Initialize Callified new-lead auto-dial queue (processes one lead at a time).
+  const { startProcessor: startCallifiedAutoDial } = require("./lib/callifiedAutoDialQueue");
+  startCallifiedAutoDial();
+
+  // Initialize Callified DNP retry engine (re-dials DNP leads on a schedule).
+  const { startDnpRetryEngine } = require("./lib/callifiedDnpRetryEngine");
+  startDnpRetryEngine();
+
   // Initialize Recurring Invoice Engine (runs daily at 6 AM)
   const { initRecurringInvoiceCron } = require("./cron/recurringInvoiceEngine");
   initRecurringInvoiceCron(io);

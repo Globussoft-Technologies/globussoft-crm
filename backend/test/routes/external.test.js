@@ -160,6 +160,23 @@ Module._cache[leadNotificationsPath] = {
   },
 };
 
+// Stub the new-lead auto-dial queue so external lead creation tests don't
+// trigger real background Prisma calls.
+const autoDialEnqueueMock = vi.fn();
+const autoDialQueuePath = requireCJS.resolve("../../lib/callifiedAutoDialQueue.js");
+Module._cache[autoDialQueuePath] = {
+  id: autoDialQueuePath,
+  filename: autoDialQueuePath,
+  loaded: true,
+  exports: {
+    enqueue: autoDialEnqueueMock,
+    startProcessor: () => {},
+    stopProcessor: () => {},
+    getQueueLength: () => 0,
+    isDialable: () => true,
+  },
+};
+
 // ── Patch middleware/externalAuth as a configurable pass-through ───────
 //
 // The tests need to control req.tenantId / req.tenant / req.apiKey
@@ -246,6 +263,8 @@ prisma.visit.findMany = vi.fn();
 prisma.visit.create = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
+prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.tenantSetting.findUnique = vi.fn();
 
 import express from "express";
 import request from "supertest";
@@ -281,6 +300,7 @@ beforeEach(() => {
   prisma.tenant.findUnique
     .mockReset()
     .mockResolvedValue({ callifiedAutoCampaignId: null, embedAllowlistJson: null });
+  prisma.tenantSetting.findUnique.mockReset();
 
   classifyLeadMock.mockReset().mockResolvedValue({
     isJunk: false,
@@ -292,6 +312,7 @@ beforeEach(() => {
     reason: "matched cat=injectables",
   });
   notifyAdminsOfNewLeadMock.mockReset().mockResolvedValue([]);
+  autoDialEnqueueMock.mockReset();
   computeFirstResponseDueAtMock.mockReset().mockResolvedValue({
     dueAt: new Date("2026-06-01T10:05:00Z"),
     tier: "high",
@@ -780,7 +801,20 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     }));
 
   });
-  test("default Callified campaign is auto-assigned for new Lead when tenant has callifiedAutoCampaignId", async () => {
+  test("Callified campaign is auto-assigned by rule for new Lead", async () => {
+    prisma.tenantSetting.findUnique.mockImplementation(({ where }) => {
+      const key = where?.tenantId_key?.key;
+      if (key === "feature.callified.auto_dial_new_leads.enabled") return { value: "true" };
+      if (key === "feature.callified.auto_campaign_rules") {
+        return {
+          value: JSON.stringify({
+            enabled: true,
+            rules: [{ enabled: true, column: "source", value: "website-form", campaignId: 42 }],
+          }),
+        };
+      }
+      return null;
+    });
     classifyLeadMock.mockResolvedValueOnce({
       isJunk: false,
       score: 70,
@@ -788,7 +822,7 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     });
     prisma.tenant.findUnique
       .mockReset()
-      .mockResolvedValueOnce({ vertical: "generic", callifiedAutoCampaignId: 42 });
+      .mockResolvedValueOnce({ vertical: "generic", callifiedAutoCampaignId: null });
     prisma.contact.findFirst.mockResolvedValueOnce(null);
     prisma.contact.create.mockResolvedValueOnce({
       id: 556,
@@ -820,6 +854,61 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     const cArgs = prisma.contact.create.mock.calls[0][0].data;
     expect(cArgs.status).toBe("Lead");
     expect(cArgs.callifiedCampaignId).toBe(42);
+    expect(autoDialEnqueueMock).toHaveBeenCalledWith({
+      tenantId: 7,
+      contactId: 556,
+      campaignId: 42,
+      userId: null,
+    });
+  });
+
+  test("auto-dial is skipped when tenant disables auto-dial new leads", async () => {
+    prisma.tenantSetting.findUnique.mockImplementation(({ where }) => {
+      const key = where?.tenantId_key?.key;
+      if (key === "feature.callified.auto_dial_new_leads.enabled") return { value: "false" };
+      if (key === "feature.callified.auto_campaign_rules") {
+        return {
+          value: JSON.stringify({
+            enabled: true,
+            rules: [{ enabled: true, column: "source", value: "website-form", campaignId: 42 }],
+          }),
+        };
+      }
+      return null;
+    });
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 70,
+      reasons: [],
+    });
+    prisma.tenant.findUnique
+      .mockReset()
+      .mockResolvedValueOnce({ vertical: "generic", callifiedAutoCampaignId: null });
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce({
+      id: 556,
+      name: "External Lead",
+      email: "ext@example.com",
+      phone: "+919900112234",
+      status: "Lead",
+      source: "website-form",
+      aiScore: 70,
+      assignedToId: 11,
+      callifiedCampaignId: 42,
+      tenantId: 7,
+      createdAt: new Date(),
+    });
+
+    const app = makeApp();
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "External Lead",
+      phone: "+919900112234",
+      email: "ext@example.com",
+      source: "website-form",
+    });
+
+    expect(res.status).toBe(201);
+    expect(autoDialEnqueueMock).not.toHaveBeenCalled();
   });
   test("custom keys are preserved in response, activity, and full payload storage", async () => {
     classifyLeadMock.mockResolvedValueOnce({

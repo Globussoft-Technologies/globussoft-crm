@@ -3631,16 +3631,23 @@ async function renderTmcReadinessReport({
     : null;
 
   // Document scaffold.
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const doc = new PDFDocument({ size: "A4", margin: 44, bufferPages: true });
   const bufPromise = streamToBuffer(doc);
   const pageW = doc.page.width;
-  const pageMargin = 50;
+  const pageMargin = 44;
   const contentW = pageW - pageMargin * 2;
+  const contentBottom = doc.page.height - 78;
   const summaryGap = 14;
   const summaryCardW = (contentW - summaryGap * 2) / 3;
   const insightBg = "#F7F9FC";
   const accentSoft = "#EAF2F8";
   const coverBandH = 132;
+  const pageLabels = ["Overview"];
+  let currentPageLabel = "Report";
+
+  doc.on("pageAdded", () => {
+    pageLabels.push(currentPageLabel);
+  });
 
   function fitReadinessText(value, max = 110) {
     const s = String(value || "").trim();
@@ -3649,27 +3656,51 @@ async function renderTmcReadinessReport({
   }
 
   function drawTopMetricCard({ x, y, label, value, tone = accent, note = "" }) {
-    doc.roundedRect(x, y, summaryCardW, 72, 12).fillAndStroke("#FFFFFF", BRAND.border);
-    doc.roundedRect(x + 1, y + 1, summaryCardW - 2, 10, 10).fill(tone);
+    doc.roundedRect(x, y, summaryCardW, 66, 8).fillAndStroke("#FFFFFF", BRAND.border);
+    doc.rect(x, y, summaryCardW, 5).fill(tone);
     doc.font("Helvetica-Bold").fontSize(8).fillColor(BRAND.textMuted)
-      .text(label, x + 14, y + 18, { width: summaryCardW - 28, lineBreak: false });
-    doc.font("Helvetica-Bold").fontSize(15).fillColor(BRAND.textDark)
-      .text(fitReadinessText(value, 48), x + 14, y + 34, { width: summaryCardW - 28 });
+      .text(label, x + 12, y + 15, { width: summaryCardW - 24, lineBreak: false });
+    doc.font("Helvetica-Bold").fontSize(13).fillColor(BRAND.textDark)
+      .text(fitReadinessText(value, 42), x + 12, y + 30, { width: summaryCardW - 24, height: 17, ellipsis: true });
     if (note) {
       doc.font("Helvetica").fontSize(8.5).fillColor(BRAND.textMuted)
-        .text(fitReadinessText(note, 84), x + 14, y + 54, { width: summaryCardW - 28 });
+        .text(fitReadinessText(note, 70), x + 12, y + 49, { width: summaryCardW - 24, height: 11, ellipsis: true });
     }
   }
 
-  function drawInsightPanel({ x, y, w, title, body }) {
+  function drawInsightPanel({ x, y, w, title, body, h = 82, maxChars = 220 }) {
     const panelBody = String(body || "").trim() || "—";
-    const panelHeight = 88;
-    doc.roundedRect(x, y, w, panelHeight, 14).fillAndStroke(insightBg, BRAND.borderSoft);
-    doc.roundedRect(x + 12, y + 14, 6, panelHeight - 28, 3).fill(accent);
+    const clippedPanelBody = fitReadinessText(String(panelBody || "").replace(/\s+/g, " ").trim(), maxChars);
+    doc.roundedRect(x, y, w, h, 8).fillAndStroke(insightBg, BRAND.borderSoft);
+    doc.rect(x, y, 5, h).fill(accent);
     doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
-      .text(title, x + 30, y + 16, { width: w - 44 });
+      .text(title, x + 18, y + 14, { width: w - 30, height: 14, ellipsis: true });
     doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
-      .text(panelBody, x + 30, y + 34, { width: w - 44, lineGap: 2 });
+      .text(clippedPanelBody, x + 18, y + 31, { width: w - 30, height: h - 42, lineGap: 2, ellipsis: true });
+  }
+
+  function drawReadinessFooters() {
+    const range = doc.bufferedPageRange();
+    for (let i = 0; i < range.count; i++) {
+      doc.switchToPage(range.start + i);
+      const footerY = doc.page.height - 54;
+      doc.rect(0, footerY - 20, doc.page.width, 74).fill("#FFFFFF");
+      doc.moveTo(pageMargin, footerY).lineTo(pageW - pageMargin, footerY)
+        .lineWidth(0.4).strokeColor(BRAND.border).stroke();
+      doc.font("Helvetica").fontSize(7.5).fillColor(BRAND.textMuted)
+        .text("TMC School Readiness Report", pageMargin, footerY + 9, {
+          width: contentW / 2,
+          lineBreak: false,
+          height: 10,
+        });
+      doc.font("Helvetica").fontSize(7.5).fillColor(BRAND.textMuted)
+        .text(`${pageLabels[i] || "Report"} | Page ${i + 1} of ${range.count}`, pageMargin, footerY + 9, {
+          width: contentW,
+          align: "right",
+          lineBreak: false,
+          height: 10,
+        });
+    }
   }
 
   // ── Section 1: Cover ────────────────────────────────────────────────
@@ -3679,12 +3710,12 @@ async function renderTmcReadinessReport({
   doc.restore();
   doc.fillColor("#fff").font("Helvetica-Bold").fontSize(13)
     .text("TMC", pageMargin, 28, { align: "left", characterSpacing: 1.8 });
-  doc.font("Helvetica-Bold").fontSize(26)
-    .text("Student Readiness Report", pageMargin, 48, { width: 320 });
+  doc.font("Helvetica-Bold").fontSize(24)
+    .text("Student Readiness Report", pageMargin, 48, { width: contentW - 120, lineBreak: false });
   doc.fillColor("#fff").font("Helvetica").fontSize(11)
-    .text("A diagnostic-led summary for school leadership teams.", pageMargin, 86, { width: 330 });
+    .text("A diagnostic-led summary for school leadership teams.", pageMargin, 82, { width: contentW - 120, lineBreak: false });
   doc.fillColor("#fff").font("Helvetica").fontSize(9)
-    .text("Built for one-shot reading: what this means, why it matters, and what to do next.", pageMargin, 104, { width: 360 });
+    .text("Built for one-shot reading: what this means, why it matters, and what to do next.", pageMargin, 101, { width: contentW - 80, lineBreak: false });
 
   // S65 — embed brand logo in the cover band's top-right (80×40 fit box at
   // right edge). The 110px-tall cover band gives more vertical room than
@@ -3739,9 +3770,10 @@ async function renderTmcReadinessReport({
   doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
     .text("AT A GLANCE", pageMargin, doc.y, { characterSpacing: 1.2 });
   doc.y += 18;
+  const metricTop = doc.y;
   drawTopMetricCard({
     x: pageMargin,
-    y: doc.y,
+    y: metricTop,
     label: "Readiness state",
     value: eState
       ? eState.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
@@ -3750,53 +3782,61 @@ async function renderTmcReadinessReport({
   });
   drawTopMetricCard({
     x: pageMargin + summaryCardW + summaryGap,
-    y: doc.y,
+    y: metricTop,
     label: "Recommended tier",
     value: sa.recommended_tier || sa.recommendedTier || n.recommended_tier || "Advisor review",
     note: "Use this as the planning lane, not a destination pitch.",
   });
   drawTopMetricCard({
     x: pageMargin + (summaryCardW + summaryGap) * 2,
-    y: doc.y,
+    y: metricTop,
     label: "Next conversation",
     value: resolvedBookingUrl ? "Book the walkthrough" : "Advisor follow-up",
     note: resolvedBookingUrl ? "PDF + call should move together." : "Executive shares the calendar next.",
   });
-  doc.y += 92;
+  doc.y = metricTop + 84;
 
+  const reportPurposeTop = doc.y;
   drawInsightPanel({
     x: pageMargin,
-    y: doc.y,
+    y: reportPurposeTop,
     w: contentW,
+    h: 78,
+    maxChars: 230,
     title: "What this report is for",
     body: "This is a readiness summary for the leadership team. It helps you decide whether to move now, what kind of programme your students are ready for, and what governance conversations need to happen next.",
   });
-  doc.y += 104;
+  doc.y = reportPurposeTop + 94;
 
   const ambitionPreview = String(n.ambition_restatement || "").trim();
   const waitingPreview = String(n.cost_of_waiting || "").trim();
   const halfInsightW = (contentW - 14) / 2;
+  const previewTop = doc.y;
   drawInsightPanel({
     x: pageMargin,
-    y: doc.y,
+    y: previewTop,
     w: halfInsightW,
+    h: 80,
+    maxChars: 150,
     title: "Core ambition",
     body: fitReadinessText(
       ambitionPreview || "The ambition summary appears here once the narrative is generated.",
-      180,
+      150,
     ),
   });
   drawInsightPanel({
     x: pageMargin + halfInsightW + 14,
-    y: doc.y,
+    y: previewTop,
     w: halfInsightW,
+    h: 80,
+    maxChars: 150,
     title: "Why timing matters",
     body: fitReadinessText(
       waitingPreview || "The report explains the calendar and growth cost of waiting.",
-      180,
+      150,
     ),
   });
-  doc.y += 108;
+  doc.y = previewTop + 96;
 
   // ── Section 2: Your ambition, in your words ─────────────────────────
   renderTmcReportSection(doc, {
@@ -3944,6 +3984,7 @@ async function renderTmcReadinessReport({
       pageMargin, footerY + 8, { width: contentW, align: "center" },
     );
 
+  drawReadinessFooters();
   doc.end();
   return bufPromise;
 }
@@ -3954,43 +3995,44 @@ async function renderTmcReadinessReport({
  * touches engineOutput or names a trip. Body is plain text (no HTML).
  */
 function renderTmcReportSection(doc, { num, title, body, accent }) {
-  const pageMargin = 50;
+  const pageMargin = 44;
   const pageW = doc.page.width;
   const contentW = pageW - pageMargin * 2;
-  const sectionSoft = "#F7F9FC";
+  const contentBottom = doc.page.height - 78;
+  const sectionSoft = "#F7FAFD";
   const text = String(body || "").trim() || "�";
   const textHeight = doc.heightOfString(text, {
-    width: contentW - 32,
+    width: contentW - 66,
     align: "left",
-    lineGap: 3,
+    lineGap: 2.5,
   });
-  const sectionHeight = Math.max(84, 42 + textHeight + 20);
+  const sectionHeight = Math.max(76, 32 + textHeight + 20);
 
   // Soft page-break guard — drop to next page if the section header
   // would otherwise sit at the very bottom.
-  if (doc.y + sectionHeight > doc.page.height - doc.page.margins.bottom - 28) {
+  if (doc.y + sectionHeight > contentBottom) {
     doc.addPage();
     doc.y = pageMargin;
   }
 
-  doc.y = Math.max(doc.y, doc.y + 10);
+  doc.y += 8;
   const startY = doc.y;
-  doc.roundedRect(pageMargin, startY, contentW, sectionHeight, 14).fillAndStroke("#FFFFFF", BRAND.borderSoft);
-  doc.roundedRect(pageMargin, startY, contentW, 28, 14).fill(sectionSoft);
-  doc.circle(pageMargin + 16, startY + 13, 9).fill(accent);
+  doc.roundedRect(pageMargin, startY, contentW, sectionHeight, 8).fillAndStroke("#FFFFFF", BRAND.borderSoft);
+  doc.rect(pageMargin, startY, 6, sectionHeight).fill(accent);
+  doc.roundedRect(pageMargin + 18, startY + 12, 22, 22, 11).fill(accent);
   doc.font("Helvetica-Bold").fontSize(9).fillColor("#FFFFFF")
-    .text(String(num), pageMargin + 13, startY + 7, { width: 6, align: "center", lineBreak: false });
-  doc.font("Helvetica-Bold").fontSize(12).fillColor(accent)
-    .text(title, pageMargin + 34, startY + 8, { width: contentW - 48, lineBreak: false });
-  doc.y = startY + 34;
+    .text(String(num), pageMargin + 26, startY + 18, { width: 7, align: "center", lineBreak: false, height: 10 });
+  doc.font("Helvetica-Bold").fontSize(11.5).fillColor(accent)
+    .text(title, pageMargin + 52, startY + 15, { width: contentW - 70, lineBreak: false, height: 15, ellipsis: true });
+  doc.y = startY + 39;
 
   doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
-    .text(text, pageMargin + 16, doc.y, {
-      width: contentW - 32,
+    .text(text, pageMargin + 52, doc.y, {
+      width: contentW - 66,
       align: "left",
-      lineGap: 3,
+      lineGap: 2.5,
     });
-  doc.y = startY + sectionHeight + 10;
+  doc.y = startY + sectionHeight + 8;
 }
 
 function readinessStateNote(state) {

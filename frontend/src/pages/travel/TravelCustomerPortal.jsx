@@ -1785,14 +1785,45 @@ function DiagnosticsCard({ token }) {
       const cur = Array.isArray(a[qid]) ? a[qid] : [];
       return { ...a, [qid]: cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value] };
     });
+  const setGroupField = (qid, fieldId, value) =>
+    setAnswers((a) => {
+      const cur = a[qid] && typeof a[qid] === "object" && !Array.isArray(a[qid]) ? a[qid] : {};
+      return { ...a, [qid]: { ...cur, [fieldId]: value } };
+    });
+  const toggleGroupMulti = (qid, fieldId, value) =>
+    setAnswers((a) => {
+      const curGroup = a[qid] && typeof a[qid] === "object" && !Array.isArray(a[qid]) ? a[qid] : {};
+      const cur = Array.isArray(curGroup[fieldId]) ? curGroup[fieldId] : [];
+      const next = cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value];
+      return { ...a, [qid]: { ...curGroup, [fieldId]: next } };
+    });
+
+  const isFieldAnswered = (field, value) => {
+    if (!field) return true;
+    if (field.required === false) return true;
+    if (field.type === "multi-select") {
+      return Array.isArray(value) && value.length > 0;
+    }
+    return String(value ?? "").trim().length > 0;
+  };
+
+  const isQuestionAnswered = (q) => {
+    const a = answers[q.id];
+    if (q.type === "group") {
+      const fields = Array.isArray(q.fields) ? q.fields : [];
+      if (!a || typeof a !== "object" || Array.isArray(a)) return false;
+      return fields.every((field) => isFieldAnswered(field, a[field.id]));
+    }
+    if (q.type === "multi-select") {
+      return Array.isArray(a) && a.length > 0;
+    }
+    return String(a ?? "").trim().length > 0;
+  };
 
   const submit = async (e) => {
     e.preventDefault();
     setError(null);
-    const unanswered = (bank?.questions || []).filter((q) => {
-      const a = answers[q.id];
-      return a === undefined || a === "" || (Array.isArray(a) && a.length === 0);
-    });
+    const unanswered = (bank?.questions || []).filter((q) => !isQuestionAnswered(q));
     if (unanswered.length) {
       setError("Please answer every question before submitting.");
       return;
@@ -1942,39 +1973,130 @@ function DiagnosticsCard({ token }) {
                       </span>
                     )}
                   </legend>
-                  <div style={{ display: "grid", gap: 6 }}>
-                    {(q.options || []).map((o) => {
-                      const isMulti = q.type === "multi-select";
-                      const checked = isMulti
-                        ? Array.isArray(answers[q.id]) && answers[q.id].includes(o.value)
-                        : answers[q.id] === o.value;
-                      return (
-                        <label
-                          key={o.value}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "8px 12px",
-                            border: `1px solid ${checked ? "var(--primary-color, #122647)" : "var(--border-color, rgba(18,38,71,0.12))"}`,
-                            borderRadius: 8,
-                            cursor: "pointer",
-                            fontSize: 14,
-                            background: checked ? "rgba(18, 38, 71, 0.04)" : "transparent",
-                          }}
-                        >
-                          <input
-                            type={isMulti ? "checkbox" : "radio"}
-                            name={q.id}
-                            value={o.value}
-                            checked={checked}
-                            onChange={() => (isMulti ? toggleMulti(q.id, o.value) : setSingle(q.id, o.value))}
-                          />
-                          {o.label}
-                        </label>
-                      );
-                    })}
-                  </div>
+                  {q.type === "group" ? (
+                    <div style={{ display: "grid", gap: 12 }}>
+                      {(q.fields || []).map((field) => {
+                        const group = answers[q.id] && typeof answers[q.id] === "object" && !Array.isArray(answers[q.id])
+                          ? answers[q.id]
+                          : {};
+                        const value = group[field.id];
+                        return (
+                          <div key={field.id} style={{ display: "grid", gap: 6 }}>
+                            <label style={{ fontSize: 13, fontWeight: 600 }}>
+                              {field.label}
+                              {field.required !== false && <span style={{ color: "var(--danger-color, #A8323F)" }}> *</span>}
+                            </label>
+                            {field.type === "single-choice" ? (
+                              <div style={{ display: "grid", gap: 6 }}>
+                                {(field.options || []).map((opt) => {
+                                  const checked = value === opt.value;
+                                  return (
+                                    <label
+                                      key={opt.value}
+                                      style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: 8,
+                                        padding: "8px 12px",
+                                        border: `1px solid ${checked ? "var(--primary-color, #122647)" : "var(--border-color, rgba(18,38,71,0.12))"}`,
+                                        borderRadius: 8,
+                                        cursor: "pointer",
+                                        fontSize: 14,
+                                        background: checked ? "rgba(18, 38, 71, 0.04)" : "transparent",
+                                      }}
+                                    >
+                                      <input
+                                        type="radio"
+                                        name={`${q.id}.${field.id}`}
+                                        value={opt.value}
+                                        checked={checked}
+                                        onChange={() => setGroupField(q.id, field.id, opt.value)}
+                                      />
+                                      {opt.label}
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            ) : field.type === "multi-select" ? (
+                              <div style={{ display: "grid", gap: 6 }}>
+                                {(field.options || []).map((opt) => {
+                                  const checked = Array.isArray(value) && value.includes(opt.value);
+                                  return (
+                                    <label
+                                      key={opt.value}
+                                      style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: 8,
+                                        padding: "8px 12px",
+                                        border: `1px solid ${checked ? "var(--primary-color, #122647)" : "var(--border-color, rgba(18,38,71,0.12))"}`,
+                                        borderRadius: 8,
+                                        cursor: "pointer",
+                                        fontSize: 14,
+                                        background: checked ? "rgba(18, 38, 71, 0.04)" : "transparent",
+                                      }}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        name={`${q.id}.${field.id}`}
+                                        value={opt.value}
+                                        checked={checked}
+                                        onChange={() => toggleGroupMulti(q.id, field.id, opt.value)}
+                                      />
+                                      {opt.label}
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <input
+                                type={field.type === "email" ? "email" : field.type === "tel" ? "tel" : "text"}
+                                value={String(value ?? "")}
+                                onChange={(e) => setGroupField(q.id, field.id, e.target.value)}
+                                style={inputStyle}
+                                placeholder={field.label}
+                                autoComplete={field.type === "email" ? "email" : field.type === "tel" ? "tel" : "off"}
+                              />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {(q.options || []).map((o) => {
+                        const isMulti = q.type === "multi-select";
+                        const checked = isMulti
+                          ? Array.isArray(answers[q.id]) && answers[q.id].includes(o.value)
+                          : answers[q.id] === o.value;
+                        return (
+                          <label
+                            key={o.value}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              padding: "8px 12px",
+                              border: `1px solid ${checked ? "var(--primary-color, #122647)" : "var(--border-color, rgba(18,38,71,0.12))"}`,
+                              borderRadius: 8,
+                              cursor: "pointer",
+                              fontSize: 14,
+                              background: checked ? "rgba(18, 38, 71, 0.04)" : "transparent",
+                            }}
+                          >
+                            <input
+                              type={isMulti ? "checkbox" : "radio"}
+                              name={q.id}
+                              value={o.value}
+                              checked={checked}
+                              onChange={() => (isMulti ? toggleMulti(q.id, o.value) : setSingle(q.id, o.value))}
+                            />
+                            {o.label}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
                 </fieldset>
               ))}
               <div style={{ display: "flex", gap: 8 }}>

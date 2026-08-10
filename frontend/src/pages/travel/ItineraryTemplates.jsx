@@ -178,11 +178,7 @@ export default function ItineraryTemplates() {
   // 'premium' | 'luxury'. Threads to the backend as ?budgetTier=…
   const [budgetTierFilter, setBudgetTierFilter] = useState('');
   const [activeOnly, setActiveOnly] = useState(true);
-  // G048 — show archived rows. When true, the list endpoint receives
-  // ?includeArchived=true and surfaces archived rows alongside live ones.
-  // Operator can then click Restore to bring a row back.
   const [includeArchived, setIncludeArchived] = useState(false);
-
   // Form state
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -393,7 +389,7 @@ export default function ItineraryTemplates() {
   // first since this is a visible-state change.
   const handleArchive = async (item) => {
     const ok = await notify.confirm(
-      `Archive "${item.name}"? It will be hidden from the default library list (toggle "Include archived" to find it again).`,
+      `Archive "${item.name}"? It will be hidden from the default library list (toggle "Include archived" to see it again).`,
     );
     if (!ok) return;
     try {
@@ -429,6 +425,7 @@ export default function ItineraryTemplates() {
       const token =
         typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null;
       const qs = new URLSearchParams();
+      qs.set('isActive', activeOnly ? 'true' : 'false');
       if (includeArchived) qs.set('includeArchived', 'true');
       const url =
         `/api/travel/itinerary-templates/analytics.csv` +
@@ -722,12 +719,7 @@ export default function ItineraryTemplates() {
           />
           Active only
         </label>
-        {/* G048 — Include archived rows in the list. Off by default; when
-            on, archived rows surface and the operator can click the
-            Restore icon to bring them back. */}
-        <label
-          style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}
-        >
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
           <input
             type="checkbox"
             checked={includeArchived}
@@ -1026,7 +1018,7 @@ export default function ItineraryTemplates() {
                 <th style={th}>Accepted</th>
                 <th style={th}>Avg sale</th>
                 <th style={th}>Last used</th>
-                <th style={th}>Active</th>
+                <th style={th}>Status</th>
                 {/* G048 — version column. Editing a template bumps the
                     visible version while preserving the previous row's id
                     so existing Itinerary.clonedFromTemplateId FKs stay
@@ -1041,11 +1033,30 @@ export default function ItineraryTemplates() {
                     key={item.id}
                     style={{
                       borderTop: '1px solid var(--border-light)',
-                      opacity: item.isActive ? 1 : 0.5,
+                      opacity: item.archivedAt ? 0.9 : item.isActive ? 1 : 0.58,
+                      background: item.archivedAt ? 'rgba(245, 158, 11, 0.08)' : undefined,
+                      boxShadow: item.archivedAt ? 'inset 4px 0 0 rgba(245, 158, 11, 0.85)' : undefined,
                     }}
                   >
                   <td style={td}>
                     <strong>{item.name}</strong>
+                    {item.archivedAt && (
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          padding: '2px 6px',
+                          borderRadius: 999,
+                          background: 'rgba(245, 158, 11, 0.18)',
+                          color: 'rgb(146, 64, 14)',
+                          fontSize: 10,
+                          fontWeight: 700,
+                          letterSpacing: 0.5,
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        archived
+                      </span>
+                    )}
                     {item.description && (
                       <div
                         style={{
@@ -1084,7 +1095,15 @@ export default function ItineraryTemplates() {
                   <td style={td} data-testid={`tpl-lastUsedAt-${item.id}`}>
                     {formatLastUsedAt(item.lastUsedAt)}
                   </td>
-                  <td style={td}>{item.isActive ? 'Yes' : 'No'}</td>
+                  <td style={td}>
+                    {item.archivedAt ? (
+                      <span style={statusBadgeArchived}>Archived</span>
+                    ) : item.isActive ? (
+                      <span style={statusBadgeActive}>Active</span>
+                    ) : (
+                      <span style={statusBadgeInactive}>Inactive</span>
+                    )}
+                  </td>
                   <td style={td} data-testid={`tpl-version-${item.id}`}>
                     v{item.version != null ? item.version : 1}
                     {item.archivedAt && (
@@ -1618,6 +1637,31 @@ const brandBadge = {
   color: 'var(--primary-color, var(--accent-color))',
   textTransform: 'uppercase',
   letterSpacing: 0.5,
+};
+const statusBadgeBase = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '2px 8px',
+  borderRadius: 999,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.4,
+  textTransform: 'uppercase',
+};
+const statusBadgeActive = {
+  ...statusBadgeBase,
+  background: 'rgba(34, 197, 94, 0.12)',
+  color: 'rgb(22, 163, 74)',
+};
+const statusBadgeInactive = {
+  ...statusBadgeBase,
+  background: 'rgba(107, 114, 128, 0.14)',
+  color: 'rgb(75, 85, 99)',
+};
+const statusBadgeArchived = {
+  ...statusBadgeBase,
+  background: 'rgba(245, 158, 11, 0.16)',
+  color: 'rgb(180, 83, 9)',
 };
 const primaryBtn = {
   display: 'inline-flex',

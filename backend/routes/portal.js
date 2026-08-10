@@ -1371,12 +1371,23 @@ async function getPortalContactSubBrand(contactId) {
   return c && c.subBrand ? c.subBrand : null;
 }
 
-// Load the active (highest-version) diagnostic bank for a sub-brand.
+// Load the newest ACTIVE diagnostic bank for a sub-brand that the customer
+// portal can actually score. The portal flow only supports the generic
+// weighted-sum engine; TMC also has a special deterministic bank used by the
+// dedicated readiness flow, so we skip non-weighted banks here instead of
+// crashing the customer submission.
 async function loadActiveBank(tenantId, subBrand) {
-  return prisma.travelDiagnosticQuestionBank.findFirst({
+  const banks = await prisma.travelDiagnosticQuestionBank.findMany({
     where: { tenantId, subBrand, isActive: true },
     orderBy: { version: "desc" },
   });
+  for (const bank of banks) {
+    const { bank: parsed } = parseBank(bank.questionsJson, bank.scoringRulesJson);
+    if (parsed && (parsed.method || "weighted-sum") === "weighted-sum") {
+      return bank;
+    }
+  }
+  return null;
 }
 
 // GET /api/portal/travel/diagnostic-brands
@@ -1389,10 +1400,15 @@ router.get("/travel/diagnostic-brands", verifyPortalToken, requireTravelPortalTe
   try {
     const banks = await prisma.travelDiagnosticQuestionBank.findMany({
       where: { tenantId: req.portal.tenantId, isActive: true },
-      select: { subBrand: true },
+      select: { subBrand: true, questionsJson: true, scoringRulesJson: true },
       orderBy: [{ subBrand: "asc" }],
     });
-    const brands = [...new Set(banks.map((b) => b.subBrand))].map((subBrand) => ({ subBrand }));
+    const brands = [...new Set(
+      banks.filter((bank) => {
+        const { bank: parsed } = parseBank(bank.questionsJson, bank.scoringRulesJson);
+        return parsed && (parsed.method || "weighted-sum") === "weighted-sum";
+      }).map((b) => b.subBrand),
+    )].map((subBrand) => ({ subBrand }));
     const defaultSubBrand = await getPortalContactSubBrand(req.portal.contactId);
     res.json({ brands, defaultSubBrand });
   } catch (err) {
@@ -1423,6 +1439,17 @@ router.get("/travel/diagnostic-bank", verifyPortalToken, requireTravelPortalTena
       id: q.id,
       text: q.text,
       type: q.type,
+      fields: Array.isArray(q.fields)
+        ? q.fields.map((f) => ({
+            id: f.id,
+            label: f.label,
+            type: f.type,
+            required: Boolean(f.required),
+            options: Array.isArray(f.options)
+              ? f.options.map((o) => ({ value: o.value, label: o.label }))
+              : undefined,
+          }))
+        : undefined,
       options: (q.options || []).map((o) => ({ value: o.value, label: o.label })),
     }));
     res.json({ available: true, bankId: bank.id, subBrand, version: bank.version, questions });

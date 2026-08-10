@@ -1,32 +1,32 @@
-﻿// Travel CRM â€” TMC trip billing + rooming surface.
+﻿// Travel CRM — TMC trip billing + rooming surface.
 //
 // Rooming assignments + payment plan + per-participant instalments.
 // All sub-routes are scoped to a TmcTrip via :tripId in the URL.
 //
 // Endpoints:
-//   GET    /api/travel/trip-billing/stats                     â€” USER+ tenant-wide TMC rollup
-//   GET    /api/travel/trips/:tripId/rooming                  â€” list rooms
+//   GET    /api/travel/trip-billing/stats                     — USER+ tenant-wide TMC rollup
+//   GET    /api/travel/trips/:tripId/rooming                  — list rooms
 //   POST   /api/travel/trips/:tripId/rooming                  ADMIN+MGR
 //   PATCH  /api/travel/trips/:tripId/rooming/:roomId          ADMIN+MGR
 //   DELETE /api/travel/trips/:tripId/rooming/:roomId          ADMIN
 //   GET    /api/travel/trips/:tripId/rooming/export.xlsx      ADMIN+MGR
 //   GET    /api/travel/trips/:tripId/rooming/export.pdf       ADMIN+MGR
-//   POST   /api/travel/trips/:tripId/rooming/auto             ADMIN+MGR â€” auto-allocate unassigned
+//   POST   /api/travel/trips/:tripId/rooming/auto             ADMIN+MGR — auto-allocate unassigned
 //
-//   GET    /api/travel/trips/:tripId/payment-plan             â€” single plan
+//   GET    /api/travel/trips/:tripId/payment-plan             — single plan
 //   PUT    /api/travel/trips/:tripId/payment-plan             ADMIN+MGR (upsert)
 //   DELETE /api/travel/trips/:tripId/payment-plan             ADMIN
 //
-//   GET    /api/travel/trips/:tripId/instalments              â€” list per-participant
-//   POST   /api/travel/trips/:tripId/instalments              ADMIN+MGR â€” bulk-create for one participant
-//   POST   /api/travel/trips/:tripId/instalments/from-plan    ADMIN+MGR â€” materialise plan template Ã— roster
-//   PATCH  /api/travel/trips/:tripId/instalments/:id          ADMIN+MGR â€” mark paid, validate paidAmount
+//   GET    /api/travel/trips/:tripId/instalments              — list per-participant
+//   POST   /api/travel/trips/:tripId/instalments              ADMIN+MGR — bulk-create for one participant
+//   POST   /api/travel/trips/:tripId/instalments/from-plan    ADMIN+MGR — materialise plan template × roster
+//   PATCH  /api/travel/trips/:tripId/instalments/:id          ADMIN+MGR — mark paid, validate paidAmount
 //   DELETE /api/travel/trips/:tripId/instalments/:id          ADMIN
 //
 // Plan has 1:1 relationship with trip (schema @unique([tripId])).
 // PUT semantics: create-or-replace (upsert). /instalments/from-plan
 // materialises the plan's instalmentsJson into TripInstalmentPayment
-// rows for every participant Ã— instalment-index pair; idempotent â€” a
+// rows for every participant × instalment-index pair; idempotent — a
 // re-run after roster additions only inserts the missing rows.
 
 const express = require("express");
@@ -71,7 +71,7 @@ async function loadTrip(req) {
 // Update the parent-contact's linked itinerary status to 'advance_paid' after
 // an instalment is successfully paid. This is what makes the Leads page Amount
 // column show a non-zero value (it reads committed itinerary totalAmount).
-// Non-fatal â€” logs on failure so it never blocks the payment reconciliation.
+// Non-fatal — logs on failure so it never blocks the payment reconciliation.
 async function _updateItineraryAfterInstalmentPaid(instalment, tenantId) {
   try {
     const participant = await prisma.tripParticipant.findFirst({
@@ -80,7 +80,7 @@ async function _updateItineraryAfterInstalmentPaid(instalment, tenantId) {
     });
     if (!participant?.parentEmail) return;
     // Include advance_paid so subsequent instalment syncs can accumulate onto the
-    // same itinerary (first sync flips draft/sent â†’ advance_paid; second sync
+    // same itinerary (first sync flips draft/sent → advance_paid; second sync
     // must still find it to add to advancePaidAmount).
     const itinerary = await prisma.itinerary.findFirst({
       where: {
@@ -93,7 +93,7 @@ async function _updateItineraryAfterInstalmentPaid(instalment, tenantId) {
     if (!itinerary) return;
 
     // Compute the true total from all paid instalments under this participant's
-    // trip â€” this is idempotent no matter how many times sync is called.
+    // trip — this is idempotent no matter how many times sync is called.
     const paidInstalments = await prisma.tripInstalmentPayment.findMany({
       where: { participantId: instalment.participantId, status: "paid" },
       select: { paidAmount: true, amount: true },
@@ -174,19 +174,19 @@ router.get(
 );
 
 // ============================================================================
-// GET /api/travel/trip-billing/stats â€” tenant-wide TMC trip-billing rollup
-// (PRD_TRAVEL Â§TMC).
+// GET /api/travel/trip-billing/stats — tenant-wide TMC trip-billing rollup
+// (PRD_TRAVEL §TMC).
 //
 // First rollup endpoint for backend/routes/travel_trip_billing.js. Mirrors
-// the canonical /suppliers/stats + /commission-profiles/stats shape â€” a
+// the canonical /suppliers/stats + /commission-profiles/stats shape — a
 // USER-readable anodyne aggregate that powers the TMC ops dashboard's
-// trip-billing KPI strip ("4 plans Â· 23 instalments [12 paid Â· 8 pending Â·
-// 2 partial Â· 1 overdue] Â· â‚¹4.5L received Â· 6 rooms Â· last plan 3h ago").
+// trip-billing KPI strip ("4 plans · 23 instalments [12 paid · 8 pending ·
+// 2 partial · 1 overdue] · ₹4.5L received · 6 rooms · last plan 3h ago").
 //
 // Distinct from /trips/:tripId/{rooming,payment-plan,instalments} per-trip
-// surfaces â€” this is the tenant-wide aggregate across ALL TMC trips in the
+// surfaces — this is the tenant-wide aggregate across ALL TMC trips in the
 // caller's tenant. Without this, the frontend would have to fan-out a per-
-// trip fetch and reduce client-side â€” same anti-pattern flagged by the
+// trip fetch and reduce client-side — same anti-pattern flagged by the
 // "client-side aggregation over paginated endpoint" standing rule.
 //
 // TMC-locked: the whole travel_trip_billing.js route is sub-brand-gated to
@@ -195,7 +195,7 @@ router.get(
 // runs.
 //
 // Children don't carry tenantId directly. The schema scopes RoomingAssignment,
-// TripPaymentPlan, and TripInstalmentPayment via FK â†’ TmcTrip â†’ tenantId.
+// TripPaymentPlan, and TripInstalmentPayment via FK → TmcTrip → tenantId.
 // Canonical pattern: fetch the trip-id set first (tenantId-scoped), then
 // aggregate the 3 child models scoped to those trip-ids.
 //
@@ -213,13 +213,13 @@ router.get(
 //   - lastPlanCreatedAt: ISO of max(createdAt) across plans, or null.
 //
 // ?from / ?to (ISO date bounds) filter ALL 3 child rows by their createdAt.
-// Invalid date â†’ 400 INVALID_DATE.
+// Invalid date → 400 INVALID_DATE.
 //
 // USER-readable: anodyne aggregate (counts + sums + timestamps); safe.
-// No audit row written â€” read-only meta surface; matches /suppliers/stats.
+// No audit row written — read-only meta surface; matches /suppliers/stats.
 //
 // Express route ordering: literal-path /trip-billing/stats MUST be declared
-// BEFORE any /trips/:tripId/... handler â€” otherwise a stray request to
+// BEFORE any /trips/:tripId/... handler — otherwise a stray request to
 // /trips/trip-billing/anything would 400 INVALID_ID before reaching here.
 // Placed at the top of the route declarations for safety.
 // ============================================================================
@@ -259,14 +259,14 @@ router.get(
       }
 
       // Fetch this tenant's trip-id set first. Children don't carry tenantId
-      // directly â€” they scope via FK â†’ TmcTrip â†’ tenantId.
+      // directly — they scope via FK → TmcTrip → tenantId.
       const trips = await prisma.tmcTrip.findMany({
         where: { tenantId },
         select: { id: true },
       });
       const tripIds = trips.map((t) => t.id);
 
-      // Empty short-circuit â€” return zeroed shape.
+      // Empty short-circuit — return zeroed shape.
       if (tripIds.length === 0) {
         return res.json({
           totalTrips: 0,
@@ -338,7 +338,7 @@ router.get(
       const tripsWithBilling = new Set();
       for (const p of plans) tripsWithBilling.add(p.tripId);
       for (const ins of instalments) tripsWithBilling.add(ins.tripId);
-      // Rooming is fetched as a count above (perf â€” most ops dashboards just
+      // Rooming is fetched as a count above (perf — most ops dashboards just
       // need the bare number). For the totalTrips set we add rooming-only
       // trips via a lightweight distinct-id fetch IF any rooming rows exist.
       if (totalRoomingAssignments > 0) {
@@ -350,7 +350,7 @@ router.get(
         for (const r of roomingTrips) tripsWithBilling.add(r.tripId);
       }
 
-      // Half-up round to 2dp â€” matches sibling stats endpoints.
+      // Half-up round to 2dp — matches sibling stats endpoints.
       const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
       res.json({
@@ -371,17 +371,17 @@ router.get(
 );
 
 // ============================================================================
-// GET /api/travel/trip-billing/by-month â€” tenant-wide TMC instalment monthly
-// rollup (PRD_TRAVEL Â§TMC trip-billing).
+// GET /api/travel/trip-billing/by-month — tenant-wide TMC instalment monthly
+// rollup (PRD_TRAVEL §TMC trip-billing).
 //
-// Sibling to /trip-billing/stats (slice shipped earlier â€” single point-in-time
+// Sibling to /trip-billing/stats (slice shipped earlier — single point-in-time
 // KPI tile). /by-month is the per-month time series across the same TMC
-// instalment population â€” powers the trip-billing dashboard's trend chart so
+// instalment population — powers the trip-billing dashboard's trend chart so
 // the operator can see how cash collection has trended over time without
 // fan-out-and-reduce on the frontend.
 //
 // Mirrors /suppliers/by-month + /commission-profiles/by-month + /quotes/by-month
-// shape â€” one row per UTC YYYY-MM bucket, JS-side aggregation over a light
+// shape — one row per UTC YYYY-MM bucket, JS-side aggregation over a light
 // findMany projection, default orderBy=month:asc, pagination AFTER aggregation
 // + sort + filter, NO audit row written.
 //
@@ -390,23 +390,23 @@ router.get(
 // A non-TMC MANAGER receives 403 SUB_BRAND_DENIED before any aggregation runs.
 //
 // Tenant scoping: TripInstalmentPayment children don't carry tenantId directly.
-// The schema scopes via FK â†’ TmcTrip â†’ tenantId. Canonical pattern (matching
+// The schema scopes via FK → TmcTrip → tenantId. Canonical pattern (matching
 // /stats): fetch the trip-id set first (tenantId-scoped), then aggregate the
 // child rows scoped to those trip-ids.
 //
 // Query params:
-//   - ?from / ?to   â€” optional inclusive YYYY-MM bounds; invalid â†’ 400
+//   - ?from / ?to   — optional inclusive YYYY-MM bounds; invalid → 400
 //                     INVALID_MONTH_FORMAT
-//   - ?orderBy      â€” default month:asc; accepts month:{asc|desc},
+//   - ?orderBy      — default month:asc; accepts month:{asc|desc},
 //                     count:{asc|desc}; unknown tokens degrade silently
 //                     to the default
-//   - ?limit / ?offset â€” default 12 / 0; limit caps at 60
+//   - ?limit / ?offset — default 12 / 0; limit caps at 60
 //
 // Per-bucket breakdown:
 //   - count: total instalment rows landing in this month bucket
-//   - byStatus: { pending, partial, paid, overdue } â€” the four
+//   - byStatus: { pending, partial, paid, overdue } — the four
 //     VALID_INSTALMENT_STATUSES values, pre-seeded so every key exists on
-//     every bucket (schema is lowercase per prisma/schema.prisma:4594 â€” the
+//     every bucket (schema is lowercase per prisma/schema.prisma:4594 — the
 //     instalment.status enum is lowercase strings, NOT uppercase; mirrors
 //     the /stats handler at the top of this file)
 //   - totalReceived: sum of paidAmount across this bucket's rows, half-up
@@ -434,7 +434,7 @@ router.get(
       const skip = parseInt(req.query.offset, 10) || 0;
       const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
 
-      // YYYY-MM validation â€” mirrors /suppliers/by-month.
+      // YYYY-MM validation — mirrors /suppliers/by-month.
       const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
       const fromRaw = req.query.from ? String(req.query.from) : null;
       const toRaw = req.query.to ? String(req.query.to) : null;
@@ -459,14 +459,14 @@ router.get(
       ]);
       const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
 
-      // Tenant scoping â€” fetch this tenant's TMC trip-id set first.
+      // Tenant scoping — fetch this tenant's TMC trip-id set first.
       const trips = await prisma.tmcTrip.findMany({
         where: { tenantId },
         select: { id: true },
       });
       const tripIds = trips.map((t) => t.id);
 
-      // Empty short-circuit â€” return zeroed envelope.
+      // Empty short-circuit — return zeroed envelope.
       if (tripIds.length === 0) {
         return res.json({
           total: 0,
@@ -474,7 +474,7 @@ router.get(
         });
       }
 
-      // Light projection â€” status + paidAmount + createdAt is enough for the
+      // Light projection — status + paidAmount + createdAt is enough for the
       // bucket totals. tripId scoping replaces tenantId (children don't carry
       // tenantId directly).
       const instalments = await prisma.tripInstalmentPayment.findMany({
@@ -482,7 +482,7 @@ router.get(
         select: { status: true, paidAmount: true, createdAt: true },
       });
 
-      // Aggregate per-UTC-month. Map "YYYY-MM" â†’ {count, byStatus, totalReceived}.
+      // Aggregate per-UTC-month. Map "YYYY-MM" → {count, byStatus, totalReceived}.
       // Null/invalid createdAt rows land in "unknown".
       const byMonth = new Map();
       for (const ins of instalments) {
@@ -531,14 +531,14 @@ router.get(
         months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
       }
 
-      // Half-up round totalReceived to 2dp per bucket â€” matches /stats and
+      // Half-up round totalReceived to 2dp per bucket — matches /stats and
       // sibling /by-month endpoints' precision posture.
       const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
       for (const r of months) r.totalReceived = round2(r.totalReceived);
 
       // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
       // "unknown" sorts last in asc / first in desc (lexicographically >
-      // "9999-12") â€” acceptable for a defensive fallback bucket that should
+      // "9999-12") — acceptable for a defensive fallback bucket that should
       // rarely appear.
       const [field, dir] = orderBy.split(":");
       const mult = dir === "asc" ? 1 : -1;
@@ -568,7 +568,7 @@ router.get(
   },
 );
 
-// â”€â”€â”€ Rooming â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Rooming ─────────────────────────────────────────────────────────
 
 router.get("/trips/:tripId/rooming", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
   try {
@@ -808,10 +808,10 @@ router.delete(
 // param (`/rooming.xlsx`). A repo-wide grep for `/:\w+\.\w+["']` returns
 // zero hits, so the established pattern is path-segment delimiting
 // (compare `/itineraries/:id/pdf` in travel_itineraries.js:925). Keeps
-// route-matcher behaviour unambiguous â€” `:tripId` cannot accidentally
+// route-matcher behaviour unambiguous — `:tripId` cannot accidentally
 // swallow a trailing `.xlsx`.
 //
-// Auth: same gates as the destructive rooming routes â€” verifyToken +
+// Auth: same gates as the destructive rooming routes — verifyToken +
 // ADMIN/MANAGER + requireTravelTenant + requireTmcAccess. The viewer
 // already has GET /rooming so we deliberately don't tighten further.
 router.get(
@@ -823,7 +823,7 @@ router.get(
   async (req, res) => {
     try {
       const trip = await loadTrip(req);
-      // Load rooms + the trip's participant roster in parallel â€” we
+      // Load rooms + the trip's participant roster in parallel — we
       // join participantIds (JSON-string array of TripParticipant.id)
       // to fullName via the roster map.
       const [rooms, participants] = await Promise.all([
@@ -866,7 +866,7 @@ router.get(
 
       const wb = XLSX.utils.book_new();
       const ws = XLSX.utils.aoa_to_sheet(aoa);
-      // Column widths â€” rough heuristic for readability in Excel.
+      // Column widths — rough heuristic for readability in Excel.
       ws["!cols"] = [
         { wch: 10 }, // Room #
         { wch: 10 }, // Room type
@@ -900,7 +900,7 @@ router.get(
 // into rooms based on capacity and room type preferences. Simple
 // deterministic algorithm: sort participants by ID, create rooms as
 // needed following the specified roomType(s), respect capacity.
-// Idempotent â€” re-running after adding new participants allocates only
+// Idempotent — re-running after adding new participants allocates only
 // the unassigned ones.
 //
 // Request body: { roomTypes: ["twin", "quad"], startingRoomNumber: 101 }
@@ -1054,10 +1054,10 @@ router.get(
       doc.fontSize(11).font("Helvetica").fillColor("#666");
 
       if (tripData) {
-        doc.text(`Trip: ${tripData.tripCode || "â€”"}`, { align: "left" });
-        doc.text(`Destination: ${tripData.destination || "â€”"}`, { align: "left" });
-        const depart = tripData.departDate ? new Date(tripData.departDate).toLocaleDateString() : "â€”";
-        const ret = tripData.returnDate ? new Date(tripData.returnDate).toLocaleDateString() : "â€”";
+        doc.text(`Trip: ${tripData.tripCode || "—"}`, { align: "left" });
+        doc.text(`Destination: ${tripData.destination || "—"}`, { align: "left" });
+        const depart = tripData.departDate ? new Date(tripData.departDate).toLocaleDateString() : "—";
+        const ret = tripData.returnDate ? new Date(tripData.returnDate).toLocaleDateString() : "—";
         doc.text(`Dates: ${depart} to ${ret}`, { align: "left" });
       }
 
@@ -1133,7 +1133,7 @@ router.get(
   },
 );
 
-// â”€â”€â”€ Payment plan â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Payment plan ────────────────────────────────────────────────────
 
 router.get(
   "/trips/:tripId/payment-plan",
@@ -1220,7 +1220,7 @@ router.delete(
   },
 );
 
-// â”€â”€â”€ Per-participant instalments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Per-participant instalments ─────────────────────────────────────
 
 router.get(
   "/trips/:tripId/instalments",
@@ -1436,7 +1436,7 @@ router.delete(
 // or any channel.
 //
 // Reuses the same createInvoicePaymentLink() factory used by billing.js
-// and travel_invoices.js â€” no new gateway coupling. Auth gate matches the
+// and travel_invoices.js — no new gateway coupling. Auth gate matches the
 // PATCH instalment endpoint (ADMIN/MANAGER via requirePermission "trips",
 // "update"). Guards: instalment must exist on this trip, status must not
 // already be "paid" (generating a link for a fully-paid instalment is
@@ -1447,7 +1447,7 @@ router.delete(
 // "Generate" and display the last-generated link without another API call.
 //
 // Contact info for the Razorpay customer block is sourced from the
-// TripParticipant's parentName/parentEmail/parentPhone fields â€” in the TMC
+// TripParticipant's parentName/parentEmail/parentPhone fields — in the TMC
 // school-trip context the parent is always the payer.
 router.post(
   "/trips/:tripId/instalments/:id/payment-link",
@@ -1500,7 +1500,7 @@ router.post(
         : undefined;
 
       const frontendBase = getFrontendUrlFromRequest(req);
-      const label = `Instalment ${instalment.instalmentIndex + 1}${participant ? ` â€” ${participant.fullName}` : ""}`;
+      const label = `Instalment ${instalment.instalmentIndex + 1}${participant ? ` — ${participant.fullName}` : ""}`;
 
       const result = await createInvoicePaymentLink({
         tenantId: req.travelTenant.id,
@@ -1572,7 +1572,7 @@ router.post(
 
       // The Razorpay webhook (payments.js) updates TripInstalmentPayment directly
       // and does NOT always create a Payment table row for TMC instalments.
-      // So check the instalment itself first â€” if the webhook already fired and
+      // So check the instalment itself first — if the webhook already fired and
       // marked it paid/partial, surface that result without a Payment table lookup.
       if (instalment.status === "partial" || Number(instalment.paidAmount) > 0) {
         const updatedNow = await prisma.tripInstalmentPayment.update({
@@ -1586,7 +1586,7 @@ router.post(
       // Fall back to searching the Payment table. Try two match strategies:
       // 1. instalmentId in metadata (new links generated after the paymentLink.js fix)
       // 2. plinkId matching the stored paymentLinkUrl (old links where instalmentId
-      //    was not embedded in notes â€” the plink_â€¦ id is the last path segment of rzp.io/rzp/<code>
+      //    was not embedded in notes — the plink_… id is the last path segment of rzp.io/rzp/<code>
       //    which Razorpay stores as gatewayId on the Payment row).
       let matchedPayment = await prisma.payment.findFirst({
         where: {
@@ -1600,7 +1600,7 @@ router.post(
       if (!matchedPayment && instalment.paymentLinkUrl) {
         // For payment links generated before the instalmentId-in-notes fix, the
         // Payment row has `metadata.url = instalment.paymentLinkUrl` (the short_url
-        // Razorpay assigned). Match on that â€” it's unique per link.
+        // Razorpay assigned). Match on that — it's unique per link.
         matchedPayment = await prisma.payment.findFirst({
           where: {
             tenantId: req.travelTenant.id,

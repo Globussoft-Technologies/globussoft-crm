@@ -1142,7 +1142,18 @@ export default function InvoicesAdmin() {
         {loading && invoices.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : (
-          <table style={{ width: "100%", minWidth: 1700, borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", minWidth: 1180, borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <colgroup>
+              <col style={{ width: "120px" }} />
+              <col style={{ width: "220px" }} />
+              <col style={{ width: "100px" }} />
+              <col style={{ width: "130px" }} />
+              <col style={{ width: "90px" }} />
+              <col style={{ width: "120px" }} />
+              <col style={{ width: "130px" }} />
+              <col style={{ width: "120px" }} />
+              {canWrite && <col style={{ width: "160px" }} />}
+            </colgroup>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                 <th style={th}>Invoice #</th>
@@ -1340,7 +1351,7 @@ export default function InvoicesAdmin() {
                       ...td,
                       textAlign: "center",
                       color: permissionDenied ? "var(--warning-color, #f59e0b)" : "var(--text-secondary)",
-                      padding: permissionDenied ? "2rem 1rem" : "1.5rem 1rem",
+                      padding: permissionDenied ? "1rem 1rem" : "0.75rem 1rem",
                     }}
                   >
                     {/* #829 — honest empty-state when API returned 403. */}
@@ -1354,7 +1365,7 @@ export default function InvoicesAdmin() {
                     ) : (
                       <>
                         <Receipt size={20} style={{ opacity: 0.4, marginBottom: 6 }} />
-                        <div>No invoices match.</div>
+                        <div style={{ whiteSpace: "nowrap" }}>No invoices match.</div>
                       </>
                     )}
                   </td>
@@ -1650,12 +1661,13 @@ const th = {
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
 const tableFrame = {
   padding: 0,
-  overflow: "auto",
-  height: "calc(100vh - 330px)",
-  minHeight: 560,
-  maxHeight: 780,
+  overflowX: "auto",
+  overflowY: "visible",
+  height: "auto",
+  minHeight: 0,
+  maxHeight: "none",
 };
-const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
+const empty = { padding: 20, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const inputStyle = {
   padding: "8px 10px",
   borderRadius: 6,

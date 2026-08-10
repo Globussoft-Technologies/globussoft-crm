@@ -207,6 +207,9 @@ model Tenant {
   travelPortalNotifications           TravelPortalNotification[]
   supplierCredentials                 SupplierCredential[]
   visaApplications                    VisaApplication[]
+  visaLetterTemplates                 VisaLetterTemplate[]
+  visaLetterGenerations               VisaLetterGeneration[]
+  visaLetterDocuments                 VisaLetterDocument[]
   // G107 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â RejectionRecoveryProgram back-relation (PRD_VISA_SURE_PHASE_3 Ãƒâ€šÃ‚Â§FR-7).
   rejectionRecoveryPrograms           RejectionRecoveryProgram[]
   embassyRules                        EmbassyRule[]
@@ -6559,6 +6562,9 @@ model TmcTrip {
   status               String                    @default("confirmed") // confirmed | in-trip | completed | cancelled
   driveFolderId        String?
   participants         TripParticipant[]
+  visaApplications     VisaApplication[]
+  visaLetterGenerations VisaLetterGeneration[]
+  visaLetterDocuments   VisaLetterDocument[]
   rooming              RoomingAssignment[]
   paymentPlan          TripPaymentPlan?
   documentRequirements TripDocumentRequirement[]
@@ -6621,6 +6627,9 @@ model TripParticipant {
   reviewedById           Int?
   reviewNotes            String?                  @db.Text
   trip                   TmcTrip                  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  visaApplications       VisaApplication[]
+  visaLetterGenerations  VisaLetterGeneration[]
+  visaLetterDocuments    VisaLetterDocument[]
   digilockerSessions     DigilockerSession[]
   // Back-reference to the staging row that produced this participant
   // (hybrid landing-page ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ microsite OTP ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ operator-approve flow).
@@ -7057,11 +7066,17 @@ model VisaApplication {
   recoveryApplications VisaApplication[]           @relation("PriorRejection")
     passportIdentityId   Int?
   passportIdentity     PassportIdentity?              @relation(fields: [passportIdentityId], references: [id], onDelete: SetNull)
+  tripId                Int?
+  trip                  TmcTrip?                    @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  participantId         Int?
+  participant           TripParticipant?            @relation(fields: [participantId], references: [id], onDelete: SetNull)
   checklistSnapshotId  Int?
   checklistSnapshot    VisaChecklistSnapshot?      @relation(fields: [checklistSnapshotId], references: [id], onDelete: SetNull)
   checklistSnapshotVersion Int?
   checklistSnapshotJson String?                    @db.LongText
   documentChecklist    VisaDocumentChecklistItem[]
+  visaLetterGenerations VisaLetterGeneration[]
+  visaLetterDocuments   VisaLetterDocument[]
   tenant               Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt            DateTime                    @default(now())
   updatedAt            DateTime                    @updatedAt
@@ -7071,6 +7086,8 @@ model VisaApplication {
   @@index([priorApplicationId])
   @@index([recoveryProgramId])
   @@index([passportIdentityId])
+  @@index([tripId])
+  @@index([participantId])
 }
 
 /// G107 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â RejectionRecoveryProgram (PRD_VISA_SURE_PHASE_3 Ãƒâ€šÃ‚Â§FR-7).
@@ -7128,6 +7145,92 @@ model VisaDocumentChecklistItem {
 /// /travel/visa/checklists; consumed by GET /checklists/template?applicationType=
 /// &destinationCountry= to seed a new application's VisaDocumentChecklistItem rows.
 /// Standalone reference data ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no FK to applications.
+model VisaLetterTemplate {
+  id                 Int      @id @default(autoincrement())
+  tenantId           Int      @default(1)
+  code               String
+  name               String
+  documentType       String
+  version            Int
+  contentHtml        String   @db.LongText
+  requiredFieldsJson String   @db.Text
+  isActive           Boolean  @default(true)
+  createdById        Int?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  documents          VisaLetterDocument[]
+
+  @@unique([tenantId, code, version])
+  @@index([tenantId, code, isActive])
+}
+
+model VisaLetterGeneration {
+  id                Int      @id @default(autoincrement())
+  tenantId          Int      @default(1)
+  visaApplicationId Int
+  tripId            Int
+  participantId     Int
+  status            String   @default("GENERATED") // GENERATED | SENT | PARTIALLY_SIGNED | SIGNED_COMPLETE
+  generatedById     Int?
+  generatedAt       DateTime @default(now())
+  sentAt            DateTime?
+  dataSnapshotJson  String   @db.LongText
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  visaApplication   VisaApplication @relation(fields: [visaApplicationId], references: [id], onDelete: Cascade)
+  trip              TmcTrip         @relation(fields: [tripId], references: [id], onDelete: Restrict)
+  participant       TripParticipant @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  documents         VisaLetterDocument[]
+
+  @@index([tenantId, visaApplicationId, createdAt])
+  @@index([tenantId, participantId])
+}
+
+model VisaLetterDocument {
+  id                        Int      @id @default(autoincrement())
+  tenantId                  Int      @default(1)
+  generationId              Int
+  visaApplicationId         Int
+  tripId                    Int
+  participantId             Int
+  templateId                Int
+  templateCode              String
+  templateVersion           Int
+  documentType              String
+  status                    String   @default("GENERATED") // GENERATED | SENT | SIGNED_UPLOADED | REJECTED
+  generatedFileUrl          String   @db.Text
+  generatedFileKey          String
+  generatedFileStorage      String
+  generatedFileName         String
+  signedFileUrl             String?  @db.Text
+  signedFileKey             String?
+  signedFileStorage         String?
+  signedFileName            String?
+  generatedDataSnapshotJson String   @db.LongText
+  generatedAt               DateTime @default(now())
+  sentAt                    DateTime?
+  signedUploadedAt          DateTime?
+  signedUploadedByContactId Int?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  tenant                    Tenant               @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  generation                VisaLetterGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  visaApplication           VisaApplication      @relation(fields: [visaApplicationId], references: [id], onDelete: Cascade)
+  trip                      TmcTrip              @relation(fields: [tripId], references: [id], onDelete: Restrict)
+  participant               TripParticipant      @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  template                  VisaLetterTemplate   @relation(fields: [templateId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, visaApplicationId, status])
+  @@index([generationId])
+  @@index([participantId])
+  @@index([templateId])
+}
+
 model VisaChecklistTemplate {
   id                 Int      @id @default(autoincrement())
   tenantId           Int

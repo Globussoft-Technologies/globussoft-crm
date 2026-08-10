@@ -30,6 +30,9 @@ const ENTITY_LABELS = {
   services: "Services",
   packages: "Packages",
   products: "Drugs / Products",
+  "product-categories": "Product Categories",
+  "inventory-products": "Products",
+  "auto-consumption-rules": "Auto-consumption rules",
   customers: "Patients",
   bookings: "Bookings",
 };
@@ -84,7 +87,7 @@ export default function CsvImportExportToolbar({
         parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
       }
     }
-    return parts.length ? `${parts.join("&")}` : "";
+    return parts.length ? `?${parts.join("&")}` : "";
   };
 
   const doExport = async (format = "csv") => {
@@ -427,10 +430,7 @@ function ImportModal({
           overflow: "auto",
           padding: "2rem",
           position: "relative",
-          // Theme-adaptive: drop the hardcoded dark fallback; rely on .glass
-          // for the background (cream-tinted in light, dark-teal-tinted in
-          // dark). Explicit text colour so the modal body inherits the
-          // theme's foreground regardless of where it's portalled to.
+          background: "var(--surface-color, rgba(250, 246, 237, 0.95))",
           color: "var(--text-primary, inherit)",
           border: "1px solid var(--border-color, rgba(0,0,0,0.1))",
           boxShadow: "var(--shadow-lg, 0 24px 60px rgba(0,0,0,0.25))",
@@ -460,7 +460,7 @@ function ImportModal({
 
         <p style={{ color: "var(--text-secondary)", marginBottom: "1rem" }}>
           Upload a {formats.length > 1 ? "CSV or Excel (XLSX) file" : "CSV"} with these columns:{" "}
-          <code style={{ fontSize: "0.85em" }}>{expectedHeaders.join(", ") || "(loading...)"}</code>.
+          <code style={codePillStyle}>{expectedHeaders.join(", ") || "(loading...)"}</code>.
           Extra columns are ignored. Files over {Math.round(thresholds.bytes / (1024 * 1024))}MB or {thresholds.rows.toLocaleString()} rows are processed in the background and emailed when done.
         </p>
 
@@ -470,7 +470,7 @@ function ImportModal({
               key={f}
               type="button"
               onClick={() => downloadTemplate(f)}
-              style={linkBtnStyle}
+              style={templateBtnStyle}
             >
               <FileText size={14} /> Download {FORMAT_META[f].label || f.toUpperCase()} template
             </button>
@@ -485,9 +485,21 @@ function ImportModal({
               ? ".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               : ".csv,text/csv"}
             onChange={(e) => handleFile(e.target.files[0] || null)}
-            style={{ width: "100%" }}
+            style={{ display: "none" }}
             aria-label={formats.length > 1 ? "Select CSV or Excel file" : "Select CSV file"}
           />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            style={filePickerBtnStyle}
+          >
+            <Upload size={14} />
+            {file ? "Change file" : (formats.length > 1 ? "Choose CSV or Excel file" : "Choose CSV file")}
+          </button>
+          <div style={fileMetaStyle}>
+            <span>{file ? `Selected: ${file.name}` : "No file selected yet."}</span>
+            <span>{formats.length > 1 ? "Accepted: CSV, XLSX" : "Accepted: CSV"}</span>
+          </div>
           {file && /\.xlsx$/i.test(file.name || "") && !result && (
             <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", marginTop: "0.4rem" }}>
               Excel file selected - column + row validation runs on the server when you click Confirm.
@@ -496,7 +508,7 @@ function ImportModal({
         </div>
 
         {previewError && (
-          <div role="alert" style={{ ...alertStyle, background: "rgba(239,68,68,0.15)", borderColor: "#ef4444" }}>
+          <div role="alert" style={getAlertStyle("error")}>
             <AlertTriangle size={16} style={{ verticalAlign: "middle", marginRight: 6 }} /> {previewError}
           </div>
         )}
@@ -504,12 +516,12 @@ function ImportModal({
         {previewRows.length > 0 && !result && (
           <div style={{ marginBottom: "1rem" }}>
             <h3 style={{ fontSize: "0.95rem", marginBottom: "0.4rem" }}>Preview (first {previewRows.length} rows)</h3>
-            <div style={{ maxHeight: 200, overflow: "auto", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6 }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+            <div style={{ ...panelStyle, maxHeight: 200, overflow: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", color: "var(--text-primary, inherit)" }}>
                 <thead>
                   <tr>
                     {previewHeaders.map((h) => (
-                      <th key={h} style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.08)", textAlign: "left", background: "rgba(255,255,255,0.04)" }}>{h}</th>
+                      <th key={h} style={tableHeaderCellStyle}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -517,7 +529,7 @@ function ImportModal({
                   {previewRows.map((r, i) => (
                     <tr key={i}>
                       {previewHeaders.map((h) => (
-                        <td key={h} style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{String(r[h] || "")}</td>
+                        <td key={h} style={tableCellStyle}>{String(r[h] || "")}</td>
                       ))}
                     </tr>
                   ))}
@@ -529,7 +541,7 @@ function ImportModal({
 
         {result && (
           <div style={{ marginBottom: "1rem" }}>
-            <div role="status" style={{ ...alertStyle, background: result.errors.length ? "rgba(245,158,11,0.15)" : "rgba(16,185,129,0.15)", borderColor: result.errors.length ? "#f59e0b" : "#10b981" }}>
+            <div role="status" style={getAlertStyle(result.errors.length ? "warning" : "success")}>
               <CheckCircle2 size={16} style={{ verticalAlign: "middle", marginRight: 6 }} />
               Inserted <strong>{result.inserted ?? result.imported ?? 0}</strong>, updated <strong>{result.updated ?? 0}</strong>, skipped <strong>{result.skipped ?? 0}</strong>{result.errors.length ? `, errors ${result.errors.length}` : ""}
             </div>
@@ -537,22 +549,22 @@ function ImportModal({
             {result.errors.length > 0 && (
               <>
                 <h3 style={{ fontSize: "0.95rem", margin: "0.6rem 0 0.4rem" }}>Row-level errors</h3>
-                <div style={{ maxHeight: 240, overflow: "auto", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 6 }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                <div style={{ ...panelStyle, maxHeight: 240, overflow: "auto", borderColor: "rgba(168, 50, 63, 0.35)" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", color: "var(--text-primary, inherit)" }}>
                     <thead>
                       <tr>
                         {["row", "column", "value", "message"].map((h) => (
-                          <th key={h} style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.08)", textAlign: "left", background: "rgba(239,68,68,0.10)" }}>{h}</th>
+                          <th key={h} style={{ ...tableHeaderCellStyle, background: "rgba(168, 50, 63, 0.12)" }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {result.errors.slice(0, 200).map((e, i) => (
                         <tr key={i}>
-                          <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{e.row}</td>
-                          <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{e.column}</td>
-                          <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{String(e.value || "")}</td>
-                          <td style={{ padding: "0.4rem", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>{e.message}</td>
+                          <td style={tableCellStyle}>{e.row}</td>
+                          <td style={tableCellStyle}>{e.column}</td>
+                          <td style={tableCellStyle}>{String(e.value || "")}</td>
+                          <td style={tableCellStyle}>{e.message}</td>
                         </tr>
                       ))}
                       {result.errors.length > 200 && (
@@ -574,8 +586,8 @@ function ImportModal({
         )}
 
         {jobId && !result && (
-          <div role="status" style={{ ...alertStyle, background: "rgba(99,102,241,0.15)", borderColor: "#6366f1" }}>
-            Background job <code>{jobId}</code> queued. You&apos;ll be emailed when it finishes; this dialog will update too.
+          <div role="status" style={getAlertStyle("info")}>
+            Background job <code style={codePillStyle}>{jobId}</code> queued. You'll be emailed when it finishes; this dialog will update too.
           </div>
         )}
 
@@ -659,51 +671,143 @@ function csvCell(value) {
 
 // -- Styles ---------------------------------------------------------
 
+const themedBorder = "1px solid var(--border-color, rgba(0,0,0,0.14))";
+
 const secondaryBtnStyle = {
   display: "inline-flex",
   alignItems: "center",
   gap: "0.3rem",
   padding: "0.5rem 0.9rem",
-  background: "transparent",
+  background: "var(--surface-color, rgba(255,255,255,0.9))",
   color: "var(--text-primary, inherit)",
-  border: "1px solid var(--border-soft, rgba(255,255,255,0.18))",
+  border: themedBorder,
   borderRadius: 8,
   cursor: "pointer",
   fontSize: "0.85rem",
+  fontWeight: 600,
 };
 
 const primaryBtnStyle = {
   display: "inline-flex",
   alignItems: "center",
   gap: "0.3rem",
-  padding: "0.5rem 1rem",
-  background: "var(--primary-color, var(--accent-color))",
-  color: "#fff",
+  padding: "0.55rem 1rem",
+  background: "linear-gradient(135deg, var(--accent-peach, var(--accent-color, #C9A063)) 0%, var(--accent-color, #C9A063) 100%)",
+  color: "var(--accent-text, #fff)",
   border: "none",
   borderRadius: 8,
   cursor: "pointer",
   fontSize: "0.9rem",
+  fontWeight: 700,
+  boxShadow: "var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.12))",
 };
 
 const linkBtnStyle = {
   display: "inline-flex",
   alignItems: "center",
   gap: "0.3rem",
-  padding: 0,
-  background: "transparent",
-  border: "none",
-  color: "var(--primary-color, var(--accent-color))",
+  padding: "0.55rem 0.8rem",
+  background: "var(--surface-color, rgba(255,255,255,0.9))",
+  border: themedBorder,
+  borderRadius: 8,
+  color: "var(--accent-color, var(--text-primary))",
   cursor: "pointer",
-  fontSize: "0.9rem",
-  textDecoration: "underline",
+  fontSize: "0.85rem",
+  fontWeight: 600,
+  textDecoration: "none",
+};
+
+const templateBtnStyle = linkBtnStyle;
+
+const filePickerBtnStyle = {
+  width: "100%",
+  padding: "0.75rem 0.9rem",
+  borderRadius: 8,
+  border: "2px dashed var(--border-color, rgba(0,0,0,0.18))",
+  background: "var(--surface-color, rgba(255,255,255,0.9))",
+  color: "var(--accent-color, var(--text-primary))",
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "0.5rem",
+  fontSize: "0.95rem",
+  fontWeight: 600,
+};
+
+const fileMetaStyle = {
+  display: "flex",
+  gap: "0.5rem",
+  justifyContent: "space-between",
+  flexWrap: "wrap",
+  marginTop: "0.45rem",
+  color: "var(--text-secondary)",
+  fontSize: "0.82rem",
+};
+
+const codePillStyle = {
+  display: "inline-block",
+  padding: "0.1rem 0.35rem",
+  borderRadius: 6,
+  border: themedBorder,
+  background: "var(--subtle-bg, rgba(0,0,0,0.03))",
+  color: "var(--text-primary, inherit)",
+  fontSize: "0.85em",
 };
 
 const alertStyle = {
   padding: "0.6rem 0.8rem",
-  borderRadius: 6,
-  border: "1px solid",
+  borderRadius: 8,
+  border: themedBorder,
   marginBottom: "0.8rem",
   fontSize: "0.9rem",
+  color: "var(--text-primary, inherit)",
+  background: "var(--subtle-bg, rgba(0,0,0,0.03))",
+};
+
+const alertVariants = {
+  error: {
+    background: "rgba(168, 50, 63, 0.12)",
+    borderColor: "rgba(168, 50, 63, 0.45)",
+  },
+  warning: {
+    background: "rgba(212, 146, 59, 0.12)",
+    borderColor: "rgba(212, 146, 59, 0.45)",
+  },
+  success: {
+    background: "rgba(74, 124, 89, 0.12)",
+    borderColor: "rgba(74, 124, 89, 0.45)",
+  },
+  info: {
+    background: "rgba(99, 102, 241, 0.12)",
+    borderColor: "rgba(99, 102, 241, 0.45)",
+  },
+};
+
+function getAlertStyle(variant) {
+  return { ...alertStyle, ...(alertVariants[variant] || {}) };
+}
+
+const panelStyle = {
+  border: themedBorder,
+  borderRadius: 8,
+  background: "var(--surface-color, rgba(255,255,255,0.9))",
+  overflow: "hidden",
+};
+
+const tableHeaderCellStyle = {
+  padding: "0.4rem",
+  borderBottom: themedBorder,
+  textAlign: "left",
+  background: "var(--subtle-bg, rgba(0,0,0,0.03))",
+  color: "var(--text-primary, inherit)",
+  fontWeight: 600,
+};
+
+const tableCellStyle = {
+  padding: "0.4rem",
+  borderBottom: "1px solid var(--border-light, rgba(0,0,0,0.06))",
+  color: "var(--text-primary, inherit)",
 };
 
 const dropdownMenuStyle = {

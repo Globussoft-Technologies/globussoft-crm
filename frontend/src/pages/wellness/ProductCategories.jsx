@@ -12,6 +12,7 @@ import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { usePermissions } from "../../hooks/usePermissions";
 import PageHeader from "../../components/PageHeader";
+import CsvImportExportToolbar from "../../components/wellness/CsvImportExportToolbar";
 
 export default function ProductCategories() {
   const notify = useNotify();
@@ -195,6 +196,15 @@ export default function ProductCategories() {
           </span>
         ) : null}
       >
+        {canManage && (
+          <CsvImportExportToolbar
+            entity="product-categories"
+            label="Product Categories"
+            filters={{ q: search || undefined }}
+            formats={["csv", "xlsx"]}
+            onImported={loadCategories}
+          />
+        )}
         {canManage && (
           <button
             onClick={() => handleOpenModal()}

@@ -290,6 +290,12 @@ describe('WebForms builder page', () => {
 
     expect(screen.getByRole('button', { name: /Settings/i })).toBeInTheDocument();
 
+    expect(screen.getByTestId('wf-field-editor-grid')).toHaveStyle({
+
+      gridTemplateColumns: 'minmax(220px, 1fr) minmax(180px, 0.8fr) minmax(260px, max-content)',
+
+    });
+
     fireEvent.click(screen.getByRole('button', { name: /Settings/i }));
 
     await screen.findByText(/Send email notification to this address/i);

@@ -231,9 +231,9 @@ export default function Drugs() {
       <div style={TABLE_CELL_STYLE}>{d.genericName || '—'}</div>
       <div style={TABLE_CELL_STYLE}>{d.dosageForm}</div>
       <div style={TABLE_CELL_STYLE}>
-        {d.strengthValue ? `${d.strengthValue} ${d.strengthUnit || ''}`.trim() : 'â€”'}
+        {d.strengthValue ? `${d.strengthValue} ${d.strengthUnit || ''}`.trim() : '—'}
       </div>
-      <div style={TABLE_CELL_STYLE}>{d.defaultDosage || 'â€”'}</div>
+      <div style={TABLE_CELL_STYLE}>{d.defaultDosage || '—'}</div>
       <div style={TABLE_CELL_STYLE}>
         <span
           style={{

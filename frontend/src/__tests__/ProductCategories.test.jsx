@@ -163,6 +163,12 @@ describe('<ProductCategories /> — page chrome', () => {
     expect(
       screen.getByRole('button', { name: /Add Category/i }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /^Export Product Categories$/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /^Import Product Categories$/i }),
+    ).toBeInTheDocument();
   });
 
   it('renders "Loading categories..." while the initial GET is in flight', async () => {

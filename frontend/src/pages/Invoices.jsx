@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useContext, useRef } from "react";
+import { useState, useEffect, useMemo, useContext, useCallback } from "react";
 import {
   Receipt,
   Plus,
@@ -18,6 +18,7 @@ import { useNotify } from "../utils/notify";
 import { AuthContext } from "../App";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { SUB_BRAND_IDS, subBrandShortLabel } from "../utils/travelSubBrand";
+import TopScrollSync from "../components/TopScrollSync";
 
 const STATUS_CONFIG = {
   PAID: { color: "#10b981", bg: "rgba(16,185,129,0.15)", label: "Paid" },
@@ -50,7 +51,7 @@ import { formatDate } from "../utils/date";
 const formatCurrency = (v) =>
   formatMoney(v, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 
-const INVOICE_BATCH_SIZE = 25;
+const INVOICE_TABLE_MIN_WIDTH = 940;
 
 export default function Invoices() {
   const notify = useNotify();
@@ -83,29 +84,11 @@ export default function Invoices() {
   const [recurInvoice, setRecurInvoice] = useState(null);
   const [recurFreq, setRecurFreq] = useState("monthly");
   const [statusFilter, setStatusFilter] = useState("ALL");
-  const [visibleInvoiceCount, setVisibleInvoiceCount] = useState(
-    INVOICE_BATCH_SIZE,
-  );
-  const invoiceTableRef = useRef(null);
+
 
   // Re-fetch when the travel sub-brand filter changes (no-op for other
   // verticals — activeSubBrand stays undefined there).
-  useEffect(() => {
-    loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSubBrand]);
-
-  // Default the create-form brand to the currently-active sub-brand (travel).
-  useEffect(() => {
-    if (isTravel && activeSubBrand) {
-      setNewInvoice((p) =>
-        p.subBrand ? p : { ...p, subBrand: activeSubBrand },
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTravel, activeSubBrand]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const qs =
         isTravel && activeSubBrand
@@ -119,10 +102,23 @@ export default function Invoices() {
       setInvoices(Array.isArray(invs) ? invs : []);
       setContacts(Array.isArray(c) ? c : []);
       setDeals(Array.isArray(d) ? d : []);
-    } catch (err) {
+    } catch (_err) {
       // Network or auth error handled by fetchApi
     }
-  };
+  }, [activeSubBrand, isTravel]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Default the create-form brand to the currently-active sub-brand (travel).
+  useEffect(() => {
+    if (isTravel && activeSubBrand) {
+      setNewInvoice((p) =>
+        p.subBrand ? p : { ...p, subBrand: activeSubBrand },
+      );
+    }
+  }, [isTravel, activeSubBrand]);
 
   const stats = useMemo(() => {
     const now = new Date();
@@ -155,29 +151,8 @@ export default function Invoices() {
     return invoices.filter((inv) => inv.status === statusFilter);
   }, [invoices, statusFilter]);
 
-  const visibleInvoices = useMemo(
-    () => filteredInvoices.slice(0, visibleInvoiceCount),
-    [filteredInvoices, visibleInvoiceCount],
-  );
-  const hasMoreInvoices = visibleInvoiceCount < filteredInvoices.length;
+  const visibleInvoices = filteredInvoices;
 
-  useEffect(() => {
-    setVisibleInvoiceCount(INVOICE_BATCH_SIZE);
-    if (invoiceTableRef.current) invoiceTableRef.current.scrollTop = 0;
-  }, [statusFilter, activeSubBrand]);
-
-  const handleInvoiceTableScroll = (event) => {
-    const scroller = event.target;
-    if (!scroller.classList?.contains("invoice-table-scroll")) return;
-
-    const distanceFromBottom =
-      scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-    if (distanceFromBottom <= 160) {
-      setVisibleInvoiceCount((count) =>
-        Math.min(count + INVOICE_BATCH_SIZE, filteredInvoices.length),
-      );
-    }
-  };
 
   const nextInvoiceNum = useMemo(() => {
     if (invoices.length === 0) return "INV-001";
@@ -224,7 +199,7 @@ export default function Invoices() {
         subBrand: isTravel ? activeSubBrand || "" : "",
       });
       loadData();
-    } catch (err) {
+    } catch (_err) {
       notify.error("Failed to create invoice");
     }
   };
@@ -237,7 +212,7 @@ export default function Invoices() {
       // refetch keeps the Outstanding/Paid totals consistent with what the
       // user sees in the table.
       await loadData();
-    } catch (err) {
+    } catch (_err) {
       notify.error("Failed to mark invoice as paid");
     }
   };
@@ -290,7 +265,7 @@ export default function Invoices() {
     try {
       await fetchApi(`/api/billing/${inv.id}/void`, { method: "PUT" });
       loadData();
-    } catch (err) {
+    } catch (_err) {
       notify.error("Failed to void invoice");
     }
   };
@@ -348,7 +323,7 @@ export default function Invoices() {
           style={{
             padding: "0.4rem 1rem",
             borderRadius: "999px",
-            fontSize: "0.8rem",
+            fontSize: "0.75rem",
             fontWeight: "600",
             background: "rgba(245,158,11,0.1)",
             color: "#f59e0b",
@@ -365,7 +340,7 @@ export default function Invoices() {
           style={{
             padding: "0.4rem 1rem",
             borderRadius: "999px",
-            fontSize: "0.8rem",
+            fontSize: "0.75rem",
             fontWeight: "600",
             background: "rgba(16,185,129,0.1)",
             color: "#10b981",
@@ -383,7 +358,7 @@ export default function Invoices() {
             style={{
               padding: "0.4rem 1rem",
               borderRadius: "999px",
-              fontSize: "0.8rem",
+              fontSize: "0.75rem",
               fontWeight: "600",
               background: "rgba(239,68,68,0.1)",
               color: "#ef4444",
@@ -400,7 +375,7 @@ export default function Invoices() {
           style={{
             padding: "0.4rem 1rem",
             borderRadius: "999px",
-            fontSize: "0.8rem",
+            fontSize: "0.75rem",
             background: "var(--subtle-bg-4)",
             color: "var(--text-secondary)",
             border: "1px solid var(--border-color)",
@@ -430,7 +405,7 @@ export default function Invoices() {
             <label
               htmlFor="invoice-subbrand-filter"
               style={{
-                fontSize: "0.8rem",
+                fontSize: "0.75rem",
                 color: "var(--text-secondary)",
                 fontWeight: 600,
               }}
@@ -448,7 +423,7 @@ export default function Invoices() {
                 background: "transparent",
                 border: "none",
                 color: "var(--text-primary)",
-                fontSize: "0.8rem",
+                fontSize: "0.75rem",
                 fontWeight: 600,
                 cursor: "pointer",
                 outline: "none",
@@ -496,7 +471,7 @@ export default function Invoices() {
           <label
             htmlFor="invoice-status-filter"
             style={{
-              fontSize: "0.8rem",
+              fontSize: "0.75rem",
               color: "var(--text-secondary)",
               fontWeight: 600,
             }}
@@ -513,7 +488,7 @@ export default function Invoices() {
               background: "transparent",
               border: "none",
               color: "var(--text-primary)",
-              fontSize: "0.8rem",
+              fontSize: "0.75rem",
               fontWeight: 600,
               cursor: "pointer",
               outline: "none",
@@ -883,12 +858,12 @@ export default function Invoices() {
       )}
 
         {/* Invoice Table */}
-        <div className="card" style={{ padding: "2rem" }}>
+        <div className="card" style={{ padding: "1.5rem" }}>
           <h3
             style={{
               fontSize: "1.15rem",
               fontWeight: "600",
-              marginBottom: "1.5rem",
+              marginBottom: "1rem",
               display: "flex",
               alignItems: "center",
               gap: "0.5rem",
@@ -901,7 +876,7 @@ export default function Invoices() {
             <div
               style={{
                 textAlign: "center",
-                padding: "4rem 2rem",
+                padding: "2.5rem 1.5rem",
                 background: "var(--subtle-bg-2)",
                 border: "1px dashed var(--border-color)",
                 borderRadius: "8px",
@@ -923,7 +898,7 @@ export default function Invoices() {
             <div
               style={{
                 textAlign: "center",
-                padding: "4rem 2rem",
+                padding: "2.5rem 1.5rem",
                 background: "var(--subtle-bg-2)",
                 border: "1px dashed var(--border-color)",
                 borderRadius: "8px",
@@ -943,40 +918,32 @@ export default function Invoices() {
               </p>
             </div>
           ) : (
-            <div
-              ref={invoiceTableRef}
-              className="invoice-table-scroll"
-              onScrollCapture={handleInvoiceTableScroll}
-              style={{
-                 minHeight: "calc(100vh - 380px)",
-                 maxHeight: "calc(100vh - 380px)",
-                 overflowY: "auto",
-                 overflowX: "auto",
-                }}
-            >
+            <div className="invoice-table-scroll">
+              <TopScrollSync scrollWidth={`${INVOICE_TABLE_MIN_WIDTH}px`}>
               {/* #243: table-layout fixed + per-column widths so the Contact
                   cell can no longer expand past its allotted space and bleed
                   on top of the sticky Actions column. The Contact cell itself
                   also truncates with ellipsis (see <td> below). */}
               <table
-                className="stable-table invoice-table"
+                className="stable-table"
                 style={{
+                  width: "100%",
+                  minWidth: `${INVOICE_TABLE_MIN_WIDTH}px`,
                   borderCollapse: "collapse",
                   fontSize: "0.875rem",
-                  minWidth: "1340px",
-                  width: "max(100%, 1340px)",
+                  tableLayout: "fixed",
                 }}
                 role="table"
                 aria-label="Invoices table"
               >
                 <colgroup>
-                  <col style={{ width: "180px" }} />
                   <col style={{ width: "110px" }} />
-                  <col style={{ width: "100px" }} />
-                  <col style={{ width: "120px" }} />
-                  <col style={{ width: "110px" }} />
-                  <col style={{ width: "220px" }} />
-                  <col style={{ width: "500px" }} />
+                  <col style={{ width: "104px" }} />
+                  <col style={{ width: "96px" }} />
+                  <col style={{ width: "108px" }} />
+                  <col style={{ width: "108px" }} />
+                  <col style={{ width: "170px" }} />
+                  <col style={{ width: "244px" }} />
                 </colgroup>
                 <thead className="invoice-table-header">
                   <tr
@@ -987,7 +954,7 @@ export default function Invoices() {
                   >
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -999,7 +966,7 @@ export default function Invoices() {
                     </th>
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -1011,7 +978,7 @@ export default function Invoices() {
                     </th>
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -1023,7 +990,7 @@ export default function Invoices() {
                     </th>
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -1035,7 +1002,7 @@ export default function Invoices() {
                     </th>
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -1047,7 +1014,7 @@ export default function Invoices() {
                     </th>
                     <th
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -1062,7 +1029,7 @@ export default function Invoices() {
                     <th
                       className="invoice-actions-cell"
                       style={{
-                        padding: "0.75rem 0.5rem",
+                        padding: "0.65rem 0.4rem",
                         color: "var(--text-secondary)",
                         fontWeight: "600",
                         fontSize: "0.75rem",
@@ -1092,15 +1059,14 @@ export default function Invoices() {
                     >
                       <td
                         style={{
-                          padding: "1rem 0.5rem",
-                          fontWeight: "500",
-                          fontSize: "0.75rem",
-                          letterSpacing: "0.02em",
+                          padding: "0.75rem 0.4rem",
+                          fontWeight: "600",
+                          letterSpacing: "0.03em",
                         }}
                       >
                         {inv.invoiceNum}
                       </td>
-                      <td style={{ padding: "1rem 0.5rem" }}>
+                      <td style={{ padding: "0.75rem 0.4rem" }}>
                         {/* #242: removed the hardcoded $ IndianRupee icon — formatCurrency()
                             already prefixes the right symbol (₹ for INR tenants, $ for USD,
                             etc.). Stacking the icon caused "$ ₹1,500.00" on Indian tenants. */}
@@ -1113,12 +1079,12 @@ export default function Invoices() {
                           {formatCurrency(inv.amount)}
                         </span>
                       </td>
-                      <td style={{ padding: "1rem 0.5rem" }}>
+                      <td style={{ padding: "0.75rem 0.4rem" }}>
                         <StatusBadge status={inv.status} />
                       </td>
                       <td
                         style={{
-                          padding: "1rem 0.5rem",
+                          padding: "0.75rem 0.4rem",
                           color: "var(--text-secondary)",
                         }}
                       >
@@ -1126,7 +1092,7 @@ export default function Invoices() {
                           style={{
                             display: "flex",
                             alignItems: "center",
-                            gap: "0.3rem",
+                            gap: "0.25rem",
                           }}
                         >
                           <Clock size={13} />
@@ -1135,7 +1101,7 @@ export default function Invoices() {
                       </td>
                       <td
                         style={{
-                          padding: "1rem 0.5rem",
+                          padding: "0.75rem 0.4rem",
                           color: "var(--text-secondary)",
                         }}
                       >
@@ -1144,7 +1110,7 @@ export default function Invoices() {
                       </td>
                       <td
                         style={{
-                          padding: "1rem 0.5rem",
+                          padding: "0.75rem 0.4rem",
                           color: "var(--text-secondary)",
                           whiteSpace: "nowrap",
                           overflow: "hidden",
@@ -1179,8 +1145,8 @@ export default function Invoices() {
                       <td
                         className="invoice-actions-cell"
                         style={{
-                          padding: "1rem 0.5rem",
-                          // textAlign: "right",
+                          padding: "0.75rem 0.4rem",
+                          textAlign: "right",
                         }}
                       >
                         {/* Keep the action controls on one line; horizontal
@@ -1188,9 +1154,10 @@ export default function Invoices() {
                         <div
                           style={{
                             display: "flex",
-                            gap: "0.5rem",
-                            flexWrap: "nowrap",
-                            whiteSpace: "nowrap",
+                            justifyContent: "flex-end",
+                            gap: "0.35rem",
+                            flexWrap: "wrap",
+                            minWidth: 0,
                           }}
                         >
                           <button
@@ -1202,9 +1169,9 @@ export default function Invoices() {
                               cursor: "pointer",
                               display: "flex",
                               alignItems: "center",
-                              gap: "0.3rem",
-                              fontSize: "0.8rem",
-                              padding: "0.4rem 0.75rem",
+                              gap: "0.25rem",
+                              fontSize: "0.75rem",
+                              padding: "0.32rem 0.55rem",
                               borderRadius: "6px",
                             }}
                             onMouseOver={(e) =>
@@ -1226,12 +1193,12 @@ export default function Invoices() {
                                 style={{
                                   display: "flex",
                                   alignItems: "center",
-                                  gap: "0.3rem",
+                                  gap: "0.25rem",
                                   background: "#3b82f6",
                                   color: "#fff",
                                   border: "none",
-                                  padding: "0.4rem 0.75rem",
-                                  fontSize: "0.8rem",
+                                  padding: "0.32rem 0.55rem",
+                                  fontSize: "0.75rem",
                                   borderRadius: "6px",
                                   cursor: "pointer",
                                 }}
@@ -1245,12 +1212,12 @@ export default function Invoices() {
                                 style={{
                                   display: "flex",
                                   alignItems: "center",
-                                  gap: "0.3rem",
+                                  gap: "0.25rem",
                                   background: "var(--success-color)",
                                   color: "#fff",
                                   border: "none",
-                                  padding: "0.4rem 0.75rem",
-                                  fontSize: "0.8rem",
+                                  padding: "0.32rem 0.55rem",
+                                  fontSize: "0.75rem",
                                   borderRadius: "6px",
                                   cursor: "pointer",
                                 }}
@@ -1282,9 +1249,9 @@ export default function Invoices() {
                                 cursor: "pointer",
                                 display: "flex",
                                 alignItems: "center",
-                                gap: "0.3rem",
-                                fontSize: "0.8rem",
-                                padding: "0.4rem 0.75rem",
+                                gap: "0.25rem",
+                                fontSize: "0.75rem",
+                                padding: "0.32rem 0.55rem",
                                 borderRadius: "6px",
                               }}
                             >
@@ -1304,9 +1271,9 @@ export default function Invoices() {
                                 cursor: "pointer",
                                 display: "flex",
                                 alignItems: "center",
-                                gap: "0.3rem",
-                                fontSize: "0.8rem",
-                                padding: "0.4rem 0.75rem",
+                                gap: "0.25rem",
+                                fontSize: "0.75rem",
+                                padding: "0.32rem 0.55rem",
                                 borderRadius: "6px",
                               }}
                               onMouseOver={(e) =>
@@ -1325,22 +1292,9 @@ export default function Invoices() {
                       </td>
                     </tr>
                   ))}
-                  {hasMoreInvoices && (
-                    <tr aria-live="polite">
-                      <td
-                        colSpan={7}
-                        style={{
-                          padding: "1rem 0.5rem",
-                          textAlign: "center",
-                          color: "var(--text-secondary)",
-                        }}
-                      >
-                        Scroll to load more invoices
-                      </td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
+              </TopScrollSync>
             </div>
           )}
         </div>
@@ -1437,7 +1391,7 @@ export default function Invoices() {
                   }}
                 >
                   A new invoice will be auto-generated every{" "}
-                  {recurFreq.replace("ly", "")} starting from this invoice's due
+                  {recurFreq.replace("ly", "")} starting from this invoice due
                   date.
                 </p>
               </>
@@ -1645,24 +1599,14 @@ export default function Invoices() {
 
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-        .invoice-table-scroll {
-          max-height: calc(100vh - 330px);
-          min-height: 240px;
-          overflow: auto;
-          overflow-x: scroll !important;
-          scrollbar-gutter: stable;
+        .invoices-grid { display: grid; grid-template-columns: minmax(360px, 420px) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+        .invoices-grid > .card { align-self: start; }
+        .invoice-table-scroll .top-scroll-sync__bottom {
+          max-height: none;
+          min-height: 0;
+          overflow-y: visible;
         }
-        .invoice-table-scroll .invoice-table {
-          display: table;
-          overflow: visible;
-          border-spacing: 0;
-        }
-        .invoice-table-scroll table.invoice-table .invoice-table-header,
-        .invoice-table-scroll table.invoice-table .invoice-table-header tr {
-          background: var(--bg-color, #15171c) !important;
-          background-color: var(--bg-color, #15171c) !important;
-        }
-        .invoice-table-scroll table.invoice-table .invoice-table-header th {
+        .invoice-table-header th {
           position: sticky;
           top: 0;
           z-index: 3;
@@ -1680,8 +1624,9 @@ export default function Invoices() {
           white-space: nowrap;
         }
         @media (max-width: 768px) {
-          .invoice-table-scroll {
-            max-height: 70vh;
+          .invoices-grid { grid-template-columns: 1fr; gap: 1.25rem; }
+          .invoice-table-scroll .top-scroll-sync__bottom {
+            max-height: none;
           }
         }
       `}</style>

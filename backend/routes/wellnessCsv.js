@@ -217,7 +217,14 @@ async function runImport(def, fileBuffer, tenantId, ctx, format = "csv") {
         continue;
       }
 
-      const { action } = await def.persist(prisma, tenantId, data, existing);
+      const { action, record } = await def.persist(prisma, tenantId, data, existing);
+      if (typeof def.registerLookup === "function" && ctx?.lookups) {
+        try {
+          def.registerLookup(ctx.lookups, data, record, existing);
+        } catch {
+          // Lookup registration is best-effort only.
+        }
+      }
       if (action === "inserted") result.inserted += 1;
       else if (action === "updated") result.updated += 1;
       else result.skipped += 1;
@@ -271,18 +278,7 @@ router.get("/:entity/export", async (req, res) => {
       };
       if (def.exportInclude) findArgs.include = def.exportInclude;
       const rows = await prisma[def.model].findMany(findArgs);
-
-      // Some serialize() implementations may need a lookup ctx (packages
-      // resolves first entitlement.serviceId → service.name for display).
-      let ctx = null;
-      if (def.model === "membershipPlan") {
-        const services = await prisma.service.findMany({
-          where: { tenantId: req.user.tenantId },
-          select: { id: true, name: true },
-        });
-        const serviceIdToName = new Map(services.map((s) => [s.id, s.name]));
-        ctx = { serviceIdToName };
-      }
+      const ctx = { lookups: await buildLookupContext(prisma, req.user.tenantId) };
 
       const outRows = [];
       for (const row of rows) {

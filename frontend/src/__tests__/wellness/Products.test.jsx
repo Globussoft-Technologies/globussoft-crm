@@ -143,6 +143,8 @@ describe('<wellness/Products /> — page surface', () => {
     // CTA is "Add Product" (button copy); wait for the mount fetch to settle
     // so the table renders before the test ends.
     expect(screen.getByRole('button', { name: /Add Product/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Export Products$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Import Products$/i })).toBeInTheDocument();
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/wellness/products?paginate=true&page=1&limit=10');
     });

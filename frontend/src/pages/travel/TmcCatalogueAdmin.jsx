@@ -1087,26 +1087,26 @@ export default function TmcCatalogueAdmin() {
                 style={{ ...inputStyle, resize: "vertical" }}
               />
             </Field>
-            <Field label="anchorExperiences (JSON or comma-separated)">
+            <Field label="anchorExperiences (comma-separated)">
               <textarea
                 rows={2}
                 value={form.anchorExperiencesJson}
                 onChange={(e) =>
                   setForm({ ...form, anchorExperiencesJson: e.target.value })
                 }
-                placeholder='[{"name":"Taj Mahal sunrise"}]'
+                placeholder="Taj Mahal sunrise, Qutub Minar walkthrough"
                 aria-label="anchorExperiencesJson"
                 style={{ ...inputStyle, resize: "vertical" }}
               />
             </Field>
-            <Field label="curriculumHooks (JSON or comma-separated)">
+            <Field label="curriculumHooks (comma-separated)">
               <textarea
                 rows={2}
                 value={form.curriculumHooksJson}
                 onChange={(e) =>
                   setForm({ ...form, curriculumHooksJson: e.target.value })
                 }
-                placeholder='[{"board":"CBSE","topic":"Mughal Empire"}]'
+                placeholder="CBSE: Mughal Empire, IGCSE: Ancient India"
                 aria-label="curriculumHooksJson"
                 style={{ ...inputStyle, resize: "vertical" }}
               />

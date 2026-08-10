@@ -142,6 +142,39 @@ function installFetchMock(payload = makeResponse()) {
   });
 }
 
+function installPagedFetchMock(totalRows) {
+  const rows = Array.from({ length: totalRows }, (_, index) =>
+    makeMilestone({
+      id: index + 1,
+      invoiceId: 1000 + index + 1,
+      invoiceNum: `TINV-2026-${String(index + 1).padStart(4, '0')}`,
+      contactId: 40 + index + 1,
+      milestoneOrder: (index % 3) + 1,
+      status: index % 2 === 0 ? 'pending' : 'partial',
+      daysUntilDue: index < 50 ? 7 : 2,
+    }),
+  );
+
+  fetchApiMock.mockImplementation((url) => {
+    if (typeof url !== 'string' || !url.startsWith('/api/travel/payment-schedules/upcoming')) {
+      return Promise.resolve(null);
+    }
+
+    const parsed = new URL(url, 'http://localhost');
+    const offset = Number(parsed.searchParams.get('offset') || 0);
+    const limit = Number(parsed.searchParams.get('limit') || 50);
+    const page = rows.slice(offset, offset + limit);
+    return Promise.resolve(
+      makeResponse({
+        milestones: page,
+        total: rows.length,
+        limit,
+        offset,
+      }),
+    );
+  });
+}
+
 beforeEach(() => {
   fetchApiMock.mockReset();
   notifyError.mockReset();
@@ -184,14 +217,15 @@ describe('<MilestoneTracker /> — page chrome', () => {
 });
 
 describe('<MilestoneTracker /> — initial fetch + table render', () => {
-  it('GETs /api/travel/payment-schedules/upcoming on mount with ?within=30 (default)', async () => {
+  it('GETs /api/travel/payment-schedules/upcoming on mount with ?allDates=true (default)', async () => {
     renderPage();
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(([url]) =>
         typeof url === 'string' && url.startsWith('/api/travel/payment-schedules/upcoming'),
       );
       expect(call).toBeTruthy();
-      expect(call[0]).toContain('within=30');
+      expect(call[0]).toContain('allDates=true');
+      expect(call[0]).not.toContain('within=');
       expect(call[0]).toContain('limit=50');
       expect(call[0]).toContain('offset=0');
     });
@@ -253,6 +287,89 @@ describe('<MilestoneTracker /> — filter chrome', () => {
     });
   });
 
+  it('"All dates" sends ?allDates=true and preserves existing filters', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Filter by status: Pending/i }),
+    );
+    fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), {
+      target: { value: 'tmc' },
+    });
+    fetchApiMock.mockClear();
+
+    fireEvent.change(screen.getByLabelText(/Window \(days from now\)/i), {
+      target: { value: 'all' },
+    });
+
+    await waitFor(() => {
+      const filtered = fetchApiMock.mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('allDates=true'),
+      );
+      expect(filtered).toBeTruthy();
+      expect(filtered[0]).toContain('status=pending');
+      expect(filtered[0]).toContain('subBrand=tmc');
+      expect(filtered[0]).not.toContain('within=');
+    });
+  });
+
+  it('status chips map to the expected request parameters, and Overdue uses overdueOnly=true', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+
+    const scenarios = [
+      {
+        label: /Filter by status: Pending/i,
+        mustContain: ['status=pending', 'allDates=true'],
+        mustNotContain: ['overdueOnly=true', 'status=overdue'],
+      },
+      {
+        label: /Filter by status: Partial/i,
+        mustContain: ['status=partial', 'allDates=true'],
+        mustNotContain: ['overdueOnly=true', 'status=overdue'],
+      },
+      {
+        label: /Filter by status: Paid/i,
+        mustContain: ['status=paid', 'allDates=true'],
+        mustNotContain: ['overdueOnly=true', 'status=overdue'],
+      },
+      {
+        label: /Filter by status: Waived/i,
+        mustContain: ['status=waived', 'allDates=true'],
+        mustNotContain: ['overdueOnly=true', 'status=overdue'],
+      },
+      {
+        label: /Filter by status: Overdue/i,
+        mustContain: ['overdueOnly=true'],
+        mustNotContain: ['status=overdue', 'within='],
+      },
+      {
+        label: /Filter by status: All/i,
+        mustContain: ['allDates=true'],
+        mustNotContain: ['status=', 'overdueOnly=true', 'within='],
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      fetchApiMock.mockClear();
+      fireEvent.click(screen.getByRole('button', { name: scenario.label }));
+      await waitFor(() => {
+        const last = fetchApiMock.mock.calls.at(-1);
+        expect(last).toBeTruthy();
+        const url = String(last[0]);
+        scenario.mustContain.forEach((expected) => {
+          expect(url).toContain(expected);
+        });
+        scenario.mustNotContain.forEach((unexpected) => {
+          expect(url).not.toContain(unexpected);
+        });
+      });
+    }
+
+    expect(screen.getByLabelText(/Window \(days from now\)/i)).not.toBeDisabled();
+  });
+
   it('"Overdue only" toggle re-fetches with ?overdueOnly=true and suppresses ?within=', async () => {
     renderPage();
     await screen.findByText('TINV-2026-0001');
@@ -265,6 +382,42 @@ describe('<MilestoneTracker /> — filter chrome', () => {
       expect(filtered).toBeTruthy();
       // When overdueOnly is set, the page should NOT send ?within= per
       // backend contract (overdueOnly overrides ?within).
+      expect(filtered[0]).not.toContain('within=');
+      expect(filtered[0]).not.toContain('status=');
+    });
+  });
+
+  it('"Overdue only" clears an explicit status filter before fetching', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fetchApiMock.mockClear();
+    fireEvent.click(
+      screen.getByRole('button', { name: /Filter by status: Pending/i }),
+    );
+    fireEvent.click(screen.getByLabelText(/Overdue only/i));
+    await waitFor(() => {
+      const filtered = fetchApiMock.mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('overdueOnly=true'),
+      );
+      expect(filtered).toBeTruthy();
+      expect(filtered[0]).not.toContain('status=pending');
+      expect(filtered[0]).not.toContain('within=');
+    });
+  });
+
+  it('clicking the Overdue status chip uses overdueOnly=true on the next fetch', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fetchApiMock.mockClear();
+    fireEvent.click(
+      screen.getByRole('button', { name: /Filter by status: Overdue/i }),
+    );
+    await waitFor(() => {
+      const filtered = fetchApiMock.mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('overdueOnly=true'),
+      );
+      expect(filtered).toBeTruthy();
+      expect(filtered[0]).not.toContain('status=overdue');
       expect(filtered[0]).not.toContain('within=');
     });
   });
@@ -286,23 +439,91 @@ describe('<MilestoneTracker /> — filter chrome', () => {
 });
 
 describe('<MilestoneTracker /> — pagination', () => {
-  it('"Next" button re-fetches with offset=50 (PAGE_SIZE) when total > limit', async () => {
-    // 120 total milestones, only the first 50 returned this call.
-    installFetchMock(
-      makeResponse({
-        milestones: [makeMilestone()],
-        total: 120,
-      }),
-    );
+  it('loads the next page on scroll and appends rows with limit=50 offsets', async () => {
+    installPagedFetchMock(62);
     renderPage();
     await screen.findByText('TINV-2026-0001');
+
+    expect(screen.queryByText(/Showing .* of 62/i)).toBeNull();
+    expect(screen.queryByText(/Page \d+ of \d+/i)).toBeNull();
+
+    const tableFrame = screen.getByText('TINV-2026-0001').closest('table')?.parentElement;
+    expect(tableFrame).toBeTruthy();
+
     fetchApiMock.mockClear();
-    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
+    fireEvent.scroll(tableFrame);
+    await screen.findByText('TINV-2026-0051');
+
+    expect(screen.getByText('TINV-2026-0001')).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url]) => typeof url === 'string' && url.includes('offset=50') && url.includes('limit=50'))).toBe(true);
+  });
+
+  it('filter changes reset pagination back to offset=0', async () => {
+    installPagedFetchMock(62);
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+
+    const tableFrame = screen.getByText('TINV-2026-0001').closest('table')?.parentElement;
+    fireEvent.scroll(tableFrame);
+    await screen.findByText('TINV-2026-0051');
+    fetchApiMock.mockClear();
+
+    fireEvent.change(screen.getByLabelText(/Window \(days from now\)/i), {
+      target: { value: '7' },
+    });
+
     await waitFor(() => {
-      const next = fetchApiMock.mock.calls.find(([url]) =>
-        typeof url === 'string' && url.includes('offset=50'),
+      const call = fetchApiMock.mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('within=7'),
       );
-      expect(next).toBeTruthy();
+      expect(call).toBeTruthy();
+      expect(call[0]).toContain('offset=0');
+      expect(call[0]).toContain('limit=50');
+    });
+  });
+
+  it('ignores a slower stale response when filters change rapidly', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+
+    const pending = {};
+    fetchApiMock.mockImplementation((url) => {
+      if (typeof url !== 'string' || !url.startsWith('/api/travel/payment-schedules/upcoming')) {
+        return Promise.resolve(null);
+      }
+      const parsed = new URL(url, 'http://localhost');
+      const status = parsed.searchParams.get('status') || 'all';
+      return new Promise((resolve) => {
+        pending[status] = resolve;
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter by status: Pending/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Filter by status: Partial/i }));
+
+    pending.partial(
+      makeResponse({
+        milestones: [makeMilestone({ invoiceNum: 'TINV-PARTIAL', status: 'partial' })],
+        total: 1,
+        offset: 0,
+        limit: 50,
+      }),
+    );
+
+    await screen.findByText('TINV-PARTIAL');
+
+    pending.pending(
+      makeResponse({
+        milestones: [makeMilestone({ invoiceNum: 'TINV-PENDING', status: 'pending' })],
+        total: 1,
+        offset: 0,
+        limit: 50,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText('TINV-PENDING')).toBeNull();
+      expect(screen.getByText('TINV-PARTIAL')).toBeInTheDocument();
     });
   });
 });
@@ -481,7 +702,7 @@ describe('<MilestoneTracker /> — extended coverage (cron-extension)', () => {
     });
   });
 
-  it('"Previous" button: disabled at offset=0; enabled after Next; click re-fetches with offset=0', async () => {
+  it.skip('"Previous" button: disabled at offset=0; enabled after Next; click re-fetches with offset=0', async () => {
     installFetchMock(
       makeResponse({
         milestones: [makeMilestone()],
@@ -515,7 +736,7 @@ describe('<MilestoneTracker /> — extended coverage (cron-extension)', () => {
     });
   });
 
-  it('changing a filter after Next-paginating resets offset to 0', async () => {
+  it.skip('changing a filter after Next-paginating resets offset to 0', async () => {
     installFetchMock(
       makeResponse({
         milestones: [makeMilestone()],

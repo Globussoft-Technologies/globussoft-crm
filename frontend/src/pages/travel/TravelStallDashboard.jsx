@@ -82,11 +82,6 @@ export default function TravelStallDashboard() {
         />
       </div>
 
-      <p style={{ marginTop: 24, fontSize: 12, color: "var(--text-secondary)" }}>
-        Travel Stall surfaces share data with the broader Travel CRM — sub-brand
-        scope, RBAC, and PII gates apply server-side. The dedicated lead-capture
-        form (voyagr CMS embed) lands in the Cluster F integration follow-up.
-      </p>
     </div>
   );
 }

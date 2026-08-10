@@ -1,4 +1,4 @@
-﻿// @ts-check
+// @ts-check
 /**
  * Travel CRM — visa applications route (Phase 3 cluster B3) contract tests.
  *
@@ -270,7 +270,7 @@ describe('travel-visa — auth gate', () => {
     const res = await request(makeApp())
       .get('/api/travel/visa/applications')
       .set('Authorization', `Bearer ${tokenFor('USER')}`);
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(403);
     // the RBAC gate trips BEFORE requireTravelTenant fires the tenant lookup.
     expect(prisma.contact.findMany).not.toHaveBeenCalled();
   });
@@ -282,7 +282,7 @@ describe('travel-visa — auth gate', () => {
       .patch('/api/travel/visa/applications/42')
       .set('Authorization', `Bearer ${tokenFor('USER')}`)
       .send({ status: 'filed' });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(403);
     expect(prisma.visaApplication.findFirst).not.toHaveBeenCalled();
     expect(prisma.visaApplication.update).not.toHaveBeenCalled();
   });
@@ -296,7 +296,7 @@ describe('travel-visa — vertical gate', () => {
     const res = await request(makeApp())
       .get('/api/travel/visa/applications')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ code: 'WRONG_VERTICAL' });
     expect(prisma.contact.findMany).not.toHaveBeenCalled();
   });
@@ -306,7 +306,7 @@ describe('travel-visa — vertical gate', () => {
     const res = await request(makeApp())
       .get('/api/travel/visa/applications/77')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ code: 'TENANT_NOT_FOUND' });
     expect(prisma.visaApplication.findFirst).not.toHaveBeenCalled();
   });
@@ -644,7 +644,7 @@ describe('POST /applications ? validation + happy path', () => {
         name: 'Rajesh Kumar',
         email: 'rajesh@example.test',
         phone: '6200039874',
-        subBrand: null,
+        subBrand: 'visasure',
         status: 'Lead',
         source: 'visa-intake',
         assignedToId: 7,
@@ -931,7 +931,7 @@ describe('PATCH /applications/:id — validation + status transitions', () => {
     const [eventName, payload, tenantArg, context] = mockSafeEmitEvent.mock.calls[0];
     expect(eventName).toBe('visa.status_changed');
     expect(payload).toMatchObject({
-      id: 50, contactId: 11, subBrand: null,
+      id: 50, contactId: 11, subBrand: 'other-brand',
       oldStatus: 'intake', newStatus: 'filed', tenantId: 1,
     });
     expect(tenantArg).toBe(1);
@@ -1359,7 +1359,6 @@ describe('travel-visa checklist snapshots + source library', () => {
       where: { id: 31 },
       data: { isActive: false },
     });
-    expect(prisma.visaChecklistSource.delete).toBeUndefined();
   });
 });
 

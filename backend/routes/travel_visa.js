@@ -1,4 +1,4 @@
-﻿// Travel CRM — Visa Sure applications endpoints (Phase 3 backend SHELL + CREATE).
+// Travel CRM — Visa Sure applications endpoints (Phase 3 backend SHELL + CREATE).
 //
 // Backend wire-up for the Phase 3 cluster B3 Visa Sure frontend SHELLs:
 //   - frontend/src/pages/travel/visa/Applications.jsx (875c082) — list view
@@ -79,7 +79,14 @@ const visaLetterStore = require("../lib/visaLetterStore");
 const visaLetterService = require("../lib/visaLetterService");
 const travelPortalNotifications = require("../lib/travelPortalNotificationService");
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
+const {
+  ensureChecklistSnapshot,
+  getLatestChecklistSnapshot,
+  hydrateChecklistSnapshot,
+} = require("../lib/visaChecklistSnapshots");
 const { ensureEmail, ensureDateInRange } = require("../lib/validators");
+const multer = require("multer");
+const { parseCsv, parseXlsxBuffer, toCsv, toXlsxBuffer } = require("../lib/csvIO");
 const { normalizePhone } = require("../utils/deduplication");
 // #920 slice S43: opt-in slim shape via `?fields=summary` for GET /applications.
 // SQL-drops PII columns (rejectionHistoryJson, outcomeReason, familySize,
@@ -97,7 +104,23 @@ const router = express.Router();
 
 router.use(verifyToken);
 
-const VISA_SUB_BRAND = null;
+const VISA_SUB_BRAND = "visasure";
+
+// In-memory upload for visa checklist CSV/XLSX imports (≤5 MB).
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+const CHECKLIST_IMPORT_HEADERS = [
+  "applicationType",
+  "destinationCountry",
+  "docType",
+  "required",
+  "sortOrder",
+  "notes",
+];
+
 const VALID_STATUSES = [
   "intake",
   "docs-pending",
@@ -259,7 +282,7 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
       email: applicantEmail || null,
       phone: applicantPhoneRaw || null,
       birthDate: applicantBirthDate || null,
-      subBrand: null,
+      subBrand: VISA_SUB_BRAND,
       status: "Lead",
       source: "visa-intake",
       assignedToId: actorUserId || null,
@@ -269,7 +292,7 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
 
   writeAudit("Contact", "CREATE", created.id, actorUserId, tenantId, {
     source: "visa-intake",
-    subBrand: null,
+    subBrand: VISA_SUB_BRAND,
     autoCreatedFrom: "visa-application",
   }).catch(() => {});
 
@@ -460,7 +483,7 @@ async function maybeAdvanceOnChecklist({ applicationId, tenantId, actorUserId })
   });
 
   writeAudit("VisaApplication", "UPDATE", applicationId, actorUserId, tenantId, {
-    subBrand: null,
+    subBrand: VISA_SUB_BRAND,
     changedFields: ["status"],
     autoAdvanced: true,
     reason: "all-required-documents-verified",
@@ -475,7 +498,7 @@ async function maybeAdvanceOnChecklist({ applicationId, tenantId, actorUserId })
       {
         id: applicationId,
         contactId: app.contactId,
-        subBrand: null,
+        subBrand: VISA_SUB_BRAND,
         oldStatus: "docs-pending",
         newStatus: "filed",
         tenantId,
@@ -580,7 +603,7 @@ router.get(
       // filter — non-visa-sure applications must stay out of the list
       // regardless of shape).
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId },
+        where: { tenantId, subBrand: VISA_SUB_BRAND },
         select: wantFullShape
           ? { id: true, name: true, email: true, phone: true }
           : { id: true },
@@ -645,7 +668,7 @@ router.get(
         req.user.userId,
         tenantId,
         {
-          subBrand: null,
+          subBrand: VISA_SUB_BRAND,
           statusFilter: statusFilter || null,
           count: applications.length,
           shape: wantFullShape ? "full" : "summary",
@@ -766,7 +789,7 @@ router.get(
 
       // Resolve visa-sure contact IDs first (mirrors /applications list).
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId },
+        where: { tenantId, subBrand: VISA_SUB_BRAND },
         select: { id: true },
       });
 
@@ -1009,7 +1032,7 @@ router.get(
 
       // Resolve visa-sure contact IDs first (mirrors the other handlers).
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId },
+        where: { tenantId, subBrand: VISA_SUB_BRAND },
         select: { id: true },
       });
 
@@ -1275,7 +1298,7 @@ router.get(
 
       // Resolve visa-sure contact IDs first.
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId },
+        where: { tenantId, subBrand: VISA_SUB_BRAND },
         select: { id: true },
       });
 
@@ -1542,7 +1565,7 @@ router.get(
 
       // Resolve visa-sure contact IDs first.
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId },
+        where: { tenantId, subBrand: VISA_SUB_BRAND },
         select: { id: true },
       });
 
@@ -2008,6 +2031,35 @@ router.post(
         );
       }
 
+      // Lock the newly-created application to the latest checklist snapshot
+      // so the advisor (and customer portal) see the exact template/sources
+      // combo that existed at intake time. This is a no-op when no templates
+      // exist for the combo — the application simply stays snapshot-less.
+      let createdWithSnapshot = created;
+      try {
+        const snapshot = await ensureChecklistSnapshot(prisma, {
+          tenantId,
+          applicationType,
+          destinationCountry,
+          actorUserId: req.user.userId,
+        });
+        if (snapshot) {
+          createdWithSnapshot = await prisma.visaApplication.update({
+            where: { id: created.id },
+            data: {
+              checklistSnapshotId: snapshot.id,
+              checklistSnapshotVersion: snapshot.versionNumber,
+              checklistSnapshotJson: snapshot.itemsJson,
+            },
+          });
+        }
+      } catch (snapshotErr) {
+        console.error(
+          "[travel-visa/create] snapshot lock failed:",
+          snapshotErr.message,
+        );
+      }
+
       writeAudit(
         "VisaApplication",
         "CREATE",
@@ -2015,7 +2067,7 @@ router.post(
         req.user.userId,
         tenantId,
         {
-          subBrand: null,
+          subBrand: VISA_SUB_BRAND,
           contactId,
           applicationType,
           destinationCountry,
@@ -2036,7 +2088,7 @@ router.post(
         console.warn("[travel-visa] customer notification failed:", err.message);
       });
       res.status(201).json({
-        ...created,
+        ...createdWithSnapshot,
         contactResolution: resolvedContact.contactMode,
       });
     } catch (e) {
@@ -2269,7 +2321,7 @@ router.patch(
         req.user.userId,
         tenantId,
         {
-          subBrand: null,
+          subBrand: contact?.subBrand || VISA_SUB_BRAND,
           changedFields: Object.keys(data),
         },
       ).catch(() => {});
@@ -2286,7 +2338,7 @@ router.patch(
           {
             id,
             contactId: existing.contactId,
-            subBrand: null,
+            subBrand: contact?.subBrand || VISA_SUB_BRAND,
             oldStatus: existing.status,
             newStatus: data.status,
             tenantId,
@@ -2414,7 +2466,7 @@ router.get(
         where: { id: application.contactId, tenantId },
         select: { id: true, subBrand: true },
       });
-      if (!contact) {
+      if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
         return res.status(404).json({
           error: "Visa application not found",
           code: "NOT_VISA_SURE",
@@ -2977,7 +3029,7 @@ router.post(
         where: { id: application.contactId, tenantId },
         select: { id: true, subBrand: true },
       });
-      if (!contact) {
+      if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
         return res.status(404).json({
           error: "Visa application not found",
           code: "NOT_VISA_SURE",
@@ -3058,19 +3110,37 @@ router.get(
   requireTravelTenant,
   async (req, res) => {
     try {
-      const where = { tenantId: req.travelTenant.id };
+      const tenantId = req.travelTenant.id;
+      const where = { tenantId };
       if (req.query.applicationType) where.applicationType = String(req.query.applicationType);
       if (req.query.destinationCountry) where.destinationCountry = String(req.query.destinationCountry);
-      const items = await prisma.visaChecklistTemplate.findMany({
-        where,
-        orderBy: [
-          { applicationType: "asc" },
-          { destinationCountry: "asc" },
-          { sortOrder: "asc" },
-          { id: "asc" },
-        ],
-      });
-      return res.json({ items });
+      const [items, sources, latestSnapshotRow] = await Promise.all([
+        prisma.visaChecklistTemplate.findMany({
+          where,
+          orderBy: [
+            { applicationType: "asc" },
+            { destinationCountry: "asc" },
+            { sortOrder: "asc" },
+            { id: "asc" },
+          ],
+        }),
+        prisma.visaChecklistSource.findMany({
+          where,
+          orderBy: [{ applicationType: "asc" }, { destinationCountry: "asc" }, { id: "asc" }],
+        }),
+        prisma.visaChecklistSnapshot.findFirst({
+          where,
+          orderBy: { versionNumber: "desc" },
+        }),
+      ]);
+      const latestSnapshot = latestSnapshotRow
+        ? {
+            ...hydrateChecklistSnapshot(latestSnapshotRow),
+            itemCount: hydrateChecklistSnapshot(latestSnapshotRow).items.length,
+            sourceCount: hydrateChecklistSnapshot(latestSnapshotRow).sourceList.length,
+          }
+        : null;
+      return res.json({ items, sources, latestSnapshot });
     } catch (e) {
       console.error("[travel-visa] checklists list error:", e.message);
       return res.status(500).json({ error: "Failed to load checklist templates" });
@@ -3213,6 +3283,259 @@ router.delete(
     } catch (e) {
       console.error("[travel-visa] checklist delete error:", e.message);
       return res.status(500).json({ error: "Failed to delete checklist item" });
+    }
+  },
+);
+
+// GET /checklists/import-template — CSV/XLSX template for bulk import.
+router.get(
+  "/checklists/import-template",
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const format = String(req.query.format || "csv").toLowerCase();
+      const exampleRow = {
+        applicationType: "tourist",
+        destinationCountry: "US",
+        docType: "Passport",
+        required: true,
+        sortOrder: 0,
+        notes: "Example row. Delete this row before importing.",
+      };
+      if (format === "xlsx") {
+        const xlsx = toXlsxBuffer(
+          CHECKLIST_IMPORT_HEADERS,
+          [exampleRow],
+          "Visa Checklists Template",
+        );
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", 'attachment; filename="travel-visa-checklists-template.xlsx"');
+        return res.send(xlsx);
+      }
+      const csv = toCsv(CHECKLIST_IMPORT_HEADERS, [exampleRow]);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="travel-visa-checklists-template.csv"');
+      return res.send(Buffer.from(csv, "utf8"));
+    } catch (e) {
+      console.error("[travel-visa] checklist template error:", e.message);
+      return res.status(500).json({ error: "Failed to generate checklist template" });
+    }
+  },
+);
+
+// POST /checklists/import.csv — bulk upsert from CSV or XLSX upload.
+router.post(
+  "/checklists/import.csv",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: "file is required", code: "MISSING_FIELDS" });
+      }
+
+      let parsed;
+      const isXlsx =
+        req.file.mimetype === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+        String(req.file.originalname || "").toLowerCase().endsWith(".xlsx");
+      if (isXlsx) {
+        parsed = parseXlsxBuffer(req.file.buffer);
+      } else {
+        parsed = parseCsv(req.file.buffer.toString("utf8"));
+      }
+
+      const rows = parsed.rows || [];
+      let imported = 0;
+      let updated = 0;
+      let skipped = 0;
+
+      for (const row of rows) {
+        const applicationType = String(row.applicationType || "").trim();
+        const destinationCountry = String(row.destinationCountry || "").trim();
+        const docType = String(row.docType || "").trim();
+
+        // Skip blank rows and comment rows (applicationType starts with #).
+        // Comment rows are intentionally ignored and NOT counted as skipped.
+        if (!applicationType || !destinationCountry || !docType) {
+          skipped += 1;
+          continue;
+        }
+        if (applicationType.startsWith("#")) {
+          continue;
+        }
+        if (!VALID_APPLICATION_TYPES.includes(applicationType)) {
+          skipped += 1;
+          continue;
+        }
+
+        const required = [true, "true", "yes", "1", 1].includes(row.required);
+        const sortOrder = Number.isFinite(Number(row.sortOrder)) ? Number(row.sortOrder) : 0;
+        const notes = row.notes == null ? null : String(row.notes).trim() || null;
+
+        const existing = await prisma.visaChecklistTemplate.findFirst({
+          where: {
+            tenantId,
+            applicationType,
+            destinationCountry,
+            docType,
+          },
+        });
+
+        if (existing) {
+          await prisma.visaChecklistTemplate.update({
+            where: { id: existing.id },
+            data: {
+              applicationType,
+              destinationCountry,
+              docType,
+              required,
+              sortOrder,
+              notes,
+            },
+          });
+          updated += 1;
+        } else {
+          await prisma.visaChecklistTemplate.create({
+            data: {
+              tenantId,
+              applicationType,
+              destinationCountry,
+              docType,
+              required,
+              sortOrder,
+              notes,
+            },
+          });
+          imported += 1;
+        }
+      }
+
+      // Refresh the canonical snapshot for every touched combo so applications
+      // created after this import lock to the latest template set.
+      const touchedCombos = new Map();
+      for (const row of rows) {
+        const applicationType = String(row.applicationType || "").trim();
+        const destinationCountry = String(row.destinationCountry || "").trim();
+        if (applicationType && destinationCountry && !applicationType.startsWith("#") &&
+            VALID_APPLICATION_TYPES.includes(applicationType)) {
+          touchedCombos.set(`${applicationType}|${destinationCountry}`, { applicationType, destinationCountry });
+        }
+      }
+      for (const combo of touchedCombos.values()) {
+        await ensureChecklistSnapshot(prisma, {
+          tenantId,
+          applicationType: combo.applicationType,
+          destinationCountry: combo.destinationCountry,
+          actorUserId: req.user.userId,
+        });
+      }
+
+      return res.json({ imported, updated, skipped });
+    } catch (e) {
+      console.error("[travel-visa] checklist import error:", e.message);
+      return res.status(500).json({ error: "Failed to import checklist templates", code: "INTERNAL_ERROR" });
+    }
+  },
+);
+
+// POST /checklists/sources — add a source and refresh the snapshot.
+router.post(
+  "/checklists/sources",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const body = req.body || {};
+      const applicationType = typeof body.applicationType === "string" ? body.applicationType.trim() : "";
+      const destinationCountry = typeof body.destinationCountry === "string" ? body.destinationCountry.trim() : "";
+      const sourceName = typeof body.sourceName === "string" ? body.sourceName.trim() : "";
+      const sourceUrl = typeof body.sourceUrl === "string" ? body.sourceUrl.trim() : "";
+      const sourceKind = typeof body.sourceKind === "string" ? body.sourceKind.trim() : "";
+      const notes = typeof body.notes === "string" ? body.notes.trim() : null;
+
+      if (!VALID_APPLICATION_TYPES.includes(applicationType)) {
+        return res.status(400).json({ error: `applicationType must be one of: ${VALID_APPLICATION_TYPES.join(", ")}`, code: "INVALID_APPLICATION_TYPE" });
+      }
+      if (!destinationCountry || destinationCountry.length > 200) {
+        return res.status(400).json({ error: "destinationCountry is required (1..200 chars)", code: "INVALID_DESTINATION" });
+      }
+      if (!sourceName || sourceName.length > 200) {
+        return res.status(400).json({ error: "sourceName is required (1..200 chars)", code: "MISSING_FIELDS" });
+      }
+      if (!sourceUrl || sourceUrl.length > 2000) {
+        return res.status(400).json({ error: "sourceUrl is required (1..2000 chars)", code: "MISSING_FIELDS" });
+      }
+      if (!sourceKind) {
+        return res.status(400).json({ error: "sourceKind is required", code: "MISSING_FIELDS" });
+      }
+
+      const created = await prisma.visaChecklistSource.create({
+        data: {
+          tenantId,
+          applicationType,
+          destinationCountry,
+          sourceName,
+          sourceUrl,
+          sourceKind,
+          notes: notes || null,
+          isActive: true,
+        },
+      });
+
+      await ensureChecklistSnapshot(prisma, {
+        tenantId,
+        applicationType,
+        destinationCountry,
+        actorUserId: req.user.userId,
+      });
+
+      return res.status(201).json(created);
+    } catch (e) {
+      console.error("[travel-visa] checklist source create error:", e.message);
+      return res.status(500).json({ error: "Failed to create checklist source", code: "INTERNAL_ERROR" });
+    }
+  },
+);
+
+// DELETE /checklists/sources/:id — archive (soft-delete) a source and refresh the snapshot.
+router.delete(
+  "/checklists/sources/:id",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const existing = await prisma.visaChecklistSource.findFirst({
+        where: { id, tenantId },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Source not found", code: "NOT_FOUND" });
+      }
+
+      await prisma.visaChecklistSource.update({
+        where: { id },
+        data: { isActive: false },
+      });
+
+      await ensureChecklistSnapshot(prisma, {
+        tenantId,
+        applicationType: existing.applicationType,
+        destinationCountry: existing.destinationCountry,
+        actorUserId: req.user.userId,
+      });
+
+      return res.json({ success: true, id });
+    } catch (e) {
+      console.error("[travel-visa] checklist source archive error:", e.message);
+      return res.status(500).json({ error: "Failed to archive checklist source", code: "INTERNAL_ERROR" });
     }
   },
 );

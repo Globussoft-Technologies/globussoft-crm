@@ -60,9 +60,9 @@ export default function Waitlist() {
   // "preferredDateRange" textbox doubled as a wait-time field and accepted
   // free text like "soon" / "tomorrow", which the cron couldn't bucket.
   // preferredFrom / preferredTo are YYYY-MM-DD strings from native date pickers.
-  // The backend's `preferredDateRange` column is a single string â€” at submit time
+  // The backend's `preferredDateRange` column is a single string — at submit time
   // we concatenate as `from..to` (matching the legacy free-text shape) or send
-  // just one side when only one is filled. Both empty â†’ omitted (no preference).
+  // just one side when only one is filled. Both empty → omitted (no preference).
   const [form, setForm] = useState({ patientId: '', serviceId: '', preferredFrom: '', preferredTo: '', estimatedWaitMin: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -126,7 +126,7 @@ export default function Waitlist() {
       return;
     }
     // Build the legacy `from..to` string from the two date pickers. If only one
-    // side is filled, send it bare; both empty â†’ omit (no preference).
+    // side is filled, send it bare; both empty → omit (no preference).
     let preferredDateRange;
     if (form.preferredFrom && form.preferredTo) {
       preferredDateRange = `${form.preferredFrom}..${form.preferredTo}`;
@@ -153,7 +153,7 @@ export default function Waitlist() {
       setShowAdd(false);
       setForm({ patientId: '', serviceId: '', preferredFrom: '', preferredTo: '', estimatedWaitMin: '', notes: '' });
       load();
-      // #362: same root cause as #392 â€” sidebar / external counters don't
+      // #362: same root cause as #392 — sidebar / external counters don't
       // refresh after a fresh POST. Refetching the local list above already
       // updates this page; this CustomEvent gives any listening shell
       // (sidebar badge, dashboard tile) a free hook to re-pull its count.
@@ -183,13 +183,13 @@ export default function Waitlist() {
     } catch (_err) { /* fetchApi already toasted */ }
   };
 
-  const serviceName = (id) => services.find((s) => s.id === id)?.name || 'â€”';
+  const serviceName = (id) => services.find((s) => s.id === id)?.name || '—';
   const displayServiceName = (row) => row.serviceLabel || (row.serviceId ? serviceName(row.serviceId) : '');
 
-  // Display-only formatter â€” storage stays `from..to` (schema-documented contract,
+  // Display-only formatter — storage stays `from..to` (schema-documented contract,
   // backend's parseTenantDateInput falls back gracefully on the legacy shape).
   const formatPreferredDates = (raw) => {
-    if (!raw) return 'â€”';
+    if (!raw) return '—';
     return raw.includes('..') ? raw.split('..').join(' - ') : raw;
   };
 
@@ -250,7 +250,7 @@ export default function Waitlist() {
           <div>
             <label style={labelStyle}>Patient *</label>
             <select value={form.patientId} onChange={(e) => setForm({ ...form, patientId: e.target.value })} style={inputStyle} required>
-              <option value="">Select patientâ€¦</option>
+              <option value="">Select patient…</option>
               {patients.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}{p.phone ? ` (${p.phone})` : ''}</option>
               ))}
@@ -287,7 +287,7 @@ export default function Waitlist() {
               />
             </div>
           </div>
-          {/* #363: wait time was free text â€” switch to bounded number. Unit lives in the label, no suffix box. */}
+          {/* #363: wait time was free text — switch to bounded number. Unit lives in the label, no suffix box. */}
           <div>
             <label style={labelStyle}>Wait time (minutes)</label>
             <input
@@ -307,7 +307,7 @@ export default function Waitlist() {
           </div>
           <div style={{ gridColumn: '1 / -1', display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
             <button type="button" onClick={() => setShowAdd(false)} style={{ padding: '0.55rem 1rem', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem' }}>Cancel</button>
-            <button type="submit" disabled={saving} style={{ padding: '0.55rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem' }}>{saving ? 'Savingâ€¦' : 'Add'}</button>
+            <button type="submit" disabled={saving} style={{ padding: '0.55rem 1rem', background: 'var(--success-color)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem' }}>{saving ? 'Saving…' : 'Add'}</button>
           </div>
         </form>
       </Modal>

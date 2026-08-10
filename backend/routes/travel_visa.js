@@ -1,4 +1,4 @@
-// Travel CRM — Visa Sure applications endpoints (Phase 3 backend SHELL + CREATE).
+﻿// Travel CRM — Visa Sure applications endpoints (Phase 3 backend SHELL + CREATE).
 //
 // Backend wire-up for the Phase 3 cluster B3 Visa Sure frontend SHELLs:
 //   - frontend/src/pages/travel/visa/Applications.jsx (875c082) — list view
@@ -75,6 +75,9 @@ const { requirePermission } = require("../middleware/requirePermission");
 const { requireTravelTenant, getSubBrandAccessSet, canAccessSubBrand } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const visaDocStore = require("../lib/visaDocStore");
+const visaLetterStore = require("../lib/visaLetterStore");
+const visaLetterService = require("../lib/visaLetterService");
+const travelPortalNotifications = require("../lib/travelPortalNotificationService");
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const { ensureEmail, ensureDateInRange } = require("../lib/validators");
 const { normalizePhone } = require("../utils/deduplication");
@@ -94,7 +97,7 @@ const router = express.Router();
 
 router.use(verifyToken);
 
-const VISA_SUB_BRAND = "visasure";
+const VISA_SUB_BRAND = null;
 const VALID_STATUSES = [
   "intake",
   "docs-pending",
@@ -175,17 +178,6 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
     if (!contact) {
       return { error: { status: 404, body: { error: "Contact not found on this tenant", code: "NOT_FOUND" } } };
     }
-    if (contact.subBrand !== VISA_SUB_BRAND) {
-      return {
-        error: {
-          status: 403,
-          body: {
-            error: "Contact is not in the Visa Sure sub-brand; visa applications can only be created for visasure contacts",
-            code: "NOT_VISA_SURE",
-          },
-        },
-      };
-    }
     return { contactId: contact.id, contactMode: "existing" };
   }
 
@@ -200,7 +192,7 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
       error: {
         status: 400,
         body: {
-          error: "Provide either contactId or applicantName to create a Visa Sure application",
+          error: "Provide either contactId or applicantName to create a visa application",
           code: "MISSING_FIELDS",
         },
       },
@@ -229,7 +221,7 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
     }
   }
 
-  const candidateWhere = { tenantId, deletedAt: null, subBrand: VISA_SUB_BRAND };
+  const candidateWhere = { tenantId, deletedAt: null };
   if (applicantEmail) {
     candidateWhere.OR = [
       { email: applicantEmail },
@@ -267,7 +259,7 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
       email: applicantEmail || null,
       phone: applicantPhoneRaw || null,
       birthDate: applicantBirthDate || null,
-      subBrand: VISA_SUB_BRAND,
+      subBrand: null,
       status: "Lead",
       source: "visa-intake",
       assignedToId: actorUserId || null,
@@ -277,7 +269,7 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
 
   writeAudit("Contact", "CREATE", created.id, actorUserId, tenantId, {
     source: "visa-intake",
-    subBrand: VISA_SUB_BRAND,
+    subBrand: null,
     autoCreatedFrom: "visa-application",
   }).catch(() => {});
 
@@ -408,6 +400,8 @@ async function resolveVisaApplication(id, tenantId) {
       status: true,
       applicationType: true,
       destinationCountry: true,
+      tripId: true,
+      participantId: true,
     },
   });
   if (!app) {
@@ -422,11 +416,11 @@ async function resolveVisaApplication(id, tenantId) {
     where: { id: app.contactId, tenantId },
     select: { id: true, subBrand: true },
   });
-  if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
+  if (!contact) {
     return {
       error: {
         status: 404,
-        body: { error: "Visa application not found", code: "NOT_VISA_SURE" },
+        body: { error: "Visa application not found", code: "NOT_FOUND" },
       },
     };
   }
@@ -466,7 +460,7 @@ async function maybeAdvanceOnChecklist({ applicationId, tenantId, actorUserId })
   });
 
   writeAudit("VisaApplication", "UPDATE", applicationId, actorUserId, tenantId, {
-    subBrand: VISA_SUB_BRAND,
+    subBrand: null,
     changedFields: ["status"],
     autoAdvanced: true,
     reason: "all-required-documents-verified",
@@ -481,7 +475,7 @@ async function maybeAdvanceOnChecklist({ applicationId, tenantId, actorUserId })
       {
         id: applicationId,
         contactId: app.contactId,
-        subBrand: VISA_SUB_BRAND,
+        subBrand: null,
         oldStatus: "docs-pending",
         newStatus: "filed",
         tenantId,
@@ -586,7 +580,7 @@ router.get(
       // filter — non-visa-sure applications must stay out of the list
       // regardless of shape).
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        where: { tenantId },
         select: wantFullShape
           ? { id: true, name: true, email: true, phone: true }
           : { id: true },
@@ -651,7 +645,7 @@ router.get(
         req.user.userId,
         tenantId,
         {
-          subBrand: VISA_SUB_BRAND,
+          subBrand: null,
           statusFilter: statusFilter || null,
           count: applications.length,
           shape: wantFullShape ? "full" : "summary",
@@ -772,7 +766,7 @@ router.get(
 
       // Resolve visa-sure contact IDs first (mirrors /applications list).
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        where: { tenantId },
         select: { id: true },
       });
 
@@ -1015,7 +1009,7 @@ router.get(
 
       // Resolve visa-sure contact IDs first (mirrors the other handlers).
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        where: { tenantId },
         select: { id: true },
       });
 
@@ -1281,7 +1275,7 @@ router.get(
 
       // Resolve visa-sure contact IDs first.
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        where: { tenantId },
         select: { id: true },
       });
 
@@ -1548,7 +1542,7 @@ router.get(
 
       // Resolve visa-sure contact IDs first.
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        where: { tenantId },
         select: { id: true },
       });
 
@@ -1735,6 +1729,26 @@ router.get(
           documentChecklist: {
             orderBy: { createdAt: "asc" },
           },
+          visaLetterDocuments: {
+            orderBy: [{ generationId: "desc" }, { id: "asc" }],
+          },
+          trip: {
+            select: {
+              id: true,
+              tripCode: true,
+              destination: true,
+              departDate: true,
+              returnDate: true,
+            },
+          },
+          participant: {
+            select: {
+              id: true,
+              fullName: true,
+              passportNumber: true,
+              passportIdentityId: true,
+            },
+          },
         },
       });
       if (!application) {
@@ -1760,7 +1774,7 @@ router.get(
         },
       });
 
-      if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
+      if (!contact) {
         return res.status(404).json({
           error: "Visa application not found",
           code: "NOT_VISA_SURE",
@@ -1776,7 +1790,7 @@ router.get(
           prisma,
           tenantId,
           application.contactId,
-          VISA_SUB_BRAND,
+          contact?.subBrand || null,
         );
         if (latest) {
           diagnostic = {
@@ -1809,7 +1823,7 @@ router.get(
         id,
         req.user.userId,
         tenantId,
-        { subBrand: VISA_SUB_BRAND, applicationType: application.applicationType },
+        { subBrand: contact?.subBrand || null, applicationType: application.applicationType },
       ).catch(() => {});
 
       res.json({
@@ -1932,6 +1946,33 @@ router.post(
       }
       const contactId = resolvedContact.contactId;
 
+      let linkedTrip = null;
+      let linkedParticipant = null;
+      const tripId = body.tripId == null || body.tripId === "" ? null : Number(body.tripId);
+      const participantId = body.participantId == null || body.participantId === "" ? null : Number(body.participantId);
+      if (tripId != null || participantId != null) {
+        if (!Number.isInteger(tripId) || tripId <= 0) {
+          return res.status(400).json({ error: "tripId must be a number", code: "INVALID_TRIP_ID" });
+        }
+        if (!Number.isInteger(participantId) || participantId <= 0) {
+          return res.status(400).json({ error: "participantId must be a number", code: "INVALID_PARTICIPANT_ID" });
+        }
+        linkedTrip = await prisma.tmcTrip.findFirst({
+          where: { id: tripId, tenantId },
+          select: { id: true },
+        });
+        if (!linkedTrip) {
+          return res.status(404).json({ error: "Trip not found", code: "TRIP_NOT_FOUND" });
+        }
+        linkedParticipant = await prisma.tripParticipant.findFirst({
+          where: { id: participantId, tripId },
+          select: { id: true },
+        });
+        if (!linkedParticipant) {
+          return res.status(404).json({ error: "Participant not found on this trip", code: "PARTICIPANT_NOT_FOUND" });
+        }
+      }
+
       const passportIdentity = prisma.passportIdentity
         ? await prisma.passportIdentity.findFirst({
             where: { tenantId, contactId },
@@ -1947,6 +1988,8 @@ router.post(
           applicationType,
           destinationCountry,
           passportIdentityId: passportIdentity?.id || null,
+          tripId: linkedTrip?.id || null,
+          participantId: linkedParticipant?.id || null,
           status: "intake",
         },
       });
@@ -1972,14 +2015,26 @@ router.post(
         req.user.userId,
         tenantId,
         {
-          subBrand: VISA_SUB_BRAND,
+          subBrand: null,
           contactId,
           applicationType,
           destinationCountry,
           contactResolution: resolvedContact.contactMode,
+          tripId: linkedTrip?.id || null,
+          participantId: linkedParticipant?.id || null,
         },
       ).catch(() => {});
 
+      travelPortalNotifications.safeNotifyTravelCustomer({
+        contactId,
+        tenantId,
+        title: "Your visa application has been created",
+        message: "Your advisor will prepare the visa letters and document checklist, then send them to your portal.",
+        type: "system",
+        link: `visa:${created.id}`,
+      }).catch((err) => {
+        console.warn("[travel-visa] customer notification failed:", err.message);
+      });
       res.status(201).json({
         ...created,
         contactResolution: resolvedContact.contactMode,
@@ -2099,7 +2154,7 @@ router.patch(
         where: { id: existing.contactId, tenantId },
         select: { id: true, subBrand: true },
       });
-      if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
+      if (!contact) {
         return res.status(404).json({
           error: "Visa application not found",
           code: "NOT_VISA_SURE",
@@ -2214,7 +2269,7 @@ router.patch(
         req.user.userId,
         tenantId,
         {
-          subBrand: VISA_SUB_BRAND,
+          subBrand: null,
           changedFields: Object.keys(data),
         },
       ).catch(() => {});
@@ -2231,7 +2286,7 @@ router.patch(
           {
             id,
             contactId: existing.contactId,
-            subBrand: VISA_SUB_BRAND,
+            subBrand: null,
             oldStatus: existing.status,
             newStatus: data.status,
             tenantId,
@@ -2359,7 +2414,7 @@ router.get(
         where: { id: application.contactId, tenantId },
         select: { id: true, subBrand: true },
       });
-      if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
+      if (!contact) {
         return res.status(404).json({
           error: "Visa application not found",
           code: "NOT_VISA_SURE",
@@ -2922,7 +2977,7 @@ router.post(
         where: { id: application.contactId, tenantId },
         select: { id: true, subBrand: true },
       });
-      if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
+      if (!contact) {
         return res.status(404).json({
           error: "Visa application not found",
           code: "NOT_VISA_SURE",
@@ -3324,6 +3379,549 @@ router.delete(
   },
 );
 
+function parseRouteId(value, field = "id") {
+  const id = parseInt(value, 10);
+  if (!Number.isFinite(id)) {
+    const err = new Error(`${field} must be a number`);
+    err.status = 400;
+    err.code = "INVALID_ID";
+    throw err;
+  }
+  return id;
+}
+
+async function loadLetterDocumentForStaff(letterId, tenantId) {
+  return prisma.visaLetterDocument.findFirst({
+    where: { id: letterId, tenantId },
+  });
+}
+
+async function refreshGenerationStatus({ generationId, tenantId }) {
+  const remaining = await prisma.visaLetterDocument.findMany({
+    where: { generationId, tenantId },
+    select: { status: true },
+  });
+  if (remaining.length === 0) {
+    await prisma.visaLetterGeneration.delete({ where: { id: generationId } }).catch(() => {});
+    return { deleted: true };
+  }
+  const anySigned = remaining.some((row) => row.status === "SIGNED_UPLOADED");
+  const allSigned = anySigned && remaining.every((row) => row.status === "SIGNED_UPLOADED");
+  const generation = await prisma.visaLetterGeneration.findFirst({
+    where: { id: generationId, tenantId },
+    select: { sentAt: true },
+  }).catch(() => null);
+  const nextStatus = allSigned
+    ? "SIGNED_COMPLETE"
+    : anySigned
+      ? "PARTIALLY_SIGNED"
+      : generation?.sentAt
+        ? "SENT"
+        : "GENERATED";
+  await prisma.visaLetterGeneration.update({
+    where: { id: generationId },
+    data: { status: nextStatus },
+  }).catch(() => {});
+  return { deleted: false, status: nextStatus, remaining: remaining.length };
+}
+
+async function streamLetterPdf(res, descriptor, fileName, { download = false } = {}) {
+  const buffer = await visaLetterStore.readLetterBuffer(descriptor);
+  if (!buffer) {
+    return res.status(404).json({ error: "Letter file not found", code: "NOT_FOUND" });
+  }
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `${download ? "attachment" : "inline"}; filename="${fileName || "visa-letter.pdf"}"`,
+  );
+  return res.send(buffer);
+}
+
+async function loadLatestGenerationDocuments({ applicationId, tenantId, generationId }) {
+  let resolvedGenerationId = generationId;
+  if (!resolvedGenerationId) {
+    const latest = await prisma.visaLetterGeneration.findFirst({
+      where: { tenantId, visaApplicationId: applicationId },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+    resolvedGenerationId = latest ? latest.id : null;
+  }
+  if (!resolvedGenerationId) return { generationId: null, documents: [] };
+  const documents = await prisma.visaLetterDocument.findMany({
+    where: { tenantId, visaApplicationId: applicationId, generationId: resolvedGenerationId },
+    orderBy: { id: "asc" },
+  });
+  return { generationId: resolvedGenerationId, documents };
+}
+
+// GET /applications/:id/letters - staff packet state.
+router.get(
+  "/applications/:id/letters",
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseRouteId(req.params.id);
+      const { app, error } = await resolveVisaApplication(id, tenantId);
+      if (error) return res.status(error.status).json(error.body);
+      const generations = await prisma.visaLetterGeneration.findMany({
+        where: { tenantId, visaApplicationId: app.id },
+        orderBy: { createdAt: "desc" },
+        include: { documents: { orderBy: { id: "asc" } } },
+      });
+      return res.json({
+        generations: generations.map((generation) => ({
+          id: generation.id,
+          status: generation.status,
+          tripId: generation.tripId,
+          participantId: generation.participantId,
+          generatedAt: generation.generatedAt,
+          sentAt: generation.sentAt || null,
+          documents: (generation.documents || []).map(visaLetterService.projectLetterDocument),
+        })),
+      });
+    } catch (e) {
+      const status = e.status || 500;
+      console.error("[travel-visa] letter list error:", e.message);
+      return res.status(status).json({ error: status === 500 ? "Failed to load letter packet" : e.message, code: e.code || "INTERNAL_ERROR" });
+    }
+  },
+);
+
+// POST /applications/:id/letters/generate - create the four unsigned PDFs.
+router.post(
+  "/applications/:id/letters/generate",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    const storedDescriptors = [];
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseRouteId(req.params.id);
+      const requestedTripId = req.body?.tripId == null ? null : Number(req.body.tripId);
+      const requestedParticipantId = req.body?.participantId == null ? null : Number(req.body.participantId);
+      const passportNumberOverride = typeof req.body?.passportNumber === "string"
+        ? req.body.passportNumber.trim()
+        : "";
+      if (req.body?.tripId != null && (!Number.isInteger(requestedTripId) || requestedTripId <= 0)) {
+        return res.status(400).json({ error: "tripId must be a number", code: "INVALID_ID" });
+      }
+      if (req.body?.participantId != null && (!Number.isInteger(requestedParticipantId) || requestedParticipantId <= 0)) {
+        return res.status(400).json({ error: "participantId must be a number", code: "INVALID_ID" });
+      }
+
+      const { app, error } = await resolveVisaApplication(id, tenantId);
+      if (error) return res.status(error.status).json(error.body);
+      const effectiveTripId = requestedTripId || app.tripId;
+      if (!effectiveTripId) {
+        return res.status(400).json({ error: "This application is not linked to a trip yet", code: "MISSING_TRIP_BINDING" });
+      }
+
+      const [application, contact, trip] = await Promise.all([
+        prisma.visaApplication.findFirst({
+          where: { id: app.id, tenantId },
+          select: {
+            id: true,
+            tenantId: true,
+            contactId: true,
+            applicationType: true,
+            destinationCountry: true,
+            passportIdentityId: true,
+            tripId: true,
+            participantId: true,
+          },
+        }),
+        prisma.contact.findFirst({
+          where: { id: app.contactId, tenantId },
+          select: { id: true, name: true, email: true, phone: true, company: true, subBrand: true },
+        }),
+        prisma.tmcTrip.findFirst({
+          where: { id: effectiveTripId, tenantId },
+          select: { id: true, tripCode: true, destination: true, departDate: true, returnDate: true, schoolContactId: true },
+        }),
+      ]);
+      if (!application || !contact) {
+        return res.status(404).json({ error: "Visa application not found", code: "NOT_FOUND" });
+      }
+      if (!trip) {
+        return res.status(400).json({ error: "This application is not linked to a trip yet", code: "MISSING_TRIP_BINDING" });
+      }
+
+      let participant = null;
+      const effectiveParticipantId = requestedParticipantId || app.participantId;
+      if (effectiveParticipantId) {
+        participant = await prisma.tripParticipant.findFirst({
+          where: { id: effectiveParticipantId, tripId: trip.id },
+          select: {
+            id: true,
+            fullName: true,
+            parentName: true,
+            parentPhone: true,
+            parentEmail: true,
+            passportNumber: true,
+            passportIdentityId: true,
+          },
+        });
+        if (!participant) {
+          return res.status(404).json({ error: "Participant not found on this trip", code: "PARTICIPANT_NOT_FOUND" });
+        }
+      } else {
+        const participants = await prisma.tripParticipant.findMany({
+          where: { tripId: trip.id },
+          select: {
+            id: true,
+            fullName: true,
+            parentName: true,
+            parentPhone: true,
+            parentEmail: true,
+            passportNumber: true,
+            passportIdentityId: true,
+          },
+          take: 2,
+        });
+        if (participants.length !== 1) {
+          return res.status(400).json({ error: "participantId is required when a trip has zero or multiple participants", code: "MISSING_FIELDS" });
+        }
+        [participant] = participants;
+      }
+
+      const [schoolContact, passportIdentity] = await Promise.all([
+        trip.schoolContactId
+          ? prisma.contact.findFirst({
+              where: { id: trip.schoolContactId, tenantId },
+              select: { id: true, name: true, company: true, email: true, phone: true },
+            })
+          : null,
+        prisma.passportIdentity.findFirst({
+          where: {
+            tenantId,
+            OR: [
+              ...(application.passportIdentityId ? [{ id: application.passportIdentityId }] : []),
+              ...(participant.passportIdentityId ? [{ id: participant.passportIdentityId }] : []),
+              { sourceType: "trip_participant", sourceId: participant.id },
+            ],
+          },
+          select: { id: true, passportNumber: true },
+        }).catch(() => null),
+      ]);
+
+      const templates = await visaLetterService.loadActiveTemplates(prisma, tenantId, req.user.userId);
+      const data = visaLetterService.buildVisaLetterData({
+        application,
+        contact,
+        trip,
+        participant,
+        schoolContact,
+        passportIdentity,
+        passportNumberOverride,
+      });
+      const missing = templates
+        .map((template) => ({
+          documentType: template.documentType,
+          fields: visaLetterService.validateTemplateData(template, data),
+        }))
+        .filter((item) => item.fields.length > 0);
+      if (missing.length > 0) {
+        return res.status(400).json({
+          error: "Required letter data is missing",
+          code: "MISSING_LETTER_DATA",
+          missing,
+        });
+      }
+
+      const rendered = [];
+      for (const template of templates) {
+        const buffer = await visaLetterService.renderVisaLetterPdf({ template, data });
+        const baseName = `${template.code}-application-${application.id}.pdf`;
+        const stored = await visaLetterStore.storeLetterPdf(buffer, {
+          applicationId: application.id,
+          participantId: participant.id,
+          kind: "generated",
+          fileName: baseName,
+        });
+        storedDescriptors.push(stored);
+        rendered.push({ template, buffer, stored, fileName: baseName });
+      }
+
+      const generation = await prisma.visaLetterGeneration.create({
+        data: {
+          tenantId,
+          visaApplicationId: application.id,
+          tripId: trip.id,
+          participantId: participant.id,
+          status: "GENERATED",
+          generatedById: req.user.userId,
+          dataSnapshotJson: JSON.stringify(data),
+        },
+      });
+      const documents = [];
+      for (const item of rendered) {
+        const created = await prisma.visaLetterDocument.create({
+          data: {
+            tenantId,
+            generationId: generation.id,
+            visaApplicationId: application.id,
+            tripId: trip.id,
+            participantId: participant.id,
+            templateId: item.template.id,
+            templateCode: item.template.code,
+            templateVersion: item.template.version,
+            documentType: item.template.documentType,
+            status: "GENERATED",
+            generatedFileUrl: item.stored.url,
+            generatedFileKey: item.stored.key,
+            generatedFileStorage: item.stored.storage,
+            generatedFileName: item.fileName,
+            generatedDataSnapshotJson: JSON.stringify(data),
+          },
+        });
+        documents.push(created);
+      }
+
+      writeAudit(
+        "VisaLetterGeneration",
+        "CREATE",
+        generation.id,
+        req.user.userId,
+        tenantId,
+        { visaApplicationId: application.id, tripId: trip.id, participantId: participant.id, documentCount: documents.length },
+      ).catch(() => {});
+
+      return res.status(201).json({
+        generation: {
+          id: generation.id,
+          status: generation.status,
+          generatedAt: generation.generatedAt,
+          tripId: generation.tripId,
+          participantId: generation.participantId,
+        },
+        generated: documents.map(visaLetterService.projectLetterDocument),
+        documents: documents.map(visaLetterService.projectLetterDocument),
+        skipped: [],
+      });
+    } catch (e) {
+      for (const descriptor of storedDescriptors) {
+        await visaLetterStore.removeLetter(descriptor);
+      }
+      console.error("[travel-visa] letter generate error:", e.message);
+      return res.status(500).json({ error: "Failed to generate letter packet", code: "INTERNAL_ERROR" });
+    }
+  },
+);
+
+// POST /applications/:id/letters/send - release a generated packet to portal.
+router.post(
+  "/applications/:id/letters/send",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseRouteId(req.params.id);
+      const generationId = req.body?.generationId == null ? null : Number(req.body.generationId);
+      const { app, error } = await resolveVisaApplication(id, tenantId);
+      if (error) return res.status(error.status).json(error.body);
+      const { documents, generationId: resolvedGenerationId } = await loadLatestGenerationDocuments({
+        applicationId: app.id,
+        tenantId,
+        generationId: Number.isInteger(generationId) ? generationId : null,
+      });
+      if (documents.length === 0) {
+        return res.status(404).json({ error: "No generated letter packet found", code: "NOT_FOUND" });
+      }
+      const now = new Date();
+      await prisma.visaLetterDocument.updateMany({
+        where: { tenantId, visaApplicationId: app.id, generationId: resolvedGenerationId },
+        data: { status: "SENT", sentAt: now },
+      });
+      await prisma.visaLetterGeneration.update({
+        where: { id: resolvedGenerationId },
+        data: { status: "SENT", sentAt: now },
+      });
+      travelPortalNotifications.safeNotifyTravelCustomer({
+        contactId: app.contactId,
+        tenantId,
+        title: "Visa letters ready for signature",
+        message: "Your visa letters are ready. Please download, sign, and upload the signed copies in the Visa section.",
+        type: "system",
+        link: `visa:${app.id}`,
+      }).catch(() => {});
+      writeAudit(
+        "VisaLetterGeneration",
+        "SEND",
+        resolvedGenerationId,
+        req.user.userId,
+        tenantId,
+        { visaApplicationId: app.id, documentCount: documents.length },
+      ).catch(() => {});
+      const refreshed = await prisma.visaLetterDocument.findMany({
+        where: { tenantId, visaApplicationId: app.id, generationId: resolvedGenerationId },
+        orderBy: { id: "asc" },
+      });
+      return res.json({
+        generationId: resolvedGenerationId,
+        status: "SENT",
+        documents: refreshed.map(visaLetterService.projectLetterDocument),
+      });
+    } catch (e) {
+      console.error("[travel-visa] letter send error:", e.message);
+      return res.status(500).json({ error: "Failed to send letter packet", code: "INTERNAL_ERROR" });
+    }
+  },
+);
+
+router.get(
+  "/letters/:letterId/generated",
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const letterId = parseRouteId(req.params.letterId, "letterId");
+      const doc = await loadLetterDocumentForStaff(letterId, req.travelTenant.id);
+      if (!doc) return res.status(404).json({ error: "Letter not found", code: "NOT_FOUND" });
+      return streamLetterPdf(
+        res,
+        { storage: doc.generatedFileStorage, key: doc.generatedFileKey },
+        doc.generatedFileName,
+        { download: req.query.download === "1" },
+      );
+    } catch (e) {
+      console.error("[travel-visa] generated letter stream error:", e.message);
+      return res.status(e.status || 500).json({ error: e.status ? e.message : "Failed to open letter", code: e.code || "INTERNAL_ERROR" });
+    }
+  },
+);
+
+router.get(
+  "/letters/:letterId/signed",
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const letterId = parseRouteId(req.params.letterId, "letterId");
+      const doc = await loadLetterDocumentForStaff(letterId, req.travelTenant.id);
+      if (!doc || !doc.signedFileKey) return res.status(404).json({ error: "Signed letter not found", code: "NOT_FOUND" });
+      return streamLetterPdf(
+        res,
+        { storage: doc.signedFileStorage, key: doc.signedFileKey },
+        doc.signedFileName || doc.generatedFileName,
+        { download: req.query.download === "1" },
+      );
+    } catch (e) {
+      console.error("[travel-visa] signed letter stream error:", e.message);
+      return res.status(e.status || 500).json({ error: e.status ? e.message : "Failed to open signed letter", code: e.code || "INTERNAL_ERROR" });
+    }
+  },
+);
+
+router.delete(
+  "/applications/:id/letters/:letterId",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const applicationId = parseRouteId(req.params.id);
+      const letterId = parseRouteId(req.params.letterId, "letterId");
+      const { app, error } = await resolveVisaApplication(applicationId, tenantId);
+      if (error) return res.status(error.status).json(error.body);
+
+      const doc = await prisma.visaLetterDocument.findFirst({
+        where: { id: letterId, tenantId, visaApplicationId: app.id },
+      });
+      if (!doc) {
+        return res.status(404).json({ error: "Letter not found", code: "NOT_FOUND" });
+      }
+
+      const descriptors = [
+        doc.generatedFileKey ? { storage: doc.generatedFileStorage, key: doc.generatedFileKey } : null,
+        doc.signedFileKey ? { storage: doc.signedFileStorage, key: doc.signedFileKey } : null,
+      ].filter(Boolean);
+      const seen = new Set();
+      for (const descriptor of descriptors) {
+        const marker = `${descriptor.storage}:${descriptor.key}`;
+        if (seen.has(marker)) continue;
+        seen.add(marker);
+        await visaLetterStore.removeLetter(descriptor);
+      }
+
+      await prisma.visaLetterDocument.delete({ where: { id: doc.id } });
+      const generationState = await refreshGenerationStatus({ generationId: doc.generationId, tenantId });
+
+      writeAudit(
+        "VisaLetterDocument",
+        "DELETE",
+        doc.id,
+        req.user.userId,
+        tenantId,
+        {
+          visaApplicationId: app.id,
+          generationId: doc.generationId,
+          removedSignedCopy: Boolean(doc.signedFileKey),
+          generationDeleted: generationState.deleted,
+        },
+      ).catch(() => {});
+
+      return res.json({
+        success: true,
+        id: doc.id,
+        generationId: doc.generationId,
+        generationDeleted: generationState.deleted,
+      });
+    } catch (e) {
+      console.error("[travel-visa] letter delete error:", e.message);
+      return res.status(e.status || 500).json({
+        error: e.status ? e.message : "Failed to remove letter",
+        code: e.code || "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+router.get(
+  "/applications/:id/letters/download-all",
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseRouteId(req.params.id);
+      const generationId = req.query.generationId == null ? null : Number(req.query.generationId);
+      const { app, error } = await resolveVisaApplication(id, tenantId);
+      if (error) return res.status(error.status).json(error.body);
+      const { documents, generationId: resolvedGenerationId } = await loadLatestGenerationDocuments({
+        applicationId: app.id,
+        tenantId,
+        generationId: Number.isInteger(generationId) ? generationId : null,
+      });
+      if (documents.length === 0) {
+        return res.status(404).json({ error: "No generated letter packet found", code: "NOT_FOUND" });
+      }
+      const entries = [];
+      for (const doc of documents) {
+        const buffer = await visaLetterStore.readLetterBuffer({
+          storage: doc.generatedFileStorage,
+          key: doc.generatedFileKey,
+        });
+        if (buffer) entries.push({ name: doc.generatedFileName, buffer, date: doc.generatedAt });
+      }
+      if (entries.length === 0) {
+        return res.status(404).json({ error: "Letter files not found", code: "NOT_FOUND" });
+      }
+      const zip = visaLetterService.makeZipBuffer(entries);
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="visa-letter-packet-${app.id}-${resolvedGenerationId}.zip"`);
+      return res.send(zip);
+    } catch (e) {
+      console.error("[travel-visa] letter packet zip error:", e.message);
+      return res.status(e.status || 500).json({ error: e.status ? e.message : "Failed to download letter packet", code: e.code || "INTERNAL_ERROR" });
+    }
+  },
+);
+
 // ============================================================================
 // Quotation TEMPLATE admin (PRD_VISA_SURE_PHASE_3 FR-5.2).
 // Curated per-applicationType quotation templates. For standard cases the
@@ -3590,3 +4188,10 @@ router.get(
 );
 
 module.exports = router;
+
+
+
+
+
+
+

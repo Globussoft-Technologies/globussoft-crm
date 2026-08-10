@@ -8,6 +8,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
 import PageHeader from '../../components/PageHeader';
+import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
 import TopScrollSync from '../../components/TopScrollSync';
 
 const UNIT_OPTIONS = ['ml', 'gm', 'kg', 'piece', 'unit', 'bottle', 'tube', 'pack', 'ltr'];
@@ -120,6 +121,14 @@ export default function AutoConsumptionRules() {
           </span>
         ) : null}
       >
+        {canManage && (
+          <CsvImportExportToolbar
+            entity="auto-consumption-rules"
+            label="Auto-consumption rules"
+            formats={['csv', 'xlsx']}
+            onImported={load}
+          />
+        )}
         {canManage && (
           <button onClick={() => (showForm ? reset() : setShowForm(true))} style={primaryBtnStyle}>
             <Plus size={16} /> {showForm ? 'Cancel' : 'New rule'}

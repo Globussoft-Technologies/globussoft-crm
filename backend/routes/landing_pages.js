@@ -6491,7 +6491,9 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
   // Resolve microsite redirect. If the trip has a published microsite,
 
-  // the URL carries ONLY the opaque draftToken (no PII). If the trip
+  // the URL carries the opaque draftToken plus a URL-encoded bridge to
+  // the customer registration page. The microsite path itself stays free
+  // of raw PII, and the bridge is only used after document submission. If the trip
 
   // hasn't published a microsite yet, fall back to a thank-you
 
@@ -6523,6 +6525,18 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
   if (micrositeLive) {
 
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { slug: true },
+    });
+
+    const customerRegisterParams = new URLSearchParams();
+    if (tenant?.slug) customerRegisterParams.set("tenantSlug", tenant.slug);
+    customerRegisterParams.set("name", parentName);
+    customerRegisterParams.set("email", parentEmail);
+    customerRegisterParams.set("next", "/travel/portal");
+    const customerRegisterUrl = `/customer/register?${customerRegisterParams.toString()}`;
+
     return res.status(201).json({
 
       ok: true,
@@ -6533,7 +6547,7 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
         type: "microsite",
 
-        url: `/p/tripmicrosite/${microsite.publicUuid}?draftToken=${draftToken}`,
+        url: `/p/tripmicrosite/${microsite.publicUuid}?draftToken=${draftToken}&portalRedirect=${encodeURIComponent(customerRegisterUrl)}`,
 
       },
 

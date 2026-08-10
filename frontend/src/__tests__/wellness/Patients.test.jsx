@@ -1,28 +1,28 @@
 ﻿/**
- * wellness/Patients.test.jsx â€” vitest + RTL coverage for the wellness master
+ * wellness/Patients.test.jsx — vitest + RTL coverage for the wellness master
  * patient-list page (daily-use surface for clinic staff).
  *
  * Scope: pins the page-surface invariants for the search-driven patient
- * roster â€” initial mount fetch, debounced search â†’ server query, total
- * counter, empty/loading states, and the "+ Add â†’ New patient" modal.
+ * roster — initial mount fetch, debounced search → server query, total
+ * counter, empty/loading states, and the "+ Add → New patient" modal.
  *
  *   1. Page renders heading "Patients" + total counter (from /api/wellness/
  *      patients .total field) + "+ Add" dropdown trigger.
  *   2. Initial mount fires GET /api/wellness/patients with paging params and
- *      NO ?q= param (full list) â€” the debounced effect's first-mount
+ *      NO ?q= param (full list) — the debounced effect's first-mount
  *      short-circuit pins #331.
  *   3. Renders one row per patient with name (as a link to detail),
  *      phone, email, gender, source.
  *   4. Empty-state row "No patients match." renders when /api/wellness/
  *      patients returns { patients: [], total: 0 }.
- *   5. Typing in the search box debounces a /api/wellness/patients?q=â€¦
+ *   5. Typing in the search box debounces a /api/wellness/patients?q=…
  *      fetch after SEARCH_DEBOUNCE_MS (300ms). Use fake timers + advance
  *      to deterministically pin the debounce.
- *   6. Clicking "Add" â†’ "New patient" opens the create modal with Full
+ *   6. Clicking "Add" → "New patient" opens the create modal with Full
  *      name + Phone number inputs.
  *   7. Submitting the modal with an invalid Indian mobile surfaces
- *      notify.error("valid Indian mobileâ€¦") and does NOT POST.
- *   8. Loading state: "Loadingâ€¦" message renders while the initial fetch
+ *      notify.error("valid Indian mobile…") and does NOT POST.
+ *   8. Loading state: "Loading…" message renders while the initial fetch
  *      is in-flight.
  *
  * Drift note: patient row-action / detail-page contracts are pinned by
@@ -30,7 +30,7 @@
  * search debounce + modal-create validation.
  *
  * The roster was rewritten (commit 2bbcde7) to use URL-driven filters,
- * a "+ Add" dropdown, and a portaled PatientCreateModal â€” assertions
+ * a "+ Add" dropdown, and a portaled PatientCreateModal — assertions
  * below target that surface, not the prior inline-form layout.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -50,7 +50,7 @@ const notifySuccess = vi.fn();
 // `confirm` is a vi.fn so individual tests can override the resolved value
 // (e.g., simulating a user clicking "Cancel" by returning false). The mock
 // object reference itself stays stable across renders so the useCallback
-// dependency identity doesn't change and trigger infinite re-renders â€”
+// dependency identity doesn't change and trigger infinite re-renders —
 // see the 2026-05-XX RTL standing rule.
 const notifyConfirm = vi.fn(() => Promise.resolve(true));
 const notifyObj = {
@@ -64,7 +64,7 @@ vi.mock('../../utils/notify', () => ({
 }));
 
 vi.mock('../../utils/date', () => ({
-  formatDate: (d) => (d ? new Date(d).toISOString().slice(0, 10) : 'â€”'),
+  formatDate: (d) => (d ? new Date(d).toISOString().slice(0, 10) : '—'),
 }));
 
 import Patients from '../../pages/wellness/Patients';
@@ -130,7 +130,7 @@ function renderPatients() {
   );
 }
 
-describe('<wellness/Patients /> â€” page surface', () => {
+describe('<wellness/Patients /> — page surface', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);
@@ -153,7 +153,7 @@ describe('<wellness/Patients /> â€” page surface', () => {
     // Total counter from /api/wellness/patients's .total field. The header
     // renders the count as a teal pill ("2") next to a descriptive label
     // ("patients on record"). textContent aggregates across descendants so
-    // the matcher fires on every ancestor up the tree â€” use getAllByText
+    // the matcher fires on every ancestor up the tree — use getAllByText
     // and assert "at least one" rather than "exactly one".
     expect(
       screen.getAllByText((_t, el) => /2.*patients on record/i.test(el?.textContent || '')).length,
@@ -195,7 +195,7 @@ describe('<wellness/Patients /> â€” page surface', () => {
       const call = fetchApiMock.mock.calls.find(([u]) => isPatientListUrl(u));
       expect(call).toBeTruthy();
       // The initial mount URL has no search term. Paging is handled
-      // client-side (PAGE_SIZE = 20) â€” the URL stays bare on first load.
+      // client-side (PAGE_SIZE = 20) — the URL stays bare on first load.
       expect(call[0]).not.toMatch(/[?&]q=/);
     });
   });
@@ -248,7 +248,7 @@ describe('<wellness/Patients /> â€” page surface', () => {
       fetchApiMock.mockClear();
       fetchApiMock.mockImplementation(defaultFetchMock);
 
-      // Type "anita" â€” this changes q which schedules a 300ms debounced load.
+      // Type "anita" — this changes q which schedules a 300ms debounced load.
       const searchBox = screen.getByPlaceholderText(/Search by name, phone, or email/i);
       fireEvent.change(searchBox, { target: { value: 'anita' } });
 
@@ -272,7 +272,7 @@ describe('<wellness/Patients /> â€” page surface', () => {
     }
   });
 
-  it('clicking "Add" â†’ "New patient" opens the create modal with Full name + Phone inputs', async () => {
+  it('clicking "Add" → "New patient" opens the create modal with Full name + Phone inputs', async () => {
     renderPatients();
     await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
 
@@ -300,7 +300,7 @@ describe('<wellness/Patients /> â€” page surface', () => {
     const dialog = await screen.findByRole('dialog', { name: /Create customer/i });
 
     // Fill firstName + a clearly invalid phone (starts with "1", not 6-9).
-    // S97 â€” `firstName` is now the required structured field (validated
+    // S97 — `firstName` is now the required structured field (validated
     // BEFORE phone in PatientCreateModal.submit); filling the read-only
     // "Full name (auto)" preview here would short-circuit validation on
     // "First name is required" before the mobile regex ever fires.
@@ -326,7 +326,7 @@ describe('<wellness/Patients /> â€” page surface', () => {
     expect(postCall).toBeUndefined();
   });
 
-  // â”€â”€ Delete row action (DELETE /api/wellness/patients/:id) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Delete row action (DELETE /api/wellness/patients/:id) ──────────
   // Soft-deletes a single patient. Backend is admin-only (403 for
   // non-admins) + returns 409 on already-soft-deleted; both error paths
   // are surfaced via notify.error. Happy path drops the row from any
@@ -379,14 +379,14 @@ describe('<wellness/Patients /> â€” page surface', () => {
 
       // Refresh: after the success the list-fetch fires again (reloadTick
       // bumps the dependency array on the load effect). Count GETs to
-      // /api/wellness/patients?... â€” at least one post-delete fetch.
+      // /api/wellness/patients?... — at least one post-delete fetch.
       await waitFor(() => {
         const listCallsAfterDelete = fetchApiMock.mock.calls.filter(
           ([u, o]) => isPatientListUrl(u) && (!o || !o.method || o.method === 'GET')
         );
         // 1 initial (after mockClear) + at least 1 reload triggered by
         // setReloadTick. The exact count varies with timer/debounce, so
-        // we only assert "more than zero" â€” pinning >=1 here is enough
+        // we only assert "more than zero" — pinning >=1 here is enough
         // to confirm the reload effect ran.
         expect(listCallsAfterDelete.length).toBeGreaterThanOrEqual(1);
       });
@@ -418,7 +418,7 @@ describe('<wellness/Patients /> â€” page surface', () => {
       await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
 
       // Make the DELETE reject. fetchApi shapes thrown errors as
-      // { message, data: { error } } â€” mirror that so the catch branch
+      // { message, data: { error } } — mirror that so the catch branch
       // surfaces the right message.
       const err = new Error('Forbidden');
       err.data = { error: 'Admin role required' };
@@ -440,7 +440,7 @@ describe('<wellness/Patients /> â€” page surface', () => {
     });
   });
 
-  it('shows "Loadingâ€¦" before the initial fetch resolves', async () => {
+  it('shows "Loading…" before the initial fetch resolves', async () => {
     let resolvePatients;
     fetchApiMock.mockImplementation((url) => {
       if (isPatientListUrl(url)) {
@@ -451,8 +451,8 @@ describe('<wellness/Patients /> â€” page surface', () => {
       return Promise.resolve(null);
     });
     renderPatients();
-    // While the patients fetch is in-flight, "Loadingâ€¦" renders.
-    expect(await screen.findByText(/Loadingâ€¦/i)).toBeInTheDocument();
+    // While the patients fetch is in-flight, "Loading…" renders.
+    expect(await screen.findByText(/Loading…/i)).toBeInTheDocument();
     // Resolve so the test cleanly tears down.
     resolvePatients({ patients: [], total: 0 });
   });

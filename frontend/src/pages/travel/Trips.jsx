@@ -8,9 +8,18 @@
 // No creation flow here — trips spawn from the linked Deal in the sales
 // pipeline (Day 7+ Deal-extension lands later).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
-import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X, Trash2, Search } from "lucide-react";
+import {
+  Luggage,
+  Filter,
+  Plus,
+  Users,
+  Calendar as CalendarIcon,
+  X,
+  Trash2,
+  Search,
+} from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
@@ -49,40 +58,31 @@ function fmtMoney(amt, currency = "INR") {
 }
 
 const EMPTY_FORM = {
-  tripCode: "", destination: "", schoolName: "",
-  departDate: "", returnDate: "", pricePerStudent: "", status: "confirmed",
+  tripCode: "",
+  destination: "",
+  schoolName: "",
+  departDate: "",
+  returnDate: "",
+  pricePerStudent: "",
+  status: "confirmed",
 };
 
 const BRAND_LABEL = "TMC";
 const SUB_BRAND_LABEL = "School trips";
-const PAGE_SIZE = 10;
 
 export default function Trips() {
   const notify = useNotify();
   const location = useLocation();
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialStatus = searchParams.get("status") || "";
-  const initialSearch = searchParams.get("search") || "";
-  const fromReports = searchParams.get("from") === "reports" || searchParams.get("source") === "reports";
-  const tripsListPath = `${location.pathname}${location.search}`;
-  const [status, setStatus] = useState(initialStatus);
-  const [search, setSearch] = useState(initialSearch);
-  const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
-  const [reachedEnd, setReachedEnd] = useState(false);
+  const [status, setStatus] = useState("");
+  const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
-  const listRef = useRef(null);
-  const tripsRef = useRef([]);
-  const loadingRef = useRef(true);
-  const loadingMoreRef = useRef(false);
-  const offsetRef = useRef(0);
-  const hasMoreRef = useRef(true);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const fromReports = searchParams.get("from") === "reports";
+  const tripsListPath = `${location.pathname}${location.search}`;
 
   const openCreate = () => {
     setForm(EMPTY_FORM);
@@ -91,9 +91,16 @@ export default function Trips() {
 
   const submitCreate = async (e) => {
     e.preventDefault();
-    if (!form.tripCode.trim() || !form.destination.trim() || !form.schoolName.trim()
-        || !form.departDate || !form.returnDate) {
-      notify.error("Trip code, destination, school, depart + return dates required");
+    if (
+      !form.tripCode.trim() ||
+      !form.destination.trim() ||
+      !form.schoolName.trim() ||
+      !form.departDate ||
+      !form.returnDate
+    ) {
+      notify.error(
+        "Trip code, destination, school, depart + return dates required",
+      );
       return;
     }
     setSaving(true);
@@ -106,8 +113,12 @@ export default function Trips() {
         returnDate: form.returnDate,
         status: form.status,
       };
-      if (form.pricePerStudent) body.pricePerStudent = Number(form.pricePerStudent);
-      await fetchApi("/api/travel/trips", { method: "POST", body: JSON.stringify(body) });
+      if (form.pricePerStudent)
+        body.pricePerStudent = Number(form.pricePerStudent);
+      await fetchApi("/api/travel/trips", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
       notify.success("Trip created");
       setCreating(false);
       load({ reset: true });
@@ -125,118 +136,35 @@ export default function Trips() {
     setSearch((current) => (current === nextSearch ? current : nextSearch));
   }, [searchParams]);
 
-  useEffect(() => {
-    tripsRef.current = trips;
-  }, [trips]);
-
-  useEffect(() => {
-    loadingRef.current = loading;
-  }, [loading]);
-
-  useEffect(() => {
-    loadingMoreRef.current = loadingMore;
-  }, [loadingMore]);
-
-  useEffect(() => {
-    offsetRef.current = offset;
-  }, [offset]);
-
-  useEffect(() => {
-    hasMoreRef.current = hasMore;
-  }, [hasMore]);
-
-  useEffect(() => {
-    if (loading || loadingMore || !listRef.current) return;
-    if (hasMore) {
-      setReachedEnd(false);
-      return;
-    }
-    const el = listRef.current;
-    const threshold = 72;
-    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
-    setReachedEnd(atBottom);
-  }, [trips, hasMore, loading, loadingMore]);
-
-  const load = useCallback(async ({ reset = false } = {}) => {
-    const startOffset = reset ? 0 : offsetRef.current;
-
-    if (reset) {
-      setLoading(true);
-      setLoadingMore(false);
-      setTrips([]);
-      tripsRef.current = [];
-      setTotal(0);
-      setOffset(0);
-      setHasMore(true);
-      setReachedEnd(false);
-      offsetRef.current = 0;
-      hasMoreRef.current = true;
-      if (listRef.current) {
-        listRef.current.scrollTop = 0;
+  const load = useCallback(
+    async ({ reset = false } = {}) => {
+      if (reset) {
+        setLoading(true);
+        setTrips([]);
+      } else {
+        setLoading(true);
       }
-    } else {
-      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
-      setLoadingMore(true);
-    }
-    const qs = new URLSearchParams();
-    if (status) qs.set("status", status);
-    qs.set("limit", String(PAGE_SIZE));
-    qs.set("offset", String(startOffset));
+      const qs = new URLSearchParams();
+      if (status) qs.set("status", status);
+      qs.set("limit", String(200));
 
-    try {
-      const res = await fetchApi(`/api/travel/trips?${qs.toString()}`);
-      const rows = Array.isArray(res?.trips) ? res.trips : [];
-      const totalCount = Number.isFinite(Number(res?.total)) ? Number(res.total) : rows.length;
-      const nextTrips = reset ? rows : [...tripsRef.current, ...rows];
-      const nextOffset = startOffset + rows.length;
-      const nextHasMore = Number.isFinite(totalCount)
-        ? nextOffset < totalCount
-        : rows.length === PAGE_SIZE;
+      try {
+        const res = await fetchApi(`/api/travel/trips?${qs.toString()}`);
+        const rows = Array.isArray(res?.trips) ? res.trips : [];
 
-      tripsRef.current = nextTrips;
-      setTrips(nextTrips);
-      setTotal(totalCount);
-      setOffset(nextOffset);
-      setHasMore(nextHasMore);
-      offsetRef.current = nextOffset;
-      hasMoreRef.current = nextHasMore;
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to load trips");
-      setTrips([]);
-      tripsRef.current = [];
-      setTotal(0);
-      setOffset(0);
-      setHasMore(false);
-      offsetRef.current = 0;
-      hasMoreRef.current = false;
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  }, [status, notify]);
+        setTrips(rows);
+      } catch (e) {
+        notify.error(e?.body?.error || "Failed to load trips");
+        setTrips([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [status, notify],
+  );
 
   useEffect(() => {
     load({ reset: true });
-  }, [load]);
-
-  useEffect(() => {
-    if (loading || loadingMore || !hasMore || !listRef.current) return;
-    const el = listRef.current;
-    const threshold = 72;
-    if (el.scrollHeight <= el.clientHeight + threshold) {
-      load({ reset: false });
-    }
-  }, [trips, hasMore, loading, loadingMore, load]);
-
-  const handleListScroll = useCallback((e) => {
-    const el = e.currentTarget;
-    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
-    const threshold = 72;
-    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
-    setReachedEnd(atBottom);
-    if (atBottom) {
-      load({ reset: false });
-    }
   }, [load]);
 
   const handleStatusChange = (nextStatus) => {
@@ -255,9 +183,10 @@ export default function Trips() {
   const visibleTrips = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return trips;
-    return trips.filter((t) =>
-      t.tripCode?.toLowerCase().includes(q) ||
-      t.destination?.toLowerCase().includes(q)
+    return trips.filter(
+      (t) =>
+        t.tripCode?.toLowerCase().includes(q) ||
+        t.destination?.toLowerCase().includes(q),
     );
   }, [trips, search]);
 
@@ -272,11 +201,11 @@ export default function Trips() {
     const ok = await notify.confirm({
       title: "Delete trip",
       message:
-        `Permanently delete "${t.tripCode}" — ${t.destination}?\n\n`
-        + "This will also delete every participant, room assignment, payment-plan row, "
-        + "instalment payment, document requirement, microsite, landing page, and "
-        + "pending registration linked to this trip.\n\n"
-        + "This cannot be undone.",
+        `Permanently delete "${t.tripCode}" — ${t.destination}?\n\n` +
+        "This will also delete every participant, room assignment, payment-plan row, " +
+        "instalment payment, document requirement, microsite, landing page, and " +
+        "pending registration linked to this trip.\n\n" +
+        "This cannot be undone.",
       confirmText: "Delete trip",
       destructive: true,
     });
@@ -303,34 +232,85 @@ export default function Trips() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1480, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
         <div>
           {fromReports && (
-            <Link to="/travel/reports" style={{ ...backLink, marginBottom: 10 }}>
+            <Link
+              to="/travel/reports"
+              style={{ ...backLink, marginBottom: 10 }}
+            >
               Back to reports
             </Link>
           )}
-          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0, marginBottom: 4 }}>
+          <h1
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              margin: 0,
+              marginBottom: 4,
+            }}
+          >
             <Luggage size={28} aria-hidden /> TMC Trips
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 0 }}>
-            School educational trips. Operational view per trip — participants, rooming,
-            payment plan, microsite — lives on the detail page.
+            School educational trips. Operational view per trip — participants,
+            rooming, payment plan, microsite — lives on the detail page.
           </p>
         </div>
-        <button type="button" onClick={openCreate} style={primaryBtn} aria-label="Create a new trip">
+        <button
+          type="button"
+          onClick={openCreate}
+          style={primaryBtn}
+          aria-label="Create a new trip"
+        >
           <Plus size={14} /> New Trip
         </button>
       </div>
 
-      <div style={{
-        display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center",
-        background: "var(--surface-color)", padding: 12, borderRadius: 8,
-        border: "1px solid var(--border-color)", marginBottom: 16,
-      }}>
-        <Filter size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
-        <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-          <Search size={14} aria-hidden style={{ position: "absolute", left: 8, color: "var(--text-secondary)", pointerEvents: "none" }} />
+      <div
+        style={{
+          display: "flex",
+          gap: 12,
+          flexWrap: "wrap",
+          alignItems: "center",
+          background: "var(--surface-color)",
+          padding: 12,
+          borderRadius: 8,
+          border: "1px solid var(--border-color)",
+          marginBottom: 16,
+        }}
+      >
+        <Filter
+          size={16}
+          aria-hidden
+          style={{ color: "var(--text-secondary)" }}
+        />
+        <div
+          style={{
+            position: "relative",
+            display: "flex",
+            alignItems: "center",
+          }}
+        >
+          <Search
+            size={14}
+            aria-hidden
+            style={{
+              position: "absolute",
+              left: 8,
+              color: "var(--text-secondary)",
+              pointerEvents: "none",
+            }}
+          />
           <input
             type="search"
             value={search}
@@ -340,170 +320,251 @@ export default function Trips() {
             style={{ ...selectStyle, paddingLeft: 28, minWidth: 240 }}
           />
         </div>
-        <select value={status} onChange={(e) => handleStatusChange(e.target.value)} style={selectStyle} aria-label="Filter by status">
-          {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+        <select
+          value={status}
+          onChange={(e) => handleStatusChange(e.target.value)}
+          style={selectStyle}
+          aria-label="Filter by status"
+        >
+          {STATUSES.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
         </select>
-        <button type="button" onClick={() => load({ reset: true })} style={refreshBtn} aria-label="Reload list">Refresh</button>
+        <button
+          type="button"
+          onClick={() => load({ reset: true })}
+          style={refreshBtn}
+          aria-label="Reload list"
+        >
+          Refresh
+        </button>
       </div>
 
       <div
-        ref={listRef}
-        data-testid="trips-table-scroll"
-        onScroll={handleListScroll}
         style={{
-          background: "var(--surface-color)", borderRadius: 8,
+          background: "var(--surface-color)",
+          borderRadius: 8,
           border: "1px solid var(--border-color)",
-          overflow: "auto",
-          height: "calc(100vh - 300px)",
-          minHeight: 620,
-          maxHeight: 720,
         }}
       >
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : trips.length === 0 ? (
           <div style={empty}>
-            No trips yet. New trips spawn from the linked Deal in the sales pipeline.
+            No trips yet. New trips spawn from the linked Deal in the sales
+            pipeline.
           </div>
         ) : visibleTrips.length === 0 ? (
-          <div style={empty}>No trips match &ldquo;{search}&rdquo;.</div>
+          <div style={empty}>No trips match &quot;{search}&quot;.</div>
         ) : (
-          <>
-            <table
-              className="stable-table"
-              style={{
-                width: "100%",
-                minWidth: 1560,
-                borderCollapse: "collapse",
-                tableLayout: "fixed",
-              }}
-            >
-              <colgroup>
-                <col style={{ width: 160 }} />
-                <col style={{ width: 240 }} />
-                <col style={{ width: 90 }} />
-                <col style={{ width: 120 }} />
-                <col style={{ width: 190 }} />
-                <col style={{ width: 230 }} />
-                <col style={{ width: 120 }} />
-                <col style={{ width: 130 }} />
-                <col style={{ width: 110 }} />
-                <col style={{ width: 90 }} />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th style={th}>Trip code</th>
-                  <th style={th}>Destination</th>
-                  <th style={th}>Brand</th>
-                  <th style={th}>Sub-brand</th>
-                  <th style={th}>Dates</th>
-                  <th style={th}>School</th>
-                  <th style={th}>Participants</th>
-                  <th style={th}>Per-student</th>
-                  <th style={th}>Status</th>
-                  <th style={{ ...th, width: 90, textAlign: "right" }} aria-label="Actions">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleTrips.map((t) => {
-                  const sc = STATUS_COLORS[t.status] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
-                  return (
-                    <tr key={t.id} style={{ borderTop: "1px solid var(--border-light)" }}>
-                    <td style={td}>
-                      <Link
-                        to={`/travel/trips/${t.id}`}
-                        state={{ backTo: tripsListPath, backLabel: fromReports ? "Back to reports results" : "Back to trips" }}
-                        style={{ color: "var(--primary-color)", textDecoration: "none", fontWeight: 600 }}
+          <div
+            data-testid="trips-table-scroll"
+            style={{ overflowX: "scroll", overflowY: "visible" }}
+          >
+            <div style={{ minWidth: "calc(100% + 1px)" }}>
+              <table
+                style={{
+                  width: "100%",
+                  minWidth: 1205,
+                  borderCollapse: "collapse",
+                  tableLayout: "fixed",
+                }}
+              >
+                <colgroup>
+                  <col style={{ width: 170 }} />
+                  <col style={{ width: 260 }} />
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 220 }} />
+                  <col style={{ width: 240 }} />
+                  <col style={{ width: 130 }} />
+                  <col style={{ width: 150 }} />
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 90 }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th style={th}>Trip code</th>
+                    <th style={th}>Destination</th>
+                    <th style={th}>Brand</th>
+                    <th style={th}>Sub-brand</th>
+                    <th style={th}>Dates</th>
+                    <th style={th}>School</th>
+                    <th style={th}>Participants</th>
+                    <th style={th}>Per-student</th>
+                    <th style={th}>Status</th>
+                    <th
+                      style={{ ...th, width: 60, textAlign: "right" }}
+                      aria-label="Actions"
+                    ></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleTrips.map((t) => {
+                    const sc = STATUS_COLORS[t.status] || {
+                      bg: "var(--subtle-bg)",
+                      color: "var(--text-secondary)",
+                    };
+                    return (
+                      <tr
+                        key={t.id}
+                        style={{ borderTop: "1px solid var(--border-light)" }}
                       >
-                        {t.tripCode}
-                      </Link>
-                    </td>
-                    <td style={td}>{t.destination}</td>
-                    <td style={td}><span style={brandBadge}>{BRAND_LABEL}</span></td>
-                    <td style={td}>{SUB_BRAND_LABEL}</td>
-                    <td style={td}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                        <CalendarIcon size={12} aria-hidden />
-                        {fmt(t.departDate)} → {fmt(t.returnDate)}
-                      </span>
-                    </td>
-                    <td style={td}>{t.schoolName || (t.schoolContactId ? `School #${t.schoolContactId}` : "?")}</td>
-                    <td style={td}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                        <Users size={12} aria-hidden />
-                        {t._count?.participants ?? 0}
-                      </span>
-                    </td>
-                    <td style={td}>{fmtMoney(t.pricePerStudent)}</td>
-                    <td style={td}>
-                      <span style={{
-                        background: sc.bg, color: sc.color,
-                        padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
-                        textTransform: "uppercase", letterSpacing: 0.5,
-                      }}>
-                        {t.status}
-                      </span>
-                    </td>
-                    <td style={{ ...td, textAlign: "right" }}>
-                      <button
-                        type="button"
-                        onClick={() => remove(t)}
-                        disabled={deletingId === t.id}
-                        aria-label={`Delete trip ${t.tripCode}`}
-                        title="Delete trip"
-                        style={{
-                          background: "transparent",
-                          border: "1px solid var(--border-color)",
-                          borderRadius: 6,
-                          padding: "4px 6px",
-                          color: "#A8323F",
-                          cursor: deletingId === t.id ? "wait" : "pointer",
-                          opacity: deletingId === t.id ? 0.5 : 1,
-                          display: "inline-flex",
-                          alignItems: "center",
-                        }}
-                      >
-                        <Trash2 size={14} aria-hidden />
-                      </button>
-                    </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
+                        <td style={{ ...td, whiteSpace: "nowrap" }}>
+                          <Link
+                            to={`/travel/trips/${t.id}`}
+                            state={{
+                              backTo: tripsListPath,
+                              backLabel: fromReports
+                                ? "Back to reports results"
+                                : "Back to trips",
+                            }}
+                            style={{
+                              color: "var(--primary-color)",
+                              textDecoration: "none",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {t.tripCode}
+                          </Link>
+                        </td>
+                        <td style={{ ...td, minWidth: 0 }}>{t.destination}</td>
+                        <td style={{ ...td, whiteSpace: "nowrap" }}>
+                          <span style={brandBadge}>{BRAND_LABEL}</span>
+                        </td>
+                        <td style={{ ...td, whiteSpace: "nowrap" }}>
+                          {SUB_BRAND_LABEL}
+                        </td>
+                        <td style={{ ...td, whiteSpace: "nowrap" }}>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                            }}
+                          >
+                            <CalendarIcon size={12} aria-hidden />
+                            {fmt(t.departDate)} ? {fmt(t.returnDate)}
+                          </span>
+                        </td>
+                        <td style={{ ...td, whiteSpace: "nowrap" }}>
+                          {t.schoolName ||
+                            (t.schoolContactId
+                              ? `School #${t.schoolContactId}`
+                              : "?")}
+                        </td>
+                        <td style={{ ...td, whiteSpace: "nowrap" }}>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                            }}
+                          >
+                            <Users size={12} aria-hidden />
+                            {t._count?.participants ?? 0}
+                          </span>
+                        </td>
+                        <td style={{ ...td, whiteSpace: "nowrap" }}>
+                          {fmtMoney(t.pricePerStudent)}
+                        </td>
+                        <td style={{ ...td, whiteSpace: "nowrap" }}>
+                          <span
+                            style={{
+                              background: sc.bg,
+                              color: sc.color,
+                              padding: "2px 8px",
+                              borderRadius: 4,
+                              fontSize: 11,
+                              fontWeight: 600,
+                              textTransform: "uppercase",
+                              letterSpacing: 0.5,
+                            }}
+                          >
+                            {t.status}
+                          </span>
+                        </td>
+                        <td
+                          style={{
+                            ...td,
+                            textAlign: "right",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => remove(t)}
+                            disabled={deletingId === t.id}
+                            aria-label={`Delete trip ${t.tripCode}`}
+                            title="Delete trip"
+                            style={{
+                              background: "transparent",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: 6,
+                              padding: "4px 6px",
+                              color: "#A8323F",
+                              cursor: deletingId === t.id ? "wait" : "pointer",
+                              opacity: deletingId === t.id ? 0.5 : 1,
+                              display: "inline-flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            <Trash2 size={14} aria-hidden />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
               </table>
-            {loadingMore && (
-              <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
-                Loading more&hellip;
-              </div>
-            )}
-            {!loadingMore && hasMore && (
-              <div aria-hidden="true" data-testid="trips-table-sentinel" style={{ height: 1 }} />
-            )}
-            {total > 0 && reachedEnd && !hasMore && (
-              <div style={{ padding: "10px 16px", textAlign: "center", color: "var(--text-secondary)", fontSize: 12, borderTop: "1px solid var(--border-color)" }}>
-                You&apos;ve reached the end of the trips.
-              </div>
-            )}
-          </>
+            </div>
+          </div>
         )}
       </div>
-
       {creating && (
         <div
-          onClick={(e) => { if (e.target === e.currentTarget) setCreating(false); }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setCreating(false);
+          }}
           style={{
-            position: "fixed", inset: 0,
+            position: "fixed",
+            inset: 0,
             background: "rgba(0,0,0,0.75)",
             backdropFilter: "blur(4px)",
             WebkitBackdropFilter: "blur(4px)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            zIndex: 1000, padding: "1rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: "1rem",
           }}
         >
-          <form onSubmit={submitCreate} className="card" role="dialog" aria-modal="true" style={drawerStyle}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>New Trip</h2>
-              <button type="button" onClick={() => setCreating(false)} aria-label="Close" style={iconBtn}>
+          <form
+            onSubmit={submitCreate}
+            className="card"
+            role="dialog"
+            aria-modal="true"
+            style={drawerStyle}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 16,
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
+                New Trip
+              </h2>
+              <button
+                type="button"
+                onClick={() => setCreating(false)}
+                aria-label="Close"
+                style={iconBtn}
+              >
                 <X size={16} />
               </button>
             </div>
@@ -511,8 +572,12 @@ export default function Trips() {
               <label style={fieldLabel}>
                 Trip code
                 <input
-                  required type="text" value={form.tripCode}
-                  onChange={(e) => setForm({ ...form, tripCode: e.target.value })}
+                  required
+                  type="text"
+                  value={form.tripCode}
+                  onChange={(e) =>
+                    setForm({ ...form, tripCode: e.target.value })
+                  }
                   style={inputStyle}
                   placeholder='e.g. "TMC-AND-2026-MUMBAI-G7"'
                 />
@@ -520,8 +585,12 @@ export default function Trips() {
               <label style={fieldLabel}>
                 Destination
                 <input
-                  required type="text" value={form.destination}
-                  onChange={(e) => setForm({ ...form, destination: e.target.value })}
+                  required
+                  type="text"
+                  value={form.destination}
+                  onChange={(e) =>
+                    setForm({ ...form, destination: e.target.value })
+                  }
                   style={inputStyle}
                   placeholder="Andaman"
                 />
@@ -529,8 +598,12 @@ export default function Trips() {
               <label style={fieldLabel}>
                 School
                 <input
-                  required type="text" value={form.schoolName}
-                  onChange={(e) => setForm({ ...form, schoolName: e.target.value })}
+                  required
+                  type="text"
+                  value={form.schoolName}
+                  onChange={(e) =>
+                    setForm({ ...form, schoolName: e.target.value })
+                  }
                   style={inputStyle}
                   placeholder='e.g. "DPS North" or "Bharat Public School"'
                   maxLength={200}
@@ -540,16 +613,24 @@ export default function Trips() {
                 <label style={{ ...fieldLabel, flex: 1 }}>
                   Depart date
                   <input
-                    required type="date" value={form.departDate}
-                    onChange={(e) => setForm({ ...form, departDate: e.target.value })}
+                    required
+                    type="date"
+                    value={form.departDate}
+                    onChange={(e) =>
+                      setForm({ ...form, departDate: e.target.value })
+                    }
                     style={inputStyle}
                   />
                 </label>
                 <label style={{ ...fieldLabel, flex: 1 }}>
                   Return date
                   <input
-                    required type="date" value={form.returnDate}
-                    onChange={(e) => setForm({ ...form, returnDate: e.target.value })}
+                    required
+                    type="date"
+                    value={form.returnDate}
+                    onChange={(e) =>
+                      setForm({ ...form, returnDate: e.target.value })
+                    }
                     style={inputStyle}
                   />
                 </label>
@@ -557,8 +638,13 @@ export default function Trips() {
               <label style={fieldLabel}>
                 Per-student price (optional)
                 <input
-                  type="number" min="0" step="any" value={form.pricePerStudent}
-                  onChange={(e) => setForm({ ...form, pricePerStudent: e.target.value })}
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={form.pricePerStudent}
+                  onChange={(e) =>
+                    setForm({ ...form, pricePerStudent: e.target.value })
+                  }
                   style={inputStyle}
                   placeholder="0"
                 />
@@ -571,13 +657,28 @@ export default function Trips() {
                   style={inputStyle}
                 >
                   {STATUSES.filter((s) => s.value).map((s) => (
-                    <option key={s.value} value={s.value}>{s.label}</option>
+                    <option key={s.value} value={s.value}>
+                      {s.label}
+                    </option>
                   ))}
                 </select>
               </label>
             </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>
-              <button type="button" onClick={() => setCreating(false)} style={refreshBtn}>Cancel</button>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                marginTop: 20,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setCreating(false)}
+                style={refreshBtn}
+              >
+                Cancel
+              </button>
               <button type="submit" disabled={saving} style={primaryBtn}>
                 {saving ? "Creating…" : "Create Trip"}
               </button>
@@ -590,26 +691,42 @@ export default function Trips() {
 }
 
 const selectStyle = {
-  padding: "6px 10px", borderRadius: 6,
+  padding: "6px 10px",
+  borderRadius: 6,
   border: "1px solid var(--border-color)",
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  minWidth: 160, fontSize: 13,
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  minWidth: 160,
+  fontSize: 13,
 };
 const backLink = {
-  display: "inline-flex", alignItems: "center", gap: 4,
-  fontSize: 13, color: "var(--text-secondary)",
-  textDecoration: "none", padding: "6px 12px", borderRadius: 6,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  fontSize: 13,
+  color: "var(--text-secondary)",
+  textDecoration: "none",
+  padding: "6px 12px",
+  borderRadius: 6,
   border: "1px solid var(--border-color)",
 };
 const refreshBtn = {
-  padding: "6px 12px", borderRadius: 6,
+  padding: "6px 12px",
+  borderRadius: 6,
   border: "1px solid var(--border-color)",
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  fontSize: 13, cursor: "pointer",
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  fontSize: 13,
+  cursor: "pointer",
 };
 const primaryBtn = {
-  display: "inline-flex", alignItems: "center", gap: 6,
-  padding: "6px 12px", borderRadius: 6, fontWeight: 600, fontSize: 13,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "6px 12px",
+  borderRadius: 6,
+  fontWeight: 600,
+  fontSize: 13,
   background: "var(--primary-color, var(--accent-color))",
   color: "var(--accent-text, #fff)",
   border: "1px solid var(--primary-color, var(--accent-color))",
@@ -620,38 +737,64 @@ const primaryBtn = {
 // and lifted shadow; we force opaque `--bg-color` here so the panel
 // doesn't read as glassmorphic over the page content behind it.
 const drawerStyle = {
-  background: "var(--bg-color)", color: "var(--text-primary)",
-  width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto",
+  background: "var(--bg-color)",
+  color: "var(--text-primary)",
+  width: "100%",
+  maxWidth: 480,
+  maxHeight: "90vh",
+  overflowY: "auto",
   padding: "1.5rem",
 };
 const iconBtn = {
-  background: "transparent", border: "none", color: "var(--text-secondary)",
-  cursor: "pointer", padding: 4,
+  background: "transparent",
+  border: "none",
+  color: "var(--text-secondary)",
+  cursor: "pointer",
+  padding: 4,
 };
 const fieldLabel = {
-  display: "flex", flexDirection: "column", gap: 4,
-  fontSize: 12, color: "var(--text-secondary)", fontWeight: 500,
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  fontSize: 12,
+  color: "var(--text-secondary)",
+  fontWeight: 500,
 };
 const inputStyle = {
-  padding: "8px 10px", borderRadius: 6,
+  padding: "8px 10px",
+  borderRadius: 6,
   border: "1px solid var(--border-color)",
-  background: "var(--input-bg, var(--surface-color))", color: "var(--text-primary)",
+  background: "var(--input-bg, var(--surface-color))",
+  color: "var(--text-primary)",
   fontSize: 14,
 };
 const empty = {
-  padding: 32, textAlign: "center",
-  color: "var(--text-secondary)", fontSize: 14,
+  padding: 32,
+  textAlign: "center",
+  color: "var(--text-secondary)",
+  fontSize: 14,
 };
 const brandBadge = {
-  display: "inline-flex", alignItems: "center", justifyContent: "center",
-  padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700,
-  letterSpacing: 0.5, textTransform: "uppercase",
-  background: "rgba(91,110,225,0.14)", color: "var(--primary-color)",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "2px 8px",
+  borderRadius: 999,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.5,
+  textTransform: "uppercase",
+  background: "rgba(91,110,225,0.14)",
+  color: "var(--primary-color)",
 };
 const th = {
-  textAlign: "left", padding: "10px 12px", fontSize: 12,
-  textTransform: "uppercase", letterSpacing: 0.5,
-  color: "var(--text-secondary)", borderBottom: "1px solid var(--border-color)",
+  textAlign: "left",
+  padding: "10px 12px",
+  fontSize: 12,
+  textTransform: "uppercase",
+  letterSpacing: 0.5,
+  color: "var(--text-secondary)",
+  borderBottom: "1px solid var(--border-color)",
   position: "sticky",
   top: 0,
   zIndex: 3,
@@ -666,7 +809,9 @@ const th = {
   whiteSpace: "nowrap",
 };
 const td = {
-  padding: "10px 12px", fontSize: 14,
+  minWidth: 0,
+  padding: "10px 12px",
+  fontSize: 14,
   color: "var(--text-primary)",
   verticalAlign: "middle",
   overflow: "hidden",

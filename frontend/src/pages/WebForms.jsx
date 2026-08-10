@@ -7148,7 +7148,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-        <div style={{ display: "grid", gridTemplateColumns: field.hidden ? "1fr auto" : "1fr 1fr auto", gap: 16, minWidth: 0 }}>
+        <div data-testid="wf-field-editor-grid" className="wf-field-editor-grid" style={{ display: "grid", gridTemplateColumns: field.hidden ? "minmax(220px, 1fr) minmax(220px, max-content)" : "minmax(220px, 1fr) minmax(180px, 0.8fr) minmax(260px, max-content)", gap: 16, minWidth: 0, alignItems: "start" }}>
 
 
 
@@ -7350,7 +7350,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-        <div style={{ display: "flex", alignItems: "center", gap: 14, justifyContent: "flex-end", flexWrap: "wrap" }}>
+        <div className="wf-field-editor-actions" style={{ display: "flex", alignItems: "center", gap: 14, justifyContent: "flex-end", flexWrap: "nowrap", minWidth: 0, width: "max-content", justifySelf: "end" }}>
 
 
 
@@ -7366,7 +7366,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 14, whiteSpace: "nowrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 14, whiteSpace: "nowrap", lineHeight: 1.35 }}>
 
 
 
@@ -7430,7 +7430,7 @@ function FieldCard({ field, index, leadFields, onChange, onMove, onRemove }) {
 
 
 
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 14, whiteSpace: "nowrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 14, whiteSpace: "nowrap", lineHeight: 1.35 }}>
 
 
 
@@ -15833,7 +15833,7 @@ export default function WebForms() {
 
 
 
-          grid-template-columns: minmax(180px, 260px) minmax(320px, 1fr) minmax(220px, auto);
+          grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
 
 
 
@@ -15880,6 +15880,12 @@ export default function WebForms() {
 
 
 
+
+        }
+
+        .wf-field-grid > * {
+
+          min-width: 0;
 
         }
 
@@ -19643,7 +19649,7 @@ export default function WebForms() {
 
 
 
-        @media (max-width: 1280px) {
+        @media (max-width: 1200px) {
 
 
 
@@ -19706,6 +19712,26 @@ export default function WebForms() {
 
 
 
+
+          }
+
+        }
+
+        @media (max-width: 760px) {
+
+          .wf-field-editor-grid {
+
+            grid-template-columns: 1fr !important;
+
+          }
+
+          .wf-field-editor-actions {
+
+            justify-content: flex-start !important;
+
+            flex-wrap: wrap !important;
+
+            width: auto !important;
 
           }
 
@@ -19866,6 +19892,54 @@ export default function WebForms() {
 
 
 
+
+        }
+
+        @media (min-width: 761px) and (max-width: 1800px) {
+
+          .wf-builder-grid {
+
+            grid-template-columns: 1fr;
+
+          }
+
+          .wf-step-rail {
+
+            position: static;
+
+            display: flex;
+
+            flex-wrap: wrap;
+
+            gap: 10px;
+
+          }
+
+          .wf-step-button {
+
+            flex: 1 1 180px;
+
+            width: auto;
+
+          }
+
+          .wf-field-editor-grid {
+
+            grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) !important;
+
+          }
+
+          .wf-field-editor-actions {
+
+            grid-column: 1 / -1 !important;
+
+            width: 100% !important;
+
+            justify-self: stretch !important;
+
+            justify-content: flex-end !important;
+
+          }
 
         }
 

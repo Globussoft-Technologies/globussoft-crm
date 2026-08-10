@@ -1,6 +1,6 @@
 ﻿// @ts-check
 /**
- * backend/routes/travel_trips.js â€” TMC trip route contract pin.
+ * backend/routes/travel_trips.js — TMC trip route contract pin.
  *
  * What's pinned
  * -------------
@@ -25,10 +25,10 @@
  *                                                           when both (a) existing.driveFolderId
  *                                                           is null AND (b) body did not
  *                                                           supply driveFolderId
- *       DELETE /trips/:id                                   ADMIN only â€” requirePermission('trips','delete')
+ *       DELETE /trips/:id                                   ADMIN only — requirePermission('trips','delete')
  *
- *   - Ops-dashboard rollup (1 route, PRD Â§4.9):
- *       GET    /trips/:id/ops-dashboard                     ADMIN+MANAGER only â€” requirePermission('trips','read')
+ *   - Ops-dashboard rollup (1 route, PRD §4.9):
+ *       GET    /trips/:id/ops-dashboard                     ADMIN+MANAGER only — requirePermission('trips','read')
  *                                                           score=null when participantsCount=0
  *                                                           OR expectedTotalRupees=0; over-roomed
  *                                                           participantsRoomed is clamped to
@@ -45,7 +45,7 @@
  *                                                           INVALID_AADHAAR_LAST4
  *       DELETE /trips/:id/participants/:pid                 PARTICIPANT_NOT_FOUND on cross-trip
  *
- *   - DigiLocker (2 routes â€” stub-mode):
+ *   - DigiLocker (2 routes — stub-mode):
  *       POST   /trips/:tripId/participants/:participantId/digilocker/initiate
  *                                                           MISSING_FIELDS w/o redirectUri;
  *                                                           persists session row with state +
@@ -64,20 +64,20 @@
  *       DELETE /trips/:id/documents/:docId                  DOC_NOT_FOUND on cross-trip
  *
  * Pinned guards (all routes go through these in order):
- *   verifyToken â†’ [requirePermission?] â†’ requireTravelTenant â†’ requireTmcAccess â†’ handler
+ *   verifyToken → [requirePermission?] → requireTravelTenant → requireTmcAccess → handler
  *
  * Failure-path codes pinned by the route source as of this commit:
  *   400 INVALID_ID / INVALID_CONTACT_ID / INVALID_STATUS / INVALID_DATE /
  *       INVERTED_DATES / MISSING_FIELDS / EMPTY_BODY / INVALID_PARTICIPANT_ID /
  *       INVALID_AADHAAR_LAST4 / INVALID_DOC_ID
- *   401 â€” verifyToken (missing Authorization)
- *   403 SUB_BRAND_DENIED / WRONG_VERTICAL / RBAC_DENIED â€” guard stack
+ *   401 — verifyToken (missing Authorization)
+ *   403 SUB_BRAND_DENIED / WRONG_VERTICAL / RBAC_DENIED — guard stack
  *   404 NOT_FOUND / PARTICIPANT_NOT_FOUND / DOC_NOT_FOUND / SESSION_NOT_FOUND
  *   409 DUPLICATE_TRIP_CODE / INVALID_STATE (digilocker replay)
  *   410 SESSION_GONE (digilocker expired/failed)
  *
  * Test pattern mirrors backend/test/routes/travel-trip-billing.test.js (commit
- * 1160dc3a) â€” patch the prisma singleton with vi.fn() shapes BEFORE requiring
+ * 1160dc3a) — patch the prisma singleton with vi.fn() shapes BEFORE requiring
  * the router, then drive supertest with real HS256 JWTs signed with the same
  * fallback secret the middleware uses in dev. The full guard chain
  * (verifyToken + requirePermission + requireTravelTenant + requireTmcAccess) is
@@ -85,7 +85,7 @@
  *
  * The googleDriveClient + digilockerClient services are stub-mode (Q1 + Q3
  * cred-blocked). The route source imports them via CJS require() at module
- * load; we don't mock them â€” the stubs return deterministic synthetic values
+ * load; we don't mock them — the stubs return deterministic synthetic values
  * that the assertions accommodate (folderId starts with "stub-folder-",
  * aadhaarLast4 = "9999"). For the failure-path tests where we need
  * createTripFolder to throw, we monkey-patch the loaded stub before
@@ -137,7 +137,7 @@ prisma.landingPage = {
   create: vi.fn(),
   update: vi.fn(),
 };
-// Phase 5 â€” pending-registration admin endpoints
+// Phase 5 — pending-registration admin endpoints
 prisma.pendingTripRegistration = {
   findFirst: vi.fn(),
   findMany: vi.fn(),
@@ -155,7 +155,7 @@ prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAcce
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 prisma.$transaction = vi.fn().mockImplementation(async (ops) => {
-  // Route uses $transaction([promise, promise]) â€” resolve each.
+  // Route uses $transaction([promise, promise]) — resolve each.
   if (Array.isArray(ops)) {
     return Promise.all(ops);
   }
@@ -246,7 +246,7 @@ beforeEach(() => {
 
   // Default the Drive + DigiLocker stubs to their real synthetic behaviour;
   // individual tests override (e.g. createTripFolder throws for one path).
-  // vi.spyOn wraps the original â€” call mockRestore in afterEach so the
+  // vi.spyOn wraps the original — call mockRestore in afterEach so the
   // next test re-spies cleanly. Otherwise repeated spyOn calls stack and
   // the "not.toHaveBeenCalled" assertion sees count from the prior test's
   // wrapper.
@@ -260,7 +260,7 @@ afterEach(() => {
 });
 
 // -----------------------------------------------------------------------------
-// GET /api/travel/trips â€” list
+// GET /api/travel/trips — list
 // -----------------------------------------------------------------------------
 
 describe('GET /api/travel/trips', () => {
@@ -327,7 +327,7 @@ describe('GET /api/travel/trips', () => {
 });
 
 // -----------------------------------------------------------------------------
-// POST /api/travel/trips â€” create
+// POST /api/travel/trips — create
 // -----------------------------------------------------------------------------
 
 describe('POST /api/travel/trips', () => {
@@ -343,7 +343,7 @@ describe('POST /api/travel/trips', () => {
     driveCreateSpy.mockResolvedValue({
       folderId: 'stub-folder-test123',
       folderUrl: 'https://drive.google.com/drive/folders/stub-folder-test123',
-      folderName: 'TMC Trip â€” bali2026 â€” Bali, Indonesia â€” 2026-09',
+      folderName: 'TMC Trip — bali2026 — Bali, Indonesia — 2026-09',
     });
     prisma.tmcTrip.create.mockResolvedValue({
       id: 200,
@@ -489,7 +489,7 @@ describe('POST /api/travel/trips', () => {
 });
 
 // -----------------------------------------------------------------------------
-// GET /api/travel/trips/:id â€” single
+// GET /api/travel/trips/:id — single
 // -----------------------------------------------------------------------------
 
 describe('GET /api/travel/trips/:id', () => {
@@ -528,7 +528,7 @@ describe('GET /api/travel/trips/:id', () => {
 });
 
 // -----------------------------------------------------------------------------
-// PATCH /api/travel/trips/:id â€” amend
+// PATCH /api/travel/trips/:id — amend
 // -----------------------------------------------------------------------------
 
 describe('PATCH /api/travel/trips/:id', () => {
@@ -582,7 +582,7 @@ describe('PATCH /api/travel/trips/:id', () => {
     expect(prisma.tmcTrip.update).not.toHaveBeenCalled();
   });
 
-  test('flip non-confirmed â†’ confirmed auto-creates Drive folder when existing has none', async () => {
+  test('flip non-confirmed → confirmed auto-creates Drive folder when existing has none', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({
       id: 100, status: 'cancelled', driveFolderId: null,
       tripCode: 'auto1', destination: 'Bali', departDate: new Date('2026-09-15'),
@@ -622,7 +622,7 @@ describe('PATCH /api/travel/trips/:id', () => {
 });
 
 // -----------------------------------------------------------------------------
-// DELETE /api/travel/trips/:id â€” ADMIN only
+// DELETE /api/travel/trips/:id — ADMIN only
 // -----------------------------------------------------------------------------
 
 describe('DELETE /api/travel/trips/:id', () => {
@@ -658,7 +658,7 @@ describe('DELETE /api/travel/trips/:id', () => {
 });
 
 // -----------------------------------------------------------------------------
-// GET /api/travel/trips/:id/ops-dashboard â€” PRD Â§4.9 operational rollup
+// GET /api/travel/trips/:id/ops-dashboard — PRD §4.9 operational rollup
 // -----------------------------------------------------------------------------
 
 describe('GET /api/travel/trips/:id/ops-dashboard', () => {
@@ -693,23 +693,23 @@ describe('GET /api/travel/trips/:id/ops-dashboard', () => {
       returnDate: new Date(), status: 'confirmed', legalEntity: 'tmc_nexus',
       pricePerStudent: 50000,
     });
-    // 4 participants, all consent-captured â†’ consentPct=100
+    // 4 participants, all consent-captured → consentPct=100
     prisma.tripParticipant.findMany.mockResolvedValue([
       { id: 1, consentCapturedAt: new Date() },
       { id: 2, consentCapturedAt: new Date() },
       { id: 3, consentCapturedAt: new Date() },
       { id: 4, consentCapturedAt: new Date() },
     ]);
-    // 10k expected, 5k received â†’ paymentPct=50
+    // 10k expected, 5k received → paymentPct=50
     prisma.tripInstalmentPayment.findMany.mockResolvedValue([
       { amount: 10000, paidAmount: 5000, status: 'partial' },
     ]);
     // submittedCount is HARD-CODED to 0 today (no submission-tracking
-    // column) â†’ docsPct=0 when requirementCount>0.
+    // column) → docsPct=0 when requirementCount>0.
     prisma.tripDocumentRequirement.findMany.mockResolvedValue([
       { required: true }, { required: true },
     ]);
-    // Over-assigned room (5 ids for 4 participants) â€” clamp to 4 â†’
+    // Over-assigned room (5 ids for 4 participants) — clamp to 4 →
     // roomingPct=100.
     prisma.roomingAssignment.findMany.mockResolvedValue([
       { participantIds: JSON.stringify([1, 2, 3, 4, 99]) },
@@ -718,7 +718,7 @@ describe('GET /api/travel/trips/:id/ops-dashboard', () => {
       .get('/api/travel/trips/100/ops-dashboard')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(200);
-    // Weighted: 0.3*1 + 0.3*0 + 0.3*0.5 + 0.1*1 = 0.55 â†’ score=55.
+    // Weighted: 0.3*1 + 0.3*0 + 0.3*0.5 + 0.1*1 = 0.55 → score=55.
     expect(res.body.departureReadiness).toMatchObject({
       score: 55,
       components: {
@@ -772,23 +772,23 @@ describe('GET /api/travel/trips/:id/ops-dashboard', () => {
     });
   });
 
-  test('zero doc requirements â†’ docsPct=0 (not penalised, but shows 0%)', async () => {
+  test('zero doc requirements → docsPct=0 (not penalised, but shows 0%)', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({
       id: 100, tripCode: 'x', destination: 'D', departDate: new Date(),
       returnDate: new Date(), status: 'confirmed', legalEntity: 'tmc_nexus',
       pricePerStudent: 50000,
     });
-    // 1 participant, all consent â†’ consentPct=100
+    // 1 participant, all consent → consentPct=100
     prisma.tripParticipant.findMany.mockResolvedValue([
       { id: 1, consentCapturedAt: new Date() },
     ]);
-    // 50k expected, 50k received â†’ paymentPct=100
+    // 50k expected, 50k received → paymentPct=100
     prisma.tripInstalmentPayment.findMany.mockResolvedValue([
       { amount: 50000, paidAmount: 50000, status: 'paid' },
     ]);
     // Zero doc requirements
     prisma.tripDocumentRequirement.findMany.mockResolvedValue([]);
-    // 1 participant roomed â†’ roomingPct=100
+    // 1 participant roomed → roomingPct=100
     prisma.roomingAssignment.findMany.mockResolvedValue([
       { participantIds: JSON.stringify([1]) },
     ]);
@@ -796,7 +796,7 @@ describe('GET /api/travel/trips/:id/ops-dashboard', () => {
       .get('/api/travel/trips/100/ops-dashboard')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(200);
-    // Weighted: 0.3*1 + 0.3*0 + 0.3*1 + 0.1*1 = 0.3 + 0 + 0.3 + 0.1 = 0.7 â†’ score=70
+    // Weighted: 0.3*1 + 0.3*0 + 0.3*1 + 0.1*1 = 0.3 + 0 + 0.3 + 0.1 = 0.7 → score=70
     expect(res.body.departureReadiness).toMatchObject({
       score: 70,
       components: {
@@ -1070,7 +1070,7 @@ describe('DigiLocker', () => {
       oauthUrl: expect.stringContaining('digilocker'),
     });
     // The persisted session row MUST be tenant-scoped to prevent the
-    // cross-tenant state-replay class â€” pin it.
+    // cross-tenant state-replay class — pin it.
     expect(prisma.digilockerSession.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -1134,7 +1134,7 @@ describe('DigiLocker', () => {
       .send({ state: 'deadbeef', code: 'authcode' });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ verified: true, aadhaarLast4: '9999' });
-    // Token MUST NOT appear in the response body â€” PII guard.
+    // Token MUST NOT appear in the response body — PII guard.
     expect(JSON.stringify(res.body)).not.toContain('opaque-token-id-NEVER-LEAKED');
   });
 });
@@ -1223,16 +1223,16 @@ describe('auth + vertical guard', () => {
 
 // -----------------------------------------------------------------------------
 // Trip-owned LandingPage lifecycle (Phase 2 hybrid architecture)
-//   GET    /trips/:id/landing-page  â†’ 200 page | 404 NOT_LINKED
-//   POST   /trips/:id/landing-page  â†’ 200 existing (idempotent) | 201 lazy-created
-//   DELETE /trips/:id/landing-page  â†’ unlinks; row survives as generic page
+//   GET    /trips/:id/landing-page  → 200 page | 404 NOT_LINKED
+//   POST   /trips/:id/landing-page  → 200 existing (idempotent) | 201 lazy-created
+//   DELETE /trips/:id/landing-page  → unlinks; row survives as generic page
 // -----------------------------------------------------------------------------
 
 describe('GET /api/travel/trips/:id/landing-page', () => {
   test('returns linked landing page when one exists', async () => {
     const existingPage = {
       id: 55,
-      title: 'Bali Trip â€” bali2026',
+      title: 'Bali Trip — bali2026',
       slug: 'trip-bali2026',
       status: 'DRAFT',
       templateType: 'wanderlux-v1',
@@ -1328,7 +1328,7 @@ describe('POST /api/travel/trips/:id/landing-page', () => {
     ]);
   });
 
-  test('idempotent â€” returns existing page (200) when already linked, does not create', async () => {
+  test('idempotent — returns existing page (200) when already linked, does not create', async () => {
     const existingPage = {
       id: 55, slug: 'trip-bali2026', tripId: 100, status: 'PUBLISHED',
     };
@@ -1455,9 +1455,9 @@ describe('DELETE /api/travel/trips/:id/landing-page', () => {
 
 // -----------------------------------------------------------------------------
 // Pending registrations (Phase 5 hybrid architecture)
-//   GET  /trips/:id/registrations            â€” list (with ?status filter)
-//   POST /trips/:id/registrations/:rid/approve â€” transactional conversion
-//   POST /trips/:id/registrations/:rid/reject  â€” soft reject
+//   GET  /trips/:id/registrations            — list (with ?status filter)
+//   POST /trips/:id/registrations/:rid/approve — transactional conversion
+//   POST /trips/:id/registrations/:rid/reject  — soft reject
 // -----------------------------------------------------------------------------
 
 describe('GET /api/travel/trips/:id/registrations', () => {
@@ -1526,7 +1526,7 @@ describe('GET /api/travel/trips/:id/registrations', () => {
 });
 
 describe('POST /api/travel/trips/:id/registrations/:rid/approve', () => {
-  test('OTP_VERIFIED draft converts: creates TripParticipant{applicationStatus="approved"} + draft â†’ CONVERTED, transactionally', async () => {
+  test('OTP_VERIFIED draft converts: creates TripParticipant{applicationStatus="approved"} + draft → CONVERTED, transactionally', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
     prisma.pendingTripRegistration.findFirst.mockResolvedValue({
       id: 9001, tripId: 100, tenantId: 1, status: 'OTP_VERIFIED',
@@ -1546,7 +1546,7 @@ describe('POST /api/travel/trips/:id/registrations/:rid/approve', () => {
     const res = await request(makeApp())
       .post('/api/travel/trips/100/registrations/9001/approve')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ reviewNotes: 'Looks good â€” approved.' });
+      .send({ reviewNotes: 'Looks good — approved.' });
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
@@ -1566,7 +1566,7 @@ describe('POST /api/travel/trips/:id/registrations/:rid/approve', () => {
         passportNumber: 'M1234567',
         applicationStatus: 'approved',
         reviewedById: 7,
-        reviewNotes: 'Looks good â€” approved.',
+        reviewNotes: 'Looks good — approved.',
         consentCapturedAt: expect.any(Date),
       }),
     });
@@ -1640,10 +1640,13 @@ describe('POST /api/travel/trips/:id/registrations/:rid/approve', () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     const email = sendEmailMock.mock.calls[0][0];
     expect(email.text).not.toContain('http://localhost:5173/pay/');
-    expect(email.html).toContain('Click here for payment');
+    expect(email.text).toContain('Click here to proceed for payment:');
+    expect(email.html).toContain('Click here to proceed for payment');
     expect(email.html).toContain('href="http://localhost:5173/pay/');
+    expect(email.html).not.toContain('display:inline-block');
+    expect(email.html).not.toContain('background:#4f46e5');
   });
-  test('DRAFT (no OTP yet) can be approved â€” OTP gate relaxed for operator approvals', async () => {
+  test('DRAFT (no OTP yet) can be approved — OTP gate relaxed for operator approvals', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
     prisma.pendingTripRegistration.findFirst.mockResolvedValue({
       id: 9001, tripId: 100, tenantId: 1, status: 'DRAFT',
@@ -1682,7 +1685,7 @@ describe('POST /api/travel/trips/:id/registrations/:rid/approve', () => {
     });
   });
 
-  test('CONVERTED draft cannot be re-approved â†’ 409 INVALID_STATE', async () => {
+  test('CONVERTED draft cannot be re-approved → 409 INVALID_STATE', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
     prisma.pendingTripRegistration.findFirst.mockResolvedValue({
       id: 9001, tripId: 100, tenantId: 1, status: 'CONVERTED',
@@ -1761,7 +1764,7 @@ describe('POST /api/travel/trips/:id/registrations/:rid/reject', () => {
     expect(prisma.pendingTripRegistration.update).not.toHaveBeenCalled();
   });
 
-  test('CONVERTED draft cannot be rejected â†’ 409 INVALID_STATE', async () => {
+  test('CONVERTED draft cannot be rejected → 409 INVALID_STATE', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
     prisma.pendingTripRegistration.findFirst.mockResolvedValue({
       id: 9003, tripId: 100, tenantId: 1, status: 'CONVERTED', convertedToParticipantId: 4242,

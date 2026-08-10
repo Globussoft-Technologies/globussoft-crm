@@ -13,7 +13,7 @@
  *     surfaces a friendly toast.
  *   - Filter dropdown changes the fetch URL (status query param).
  *   - "Upcoming only" toggle switches to the /upcoming endpoint.
- *   - Pagination Next updates the offset query param.
+ *   - No pagination footer renders; the list stays on a single visible page.
  *
  * Mock stability: useNotify and fetchApi mocks are stable references
  * per CLAUDE.md feedback rule (fresh refs in useCallback / useEffect
@@ -69,7 +69,7 @@ const SAMPLE_STAFF = [
 function defaultFetchImpl(rows = SAMPLE_ROWS) {
   return (url, opts) => {
     if (url.startsWith('/api/travel/webcheckins?')) {
-      return Promise.resolve({ webcheckins: rows, total: rows.length, limit: 50, offset: 0 });
+      return Promise.resolve({ webcheckins: rows, total: rows.length, limit: 200, offset: 0 });
     }
     if (url === '/api/travel/webcheckins/upcoming') {
       return Promise.resolve({ webcheckins: rows.filter(r => r.status === 'pending' || r.status === 'reminded'), total: 1 });
@@ -251,64 +251,64 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     });
   });
 
-  it('scrolling the queue loads the next page with offset=50', async () => {
-    const firstPage = Array.from({ length: 50 }, (_, i) => ({
-      id: i + 1, pnr: `PNR${i}`, airlineCode: '6E', flightNumber: `6E-${100 + i}`,
-      departureAt: '2026-06-01T10:30:00.000Z',
-      windowOpenAt: '2026-05-31T10:30:00.000Z',
-      passengerName: `Passenger ${i}`, status: 'pending',
-      boardingPassUrl: null, deliveredAt: null, assignedAgentId: null,
-    }));
-    const secondPage = Array.from({ length: 20 }, (_, i) => ({
-      id: 100 + i, pnr: `PNR${50 + i}`, airlineCode: '6E', flightNumber: `6E-${150 + i}`,
-      departureAt: '2026-06-02T10:30:00.000Z',
-      windowOpenAt: '2026-06-01T10:30:00.000Z',
-      passengerName: `Passenger ${50 + i}`, status: 'pending',
-      boardingPassUrl: null, deliveredAt: null, assignedAgentId: null,
-    }));
-    fetchApiMock.mockImplementation((url) => {
-      if (url.startsWith('/api/travel/webcheckins?')) {
-        return Promise.resolve({
-          webcheckins: url.includes('offset=50') ? secondPage : firstPage,
-          total: 120,
-          limit: 50,
-          offset: url.includes('offset=50') ? 50 : 0,
-        });
-      }
-      if (url === '/api/staff') return Promise.resolve(SAMPLE_STAFF);
-      return Promise.resolve({});
-    });
+  it('table width shrinks to content instead of leaving blank horizontal runway', async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
     renderPage();
-    await screen.findByText('PNR0');
+    await screen.findByText('ABC123');
+
+    const table = document.querySelector('table.webcheckins-table');
+    expect(table).toBeTruthy();
+    expect(table.style.width).toBe('max-content');
+    expect(table.style.minWidth).toBe('');
+  });
+  it('keeps the scroll wrapper shrink-wrapped while preserving horizontal overflow', async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
+    renderPage();
+    await screen.findByText('ABC123');
 
     const scrollArea = screen.getByTestId('webcheckins-table-scroll');
-    Object.defineProperties(scrollArea, {
-      scrollTop: { value: 728, writable: true, configurable: true },
-      clientHeight: { value: 400, writable: true, configurable: true },
-      scrollHeight: { value: 800, writable: true, configurable: true },
-    });
-    fireEvent.scroll(scrollArea);
+    expect(scrollArea.style.display).toBe('inline-block');
+    expect(scrollArea.style.minWidth).toBe('100%');
+    expect(scrollArea.style.overflowX).toBe('auto');
+  });
+  it('does not render pagination controls', async () => {
+    fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
+    renderPage();
+    await screen.findByText('ABC123');
 
-    await waitFor(() => {
-      const nextCall = fetchApiMock.mock.calls.find(
-        ([u]) => typeof u === 'string' && u.includes('offset=50'),
-      );
-      expect(nextCall).toBeTruthy();
-    });
+    expect(screen.queryByRole('button', { name: /Next page/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Previous page/i })).toBeNull();
   });
 
-  // ─── Extended coverage (2026-05-26 test-cron) ────────────────────
-  //
-  // These extend to cover deliver-disabled-after-delivered,
-  // declined-confirm path, reassign PATCH (assign + unassign), upload
-  // error, /api/staff fetch failure, fetchApi catch (non-401), invalid
-  // dates rendering "—", boarding-pass View link, status-filter
-  // disabled-during-upcoming, and pagination range display.
 
-  it('renders status badges for pending and done enum values', async () => {
+  it('renders statuses for multiple rows', async () => {
     const allStatusRows = [
-      { id: 1, pnr: 'P1', airlineCode: '6E', flightNumber: '6E-1', departureAt: '2026-06-01T10:30:00.000Z', windowOpenAt: '2026-05-31T10:30:00.000Z', passengerName: 'A', status: 'pending', boardingPassUrl: null, deliveredAt: null, assignedAgentId: null },
-      { id: 2, pnr: 'P2', airlineCode: '6E', flightNumber: '6E-2', departureAt: '2026-06-01T10:30:00.000Z', windowOpenAt: '2026-05-31T10:30:00.000Z', passengerName: 'B', status: 'done', boardingPassUrl: null, deliveredAt: null, assignedAgentId: null },
+      {
+        id: 1,
+        pnr: 'P1',
+        airlineCode: '6E',
+        flightNumber: '6E-1',
+        departureAt: '2026-06-01T10:30:00.000Z',
+        windowOpenAt: '2026-05-31T10:30:00.000Z',
+        passengerName: 'A',
+        status: 'pending',
+        boardingPassUrl: null,
+        deliveredAt: null,
+        assignedAgentId: null,
+      },
+      {
+        id: 2,
+        pnr: 'P2',
+        airlineCode: '6E',
+        flightNumber: '6E-2',
+        departureAt: '2026-06-01T10:30:00.000Z',
+        windowOpenAt: '2026-05-31T10:30:00.000Z',
+        passengerName: 'B',
+        status: 'done',
+        boardingPassUrl: null,
+        deliveredAt: null,
+        assignedAgentId: null,
+      },
     ];
     fetchApiMock.mockImplementation(defaultFetchImpl(allStatusRows));
     renderPage();
@@ -484,7 +484,7 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     });
   });
 
-  it('scrolling the queue loads the next page and appends more rows', async () => {
+  it('scrolling the queue does not request another page', async () => {
     const manyRows = Array.from({ length: 50 }, (_, i) => ({
       id: i + 1, pnr: `RNG${i}`, airlineCode: '6E', flightNumber: `6E-${100 + i}`,
       departureAt: '2026-06-01T10:30:00.000Z',
@@ -494,7 +494,7 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     }));
     fetchApiMock.mockImplementation((url) => {
       if (url.startsWith('/api/travel/webcheckins?')) {
-        return Promise.resolve({ webcheckins: manyRows, total: 120, limit: 50, offset: 0 });
+        return Promise.resolve({ webcheckins: manyRows, total: 120, limit: 200, offset: 0 });
       }
       if (url === '/api/staff') return Promise.resolve(SAMPLE_STAFF);
       return Promise.resolve({});
@@ -503,18 +503,14 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     await screen.findByText('RNG0');
 
     const scrollArea = screen.getByTestId('webcheckins-table-scroll');
-    Object.defineProperties(scrollArea, {
-      scrollTop: { value: 728, writable: true, configurable: true },
-      clientHeight: { value: 400, writable: true, configurable: true },
-      scrollHeight: { value: 800, writable: true, configurable: true },
-    });
     fireEvent.scroll(scrollArea);
 
     await waitFor(() => {
-      const nextCall = fetchApiMock.mock.calls.find(
-        ([u]) => typeof u === 'string' && u.includes('offset=50'),
+      const listCalls = fetchApiMock.mock.calls.filter(
+        ([u]) => typeof u === 'string' && u.startsWith('/api/travel/webcheckins?'),
       );
-      expect(nextCall).toBeTruthy();
+      expect(listCalls).toHaveLength(1);
     });
   });
+
 });

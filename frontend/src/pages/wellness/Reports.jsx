@@ -85,7 +85,7 @@ function ReportTableShell({ scrollRef, sentinelRef, loadingMore, hasMore, childr
 export default function Reports() {
   const navigate = useNavigate();
   const [tab, setTab] = useState('pnl');
-  // Reports require a window â€” opt out of "All time" and default to last30
+  // Reports require a window — opt out of "All time" and default to last30
   // (matches the prior 30-day default).
   const [filter, setFilter] = useState({ preset: 'last30', start: '', end: '' });
   const [from, to] = resolveDateRangeYmd(filter);
@@ -93,7 +93,7 @@ export default function Reports() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
-  // #227: a single in-flight flag covers all export buttons â€” clicking one
+  // #227: a single in-flight flag covers all export buttons — clicking one
   // disables the others for the same tab while we wait, mirroring the UX of
   // the prescription-PDF button in PatientDetail.jsx.
   const [exporting, setExporting] = useState(null); // 'csv' | 'xlsx' | 'pdf' | null
@@ -125,7 +125,7 @@ export default function Reports() {
   };
 
   const load = ({ reset = false } = {}) => {
-    if (!from || !to) return; // 'custom' preset with no dates yet â€” skip fetch
+    if (!from || !to) return; // 'custom' preset with no dates yet — skip fetch
     const requestId = ++requestSeqRef.current;
     if (reset) {
       resetReportState();
@@ -217,7 +217,7 @@ export default function Reports() {
     return () => observer.disconnect();
   }, [loading, loadingMore, hasMore, tab, from, to]);
 // #227: export downloader. We use raw fetch so we can stream the binary
-  // body into a blob URL â€” fetchApi assumes JSON. Same pattern used by the
+  // body into a blob URL — fetchApi assumes JSON. Same pattern used by the
   // RxDetailModal "Download PDF" button in PatientDetail.jsx.
   const downloadExport = async (format) => {
     if (!from || !to) {
@@ -248,7 +248,7 @@ export default function Reports() {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      // Same 60s revoke as the Rx download â€” gives the browser time to
+      // Same 60s revoke as the Rx download — gives the browser time to
       // actually persist the file before we drop the reference.
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
     } catch (err) {
@@ -265,7 +265,7 @@ export default function Reports() {
           <BarChart3 size={24} /> Reports
         </h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Profit, contribution, and team performance â€” filterable by date.
+          Profit, contribution, and team performance — filterable by date.
         </p>
       </header>
 
@@ -286,7 +286,7 @@ export default function Reports() {
         <DateRangeFilter value={filter} onChange={setFilter} label={null} includeAllOption={false} />
       </div>
 
-      {/* #227: export bar â€” both buttons disabled while either is in flight, and
+      {/* #227: export bar — both buttons disabled while either is in flight, and
           while the JSON load is still in flight (no point exporting an empty
           tab the user hasn't seen yet). */}
       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginBottom: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -463,14 +463,14 @@ function ProTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
           </colgroup>
           {/* #236: drop the orthogonal RBAC role column (it always says USER for
               doctors/professionals/etc) and surface wellnessRole as the primary
-              "Role" instead â€” that's the meaningful one for clinics. */}
+              "Role" instead — that's the meaningful one for clinics. */}
           <thead>
             <tr>{headers.map((h, i) => <th key={h} style={{ ...STICKY_TH_STYLE, ...th, width: colWidths[i], textAlign: i > 1 ? 'right' : 'left' }}>{h}</th>)}</tr>
           </thead>
           <tbody>
             {/* #637: per-practitioner avatar with hashed colour so each name
                 is visually distinct in the staff column. The colour is
-                deterministic â€” same name â†’ same swatch across pages. */}
+                deterministic — same name → same swatch across pages. */}
             {rows.map((r) => (
               <tr key={r.id}>
                 <td style={{ ...td, width: colWidths[0] }}>
@@ -479,7 +479,7 @@ function ProTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
                     <span>{r.name}</span>
                   </span>
                 </td>
-                <td style={{ ...td, width: colWidths[1], textTransform: 'capitalize' }}>{r.wellnessRole || r.role || 'â€”'}</td>
+                <td style={{ ...td, width: colWidths[1], textTransform: 'capitalize' }}>{r.wellnessRole || r.role || '—'}</td>
                 <td style={{ ...tdR, width: colWidths[2] }}>{r.visits}</td>
                 <td style={{ ...tdR, width: colWidths[3] }}>{formatMoney(r.revenue)}</td>
               </tr>
@@ -558,7 +558,7 @@ function LocTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
 }
 
 function AttTable({ data, scrollRef, sentinelRef, loadingMore, hasMore }) {
-  // #156: defensive defaults â€” if the API ever returns a partial response (e.g.
+  // #156: defensive defaults — if the API ever returns a partial response (e.g.
   // missing totals or rows), render "No data" instead of crashing the whole page
   // on `undefined.toLocaleString()`. Reproducer wasn't found in dry-runs, but
   // the cost of guarding is zero.
@@ -607,11 +607,11 @@ const tableStyle = { width: '100%', borderCollapse: 'collapse', tableLayout: 'fi
 const th = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', textOverflow: 'ellipsis' };
 const td = { padding: '0.65rem 1rem', fontSize: '0.85rem', borderBottom: '1px solid rgba(255,255,255,0.04)', overflow: 'hidden', textOverflow: 'ellipsis', wordBreak: 'break-word' };
 // #602: right-aligned cells are always numeric / currency / count in this
-// page's report tables. Forbid mid-number wrap (`â‚¹1,2\n34,567` breaks
+// page's report tables. Forbid mid-number wrap (`₹1,2\n34,567` breaks
 // copy-paste + CSV alignment) and use tabular-nums so digit columns line up.
 // wordBreak overrides the inherited break-word from `td`.
 const tdR = { ...td, textAlign: 'right', whiteSpace: 'nowrap', wordBreak: 'normal', fontVariantNumeric: 'tabular-nums' };
-// #227: export buttons sit next to the date picker â€” wait state shows a
+// #227: export buttons sit next to the date picker — wait state shows a
 // spinner and dims the button without removing it from the layout.
 const exportBtn = (busy) => ({
   display: 'inline-flex', alignItems: 'center', gap: '0.35rem',

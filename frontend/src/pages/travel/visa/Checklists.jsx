@@ -12,10 +12,10 @@
  * Replaces the former Phase-3 SHELL. Read for ADMIN/MANAGER/USER; create/edit/
  * delete are ADMIN/MANAGER (enforced server-side).
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { ClipboardList, Plus, Trash2, ArrowLeft, Receipt, X } from 'lucide-react';
-import { fetchApi } from '../../../utils/api';
+import { ClipboardList, Plus, Trash2, ArrowLeft, Receipt, X, Download, Upload, FileSpreadsheet } from 'lucide-react';
+import { fetchApi, getAuthToken } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 
 const APPLICATION_TYPES = [
@@ -48,7 +48,23 @@ const primaryBtn = {
   color: '#fff', fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer',
 };
 
+const secondaryBtn = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0.5rem 1rem',
+  borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--surface-color)',
+  color: 'var(--text-primary)', fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer',
+};
+
 const EMPTY_FORM = { applicationType: 'tourist', destinationCountry: '', docType: '', required: true };
+const SOURCE_KIND_OPTIONS = [
+  { value: 'consulate', label: 'Consulate' },
+  { value: 'vfs', label: 'VFS' },
+  { value: 'pdf', label: 'PDF' },
+  { value: 'image', label: 'Image' },
+  { value: 'manual', label: 'Manual' },
+  { value: 'other', label: 'Other' },
+];
+
+const EMPTY_SOURCE_FORM = { applicationType: 'tourist', destinationCountry: '', sourceName: '', sourceUrl: '', sourceKind: 'consulate', notes: '' };
 
 export default function VisaChecklists() {
   const notify = useNotify();
@@ -57,6 +73,14 @@ export default function VisaChecklists() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [filterType, setFilterType] = useState('');
+  const importInputRef = useRef(null);
+  const [importFile, setImportFile] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState(null);
+  const [sources, setSources] = useState([]);
+  const [latestSnapshot, setLatestSnapshot] = useState(null);
+  const [sourceForm, setSourceForm] = useState(EMPTY_SOURCE_FORM);
+  const [sourceSaving, setSourceSaving] = useState(false);
   // FR-5.2 — the checklist admin page extends to manage quotation templates
   // too. A tab toggles between the two surfaces.
   const [tab, setTab] = useState('checklists');
@@ -66,6 +90,8 @@ export default function VisaChecklists() {
     try {
       const data = await fetchApi('/api/travel/visa/checklists', { silent: true });
       const list = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+      setSources(Array.isArray(data?.sources) ? data.sources : []);
+      setLatestSnapshot(data?.latestSnapshot || null);
       setItems(list);
     } catch (e) {
       notify.error(e?.message || 'Failed to load checklist templates');
@@ -75,6 +101,61 @@ export default function VisaChecklists() {
   }, [notify]);
 
   useEffect(() => { load(); }, [load]);
+  const downloadTemplate = async (format) => {
+    try {
+      const ext = format === 'xlsx' ? 'xlsx' : 'csv';
+      const token = getAuthToken();
+      const response = await fetch('/api/travel/visa/checklists/import-template?format=' + ext, {
+        headers: token ? { Authorization: 'Bearer ' + token } : undefined,
+      });
+      if (!response.ok) throw new Error('Failed to download ' + ext.toUpperCase() + ' template');
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'travel-visa-checklists-template.' + ext;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      notify.error(err?.message || 'Failed to download template');
+    }
+  };
+
+  const handleImport = async () => {
+    if (!importFile) {
+      notify.error('Choose a CSV or Excel file first');
+      return;
+    }
+    setImporting(true);
+    try {
+      const token = getAuthToken();
+      const formData = new FormData();
+      formData.append('file', importFile);
+      const response = await fetch('/api/travel/visa/checklists/import.csv', {
+        method: 'POST',
+        headers: token ? { Authorization: 'Bearer ' + token } : undefined,
+        body: formData,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error || 'Import failed');
+      setImportSummary(payload);
+      setImportFile(null);
+      if (importInputRef.current) importInputRef.current.value = "";
+      await load();
+      const summary = 'Imported ' + (payload.imported || 0) + ', updated ' + (payload.updated || 0) + ', skipped ' + (payload.skipped || 0);
+      if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+        notify.error(summary + '. First error row ' + payload.errors[0].rowNumber + ': ' + payload.errors[0].reason);
+      } else {
+        notify.success(summary);
+      }
+    } catch (err) {
+      notify.error(err?.message || 'Import failed');
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const addItem = async (e) => {
     e.preventDefault();
@@ -129,6 +210,61 @@ export default function VisaChecklists() {
     }
   };
 
+
+  const addSource = async (e) => {
+    e.preventDefault();
+    if (!sourceForm.sourceName.trim() || !sourceForm.sourceUrl.trim()) {
+      notify.error('Source name and URL are required');
+      return;
+    }
+    setSourceSaving(true);
+    try {
+      const created = await fetchApi('/api/travel/visa/checklists/sources', {
+        method: 'POST',
+        body: JSON.stringify({
+          applicationType: sourceForm.applicationType,
+          destinationCountry: sourceForm.destinationCountry.trim(),
+          sourceName: sourceForm.sourceName.trim(),
+          sourceUrl: sourceForm.sourceUrl.trim(),
+          sourceKind: sourceForm.sourceKind,
+          notes: sourceForm.notes.trim(),
+        }),
+      });
+      setSources((prev) => [...prev, created]);
+      setSourceForm(EMPTY_SOURCE_FORM);
+      notify.success('Source added');
+      await load();
+    } catch (err) {
+      notify.error(err?.message || 'Failed to add source');
+    } finally {
+      setSourceSaving(false);
+    }
+  };
+
+  const toggleSourceActive = async (source) => {
+    const next = !source.isActive;
+    setSources((prev) => prev.map((item) => (item.id === source.id ? { ...item, isActive: next } : item)));
+    try {
+      if (next) {
+        await fetchApi(`/api/travel/visa/checklists/sources/${source.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ isActive: true }),
+          silent: true,
+        });
+        notify.success('Source restored');
+      } else {
+        await fetchApi(`/api/travel/visa/checklists/sources/${source.id}`, {
+          method: 'DELETE',
+          silent: true,
+        });
+        notify.success('Source archived');
+      }
+      await load();
+    } catch (err) {
+      setSources((prev) => prev.map((item) => (item.id === source.id ? { ...item, isActive: source.isActive } : item)));
+      notify.error(err?.message || 'Failed to update source');
+    }
+  };
   const filtered = filterType ? items.filter((i) => i.applicationType === filterType) : items;
   const groups = {};
   for (const it of filtered) {
@@ -136,6 +272,12 @@ export default function VisaChecklists() {
     (groups[key] = groups[key] || []).push(it);
   }
   const groupKeys = Object.keys(groups).sort();
+  const sourceGroups = {};
+  for (const source of sources) {
+    const key = `${source.applicationType}|||${source.destinationCountry}`;
+    (sourceGroups[key] = sourceGroups[key] || []).push(source);
+  }
+  const sourceGroupKeys = Object.keys(sourceGroups).sort();
 
   return (
     <div data-testid="visa-checklists" style={{ padding: 24, maxWidth: 1000, margin: '0 auto', animation: 'fadeIn 0.4s ease-out' }}>
@@ -185,6 +327,154 @@ export default function VisaChecklists() {
 
       {tab === 'checklists' && (
         <>
+      <div style={{ ...card, marginBottom: 16, display: "grid", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
+          <FileSpreadsheet size={16} aria-hidden /> Bulk import
+        </div>
+        <div style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>
+          Download the template, fill it in, then import rows in CSV or Excel format.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" onClick={() => downloadTemplate("csv")} style={secondaryBtn}>
+            <Download size={14} aria-hidden /> CSV template
+          </button>
+          <button type="button" onClick={() => downloadTemplate("xlsx")} style={secondaryBtn}>
+            <Download size={14} aria-hidden /> XLSX template
+          </button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, alignItems: "end" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+            Import file
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+              style={inputStyle}
+            />
+          </label>
+          <button type="button" onClick={handleImport} disabled={importing || !importFile} style={{ ...primaryBtn, opacity: importing || !importFile ? 0.6 : 1 }}>
+            <Upload size={14} aria-hidden /> {importing ? "Importing..." : "Import rows"}
+          </button>
+        </div>
+        {importSummary && (
+          <div style={{ ...card, padding: "0.9rem 1rem", background: "var(--input-bg)", borderRadius: 10 }}>
+            <div style={{ fontSize: "0.78rem", fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 4 }}>
+              Last import
+            </div>
+            <div style={{ color: "var(--text-secondary)", fontSize: "0.88rem", lineHeight: 1.5 }}>
+              Imported {importSummary.imported || 0}, updated {importSummary.updated || 0}, skipped {importSummary.skipped || 0}.
+              {Array.isArray(importSummary.errors) && importSummary.errors.length > 0 ? (" First error row " + importSummary.errors[0].rowNumber + ": " + importSummary.errors[0].reason) : ""}
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={{ ...card, marginBottom: 16, display: 'grid', gap: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700 }}>
+              Source library
+            </div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              Keep the official consulate, VFS, PDF, and image references that back each checklist.
+            </div>
+          </div>
+          {latestSnapshot && (
+            <div style={{ ...card, padding: '0.8rem 1rem', background: 'var(--input-bg)', borderRadius: 10, minWidth: 220 }}>
+              <div style={{ fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 4 }}>
+                Latest snapshot
+              </div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', lineHeight: 1.5 }}>
+                Version {latestSnapshot.versionNumber || 0} - {latestSnapshot.itemCount || 0} items - {latestSnapshot.sourceCount || 0} sources
+                {latestSnapshot.createdAt ? ' - ' + new Date(latestSnapshot.createdAt).toLocaleString() : ''}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <form onSubmit={addSource} style={{ display: 'grid', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              Visa type
+              <select value={sourceForm.applicationType} onChange={(e) => setSourceForm({ ...sourceForm, applicationType: e.target.value })} style={inputStyle}>
+                {APPLICATION_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              Destination
+              <input type="text" value={sourceForm.destinationCountry} onChange={(e) => setSourceForm({ ...sourceForm, destinationCountry: e.target.value })} style={inputStyle} />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              Source name
+              <input type="text" value={sourceForm.sourceName} onChange={(e) => setSourceForm({ ...sourceForm, sourceName: e.target.value })} style={inputStyle} />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              Source URL
+              <input type="url" value={sourceForm.sourceUrl} onChange={(e) => setSourceForm({ ...sourceForm, sourceUrl: e.target.value })} style={inputStyle} />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              Source kind
+              <select value={sourceForm.sourceKind} onChange={(e) => setSourceForm({ ...sourceForm, sourceKind: e.target.value })} style={inputStyle}>
+                {SOURCE_KIND_OPTIONS.map((kind) => <option key={kind.value} value={kind.value}>{kind.label}</option>)}
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.78rem', color: 'var(--text-secondary)', gridColumn: '1 / -1' }}>
+              Notes
+              <textarea value={sourceForm.notes} onChange={(e) => setSourceForm({ ...sourceForm, notes: e.target.value })} rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
+            </label>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button type="submit" disabled={sourceSaving} style={{ ...primaryBtn, opacity: sourceSaving ? 0.6 : 1 }}>
+              <Upload size={14} aria-hidden /> {sourceSaving ? 'Saving...' : 'Add source'}
+            </button>
+          </div>
+        </form>
+
+        {sourceGroupKeys.length === 0 ? (
+          <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No source entries yet.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {sourceGroupKeys.map((key) => {
+              const rows = sourceGroups[key];
+              const [type, country] = key.split('|||');
+              return (
+                <div key={key} style={{ border: '1px solid var(--border-color)', borderRadius: 12, padding: '0.8rem 0.9rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <span style={{ padding: '0.2rem 0.6rem', borderRadius: 999, fontSize: '0.78rem', fontWeight: 600, background: 'var(--input-bg)', color: 'var(--primary-color, var(--accent-color))', border: '1px solid var(--border-color)' }}>
+                      {TYPE_LABEL[type] || type}
+                    </span>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>→ {country}</span>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginLeft: 'auto' }}>{rows.length} source{rows.length === 1 ? '' : 's'}</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    {rows.map((source) => (
+                      <div key={source.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 1fr) auto', gap: 10, alignItems: 'center', padding: '0.55rem 0', borderTop: '1px solid var(--border-color)', opacity: source.isActive ? 1 : 0.55 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                            <span style={{ color: 'var(--text-primary)', fontWeight: 600, minWidth: 0 }}>{source.sourceName}</span>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', padding: '0.16rem 0.45rem', borderRadius: 999, border: '1px solid var(--border-color)' }}>{source.sourceKind}</span>
+                            <span style={{ fontSize: '0.72rem', color: source.isActive ? '#16a34a' : 'var(--text-secondary)' }}>{source.isActive ? 'Active' : 'Archived'}</span>
+                          </div>
+                          <a href={source.sourceUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', wordBreak: 'break-word' }}>
+                            {source.sourceUrl}
+                          </a>
+                          {source.notes ? <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: 2 }}>{source.notes}</div> : null}
+                        </div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+                          {source.destinationCountry}
+                        </div>
+                        <button type="button" onClick={() => toggleSourceActive(source)} style={{ ...secondaryBtn, justifySelf: 'end', borderColor: source.isActive ? 'rgba(239,68,68,0.35)' : 'rgba(34,197,94,0.35)', color: source.isActive ? '#ef4444' : '#16a34a' }}>
+                          {source.isActive ? 'Archive' : 'Restore'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
       {/* Add row */}
       <form onSubmit={addItem} style={{ ...card, marginBottom: 16, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
@@ -305,7 +595,7 @@ export default function VisaChecklists() {
   );
 }
 
-// ── Quotation templates admin (FR-5.2) ────────────────────────────────
+// ── Quotation templates admin (FR-5.2) ─────────────────────────────────────────────────────────────
 // Curated per-visa-type quotation templates. Each template carries a set of
 // { label, amount } line items (amount may be negative for credits, e.g.
 // "Credit: free entry diagnostic"). Advisors pick one to auto-fill a quote.

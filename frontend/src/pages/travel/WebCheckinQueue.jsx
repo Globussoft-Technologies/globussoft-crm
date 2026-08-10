@@ -331,9 +331,9 @@ export default function WebCheckinQueue() {
           background: "var(--surface-color)",
           borderRadius: 8,
           border: "1px solid var(--border-color)",
-          overflowX: "scroll",
+          overflowX: "auto",
           overflowY: "visible",
-          display: "block",
+          display: "inline-block",
           minWidth: "100%",
         }}
       >
@@ -348,10 +348,8 @@ export default function WebCheckinQueue() {
           <table
             className="stable-table webcheckins-table"
             style={{
-              width: "100%",
-              minWidth: "max(1340px, calc(100% + 1px))",
+              width: "max-content",
               borderCollapse: "collapse",
-              tableLayout: "fixed",
             }}
           >
             <colgroup>

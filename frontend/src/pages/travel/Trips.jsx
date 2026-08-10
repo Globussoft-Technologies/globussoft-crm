@@ -366,9 +366,10 @@ export default function Trips() {
             <div style={{ minWidth: "calc(100% + 1px)" }}>
               <table
                 style={{
-                  width: "max-content",
-                  minWidth: "100%",
+                  width: "100%",
+                  minWidth: 1205,
                   borderCollapse: "collapse",
+                  tableLayout: "fixed",
                 }}
               >
                 <colgroup>

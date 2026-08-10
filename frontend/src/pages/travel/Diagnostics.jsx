@@ -213,12 +213,14 @@ export default function Diagnostics() {
               overflowY: "visible",
             }}
           >
+            <div style={{ minWidth: "calc(100% + 1px)" }}>
             <table
               aria-label="Diagnostics results"
               style={{
-                width: "max-content",
-                minWidth: "calc(100% + 1px)",
+                width: "100%",
+                minWidth: 760,
                 borderCollapse: "collapse",
+                tableLayout: "fixed",
               }}
             >
               <colgroup>
@@ -302,6 +304,7 @@ export default function Diagnostics() {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>

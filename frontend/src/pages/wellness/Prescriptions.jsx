@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   PenTool,
   Search,
@@ -42,40 +42,7 @@ export default function Prescriptions() {
   const [patientQuery, setPatientQuery] = useState('');
   const [patientOptions, setPatientOptions] = useState([]);
   const [patientSearchOpen, setPatientSearchOpen] = useState(false);
-  const [patientSearchLoading, setPatientSearchLoading] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState(null); // {id, name}
-  const searchDebounceRef = useRef(null);
-
-  useEffect(() => {
-    if (!patientSearchOpen) return undefined;
-    const q = patientQuery.trim();
-    // Empty query = show recent patients (server returns ordered list).
-    clearTimeout(searchDebounceRef.current);
-    searchDebounceRef.current = setTimeout(() => {
-      setPatientSearchLoading(true);
-      // Patients list endpoint uses `?q=` (substring match across name /
-      // phone / email — see GET /api/wellness/patients in routes/wellness.js).
-      const url = q
-        ? `/api/wellness/patients?q=${encodeURIComponent(q)}&limit=15`
-        : '/api/wellness/patients?limit=15';
-      fetchApi(url, { silent: true })
-        .then((res) => {
-          // GET /api/wellness/patients returns { patients, total }; older
-          // generic shapes returned a bare array or { items: [...] }.
-          const list = Array.isArray(res)
-            ? res
-            : Array.isArray(res?.patients)
-              ? res.patients
-              : Array.isArray(res?.items)
-                ? res.items
-                : [];
-          setPatientOptions(list);
-        })
-        .catch(() => setPatientOptions([]))
-        .finally(() => setPatientSearchLoading(false));
-    }, 200);
-    return () => clearTimeout(searchDebounceRef.current);
-  }, [patientQuery, patientSearchOpen]);
 
   // ── Prescription list ───────────────────────────────────────────
   const [items, setItems] = useState([]);
@@ -120,6 +87,37 @@ export default function Prescriptions() {
   useEffect(() => { setSkip(0); }, [selectedPatient?.id, limit]);
 
   // ── Per-row PDF download ────────────────────────────────────────
+  const searchablePatients = useMemo(() => {
+    const seen = new Set();
+    return items.reduce((acc, rx) => {
+      const patient = rx?.patient;
+      const id = patient?.id;
+      const name = patient?.name?.trim();
+      if (!id || !name || seen.has(id)) return acc;
+      seen.add(id);
+      acc.push({
+        id,
+        name,
+        phone: patient?.phone || '',
+      });
+      return acc;
+    }, []);
+  }, [items]);
+
+  useEffect(() => {
+    const q = patientQuery.trim().toLowerCase();
+    if (!patientSearchOpen || !q) {
+      setPatientOptions([]);
+      return;
+    }
+    setPatientOptions(
+      searchablePatients.filter((p) => {
+        const haystack = `${p.name} ${p.phone}`.toLowerCase();
+        return haystack.includes(q);
+      }),
+    );
+  }, [patientQuery, patientSearchOpen, searchablePatients]);
+
   const downloadPdf = async (rx) => {
     if (downloadingId) return;
     setDownloadingId(rx.id);
@@ -251,7 +249,6 @@ export default function Prescriptions() {
               setPatientQuery(e.target.value);
               setPatientSearchOpen(true);
             }}
-            onFocus={() => setPatientSearchOpen(true)}
             // Defer blur so the click on a result is registered first.
             onBlur={() => setTimeout(() => setPatientSearchOpen(false), 150)}
             style={{
@@ -304,7 +301,7 @@ export default function Prescriptions() {
                 zIndex: 20,
               }}
             >
-              {patientSearchLoading && (
+              {patientOptions.length === 0 && (
                 <div
                   style={{
                     padding: '0.6rem 0.85rem',
@@ -312,18 +309,7 @@ export default function Prescriptions() {
                     color: 'var(--text-secondary)',
                   }}
                 >
-                  Searching…
-                </div>
-              )}
-              {!patientSearchLoading && patientOptions.length === 0 && (
-                <div
-                  style={{
-                    padding: '0.6rem 0.85rem',
-                    fontSize: '0.85rem',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  No matching patients.
+                  No matching prescriptions.
                 </div>
               )}
               {patientOptions.map((p) => (

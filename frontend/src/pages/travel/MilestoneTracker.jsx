@@ -16,9 +16,10 @@
 //
 // Filter surface mirrors the backend's query-param contract:
 //   - status (pending|partial|paid|overdue|waived) — filter chip strip.
-//   - within (positive int, presets 7|14|30|60|90 days) — window dropdown.
+//   - within / allDates — date dropdown.
 //   - subBrand (tmc|rfu|travelstall|visasure) — dropdown.
-//   - overdueOnly (boolean) — toggle; overrides ?within when truthy.
+//   - overdueOnly (boolean) — toggle; overrides ?within when truthy and
+//     represents past-due unsettled milestones.
 //
 // Decisions:
 //   - Status chips include "All" + the 5 enum values. Clicking "All" clears
@@ -55,10 +56,10 @@ const SUB_BRANDS = [
   { value: "visasure", label: "Visa Sure" },
 ];
 
-// Window presets — backend accepts any positive integer; the prompt named
-// 7 / 14 / 30 / 60 / 90 day presets and we expose those (default 30, the
-// backend's DEFAULT_WITHIN_DAYS).
+// Date presets — "All dates" plus the 7 / 14 / 30 / 60 / 90 day windows
+// (default All dates on the frontend).
 const WINDOWS = [
+  { value: "all", label: "All dates" },
   { value: 7, label: "Next 7 days" },
   { value: 14, label: "Next 14 days" },
   { value: 30, label: "Next 30 days" },
@@ -131,11 +132,12 @@ export default function MilestoneTracker() {
   const [hasMore, setHasMore] = useState(true);
 
   const [status, setStatus] = useState("");
-  const [within, setWithin] = useState(30);
+  const [within, setWithin] = useState("all");
   const [subBrand, setSubBrand] = useState("");
   const [overdueOnly, setOverdueOnly] = useState(false);
   const milestonesRef = useRef([]);
   const offsetRef = useRef(0);
+  const requestIdRef = useRef(0);
   const loadingRef = useRef(false);
   const loadingMoreRef = useRef(false);
   const hasMoreRef = useRef(true);
@@ -144,12 +146,13 @@ export default function MilestoneTracker() {
   const [notified, setNotified] = useState({});
 
   const load = ({ reset = false, targetOffset = null } = {}) => {
+    const requestId = ++requestIdRef.current;
     if (reset) {
       offsetRef.current = 0;
       milestonesRef.current = [];
-      hasMoreRef.current = true;
       setMilestones([]);
-      setHasMore(true);
+      setTotal(0);
+      setHasMore(false);
       setLoading(true);
       loadingRef.current = true;
       loadingMoreRef.current = false;
@@ -160,17 +163,15 @@ export default function MilestoneTracker() {
     }
 
     const nextOffset = targetOffset != null ? targetOffset : (reset ? 0 : offsetRef.current + PAGE_SIZE);
-    offsetRef.current = nextOffset;
-    if (!reset && nextOffset > 0) {
-      hasMoreRef.current = true;
-      setHasMore(true);
-    }
 
+    const isOverdueFilter = status === "overdue" || overdueOnly;
     const qs = new URLSearchParams();
-    if (status) qs.set("status", status);
+    if (status && status !== "overdue") qs.set("status", status);
     if (subBrand) qs.set("subBrand", subBrand);
-    if (overdueOnly) {
+    if (isOverdueFilter) {
       qs.set("overdueOnly", "true");
+    } else if (within === "all") {
+      qs.set("allDates", "true");
     } else {
       qs.set("within", String(within));
     }
@@ -179,11 +180,13 @@ export default function MilestoneTracker() {
     const url = `/api/travel/payment-schedules/upcoming?${qs.toString()}`;
     fetchApi(url)
       .then((d) => {
+        if (requestId !== requestIdRef.current) return;
         const rows = Array.isArray(d?.milestones) ? d.milestones : [];
         const totalRows = Number.isFinite(d?.total) ? d.total : rows.length;
-        milestonesRef.current = rows;
+        offsetRef.current = nextOffset;
+        milestonesRef.current = reset ? rows : [...milestonesRef.current, ...rows];
         hasMoreRef.current = nextOffset + rows.length < totalRows;
-        setMilestones(rows);
+        setMilestones(milestonesRef.current);
         setTotal(totalRows);
         setHasMore(hasMoreRef.current);
         setSummary({
@@ -194,6 +197,7 @@ export default function MilestoneTracker() {
         });
       })
       .catch((err) => {
+        if (requestId !== requestIdRef.current) return;
         if (reset) {
           milestonesRef.current = [];
           offsetRef.current = 0;
@@ -211,6 +215,7 @@ export default function MilestoneTracker() {
         }
       })
       .finally(() => {
+        if (requestId !== requestIdRef.current) return;
         if (reset) {
           setLoading(false);
           loadingRef.current = false;
@@ -232,18 +237,6 @@ export default function MilestoneTracker() {
       if (!loadingRef.current && !loadingMoreRef.current && hasMoreRef.current) {
         load({ reset: false });
       }
-    }
-  };
-
-  const goNext = () => {
-    if (!loadingRef.current && !loadingMoreRef.current && hasMoreRef.current) {
-      load({ reset: false });
-    }
-  };
-
-  const goPrev = () => {
-    if (!loadingRef.current && !loadingMoreRef.current && offsetRef.current > 0) {
-      load({ reset: false, targetOffset: Math.max(0, offsetRef.current - PAGE_SIZE) });
     }
   };
 
@@ -355,7 +348,12 @@ export default function MilestoneTracker() {
               <button
                 key={c.value || "all"}
                 type="button"
-                onClick={() => setStatus(c.value)}
+                onClick={() => {
+                  setStatus(c.value);
+                  if (c.value) {
+                    setOverdueOnly(false);
+                  }
+                }}
                 aria-pressed={active}
                 aria-label={`Filter by status: ${c.label}`}
                 style={{
@@ -373,11 +371,11 @@ export default function MilestoneTracker() {
 
         <select
           value={within}
-          onChange={(e) => setWithin(parseInt(e.target.value, 10))}
+          onChange={(e) => setWithin(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
           style={selectStyle}
           aria-label="Window (days from now)"
-          disabled={overdueOnly}
-          title={overdueOnly ? "Window disabled while 'Overdue only' is active" : "Window (days from now)"}
+          disabled={status === "overdue" || overdueOnly}
+          title={status === "overdue" || overdueOnly ? "Window disabled while overdue filtering is active" : "Window (days from now)"}
         >
           {WINDOWS.map((w) => (
             <option key={w.value} value={w.value}>{w.label}</option>
@@ -408,7 +406,13 @@ export default function MilestoneTracker() {
           <input
             type="checkbox"
             checked={overdueOnly}
-            onChange={(e) => setOverdueOnly(e.target.checked)}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setOverdueOnly(checked);
+              if (checked) {
+                setStatus("");
+              }
+            }}
             aria-label="Overdue only"
           />
           Overdue only
@@ -422,7 +426,7 @@ export default function MilestoneTracker() {
         ) : milestones.length === 0 ? (
           <div style={empty}>No upcoming milestones in this window.</div>
         ) : (
-          <table style={{ width: "100%", minWidth: 1600, borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th style={th}>Invoice #</th>
@@ -443,12 +447,12 @@ export default function MilestoneTracker() {
                     {m.invoiceNum || `#${m.invoiceId}`}
                   </td>
                   <td style={td}>{m.subBrand || "—"}</td>
-                  <td style={td}>
+                  <td style={{ ...td, overflow: "hidden", verticalAlign: "top" }}>
                     {m.contactName || m.contactPhone || m.contactEmail ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        <span style={{ fontWeight: 600 }}>{m.contactName || "Unnamed"}</span>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                        <span style={{ fontWeight: 600, overflowWrap: "anywhere" }}>{m.contactName || "Unnamed"}</span>
                         {(m.contactPhone || m.contactEmail) && (
-                          <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                          <span style={{ fontSize: 12, color: "var(--text-secondary)", overflowWrap: "anywhere" }}>
                             {m.contactPhone || m.contactEmail}
                           </span>
                         )}
@@ -547,31 +551,11 @@ export default function MilestoneTracker() {
           flexWrap: "wrap",
         }}
       >
-        <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-          {total > 0
-            ? `Showing ${Math.min(milestones.length, total).toLocaleString()} of ${total.toLocaleString()}${hasMore ? "" : " - end of table"}`
-            : "No milestones to show"}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button
-            type="button"
-            onClick={goPrev}
-            disabled={offsetRef.current === 0 || loading || loadingMore}
-            aria-label="Previous page"
-            style={pageBtn}
-          >
-            Previous
-          </button>
-          <button
-            type="button"
-            onClick={goNext}
-            disabled={!hasMore || loading || loadingMore}
-            aria-label="Next page"
-            style={pageBtn}
-          >
-            Next
-          </button>
-        </div>
+        {total === 0 && (
+          <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+            No milestones to show
+          </div>
+        )}
       </div>
     </div>
   );
@@ -634,7 +618,8 @@ const th = {
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
 const tableFrame = {
   padding: 0,
-  overflow: "auto",
+  overflowX: "hidden",
+  overflowY: "auto",
   height: "calc(100vh - 360px)",
   minHeight: 520,
   maxHeight: 760,
@@ -677,14 +662,4 @@ const notifyBtn = {
   color: "#fff",
   border: "none",
   whiteSpace: "nowrap",
-};
-const pageBtn = {
-  padding: "6px 12px",
-  borderRadius: 6,
-  border: "1px solid var(--border-color)",
-  background: "var(--surface-color)",
-  color: "var(--text-primary)",
-  fontSize: 13,
-  fontWeight: 600,
-  cursor: "pointer",
 };

@@ -765,8 +765,8 @@ export default function Patients() {
                       </span>
                     )}
                   </td>
-                  <td style={tdStyle}>{p.gender || "â€”"}</td>
-                  <td style={tdStyle}>{p.source || "â€”"}</td>
+                  <td style={tdStyle}>{p.gender || ""}</td>
+                  <td style={tdStyle}>{p.source || "walk-in"}</td>
                   <td style={tdStyle}>
                     {formatDate(p.createdAt)}
                   </td>

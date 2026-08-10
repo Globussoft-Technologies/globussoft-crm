@@ -147,6 +147,7 @@ export default function Payables() {
   const [supplierCategory, setSupplierCategory] = useState("");
   const [dueFrom, setDueFrom] = useState("");
   const [dueTo, setDueTo] = useState("");
+  const today = new Date().toISOString().slice(0, 10);
   const payablesRef = useRef([]);
   const offsetRef = useRef(0);
   const loadingRef = useRef(false);
@@ -267,6 +268,11 @@ export default function Payables() {
   const paidCount = summary.byStatus?.paid || 0;
   const cancelledCount = summary.byStatus?.cancelled || 0;
 
+  const handleRefresh = () => {
+  setDueFrom("");
+  setDueTo("");
+  };
+
   return (
     <div style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
       <header style={{ marginBottom: 16 }}>
@@ -368,17 +374,50 @@ export default function Payables() {
         <input
           type="date"
           value={dueFrom}
-          onChange={(e) => setDueFrom(e.target.value)}
+          max={dueTo || undefined}
+          onChange={(e) => {
+            const value = e.target.value;
+        
+            if (dueTo && value > dueTo) {
+              notify.error("Due From date cannot be after Due To date.");
+              return;
+            }
+        
+            setDueFrom(value);
+          }}
           style={inputStyle}
           aria-label="Due date from"
         />
         <input
           type="date"
           value={dueTo}
-          onChange={(e) => setDueTo(e.target.value)}
+          min={dueFrom || undefined}
+          // max={today}
+          onChange={(e) => {
+            const value = e.target.value;
+        
+            if (dueFrom && value < dueFrom) {
+              notify.error("Due To date cannot be before Due From date.");
+              return;
+            }
+        
+            setDueTo(value);
+          }}
           style={inputStyle}
           aria-label="Due date to"
         />
+        <button
+  type="button"
+  onClick={handleRefresh}
+  style={{
+    ...inputStyle,
+    cursor: "pointer",
+    minWidth: "auto",
+    fontWeight: 600,
+  }}
+>
+  Refresh
+</button>
       </div>
 
       {/* Table */}
@@ -388,16 +427,16 @@ export default function Payables() {
         ) : filtered.length === 0 ? (
           <div style={empty}>No payables found</div>
         ) : (
-          <table style={{ width: "100%", minWidth: 1500, borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th style={th}>Supplier</th>
-                <th style={th}>PO #</th>
-                <th style={th}>Description</th>
-                <th style={th}>Amount</th>
-                <th style={th}>Due date</th>
-                <th style={th}>Status</th>
-                <th style={th}>Days until due</th>
+                <th style={{ ...th, width: "24%" }}>Supplier</th>
+                <th style={{ ...th, width: "13%" }}>PO #</th>
+                <th style={{ ...th, width: "27%" }}>Description</th>
+                <th style={{ ...th, width: "14%" }}>Amount</th>
+                <th style={{ ...th, width: "10%" }}>Due date</th>
+                <th style={{ ...th, width: "10%" }}>Status</th>
+                <th style={{ ...th, width: "12%" }}>Days until due</th>
               </tr>
             </thead>
             <tbody>
@@ -410,7 +449,7 @@ export default function Payables() {
                     style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
                   >
                     <td style={td}>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
                         <strong>{r.supplierName || "—"}</strong>
                         {r.subBrand && (
                           <span
@@ -552,11 +591,21 @@ const th = {
   top: 0,
   zIndex: 3,
   fontWeight: 600,
+  whiteSpace: "normal",
+  overflowWrap: "anywhere",
 };
-const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
+const td = {
+  padding: "10px 12px",
+  fontSize: 14,
+  color: "var(--text-primary)",
+  whiteSpace: "normal",
+  overflowWrap: "anywhere",
+  wordBreak: "break-word",
+};
 const tableFrame = {
   padding: 0,
-  overflow: "auto",
+  overflowX: "hidden",
+  overflowY: "auto",
   height: "calc(100vh - 360px)",
   minHeight: 520,
   maxHeight: 760,

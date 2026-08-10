@@ -439,6 +439,13 @@ const PROJECTIONS = Object.freeze({
     visitId: true,       // back-link FK (when the Rx anchors a visit).
     doctorId: true,      // prescriber FK — medico-legal "who wrote it"
                          // metadata; not PHI on its own.
+    patient: {           // picker needs the linked patient identity.
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+      },
+    },
     // S96 — surface S62's slim-shape PRD additions. Both columns are
     // lifecycle workflow keys (not PHI on their own — they don't reveal
     // what was prescribed, only whether/when the Rx was issued/dispensed).

@@ -6532,8 +6532,9 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
     const customerRegisterParams = new URLSearchParams();
     if (tenant?.slug) customerRegisterParams.set("tenantSlug", tenant.slug);
-    customerRegisterParams.set("name", parentName);
-    customerRegisterParams.set("email", parentEmail);
+    // #1307: do not put PII (name/email/phone/passport) in the redirect URL.
+    // The customer portal can look up the draft via the opaque draftToken
+    // using /api/travel/microsites/public/:publicUuid/draft-summary?token=...
     customerRegisterParams.set("next", "/travel/portal");
     const customerRegisterUrl = `/customer/register?${customerRegisterParams.toString()}`;
 

@@ -20,8 +20,8 @@
  *   - GET /applications empty-state: zero other-brand contacts returns a
  *     stable shape `{ applications: [], total: 0, limit, offset }` —
  *     never hits visaApplication.findMany / count when contact set empty.
- *   - GET /applications/:id 404 NOT_FOUND (no application on this tenant)
- *     vs 404 NOT_VISA_SURE (application exists but its Contact row is missing) vs 400 INVALID_ID. Detail-shape includes contact +
+ *   - GET /applications/:id 404 NOT_FOUND (no application on this tenant
+ *     or its Contact row is missing) vs 400 INVALID_ID. Detail-shape includes contact +
  *     diagnostic + documentChecklist.
  *   - POST /applications validation: MISSING_FIELDS (no contactId / no
  *     applicationType / no destinationCountry), INVALID_APPLICATION_TYPE
@@ -572,15 +572,23 @@ describe('POST /applications ? validation + happy path', () => {
     expect(prisma.visaApplication.create).not.toHaveBeenCalled();
   });
 
-  test('contact exists but is not visasure → 403 NOT_VISA_SURE', async () => {
-    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'other-brand' });
+  test('contact exists with tmc sub-brand → 201 existing contact is accepted', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'tmc' });
+    prisma.visaApplication.create.mockResolvedValue({
+      id: 101, tenantId: 1, contactId: 11, applicationType: 'umrah',
+      destinationCountry: 'SA', status: 'intake',
+      readinessLevel: null, advisorRiskFlag: null, complexCase: false,
+      filedAt: null, decidedAt: null, outcome: null,
+      createdAt: new Date('2026-05-25').toISOString(),
+      updatedAt: new Date('2026-05-25').toISOString(),
+    });
     const res = await request(makeApp())
       .post('/api/travel/visa/applications')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
       .send({ contactId: 11, applicationType: 'umrah', destinationCountry: 'SA' });
-    expect(res.status).toBe(403);
-    expect(res.body).toMatchObject({ code: 'NOT_VISA_SURE' });
-    expect(prisma.visaApplication.create).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ contactId: 11, contactResolution: 'existing' });
+    expect(prisma.visaApplication.create).toHaveBeenCalled();
   });
 
   test('contact exists with visasure sub-brand → 201 existing contact is accepted', async () => {
@@ -792,6 +800,50 @@ describe('POST /applications ? validation + happy path', () => {
         destinationCountry: 'Vietnam',
         tripId: 9001,
         participantId: 501,
+        status: 'intake',
+      },
+    });
+  });
+
+  test('happy path without trip binding creates a tripless application for non-TMC travel', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'rfu' });
+    prisma.passportIdentity.findFirst.mockResolvedValue(null);
+    prisma.visaApplication.create.mockResolvedValue({
+      id: 104, tenantId: 1, contactId: 11, applicationType: 'tourist',
+      destinationCountry: 'Japan', status: 'intake', tripId: null, participantId: null,
+      readinessLevel: null, advisorRiskFlag: null, complexCase: false,
+      filedAt: null, decidedAt: null, outcome: null,
+      createdAt: new Date('2026-05-25').toISOString(),
+      updatedAt: new Date('2026-05-25').toISOString(),
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/visa/applications')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 11,
+        applicationType: 'tourist',
+        destinationCountry: 'Japan',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      id: 104,
+      contactId: 11,
+      tripId: null,
+      participantId: null,
+      contactResolution: 'existing',
+    });
+    expect(prisma.tmcTrip.findFirst).not.toHaveBeenCalled();
+    expect(prisma.tripParticipant.findFirst).not.toHaveBeenCalled();
+    expect(prisma.visaApplication.create.mock.calls[0][0]).toMatchObject({
+      data: {
+        tenantId: 1,
+        contactId: 11,
+        applicationType: 'tourist',
+        destinationCountry: 'Japan',
+        tripId: null,
+        participantId: null,
         status: 'intake',
       },
     });

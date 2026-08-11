@@ -316,7 +316,9 @@ export default function VisaApplications() {
     setFormError(null);
     setCreating(true);
     // Backend /api/contacts doesn't support ?subBrand= today; fetch a
-    // batch and filter client-side. See module header for follow-up note.
+    // batch and filter client-side. Trip linkage is optional, but we
+    // still preload the TMC trip list so school-trip applicants can be
+    // linked to a participant when needed.
     setContactsLoading(true);
     fetchApi('/api/contacts?limit=200')
       .then((res) => {
@@ -427,12 +429,8 @@ export default function VisaApplications() {
       setFormError({ field: 'applicationType', message: 'Application type is required' });
       return;
     }
-    if (!form.tripId) {
-      setFormError({ field: 'tripId', message: 'Trip is required' });
-      return;
-    }
-    if (!form.participantId) {
-      setFormError({ field: 'participantId', message: 'Participant is required' });
+    if (form.tripId && !form.participantId) {
+      setFormError({ field: 'participantId', message: 'Participant is required when linking a trip' });
       return;
     }
     const dest = (form.destinationCountry || '').trim();
@@ -459,8 +457,10 @@ export default function VisaApplications() {
         if ((form.applicantPhone || '').trim()) body.applicantPhone = form.applicantPhone.trim();
         if (form.applicantBirthDate) body.applicantBirthDate = form.applicantBirthDate;
       }
-      body.tripId = parseInt(form.tripId, 10);
-      body.participantId = parseInt(form.participantId, 10);
+      if (form.tripId) {
+        body.tripId = parseInt(form.tripId, 10);
+        body.participantId = parseInt(form.participantId, 10);
+      }
       await fetchApi('/api/travel/visa/applications', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -927,7 +927,7 @@ export default function VisaApplications() {
               )}
 
               <label style={fieldLabel}>
-                Trip
+                Trip linkage (optional)
                 <select
                   data-testid="create-trip-select"
                   value={form.tripId}
@@ -938,9 +938,7 @@ export default function VisaApplications() {
                   <option value="">
                     {tripsLoading
                       ? 'Loading trips...'
-                      : trips.length === 0
-                        ? '(no trips found)'
-                        : 'Select a trip'}
+                      : 'No trip linked'}
                   </option>
                   {trips.map((trip) => (
                     <option key={trip.id} value={trip.id}>
@@ -948,6 +946,9 @@ export default function VisaApplications() {
                     </option>
                   ))}
                 </select>
+                <span style={fieldHintText}>
+                  Leave blank for non-TMC travel, or link a TMC trip now if the applicant is already part of one.
+                </span>
                 {formError?.field === 'tripId' && (
                   <span style={fieldErrorText} role="alert">
                     {formError.message}

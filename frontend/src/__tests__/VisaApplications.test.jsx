@@ -29,16 +29,18 @@
  *      "risk", "complex"). Row with none renders the em-dash fallback.
  *   8. Create-drawer open: clicking "Create Application" opens the drawer
  *      with the 3 required fields (Contact / Application type / Destination
- *      country) and fetches /api/contacts?limit=200 to populate the picker,
- *      show all contacts in the picker.
+ *      country) and fetches /api/contacts?limit=200 to populate the picker.
+ *      The Trip linkage control is optional and still preloads TMC trips
+ *      for school-trip applicants.
  *   9. Form validation — empty destination: client-side gate surfaces
  *      "Destination country is required" inline + does NOT fire POST.
  *  10. Form validation — empty contactId: client-side gate surfaces
  *      "Pick a contact" inline + does NOT fire POST.
  *  11. Submit happy path: POST /api/travel/visa/applications with
  *      contactId (Int) + applicationType + destinationCountry (trimmed)
- *      and the `silent: true` opt (the SUT raises its own targeted
- *      success toast). On 201 → drawer closes + notify.success fires.
+ *      and the `silent: true` opt. When a trip is linked, tripId and
+ *      participantId are included too. On 201 → drawer closes + notify.success
+ *      fires.
  *  12. Backend error mapping: INVALID_DESTINATION → inline error on the
  *      destinationCountry field; NOT_FOUND → inline error on the
  *      contactId field. notify.error fires with the backend message.
@@ -49,7 +51,8 @@
  *          → 200 { applications, total, limit, offset }
  *          | 403 SUB_BRAND_DENIED (handled at fetchApi-level — out of scope)
  *   POST   /api/travel/visa/applications  body:{contactId,applicationType,
- *                                                destinationCountry}
+ *                                                destinationCountry[,tripId,
+ *                                                participantId]}
  *          → 201 created (ADMIN+MANAGER)
  *          | 400 MISSING_FIELDS / INVALID_APPLICATION_TYPE / INVALID_DESTINATION
  *          | 404 NOT_FOUND
@@ -553,6 +556,51 @@ describe('<VisaApplications /> — create drawer', () => {
       // Destination trimmed.
       expect(body.destinationCountry).toBe('Germany');
       // Silent flag to suppress the global fetchApi toast.
+      expect(post[1].silent).toBe(true);
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/Visa application created/i),
+    );
+  });
+
+  it('submit happy path without trip linkage POSTs only the visa fields and leaves tripId/participantId out', async () => {
+    renderPage();
+    await screen.findByText('Riya Sharma');
+    fireEvent.click(screen.getByRole('button', { name: /Create a new visa application/i }));
+    await screen.findByRole('heading', { name: /New Visa Application/i });
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
+    });
+    fireEvent.change(
+      screen.getByLabelText(/Contact/i),
+      { target: { value: '5001' } },
+    );
+    fireEvent.change(
+      screen.getByLabelText(/Application type/i),
+      { target: { value: 'tourist' } },
+    );
+    fireEvent.change(
+      screen.getByLabelText(/Destination country/i),
+      { target: { value: '  Italy  ' } },
+    );
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Create Application/i }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/visa/applications' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.contactId).toBe(5001);
+      expect(typeof body.contactId).toBe('number');
+      expect(body.applicantName).toBeUndefined();
+      expect(body.applicantEmail).toBeUndefined();
+      expect(body.applicantPhone).toBeUndefined();
+      expect(body.tripId).toBeUndefined();
+      expect(body.participantId).toBeUndefined();
+      expect(body.applicationType).toBe('tourist');
+      expect(body.destinationCountry).toBe('Italy');
       expect(post[1].silent).toBe(true);
     });
     expect(notifySuccess).toHaveBeenCalledWith(

@@ -14,8 +14,8 @@
  *   - INVALID_ID: non-numeric :id → 400.
  *   - APPLICATION_NOT_FOUND: no row in {id, tenantId} → 404 (tenant-scoped
  *     lookup catches cross-tenant ids).
- *   - NOT_VISA_SURE: application exists but Contact.subBrand != 'visasure'
- *     → 404 (sub-brand isolation, defense-in-depth).
+ *   - Contact.brand is informational only; non-Visa-Sure contacts still
+ *     return history normally.
  *   - Happy path: 3 CREATE/UPDATE audit rows → returns 3 history entries
  *     in ASC chronological order with parsed details and surfaced
  *     fromStatus/toStatus projections.
@@ -175,26 +175,25 @@ describe('GET /applications/:id/status-history — id resolution', () => {
   });
 });
 
-// ─── NOT_VISA_SURE sub-brand isolation ───────────────────────────────
+// ─── Contact brand agnostic ───────────────────────────────────────────
 
-describe('GET /applications/:id/status-history — sub-brand gate', () => {
-  test('Contact.subBrand != "visasure" → 404 NOT_VISA_SURE', async () => {
+describe('GET /applications/:id/status-history — brand-agnostic load', () => {
+  test('Contact.subBrand != "visasure" → 200 and loads history normally', async () => {
     prisma.visaApplication.findFirst.mockResolvedValue({
       id: 42, contactId: 11,
     });
     prisma.contact.findFirst.mockResolvedValue({
-      id: 11, subBrand: 'tmc-school-trips',
+      id: 11, subBrand: 'tmc',
     });
     const res = await request(makeApp())
       .get('/api/travel/visa/applications/42/status-history')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    expect(res.status).toBe(404);
-    expect(res.body).toMatchObject({ code: 'NOT_VISA_SURE' });
-    // Audit not read — gate trips before the query.
-    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ applicationId: 42, total: 0, history: [] });
+    expect(prisma.auditLog.findMany).toHaveBeenCalled();
   });
 
-  test('Contact missing → 404 NOT_VISA_SURE (defense-in-depth)', async () => {
+  test('Contact missing → 404 NOT_FOUND', async () => {
     prisma.visaApplication.findFirst.mockResolvedValue({
       id: 42, contactId: 11,
     });
@@ -203,7 +202,7 @@ describe('GET /applications/:id/status-history — sub-brand gate', () => {
       .get('/api/travel/visa/applications/42/status-history')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(404);
-    expect(res.body).toMatchObject({ code: 'NOT_VISA_SURE' });
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
   });
 });
 

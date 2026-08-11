@@ -1,4 +1,4 @@
-// Travel CRM — Visa Sure applications endpoints (Phase 3 backend SHELL + CREATE).
+// Travel CRM — Visa applications endpoints (Phase 3 backend SHELL + CREATE).
 //
 // Backend wire-up for the Phase 3 cluster B3 Visa Sure frontend SHELLs:
 //   - frontend/src/pages/travel/visa/Applications.jsx (875c082) — list view
@@ -201,10 +201,11 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
     if (!contact) {
       return { error: { status: 404, body: { error: "Contact not found on this tenant", code: "NOT_FOUND" } } };
     }
-    if (contact.subBrand !== VISA_SUB_BRAND) {
-      return { error: { status: 403, body: { error: "Contact is not a Visa Sure contact", code: "NOT_VISA_SURE" } } };
-    }
-    return { contactId: contact.id, contactMode: "existing" };
+    return {
+      contactId: contact.id,
+      contactMode: "existing",
+      contactSubBrand: contact.subBrand || null,
+    };
   }
 
   const applicantName = normalizeApplicantName(body.applicantName);
@@ -260,7 +261,7 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
   const candidates = candidateWhere.OR && candidateWhere.OR.length > 0
     ? await prisma.contact.findMany({
         where: candidateWhere,
-        select: { id: true, name: true, email: true, phone: true, birthDate: true },
+        select: { id: true, name: true, email: true, phone: true, birthDate: true, subBrand: true },
         take: 20,
       })
     : [];
@@ -276,7 +277,13 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
     })
     || candidates.find((c) => applicantEmail && c.email && c.email.toLowerCase() === applicantEmail);
 
-  if (matched) return { contactId: matched.id, contactMode: "matched" };
+  if (matched) {
+    return {
+      contactId: matched.id,
+      contactMode: "matched",
+      contactSubBrand: matched.subBrand || null,
+    };
+  }
 
   const created = await prisma.contact.create({
     data: {
@@ -299,7 +306,11 @@ async function resolveOrCreateVisaContact({ tenantId, actorUserId, body }) {
     autoCreatedFrom: "visa-application",
   }).catch(() => {});
 
-  return { contactId: created.id, contactMode: "created" };
+  return {
+    contactId: created.id,
+    contactMode: "created",
+    contactSubBrand: VISA_SUB_BRAND,
+  };
 }
 
 async function evaluateVisaSubmissionBlockers({ tenantId, applicationId, destinationCountry, applicationType }) {
@@ -480,13 +491,24 @@ async function maybeAdvanceOnChecklist({ applicationId, tenantId, actorUserId })
   if (required.length === 0) return { advanced: false };
   if (!required.every((r) => r.status === "verified")) return { advanced: false };
 
+  let contactSubBrand = null;
+  try {
+    const contact = await prisma.contact.findFirst({
+      where: { id: app.contactId, tenantId },
+      select: { subBrand: true },
+    });
+    contactSubBrand = contact?.subBrand || null;
+  } catch {
+    contactSubBrand = null;
+  }
+
   await prisma.visaApplication.update({
     where: { id: applicationId },
     data: { status: "filed" },
   });
 
   writeAudit("VisaApplication", "UPDATE", applicationId, actorUserId, tenantId, {
-    subBrand: VISA_SUB_BRAND,
+    subBrand: contactSubBrand,
     changedFields: ["status"],
     autoAdvanced: true,
     reason: "all-required-documents-verified",
@@ -501,7 +523,7 @@ async function maybeAdvanceOnChecklist({ applicationId, tenantId, actorUserId })
       {
         id: applicationId,
         contactId: app.contactId,
-        subBrand: VISA_SUB_BRAND,
+        subBrand: contactSubBrand,
         oldStatus: "docs-pending",
         newStatus: "filed",
         tenantId,
@@ -533,8 +555,8 @@ async function maybeAdvanceOnChecklist({ applicationId, tenantId, actorUserId })
 
 // ─── GET /api/travel/visa/applications ──────────────────────────────
 //
-// Paginated list of Visa Sure applications scoped to the caller's tenant
-// AND to Contact.subBrand="visasure".
+// Paginated list of visa applications scoped to the caller's tenant and
+// decorated with the tenant's contact records.
 //
 // Query filters:
 //   ?status=<intake|docs-pending|filed|approved|rejected|appeal>
@@ -600,13 +622,12 @@ router.get(
       // backward-compat with Applications.jsx + AdvisorDashboard.jsx.
       const wantFullShape = isFullShape(req.query);
 
-      // Resolve visa-sure contact IDs. On the FULL path we also need the
+      // Resolve tenant contact IDs. On the FULL path we also need the
       // contact PII (name/email/phone) for the decoration; on the SLIM
-      // path we only need the ids list (used as a sub-brand isolation
-      // filter — non-visa-sure applications must stay out of the list
-      // regardless of shape).
+      // path we only need the ids list (used as the tenant-wide filter
+      // for the applications table regardless of shape).
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        where: { tenantId },
         select: wantFullShape
           ? { id: true, name: true, email: true, phone: true }
           : { id: true },
@@ -671,7 +692,7 @@ router.get(
         req.user.userId,
         tenantId,
         {
-          subBrand: VISA_SUB_BRAND,
+          subBrand: null,
           statusFilter: statusFilter || null,
           count: applications.length,
           shape: wantFullShape ? "full" : "summary",
@@ -709,15 +730,14 @@ router.get(
 //
 // Sub-brand scoping — same rationale as the analytics surface and the
 // /applications list endpoint above:
-//   VisaApplication itself has NO subBrand column on its row; visa-sure-ness
-//   is encoded via Contact.subBrand="visasure" — the Contact is the upstream
-//   owner of the visa pipeline. This stats endpoint resolves visa-sure
-//   contact IDs first, then aggregates VisaApplication rows whose contactId
-//   is in that set. Non-visa applications (schema anomaly today) stay out.
+//   VisaApplication itself has NO subBrand column on its row, so this stats
+//   endpoint just scopes to the tenant's contact set and aggregates the
+//   matching VisaApplication rows. Non-visa applications (schema anomaly
+//   today) stay out.
 //
 // Behaviour:
-//   - Tenant-scoped count of ALL VisaApplication rows joined via
-//     Contact.subBrand='visasure'.
+//   - Tenant-scoped count of all VisaApplication rows for the caller's
+//     contacts.
 //   - Counts by status, applicationType, destinationCountry (capped to
 //     top-10 most-common; the rest aggregate into a `_other` bucket).
 //   - complexCount = count where complexCase=true.
@@ -790,9 +810,9 @@ router.get(
         lastActivityAt: null,
       });
 
-      // Resolve visa-sure contact IDs first (mirrors /applications list).
+      // Resolve tenant contact IDs first (mirrors /applications list).
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        where: { tenantId },
         select: { id: true },
       });
 
@@ -924,11 +944,11 @@ router.get(
 // belong on the operational route file so the page doesn't have to fan
 // out across two mount points.
 //
-// Sub-brand scoping (same rationale as the other endpoints in this file):
-//   VisaApplication itself has NO subBrand column on its row; visa-sure-ness
-//   is encoded via Contact.subBrand="visasure". Resolve visa-sure contact
-//   IDs first, then aggregate VisaApplication rows whose contactId is in
-//   that set. Non-visa applications (schema anomaly today) stay out.
+// Tenant-wide scoping (same rationale as the other endpoints in this file):
+//   VisaApplication itself has NO subBrand column on its row, so this
+//   endpoint resolves the tenant's contacts first and then aggregates
+//   VisaApplication rows whose contactId is in that set. Non-visa
+//   applications (schema anomaly today) stay out.
 //
 // Bucket key: ISO YYYY-MM string (e.g. "2026-05") derived from
 // VisaApplication.createdAt's UTC year + month. UTC chosen deliberately so
@@ -1033,9 +1053,9 @@ router.get(
       ]);
       const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "month:asc";
 
-      // Resolve visa-sure contact IDs first (mirrors the other handlers).
+      // Resolve tenant contact IDs first (mirrors the other handlers).
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        where: { tenantId },
         select: { id: true },
       });
 
@@ -1198,10 +1218,9 @@ router.get(
 // quarterly recovery-program reviews) — monthly resolution is too noisy
 // and yearly resolution is too coarse.
 //
-// Sub-brand scoping: same as siblings — VisaApplication has no subBrand
-// column; visa-sure-ness is encoded via Contact.subBrand="visasure".
-// Resolve visa-sure contact IDs first, then aggregate VisaApplication
-// rows whose contactId is in that set.
+// Tenant-wide scoping: same as siblings — VisaApplication has no subBrand
+// column, so the endpoint resolves the tenant's contacts first and then
+// aggregates VisaApplication rows whose contactId is in that set.
 //
 // Bucket key: YYYY-Qn (e.g. "2026-Q2") derived from VisaApplication.createdAt's
 // UTC year + quarter. Quarter = floor(month0 / 3) + 1.
@@ -1299,9 +1318,9 @@ router.get(
         ? orderByRaw
         : "quarter:asc";
 
-      // Resolve visa-sure contact IDs first.
+      // Resolve tenant contact IDs first.
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        where: { tenantId },
         select: { id: true },
       });
 
@@ -1458,13 +1477,11 @@ router.get(
 // visualisations need; the operators' dashboard renders monthly +
 // quarterly + yearly side-by-side from this triplet.
 //
-// Sub-brand scoping: same as siblings — VisaApplication has no subBrand
-// column; visa-sure-ness is encoded via Contact.subBrand="visasure".
-// Resolve visa-sure contact IDs first, then aggregate VisaApplication
-// rows whose contactId is in that set. The narrowing is structurally
-// IDENTICAL to /applications/by-quarter (Contact.subBrand="visasure"
-// gate — no extra restriction needed at the aggregation layer because
-// every surviving row is visa-sure by construction).
+// Tenant-wide scoping: same as siblings — VisaApplication has no subBrand
+// column, so the endpoint resolves the tenant's contacts first and then
+// aggregates VisaApplication rows whose contactId is in that set. The
+// narrowing is structurally identical to /applications/by-quarter, just
+// without the old Visa Sure-only contact gate.
 //
 // Bucket key: YYYY (e.g. "2026") derived from VisaApplication.createdAt's
 // UTC year. UTC over local-tz for the same cross-border-stability
@@ -1566,9 +1583,9 @@ router.get(
       ]);
       const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
 
-      // Resolve visa-sure contact IDs first.
+      // Resolve tenant contact IDs first.
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId, subBrand: VISA_SUB_BRAND },
+        where: { tenantId },
         select: { id: true },
       });
 
@@ -1731,9 +1748,7 @@ router.get(
 //
 // Errors:
 //   400 INVALID_ID          — :id not numeric
-//   404 NOT_FOUND           — no application for this tenant
-//   404 NOT_VISA_SURE       — application exists but its Contact has
-//                             subBrand != "visasure" (sub-brand isolation)
+//   404 NOT_FOUND           — no application or missing contact for this tenant
 router.get(
   "/applications/:id",
   requireTravelTenant,
@@ -1784,10 +1799,7 @@ router.get(
         });
       }
 
-      // Sub-brand isolation: load Contact and reject if its subBrand
-      // is not "visasure". This keeps an accidental TMC/RFU/Travel-Stall
-      // contact (with a stray VisaApplication row) out of the Visa Sure
-      // surface. Same defense-in-depth posture as the analytics surface.
+      // Load Contact for the response decoration and diagnostic join.
       const contact = await prisma.contact.findFirst({
         where: { id: application.contactId, tenantId },
         select: {
@@ -1803,7 +1815,7 @@ router.get(
       if (!contact) {
         return res.status(404).json({
           error: "Visa application not found",
-          code: "NOT_VISA_SURE",
+          code: "NOT_FOUND",
         });
       }
 
@@ -1875,10 +1887,10 @@ router.get(
 //
 // Body shape:
 //   {
-//     contactId: <Int> (REQUIRED) — existing Contact on this tenant; must
-//                                  carry subBrand="visasure" or 403
-//                                  NOT_VISA_SURE. 404 NOT_FOUND if the
-//                                  contact doesn't exist on this tenant.
+//     contactId: <Int> (REQUIRED) — existing Contact on this tenant;
+//                                  any travel sub-brand is accepted.
+//                                  404 NOT_FOUND if the contact doesn't
+//                                  exist on this tenant.
 //     applicationType: <String> (REQUIRED) — one of VALID_APPLICATION_TYPES
 //                                  (tourist | business | student | work |
 //                                  umrah | hajj). 400 INVALID_APPLICATION_TYPE
@@ -1916,8 +1928,6 @@ router.get(
 //   400 INVALID_APPLICATION_TYPE    — applicationType not in enum
 //   400 INVALID_DESTINATION         — destinationCountry empty or > 200 chars
 //   404 NOT_FOUND                   — contactId not on this tenant
-//   403 NOT_VISA_SURE               — contact exists but Contact.subBrand
-//                                     != "visasure" (sub-brand isolation)
 //   500 INTERNAL_ERROR              — Prisma error or unexpected
 router.post(
   "/applications",
@@ -2070,7 +2080,7 @@ router.post(
         req.user.userId,
         tenantId,
         {
-          subBrand: VISA_SUB_BRAND,
+          subBrand: resolvedContact.contactSubBrand || null,
           contactId,
           applicationType,
           destinationCountry,
@@ -2100,14 +2110,6 @@ router.post(
         return res.status(404).json({
           error: e.message || "Contact not found on this tenant",
           code: "NOT_FOUND",
-        });
-      }
-      if (e?.code === "NOT_VISA_SURE") {
-        return res.status(403).json({
-          error:
-            e.message ||
-            "Contact is not in the Visa Sure sub-brand; visa applications can only be created for visasure contacts",
-          code: "NOT_VISA_SURE",
         });
       }
       if (["MISSING_FIELDS", "INVALID_EMAIL", "INVALID_BIRTHDATE", "INVALID_PHONE"].includes(e?.code)) {
@@ -2152,10 +2154,9 @@ router.post(
 //     that's a schema migration + separate scope. Same drift as the POST
 //     handler's brief.
 //
-// Behavior: load the application, verify Contact.subBrand="visasure"
-// (sub-brand isolation — identical posture to the GET /:id and POST
-// handlers), build an update object with ONLY the provided fields, write,
-// audit, return 200 + the updated row.
+// Behavior: load the application, verify the owning Contact exists,
+// build an update object with ONLY the provided fields, write audit,
+// return 200 + the updated row.
 //
 // Audit log: writeAudit("VisaApplication", "UPDATE", id, ..., {
 //   changedFields: [...keys of update object] }) — surfaces exactly which
@@ -2170,9 +2171,7 @@ router.post(
 //   400 INVALID_RISK_FLAG         — advisorRiskFlag not in enum (and not
 //                                   null/"" clear)
 //   400 INVALID_COMPLEX_CASE      — complexCase not a boolean
-//   404 NOT_FOUND                 — no application for this tenant
-//   404 NOT_VISA_SURE             — application exists but its Contact has
-//                                   subBrand != "visasure"
+//   404 NOT_FOUND                 — no application or missing contact for this tenant
 //   500 INTERNAL_ERROR            — Prisma error or unexpected
 router.patch(
   "/applications/:id",
@@ -2203,8 +2202,8 @@ router.patch(
         });
       }
 
-      // Sub-brand isolation: load the upstream Contact and reject if its
-      // subBrand isn't visasure. Same defense-in-depth as GET /:id.
+      // Load the upstream Contact so missing-contact rows surface as
+      // NOT_FOUND and the audit/event payloads can reflect the brand.
       const contact = await prisma.contact.findFirst({
         where: { id: existing.contactId, tenantId },
         select: { id: true, subBrand: true },
@@ -2212,7 +2211,7 @@ router.patch(
       if (!contact) {
         return res.status(404).json({
           error: "Visa application not found",
-          code: "NOT_VISA_SURE",
+          code: "NOT_FOUND",
         });
       }
 
@@ -2324,7 +2323,7 @@ router.patch(
         req.user.userId,
         tenantId,
         {
-          subBrand: contact?.subBrand || VISA_SUB_BRAND,
+          subBrand: contact?.subBrand || null,
           changedFields: Object.keys(data),
         },
       ).catch(() => {});
@@ -2341,7 +2340,7 @@ router.patch(
           {
             id,
             contactId: existing.contactId,
-            subBrand: contact?.subBrand || VISA_SUB_BRAND,
+            subBrand: contact?.subBrand || null,
             oldStatus: existing.status,
             newStatus: data.status,
             tenantId,
@@ -2398,11 +2397,8 @@ router.patch(
 //
 // Behavior:
 //   - 400 INVALID_ID for non-numeric :id.
-//   - 404 NOT_FOUND for cross-tenant or missing application (resolved
-//     via the same {id, tenantId} pattern as GET /:id).
-//   - 404 NOT_VISA_SURE when application exists but its owning
-//     Contact.subBrand != 'visasure' — defense-in-depth sub-brand
-//     isolation, identical posture to the other Visa endpoints.
+//   - 404 NOT_FOUND for cross-tenant or missing application/contact
+//     (resolved via the same {id, tenantId} pattern as GET /:id).
 //   - Defensive empty: if no audit rows exist for this entityId
 //     (route never emitted any, or row table was pruned), returns
 //     `{applicationId, total: 0, history: []}` — NOT 404.
@@ -2464,15 +2460,15 @@ router.get(
         });
       }
 
-      // Sub-brand isolation: same defense-in-depth as GET /:id and PATCH.
+      // Load the owning Contact so missing-contact rows surface as NOT_FOUND.
       const contact = await prisma.contact.findFirst({
         where: { id: application.contactId, tenantId },
         select: { id: true, subBrand: true },
       });
-      if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
+      if (!contact) {
         return res.status(404).json({
           error: "Visa application not found",
-          code: "NOT_VISA_SURE",
+          code: "NOT_FOUND",
         });
       }
 
@@ -2984,7 +2980,7 @@ router.put(
 // Body: { recoveryProgramId: <int> }  (use null to UN-enrol)
 //
 // Writes audit row APPLICATION_ENROL_RECOVERY with old/new programId.
-// Tenant-scoped + sub-brand-scoped (Contact.subBrand === 'visasure').
+// Tenant-scoped.
 router.post(
   "/applications/:id/enrol-recovery",
   requireTravelTenant,
@@ -3017,7 +3013,8 @@ router.post(
         programId = p;
       }
 
-      // Resolve application with tenant + sub-brand gate.
+      // Resolve application with tenant scope; the owning contact brand is
+      // no longer restricted here.
       const application = await prisma.visaApplication.findFirst({
         where: { id, tenantId },
         select: { id: true, contactId: true, recoveryProgramId: true },
@@ -3032,10 +3029,10 @@ router.post(
         where: { id: application.contactId, tenantId },
         select: { id: true, subBrand: true },
       });
-      if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
+      if (!contact) {
         return res.status(404).json({
           error: "Visa application not found",
-          code: "NOT_VISA_SURE",
+          code: "NOT_FOUND",
         });
       }
 

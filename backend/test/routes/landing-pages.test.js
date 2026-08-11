@@ -1400,9 +1400,14 @@ describe('POST /p/:slug/submit (registration-draft branch — trip-linked + mode
     expect(redirectUrl.searchParams.get('draftToken')).toMatch(/^[0-9a-f]{64}$/);
     const portalRedirect = redirectUrl.searchParams.get('portalRedirect');
     expect(portalRedirect).toContain('/customer/register?tenantSlug=travel-stall');
-    expect(portalRedirect).toContain('name=Rohan');
-    expect(portalRedirect).toContain('email=rohan%40example.com');
     expect(portalRedirect).toContain('next=');
+    // #1307: PII (name/email/phone/passport) must not appear in the
+    // customer-portal bridge URL. The portal can resolve the draft via the
+    // opaque draftToken using /api/travel/microsites/public/:uuid/draft-summary.
+    expect(portalRedirect).not.toContain('name=');
+    expect(portalRedirect).not.toContain('Rohan');
+    expect(portalRedirect).not.toContain('email=');
+    expect(portalRedirect).not.toContain('rohan%40example.com');
     // PII must not appear in the microsite URL directly.
     expect(res.body.redirect.url).not.toContain('Aarav');
     expect(res.body.redirect.url).not.toContain('rohan@example.com');

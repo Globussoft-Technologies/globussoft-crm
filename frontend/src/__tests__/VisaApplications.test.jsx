@@ -7,9 +7,9 @@
  * Scope — pins the page-surface invariants for the Visa applications
  * admin list page (sibling to QuotesAdmin / InvoicesAdmin / SuppliersAdmin):
  *
- *   1. Page chrome: heading "Visa Applications" + status filter + Refresh
- *      button + "Create Application" CTA (ADMIN/MANAGER only — canCreate
- *      = user.role === 'ADMIN' || 'MANAGER', per SUT line 199).
+ *   1. Page chrome: heading "Visa Applications" + status/type/search/date
+ *      filters + Refresh button + "Create Application" CTA (ADMIN/MANAGER
+ *      only — canCreate = user.role === 'ADMIN' || 'MANAGER', per SUT line 199).
  *   2. Loading state: shows "Loading…" before first GET resolves (await
  *      findByText per CLAUDE.md tick #108 cron-learning).
  *   3. GET on mount: hits /api/travel/visa/applications with default
@@ -29,16 +29,18 @@
  *      "risk", "complex"). Row with none renders the em-dash fallback.
  *   8. Create-drawer open: clicking "Create Application" opens the drawer
  *      with the 3 required fields (Contact / Application type / Destination
- *      country) and fetches /api/contacts?limit=200 to populate the picker,
- *      show all contacts in the picker.
+ *      country) and fetches /api/contacts?limit=200 to populate the picker.
+ *      The Trip linkage control is optional and still preloads TMC trips
+ *      for school-trip applicants.
  *   9. Form validation — empty destination: client-side gate surfaces
  *      "Destination country is required" inline + does NOT fire POST.
  *  10. Form validation — empty contactId: client-side gate surfaces
  *      "Pick a contact" inline + does NOT fire POST.
  *  11. Submit happy path: POST /api/travel/visa/applications with
  *      contactId (Int) + applicationType + destinationCountry (trimmed)
- *      and the `silent: true` opt (the SUT raises its own targeted
- *      success toast). On 201 → drawer closes + notify.success fires.
+ *      and the `silent: true` opt. When a trip is linked, tripId and
+ *      participantId are included too. On 201 → drawer closes + notify.success
+ *      fires.
  *  12. Backend error mapping: INVALID_DESTINATION → inline error on the
  *      destinationCountry field; NOT_FOUND → inline error on the
  *      contactId field. notify.error fires with the backend message.
@@ -49,7 +51,8 @@
  *          → 200 { applications, total, limit, offset }
  *          | 403 SUB_BRAND_DENIED (handled at fetchApi-level — out of scope)
  *   POST   /api/travel/visa/applications  body:{contactId,applicationType,
- *                                                destinationCountry}
+ *                                                destinationCountry[,tripId,
+ *                                                participantId]}
  *          → 201 created (ADMIN+MANAGER)
  *          | 400 MISSING_FIELDS / INVALID_APPLICATION_TYPE / INVALID_DESTINATION
  *          | 404 NOT_FOUND
@@ -246,6 +249,15 @@ function installFetchMock({
   });
 }
 
+function getVisaListUrl() {
+  const call = fetchApiMock.mock.calls.filter(([u, o]) =>
+    typeof u === 'string'
+    && u.startsWith('/api/travel/visa/applications')
+    && (!o?.method || o?.method === 'GET'),
+  ).at(-1);
+  return call ? new URL(call[0], 'http://localhost') : null;
+}
+
 function renderPage(user = ADMIN_USER) {
   const value = { user, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false };
   return render(
@@ -255,6 +267,34 @@ function renderPage(user = ADMIN_USER) {
       </AuthContext.Provider>
     </MemoryRouter>,
   );
+}
+
+async function openFiltersPanel() {
+  fireEvent.click(screen.getByRole('button', { name: /Filters/i }));
+  return screen.findByRole('dialog', { name: /Visa application filters/i });
+}
+
+async function openDateRangeModal() {
+  await openFiltersPanel();
+  fireEvent.click(screen.getByRole('button', { name: /Custom date range/i }));
+  return screen.findByRole('dialog', { name: /Select date range/i });
+}
+
+async function goToMonth(labelRegex) {
+  const prev = screen.getByRole('button', { name: /Previous month/i });
+  for (let i = 0; i < 12 && screen.queryAllByText(labelRegex).length === 0; i += 1) {
+    fireEvent.click(prev);
+  }
+  await waitFor(() => {
+    expect(screen.queryAllByText(labelRegex).length).toBeGreaterThan(0);
+  });
+}
+
+function clickEnabledDateButton(isoDate) {
+  const candidates = screen.getAllByRole('button', { name: isoDate });
+  const target = candidates.find((button) => !button.disabled);
+  expect(target).toBeTruthy();
+  fireEvent.click(target);
 }
 
 async function selectDefaultTripParticipant() {
@@ -288,16 +328,27 @@ afterEach(() => {
 });
 
 describe('<VisaApplications /> — page chrome + RBAC', () => {
-  it('renders heading + filter chrome + "Create Application" CTA when role=ADMIN', async () => {
+  it('renders heading + compact filter chrome + "Create Application" CTA when role=ADMIN', async () => {
     renderPage();
     expect(
       screen.getByRole('heading', { name: /Visa Applications/i }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText(/Filter by status/i)).toBeInTheDocument();
+    expect(screen.getByRole('searchbox', { name: /Search by contact name/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reload list/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Filters/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Filter by status/i)).toBeNull();
+    expect(screen.queryByLabelText(/Filter by type/i)).toBeNull();
+    expect(screen.queryByLabelText(/Created date from/i)).toBeNull();
+    expect(screen.queryByLabelText(/Created date to/i)).toBeNull();
+    expect(screen.getByLabelText(/Search by contact name/i)).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /Create a new visa application/i }),
     ).toBeInTheDocument();
+    await openFiltersPanel();
+    expect(screen.getByRole('button', { name: /Close filters/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Filter by status/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Filter by type/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Custom date range/i })).toBeInTheDocument();
     // Wait for the mount-time GET to settle.
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(
@@ -359,6 +410,10 @@ describe('<VisaApplications /> — load + render lifecycle', () => {
       expect(listCall[0]).toContain('offset=0');
       // No status= when filter empty.
       expect(listCall[0]).not.toContain('status=');
+      expect(listCall[0]).not.toContain('applicationType=');
+      expect(listCall[0]).not.toContain('search=');
+      expect(listCall[0]).not.toContain('from=');
+      expect(listCall[0]).not.toContain('to=');
     });
     // Renders one row per application (by contact name).
     expect(await screen.findByText('Riya Sharma')).toBeInTheDocument();
@@ -379,18 +434,63 @@ describe('<VisaApplications /> — filter behaviour', () => {
   it('changing status filter to "approved" re-fetches with ?status=approved', async () => {
     renderPage();
     await screen.findByText('Riya Sharma');
+    await openFiltersPanel();
     fetchApiMock.mockClear();
-    installFetchMock({ list: { applications: [APPS_DEFAULT[1]], total: 1, limit: 50, offset: 0 } });
     fireEvent.change(screen.getByLabelText(/Filter by status/i), {
       target: { value: 'approved' },
     });
     await waitFor(() => {
-      const call = fetchApiMock.mock.calls.find(([u, o]) =>
-        typeof u === 'string'
-        && u.includes('status=approved')
-        && (!o?.method || o.method === 'GET'),
-      );
-      expect(call).toBeTruthy();
+      const url = getVisaListUrl();
+      expect(url?.searchParams.get('status')).toBe('approved');
+      expect(url?.searchParams.get('offset')).toBe('0');
+    });
+  });
+
+  it('changing type filter to "business" re-fetches with ?applicationType=business', async () => {
+    renderPage();
+    await screen.findByText('Riya Sharma');
+    await openFiltersPanel();
+    fetchApiMock.mockClear();
+    fireEvent.change(screen.getByLabelText(/Filter by type/i), {
+      target: { value: 'business' },
+    });
+    await waitFor(() => {
+      const url = getVisaListUrl();
+      expect(url?.searchParams.get('applicationType')).toBe('business');
+      expect(url?.searchParams.get('offset')).toBe('0');
+    });
+  });
+
+  it('typing a contact name search re-fetches with ?search=<name>', async () => {
+    renderPage();
+    await screen.findByText('Riya Sharma');
+    fetchApiMock.mockClear();
+    fireEvent.change(screen.getByLabelText(/Search by contact name/i), {
+      target: { value: 'Riya' },
+    });
+    await waitFor(() => {
+      const url = getVisaListUrl();
+      expect(url?.searchParams.get('search')).toBe('Riya');
+      expect(url?.searchParams.get('offset')).toBe('0');
+    });
+  });
+
+  it('date range filters re-fetch with ISO from/to bounds', async () => {
+    renderPage();
+    await screen.findByText('Riya Sharma');
+    await openDateRangeModal();
+    fetchApiMock.mockClear();
+    const fromDate = '2026-05-01';
+    const toDate = '2026-05-31';
+    await goToMonth(/May 2026/i);
+    clickEnabledDateButton(fromDate);
+    clickEnabledDateButton(toDate);
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+    await waitFor(() => {
+      const url = getVisaListUrl();
+      expect(url?.searchParams.get('from')).toBe(new Date(`${fromDate}T00:00:00`).toISOString());
+      expect(url?.searchParams.get('to')).toBe(new Date(`${toDate}T23:59:59.999`).toISOString());
+      expect(url?.searchParams.get('offset')).toBe('0');
     });
   });
 });
@@ -463,7 +563,7 @@ describe('<VisaApplications /> — create drawer', () => {
       expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
     });
     fireEvent.change(
-      screen.getByLabelText(/Contact/i),
+      screen.getByRole('combobox', { name: /Contact/i }),
       { target: { value: '5001' } },
     );
     await selectDefaultTripParticipant();
@@ -520,7 +620,7 @@ describe('<VisaApplications /> — create drawer', () => {
       expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
     });
     fireEvent.change(
-      screen.getByLabelText(/Contact/i),
+      screen.getByRole('combobox', { name: /Contact/i }),
       { target: { value: '5001' } },
     );
     await selectDefaultTripParticipant();
@@ -560,12 +660,57 @@ describe('<VisaApplications /> — create drawer', () => {
     );
   });
 
+  it('submit happy path without trip linkage POSTs only the visa fields and leaves tripId/participantId out', async () => {
+    renderPage();
+    await screen.findByText('Riya Sharma');
+    fireEvent.click(screen.getByRole('button', { name: /Create a new visa application/i }));
+    await screen.findByRole('heading', { name: /New Visa Application/i });
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
+    });
+    fireEvent.change(
+      screen.getByRole('combobox', { name: /Contact/i }),
+      { target: { value: '5001' } },
+    );
+    fireEvent.change(
+      screen.getByLabelText(/Application type/i),
+      { target: { value: 'tourist' } },
+    );
+    fireEvent.change(
+      screen.getByLabelText(/Destination country/i),
+      { target: { value: '  Italy  ' } },
+    );
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Create Application/i }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/visa/applications' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.contactId).toBe(5001);
+      expect(typeof body.contactId).toBe('number');
+      expect(body.applicantName).toBeUndefined();
+      expect(body.applicantEmail).toBeUndefined();
+      expect(body.applicantPhone).toBeUndefined();
+      expect(body.tripId).toBeUndefined();
+      expect(body.participantId).toBeUndefined();
+      expect(body.applicationType).toBe('tourist');
+      expect(body.destinationCountry).toBe('Italy');
+      expect(post[1].silent).toBe(true);
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/Visa application created/i),
+    );
+  });
+
   it('auto-selects the matching participant when the contact and trip identify the same traveler', async () => {
     renderPage();
     await screen.findByText('Riya Sharma');
     fireEvent.click(screen.getByRole('button', { name: /Create a new visa application/i }));
     await screen.findByRole('heading', { name: /New Visa Application/i });
-    fireEvent.change(screen.getByLabelText(/Contact/i), { target: { value: '5001' } });
+    fireEvent.change(screen.getByRole('combobox', { name: /Contact/i }), { target: { value: '5001' } });
     fireEvent.change(screen.getByTestId('create-trip-select'), { target: { value: '9001' } });
 
     await waitFor(() => {
@@ -585,7 +730,7 @@ describe('<VisaApplications /> — create drawer', () => {
     });
     expect(screen.getByText(/New applicant details/i)).toBeInTheDocument();
     fireEvent.change(
-      screen.getByLabelText(/Contact/i),
+      screen.getByRole('combobox', { name: /Contact/i }),
       { target: { value: '5001' } },
     );
     expect(screen.getByTestId('selected-contact-summary')).toHaveTextContent(/Using existing contact details/i);
@@ -601,7 +746,7 @@ describe('<VisaApplications /> — create drawer', () => {
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
     });
-    fireEvent.change(screen.getByLabelText(/Contact/i), { target: { value: '5001' } });
+    fireEvent.change(screen.getByRole('combobox', { name: /Contact/i }), { target: { value: '5001' } });
     await selectDefaultTripParticipant();
     fireEvent.change(screen.getByLabelText(/Destination country/i), { target: { value: 'X' } });
 
@@ -650,7 +795,7 @@ describe('<VisaApplications /> — create drawer', () => {
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
     });
-    fireEvent.change(screen.getByLabelText(/Contact/i), { target: { value: '5001' } });
+    fireEvent.change(screen.getByRole('combobox', { name: /Contact/i }), { target: { value: '5001' } });
     await selectDefaultTripParticipant();
     fireEvent.change(screen.getByLabelText(/Destination country/i), { target: { value: 'Italy' } });
 
@@ -970,7 +1115,7 @@ describe('<VisaApplications /> — backend error mapping (extension)', () => {
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
     });
-    fireEvent.change(screen.getByLabelText(/Contact/i), { target: { value: '5001' } });
+    fireEvent.change(screen.getByRole('combobox', { name: /Contact/i }), { target: { value: '5001' } });
     await selectDefaultTripParticipant();
     fireEvent.change(screen.getByLabelText(/Destination country/i), { target: { value: 'France' } });
 
@@ -999,7 +1144,7 @@ describe('<VisaApplications /> — backend error mapping (extension)', () => {
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
     });
-    fireEvent.change(screen.getByLabelText(/Contact/i), { target: { value: '5001' } });
+    fireEvent.change(screen.getByLabelText(/^Contact$/i), { target: { value: '5001' } });
     await selectDefaultTripParticipant();
     fireEvent.change(screen.getByLabelText(/Destination country/i), { target: { value: 'France' } });
 
@@ -1016,7 +1161,7 @@ describe('<VisaApplications /> — backend error mapping (extension)', () => {
     });
     // contactId field gets aria-invalid; inline error text surfaces.
     expect(
-      screen.getByLabelText(/Contact/i).getAttribute('aria-invalid'),
+      screen.getByRole('combobox', { name: /Contact/i }).getAttribute('aria-invalid'),
     ).toBe('true');
   });
 
@@ -1028,7 +1173,7 @@ describe('<VisaApplications /> — backend error mapping (extension)', () => {
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
     });
-    fireEvent.change(screen.getByLabelText(/Contact/i), { target: { value: '5001' } });
+    fireEvent.change(screen.getByRole('combobox', { name: /Contact/i }), { target: { value: '5001' } });
     await selectDefaultTripParticipant();
     fireEvent.change(screen.getByLabelText(/Destination country/i), { target: { value: 'France' } });
 
@@ -1058,7 +1203,7 @@ describe('<VisaApplications /> — client-side validation extras (extension)', (
     await waitFor(() => {
       expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
     });
-    fireEvent.change(screen.getByLabelText(/Contact/i), { target: { value: '5001' } });
+    fireEvent.change(screen.getByRole('combobox', { name: /Contact/i }), { target: { value: '5001' } });
     await selectDefaultTripParticipant();
     // The SUT's <input> has maxLength=200 enforcement at the HTML level, so
     // a manual change to a 201-char string is rejected by the input. To
@@ -1117,6 +1262,7 @@ describe('<VisaApplications /> — filter+pagination interaction (extension)', (
     installFetchMock({
       list: { applications: APPS_DEFAULT.slice(0, 1), total: 1, limit: 50, offset: 0 },
     });
+    await openFiltersPanel();
     fireEvent.change(screen.getByLabelText(/Filter by status/i), {
       target: { value: 'approved' },
     });

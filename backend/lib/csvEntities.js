@@ -904,6 +904,7 @@ const autoConsumptionRules = {
     unit: "piece",
     active: "true",
   },
+  exportInclude: { service: true, product: true },
   readGate: ["admin", "manager"],
   readPermissions: [{ module: "products", action: "read" }],
   writeGate: ["admin", "manager"],

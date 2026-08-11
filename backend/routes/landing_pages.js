@@ -6532,8 +6532,9 @@ async function handleRegistrationDraft(req, res, page, formProps) {
 
     const customerRegisterParams = new URLSearchParams();
     if (tenant?.slug) customerRegisterParams.set("tenantSlug", tenant.slug);
-    customerRegisterParams.set("name", parentName);
-    customerRegisterParams.set("email", parentEmail);
+    // #1307: do not put PII (name/email/phone/passport) in the redirect URL.
+    // The customer portal can look up the draft via the opaque draftToken
+    // using /api/travel/microsites/public/:publicUuid/draft-summary?token=...
     customerRegisterParams.set("next", "/travel/portal");
     const customerRegisterUrl = `/customer/register?${customerRegisterParams.toString()}`;
 
@@ -6959,6 +6960,8 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
   try {
 
+    console.log(`[LandingPage][submit] slug=${req.params.slug} method=${req.method} bodyKeys=${req.body ? Object.keys(req.body).join(',') : 'null'}`);
+
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
 
     if (!page) return res.status(404).json({ error: "Page not found" });
@@ -7223,9 +7226,9 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
   } catch (err) {
 
-    console.error("[LandingPage] Submit error:", err);
+    console.error("[LandingPage] Submit error:", err?.message || err, err?.stack || "");
 
-    res.status(500).json({ error: "Submission failed" });
+    res.status(500).json({ error: "Submission failed", code: err?.code || "INTERNAL_ERROR" });
 
   }
 

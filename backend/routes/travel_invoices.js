@@ -1,4 +1,4 @@
-﻿/**
+/**
  * /api/travel/invoices — TravelInvoice CRUD (PRD_TRAVEL_BILLING DD-5.1)
  *
  * Third in the Quote/Invoice/Supplier trio. Schema at commit fdb793e
@@ -6838,7 +6838,11 @@ router.get(
               ? new Date(m.dueDate).getTime()
               : null;
         const isSettled = m.status === "paid" || m.status === "waived";
-        if (!isSettled && (m.status === "overdue" || (dueMs != null && dueMs < nowMs))) {
+        // Past-due unsettled rows are additionally bucketed as overdue so the
+        // KPI surfaces them alongside explicit overdue-status rows. Rows that
+        // already carry status='overdue' are counted once (in the status bucket
+        // above), not double-counted here.
+        if (!isSettled && m.status !== "overdue" && dueMs != null && dueMs < nowMs) {
           byStatus.overdue = (byStatus.overdue || 0) + 1;
         }
         totalExpected = addDecimal(totalExpected, m.expectedAmount);

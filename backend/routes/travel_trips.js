@@ -1,4 +1,4 @@
-﻿// Travel CRM — TMC trip CRUD routes (Phase 1 MVP).
+// Travel CRM — TMC trip CRUD routes (Phase 1 MVP).
 //
 // Endpoints:
 //   GET    /api/travel/trips                                   — list trips
@@ -97,7 +97,7 @@ function sendApprovalPaymentPortalEmail({ tenantId, trip, participant }) {
         "Your trip registration has been approved.",
         "You can now proceed with the next step and pay your instalments through the secure CRM payment portal.",
         "",
-        `${paymentLinkText}: ${paymentUrl}`,
+        `${paymentLinkText}:`,
         "",
         "This portal link is unique to the transaction and should not be shared publicly.",
       ].join("\n");
@@ -105,7 +105,7 @@ function sendApprovalPaymentPortalEmail({ tenantId, trip, participant }) {
         <p>Hello ${escapeHtml(greeting)},</p>
         <p>Your trip registration has been approved.</p>
         <p>You can now proceed with the next step and pay your instalments through the secure CRM payment portal.</p>
-        <p><a href="${escapeHtml(paymentUrl)}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;text-decoration:underline;font-weight:600;">${paymentLinkText}</a></p>
+        <p><a href="${escapeHtml(paymentUrl)}" target="_blank" rel="noopener noreferrer">${paymentLinkText}</a></p>
         <p>This portal link is unique to the transaction and should not be shared publicly.</p>
       `;
       await sendEmail({

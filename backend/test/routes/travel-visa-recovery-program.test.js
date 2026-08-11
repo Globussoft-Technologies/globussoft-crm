@@ -14,8 +14,8 @@
  *   - Role gate: USER → 403; ADMIN + MANAGER reach the handler.
  *   - Tenant scoping: cross-tenant rows return 404 (PROGRAM_NOT_FOUND /
  *     APPLICATION_NOT_FOUND).
- *   - Sub-brand isolation: applications whose Contact.subBrand != 'visasure'
- *     return 404 NOT_VISA_SURE on enrol-recovery.
+ *   - Contact brand is informational only; any valid tenant contact can
+ *     enrol in a recovery program.
  *   - Validation: MISSING_FIELDS (no name / destinationCountry on POST),
  *     INVALID_NAME / INVALID_DESTINATION (length cap), INVALID_DURATION
  *     (negative integer), INVALID_SUCCESS_RATE (not in [0, 100]),
@@ -371,17 +371,24 @@ describe('POST /applications/:id/enrol-recovery', () => {
     expect(res.body.code).toBe('APPLICATION_NOT_FOUND');
   });
 
-  test('non-visasure contact → 404 NOT_VISA_SURE', async () => {
+  test('non-Visa Sure contact → 200 enrols normally', async () => {
     prisma.visaApplication.findFirst.mockResolvedValue({
       id: 5, contactId: 22, recoveryProgramId: null,
     });
     prisma.contact.findFirst.mockResolvedValue({ id: 22, subBrand: 'tmc' });
+    prisma.rejectionRecoveryProgram.findFirst.mockResolvedValue({
+      id: 1, isActive: true,
+    });
+    prisma.visaApplication.update.mockResolvedValue({
+      id: 5, recoveryProgramId: 1,
+    });
     const res = await request(makeApp())
       .post('/api/travel/visa/applications/5/enrol-recovery')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
       .send({ recoveryProgramId: 1 });
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('NOT_VISA_SURE');
+    expect(res.status).toBe(200);
+    expect(res.body.recoveryProgramId).toBe(1);
+    expect(prisma.visaApplication.update).toHaveBeenCalledOnce();
   });
 
   test('inactive program → 400 PROGRAM_INACTIVE', async () => {

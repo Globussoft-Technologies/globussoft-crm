@@ -380,6 +380,24 @@
       "reason": "Transitive dependency used for YAML parsing in internal tooling (Swagger/OpenAPI spec loading, config parsing). The unsafe deserialization vector requires attacker-controlled YAML input; our runtime callsites only parse literal/known configuration or generate specs from code, not user-submitted YAML. Long-term: upgrade transitive js-yaml to a patched version or replace yamljs with a maintained parser.",
       "addedOn": "2026-08-07",
       "sunsetBy": "2026-11-07"
+    },
+    {
+      "ghsa": "GHSA-28wg-ghj8-5hjv",
+      "package": "nanoid",
+      "severity": "high",
+      "title": "nanoid: predictable IDs when using non-default size/alphabet",
+      "reason": "Transitive dependency used by jsonwebtoken and msw. The predictable-ID issue only affects callers passing a non-default `size` or custom `alphabet` to nanoid. Our callsites use the default nanoid() signature; JWT token generation and mock-service-worker IDs are not security-critical here. Long-term: refresh dependencies to nanoid >=5.0.9 or patched 3.3.8.",
+      "addedOn": "2026-08-10",
+      "sunsetBy": "2026-11-10"
+    },
+    {
+      "ghsa": "GHSA-2v37-7h3g-55p8",
+      "package": "nanoid",
+      "severity": "high",
+      "title": "nanoid: non-secure values produced by the default generator",
+      "reason": "Same transitive nanoid path as GHSA-28wg-ghj8-5hjv. Our runtime callsites use nanoid only for non-security-sensitive identifiers and rely on default options; upgrade when parent dependencies refresh.",
+      "addedOn": "2026-08-10",
+      "sunsetBy": "2026-11-10"
     }
   ]
 }

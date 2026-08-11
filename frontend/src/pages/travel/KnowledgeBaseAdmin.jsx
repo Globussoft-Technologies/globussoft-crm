@@ -53,6 +53,8 @@ export default function KnowledgeBaseAdmin() {
   const [filesLoadingMore, setFilesLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [activeJobId, setActiveJobId] = useState(null);
+  const [stopping, setStopping] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [completingOAuth, setCompletingOAuth] = useState(false);
@@ -276,19 +278,72 @@ export default function KnowledgeBaseAdmin() {
   const runSync = async () => {
     if (!isAdmin) return;
     setSyncing(true);
+    setActiveJobId(null);
     try {
-      const res = await fetchApi('/api/travel/knowledge-base/sync', {
+      const rootFolderId = (folderInput || '').trim() || config.rootFolderId;
+      if (!rootFolderId) {
+        notify.error('Select a Drive folder first');
+        setSyncing(false);
+        return;
+      }
+      const res = await fetchApi('/api/travel/knowledge-base/sync/jobs', {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify({ rootFolderId }),
       });
-      notify.success(`Sync ${res.status}: ${res.indexed} indexed, ${res.failed} failed`);
-      await loadAll();
+      setActiveJobId(res.jobId || null);
+      notify.success('Sync started');
     } catch (e) {
-      notify.error(e.message || 'Sync failed');
-    } finally {
+      notify.error(e.message || 'Sync failed to start');
       setSyncing(false);
     }
   };
+
+  const stopSync = async () => {
+    if (!activeJobId) return;
+    setStopping(true);
+    try {
+      await fetchApi(`/api/travel/knowledge-base/sync/${activeJobId}/stop`, { method: 'POST' });
+      notify.success('Sync stop requested');
+    } catch (e) {
+      notify.error(e.message || 'Failed to stop sync');
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const pollJobStatus = useCallback(async () => {
+    if (!activeJobId) return;
+    try {
+      const res = await fetchApi(`/api/travel/knowledge-base/jobs/${activeJobId}`, { silent: true });
+      const job = res?.job;
+      if (!job) return;
+      setStatus((prev) => ({
+        ...prev,
+        lastJob: job,
+      }));
+      if (job.status !== 'running') {
+        setSyncing(false);
+        setActiveJobId(null);
+        await loadAll();
+        if (job.status === 'completed') {
+          notify.success(`Sync completed: ${job.filesIndexed} indexed, ${job.filesFailed} failed`);
+        } else if (job.status === 'stopped') {
+          notify.info(`Sync stopped: ${job.filesIndexed} indexed, ${job.filesFailed} failed`);
+        } else {
+          notify.error(`Sync ${job.status}: ${job.errorMessage || 'unknown error'}`);
+        }
+      }
+    } catch (_) {
+      // ignore polling errors; next tick will retry
+    }
+  }, [activeJobId, loadAll, notify]);
+
+  useEffect(() => {
+    if (!activeJobId) return;
+    pollJobStatus();
+    const id = setInterval(pollJobStatus, 3000);
+    return () => clearInterval(id);
+  }, [activeJobId, pollJobStatus]);
 
   const deleteFile = async (id) => {
     if (!isAdmin) return;
@@ -591,10 +646,19 @@ export default function KnowledgeBaseAdmin() {
             </div>
           </div>
           {isAdmin && (
-            <button className="btn-primary" onClick={runSync} disabled={syncing || !canSync}>
-              <RefreshCw size={16} style={{ marginRight: 6, animation: syncing ? 'spin 1s linear infinite' : undefined }} />
-              {syncing ? 'Syncing…' : 'Sync now'}
-            </button>
+            <div style={{ display: 'flex', gap: 10 }}>
+              {syncing && activeJobId ? (
+                <button className="btn-danger" onClick={stopSync} disabled={stopping}>
+                  <XCircle size={16} style={{ marginRight: 6 }} />
+                  {stopping ? 'Stopping…' : 'Stop sync'}
+                </button>
+              ) : (
+                <button className="btn-primary" onClick={runSync} disabled={syncing || !canSync}>
+                  <RefreshCw size={16} style={{ marginRight: 6, animation: syncing ? 'spin 1s linear infinite' : undefined }} />
+                  {syncing ? 'Syncing…' : 'Sync now'}
+                </button>
+              )}
+            </div>
           )}
         </div>
 

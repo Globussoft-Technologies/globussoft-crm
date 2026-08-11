@@ -23,17 +23,15 @@ const RAG_TOP_K = 15;
 const RAG_SUB_BRAND = "tmc";
 const RAG_TASK = "travel-knowledge-rag";
 
-function buildQueryText(answers, _bank) {
-  // Simple but effective: turn the answer map into a human-readable sentence.
-  // Future: use the question text from the bank to make this richer.
+function buildQueryText(answers, subBrand, _bank) {
   const parts = [];
   for (const [key, value] of Object.entries(answers || {})) {
     const v = Array.isArray(value) ? value.join(", ") : String(value);
     if (v && v.trim()) parts.push(`${key}: ${v}`);
   }
-  return parts.length
-    ? `School trip diagnostic profile. ${parts.join(". ")}.`
-    : "School trip diagnostic profile.";
+  const subBrandLabel = String(subBrand || "travel").trim();
+  const prefix = subBrandLabel ? `${subBrandLabel} diagnostic profile` : "Travel diagnostic profile";
+  return parts.length ? `${prefix}. ${parts.join(". ")}.` : `${prefix}.`;
 }
 
 function consolidateChunks(chunks) {
@@ -74,7 +72,10 @@ function consolidateChunks(chunks) {
  * @returns {Promise<{id:number, readinessScore:number, recommendations:object}|null>}
  */
 async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, bank }) {
-  if (subBrand !== RAG_SUB_BRAND) return null;
+  if (!subBrand) {
+    console.log("[travelRag] no subBrand provided; skipping RAG");
+    return null;
+  }
   if (!qdrant.isEnabled()) {
     console.log("[travelRag] Qdrant not configured; skipping RAG");
     return null;
@@ -84,7 +85,7 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
     return null;
   }
 
-  const queryText = buildQueryText(answers, bank);
+  const queryText = buildQueryText(answers, subBrand, bank);
   const queryVector = await embedClient.embedText(queryText);
   if (!queryVector) {
     console.warn("[travelRag] query embedding failed");
@@ -94,7 +95,7 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
   const chunks = await qdrant.searchBySubBrand({
     vector: queryVector,
     tenantId,
-    subBrand: RAG_SUB_BRAND,
+    subBrand,
     limit: RAG_TOP_K,
   });
   if (!chunks.length) {
@@ -104,6 +105,7 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
 
   const context = consolidateChunks(chunks);
   const llmPayload = {
+    subBrand,
     queryText,
     brochures: context.map((c) => ({
       fileName: c.fileName,
@@ -145,7 +147,8 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
       parsed.recommendedTrips.push({
         name: tripName,
         driveLink: c.driveLink || "",
-        places: [],
+        summary: "",
+        learnings: [],
       });
     }
   }
@@ -174,7 +177,7 @@ async function runRagForDiagnostic({ tenantId, diagnosticId, subBrand, answers, 
         data: {
           tenantId,
           diagnosticId,
-          subBrand: RAG_SUB_BRAND,
+          subBrand,
           readinessScore: Number.isFinite(parsed.readinessScore) ? parsed.readinessScore : null,
           recommendationsJson,
           topChunkIdsJson,
@@ -209,6 +212,11 @@ function parseRagResponse(text) {
   }
 }
 
+function isPolicyOrAdminText(text) {
+  const t = String(text || "").toLowerCase();
+  return /\b(cancellation|cancel|refund|non-refundable|payment|policy|policies|disclaimer|insurance|booking conditions?)\b/.test(t);
+}
+
 function validateAndNormalise(parsed) {
   if (!parsed || typeof parsed !== "object") return null;
   const out = { readinessScore: null, summary: "", recommendedTrips: [] };
@@ -223,19 +231,22 @@ function validateAndNormalise(parsed) {
       const name = String(trip.name || trip.tripName || "").trim();
       if (!name) return null;
       const driveLink = String(trip.driveLink || trip.driveViewLink || "").trim();
-      const places = Array.isArray(trip.places)
-        ? trip.places
-            .map((place) => {
-              const placeName = String(place.name || place.placeName || "").trim();
-              if (!placeName) return null;
-              const learnings = Array.isArray(place.learnings)
-                ? place.learnings.map((l) => String(l)).filter(Boolean)
-                : [];
-              return { name: placeName, learnings };
-            })
-            .filter(Boolean)
-        : [];
-      return { name, driveLink, places };
+      let summary = String(trip.summary || "").trim();
+      if (isPolicyOrAdminText(summary)) summary = "";
+
+      // Prefer the new flat learnings array; fall back to the older places shape.
+      let learnings = [];
+      if (Array.isArray(trip.learnings)) {
+        learnings = trip.learnings.map((l) => String(l)).filter(Boolean);
+      } else if (Array.isArray(trip.places)) {
+        for (const place of trip.places) {
+          if (place?.learnings && Array.isArray(place.learnings)) {
+            learnings.push(...place.learnings.map((l) => String(l)).filter(Boolean));
+          }
+        }
+      }
+
+      return { name, driveLink, summary, learnings: learnings.filter((l) => !isPolicyOrAdminText(l)).slice(0, 4) };
     })
     .filter(Boolean)
     .slice(0, RAG_TOP_K); // cap at the retrieved chunk count so the PDF stays bounded

@@ -60,6 +60,22 @@ function normaliseSubBrand(name) {
   return raw;
 }
 
+// In-memory abort registry for long-running sync jobs. A stop request calls
+// controller.abort(); the sync loop checks signal.aborted at folder and file
+// boundaries and exits cleanly, marking the job status as "stopped".
+const activeSyncs = new Map();
+
+function stopSyncJob(jobId) {
+  const entry = activeSyncs.get(jobId);
+  if (!entry) return false;
+  try {
+    entry.controller.abort();
+  } catch (e) {
+    console.warn("[travelKnowledgeBaseSync] abort failed:", e.message);
+  }
+  return true;
+}
+
 async function getDriveClient(tenantId) {
   if (!oauth.isConfigured()) {
     const err = new Error("Google OAuth is not configured (missing GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI)");
@@ -372,7 +388,7 @@ async function upsertFileRow({
  * @param {string} opts.rootFolderId
  * @returns {Promise<{jobId:number, status:string, discovered:number, indexed:number, failed:number, errorMessage:string|null}>}
  */
-async function runSync({ tenantId, rootFolderId }) {
+async function runSync({ tenantId, rootFolderId, job: existingJob = null }) {
   if (!qdrant.isEnabled()) {
     throw Object.assign(new Error("QDRANT_URL is not set"), { code: "QDRANT_NOT_CONFIGURED" });
   }
@@ -383,9 +399,17 @@ async function runSync({ tenantId, rootFolderId }) {
   await qdrant.ensureCollection();
   const drive = await getDriveClient(tenantId);
 
-  const job = await prisma.travelKnowledgeBaseSyncJob.create({
-    data: { tenantId, rootFolderId, status: "running" },
-  });
+  // Allow callers (background async start) to pre-create the job row so they can
+  // return the job id immediately while sync continues in the background.
+  let job = existingJob;
+  if (!job) {
+    job = await prisma.travelKnowledgeBaseSyncJob.create({
+      data: { tenantId, rootFolderId, status: "running" },
+    });
+  }
+
+  const controller = new AbortController();
+  activeSyncs.set(job.id, { controller, tenantId });
 
   let discovered = 0;
   let indexed = 0;
@@ -397,10 +421,12 @@ async function runSync({ tenantId, rootFolderId }) {
     const subBrandFolders = rootChildren.filter((c) => c.mimeType === "application/vnd.google-apps.folder");
 
     for (const folder of subBrandFolders) {
+      if (controller.signal.aborted) break;
       const subBrand = normaliseSubBrand(folder.name);
       if (!subBrand) continue;
       const pdfs = await listPdfsRecursive(drive, folder.id, folder.name);
       for (const pdf of pdfs) {
+        if (controller.signal.aborted) break;
         discovered += 1;
         const result = await indexOneFile({
           drive,
@@ -414,16 +440,27 @@ async function runSync({ tenantId, rootFolderId }) {
       }
     }
 
+    const stopped = controller.signal.aborted;
     await prisma.travelKnowledgeBaseSyncJob.update({
       where: { id: job.id },
       data: {
-        status: "completed",
+        status: stopped ? "stopped" : "completed",
         completedAt: new Date(),
         filesDiscovered: discovered,
         filesIndexed: indexed,
         filesFailed: failed,
+        errorMessage: stopped ? sanitizeText("Stopped by user") : null,
       },
     });
+
+    return {
+      jobId: job.id,
+      status: stopped ? "stopped" : "completed",
+      discovered,
+      indexed,
+      failed,
+      errorMessage: stopped ? "Stopped by user" : null,
+    };
   } catch (e) {
     errorMessage = e.message;
     console.error("[travelKnowledgeBaseSync] sync failed:", e.message);
@@ -438,16 +475,10 @@ async function runSync({ tenantId, rootFolderId }) {
         errorMessage: sanitizeText(errorMessage),
       },
     });
+    throw e;
+  } finally {
+    activeSyncs.delete(job.id);
   }
-
-  return {
-    jobId: job.id,
-    status: errorMessage ? "failed" : "completed",
-    discovered,
-    indexed,
-    failed,
-    errorMessage,
-  };
 }
 
 /**
@@ -500,6 +531,7 @@ async function getStats(tenantId) {
 
 module.exports = {
   runSync,
+  stopSyncJob,
   deleteFileFromIndex,
   getStats,
   normaliseSubBrand,

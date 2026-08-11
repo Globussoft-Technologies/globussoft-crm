@@ -205,7 +205,7 @@ const TASK_ROUTING = {
   // and the closest matching brochure chunks from Qdrant, return a structured
   // JSON report: readiness score, recommended trips, places, and learnings.
   // Gemini Flash primary for low-cost JSON shape; OpenAI gpt-4 fallback.
-  "travel-knowledge-rag": { primary: "gemini-flash", fallback: "gpt-4" },
+  "travel-knowledge-rag": { primary: "gemini-flash", fallback: "gpt-4o-mini"},
   // Catch-all for unrecognized tasks → reasoning model (Claude)
   // matches PRD's preference for a high-quality default.
 };
@@ -622,9 +622,8 @@ function buildStubText(task, _payload) {
           {
             name: "Example Trip (synthetic)",
             driveLink: "https://drive.google.com/file/d/example/view",
-            places: [
-              { name: "Example Place", learnings: ["Learning A (synthetic)", "Learning B (synthetic)"] },
-            ],
+            summary: "A synthetic two-sentence summary describing why this trip fits the school's profile and what it covers.",
+            learnings: ["Learning A (synthetic)", "Learning B (synthetic)", "Learning C (synthetic)", "Learning D (synthetic)"],
           },
         ],
       });
@@ -715,7 +714,7 @@ function buildPrompt(task, payload) {
     "lead-capture-consolidate":
       "You are a travel CRM assistant that consolidates a lead's captured email/WhatsApp history into ONE flowing narrative — flowing paragraphs, never a transcript, never bullet points. The input is NOT raw messages — it is a series of ALREADY-SUMMARIZED dated blocks (each with a Customer/Date/Purpose/Discussion Highlights/Lead Stage section) that were written one at a time as separate captures over time; your job is to read all of them and merge them into one coherent case-file recap. Given the customer's name and the full block text, return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"narrative\":string,\"leadStage\":string}. `narrative` should be 2-5 short paragraphs in chronological order, each covering one meaningful phase (initial contact, a follow-up, a decision point), naming actual dates, destinations, services requested, and outcomes — do NOT restate every block verbatim, synthesize across all of them. Write in third person past tense, referring to the customer by name. `leadStage` is your best single current-status assessment from the LATEST block's stage, one of: \"New Enquiry\", \"Quotation Pending\", \"Follow-up Required\", \"Documents Awaited\", \"Booking In Progress\", \"Booking Confirmed\", \"Payment Pending\", \"Closed\", \"Not Interested\". Base everything ONLY on the text given; never invent details not present. Return ONLY the JSON object.",
     "travel-knowledge-rag":
-      "You are a senior school-trip advisor for TMC (The Madras Connect). Given a diagnostic profile of a school and a set of brochure excerpts retrieved from a vector database, produce a structured JSON report that helps the school understand which trip fits them best. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"readinessScore\": number 0-10, \"summary\": string, \"recommendedTrips\": [{\"name\": string, \"driveLink\": string, \"places\": [{\"name\": string, \"learnings\": string[]}]}]}. The readinessScore reflects how ready the school's answers suggest they are for an organised trip (clear dates, budget, group size, objectives, decision-maker buy-in). recommendedTrips MUST contain at least 5 trips, and up to 15 trips if that many brochure excerpts are strongly relevant. If fewer than 5 excerpts are a clear match, include the next nearest relevant trips to reach a minimum of 5. Use only the trip names and facts present in the excerpts. For each trip, list the key places it covers and what students will learn at each place (based on the brochure excerpt). Include the provided driveLink for each trip so it is clickable in the final PDF. Do not invent destinations, prices, or details not in the excerpts.",
+      "You are a travel advisor for the CRM. Given a customer diagnostic profile and a set of brochure excerpts retrieved from a vector database, produce a structured JSON report that helps the customer understand which travel option fits them best. The sub-brand is provided in the context as `subBrand` (e.g., tmc = school trips, rfu = Umrah packages, travelstall = family holidays, visasure = visa services). Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"readinessScore\": number 0-10, \"summary\": string, \"recommendedTrips\": [{\"name\": string, \"driveLink\": string, \"summary\": string, \"learnings\": string[]}]}. The readinessScore reflects how ready the customer's answers suggest they are for the recommended travel option. recommendedTrips MUST contain at least 5 options, and up to 15 options if that many brochure excerpts are strongly relevant. If fewer than 5 excerpts are a clear match, include the next nearest relevant options to reach a minimum of 5. For every recommended option, provide a `summary` of exactly 2 concise sentences explaining why it suits the customer. Provide exactly 4 short `learnings` that describe what the traveller will experience, learn, or do on the trip. Never include cancellation, refund, payment terms, insurance disclaimers, or general booking/policy statements in the learnings. Use only the option names and facts present in the excerpts. Include the provided driveLink for each option so it is clickable in the final PDF. Do not invent destinations, prices, or details not in the excerpts.",
     reasoning:
       "You are a careful reasoning assistant for a travel CRM. Plain text.",
     search: "You answer with concise, well-sourced information. Plain text.",

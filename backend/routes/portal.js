@@ -1528,22 +1528,21 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
       },
     });
 
-    // RAG knowledge-base recommendations: best-effort, runs only for TMC and
-    // only when Qdrant + OpenAI embeddings are configured. Never blocks the
-    // diagnostic submission; a failure simply omits the RAG section from the PDF.
+    // RAG knowledge-base recommendations: best-effort for any travel sub-brand
+    // that has indexed PDFs. Runs only when Qdrant + OpenAI embeddings are
+    // configured. Never blocks the diagnostic submission; a failure simply omits
+    // the RAG section from the PDF.
     let ragResult = null;
-    if (bank.subBrand === travelRag.RAG_SUB_BRAND) {
-      try {
-        ragResult = await travelRag.runRagForDiagnostic({
-          tenantId: req.portal.tenantId,
-          diagnosticId: diag.id,
-          subBrand: bank.subBrand,
-          answers,
-          bank: parsed,
-        });
-      } catch (ragErr) {
-        console.warn("[Portal][travel/diagnostics POST] RAG generation failed (non-fatal):", ragErr.message);
-      }
+    try {
+      ragResult = await travelRag.runRagForDiagnostic({
+        tenantId: req.portal.tenantId,
+        diagnosticId: diag.id,
+        subBrand: bank.subBrand,
+        answers,
+        bank: parsed,
+      });
+    } catch (ragErr) {
+      console.warn("[Portal][travel/diagnostics POST] RAG generation failed (non-fatal):", ragErr.message);
     }
 
     // Best-effort branded PDF; if it fails the diagnostic row is still returned

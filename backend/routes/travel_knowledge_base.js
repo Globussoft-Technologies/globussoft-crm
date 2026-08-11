@@ -28,6 +28,7 @@ const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const syncEngine = require("../lib/travelKnowledgeBaseSync");
 const qdrant = require("../lib/qdrantClient");
+const embedClient = require("../lib/openAIEmbedClient");
 const oauth = require("../lib/googleDriveOAuth");
 const {
   requireTravelTenant,
@@ -119,6 +120,98 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-kb] sync error:", e.message);
       res.status(500).json({ error: e.message || "Sync failed", code: e.code || "SYNC_FAILED" });
+    }
+  },
+);
+
+// POST /api/travel/knowledge-base/sync/jobs
+// Starts a sync in the background and returns immediately with the job id so the
+// UI can poll progress and request a stop.
+router.post(
+  "/sync/jobs",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      if (!qdrant.isEnabled()) {
+        return res.status(503).json({ error: "Qdrant is not configured", code: "QDRANT_NOT_CONFIGURED" });
+      }
+      if (!embedClient.isEnabled()) {
+        return res.status(503).json({ error: "OpenAI is not configured", code: "OPENAI_NOT_CONFIGURED" });
+      }
+      const rootFolderId =
+        String(req.body?.rootFolderId || "").trim() ||
+        (await getRootFolderId(req.travelTenant.id));
+      if (!rootFolderId) {
+        return res.status(400).json({
+          error: "Drive root folder id is required. Save it in config or pass it in the body.",
+          code: "MISSING_FOLDER_ID",
+        });
+      }
+      const job = await prisma.travelKnowledgeBaseSyncJob.create({
+        data: { tenantId: req.travelTenant.id, rootFolderId, status: "running" },
+      });
+      // Start processing without awaiting; the UI polls for completion.
+      syncEngine
+        .runSync({ tenantId: req.travelTenant.id, rootFolderId, job })
+        .catch((e) => console.error("[travel-kb] background sync failed:", e.message));
+      res.status(202).json({ jobId: job.id, status: "running", startedAt: job.startedAt });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-kb] sync/jobs error:", e.message);
+      res.status(500).json({ error: e.message || "Sync failed", code: e.code || "SYNC_FAILED" });
+    }
+  },
+);
+
+// GET /api/travel/knowledge-base/jobs/:jobId
+router.get(
+  "/jobs/:jobId",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const jobId = parseInt(req.params.jobId, 10);
+      if (!Number.isFinite(jobId)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const job = await prisma.travelKnowledgeBaseSyncJob.findFirst({
+        where: { id: jobId, tenantId: req.travelTenant.id },
+      });
+      if (!job) return res.status(404).json({ error: "Job not found", code: "NOT_FOUND" });
+      res.json({ job });
+    } catch (e) {
+      console.error("[travel-kb] get job error:", e.message);
+      res.status(500).json({ error: "Failed to read job" });
+    }
+  },
+);
+
+// POST /api/travel/knowledge-base/sync/:jobId/stop
+router.post(
+  "/sync/:jobId/stop",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "write"),
+  async (req, res) => {
+    try {
+      const jobId = parseInt(req.params.jobId, 10);
+      if (!Number.isFinite(jobId)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const job = await prisma.travelKnowledgeBaseSyncJob.findFirst({
+        where: { id: jobId, tenantId: req.travelTenant.id },
+      });
+      if (!job) return res.status(404).json({ error: "Job not found", code: "NOT_FOUND" });
+      if (job.status !== "running") {
+        return res.status(400).json({ error: "Job is not running", code: "NOT_RUNNING" });
+      }
+      const stopped = syncEngine.stopSyncJob(jobId);
+      res.json({ stopped });
+    } catch (e) {
+      console.error("[travel-kb] stop sync error:", e.message);
+      res.status(500).json({ error: "Failed to stop sync" });
     }
   },
 );

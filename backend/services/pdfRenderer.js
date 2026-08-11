@@ -3308,7 +3308,6 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   const metaLine = [contact?.email, contact?.phone].filter(Boolean).join("  •  ");
   if (metaLine) doc.font("Helvetica").fontSize(10).fillColor("#555").text(metaLine);
   doc.font("Helvetica").fontSize(10).fillColor("#555");
-  doc.text(`Bank version: v${bank?.version ?? "?"}`);
   doc.text(`Submitted: ${formatDate(diagnostic.createdAt || new Date())}`);
   doc.moveDown(0.8);
 
@@ -3383,41 +3382,87 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     });
   }
 
-  // RAG knowledge-base recommendations — rendered only for TMC diagnostics that
-  // have a persisted RAG result. Includes readiness score, recommended trips,
-  // places, learnings, and clickable Drive links for each brochure.
-  if (sub === "tmc" && ragResult && ragResult.recommendations) {
+  // RAG knowledge-base recommendations — rendered for any travel sub-brand that
+  // has a persisted RAG result. Shows a readiness score gauge, a consistent
+  // 2-line summary and up to 4 learnings per recommended option, plus a clickable
+  // Google Drive brochure link.
+  function drawReadinessScore(score) {
+    const barW = 160;
+    const barH = 10;
+    const radius = barH / 2;
+    const safeScore = Math.min(10, Math.max(0, Math.round(Number(score) || 0)));
+    const pct = safeScore / 10;
+    const color = safeScore <= 4 ? '#ef4444' : safeScore <= 7 ? '#eab308' : '#22c55e';
+
+    const startX = 50;
+    const startY = doc.y;
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('#111')
+      .text(`Readiness score: ${safeScore} / 10`, startX, startY);
+    const barY = startY + 16;
+    doc.roundedRect(startX, barY, barW, barH, radius).fill('#e5e7eb');
+    if (pct > 0) {
+      const fillW = Math.max(barW * pct, barH);
+      doc.roundedRect(startX, barY, fillW, barH, radius).fill(color);
+    }
+    doc.y = barY + barH + 10;
+  }
+
+  if (ragResult && ragResult.recommendations) {
     const recs = ragResult.recommendations;
     const trips = Array.isArray(recs.recommendedTrips) ? recs.recommendedTrips : [];
     if (trips.length || Number.isFinite(recs.readinessScore)) {
       doc.moveDown(1);
       doc.font("Helvetica-Bold").fontSize(12).fillColor("#111")
-        .text("Recommended trips from our brochure library");
+        .text("Recommended options from our brochure library");
       if (Number.isFinite(recs.readinessScore)) {
-        doc.font("Helvetica").fontSize(10).fillColor("#333")
-          .text(`Readiness score: ${recs.readinessScore} / 10`);
+        drawReadinessScore(recs.readinessScore);
+      } else {
+        doc.moveDown(0.3);
       }
-      if (recs.summary) {
-        doc.font("Helvetica").fontSize(9.5).fillColor("#555").text(recs.summary);
+      function isPolicyHighlight(text) {
+        const t = String(text || "").toLowerCase();
+        return /\b(cancellation|cancel|refund|non-refundable|payment|policy|policies|disclaimer|insurance|booking conditions?)\b/.test(t);
       }
-      doc.moveDown(0.4);
+
       trips.forEach((trip, tIdx) => {
-        doc.font("Helvetica-Bold").fontSize(10.5).fillColor(accent)
+        doc.moveDown(0.4);
+        doc.font("Helvetica-Bold").fontSize(11).fillColor(accent)
           .text(`${tIdx + 1}. ${trip.name || "Trip"}`);
+
+        if (trip.summary) {
+          doc.moveDown(0.25);
+          doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#333")
+            .text("Summary:");
+          doc.font("Helvetica").fontSize(9.5).fillColor("#444")
+            .text(trip.summary);
+        }
+
         if (trip.driveLink) {
+          doc.moveDown(0.25);
           doc.font("Helvetica").fontSize(9).fillColor("#2563EB")
             .text("View brochure on Google Drive", { underline: true, link: trip.driveLink });
         }
-        (trip.places || []).forEach((place) => {
+
+          const cleanLearnings = (trip.learnings || [])
+            .filter((learning) => !isPolicyHighlight(learning))
+            .slice(0, 4);
+          if (cleanLearnings.length) {
+          doc.moveDown(0.45);
           doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#333")
-            .text(`   • ${place.name || "Place"}`);
-          (place.learnings || []).forEach((learning) => {
+            .text("Trip highlights:");
+          doc.moveDown(0.15);
+          cleanLearnings.forEach((learning) => {
             doc.font("Helvetica").fontSize(9).fillColor("#555")
-              .text(`      – ${learning}`);
+              .text(`• ${learning}`, { indent: 10 });
           });
-        });
+        }
+
         doc.moveDown(0.4);
+        const sepY = doc.y;
+        doc.moveTo(60, sepY).lineTo(doc.page.width - 60, sepY).lineWidth(0.5).strokeColor("#ddd").stroke();
+        doc.moveDown(0.2);
       });
+      doc.moveDown(0.4);
     }
   }
 

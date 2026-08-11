@@ -49,7 +49,7 @@ async function generateDiagnosticPdfBestEffort(diag, bank, opts = {}) {
     }
 
     let ragResult = opts?.ragResult;
-    if (diag.subBrand === travelRag.RAG_SUB_BRAND && !ragResult) {
+    if (!ragResult) {
       try {
         ragResult = await travelRag.getRagResultForDiagnostic(diag.id);
       } catch (ragFetchErr) {

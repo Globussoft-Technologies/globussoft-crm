@@ -110,6 +110,137 @@ describe('GET /api/embassy-rules', () => {
   });
 });
 
+describe('Embassy Rules import/export helpers', () => {
+  test('GET /api/embassy-rules/import-meta returns the template headers + thresholds', async () => {
+    const res = await request(makeApp())
+      .get('/api/embassy-rules/import-meta')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      entity: 'embassy-rules',
+      thresholds: { rows: 5000, bytes: 5 * 1024 * 1024 },
+    });
+    expect(res.body.headers).toEqual([
+      'destinationCountry',
+      'ruleType',
+      'applicationType',
+      'actionLabel',
+      'severity',
+      'isActive',
+      'conditionJson',
+    ]);
+  });
+
+  test('GET /api/embassy-rules/export is blocked for USER role', async () => {
+    const res = await request(makeApp())
+      .get('/api/embassy-rules/export')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'RBAC_DENIED' });
+    expect(prisma.embassyRule.findMany).not.toHaveBeenCalled();
+  });
+
+  test('GET /api/embassy-rules/import-template returns a CSV template with a skippable example row', async () => {
+    const res = await request(makeApp())
+      .get('/api/embassy-rules/import-template')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('embassy-rules-template.csv');
+    expect(res.text).toContain('destinationCountry,ruleType,applicationType,actionLabel,severity,isActive,conditionJson');
+    expect(res.text).toContain('# DELETE THIS ROW BEFORE IMPORTING');
+  });
+
+  test('GET /api/embassy-rules/import-template?format=xlsx returns an XLSX attachment', async () => {
+    const res = await request(makeApp())
+      .get('/api/embassy-rules/import-template?format=xlsx')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(res.headers['content-disposition']).toContain('embassy-rules-template.xlsx');
+  });
+
+  test('GET /api/embassy-rules/export streams the current filtered rules as CSV', async () => {
+    prisma.embassyRule.findMany.mockResolvedValue([
+      {
+        id: 1,
+        tenantId: 1,
+        destinationCountry: 'US',
+        ruleType: 'document_required',
+        applicationType: 'tourist',
+        actionLabel: 'Passport copy required',
+        severity: 'warning',
+        isActive: true,
+        conditionJson: '{"days":30}',
+        createdById: 7,
+      },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/embassy-rules/export?severity=warning')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('embassy-rules-export-');
+    expect(res.text).toContain('US,document_required,tourist,Passport copy required,warning,true,"{""days"":30}"');
+    expect(prisma.embassyRule.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: 1, severity: 'warning' }),
+      }),
+    );
+  });
+
+  test('POST /api/embassy-rules/import skips the comment row and upserts the rule row', async () => {
+    prisma.embassyRule.findFirst.mockResolvedValue(null);
+    prisma.embassyRule.create.mockImplementation(async ({ data }) => ({
+      id: 99,
+      ...data,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+
+    const csv = [
+      'destinationCountry,ruleType,applicationType,actionLabel,severity,isActive,conditionJson',
+      '# DELETE THIS ROW BEFORE IMPORTING,# example: document_required,# optional: leave blank for all application types,# example: Sponsor income proof required (last 6 months),# info | warning | blocker,# true,# optional JSON string',
+      'US,document_required,tourist,Passport copy required,warning,true,"{\\"days\\":30}"',
+      '',
+    ].join('\r\n');
+
+    const res = await request(makeApp())
+      .post('/api/embassy-rules/import')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN', { userId: 7, tenantId: 1 })}`)
+      .attach('file', Buffer.from(csv, 'utf8'), 'embassy-rules-template.csv');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      imported: 1,
+      updated: 0,
+      skipped: 1,
+    });
+    expect(prisma.embassyRule.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tenantId: 1,
+          createdById: 7,
+          destinationCountry: 'US',
+          ruleType: 'document_required',
+          applicationType: 'tourist',
+          actionLabel: 'Passport copy required',
+          severity: 'warning',
+          isActive: true,
+        }),
+      }),
+    );
+    expect(prisma.embassyRule.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 1,
+          destinationCountry: 'US',
+          applicationType: 'tourist',
+          ruleType: 'document_required',
+        }),
+      }),
+    );
+  });
+});
+
 describe('POST /api/embassy-rules', () => {
   test('happy path returns 201 with stamped tenantId + createdById', async () => {
     prisma.embassyRule.create.mockImplementation(async ({ data }) => ({

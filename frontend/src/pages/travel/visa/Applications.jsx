@@ -28,10 +28,10 @@
  *
  * Render:
  *   - Header + Create CTA
- *   - Status filter dropdown (all / intake / docs-pending / filed /
- *     approved / rejected / appeal) — pinned to backend VALID_STATUSES,
- *     NOT the dispatch's prose list (the dispatch said "docs-collected"
- *     + "submitted" which the route validator rejects with 400 INVALID_STATUS).
+ *   - Compact filter bar: contact search + Refresh + single Filters
+ *     button. The Filters popover holds status, application type, and
+ *     created date range controls, pinned to backend VALID_STATUSES /
+ *     VALID_APPLICATION_TYPES.
  *   - Pagination (50 per page, prev/next)
  *   - Row table: ID | Contact | Type | Status badge |
  *     Risk pills (3: readiness / risk-flag / complex) | Updated
@@ -42,9 +42,9 @@
  * Visual shape mirrors pages/travel/Itineraries.jsx (the canonical
  * Travel list page) for consistency with the rest of the vertical.
  */
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { FileText, Filter, AlertTriangle, ShieldAlert, Layers, Plus, X } from 'lucide-react';
+import { FileText, Filter, Search, AlertTriangle, ShieldAlert, Layers, Plus, X, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { AuthContext } from '../../../App';
@@ -105,6 +105,69 @@ const READINESS_COLORS = {
 function fmt(d) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString();
+}
+
+function toStartOfDayIso(value) {
+  if (!value) return '';
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+}
+
+function toEndOfDayIso(value) {
+  if (!value) return '';
+  const date = new Date(`${value}T23:59:59.999`);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+}
+
+function parseIsoDate(value) {
+  if (!value) return null;
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function toYmd(date) {
+  if (!date) return '';
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function sameDay(a, b) {
+  return Boolean(a && b)
+    && a.getFullYear() === b.getFullYear()
+    && a.getMonth() === b.getMonth()
+    && a.getDate() === b.getDate();
+}
+
+function isBetweenDates(day, start, end) {
+  if (!start || !end) return false;
+  const t = day.getTime();
+  return t > Math.min(start.getTime(), end.getTime()) && t < Math.max(start.getTime(), end.getTime());
+}
+
+function buildMonthGrid(year, month) {
+  const first = new Date(year, month, 1);
+  const startOffset = first.getDay();
+  const gridStart = new Date(year, month, 1 - startOffset);
+  const days = [];
+  for (let i = 0; i < 42; i += 1) {
+    days.push(new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i));
+  }
+  return days;
+}
+
+function formatDateLabel(value) {
+  const date = parseIsoDate(value);
+  if (!date) return '';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function formatDateRangeLabel(from, to) {
+  if (!from && !to) return 'Custom date range';
+  if (from && to && from === to) return formatDateLabel(from);
+  if (from && to) return `${formatDateLabel(from)} - ${formatDateLabel(to)}`;
+  return formatDateLabel(from || to);
 }
 
 function formatTripLabel(trip) {
@@ -231,6 +294,248 @@ function RiskPills({ readinessLevel, advisorRiskFlag, complexCase }) {
   return <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{pills}</div>;
 }
 
+function VisaDateRangePicker({ fromDate, toDate, onChange }) {
+  const [open, setOpen] = useState(false);
+  const committedFrom = parseIsoDate(fromDate);
+  const committedTo = parseIsoDate(toDate);
+  const [draftFrom, setDraftFrom] = useState(committedFrom);
+  const [draftTo, setDraftTo] = useState(committedTo);
+  const [viewYear, setViewYear] = useState((committedFrom || new Date()).getFullYear());
+  const [viewMonth, setViewMonth] = useState((committedFrom || new Date()).getMonth());
+
+  useEffect(() => {
+    if (!open) return undefined;
+    setDraftFrom(committedFrom);
+    setDraftTo(committedTo);
+    if (committedFrom) {
+      setViewYear(committedFrom.getFullYear());
+      setViewMonth(committedFrom.getMonth());
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, committedFrom, committedTo]);
+
+  const monthLabel = new Date(viewYear, viewMonth, 1).toLocaleDateString(undefined, {
+    month: 'long',
+    year: 'numeric',
+  });
+  const nextMonth = new Date(viewYear, viewMonth + 1, 1);
+  const displayLabel = formatDateRangeLabel(fromDate, toDate);
+  const canSave = Boolean(draftFrom && draftTo);
+
+  const goMonth = (delta) => {
+    const next = new Date(viewYear, viewMonth + delta, 1);
+    setViewYear(next.getFullYear());
+    setViewMonth(next.getMonth());
+  };
+
+  const pickDay = (day) => {
+    if (!draftFrom || draftTo) {
+      setDraftFrom(day);
+      setDraftTo(null);
+      return;
+    }
+    if (sameDay(day, draftFrom)) {
+      setDraftTo(day);
+      return;
+    }
+    if (day < draftFrom) {
+      setDraftFrom(day);
+      setDraftTo(draftFrom);
+      return;
+    }
+    setDraftTo(day);
+  };
+
+  const save = () => {
+    if (!draftFrom || !draftTo) return;
+    onChange({
+      from: toYmd(draftFrom),
+      to: toYmd(draftTo),
+    });
+    setOpen(false);
+  };
+
+  const clear = () => {
+    onChange({ from: '', to: '' });
+  };
+
+  const renderMonth = (monthDate) => {
+    const days = buildMonthGrid(monthDate.getFullYear(), monthDate.getMonth());
+    return (
+      <div key={monthDate.toISOString()} style={{ marginTop: 12 }}>
+        <div style={{ fontWeight: 600, textAlign: 'center', marginBottom: 8 }}>
+          {monthDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, marginBottom: 4 }}>
+          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
+            <div
+              key={`${day}-${index}`}
+              style={{
+                textAlign: 'center',
+                fontSize: 11,
+                color: 'var(--text-secondary)',
+                padding: '2px 0',
+              }}
+            >
+              {day}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
+          {days.map((day) => {
+            const inMonth = day.getMonth() === monthDate.getMonth();
+            const isStart = sameDay(day, draftFrom);
+            const isEnd = sameDay(day, draftTo);
+            const inRange = isBetweenDates(day, draftFrom, draftTo) && !isStart && !isEnd;
+            return (
+              <button
+                key={day.toISOString()}
+                type="button"
+                aria-label={toYmd(day)}
+                onClick={() => pickDay(day)}
+                disabled={!inMonth}
+                style={{
+                  padding: '6px 0',
+                  fontSize: 13,
+                  border: 'none',
+                  borderRadius: isStart || isEnd ? 999 : 6,
+                  background: isStart || isEnd
+                    ? 'var(--primary-color, var(--accent-color))'
+                    : inRange
+                      ? 'rgba(68, 74, 214, 0.12)'
+                      : 'transparent',
+                  color: !inMonth
+                    ? 'var(--text-secondary)'
+                    : isStart || isEnd
+                      ? '#fff'
+                      : 'var(--text-primary)',
+                  opacity: inMonth ? 1 : 0.35,
+                  cursor: inMonth ? 'pointer' : 'default',
+                }}
+              >
+                {day.getDate()}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        style={{
+          ...panelFieldButton,
+          justifyContent: 'space-between',
+          paddingRight: fromDate || toDate ? 30 : undefined,
+        }}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+      >
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <Calendar size={14} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {displayLabel}
+          </span>
+        </span>
+      </button>
+      {fromDate || toDate ? (
+        <button
+          type="button"
+          onClick={clear}
+          aria-label="Clear date range"
+          style={{
+            position: 'absolute',
+            right: 8,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--text-secondary)',
+            background: 'transparent',
+            border: 'none',
+            padding: 2,
+            cursor: 'pointer',
+          }}
+        >
+          <X size={12} />
+        </button>
+      ) : null}
+
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Select date range"
+          style={dateModalOverlayStyle}
+          onClick={() => setOpen(false)}
+        >
+          <div
+            style={dateModalStyle}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={dateModalHeaderStyle}>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                aria-label="Close date range picker"
+                style={iconOnlyButtonStyle}
+              >
+                <X size={18} />
+              </button>
+              <button
+                type="button"
+                onClick={save}
+                disabled={!canSave}
+                style={{
+                  ...textActionButtonStyle,
+                  cursor: canSave ? 'pointer' : 'not-allowed',
+                  opacity: canSave ? 1 : 0.4,
+                }}
+              >
+                Save
+              </button>
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 4 }}>
+                Select range
+              </div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: 14 }}>
+                {displayLabel}
+              </div>
+            </div>
+
+            <div style={dateNavRowStyle}>
+              <button type="button" onClick={() => goMonth(-1)} aria-label="Previous month" style={navButtonStyle}>
+                <ChevronLeft size={16} />
+              </button>
+              <div style={{ flex: 1, textAlign: 'center', fontWeight: 600, fontSize: 14 }}>
+                {monthLabel}
+              </div>
+              <button type="button" onClick={() => goMonth(1)} aria-label="Next month" style={navButtonStyle}>
+                <ChevronRight size={16} />
+              </button>
+            </div>
+
+            {renderMonth(new Date(viewYear, viewMonth, 1))}
+            {renderMonth(nextMonth)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function pillStyle(bg, color) {
   return {
     display: 'inline-flex',
@@ -265,7 +570,13 @@ export default function VisaApplications() {
     ? searchParams.get('status')
     : '';
   const [status, setStatus] = useState(initialStatus);
+  const [applicationType, setApplicationType] = useState('');
+  const [search, setSearch] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const [offset, setOffset] = useState(0);
+  const [showFilters, setShowFilters] = useState(false);
+  const filterWrapRef = useRef(null);
 
   // Create-drawer state.
   const [creating, setCreating] = useState(false);
@@ -286,6 +597,13 @@ export default function VisaApplications() {
     setLoading(true);
     const qs = new URLSearchParams();
     if (status) qs.set('status', status);
+    if (applicationType) qs.set('applicationType', applicationType);
+    const trimmedSearch = search.trim();
+    if (trimmedSearch) qs.set('search', trimmedSearch);
+    const fromIso = toStartOfDayIso(fromDate);
+    if (fromIso) qs.set('from', fromIso);
+    const toIso = toEndOfDayIso(toDate);
+    if (toIso) qs.set('to', toIso);
     qs.set('limit', String(PAGE_SIZE));
     qs.set('offset', String(offset));
     fetchApi(`/api/travel/visa/applications?${qs.toString()}`)
@@ -302,12 +620,55 @@ export default function VisaApplications() {
   };
 
   // Reload whenever filter or page changes.
-  useEffect(load, [status, offset]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, [status, applicationType, search, fromDate, toDate, offset]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!showFilters) return undefined;
+    const onMouseDown = (event) => {
+      if (filterWrapRef.current && !filterWrapRef.current.contains(event.target)) {
+        setShowFilters(false);
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setShowFilters(false);
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [showFilters]);
 
   // Reset offset to 0 when status filter changes so we don't land on an
   // empty page after a narrowing filter.
   const onStatusChange = (v) => {
     setStatus(v);
+    setOffset(0);
+  };
+
+  const onApplicationTypeChange = (v) => {
+    setApplicationType(v);
+    setOffset(0);
+  };
+
+  const onSearchChange = (v) => {
+    setSearch(v);
+    setOffset(0);
+  };
+
+  const onDateRangeChange = ({ from, to }) => {
+    setFromDate(from || '');
+    setToDate(to || '');
+    setOffset(0);
+  };
+
+  const clearAllFilters = () => {
+    setStatus('');
+    setApplicationType('');
+    setSearch('');
+    setFromDate('');
+    setToDate('');
     setOffset(0);
   };
 
@@ -412,7 +773,7 @@ export default function VisaApplications() {
     return () => {
       cancelled = true;
     };
-  }, [creating, form.tripId, selectedContact?.id]);
+  }, [creating, form.tripId, selectedContact]);
 
   const submitCreate = async (e) => {
     e.preventDefault();
@@ -530,6 +891,17 @@ export default function VisaApplications() {
   const hasNext = offset + PAGE_SIZE < total;
   const pageStart = total === 0 ? 0 : offset + 1;
   const pageEnd = Math.min(offset + PAGE_SIZE, total);
+  const hasActiveFilters = Boolean(status || applicationType || search.trim() || fromDate || toDate);
+  const activeFilterCount = [
+    status,
+    applicationType,
+    search.trim(),
+    fromDate,
+    toDate,
+  ].filter(Boolean).length;
+  const emptyMessage = hasActiveFilters
+    ? 'No visa applications match the current filters.'
+    : 'No visa applications yet. Applications appear here once contacts in your tenant have applications created in the system.';
 
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
@@ -579,43 +951,207 @@ export default function VisaApplications() {
           gap: 12,
           flexWrap: 'wrap',
           alignItems: 'center',
+          justifyContent: 'space-between',
           background: 'var(--surface-color)',
           padding: 12,
           borderRadius: 8,
           border: '1px solid var(--border-color)',
           marginBottom: 16,
+          position: 'relative',
         }}
       >
-        <Filter
-          size={16}
-          aria-hidden
-          style={{ color: 'var(--text-secondary)' }}
-        />
-        <select
-          value={status}
-          onChange={(e) => onStatusChange(e.target.value)}
-          style={selectStyle}
-          aria-label="Filter by status"
+        <div
+          style={{
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            flex: '1 1 360px',
+            minWidth: 0,
+            maxWidth: 420,
+          }}
         >
-          {STATUSES.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={load}
-          style={refreshBtn}
-          aria-label="Reload list"
+          <Search
+            size={16}
+            aria-hidden
+            style={{
+              position: 'absolute',
+              left: 10,
+              color: 'var(--text-secondary)',
+              pointerEvents: 'none',
+            }}
+          />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Search contact name"
+            style={{
+              ...selectStyle,
+              width: '100%',
+              minWidth: 0,
+              paddingLeft: 32,
+              paddingRight: search ? 30 : 10,
+              boxSizing: 'border-box',
+            }}
+            aria-label="Search by contact name"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => onSearchChange('')}
+              aria-label="Clear contact search"
+              style={{
+                position: 'absolute',
+                right: 6,
+                background: 'none',
+                border: 'none',
+                padding: 2,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+
+        <div
+          ref={filterWrapRef}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            position: 'relative',
+          }}
         >
-          Refresh
-        </button>
+          <button
+            type="button"
+            onClick={load}
+            style={refreshBtn}
+            aria-label="Reload list"
+          >
+            Refresh
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowFilters((open) => !open)}
+            aria-haspopup="dialog"
+            aria-expanded={showFilters}
+            style={{
+              ...filterTriggerBtn,
+              background: activeFilterCount > 0
+                ? 'var(--primary-color, var(--accent-color))'
+                : 'var(--surface-color)',
+              color: activeFilterCount > 0 ? '#fff' : 'var(--text-primary)',
+              borderColor: activeFilterCount > 0
+                ? 'var(--primary-color, var(--accent-color))'
+                : 'var(--border-color)',
+            }}
+          >
+            <Filter size={14} />
+            Filters
+            {activeFilterCount > 0 && (
+              <span style={filterBadgeStyle}>{activeFilterCount}</span>
+            )}
+          </button>
+
+          {showFilters && (
+            <div
+              role="dialog"
+              aria-label="Visa application filters"
+              style={filterPanelStyle}
+            >
+              <div style={filterPanelHeaderStyle}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 600 }}>Filters</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+                    Status, type and created date
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowFilters(false)}
+                  aria-label="Close filters"
+                  style={iconOnlyButtonStyle}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div style={filterGridStyle}>
+                <label style={filterFieldLabelStyle}>
+                  <span>Status</span>
+                  <select
+                    value={status}
+                    onChange={(e) => onStatusChange(e.target.value)}
+                    style={panelSelectStyle}
+                    aria-label="Filter by status"
+                  >
+                    {STATUSES.map((s) => (
+                      <option key={s.value} value={s.value}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label style={filterFieldLabelStyle}>
+                  <span>Type</span>
+                  <select
+                    value={applicationType}
+                    onChange={(e) => onApplicationTypeChange(e.target.value)}
+                    style={panelSelectStyle}
+                    aria-label="Filter by type"
+                  >
+                    <option value="">All types</option>
+                    {APPLICATION_TYPES.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div style={filterFieldLabelStyle}>
+                  <span>Date</span>
+                  <VisaDateRangePicker
+                    fromDate={fromDate}
+                    toDate={toDate}
+                    onChange={onDateRangeChange}
+                  />
+                </div>
+              </div>
+
+              <div style={filterPanelFooterStyle}>
+                <button
+                  type="button"
+                  onClick={clearAllFilters}
+                  disabled={!hasActiveFilters}
+                  style={{
+                    ...textActionButtonStyle,
+                    opacity: hasActiveFilters ? 1 : 0.45,
+                    cursor: hasActiveFilters ? 'pointer' : 'default',
+                  }}
+                >
+                  Reset filters
+                </button>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  {activeFilterCount} active
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
         <div
           style={{
             marginLeft: 'auto',
             fontSize: 12,
             color: 'var(--text-secondary)',
+            flexShrink: 0,
           }}
         >
           {total > 0
@@ -638,9 +1174,7 @@ export default function VisaApplications() {
           <div style={empty}>Loading&hellip;</div>
         ) : applications.length === 0 ? (
           <div style={empty}>
-            No visa applications yet. Applications appear here once
-            contacts in your tenant have applications
-            created in the system.
+            {emptyMessage}
           </div>
         ) : (
           <TopScrollSync>
@@ -1218,6 +1752,173 @@ const td = {
   padding: '10px 12px',
   fontSize: 14,
   color: 'var(--text-primary)',
+};
+
+const filterTriggerBtn = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '7px 12px',
+  borderRadius: 8,
+  border: '1px solid var(--border-color)',
+  background: 'var(--surface-color)',
+  color: 'var(--text-primary)',
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+};
+
+const filterBadgeStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minWidth: 18,
+  height: 18,
+  padding: '0 5px',
+  borderRadius: 999,
+  background: 'rgba(255,255,255,0.24)',
+  color: '#fff',
+  fontSize: 11,
+  fontWeight: 700,
+};
+
+const filterPanelStyle = {
+  position: 'absolute',
+  top: 'calc(100% + 10px)',
+  right: 0,
+  zIndex: 80,
+  width: 'min(760px, calc(100vw - 48px))',
+  background: 'var(--bg-color)',
+  border: '1px solid var(--border-color)',
+  borderRadius: 12,
+  boxShadow: '0 24px 60px rgba(0,0,0,0.18)',
+  padding: 16,
+  color: 'var(--text-primary)',
+};
+
+const filterPanelHeaderStyle = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 12,
+  marginBottom: 16,
+};
+
+const filterGridStyle = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+  gap: 12,
+  alignItems: 'start',
+};
+
+const filterFieldLabelStyle = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  fontSize: 12,
+  fontWeight: 600,
+  color: 'var(--text-secondary)',
+};
+
+const panelSelectStyle = {
+  ...selectStyle,
+  width: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+};
+
+const panelFieldButton = {
+  ...selectStyle,
+  width: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  justifyContent: 'flex-start',
+};
+
+const filterPanelFooterStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  marginTop: 14,
+  paddingTop: 14,
+  borderTop: '1px solid var(--border-color)',
+};
+
+const iconOnlyButtonStyle = {
+  background: 'transparent',
+  border: 'none',
+  color: 'var(--text-secondary)',
+  cursor: 'pointer',
+  padding: 4,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  lineHeight: 1,
+};
+
+const textActionButtonStyle = {
+  background: 'transparent',
+  border: 'none',
+  color: 'var(--primary-color, var(--accent-color))',
+  cursor: 'pointer',
+  padding: '4px 0',
+  fontSize: 13,
+  fontWeight: 600,
+};
+
+const dateModalOverlayStyle = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 1400,
+  background: 'rgba(0,0,0,0.62)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 16,
+};
+
+const dateModalStyle = {
+  width: 'min(440px, calc(100vw - 32px))',
+  maxHeight: '88vh',
+  overflowY: 'auto',
+  background: 'var(--bg-color)',
+  border: '1px solid var(--border-color)',
+  borderRadius: 16,
+  boxShadow: '0 24px 60px rgba(0,0,0,0.38)',
+  padding: 18,
+  color: 'var(--text-primary)',
+};
+
+const dateModalHeaderStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  marginBottom: 10,
+};
+
+const dateNavRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  marginTop: 8,
+};
+
+const navButtonStyle = {
+  background: 'transparent',
+  border: '1px solid var(--border-color)',
+  borderRadius: 8,
+  padding: '4px 8px',
+  color: 'var(--text-primary)',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
 };
 
 

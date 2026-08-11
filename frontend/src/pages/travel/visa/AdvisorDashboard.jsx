@@ -58,11 +58,33 @@ import { useNotify } from '../../../utils/notify';
 import { AuthContext } from '../../../App';
 
 const SECTION = {
-  background: 'rgba(255, 255, 255, 0.03)',
-  border: '1px solid rgba(255, 255, 255, 0.05)',
-  borderRadius: 12,
+  background: 'var(--surface-color)',
+  border: '1px solid var(--border-color)',
+  borderRadius: 16,
   padding: '1.25rem 1.5rem',
   marginBottom: '1.25rem',
+  backdropFilter: 'blur(12px)',
+  WebkitBackdropFilter: 'blur(12px)',
+  boxShadow: 'var(--shadow-md)',
+};
+
+const SUBSECTION = {
+  background: 'var(--subtle-bg)',
+  border: '1px solid var(--border-color)',
+  borderRadius: 12,
+  padding: '0.75rem 0.9rem',
+  backdropFilter: 'blur(12px)',
+  WebkitBackdropFilter: 'blur(12px)',
+  boxShadow: 'var(--shadow-sm)',
+};
+
+const CHIP = {
+  padding: '4px 8px',
+  borderRadius: 999,
+  border: '1px solid var(--border-color)',
+  background: 'var(--subtle-bg)',
+  color: 'var(--text-secondary)',
+  fontSize: '0.76rem',
 };
 
 const SECTION_HEADER = {
@@ -100,8 +122,8 @@ const RISK_PILL_BASE = {
 // the corresponding fields, then active (red for hard risk, yellow for
 // soft / advisor-tagged risk).
 const PILL_NEUTRAL = {
-  background: 'rgba(255, 255, 255, 0.04)',
-  borderColor: 'rgba(255, 255, 255, 0.08)',
+  background: 'var(--subtle-bg)',
+  borderColor: 'var(--border-color)',
   color: 'var(--text-secondary)',
 };
 
@@ -684,8 +706,8 @@ const VisaAdvisorDashboard = () => {
         <div
           style={{
             ...SECTION,
-            borderColor: 'rgba(255, 120, 120, 0.25)',
-            background: 'rgba(255, 120, 120, 0.05)',
+            borderColor: 'rgba(255, 120, 120, 0.28)',
+            background: 'rgba(255, 120, 120, 0.08)',
           }}
         >
           <p style={EMPTY_LINE}>
@@ -753,17 +775,10 @@ const VisaAdvisorDashboard = () => {
                   marginBottom: 12,
                 }}
               >
-                {LETTER_TEMPLATE_LABELS.map((label) => (
+                  {LETTER_TEMPLATE_LABELS.map((label) => (
                   <span
                     key={label}
-                    style={{
-                      padding: '4px 8px',
-                      borderRadius: 999,
-                      border: '1px solid rgba(255,255,255,0.08)',
-                      background: 'rgba(255,255,255,0.04)',
-                      color: 'var(--text-secondary)',
-                      fontSize: '0.76rem',
-                    }}
+                    style={CHIP}
                   >
                     {label}
                   </span>
@@ -781,11 +796,8 @@ const VisaAdvisorDashboard = () => {
                     <div
                       data-testid="letter-binding-summary"
                       style={{
+                        ...SUBSECTION,
                         gridColumn: '1 / -1',
-                        padding: '0.75rem 0.9rem',
-                        borderRadius: 10,
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        background: 'rgba(255,255,255,0.04)',
                         color: 'var(--text-secondary)',
                         fontSize: '0.84rem',
                         display: 'grid',
@@ -922,11 +934,8 @@ const VisaAdvisorDashboard = () => {
                 <div
                   data-testid="letter-packet-result"
                   style={{
+                    ...SUBSECTION,
                     marginTop: 14,
-                    padding: '0.85rem 1rem',
-                    borderRadius: 10,
-                    border: '1px solid rgba(255,255,255,0.08)',
-                    background: 'rgba(255,255,255,0.04)',
                   }}
                 >
                   <div style={{ fontWeight: 600, marginBottom: 6 }}>
@@ -952,7 +961,7 @@ const VisaAdvisorDashboard = () => {
                   data-testid="letter-packet-documents"
                   style={{
                     marginTop: 14,
-                    borderTop: '1px solid rgba(255,255,255,0.08)',
+                    borderTop: '1px solid var(--border-color)',
                     paddingTop: 14,
                     display: 'flex',
                     flexDirection: 'column',
@@ -1012,7 +1021,7 @@ const VisaAdvisorDashboard = () => {
                         alignItems: 'center',
                         gap: 10,
                         padding: '0.55rem 0',
-                        borderTop: '1px solid rgba(255,255,255,0.06)',
+                        borderTop: '1px solid var(--border-color)',
                       }}
                     >
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -1316,7 +1325,7 @@ const VisaAdvisorDashboard = () => {
                           padding: '6px 10px',
                           borderRadius: 6,
                           border: '1px solid var(--border-color)',
-                          background: 'var(--bg-color)',
+                          background: 'var(--input-bg)',
                           color: 'var(--text-primary)',
                           fontSize: 13,
                         }}
@@ -1440,7 +1449,7 @@ const VisaAdvisorDashboard = () => {
                         height: 6,
                         width: '100%',
                         borderRadius: 999,
-                        background: 'rgba(255, 255, 255, 0.06)',
+                        background: 'var(--subtle-bg-2)',
                         overflow: 'hidden',
                       }}
                       role="progressbar"

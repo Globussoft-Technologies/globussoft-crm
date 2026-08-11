@@ -1494,9 +1494,9 @@ const Leads = () => {
     : isWellness
     ? '1500px'
     : isGeneric
-    ? `${1420 + visibleCfCols * 140}px`
+    ? `${1080 + visibleCfCols * 84}px`
     : customFieldDefs.length
-    ? `${900 + customFieldDefs.length * 140}px`
+    ? `${900 + customFieldDefs.length * 84}px`
     : undefined;
 
   const leadDetailPath = (lead) => {
@@ -2643,7 +2643,7 @@ const Leads = () => {
           </div>
         </div>
         <TopScrollSync forceScrollbar>
-            <table className={isTravel ? "leads-table leads-table--fit" : "leads-table"} style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: leadsTableMinWidth, tableLayout: isTravel ? 'fixed' : 'auto' }}>
+            <table className={isTravel ? "leads-table leads-table--fit" : isGeneric ? "leads-table leads-table--compact" : "leads-table"} style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: leadsTableMinWidth, tableLayout: isTravel ? 'fixed' : 'auto' }}>
               {isTravel && (
                 <colgroup>
                   {isAdmin && <col style={{ width: '2.5%' }} />}
@@ -2684,9 +2684,22 @@ const Leads = () => {
                   {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Sub-brand</th>}
                   {isTravel && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Amount</th>}
                   {customFieldDefs.filter(f => isColVisible(`cf_${f.fieldKey}`)).map(f => (
-                    <th key={f.id} style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>{f.label}</th>
+                    <th
+                      key={f.id}
+                      className="leads-custom-field-col"
+                      style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}
+                    >
+                      <span className="leads-custom-field-label">{f.label}</span>
+                    </th>
                   ))}
-                  {isColVisible('assignedTo') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Assigned To</th>}
+                  {isColVisible('assignedTo') && (
+                    <th
+                      className="leads-assigned-col"
+                      style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}
+                    >
+                      Assigned To
+                    </th>
+                  )}
                   {isColVisible('createdAt') && <th style={{ padding: '1rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem' }}>Created</th>}
                   <th style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '500', fontSize: '0.875rem', whiteSpace: 'nowrap' }}>Actions</th>
                 </tr>
@@ -2938,6 +2951,7 @@ const Leads = () => {
                     return (
                       <td
                         key={f.id}
+                        className="leads-custom-field-col"
                         style={{ padding: '0.75rem 1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}
                         onClick={(e) => e.stopPropagation()}
                       >
@@ -2955,7 +2969,7 @@ const Leads = () => {
                     );
                   })}
                   {isColVisible('assignedTo') && (
-                    <td style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
+                    <td className="leads-assigned-col" style={{ padding: '1rem' }} onClick={e => e.stopPropagation()}>
                       {isAdmin ? (
                         <select
                           className="input-field"

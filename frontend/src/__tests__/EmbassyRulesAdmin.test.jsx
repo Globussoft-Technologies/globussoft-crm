@@ -212,6 +212,8 @@ describe('<EmbassyRulesAdmin /> — page chrome + RBAC', () => {
     expect(screen.getByLabelText(/Filter by rule type/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by severity/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by active state/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Export Embassy Rules/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Import Embassy Rules/i })).toBeInTheDocument();
     expect(screen.getByTestId('embassy-rule-new')).toBeInTheDocument();
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(

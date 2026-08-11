@@ -560,6 +560,10 @@ async function maybeAdvanceOnChecklist({ applicationId, tenantId, actorUserId })
 //
 // Query filters:
 //   ?status=<intake|docs-pending|filed|approved|rejected|appeal>
+//   ?applicationType=<tourist|business|student|work|umrah|hajj>
+//   ?search=<contact name substring>
+//   ?from=ISO  lower bound on createdAt (inclusive)
+//   ?to=ISO    upper bound on createdAt (inclusive)
 //   ?limit=N (max 200, default 50)
 //   ?offset=N (default 0)
 //
@@ -605,8 +609,9 @@ router.get(
       const skip = parseInt(req.query.offset, 10) || 0;
 
       let statusFilter = null;
-      if (req.query.status) {
-        const s = String(req.query.status);
+      const statusRaw = req.query.status ? String(req.query.status).trim() : "";
+      if (statusRaw) {
+        const s = statusRaw;
         if (!VALID_STATUSES.includes(s)) {
           return res.status(400).json({
             error: `status must be one of: ${VALID_STATUSES.join(", ")}`,
@@ -614,6 +619,47 @@ router.get(
           });
         }
         statusFilter = s;
+      }
+
+      let applicationTypeFilter = null;
+      const applicationTypeRaw = req.query.applicationType
+        ? String(req.query.applicationType).trim()
+        : "";
+      if (applicationTypeRaw) {
+        const t = applicationTypeRaw;
+        if (!VALID_APPLICATION_TYPES.includes(t)) {
+          return res.status(400).json({
+            error: `applicationType must be one of: ${VALID_APPLICATION_TYPES.join(", ")}`,
+            code: "INVALID_APPLICATION_TYPE",
+          });
+        }
+        applicationTypeFilter = t;
+      }
+
+      const searchFilter = req.query.search ? String(req.query.search).trim() : "";
+
+      const fromRaw = req.query.from ? String(req.query.from) : null;
+      const toRaw = req.query.to ? String(req.query.to) : null;
+      const createdAtFilter = {};
+      if (fromRaw) {
+        const d = new Date(fromRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "from must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        createdAtFilter.gte = d;
+      }
+      if (toRaw) {
+        const d = new Date(toRaw);
+        if (Number.isNaN(d.getTime())) {
+          return res.status(400).json({
+            error: "to must be a valid ISO date",
+            code: "INVALID_DATE",
+          });
+        }
+        createdAtFilter.lte = d;
       }
 
       // S43 — slim opt-in. The slim path skips both the Contact PII fetch
@@ -626,11 +672,21 @@ router.get(
       // contact PII (name/email/phone) for the decoration; on the SLIM
       // path we only need the ids list (used as the tenant-wide filter
       // for the applications table regardless of shape).
+      const contactSelect = wantFullShape
+        ? { id: true, name: true, email: true, phone: true }
+        : searchFilter
+          ? { id: true, name: true }
+          : { id: true };
       const visaContacts = await prisma.contact.findMany({
-        where: { tenantId },
-        select: wantFullShape
-          ? { id: true, name: true, email: true, phone: true }
-          : { id: true },
+        where: {
+          tenantId,
+          ...(searchFilter
+            ? {
+                name: { contains: searchFilter },
+              }
+            : {}),
+        },
+        select: contactSelect,
       });
 
       if (visaContacts.length === 0) {
@@ -652,6 +708,10 @@ router.get(
         contactId: { in: contactIds },
       };
       if (statusFilter) where.status = statusFilter;
+      if (applicationTypeFilter) where.applicationType = applicationTypeFilter;
+      if (createdAtFilter.gte || createdAtFilter.lte) {
+        where.createdAt = createdAtFilter;
+      }
 
       const findManyArgs = {
         where,
@@ -694,6 +754,10 @@ router.get(
         {
           subBrand: null,
           statusFilter: statusFilter || null,
+          applicationTypeFilter: applicationTypeFilter || null,
+          searchFilter: searchFilter || null,
+          createdAtFrom: fromRaw || null,
+          createdAtTo: toRaw || null,
           count: applications.length,
           shape: wantFullShape ? "full" : "summary",
         },

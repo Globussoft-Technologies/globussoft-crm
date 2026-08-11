@@ -48,6 +48,7 @@ export default function CsvImportExportToolbar({
   filters = {},
   label = null,
   onImported = null,
+  forceSync = false,
   // Patient-list opt-in: when caller passes ['csv','xlsx'] the export button
   // becomes a dropdown and the Import modal offers both template formats.
   // Other entities keep the default single-CSV UX.
@@ -195,14 +196,15 @@ export default function CsvImportExportToolbar({
       </div>
 
       {showImport && (
-        <ImportModal
-          entity={entity}
-          label={displayLabel}
-          formats={formats}
-          templateUrl={templateUrl}
-          metaUrl={metaUrl}
-          importUrl={importUrl}
-          importAsyncUrl={importAsyncUrl}
+      <ImportModal
+        entity={entity}
+        label={displayLabel}
+        formats={formats}
+        forceSync={forceSync}
+        templateUrl={templateUrl}
+        metaUrl={metaUrl}
+        importUrl={importUrl}
+        importAsyncUrl={importAsyncUrl}
           jobUrl={jobUrl}
           onClose={() => setShowImport(false)}
           onImported={(result) => {
@@ -222,6 +224,7 @@ function ImportModal({
   label,
   onClose,
   onImported,
+  forceSync = false,
   formats = ["csv"],
   templateUrl = null,
   metaUrl = null,
@@ -319,7 +322,7 @@ function ImportModal({
     const tooBig = file.size > thresholds.bytes;
     const tooLong = previewRows.length === 10 && file.size > 100 * 1024; // heuristic; the row count is properly checked server-side
 
-    const useAsync = tooBig || tooLong;
+    const useAsync = !forceSync && (tooBig || tooLong);
     const endpoint = useAsync ?
       (importAsyncUrl || `/api/wellness/csv/${entity}/import/async`)
       : (importUrl || `/api/wellness/csv/${entity}/import`);
@@ -461,7 +464,12 @@ function ImportModal({
         <p style={{ color: "var(--text-secondary)", marginBottom: "1rem" }}>
           Upload a {formats.length > 1 ? "CSV or Excel (XLSX) file" : "CSV"} with these columns:{" "}
           <code style={codePillStyle}>{expectedHeaders.join(", ") || "(loading...)"}</code>.
-          Extra columns are ignored. Files over {Math.round(thresholds.bytes / (1024 * 1024))}MB or {thresholds.rows.toLocaleString()} rows are processed in the background and emailed when done.
+          Extra columns are ignored.
+          {forceSync ? (
+            ' Imports are processed immediately on this page.'
+          ) : (
+            <> Files over {Math.round(thresholds.bytes / (1024 * 1024))}MB or {thresholds.rows.toLocaleString()} rows are processed in the background and emailed when done.</>
+          )}
         </p>
 
         <div style={{ marginBottom: "1rem", display: "flex", gap: "1rem", flexWrap: "wrap" }}>

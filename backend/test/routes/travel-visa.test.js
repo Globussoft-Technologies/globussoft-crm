@@ -403,6 +403,65 @@ describe('GET /applications — empty + happy paths', () => {
     expect(bad.body).toMatchObject({ code: 'INVALID_STATUS' });
   });
 
+  test('?applicationType=umrah narrows the where clause; ?applicationType=bogus → 400 INVALID_APPLICATION_TYPE', async () => {
+    prisma.contact.findMany.mockResolvedValue([{ id: 11, name: 'A', email: 'a@x', phone: '1' }]);
+    prisma.visaApplication.findMany.mockResolvedValue([]);
+    prisma.visaApplication.count.mockResolvedValue(0);
+
+    const ok = await request(makeApp())
+      .get('/api/travel/visa/applications?applicationType=umrah')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(ok.status).toBe(200);
+    expect(prisma.visaApplication.findMany.mock.calls[0][0].where).toMatchObject({
+      tenantId: 1,
+      contactId: { in: [11] },
+      applicationType: 'umrah',
+    });
+
+    const bad = await request(makeApp())
+      .get('/api/travel/visa/applications?applicationType=bogus')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(bad.status).toBe(400);
+    expect(bad.body).toMatchObject({ code: 'INVALID_APPLICATION_TYPE' });
+  });
+
+  test('?search=Riya filters contacts by name and ?from/?to narrows createdAt', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 11, name: 'Riya Sharma', email: 'riya@x.test', phone: '1' },
+    ]);
+    prisma.visaApplication.findMany.mockResolvedValue([]);
+    prisma.visaApplication.count.mockResolvedValue(0);
+
+    const from = '2026-05-01T00:00:00.000Z';
+    const to = '2026-05-31T23:59:59.999Z';
+    const res = await request(makeApp())
+      .get(`/api/travel/visa/applications?search=Riya&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findMany.mock.calls[0][0].where).toMatchObject({
+      tenantId: 1,
+      name: { contains: 'Riya' },
+    });
+    expect(prisma.visaApplication.findMany.mock.calls[0][0].where).toMatchObject({
+      tenantId: 1,
+      contactId: { in: [11] },
+      createdAt: {
+        gte: new Date(from),
+        lte: new Date(to),
+      },
+    });
+  });
+
+  test('?from=garbage → 400 INVALID_DATE before hitting the list query', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/visa/applications?from=not-a-date')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_DATE' });
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+    expect(prisma.visaApplication.findMany).not.toHaveBeenCalled();
+  });
+
   test('limit cap: ?limit=10000 clamped to 200', async () => {
     prisma.contact.findMany.mockResolvedValue([{ id: 11, name: 'A', email: 'a@x', phone: '1' }]);
     prisma.visaApplication.findMany.mockResolvedValue([]);

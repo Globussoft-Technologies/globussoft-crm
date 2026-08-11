@@ -50,6 +50,7 @@ import { Shield, Plus, Edit2, Trash2, X, AlertTriangle } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { AuthContext } from '../../../App';
+import CsvImportExportToolbar from '../../../components/wellness/CsvImportExportToolbar';
 
 const SEVERITIES = ['info', 'warning', 'blocker'];
 const PAGE_SIZE = 10;
@@ -467,15 +468,35 @@ export default function EmbassyRulesAdmin() {
           </p>
         </div>
         {isAdmin && (
-          <button
-            type="button"
-            onClick={openCreate}
-            style={primaryBtn}
-            aria-label="Create a new embassy rule"
-            data-testid="embassy-rule-new"
-          >
-            <Plus size={14} /> New Rule
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <CsvImportExportToolbar
+              entity="embassy-rules"
+              label="Embassy Rules"
+              formats={['csv', 'xlsx']}
+              forceSync
+              filters={{
+                destinationCountry: filterCountry.trim() ? filterCountry.trim().toUpperCase() : '',
+                ruleType: filterRuleType.trim(),
+                severity: filterSeverity,
+                isActive: filterIsActive === 'all' ? '' : filterIsActive,
+              }}
+              endpoints={{
+                export: '/api/embassy-rules/export',
+                template: '/api/embassy-rules/import-template',
+                meta: '/api/embassy-rules/import-meta',
+                import: '/api/embassy-rules/import',
+              }}
+            />
+            <button
+              type="button"
+              onClick={openCreate}
+              style={primaryBtn}
+              aria-label="Create a new embassy rule"
+              data-testid="embassy-rule-new"
+            >
+              <Plus size={14} /> New Rule
+            </button>
+          </div>
         )}
       </header>
 

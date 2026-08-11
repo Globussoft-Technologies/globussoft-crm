@@ -316,6 +316,64 @@ describe('<VisaAdvisorDashboard /> — successful render with diagnostic + check
     expect(progressbar.getAttribute('aria-valuemax')).toBe('2');
   });
 
+  it('keeps the main sections and packet summary on the shared card surfaces', async () => {
+    const prevTheme = document.documentElement.getAttribute('data-theme');
+    document.documentElement.setAttribute('data-theme', 'light');
+
+    try {
+      installFetchMock(
+        makeDetail({
+          status: 'rejected',
+          tripId: 9001,
+          participantId: 501,
+          trip: {
+            id: 9001,
+            destination: 'Hong Kong',
+            tripCode: 'hong-kong-2027',
+            departDate: '2027-01-08T00:00:00.000Z',
+            returnDate: '2027-01-20T00:00:00.000Z',
+          },
+          participant: {
+            id: 501,
+            fullName: 'Nishan Khan',
+          },
+        }),
+      );
+      renderPage();
+
+      await screen.findByRole('heading', { name: /Diagnostic answers/i });
+
+      const sectionTitles = [
+        /Application status/i,
+        /Visa letter packet/i,
+        /Diagnostic answers/i,
+        /AI summary notes/i,
+        /Risk indicators/i,
+        /Rejection recovery/i,
+        /Document checklist/i,
+      ];
+
+      sectionTitles.forEach((title) => {
+        const heading = screen.getByRole('heading', { name: title });
+        const section = heading.closest('section');
+        expect(section).not.toBeNull();
+        const style = section?.getAttribute('style') || '';
+        expect(style).toContain('background: var(--surface-color)');
+        expect(style).toContain('box-shadow: var(--shadow-md)');
+        expect(style).toContain('padding: 1.25rem 1.5rem');
+      });
+
+      const bindingSummary = screen.getByTestId('letter-binding-summary');
+      const bindingStyle = bindingSummary.getAttribute('style') || '';
+      expect(bindingStyle).toContain('background: var(--subtle-bg)');
+      expect(bindingStyle).toContain('box-shadow: var(--shadow-sm)');
+      expect(bindingStyle).toContain('padding: 0.75rem 0.9rem');
+    } finally {
+      if (prevTheme == null) document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', prevTheme);
+    }
+  });
+
   it('renders empty-diagnostic copy when application.diagnostic === null', async () => {
     installFetchMock(makeDetail({ diagnostic: null }));
     renderPage();

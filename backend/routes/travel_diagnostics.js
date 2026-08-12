@@ -23,8 +23,6 @@
 // See docs/TRAVEL_CRM_PRD.md 4.2 + 5.1 for the contract.
 
 const express = require("express");
-const path = require("path");
-const fs = require("fs");
 const crypto = require("crypto");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
@@ -35,7 +33,6 @@ const {
   parseBank,
 } = require("../lib/travelDiagnosticScoring");
 const pdfRenderer = require("../services/pdfRenderer");
-const { renderTravelDiagnosticPdf } = pdfRenderer;
 const { findDuplicateContactFull } = require("../utils/deduplication");
 const llmRouter = require("../lib/llmRouter");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
@@ -50,6 +47,8 @@ const tmcEngine = require("../lib/tmcDiagnosticEngine");
 const tmcLeadQuality = require("../lib/tmcLeadQuality");
 const tmcPrompts = require("../services/tmcDiagnosticPrompts");
 const tmcReportGuard = require("../lib/tmcReportGuard");
+const travelRag = require("../lib/travelRag");
+const { generateDiagnosticPdfBestEffort } = require("../lib/travelDiagnosticPdf");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -61,72 +60,6 @@ const {
   sanitizeText,
   sanitizeJsonForStringColumn,
 } = require("../lib/sanitizeJson");
-
-// PRD 4.2 branded PDF  saved under backend/uploads/diagnostics/ and
-// served via the backend static mounts. We persist the canonical
-// /api/uploads/diagnostics/... URL because production only proxies
-// /api/* back to Express; bare /uploads/* falls through to the SPA host
-// and 404s there. Filename includes a 16-byte random suffix so the URL
-// is unguessable for casual access; auth'd surfaces (WhatsApp / email
-// delivery, advisor download) resolve via the stored
-// TravelDiagnostic.reportPdfUrl column.
-const DIAG_PDF_DIR = path.join(__dirname, "..", "uploads", "diagnostics");
-try {
-  fs.mkdirSync(DIAG_PDF_DIR, { recursive: true });
-} catch {
-  /* best-effort */
-}
-
-async function generateDiagnosticPdfBestEffort(diag, bank) {
-  // Best-effort: if PDF generation fails, we don't break the diagnostic
-  // submission  the row is already saved, the advisor still sees it on
-  // the dashboard, and a future endpoint can re-generate. Logs the error
-  // for observability but swallows.
-  try {
-    const contact = diag.contactId
-      ? await prisma.contact.findUnique({
-          where: { id: diag.contactId },
-          select: { name: true, email: true, phone: true },
-        })
-      : { name: "Anonymous customer", email: null, phone: null };
-
-    // Brand logo for the header  S3 (tenant.logoUrl) first, local /uploads
-    // next, bundled asset last. Best-effort: a failure here just means the
-    // header draws its emblem instead.
-    let logoBuffer = null;
-    try {
-      const { resolveBrandLogoBuffer } = require("../lib/brandLogo");
-      const tenant = await prisma.tenant.findUnique({
-        where: { id: diag.tenantId },
-        select: { logoUrl: true },
-      });
-      logoBuffer = await resolveBrandLogoBuffer(tenant?.logoUrl);
-    } catch (logoErr) {
-      console.warn("[travel-diag] logo resolve failed:", logoErr.message);
-    }
-
-    const pdfBuf = await renderTravelDiagnosticPdf(diag, contact, bank, {
-      logoBuffer,
-    });
-    const rand = crypto.randomBytes(16).toString("hex");
-    const filename = `diag-${diag.id}-${rand}.pdf`;
-    const filepath = path.join(DIAG_PDF_DIR, filename);
-    await fs.promises.writeFile(filepath, pdfBuf);
-    // Use the canonical /api/uploads prefix so the file opens without auth.
-    // The backend + Nginx + Vite dev proxy all route /api/uploads/diagnostics
-    // to the backend static mount. The legacy /uploads/diagnostics prefix is
-    // still served as a fallback for older persisted rows.
-    const url = `/api/uploads/diagnostics/${filename}`;
-    await prisma.travelDiagnostic.update({
-      where: { id: diag.id },
-      data: { reportPdfUrl: url },
-    });
-    return url;
-  } catch (e) {
-    console.error("[travel-diag] PDF generation failed:", e.message);
-    return null;
-  }
-}
 
 //  Question banks
 
@@ -594,32 +527,45 @@ router.post(
         },
       });
 
-      // PRD 4.2: branded PDF generated on submission. Awaited so the
-      // response includes reportPdfUrl; if generation fails, the diagnostic
-      // row is still returned (PDF can be regenerated later).
-      const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank);
-
-      res.status(201).json({
-        diagnostic: {
-          ...diag,
-          reportPdfUrl: reportPdfUrl || diag.reportPdfUrl,
-        },
-        score: result.score,
-        classification: result.classification,
-        classificationLabel: result.classificationLabel,
-        recommendedTier: result.recommendedTier,
-        warnings: result.warnings,
-        reportPdfUrl,
-        recommendations: curriculumFit?.recommendations || [],
+      // RAG knowledge-base recommendations: best-effort for any travel sub-brand
+    // that has indexed PDFs. Runs only when Qdrant + OpenAI embeddings are
+    // configured. Never blocks the diagnostic submission; a failure simply omits
+    // the RAG section from the PDF.
+    let ragResult = null;
+    try {
+      ragResult = await travelRag.runRagForDiagnostic({
+        tenantId: req.travelTenant.id,
+        diagnosticId: diag.id,
+        subBrand: bank.subBrand,
+        answers,
+        bank: parsed,
       });
-    } catch (e) {
-      if (e.status)
-        return res.status(e.status).json({ error: e.message, code: e.code });
-      console.error("[travel-diag] submit diagnostic error:", e.message);
-      res.status(500).json({ error: "Failed to submit diagnostic" });
+    } catch (ragErr) {
+      console.warn("[travel-diag] RAG generation failed (non-fatal):", ragErr.message);
     }
-  },
-);
+
+    // PRD 4.2: branded PDF generated on submission. Awaited so the
+    // response includes reportPdfUrl; if generation fails, the diagnostic
+    // row is still returned (PDF can be regenerated later).
+    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank, { ragResult });
+
+    res.status(201).json({
+      diagnostic: { ...diag, reportPdfUrl: reportPdfUrl || diag.reportPdfUrl },
+      score: result.score,
+      classification: result.classification,
+      classificationLabel: result.classificationLabel,
+      recommendedTier: result.recommendedTier,
+      warnings: result.warnings,
+      reportPdfUrl,
+      recommendations: curriculumFit?.recommendations || [],
+      ragResult,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-diag] submit diagnostic error:", e.message);
+    res.status(500).json({ error: "Failed to submit diagnostic" });
+  }
+});
 
 // POST /api/travel/diagnostics/:id/report-pdf/regen  (re)generate the branded
 // report PDF on demand. Submission-time PDF generation is best-effort and can
@@ -887,9 +833,7 @@ router.get(
       // TravelDiagnostic has no Prisma relation to Contact (just contactId), so
       // batch-fetch the contacts and attach name/email so the UI can show WHO
       // took each diagnostic instead of a bare "#id".
-      const contactIds = [
-        ...new Set(diagnostics.map((d) => d.contactId).filter(Boolean)),
-      ];
+      const contactIds = [...new Set(diagnostics.map((d) => d.contactId).filter(Boolean))];
       const contactMap = {};
       if (contactIds.length) {
         const contacts = await prisma.contact.findMany({
@@ -898,19 +842,45 @@ router.get(
         });
         for (const c of contacts) contactMap[c.id] = c;
       }
+
+      // TravelDiagnosticRagResult is also not relation-wired; batch-fetch so the
+      // portal history can show the readiness score + recommended trips.
+      const diagnosticIds = diagnostics.map((d) => d.id);
+      const ragMap = {};
+      if (diagnosticIds.length && prisma.travelDiagnosticRagResult && typeof prisma.travelDiagnosticRagResult.findMany === "function") {
+        const ragRows = await prisma.travelDiagnosticRagResult.findMany({
+          where: { diagnosticId: { in: diagnosticIds }, tenantId: req.travelTenant.id },
+        });
+        for (const r of ragRows) {
+          let recommendations = null;
+          try {
+            recommendations = JSON.parse(r.recommendationsJson || "null");
+          } catch {
+            recommendations = null;
+          }
+          ragMap[r.diagnosticId] = {
+            id: r.id,
+            readinessScore: r.readinessScore,
+            recommendations,
+            generatedAt: r.generatedAt,
+            model: r.model,
+            stub: r.stub,
+          };
+        }
+      }
+
       const enriched = diagnostics.map((d) => ({
         ...d,
         contact: d.contactId ? contactMap[d.contactId] || null : null,
+        ragResult: ragMap[d.id] || null,
       }));
       res.json({ diagnostics: enriched, total, limit: take, offset: skip });
     } catch (e) {
-      if (e.status)
-        return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] list diagnostics error:", e.message);
       res.status(500).json({ error: "Failed to list diagnostics" });
     }
-  },
-);
+  });
 
 // ============================================================================
 // GET /api/travel/diagnostics/stats  tenant-wide Diagnostic submissions rollup

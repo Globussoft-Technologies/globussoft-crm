@@ -10,6 +10,8 @@ const s3Service = require("../services/s3Service");
 const passportOcrClient = require("../services/passportOcrClient");
 const { findPassportIdentityCandidates } = require("../lib/passportIdentityLinker");
 const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
+const travelRag = require("../lib/travelRag");
+const { generateDiagnosticPdfBestEffort } = require("../lib/travelDiagnosticPdf");
 const { notifyMany } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
 const visaDocStore = require("../lib/visaDocStore");
@@ -1473,10 +1475,38 @@ router.get("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant, 
         classification: true,
         classificationLabel: true,
         recommendedTier: true,
+        reportPdfUrl: true,
         createdAt: true,
       },
     });
-    res.json(rows);
+
+    // TravelDiagnosticRagResult is not relation-wired; batch-fetch so the
+    // portal history can show the readiness score + recommended trips.
+    const diagnosticIds = rows.map((d) => d.id);
+    const ragMap = {};
+    if (diagnosticIds.length && prisma.travelDiagnosticRagResult && typeof prisma.travelDiagnosticRagResult.findMany === "function") {
+      const ragRows = await prisma.travelDiagnosticRagResult.findMany({
+        where: { diagnosticId: { in: diagnosticIds }, tenantId: req.portal.tenantId },
+      });
+      for (const r of ragRows) {
+        let recommendations = null;
+        try {
+          recommendations = JSON.parse(r.recommendationsJson || "null");
+        } catch {
+          recommendations = null;
+        }
+        ragMap[r.diagnosticId] = {
+          id: r.id,
+          readinessScore: r.readinessScore,
+          recommendations,
+          generatedAt: r.generatedAt,
+          model: r.model,
+          stub: r.stub,
+        };
+      }
+    }
+
+    res.json(rows.map((d) => ({ ...d, ragResult: ragMap[d.id] || null })));
   } catch (err) {
     console.error("[Portal][travel/diagnostics]", err);
     res.status(500).json({ error: "Failed to load diagnostics" });
@@ -1527,6 +1557,28 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
         recommendedTier: result.recommendedTier,
       },
     });
+
+    // RAG knowledge-base recommendations: best-effort for any travel sub-brand
+    // that has indexed PDFs. Runs only when Qdrant + OpenAI embeddings are
+    // configured. Never blocks the diagnostic submission; a failure simply omits
+    // the RAG section from the PDF.
+    let ragResult = null;
+    try {
+      ragResult = await travelRag.runRagForDiagnostic({
+        tenantId: req.portal.tenantId,
+        diagnosticId: diag.id,
+        subBrand: bank.subBrand,
+        answers,
+        bank: parsed,
+      });
+    } catch (ragErr) {
+      console.warn("[Portal][travel/diagnostics POST] RAG generation failed (non-fatal):", ragErr.message);
+    }
+
+    // Best-effort branded PDF; if it fails the diagnostic row is still returned
+    // and the customer can retry via the report-pdf/regen staff endpoint.
+    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank, { ragResult });
+
     res.status(201).json({
       id: diag.id,
       subBrand: diag.subBrand,
@@ -1534,7 +1586,9 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
       classification: result.classification,
       classificationLabel: result.classificationLabel,
       recommendedTier: result.recommendedTier,
+      reportPdfUrl: reportPdfUrl || diag.reportPdfUrl,
       createdAt: diag.createdAt,
+      ragResult,
     });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message, code: err.code });

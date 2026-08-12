@@ -202,6 +202,11 @@ const TASK_ROUTING = {
     primary: "gemini-flash",
     fallback: "groq-llama",
   },
+  // Travel CRM knowledge-base RAG (2026-08-04). Given a TMC diagnostic profile
+  // and the closest matching brochure chunks from Qdrant, return a structured
+  // JSON report: readiness score, recommended trips, places, and learnings.
+  // Gemini Flash primary for low-cost JSON shape; OpenAI gpt-4 fallback.
+  "travel-knowledge-rag": { primary: "gemini-flash", fallback: "gpt-4o-mini"},
   // Catch-all for unrecognized tasks → reasoning model (Claude)
   // matches PRD's preference for a high-quality default.
 };
@@ -216,6 +221,8 @@ const ENV_FOR_MODEL = {
   "perplexity-sonar": "PERPLEXITY_API_KEY",
   "claude-opus-4-7": "ANTHROPIC_API_KEY",
   "gpt-4": "OPENAI_API_KEY",
+  "gpt-4o": "OPENAI_API_KEY",
+  "gpt-4o-mini": "OPENAI_API_KEY",
   // OpenAI's web-search-enabled chat model — same OPENAI_API_KEY, but the
   // model itself browses the live web (gpt-4o-search-preview). Used by the
   // flight/hotel/transfer search tasks so estimates are web-grounded.
@@ -610,6 +617,19 @@ function buildStubText(task, _payload) {
         { lineType: "visa", description: "Visa fees per person", quantity: 2, unitPrice: 6000, currency: "INR" },
         { lineType: "service", description: "Travel insurance per person", quantity: 2, unitPrice: 1200, currency: "INR" },
       ]);
+    case "travel-knowledge-rag":
+      return JSON.stringify({
+        readinessScore: 7,
+        summary: "[STUB-TRAVEL-KNOWLEDGE-RAG] Synthetic recommendation. Real Gemini Flash reasoning lands when Q11 keys arrive.",
+        recommendedTrips: [
+          {
+            name: "Example Trip (synthetic)",
+            driveLink: "https://drive.google.com/file/d/example/view",
+            summary: "A synthetic two-sentence summary describing why this trip fits the school's profile and what it covers.",
+            learnings: ["Learning A (synthetic)", "Learning B (synthetic)", "Learning C (synthetic)", "Learning D (synthetic)"],
+          },
+        ],
+      });
     case "reasoning":
       return `${tag} Reasoning output (synthetic). Real Gemini Flash/GPT lands when Q11 keys arrive.`;
     default:
@@ -696,6 +716,8 @@ function buildPrompt(task, payload) {
       "You generate STRUCTURED travel-destination landing-page block JSON. The canonical consumer (landingPageGeneratorLLM.js) supplies the full prompt — this text-envelope entry is a safety net for routeRequest callers. Return a JSON object with keys suggestedTitle, suggestedSlug, seoMeta {metaTitle, metaDescription}, and blocks (array). NEVER include monetary values, testimonials, ratings, discounts, vendor names, partner names, or image URLs.",
     "lead-capture-consolidate":
       "You are a travel CRM assistant that consolidates a lead's captured email/WhatsApp history into ONE flowing narrative — flowing paragraphs, never a transcript, never bullet points. The input is NOT raw messages — it is a series of ALREADY-SUMMARIZED dated blocks (each with a Customer/Date/Purpose/Discussion Highlights/Lead Stage section) that were written one at a time as separate captures over time; your job is to read all of them and merge them into one coherent case-file recap. Given the customer's name and the full block text, return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"narrative\":string,\"leadStage\":string}. `narrative` should be 2-5 short paragraphs in chronological order, each covering one meaningful phase (initial contact, a follow-up, a decision point), naming actual dates, destinations, services requested, and outcomes — do NOT restate every block verbatim, synthesize across all of them. Write in third person past tense, referring to the customer by name. `leadStage` is your best single current-status assessment from the LATEST block's stage, one of: \"New Enquiry\", \"Quotation Pending\", \"Follow-up Required\", \"Documents Awaited\", \"Booking In Progress\", \"Booking Confirmed\", \"Payment Pending\", \"Closed\", \"Not Interested\". Base everything ONLY on the text given; never invent details not present. Return ONLY the JSON object.",
+    "travel-knowledge-rag":
+      "You are a travel advisor for the CRM. Given a customer diagnostic profile and a set of brochure excerpts retrieved from a vector database, produce a structured JSON report that helps the customer understand which travel option fits them best. The sub-brand is provided in the context as `subBrand` (e.g., tmc = school trips, rfu = Umrah packages, travelstall = family holidays, visasure = visa services). Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"readinessScore\": number 0-10, \"summary\": string, \"recommendedTrips\": [{\"name\": string, \"driveLink\": string, \"summary\": string, \"learnings\": string[]}]}. The readinessScore reflects how ready the customer's answers suggest they are for the recommended travel option. recommendedTrips MUST contain at least 5 options, and up to 15 options if that many brochure excerpts are strongly relevant. If fewer than 5 excerpts are a clear match, include the next nearest relevant options to reach a minimum of 5. For every recommended option, provide a `summary` of exactly 2 concise sentences explaining why it suits the customer. Provide exactly 4 short `learnings` that describe what the traveller will experience, learn, or do on the trip. Never include cancellation, refund, payment terms, insurance disclaimers, or general booking/policy statements in the learnings. Use only the option names and facts present in the excerpts. Include the provided driveLink for each option so it is clickable in the final PDF. Do not invent destinations, prices, or details not in the excerpts.",
     reasoning:
       "You are a careful reasoning assistant for a travel CRM. Plain text.",
     search: "You answer with concise, well-sourced information. Plain text.",
@@ -790,17 +812,44 @@ async function callOpenAICompatible(
   };
 }
 
+// Build an auth header descriptor for a custom Gemini base URL.
+// Env format: GEMINI_AUTH_HEADER / TRAVEL_KNOWLEDGE_RAG_GEMINI_AUTH_HEADER = header
+// name (e.g. "Authorization" or "x-goog-api-key"), plus optional prefix env var.
+// If no prefix is supplied, "Authorization" defaults to "Bearer".
+function buildGeminiAuthHeader(headerName, prefix) {
+  if (!headerName) return null;
+  const name = headerName.trim();
+  if (!name) return null;
+  let resolvedPrefix = (prefix || "").trim();
+  if (!resolvedPrefix && name.toLowerCase() === "authorization") {
+    resolvedPrefix = "Bearer";
+  }
+  return { name, prefix: resolvedPrefix };
+}
+
 // A single generateContent call against one Gemini model. Throws on non-2xx
 // (httpJson surfaces "<status> <message>").
-async function callGeminiOnce(modelId, system, user, apiKey, maxTokens) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(apiKey)}`;
+async function callGeminiOnce(modelId, system, user, apiKey, maxTokens, baseUrl, authHeader, jsonMode = false) {
+  const base = baseUrl || "https://generativelanguage.googleapis.com/v1beta";
+  let url = `${base}/models/${modelId}:generateContent`;
+  const headers = { "content-type": "application/json" };
+  if (authHeader && authHeader.name) {
+    const prefix = authHeader.prefix || "";
+    headers[authHeader.name] = prefix ? `${prefix} ${apiKey}` : apiKey;
+  } else {
+    url += `?key=${encodeURIComponent(apiKey)}`;
+  }
+  const generationConfig = { maxOutputTokens: maxTokens };
+  if (jsonMode) {
+    generationConfig.responseMimeType = "application/json";
+  }
   const body = await httpJson(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts: [{ text: user }] }],
-      generationConfig: { maxOutputTokens: maxTokens },
+      generationConfig,
     }),
   });
   const parts =
@@ -839,14 +888,15 @@ function geminiModelChain(primaryId) {
   return [primaryId, ...fallbacks].filter((m, i, a) => m && a.indexOf(m) === i);
 }
 
-async function callGemini(modelId, system, user, apiKey, maxTokens) {
+async function callGemini(modelId, system, user, apiKey, maxTokens, opts = {}) {
+  const { baseUrl, authHeader, jsonMode } = opts;
   const chain = geminiModelChain(modelId);
   const attemptsPerModel = 2;
   let lastErr;
   for (const m of chain) {
     for (let attempt = 1; attempt <= attemptsPerModel; attempt += 1) {
       try {
-        const out = await callGeminiOnce(m, system, user, apiKey, maxTokens);
+        const out = await callGeminiOnce(m, system, user, apiKey, maxTokens, baseUrl, authHeader, jsonMode);
         if (m !== modelId) {
           console.warn(`[llm-router] gemini: '${modelId}' unavailable, succeeded on fallback '${m}'`);
         }
@@ -886,6 +936,24 @@ function persistLlmCallLog(data) {
     console.error(`[llm-router] LlmCallLog require failed (non-fatal): ${e.message}`);
   }
 }
+
+// Tasks whose consumer expects a strict JSON object from the LLM.
+// Gemini 2.x supports responseMimeType: "application/json", which forces
+// valid JSON output and avoids mid-JSON truncation that breaks parsers.
+const JSON_OUTPUT_TASKS = new Set([
+  "callified-lead-status",
+  "flight-search",
+  "hotel-search",
+  "landing-page-generate",
+  "lead-capture-consolidate",
+  "lead-conversation-summary",
+  "lead-narrative-summary",
+  "marketing-flyer-copy",
+  "quote-template-generate",
+  "transfer-search",
+  "travel-knowledge-rag",
+  "whatsapp-lead-qualify",
+]);
 
 async function realProviderCall({ task, model, payload, tenantId }) {
   const provider = providerForModel(model);
@@ -929,7 +997,18 @@ async function realProviderCall({ task, model, payload, tenantId }) {
       out = await callOpenAICompatible("https://api.openai.com/v1", modelId, system, user, apiKey, maxTokens, extra);
     }
     else if (provider === "perplexity") out = await callOpenAICompatible("https://api.perplexity.ai", modelId, system, user, apiKey, maxTokens);
-    else if (provider === "gemini") out = await callGemini(modelId, system, user, apiKey, maxTokens);
+    else if (provider === "gemini") {
+      let baseUrl = null;
+      let authHeader = null;
+      if (task === "travel-knowledge-rag" && process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL) {
+        baseUrl = process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_BASE_URL;
+        authHeader = buildGeminiAuthHeader(process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_AUTH_HEADER, process.env.TRAVEL_KNOWLEDGE_RAG_GEMINI_AUTH_PREFIX);
+      } else if (process.env.GEMINI_BASE_URL) {
+        baseUrl = process.env.GEMINI_BASE_URL;
+        authHeader = buildGeminiAuthHeader(process.env.GEMINI_AUTH_HEADER, process.env.GEMINI_AUTH_PREFIX);
+      }
+      out = await callGemini(modelId, system, user, apiKey, maxTokens, { task, baseUrl, authHeader, jsonMode: JSON_OUTPUT_TASKS.has(task) });
+    }
     else if (provider === "groq") out = await callOpenAICompatible("https://api.groq.com/openai/v1", modelId, system, user, apiKey, maxTokens);
     else throw new Error(`unknown provider for ${model}`);
   } catch (e) {

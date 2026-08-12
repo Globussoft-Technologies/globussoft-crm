@@ -1,4 +1,4 @@
-﻿import React, {
+import React, {
   useState,
   useContext,
   createContext,
@@ -260,7 +260,10 @@ const TravelDiagnosticBuilder = lazy(
 const TravelDiagnosticDetail = lazy(
   () => import("./pages/travel/DiagnosticDetail"),
 );
-// T16  dedicated TMC catalogue admin (extracts the Promote-to-active sub-panel
+const TravelKnowledgeBaseAdmin = lazy(
+  () => import("./pages/travel/KnowledgeBaseAdmin"),
+);
+// T16 — dedicated TMC catalogue admin (extracts the Promote-to-active sub-panel
 // from DiagnosticBuilder's EngineWeights tab into a first-class page).
 const TravelTmcCatalogueAdmin = lazy(
   () => import("./pages/travel/TmcCatalogueAdmin"),
@@ -2692,7 +2695,7 @@ export default function App() {
                   so generic + wellness tenants get bounced to /dashboard
                   rather than rendering empty travel UI. Phase 1 sub-pages
                   (diagnostics, itineraries, trips, visa, suppliers) mount
-                  under /travel/* per docs/TRAVEL_CRM_PRD.md 7. */}
+                  under /travel/* per docs/TRAVEL_CRM_PRD.md §7. */}
                       <Route
                         path="travel"
                         element={
@@ -2734,6 +2737,14 @@ export default function App() {
                         }
                       />
                       <Route
+                        path="travel/trip-knowledge"
+                        element={
+                          <TravelOnly>
+                            <TravelKnowledgeBaseAdmin />
+                          </TravelOnly>
+                        }
+                      />
+                      <Route
                         path="travel/itineraries"
                         element={
                           <TravelOnly>
@@ -2765,7 +2776,7 @@ export default function App() {
                           </TravelOnly>
                         }
                       />
-                      {/* #912  canonical kebab-case path matches sibling travel routes
+                      {/* #912 — canonical kebab-case path matches sibling travel routes
                   (cost-master, pricing-rules, religious-packets). The unhyphenated
                   alias stays registered so existing bookmarks / sidebar links keep working. */}
                       <Route

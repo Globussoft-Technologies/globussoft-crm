@@ -11,19 +11,21 @@ import request from 'supertest';
 import prisma from '../../lib/prisma.js';
 
 
-
 const requireCJS = createRequire(import.meta.url);
 
 const authMw = requireCJS('../../middleware/auth');
 
+/**
+ * @param {import('express').Request} _req
+ * @param {import('express').Response} _res
+ * @param {import('express').NextFunction} next
+ */
 authMw.verifyToken = (_req, _res, next) => next();
-
 
 
 const emailSender = requireCJS('../../lib/emailSender');
 
 emailSender.sendEmail = vi.fn().mockResolvedValue({ sent: true });
-
 
 
 prisma.webForm = prisma.webForm || {};
@@ -42,8 +44,9 @@ prisma.leadCustomFieldValue = prisma.leadCustomFieldValue || {};
 
 prisma.tenant = prisma.tenant || {};
 
-prisma.user = prisma.user || {};
+prisma.tenantSetting = prisma.tenantSetting || {};
 
+prisma.user = prisma.user || {};
 
 
 for (const key of ['findMany', 'findFirst', 'create', 'update', 'delete', 'groupBy']) {
@@ -54,7 +57,7 @@ for (const key of ['findMany', 'findFirst', 'create', 'update', 'delete', 'group
 
 }
 
-for (const key of ['findFirst', 'create']) {
+for (const key of ['findFirst', 'create', 'update']) {
 
   prisma.contact[key] = vi.fn();
 
@@ -74,18 +77,17 @@ for (const key of ['findMany', 'upsert']) {
 
 prisma.tenant.findUnique = vi.fn();
 
-prisma.user.findFirst = vi.fn();
+prisma.tenantSetting.findUnique = vi.fn();
 
+prisma.user.findFirst = vi.fn();
 
 
 const webFormsRouter = requireCJS('../../routes/web_forms');
 
 
-
 const TENANT_ID = 11;
 
 const USER_ID = 22;
-
 
 
 function makeApp() {
@@ -94,7 +96,7 @@ function makeApp() {
 
   app.use(express.json());
 
-  app.use((req, _res, next) => {
+  app.use((/** @type {any} */ req, /** @type {import('express').Response} */ _res, /** @type {import('express').NextFunction} */ next) => {
 
     req.user = { userId: USER_ID, tenantId: TENANT_ID, role: 'ADMIN' };
 
@@ -109,10 +111,9 @@ function makeApp() {
 }
 
 
-
 beforeEach(() => {
 
-  for (const model of [prisma.webForm, prisma.webFormSubmission, prisma.contact, prisma.deal, prisma.contactAttachment, prisma.leadCustomFieldDefinition, prisma.leadCustomFieldValue, prisma.tenant, prisma.user]) {
+  for (const model of [prisma.webForm, prisma.webFormSubmission, prisma.contact, prisma.deal, prisma.contactAttachment, prisma.leadCustomFieldDefinition, prisma.leadCustomFieldValue, prisma.tenant, prisma.tenantSetting, prisma.user]) {
 
     for (const key of Object.keys(model)) {
 
@@ -146,12 +147,13 @@ beforeEach(() => {
 
   prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, defaultCurrency: 'USD' });
 
+  prisma.tenantSetting.findUnique.mockResolvedValue(null);
+
   prisma.user.findFirst.mockResolvedValue(null);
 
   emailSender.sendEmail.mockClear();
 
 });
-
 
 
 describe('GET /api/forms', () => {
@@ -169,9 +171,7 @@ describe('GET /api/forms', () => {
     prisma.webFormSubmission.groupBy.mockResolvedValue([{ webFormId: 1, _count: { _all: 3 } }]);
 
 
-
     const res = await request(makeApp()).get('/api/forms');
-
 
 
     expect(res.status).toBe(200);
@@ -191,7 +191,6 @@ describe('GET /api/forms', () => {
     });
 
   });
-
 
 
   test('creates a starter form when the tenant has no forms', async () => {
@@ -227,9 +226,7 @@ describe('GET /api/forms', () => {
     });
 
 
-
     const res = await request(makeApp()).get('/api/forms');
-
 
 
     expect(res.status).toBe(200);
@@ -279,13 +276,11 @@ describe('GET /api/forms', () => {
 });
 
 
-
 describe('POST /api/forms', () => {
 
   test('creates a form with an auto-slug', async () => {
 
     prisma.webForm.findFirst.mockResolvedValueOnce(null);
-
 
 
     const res = await request(makeApp()).post('/api/forms').send({
@@ -295,7 +290,6 @@ describe('POST /api/forms', () => {
       description: 'Lead capture',
 
     });
-
 
 
     expect(res.status).toBe(201);
@@ -315,7 +309,6 @@ describe('POST /api/forms', () => {
   });
 
 });
-
 
 
 describe('PUT /api/forms/:id', () => {
@@ -442,9 +435,7 @@ describe('GET /api/forms/public/:slug', () => {
     });
 
 
-
     const res = await request(makeApp()).get('/api/forms/public/contact-us');
-
 
 
     expect(res.status).toBe(200);
@@ -456,7 +447,6 @@ describe('GET /api/forms/public/:slug', () => {
   });
 
 });
-
 
 
 describe('POST /api/forms/public/:slug/submit', () => {
@@ -498,7 +488,6 @@ describe('POST /api/forms/public/:slug/submit', () => {
     });
 
 
-
     const res = await request(makeApp())
 
       .post('/api/forms/public/contact-us/submit')
@@ -508,7 +497,6 @@ describe('POST /api/forms/public/:slug/submit', () => {
       .field('interest', 'A')
 
       .field('interest', 'B');
-
 
 
     expect(res.status).toBe(201);
@@ -590,7 +578,6 @@ describe('POST /api/forms/public/:slug/submit', () => {
     prisma.contact.findFirst.mockResolvedValueOnce({ id: 2002, tenantId: TENANT_ID, name: 'Monica', email: 'monica999@gmail.com' });
 
 
-
     const res = await request(makeApp())
 
       .post('/api/forms/public/contact-us/submit')
@@ -598,7 +585,6 @@ describe('POST /api/forms/public/:slug/submit', () => {
       .field('name', 'Monica')
 
       .field('email', 'monica999@gmail.com');
-
 
 
     expect(res.status).toBe(201);
@@ -622,6 +608,99 @@ describe('POST /api/forms/public/:slug/submit', () => {
     }));
 
 });
+
+
+  test('auto-assigns Callified campaign by rule for new Lead', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: false, hidden: false, width: 'full', options: [] },
+        { id: 'contact-source', sourceKind: 'contact', sourceKey: 'source', fieldType: 'dropdown', label: 'Source', required: false, hidden: true, defaultValue: 'website-form', width: 'full', options: [] },
+      ]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({ submitButtonLabel: 'Send', successMessage: 'Thanks!' }),
+    });
+
+    prisma.tenantSetting.findUnique.mockImplementation((/** @type {{ where?: { tenantId_key?: { key: string } } }} */ params) => {
+      const { where } = params;
+      if (where?.tenantId_key?.key === 'feature.callified.auto_campaign_rules') {
+        return {
+          value: JSON.stringify({
+            enabled: true,
+            rules: [{ enabled: true, column: 'source', value: 'website-form', campaignId: 77 }],
+          }),
+        };
+      }
+      return null;
+    });
+
+    const res = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit')
+      .field('name', 'Web Lead');
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        source: 'website-form',
+        status: 'Lead',
+        callifiedCampaignId: 77,
+      }),
+    }));
+  });
+
+  test('backfills Callified campaign on existing contact when rule matches', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({
+      id: 1,
+      tenantId: TENANT_ID,
+      createdByUserId: USER_ID,
+      name: 'Contact Us',
+      slug: 'contact-us',
+      description: '',
+      isActive: true,
+      fieldsJson: JSON.stringify([
+        { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-source', sourceKind: 'contact', sourceKey: 'source', fieldType: 'dropdown', label: 'Source', required: false, hidden: true, defaultValue: 'website-form', width: 'full', options: [] },
+      ]),
+      styleJson: JSON.stringify({}),
+      settingsJson: JSON.stringify({ submitButtonLabel: 'Send', successMessage: 'Thanks!' }),
+    });
+
+    prisma.tenantSetting.findUnique.mockImplementation((/** @type {{ where?: { tenantId_key?: { key: string } } }} */ params) => {
+      const { where } = params;
+      if (where?.tenantId_key?.key === 'feature.callified.auto_campaign_rules') {
+        return {
+          value: JSON.stringify({
+            enabled: true,
+            rules: [{ enabled: true, column: 'source', value: 'website-form', campaignId: 77 }],
+          }),
+        };
+      }
+      return null;
+    });
+
+    prisma.contact.findFirst.mockResolvedValueOnce({ id: 2003, tenantId: TENANT_ID, name: 'Monica', email: 'monica999@gmail.com', callifiedCampaignId: null });
+    prisma.contact.update.mockResolvedValueOnce({ id: 2003, tenantId: TENANT_ID, name: 'Monica', email: 'monica999@gmail.com', callifiedCampaignId: 77 });
+
+    const res = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit')
+      .field('name', 'Monica')
+      .field('email', 'monica999@gmail.com');
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 2003 },
+      data: { callifiedCampaignId: 77 },
+    });
+  });
 
 
 });

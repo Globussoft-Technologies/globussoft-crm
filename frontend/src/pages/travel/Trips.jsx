@@ -8,7 +8,7 @@
 // No creation flow here — trips spawn from the linked Deal in the sales
 // pipeline (Day 7+ Deal-extension lands later).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import {
   Luggage,
@@ -22,6 +22,8 @@ import {
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import TopScrollSync from "../../components/TopScrollSync";
+import TripPager from "./TripPager";
 
 // School is captured as free-text so the operator doesn't have to pre-create
 // a Contact row for every new school. The backend POST /api/travel/trips
@@ -69,6 +71,14 @@ const EMPTY_FORM = {
 
 const BRAND_LABEL = "TMC";
 const SUB_BRAND_LABEL = "School trips";
+const DEFAULT_PAGE_SIZE = 20;
+const PAGE_SIZE_OPTIONS = [10, 20, 50];
+const MAX_PAGE_SIZE = 200;
+const TRIPS_TABLE_MIN_WIDTH = 1640;
+
+function readPageParam(params) {
+  return Math.max(1, parseInt(params.get("page") || "1", 10) || 1);
+}
 
 export default function Trips() {
   const notify = useNotify();
@@ -76,13 +86,51 @@ export default function Trips() {
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchParams, setSearchParams] = useSearchParams();
-  const [status, setStatus] = useState("");
-  const [search, setSearch] = useState("");
+  const page = readPageParam(searchParams);
+  const [status, setStatus] = useState(searchParams.get("status") || "");
+  const [search, setSearch] = useState(searchParams.get("search") || "");
+  const [total, setTotal] = useState(0);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [isCustomPageSize, setIsCustomPageSize] = useState(false);
+  const [customPageSize, setCustomPageSize] = useState("");
+  const [reloadTick, setReloadTick] = useState(0);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const reqIdRef = useRef(0);
   const fromReports = searchParams.get("from") === "reports";
   const tripsListPath = `${location.pathname}${location.search}`;
+
+  const updateParams = useCallback(
+    (patch, options = {}) => {
+      const next = new URLSearchParams(searchParams);
+      for (const [key, value] of Object.entries(patch)) {
+        if (
+          value === null ||
+          value === undefined ||
+          value === "" ||
+          (Array.isArray(value) && !value.length)
+        ) {
+          next.delete(key);
+        } else {
+          next.set(key, String(value));
+        }
+      }
+      setSearchParams(next, options);
+    },
+    [searchParams, setSearchParams],
+  );
+
+  useEffect(() => {
+    const nextStatus = searchParams.get("status") || "";
+    const nextSearch = searchParams.get("search") || "";
+    setStatus((current) => (current === nextStatus ? current : nextStatus));
+    setSearch((current) => (current === nextSearch ? current : nextSearch));
+  }, [searchParams]);
+
+  const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const hasActiveFilters = Boolean(status || search.trim());
 
   const openCreate = () => {
     setForm(EMPTY_FORM);
@@ -121,7 +169,7 @@ export default function Trips() {
       });
       notify.success("Trip created");
       setCreating(false);
-      load({ reset: true });
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Failed to create trip");
     } finally {
@@ -129,15 +177,9 @@ export default function Trips() {
     }
   };
 
-  useEffect(() => {
-    const nextStatus = searchParams.get("status") || "";
-    const nextSearch = searchParams.get("search") || "";
-    setStatus((current) => (current === nextStatus ? current : nextStatus));
-    setSearch((current) => (current === nextSearch ? current : nextSearch));
-  }, [searchParams]);
-
   const load = useCallback(
     async ({ reset = false } = {}) => {
+      const myReqId = ++reqIdRef.current;
       if (reset) {
         setLoading(true);
         setTrips([]);
@@ -146,49 +188,69 @@ export default function Trips() {
       }
       const qs = new URLSearchParams();
       if (status) qs.set("status", status);
-      qs.set("limit", String(200));
+      if (search.trim()) qs.set("search", search.trim());
+      qs.set("limit", String(pageSize));
+      qs.set("offset", String(Math.max(0, (page - 1) * pageSize)));
 
       try {
         const res = await fetchApi(`/api/travel/trips?${qs.toString()}`);
+        if (myReqId !== reqIdRef.current) return;
         const rows = Array.isArray(res?.trips) ? res.trips : [];
-
         setTrips(rows);
+        setTotal(Number(res?.total) || 0);
       } catch (e) {
+        if (myReqId !== reqIdRef.current) return;
         notify.error(e?.body?.error || "Failed to load trips");
         setTrips([]);
+        setTotal(0);
       } finally {
-        setLoading(false);
+        if (myReqId === reqIdRef.current) {
+          setLoading(false);
+        }
       }
     },
-    [status, notify],
+    [page, pageSize, search, status, notify],
   );
 
   useEffect(() => {
     load({ reset: true });
-  }, [load]);
+  }, [load, reloadTick]);
+
+  useEffect(() => {
+    if (total > 0 && page > pageCount) {
+      updateParams({ page: pageCount }, { replace: true });
+    }
+  }, [page, pageCount, total, updateParams]);
 
   const handleStatusChange = (nextStatus) => {
     setStatus(nextStatus);
-    const nextParams = new URLSearchParams(searchParams);
-    if (nextStatus) nextParams.set("status", nextStatus);
-    else nextParams.delete("status");
-    setSearchParams(nextParams, { replace: true });
+    updateParams({ status: nextStatus, page: 1 }, { replace: true });
   };
+
+  const handleSearchChange = (value) => {
+    setSearch(value);
+    updateParams({ search: value, page: 1 }, { replace: true });
+  };
+
+  const setPage = useCallback(
+    (nextPage) => {
+      updateParams({ page: nextPage });
+    },
+    [updateParams],
+  );
+
+  const setPageSizeAndReset = useCallback(
+    (nextPageSize) => {
+      setPageSize(nextPageSize);
+      updateParams({ page: 1 });
+    },
+    [updateParams],
+  );
 
   // Track which trip is currently being deleted so we can disable its
   // row's trash button (prevents double-click race) without disabling
   // siblings.
   const [deletingId, setDeletingId] = useState(null);
-
-  const visibleTrips = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return trips;
-    return trips.filter(
-      (t) =>
-        t.tripCode?.toLowerCase().includes(q) ||
-        t.destination?.toLowerCase().includes(q),
-    );
-  }, [trips, search]);
 
   // DELETE /api/travel/trips/:id is ADMIN-only on the server
   // (requirePermission("trips","delete")). The route cascades through
@@ -314,7 +376,7 @@ export default function Trips() {
           <input
             type="search"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Search trip code or destination…"
             aria-label="Search trips"
             style={{ ...selectStyle, paddingLeft: 28, minWidth: 240 }}
@@ -353,36 +415,32 @@ export default function Trips() {
           <div style={empty}>Loading&hellip;</div>
         ) : trips.length === 0 ? (
           <div style={empty}>
-            No trips yet. New trips spawn from the linked Deal in the sales
-            pipeline.
+            {hasActiveFilters
+              ? "No trips match the current filters."
+              : "No trips yet. New trips spawn from the linked Deal in the sales pipeline."}
           </div>
-        ) : visibleTrips.length === 0 ? (
-          <div style={empty}>No trips match &quot;{search}&quot;.</div>
         ) : (
-          <div
-            data-testid="trips-table-scroll"
-            style={{ overflowX: "scroll", overflowY: "visible" }}
-          >
-            <div style={{ minWidth: "calc(100% + 1px)" }}>
+          <>
+            <TopScrollSync forceScrollbar>
               <table
                 style={{
                   width: "100%",
-                  minWidth: 1205,
+                  minWidth: TRIPS_TABLE_MIN_WIDTH,
                   borderCollapse: "collapse",
                   tableLayout: "fixed",
                 }}
               >
                 <colgroup>
-                  <col style={{ width: 170 }} />
-                  <col style={{ width: 260 }} />
+                  <col style={{ width: 190 }} />
+                  <col style={{ width: 280 }} />
                   <col style={{ width: 120 }} />
-                  <col style={{ width: 140 }} />
-                  <col style={{ width: 220 }} />
-                  <col style={{ width: 240 }} />
-                  <col style={{ width: 130 }} />
                   <col style={{ width: 150 }} />
+                  <col style={{ width: 240 }} />
+                  <col style={{ width: 250 }} />
+                  <col style={{ width: 150 }} />
+                  <col style={{ width: 160 }} />
                   <col style={{ width: 120 }} />
-                  <col style={{ width: 90 }} />
+                  <col style={{ width: 80 }} />
                 </colgroup>
                 <thead>
                   <tr>
@@ -402,7 +460,7 @@ export default function Trips() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleTrips.map((t) => {
+                  {trips.map((t) => {
                     const sc = STATUS_COLORS[t.status] || {
                       bg: "var(--subtle-bg)",
                       color: "var(--text-secondary)",
@@ -519,8 +577,22 @@ export default function Trips() {
                   })}
                 </tbody>
               </table>
-            </div>
-          </div>
+            </TopScrollSync>
+            <TripPager
+              total={total}
+              page={safePage}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSizeAndReset}
+              isCustomPageSize={isCustomPageSize}
+              setIsCustomPageSize={setIsCustomPageSize}
+              customPageSize={customPageSize}
+              setCustomPageSize={setCustomPageSize}
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
+              maxPageSize={MAX_PAGE_SIZE}
+              entityLabel="trips"
+            />
+          </>
         )}
       </div>
       {creating && (

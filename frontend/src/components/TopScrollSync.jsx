@@ -19,6 +19,8 @@ const TopScrollSync = ({
   children,
   disabled = false,
   forceScrollbar = false,
+  stickyTop = false,
+  stickyTopOffset = 0,
 }) => {
   const topRef = useRef(null);
   const bottomRef = useRef(null);
@@ -111,6 +113,10 @@ const TopScrollSync = ({
             height: "16px",
             minWidth: 0,
             maxWidth: "100%",
+            position: stickyTop ? "sticky" : "static",
+            top: stickyTop ? stickyTopOffset : "auto",
+            zIndex: stickyTop ? 5 : "auto",
+            background: stickyTop ? "var(--surface-color)" : "transparent",
           }}
         >
           <div style={{ width: spacerWidth, height: "1px" }} />

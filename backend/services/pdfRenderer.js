@@ -3517,58 +3517,104 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     const recs = ragResult.recommendations;
     const trips = Array.isArray(recs.recommendedTrips) ? recs.recommendedTrips : [];
     if (trips.length || Number.isFinite(recs.readinessScore)) {
-      doc.moveDown(1);
-      doc.font("Helvetica-Bold").fontSize(12).fillColor("#111")
-        .text("Recommended options from our brochure library");
+      doc.moveDown(0.6);
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
+        .text("RECOMMENDED OPTIONS", pageMargin, doc.y, { characterSpacing: 1.4 });
+      doc.y += 10;
+      doc.font("Helvetica-Bold").fontSize(14).fillColor(textDark)
+        .text("Recommended options from our brochure library", pageMargin, doc.y);
+      doc.y += 8;
+
       if (Number.isFinite(recs.readinessScore)) {
-        drawReadinessScore(recs.readinessScore);
+        drawMetricCard({
+          x: pageMargin,
+          y: doc.y,
+          w: Math.min(220, contentW),
+          label: "Readiness score",
+          value: `${recs.readinessScore} / 10`,
+          tone: accent,
+          soft: accentSoft,
+          valueColor: accentDeeper,
+        });
+        doc.y += 60;
       } else {
         doc.moveDown(0.3);
       }
+
       function isPolicyHighlight(text) {
         const t = String(text || "").toLowerCase();
         return /\b(cancellation|cancel|refund|non-refundable|payment|policy|policies|disclaimer|insurance|booking conditions?)\b/.test(t);
       }
 
       trips.forEach((trip, tIdx) => {
-        doc.moveDown(0.4);
-        doc.font("Helvetica-Bold").fontSize(11).fillColor(accent)
-          .text(`${tIdx + 1}. ${trip.name || "Trip"}`);
+        const tripTitle = `${tIdx + 1}. ${trip.name || "Trip"}`;
+        const summaryText = trip.summary || "";
+        const cleanLearnings = (trip.learnings || [])
+          .filter((learning) => !isPolicyHighlight(learning))
+          .slice(0, 4);
 
-        if (trip.summary) {
-          doc.moveDown(0.25);
-          doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#333")
-            .text("Summary:");
-          doc.font("Helvetica").fontSize(9.5).fillColor("#444")
-            .text(trip.summary);
-        }
+        const innerW = contentW - 56;
+        const titleH = doc.heightOfString(tripTitle, { width: innerW - 90, lineGap: 2 });
+        const summaryH = summaryText
+          ? doc.heightOfString(summaryText, { width: innerW, lineGap: 2 })
+          : 0;
+        const highlightsH = cleanLearnings.length
+          ? cleanLearnings.reduce(
+              (acc, learning) =>
+                acc +
+                doc.heightOfString(`• ${learning}`, { width: innerW - 12, lineGap: 2 }),
+              0,
+            )
+          : 0;
+        const cardH =
+          16 +
+          titleH +
+          (summaryText ? 12 + summaryH + 6 : 0) +
+          (cleanLearnings.length ? 12 + highlightsH + 6 : 0) +
+          8;
+
+        ensureAnswerSpace(cardH + 10);
+
+        const cardTop = doc.y;
+        doc.roundedRect(pageMargin, cardTop, contentW, cardH, 14).fillAndStroke("#FFFFFF", borderSoft);
+        doc.circle(pageMargin + 22, cardTop + 18, 10).fill(accent);
+        doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#FFFFFF")
+          .text(String(tIdx + 1), pageMargin + 18, cardTop + 12, { width: 8, align: "center", lineBreak: false });
+
+        doc.font("Helvetica-Bold").fontSize(10.5).fillColor(textDark)
+          .text(tripTitle, pageMargin + 42, cardTop + 10, { width: innerW - 90, lineGap: 2 });
 
         if (trip.driveLink) {
-          doc.moveDown(0.25);
-          doc.font("Helvetica").fontSize(9).fillColor("#2563EB")
-            .text("View brochure on Google Drive", { underline: true, link: trip.driveLink });
+          doc.font("Helvetica-Bold").fontSize(8).fillColor(accent)
+            .text("VIEW BROCHURE", pageMargin + contentW - 86, cardTop + 13, { width: 72, align: "right", lineBreak: false, link: trip.driveLink });
         }
 
-          const cleanLearnings = (trip.learnings || [])
-            .filter((learning) => !isPolicyHighlight(learning))
-            .slice(0, 4);
-          if (cleanLearnings.length) {
-          doc.moveDown(0.45);
-          doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#333")
-            .text("Trip highlights:");
-          doc.moveDown(0.15);
+        let cursorY = cardTop + 16 + titleH + 6;
+
+        if (summaryText) {
+          doc.font("Helvetica-Bold").fontSize(8).fillColor(textMuted)
+            .text("SUMMARY", pageMargin + 42, cursorY, { characterSpacing: 1.1, lineBreak: false });
+          cursorY += 12;
+          doc.font("Helvetica").fontSize(9.5).fillColor(textDark)
+            .text(summaryText, pageMargin + 42, cursorY, { width: innerW, lineGap: 2 });
+          cursorY += summaryH + 6;
+        }
+
+        if (cleanLearnings.length) {
+          doc.font("Helvetica-Bold").fontSize(8).fillColor(textMuted)
+            .text("TRIP HIGHLIGHTS", pageMargin + 42, cursorY, { characterSpacing: 1.1, lineBreak: false });
+          cursorY += 12;
           cleanLearnings.forEach((learning) => {
-            doc.font("Helvetica").fontSize(9).fillColor("#555")
-              .text(`• ${learning}`, { indent: 10 });
+            const lineH = doc.heightOfString(`• ${learning}`, { width: innerW - 12, lineGap: 2 });
+            doc.font("Helvetica").fontSize(9).fillColor(textDark)
+              .text(`• ${learning}`, pageMargin + 54, cursorY, { width: innerW - 12, lineGap: 2 });
+            cursorY += lineH;
           });
         }
 
-        doc.moveDown(0.4);
-        const sepY = doc.y;
-        doc.moveTo(60, sepY).lineTo(doc.page.width - 60, sepY).lineWidth(0.5).strokeColor("#ddd").stroke();
-        doc.moveDown(0.2);
+        doc.y = cardTop + cardH + 10;
       });
-      doc.moveDown(0.4);
+      doc.moveDown(0.3);
     }
   }
 

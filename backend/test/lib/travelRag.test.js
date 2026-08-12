@@ -39,7 +39,7 @@ describe('travelRag — parseRagResponse', () => {
     expect(out.readinessScore).toBe(8);
     expect(out.summary).toBe('Great fit');
     expect(out.recommendedTrips).toHaveLength(1);
-    expect(out.recommendedTrips[0].places[0].learnings).toHaveLength(2);
+    expect(out.recommendedTrips[0].learnings).toHaveLength(2);
   });
 
   test('extracts JSON from a markdown fenced block', () => {

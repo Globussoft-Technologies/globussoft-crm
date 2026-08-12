@@ -862,6 +862,65 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     });
   });
 
+  test("backfills Callified campaign on existing lead when rule matches", async () => {
+    prisma.tenantSetting.findUnique.mockImplementation(({ where }) => {
+      const key = where?.tenantId_key?.key;
+      if (key === "feature.callified.auto_dial_new_leads.enabled") return { value: "false" };
+      if (key === "feature.callified.auto_campaign_rules") {
+        return {
+          value: JSON.stringify({
+            enabled: true,
+            rules: [{ enabled: true, column: "source", value: "website-form", campaignId: 42 }],
+          }),
+        };
+      }
+      return null;
+    });
+    classifyLeadMock.mockResolvedValueOnce({
+      isJunk: false,
+      score: 70,
+      reasons: [],
+    });
+    prisma.tenant.findUnique
+      .mockReset()
+      .mockResolvedValueOnce({ vertical: "generic", callifiedAutoCampaignId: null });
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      id: 557,
+      name: "Existing Lead",
+      email: "ext@example.com",
+      phone: "+919900112234",
+      status: "Lead",
+      source: "website-form",
+      callifiedCampaignId: null,
+      tenantId: 7,
+    });
+    prisma.contact.update.mockResolvedValueOnce({
+      id: 557,
+      name: "Existing Lead",
+      email: "ext@example.com",
+      phone: "+919900112234",
+      status: "Lead",
+      source: "website-form",
+      callifiedCampaignId: 42,
+      tenantId: 7,
+    });
+
+    const app = makeApp();
+    const res = await request(app).post("/api/v1/external/leads").send({
+      name: "Existing Lead",
+      phone: "+919900112234",
+      email: "ext@example.com",
+      source: "website-form",
+    });
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 557 },
+      data: expect.objectContaining({ callifiedCampaignId: 42 }),
+    });
+  });
+
   test("auto-dial is skipped when tenant disables auto-dial new leads", async () => {
     prisma.tenantSetting.findUnique.mockImplementation(({ where }) => {
       const key = where?.tenantId_key?.key;

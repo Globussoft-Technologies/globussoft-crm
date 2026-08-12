@@ -527,6 +527,12 @@ router.post("/leads", async (req, res) => {
             dedupeUpdates[key] = value;
           }
         }
+        // Backfill Callified campaign on existing leads when an inbound retry
+        // now matches an auto-campaign rule (e.g. partner re-posts a lead that
+        // was created before the rule existed).
+        if (contact.callifiedCampaignId == null && contactData.callifiedCampaignId != null) {
+          dedupeUpdates.callifiedCampaignId = contactData.callifiedCampaignId;
+        }
         if (Object.keys(dedupeUpdates).length > 1) {
           contact = await prisma.contact.update({ where: { id: contact.id }, data: dedupeUpdates });
         }

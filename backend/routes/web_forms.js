@@ -11,6 +11,8 @@ const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 
 const { sendEmail } = require("../lib/emailSender");
+const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 
 const router = express.Router();
 
@@ -899,6 +901,20 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
       if (!assignee) delete contactData.assignedToId;
     }
 
+    // Auto-assign new Leads to a matching Callified campaign based on the
+    // tenant's rule configuration when no campaign was supplied explicitly.
+    // Mirrors the logic in contacts.js and external.js.
+    if (contactData.status === "Lead" && contactData.callifiedCampaignId == null) {
+      try {
+        const matchedCampaignId = await evaluateAutoCampaignRules(form.tenantId, contactData, customFieldValues);
+        if (matchedCampaignId) {
+          contactData.callifiedCampaignId = matchedCampaignId;
+        }
+      } catch (e) {
+        console.error("[web_forms] auto-campaign rule evaluation failed:", e.message);
+      }
+    }
+
     let tenantCurrency = "USD";
 
     if (settings.createDeal) {
@@ -920,6 +936,15 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
     if (contactData.email) {
       contact = await prisma.contact.findFirst({
         where: { tenantId: form.tenantId, email: contactData.email },
+      });
+    }
+
+    // Backfill Callified campaign on existing leads when a form re-submission
+    // now matches an auto-campaign rule.
+    if (contact && contact.callifiedCampaignId == null && contactData.callifiedCampaignId != null) {
+      contact = await prisma.contact.update({
+        where: { id: contact.id },
+        data: { callifiedCampaignId: contactData.callifiedCampaignId },
       });
     }
 
@@ -953,6 +978,27 @@ router.post("/public/:slug/submit", upload.any(), async (req, res) => {
         form.tenantId,
         customFieldValues,
       );
+    }
+
+    // Auto-dial newly-created web-form Leads that have a Callified campaign + phone
+    // when the tenant has enabled auto-dial for new leads. Mirrors external.js.
+    if (contact.status === "Lead" && contact.callifiedCampaignId && contact.phone) {
+      try {
+        const autoDialEnabled = await getSetting(contact.tenantId, KEYS.CALLIFIED_AUTO_DIAL_NEW_LEADS_ENABLED, {
+          coerce: (v) => String(v).toLowerCase() !== "false",
+        });
+        if (autoDialEnabled) {
+          const { enqueue } = require("../lib/callifiedAutoDialQueue");
+          enqueue({
+            tenantId: contact.tenantId,
+            contactId: contact.id,
+            campaignId: contact.callifiedCampaignId,
+            userId: null,
+          });
+        }
+      } catch (_e) {
+        console.error("[web_forms] auto-dial enqueue failed:", _e && _e.message);
+      }
     }
 
     let deal = null;

@@ -77,42 +77,153 @@ async function fetchLatestCallReviewForContact(tenantId, contactId) {
 
   if (leadIds.length === 0) return { hasCall: true, log: logs[0], review: null, transcript: null };
 
-  // Fetch fresh details for each unique lead id and keep the newest transcript
-  // + its matching review across all of them.
-  let bestTranscript = null;
-  let bestReview = null;
-  let bestLog = logs[0];
+  // For each unique lead id, pick the best transcript + review. We then keep
+  // the single best pair across all of them. A transcript without a created_at
+  // timestamp is still considered (fallback to the last element in the array),
+  // and a review without a matching transcript is still used so that a real
+  // answered call does not get misclassified as DNP just because the review
+  // metadata is delayed or the transcript ordering is ambiguous.
+  function getTranscriptTimestamp(t) {
+    if (!t) return 0;
+    const d = new Date(t.created_at || t.createdAt || 0);
+    return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+  }
+  function getReviewTimestamp(r) {
+    if (!r) return 0;
+    const d = new Date(r.created_at || r.createdAt || r.updated_at || r.updatedAt || 0);
+    return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+  }
+  function getLogTimestamp(log) {
+    if (!log) return 0;
+    const d = new Date(log.createdAt || log.created_at || 0);
+    return Number.isNaN(d.getTime()) ? 0 : d.getTime();
+  }
+  function transcriptHasText(t) {
+    return String(t?.transcript_text || t?.transcript || t?.text || "").trim().length > 0;
+  }
+  function parseLogNotes(log) {
+    if (!log?.notes) return { transcripts: [], reviews: [] };
+    try {
+      const parsed = JSON.parse(log.notes);
+      if (parsed && typeof parsed === "object") {
+        return {
+          transcripts: Array.isArray(parsed.transcripts) ? parsed.transcripts : [],
+          reviews: Array.isArray(parsed.reviews) ? parsed.reviews : [],
+        };
+      }
+    } catch (_) { /* ignore malformed notes */ }
+    return { transcripts: [], reviews: [] };
+  }
+  function findLatestReviewForTranscript(details, latestTranscript) {
+    if (!Array.isArray(details.reviews)) return null;
+    const goodReviews = details.reviews.filter((r) => r && !r.error);
+    if (goodReviews.length === 0) return null;
+    // If there is only one usable review for this call, trust it. Callified
+    // sometimes omits transcript_id on the review or returns it out of sync with
+    // the transcript array, and discarding the only review makes the status flap
+    // between answered-call and DNP/New on every refresh.
+    if (goodReviews.length === 1) return goodReviews[0];
+    // When the latest transcript has real conversation text, prefer a review
+    // explicitly linked to it. A review tied to a different transcript_id is
+    // likely stale and belongs to an earlier call.
+    if (latestTranscript && transcriptHasText(latestTranscript)) {
+      const match = goodReviews.find((r) =>
+        r.transcript_id != null &&
+        String(r.transcript_id) === String(latestTranscript.id),
+      );
+      if (match) return match;
+      const orphan = goodReviews.find((r) =>
+        r.transcript_id == null || r.transcriptId == null,
+      );
+      if (orphan) return orphan;
+      return null;
+    }
+    // No usable transcript text: fall back to the best available review.
+    return (
+      goodReviews.find((r) => typeof r.quality_score === "number" && r.quality_score > 0) ||
+      goodReviews[0] ||
+      null
+    );
+  }
+  function findLatestTranscript(details) {
+    if (!Array.isArray(details.transcripts) || details.transcripts.length === 0) return null;
+    const valid = details.transcripts.filter((t) => t && typeof t === "object");
+    if (valid.length === 0) return null;
+    const withCreatedAt = valid.filter((t) => t.created_at);
+    if (withCreatedAt.length > 0) {
+      return [...withCreatedAt].sort(
+        (a, b) => getTranscriptTimestamp(b) - getTranscriptTimestamp(a),
+      )[0];
+    }
+    // No created_at available: assume the API returned chronological order and
+    // use the last transcript as the latest. This mirrors the fallback in
+    // fetchAndStoreCallDetails so classification and the UI agree.
+    return valid[valid.length - 1];
+  }
+
+  let bestCandidate = null;
   for (const callifiedLeadId of leadIds) {
-    const details = await callifiedClient.getCallDetails(tenantId, callifiedLeadId).catch((e) => {
+    const logForLead = logs.find((l) => {
+      let id = l.providerCallId;
+      try {
+        const parsed = JSON.parse(l.notes || "{}");
+        if (parsed.callifiedLeadId) id = String(parsed.callifiedLeadId);
+      } catch (_) { /* ignore */ }
+      return id === callifiedLeadId;
+    }) || logs[0];
+
+    // Prefer live API details, but merge in the cached CallLog notes as a
+    // fallback. Callified's API can return partial/out-of-sync review data on
+    // repeated polls, so the notes we already stored in fetchAndStoreCallDetails
+    // act as a stable secondary source.
+    const notes = parseLogNotes(logForLead);
+    const apiDetails = await callifiedClient.getCallDetails(tenantId, callifiedLeadId).catch((e) => {
       console.error(`[callified] getCallDetails failed for lead ${callifiedLeadId}: ${e.message}`);
       return { transcripts: [], reviews: [] };
     });
-    const sortedTranscripts = Array.isArray(details.transcripts)
-      ? [...details.transcripts]
-        .filter((t) => t && t.created_at)
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      : [];
-    const latestTranscript = sortedTranscripts[0] || null;
-    const latestReview =
-      details.reviews?.find((r) => r && !r.error && (latestTranscript ? r.transcript_id === latestTranscript.id : true)) ||
-      details.reviews?.find((r) => r && !r.error) ||
-      null;
+    const apiReviews = Array.isArray(apiDetails.reviews) ? apiDetails.reviews : [];
+    const noteReviews = (Array.isArray(notes.reviews) ? notes.reviews : []).filter(
+      (nr) => nr && !nr.error && !apiReviews.some(
+        (ar) => ar.transcript_id != null && String(ar.transcript_id) === String(nr.transcript_id),
+      ),
+    );
+    const details = { ...apiDetails, reviews: [...apiReviews, ...noteReviews] };
 
-    if (latestTranscript && (!bestTranscript || new Date(latestTranscript.created_at).getTime() > new Date(bestTranscript.created_at).getTime())) {
-      bestTranscript = latestTranscript;
-      bestReview = latestReview;
-      bestLog = logs.find((l) => {
-        let id = l.providerCallId;
-        try {
-          const parsed = JSON.parse(l.notes || "{}");
-          if (parsed.callifiedLeadId) id = String(parsed.callifiedLeadId);
-        } catch (_) { /* ignore */ }
-        return id === callifiedLeadId;
-      }) || logs[0];
+    const latestTranscript = findLatestTranscript(details);
+    const latestReview = findLatestReviewForTranscript(details, latestTranscript);
+
+    const candidate = {
+      transcript: latestTranscript,
+      review: latestReview,
+      log: logForLead,
+      timestamp: Math.max(
+        getTranscriptTimestamp(latestTranscript),
+        getReviewTimestamp(latestReview),
+        getLogTimestamp(logForLead),
+      ),
+    };
+
+    if (!bestCandidate) {
+      bestCandidate = candidate;
+      continue;
+    }
+
+    // The latest call (by log time) should always win, because that is the
+    // freshest outcome. If two calls land on the same timestamp, prefer the one
+    // with a real review/transcript signal.
+    if (candidate.timestamp > bestCandidate.timestamp) {
+      bestCandidate = candidate;
+    } else if (candidate.timestamp === bestCandidate.timestamp && candidate.review && !bestCandidate.review) {
+      bestCandidate = candidate;
     }
   }
 
-  return { hasCall: true, log: bestLog, review: bestReview, transcript: bestTranscript };
+  return {
+    hasCall: true,
+    log: bestCandidate?.log || logs[0],
+    review: bestCandidate?.review || null,
+    transcript: bestCandidate?.transcript || null,
+  };
 }
 
 async function updateCallLogNotesWithReview(tenantId, contactId, review) {

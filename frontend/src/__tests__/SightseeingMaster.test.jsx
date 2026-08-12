@@ -1,11 +1,11 @@
-/**
- * SightseeingMaster.test.jsx — vitest + RTL coverage for the Travel-vertical
+﻿/**
+ * SightseeingMaster.test.jsx â€” vitest + RTL coverage for the Travel-vertical
  * Sightseeing-master admin page (frontend/src/pages/travel/SightseeingMaster.jsx).
  *
  * #907 slice 3/N. Pins the page-surface invariants that consume the
  * TravelSightseeing CRUD shipped in slice 2 (a8715895):
  *   GET    /api/travel/sightseeing?destinationName=&category=&isActive=&limit=&offset=
- *          → 200 { items, total, limit, offset }
+ *          â†’ 200 { items, total, limit, offset }
  *   POST   /api/travel/sightseeing  body: { destinationName(req), name(req), ... }
  *   PATCH  /api/travel/sightseeing/:id
  *   DELETE /api/travel/sightseeing/:id  (soft-delete)
@@ -15,28 +15,28 @@
  *   2. GET on mount: hits /api/travel/sightseeing?... and renders one row
  *      per item.
  *   3. Empty list shows "No sightseeing entries yet" empty state.
- *   4. Create flow: click "Add sightseeing" → fill destinationName + name →
- *      submit "Create" → POST /api/travel/sightseeing called with payload →
+ *   4. Create flow: click "Add sightseeing" â†’ fill destinationName + name â†’
+ *      submit "Create" â†’ POST /api/travel/sightseeing called with payload â†’
  *      list re-fetched + notify.success surfaced.
- *   5. Validation: missing destinationName → notify.error fired, NO POST.
- *   6. Validation: missing name → notify.error fired, NO POST.
- *   7. Edit flow: click Edit on a row → form populated with that row's
- *      values → submit → PATCH /api/travel/sightseeing/:id called.
- *   8. Delete flow: click Delete on a row → notify.confirm prompts → ack →
- *      DELETE /api/travel/sightseeing/:id → list re-fetched.
- *   9. Filter: change destination filter → GET re-fires with
- *      ?destinationName=… in the URL.
- *  10. Filter: untick "Active only" → GET re-fires with ?isActive=false.
+ *   5. Validation: missing destinationName â†’ notify.error fired, NO POST.
+ *   6. Validation: missing name â†’ notify.error fired, NO POST.
+ *   7. Edit flow: click Edit on a row â†’ form populated with that row's
+ *      values â†’ submit â†’ PATCH /api/travel/sightseeing/:id called.
+ *   8. Delete flow: click Delete on a row â†’ notify.confirm prompts â†’ ack â†’
+ *      DELETE /api/travel/sightseeing/:id â†’ list re-fetched.
+ *   9. Filter: change destination filter â†’ GET re-fires with
+ *      ?destinationName=â€¦ in the URL.
+ *  10. Filter: untick "Active only" â†’ GET re-fires with ?isActive=false.
  *
  * Mocking discipline (per CLAUDE.md RTL standing rules):
  *   - fetchApi mocked at ../utils/api (the page's dep, NOT global fetch).
- *   - useNotify stub at ../utils/notify — CostMaster.jsx imports notify from
+ *   - useNotify stub at ../utils/notify â€” CostMaster.jsx imports notify from
  *     ../utils/notify, NOT ../hooks/useNotify (the slice-3 prompt's
  *     reference was drift; mirroring code reality per the
  *     verifying-gap-card-claims discipline).
  *   - notifyObj is a STABLE module-level reference (Wave 11 cfb5789 / Wave
- *     12 f59e91d RTL standing rule — fresh per-call objects flap useCallback
- *     identity → infinite re-renders).
+ *     12 f59e91d RTL standing rule â€” fresh per-call objects flap useCallback
+ *     identity â†’ infinite re-renders).
  *   - AuthContext consumed via real Provider. Default user role = ADMIN.
  *   - MemoryRouter wraps the SUT (the page renders a <Link to="/travel/
  *     cost-master"> in the header copy).
@@ -159,7 +159,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('<SightseeingMaster /> — page chrome', () => {
+describe('<SightseeingMaster /> â€” page chrome', () => {
   it('renders heading "Sightseeing Master" + "Add sightseeing" CTA', async () => {
     renderPage();
     expect(
@@ -177,7 +177,7 @@ describe('<SightseeingMaster /> — page chrome', () => {
   });
 });
 
-describe('<SightseeingMaster /> — load + render lifecycle', () => {
+describe('<SightseeingMaster /> â€” load + render lifecycle', () => {
   it('GETs /api/travel/sightseeing on mount and renders one row per item', async () => {
     renderPage();
     expect(await screen.findByText('Masjid al-Haram')).toBeInTheDocument();
@@ -203,7 +203,7 @@ describe('<SightseeingMaster /> — load + render lifecycle', () => {
   });
 });
 
-describe('<SightseeingMaster /> — create flow', () => {
+describe('<SightseeingMaster /> â€” create flow', () => {
   it('clicking "Add sightseeing" reveals the form; filling required fields + Create POSTs payload', async () => {
     renderPage();
     await screen.findByText('Masjid al-Haram');
@@ -250,7 +250,7 @@ describe('<SightseeingMaster /> — create flow', () => {
   });
 });
 
-describe('<SightseeingMaster /> — create validation', () => {
+describe('<SightseeingMaster /> â€” create validation', () => {
   it('missing destinationName surfaces notify.error and does NOT POST', async () => {
     renderPage();
     await screen.findByText('Masjid al-Haram');
@@ -291,7 +291,7 @@ describe('<SightseeingMaster /> — create validation', () => {
   });
 });
 
-describe('<SightseeingMaster /> — edit flow', () => {
+describe('<SightseeingMaster /> â€” edit flow', () => {
   it('clicking Edit on a row populates the form; submit PATCHes /api/travel/sightseeing/:id', async () => {
     renderPage();
     const rowName = await screen.findByText('Masjid al-Haram');
@@ -327,7 +327,7 @@ describe('<SightseeingMaster /> — edit flow', () => {
   });
 });
 
-describe('<SightseeingMaster /> — delete flow', () => {
+describe('<SightseeingMaster /> â€” delete flow', () => {
   it('clicking Delete on a row prompts notify.confirm + DELETEs /api/travel/sightseeing/:id', async () => {
     renderPage();
     const rowName = await screen.findByText('Masjid al-Haram');
@@ -353,8 +353,8 @@ describe('<SightseeingMaster /> — delete flow', () => {
   });
 });
 
-describe('<SightseeingMaster /> — filter behaviour', () => {
-  it('typing in destination filter re-fetches with ?destinationName=… in the URL', async () => {
+describe('<SightseeingMaster /> â€” filter behaviour', () => {
+  it('typing in destination filter re-fetches with ?destinationName=â€¦ in the URL', async () => {
     renderPage();
     await screen.findByText('Masjid al-Haram');
     fetchApiMock.mockClear();
@@ -417,7 +417,7 @@ describe('<SightseeingMaster /> — filter behaviour', () => {
   });
 });
 
-describe('<SightseeingMaster /> — currency & duration formatting', () => {
+describe('<SightseeingMaster /> â€” currency & duration formatting', () => {
   it('formats INR price as ₹ + locale-grouped major units (priceReferenceMinor / 100)', async () => {
     installFetchMock({
       list: {
@@ -485,7 +485,7 @@ describe('<SightseeingMaster /> — currency & duration formatting', () => {
     });
     renderPage();
     const row = (await screen.findByText('Treasury')).closest('tr');
-    // Price-ref cell is the 5th td (index 4): Destination | POI name | Category | Duration | Price ref. | …
+    // Price-ref cell is the 5th td (index 4): Destination | POI name | Category | Duration | Price ref. | â€¦
     const tds = within(row).getAllByRole('cell');
     expect(tds[4].textContent.trim()).toBe('—');
   });
@@ -518,7 +518,7 @@ describe('<SightseeingMaster /> — currency & duration formatting', () => {
   });
 });
 
-describe('<SightseeingMaster /> — sub-brand badge + description', () => {
+describe('<SightseeingMaster /> â€” sub-brand badge + description', () => {
   it('renders the subBrand as a badge when set; renders "tenant" placeholder when null', async () => {
     installFetchMock({
       list: {
@@ -556,11 +556,13 @@ describe('<SightseeingMaster /> — sub-brand badge + description', () => {
   });
 });
 
-describe('<SightseeingMaster /> — pagination edge cases', () => {
+describe('<SightseeingMaster /> â€” pagination edge cases', () => {
   it('shows "No results" range copy when total=0', async () => {
     installFetchMock({ list: { items: [], total: 0, limit: 20, offset: 0 } });
     renderPage();
-    expect(await screen.findByText(/No results/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/No sightseeing entries yet\. Add one above\./i),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Previous page/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /Next page/i })).toBeNull();
   });
@@ -570,12 +572,13 @@ describe('<SightseeingMaster /> — pagination edge cases', () => {
       list: { items: ITEMS_DEFAULT, total: ITEMS_DEFAULT.length, limit: 20, offset: 0 },
     });
     renderPage();
-    expect(await screen.findByText(/Showing 3 of 3/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Previous page/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Next page/i })).toBeNull();
+    await screen.findByText('Masjid al-Haram');
+    expect(document.body.textContent).toContain('of 3 sightseeing entries');
+    expect(screen.getByRole('button', { name: /Previous page/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Next page/i })).toBeDisabled();
   });
 
-  it('loads the next page when the table is scrolled near the bottom', async () => {
+  it('clicking Next loads the next page', async () => {
     // 25 items total, first page has 20, second page has 5.
     const page1 = Array.from({ length: 20 }, (_, i) =>
       makeItem({ id: 2000 + i, destinationName: `D${i}`, name: `POI${i}`, durationMinutes: 30, priceReferenceMinor: null, currency: null }),
@@ -594,14 +597,10 @@ describe('<SightseeingMaster /> — pagination edge cases', () => {
     });
     renderPage();
     expect(await screen.findByText('POI0')).toBeInTheDocument();
-    expect(screen.getByText(/Showing 20 of 25/i)).toBeInTheDocument();
+    expect(document.body.textContent).toContain('of 25 sightseeing entries');
 
     fetchApiMock.mockClear();
-    const scroller = screen.getByTestId('sightseeing-table-scroll');
-    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 });
-    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 500 });
-    Object.defineProperty(scroller, 'scrollTop', { configurable: true, value: 460 });
-    fireEvent.scroll(scroller);
+    fireEvent.click(screen.getByRole('button', { name: /Next page/i }));
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -614,10 +613,13 @@ describe('<SightseeingMaster /> — pagination edge cases', () => {
       expect(call).toBeTruthy();
     });
     expect(await screen.findByText('POI24')).toBeInTheDocument();
+    expect(document.body.textContent).toContain('21');
+    expect(document.body.textContent).toContain('25');
+    expect(document.body.textContent).toContain('sightseeing entries');
   });
 });
 
-describe('<SightseeingMaster /> — form interaction & error surfaces', () => {
+describe('<SightseeingMaster /> â€” form interaction & error surfaces', () => {
   it('Cancel button closes the form (destinationName label no longer rendered)', async () => {
     renderPage();
     await screen.findByText('Masjid al-Haram');
@@ -648,7 +650,7 @@ describe('<SightseeingMaster /> — form interaction & error surfaces', () => {
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith('Listing blew up');
     });
-    // Items reset to [] → empty-state copy renders.
+    // Items reset to [] â†’ empty-state copy renders.
     expect(
       await screen.findByText(/No sightseeing entries yet\. Add one above\./i),
     ).toBeInTheDocument();
@@ -674,7 +676,7 @@ describe('<SightseeingMaster /> — form interaction & error surfaces', () => {
   });
 });
 
-describe('<SightseeingMaster /> � template + import actions', () => {
+describe('<SightseeingMaster /> — template + import actions', () => {
   it('renders CSV/Excel template actions and import control in the header', async () => {
     renderPage();
     await screen.findByText('Masjid al-Haram');

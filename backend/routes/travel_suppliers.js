@@ -4806,7 +4806,7 @@ router.get(
         where.supplier = { is: supplierFilter };
       }
 
-      const [rows, total] = await Promise.all([
+      const [rows, total, summaryRows] = await Promise.all([
         prisma.travelSupplierPayable.findMany({
           where,
           include: {
@@ -4819,6 +4819,10 @@ router.get(
           skip: offset,
         }),
         prisma.travelSupplierPayable.count({ where }),
+        prisma.travelSupplierPayable.findMany({
+          where,
+          select: { status: true, amount: true, currency: true },
+        }),
       ]);
 
       const now = new Date();
@@ -4850,13 +4854,15 @@ router.get(
         };
       });
 
-      // Summary aggregates over the returned page (see header note).
+      // Summary aggregates over the full filtered result set, not just the
+      // paginated page returned above. This keeps the KPI cards stable while
+      // the table lazy-loads additional rows on scroll.
       const byStatus = { pending: 0, scheduled: 0, paid: 0, cancelled: 0 };
       const currencyBreakdown = {};
       let totalPending = "0.00";
       let totalScheduled = "0.00";
       let totalPaid = "0.00";
-      for (const p of payables) {
+      for (const p of summaryRows) {
         if (Object.prototype.hasOwnProperty.call(byStatus, p.status)) {
           byStatus[p.status] += 1;
         } else {

@@ -1387,6 +1387,48 @@ function Field({ label, children }) {
 // G105: /api/travel/tmc/booking-link-config GET/PUT manages the URL stored
 // in tenant.subBrandConfigJson.tmc.bookingLinkUrl (admin-only PUT).
 // ────────────────────────────────────────────────────────────────────
+function humanizeFactKey(key) {
+  return String(key || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function humanizeFactValue(value) {
+  if (Array.isArray(value)) return value.join(", ");
+  if (value && typeof value === "object") {
+    return Object.entries(value)
+      .map(([key, nestedValue]) => `${humanizeFactKey(key)}: ${humanizeFactValue(nestedValue)}`)
+      .join("; ");
+  }
+  return String(value ?? "");
+}
+
+function factsJsonToPlainText(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === "string") return parsed;
+    if (parsed && typeof parsed === "object") {
+      if (typeof parsed.plainText === "string") return parsed.plainText;
+      return Object.entries(parsed)
+        .filter(([, value]) => value != null && humanizeFactValue(value).trim())
+        .map(([key, value]) => `${humanizeFactKey(key)}: ${humanizeFactValue(value)}.`)
+        .join(" ");
+    }
+    return String(parsed ?? "");
+  } catch {
+    return trimmed;
+  }
+}
+
+function plainTextToFactsJson(text) {
+  const trimmed = String(text || "").trim();
+  return trimmed ? JSON.stringify({ plainText: trimmed }) : null;
+}
+
 function TmcConfigPanel({ notify, isAdmin }) {
   const [collapsed, setCollapsed] = useState(true);
   // G105
@@ -1408,8 +1450,8 @@ function TmcConfigPanel({ notify, isAdmin }) {
     ]).then(([booking, ew]) => {
       if (cancelled) return;
       setBookingLinkUrl(booking?.bookingLinkUrl || "");
-      setAssuranceFactsJson(ew?.assuranceFactsJson || "");
-      setTrustFactsJson(ew?.trustFactsJson || "");
+      setAssuranceFactsJson(factsJsonToPlainText(ew?.assuranceFactsJson));
+      setTrustFactsJson(factsJsonToPlainText(ew?.trustFactsJson));
       setEwLoaded(true);
     });
     return () => {
@@ -1444,21 +1486,6 @@ function TmcConfigPanel({ notify, isAdmin }) {
     e.preventDefault();
     setEwSaving(true);
     try {
-      // Validate both JSON inputs locally before round-tripping to the backend.
-      if (assuranceFactsJson.trim()) {
-        try {
-          JSON.parse(assuranceFactsJson);
-        } catch {
-          throw new Error("assuranceFactsJson must be valid JSON");
-        }
-      }
-      if (trustFactsJson.trim()) {
-        try {
-          JSON.parse(trustFactsJson);
-        } catch {
-          throw new Error("trustFactsJson must be valid JSON");
-        }
-      }
       // PUT requires the full 6-weight + threshold surface. Load existing
       // first so we don't truncate the row's other knobs.
       const current = await fetchApi("/api/travel/engine-weights");
@@ -1470,17 +1497,20 @@ function TmcConfigPanel({ notify, isAdmin }) {
         weightGradeBandCenter: current?.weightGradeBandCenter ?? 10,
         weightTierValueLean: current?.weightTierValueLean ?? 8,
         scoresWellThreshold: current?.scoresWellThreshold ?? 70,
-        assuranceFactsJson: assuranceFactsJson.trim() || null,
-        trustFactsJson: trustFactsJson.trim() || null,
+        assuranceFactsJson: plainTextToFactsJson(assuranceFactsJson),
+        trustFactsJson: plainTextToFactsJson(trustFactsJson),
       };
       await fetchApi("/api/travel/engine-weights", {
         method: "PUT",
         body: JSON.stringify(body),
       });
-      notify.success("Standing facts saved");
+      const latest = await fetchApi("/api/travel/engine-weights");
+      setAssuranceFactsJson(factsJsonToPlainText(latest?.assuranceFactsJson));
+      setTrustFactsJson(factsJsonToPlainText(latest?.trustFactsJson));
+      notify.success("Report details saved");
     } catch (err) {
       notify.error(
-        err?.body?.error || err?.message || "Failed to save standing facts",
+        err?.body?.error || err?.message || "Failed to save report details",
       );
     } finally {
       setEwSaving(false);
@@ -1511,7 +1541,7 @@ function TmcConfigPanel({ notify, isAdmin }) {
       >
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           <Settings size={14} aria-hidden /> TMC configuration (booking link +
-          standing facts)
+          report details)
         </span>
         <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
           {collapsed ? "Show" : "Hide"}
@@ -1536,7 +1566,7 @@ function TmcConfigPanel({ notify, isAdmin }) {
                 value={bookingLinkUrl}
                 onChange={(e) => setBookingLinkUrl(e.target.value)}
                 placeholder="https://calendly.com/tmc-team/30min"
-                aria-label="bookingLinkUrl"
+                aria-label="Calendar booking link"
                 style={{
                   padding: "8px 10px",
                   borderRadius: 6,
@@ -1591,46 +1621,46 @@ function TmcConfigPanel({ notify, isAdmin }) {
             onSubmit={saveStandingFacts}
             style={{ display: "grid", gap: 12, gridTemplateColumns: "1fr" }}
           >
-            <Field label="Trust facts JSON override (renderer §3.5.5)">
+            <Field label="School trust details shown in reports">
               <textarea
                 rows={5}
                 value={trustFactsJson}
                 onChange={(e) => setTrustFactsJson(e.target.value)}
                 placeholder={
-                  '{ "schools_served_since_2015": "over 50", "students_moved_last_year": 14018 }'
+                  "Example: Schools served since 2015: over 50. Students travelled last year: 14,018."
                 }
-                aria-label="trustFactsJson"
+                aria-label="School trust details shown in reports"
                 style={{
                   padding: "8px 10px",
                   borderRadius: 6,
                   border: "1px solid var(--border-color)",
                   background: "var(--bg-color)",
                   color: "var(--text-primary)",
-                  fontSize: 12,
-                  fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                  fontSize: 13,
+                  fontFamily: "inherit",
                   resize: "vertical",
                   width: "100%",
                   boxSizing: "border-box",
                 }}
               />
             </Field>
-            <Field label="Assurance facts JSON override (renderer §3.5.5)">
+            <Field label="Safety and support details shown in reports">
               <textarea
                 rows={5}
                 value={assuranceFactsJson}
                 onChange={(e) => setAssuranceFactsJson(e.target.value)}
                 placeholder={
-                  '{ "supervision_ratio": "1 teacher per 15 students", "governance_pack": ["safety plan", "consent template"] }'
+                  "Example: Supervision: 1 teacher per 15 students. Includes safety plan and consent templates."
                 }
-                aria-label="assuranceFactsJson"
+                aria-label="Safety and support details shown in reports"
                 style={{
                   padding: "8px 10px",
                   borderRadius: 6,
                   border: "1px solid var(--border-color)",
                   background: "var(--bg-color)",
                   color: "var(--text-primary)",
-                  fontSize: 12,
-                  fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                  fontSize: 13,
+                  fontFamily: "inherit",
                   resize: "vertical",
                   width: "100%",
                   boxSizing: "border-box",
@@ -1655,10 +1685,10 @@ function TmcConfigPanel({ notify, isAdmin }) {
                   cursor: ewSaving ? "not-allowed" : "pointer",
                   opacity: ewSaving ? 0.5 : 1,
                 }}
-                aria-label="Save standing facts"
+                aria-label="Save report details"
               >
                 <ShieldCheck size={14} aria-hidden />
-                {ewSaving ? "Saving…" : "Save standing facts"}
+                {ewSaving ? "Saving…" : "Save report details"}
               </button>
               <p
                 style={{
@@ -1668,7 +1698,7 @@ function TmcConfigPanel({ notify, isAdmin }) {
                   color: "var(--text-secondary)",
                 }}
               >
-                Empty fields fall back to PRD §3.5.5 default standing facts.
+                Leave a field empty to use the standard report details.
               </p>
             </div>
           </form>

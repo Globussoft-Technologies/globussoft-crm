@@ -199,6 +199,11 @@ function tokenFor(role = 'ADMIN', { userId = 7, tenantId = 1 } = {}) {
   );
 }
 
+function toLocalIsoDay(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
 let driveCreateSpy;
 let digilockerInitiateSpy;
 let digilockerExchangeSpy;
@@ -434,6 +439,23 @@ describe('POST /api/travel/trips', () => {
       .send({ ...validBody(), departDate: 'garbage-date' });
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'INVALID_DATE' });
+    expect(prisma.tmcTrip.create).not.toHaveBeenCalled();
+  });
+
+  test('past departDate returns 400 DATE_IN_PAST', async () => {
+    const today = new Date();
+    const past = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+    const future = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 2);
+    const res = await request(makeApp())
+      .post('/api/travel/trips')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        ...validBody(),
+        departDate: toLocalIsoDay(past),
+        returnDate: toLocalIsoDay(future),
+      });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'DATE_IN_PAST' });
     expect(prisma.tmcTrip.create).not.toHaveBeenCalled();
   });
 

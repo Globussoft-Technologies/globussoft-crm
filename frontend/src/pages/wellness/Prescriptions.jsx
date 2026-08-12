@@ -52,6 +52,7 @@ export default function Prescriptions() {
   const [limit, setLimit] = useState(50);
   const [skip, setSkip] = useState(0);
   const [downloadingId, setDownloadingId] = useState(null);
+  const prescriptionSearch = patientQuery.trim();
 
   const loadPrescriptions = () => {
     setLoading(true);
@@ -60,6 +61,7 @@ export default function Prescriptions() {
     params.set('limit', String(limit));
     params.set('skip', String(skip));
     if (selectedPatient?.id) params.set('patientId', String(selectedPatient.id));
+    if (prescriptionSearch) params.set('q', prescriptionSearch);
     fetchApi(`/api/wellness/prescriptions?${params.toString()}`, { silent: true })
       .then((res) => {
         // Envelope: { items, total }. Older deploys returned a bare array;
@@ -80,11 +82,11 @@ export default function Prescriptions() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(loadPrescriptions, [selectedPatient?.id, limit, skip]);
+  useEffect(loadPrescriptions, [selectedPatient?.id, limit, skip, prescriptionSearch]);
 
   // Reset to page 1 whenever the filter or page-size changes so we don't
   // strand the user on a page that no longer exists in the new window.
-  useEffect(() => { setSkip(0); }, [selectedPatient?.id, limit]);
+  useEffect(() => { setSkip(0); }, [selectedPatient?.id, limit, prescriptionSearch]);
 
   // ── Per-row PDF download ────────────────────────────────────────
   const searchablePatients = useMemo(() => {
@@ -246,6 +248,7 @@ export default function Prescriptions() {
             placeholder={selectedPatient ? selectedPatient.name : 'Filter by patient…'}
             value={patientQuery}
             onChange={(e) => {
+              setSkip(0);
               setPatientQuery(e.target.value);
               setPatientSearchOpen(true);
             }}
@@ -435,7 +438,7 @@ export default function Prescriptions() {
                     <a
                       href={`/wellness/patients/${rx.patient.id}`}
                       style={{
-                        color: 'var(--primary-color, var(--accent-color))',
+                        color: 'var(--text-primary)',
                         textDecoration: 'none',
                       }}
                     >

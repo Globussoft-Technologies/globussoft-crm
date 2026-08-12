@@ -59,6 +59,11 @@ function fmtMoney(amt, currency = "INR") {
   return `${currency === "INR" ? "₹" : currency + " "}${n.toLocaleString()}`;
 }
 
+function localDateKey(value = new Date()) {
+  const d = value instanceof Date ? value : new Date(value);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
 const EMPTY_FORM = {
   tripCode: "",
   destination: "",
@@ -100,6 +105,7 @@ export default function Trips() {
   const reqIdRef = useRef(0);
   const fromReports = searchParams.get("from") === "reports";
   const tripsListPath = `${location.pathname}${location.search}`;
+  const today = localDateKey();
 
   const updateParams = useCallback(
     (patch, options = {}) => {
@@ -149,6 +155,14 @@ export default function Trips() {
       notify.error(
         "Trip code, destination, school, depart + return dates required",
       );
+      return;
+    }
+    if (form.departDate < today || form.returnDate < today) {
+      notify.error("Depart and return dates must be today or later.");
+      return;
+    }
+    if (form.returnDate < form.departDate) {
+      notify.error("Return date must be on or after depart date.");
       return;
     }
     setSaving(true);
@@ -692,6 +706,7 @@ export default function Trips() {
                       setForm({ ...form, departDate: e.target.value })
                     }
                     style={inputStyle}
+                    min={today}
                   />
                 </label>
                 <label style={{ ...fieldLabel, flex: 1 }}>
@@ -704,6 +719,7 @@ export default function Trips() {
                       setForm({ ...form, returnDate: e.target.value })
                     }
                     style={inputStyle}
+                    min={form.departDate || today}
                   />
                 </label>
               </div>

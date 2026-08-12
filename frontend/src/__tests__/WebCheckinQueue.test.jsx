@@ -1,5 +1,5 @@
-/**
- * WebCheckinQueue.jsx — Travel CRM web check-in operator queue (PRD §4.6 + §7 row 20).
+﻿/**
+ * WebCheckinQueue.jsx â€” Travel CRM web check-in operator queue (PRD Â§4.6 + Â§7 row 20).
  *
  * Pins the frontend contract for the page that sits on top of
  * backend/routes/travel_webcheckin.js (commit 9898e87). Verifies:
@@ -102,7 +102,7 @@ function renderPage() {
   );
 }
 
-describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
+describe('WebCheckinQueue â€” operator queue (PRD Â§4.6)', () => {
   it('renders the page header', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl([]));
     renderPage();
@@ -166,7 +166,7 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
         }),
       );
     });
-    // Second arg is the request init — body is a FormData instance.
+    // Second arg is the request init â€” body is a FormData instance.
     const init = fetchSpy.mock.calls[0][1];
     expect(init.body).toBeInstanceOf(FormData);
     expect(notifyObj.success).toHaveBeenCalled();
@@ -179,7 +179,7 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     renderPage();
     await screen.findByText('ABC123');
 
-    // Row 1 (pending, no deliveredAt) → Deliver button enabled.
+    // Row 1 (pending, no deliveredAt) â†’ Deliver button enabled.
     const deliverBtn = screen.getByRole('button', { name: /Deliver boarding pass for ABC123/i });
     fireEvent.click(deliverBtn);
 
@@ -271,13 +271,14 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     expect(scrollArea.style.minWidth).toBe('100%');
     expect(scrollArea.style.overflowX).toBe('auto');
   });
-  it('does not render pagination controls', async () => {
+  it('renders pager controls for the current single-page result and keeps them disabled', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
     renderPage();
     await screen.findByText('ABC123');
 
-    expect(screen.queryByRole('button', { name: /Next page/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Previous page/i })).toBeNull();
+    expect(document.body.textContent).toContain('of 2 web check-ins');
+    expect(screen.getByRole('button', { name: /Next page/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Previous page/i })).toBeDisabled();
   });
 
 
@@ -317,11 +318,11 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     expect(screen.getByTestId('status-badge-2').textContent).toBe('done');
   });
 
-  it('renders boarding-pass "View" link when URL present and "—" when absent', async () => {
+  it('renders boarding-pass "View" link when URL present and "â€”" when absent', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
     renderPage();
     await screen.findByText('ABC123');
-    // Row 2 has a boardingPassUrl → expect a "View" anchor pointing to it.
+    // Row 2 has a boardingPassUrl â†’ expect a "View" anchor pointing to it.
     // The component normalizes a stored "/uploads/..." path to "/api/uploads/..."
     // so production (where the SPA catches "/uploads/*" before the backend static
     // mount) still serves the file. Backend stores the bare "/uploads/..." form,
@@ -336,7 +337,7 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_ROWS));
     renderPage();
     await screen.findByText('XYZ789');
-    // Row 2 has deliveredAt set → button should be disabled with "Delivered" label.
+    // Row 2 has deliveredAt set â†’ button should be disabled with "Delivered" label.
     const deliveredBtn = screen.getByRole('button', { name: /Deliver boarding pass for XYZ789/i });
     expect(deliveredBtn.disabled).toBe(true);
     expect(deliveredBtn.textContent).toMatch(/Delivered/);
@@ -450,12 +451,13 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(badDateRow));
     renderPage();
     await screen.findByText('BAD1');
-    // Both columns should render the em-dash fallback.
-    const dashes = screen.getAllByText('—');
-    expect(dashes.length).toBeGreaterThanOrEqual(2);
+    const row = screen.getByText('BAD1').closest('tr');
+    const cells = row.querySelectorAll('td');
+    expect(cells[0].textContent).toContain('—');
+    expect(cells[4].textContent.trim()).toBe('—');
   });
 
-  it('survives /api/staff fetch failure — reassign dropdown still renders (Unassigned only)', async () => {
+  it('survives /api/staff fetch failure â€” reassign dropdown still renders (Unassigned only)', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/staff') return Promise.reject(new Error('staff endpoint down'));
       return defaultFetchImpl(SAMPLE_ROWS)(url, opts);
@@ -514,3 +516,4 @@ describe('WebCheckinQueue — operator queue (PRD §4.6)', () => {
   });
 
 });
+

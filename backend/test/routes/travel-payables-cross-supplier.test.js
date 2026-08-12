@@ -24,9 +24,8 @@
  *     always.
  *   - Sub-brand-restricted MANAGER: subBrandAccess=["tmc"] narrows
  *     supplier.subBrand to {in:["tmc"]} so RFU payables can't be queried.
- *   - summary.byStatus counts match the rows returned.
- *   - summary.totalPending sums pending payables' amounts.
- *   - summary.currencyBreakdown groups by currency.
+ *   - summary.byStatus / totals / currencyBreakdown reflect the full
+ *     filtered result set, not just the paginated page returned.
  *   - Invalid ?status → 400 INVALID_STATUS.
  *   - ?limit=1000 → clamped to 500.
  *
@@ -313,13 +312,13 @@ describe('GET /api/travel/payables (cross-supplier)', () => {
     });
   });
 
-  test('summary.totalPending sums pending payables\' amounts', async () => {
+  test('summary totals and currency breakdown are computed from the full filtered set', async () => {
     const rows = [
-      makePayable({ id: 1, status: 'pending', amount: '30000.00' }),
-      makePayable({ id: 2, status: 'pending', amount: '45000.50' }),
+      makePayable({ id: 1, status: 'pending', amount: '30000.00', currency: 'INR' }),
+      makePayable({ id: 2, status: 'pending', amount: '45000.50', currency: 'INR' }),
       // Non-pending should NOT contribute to totalPending.
-      makePayable({ id: 3, status: 'paid', amount: '100000.00', paidAt: new Date() }),
-      makePayable({ id: 4, status: 'scheduled', amount: '25000.25' }),
+      makePayable({ id: 3, status: 'paid', amount: '100000.00', paidAt: new Date(), currency: 'USD' }),
+      makePayable({ id: 4, status: 'scheduled', amount: '25000.25', currency: 'USD' }),
     ];
     prisma.travelSupplierPayable.findMany.mockResolvedValue(rows);
     prisma.travelSupplierPayable.count.mockResolvedValue(4);
@@ -331,6 +330,10 @@ describe('GET /api/travel/payables (cross-supplier)', () => {
     expect(res.body.summary.totalPending).toBe('75000.50');
     expect(res.body.summary.totalScheduled).toBe('25000.25');
     expect(res.body.summary.totalPaid).toBe('100000.00');
+    expect(res.body.summary.currencyBreakdown).toEqual({
+      INR: '75000.50',
+      USD: '125000.25',
+    });
   });
 
   test('summary.currencyBreakdown groups by currency', async () => {
@@ -353,6 +356,41 @@ describe('GET /api/travel/payables (cross-supplier)', () => {
       USD: '750.50',
       EUR: '1000.00',
     });
+  });
+
+  test('summary ignores pagination window and reflects the full filtered set', async () => {
+    const pagedRows = [
+      makePayable({ id: 1, status: 'pending', amount: '30000.00' }),
+      makePayable({ id: 2, status: 'pending', amount: '30000.00' }),
+    ];
+    const fullRows = [
+      ...pagedRows,
+      makePayable({ id: 3, status: 'pending', amount: '30000.00' }),
+      makePayable({ id: 4, status: 'scheduled', amount: '10000.00' }),
+      makePayable({ id: 5, status: 'paid', amount: '5000.00', paidAt: new Date() }),
+      makePayable({ id: 6, status: 'cancelled', amount: '2500.00' }),
+    ];
+
+    prisma.travelSupplierPayable.findMany
+      .mockResolvedValueOnce(pagedRows)
+      .mockResolvedValueOnce(fullRows);
+    prisma.travelSupplierPayable.count.mockResolvedValue(6);
+
+    const res = await request(makeApp())
+      .get('/api/travel/payables?limit=2&offset=0')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.body.payables).toHaveLength(2);
+    expect(res.body.total).toBe(6);
+    expect(res.body.summary.byStatus).toEqual({
+      pending: 3,
+      scheduled: 1,
+      paid: 1,
+      cancelled: 1,
+    });
+    expect(res.body.summary.totalPending).toBe('90000.00');
+    expect(res.body.summary.totalScheduled).toBe('10000.00');
+    expect(res.body.summary.totalPaid).toBe('5000.00');
   });
 
   test('invalid ?status returns 400 INVALID_STATUS', async () => {

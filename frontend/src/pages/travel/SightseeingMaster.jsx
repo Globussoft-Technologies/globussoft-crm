@@ -23,7 +23,7 @@
 //     at `../utils/notify` (CostMaster.jsx + every other Travel admin page
 //     imports from there). Following code reality, not prompt language.
 //   - Prompt referenced pagination; this page keeps the backend offset+limit
-//     contract and loads additional rows as the table scrolls.
+//     contract and drives page-based requests from the footer pager.
 
 import React, { useState, useEffect, useCallback, useContext, useRef } from 'react';
 import { Link } from 'react-router-dom';
@@ -31,6 +31,7 @@ import { Download, Edit2, Filter, MapPin, Plus, Trash2, Upload, X } from 'lucide
 import { fetchApi, getActiveTenantId, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
+import PatientPager from '../wellness/patients/PatientPager';
 import { useActiveSubBrand } from '../../utils/subBrand';
 import {
   accessibleSubBrands,
@@ -78,10 +79,12 @@ export default function SightseeingMaster() {
 
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+  const [isCustomPageSize, setIsCustomPageSize] = useState(false);
+  const [customPageSize, setCustomPageSize] = useState('');
+  const [reloadTick, setReloadTick] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
 
   // Filter state
   const [destinationFilter, setDestinationFilter] = useState('');
@@ -94,12 +97,6 @@ export default function SightseeingMaster() {
   const [editingId, setEditingId] = useState(null);
 
   // Image upload
-  const listRef = useRef(null);
-  const itemsRef = useRef([]);
-  const loadingRef = useRef(false);
-  const loadingMoreRef = useRef(false);
-  const offsetRef = useRef(0);
-  const hasMoreRef = useRef(false);
   const imgInputRef = useRef(null);
   const importInputRef = useRef(null);
   const [uploadingImg, setUploadingImg] = useState(false);
@@ -124,78 +121,40 @@ export default function SightseeingMaster() {
     }
   };
 
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
-
-  useEffect(() => {
-    loadingRef.current = loading;
-  }, [loading]);
-
-  useEffect(() => {
-    loadingMoreRef.current = loadingMore;
-  }, [loadingMore]);
-
-  useEffect(() => {
-    offsetRef.current = offset;
-  }, [offset]);
-
-  useEffect(() => {
-    hasMoreRef.current = hasMore;
-  }, [hasMore]);
-
-  const fetchItems = useCallback((targetOffset = offsetRef.current) => {
-    if (targetOffset === 0) {
-      setLoading(true);
-      setLoadingMore(false);
-      itemsRef.current = [];
-      setItems([]);
-      if (listRef.current) listRef.current.scrollTop = 0;
-    } else if (!loadingRef.current) {
-      setLoadingMore(true);
-    }
+  const fetchItems = useCallback((currentPage = page, currentPageSize = pageSize) => {
+    setLoading(true);
     const qs = new URLSearchParams();
     if (destinationFilter.trim()) qs.set('destinationName', destinationFilter.trim());
     if (categoryFilter) qs.set('category', categoryFilter);
     if (activeOnly) qs.set('isActive', 'true');
     else qs.set('isActive', 'false');
-    qs.set('limit', String(PAGE_SIZE));
-    qs.set('offset', String(targetOffset));
+    qs.set('limit', String(currentPageSize));
+    qs.set('offset', String(Math.max(currentPage - 1, 0) * currentPageSize));
     fetchApi(`/api/travel/sightseeing?${qs.toString()}`)
       .then((res) => {
         const rows = Array.isArray(res?.items) ? res.items : [];
         const totalCount = Number(res?.total) || 0;
-        const nextItems = targetOffset === 0 ? rows : [...itemsRef.current, ...rows];
-        const nextOffset = targetOffset + rows.length;
-        const nextHasMore = Number.isFinite(totalCount) ? nextOffset < totalCount : rows.length === PAGE_SIZE;
-        itemsRef.current = nextItems;
-        setItems(nextItems);
+        setItems(rows);
         setTotal(totalCount);
-        setHasMore(nextHasMore);
       })
       .catch((e) => {
         notify.error(e?.body?.error || 'Failed to load sightseeing entries');
         setItems([]);
         setTotal(0);
-        setHasMore(false);
       })
       .finally(() => {
         setLoading(false);
-        setLoadingMore(false);
       });
-  }, [destinationFilter, categoryFilter, activeOnly, notify]);
+  }, [destinationFilter, categoryFilter, activeOnly, notify, page, pageSize]);
 
   useEffect(() => {
-    fetchItems(offset);
-  }, [fetchItems, offset]);
+    fetchItems(page, pageSize);
+  }, [fetchItems, page, pageSize, reloadTick]);
 
   const reloadFirstPage = useCallback(() => {
-    if (offsetRef.current === 0) {
-      fetchItems(0);
-    } else {
-      setOffset(0);
-    }
-  }, [fetchItems]);
+    setPage(1);
+    setReloadTick((t) => t + 1);
+  }, []);
   const downloadTemplate = async (format) => {
     try {
       const ext = format === 'xlsx' ? 'xlsx' : 'csv';
@@ -356,17 +315,6 @@ export default function SightseeingMaster() {
     return rem === 0 ? `${h}h` : `${h}h ${rem}m`;
   };
 
-  const handleListScroll = useCallback((e) => {
-    const el = e.currentTarget;
-    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
-    const threshold = 72;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
-      loadingMoreRef.current = true;
-      setLoadingMore(true);
-      setOffset((curr) => curr + PAGE_SIZE);
-    }
-  }, []);
-
   return (
     <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
       <div
@@ -469,8 +417,8 @@ export default function SightseeingMaster() {
             type="text"
             value={destinationFilter}
             onChange={(e) => {
-              setOffset(0);
               setDestinationFilter(e.target.value);
+              setPage(1);
             }}
             placeholder="Filter by destination"
             aria-label="Destination filter"
@@ -480,8 +428,8 @@ export default function SightseeingMaster() {
         <select
           value={categoryFilter}
           onChange={(e) => {
-            setOffset(0);
             setCategoryFilter(e.target.value);
+            setPage(1);
           }}
           aria-label="Category filter"
           style={selectStyle}
@@ -499,8 +447,8 @@ export default function SightseeingMaster() {
             type="checkbox"
             checked={activeOnly}
             onChange={(e) => {
-              setOffset(0);
               setActiveOnly(e.target.checked);
+              setPage(1);
             }}
             aria-label="Active only"
           />
@@ -743,9 +691,7 @@ export default function SightseeingMaster() {
           <div style={emptyStyle}>No sightseeing entries yet. Add one above.</div>
         ) : (
           <div
-            ref={listRef}
             data-testid="sightseeing-table-scroll"
-            onScroll={handleListScroll}
             style={{
               overflow: 'auto',
               height: 'calc(100vh - 370px)',
@@ -829,29 +775,23 @@ export default function SightseeingMaster() {
               ))}
           </tbody>
           </table>
-          {loadingMore && (
-            <div style={{ padding: '10px 16px', fontSize: 12, color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)' }}>
-              Loading more&hellip;
-            </div>
-          )}
           </div>
         )}
-      </div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-start',
-          marginTop: 12,
-          fontSize: 13,
-          color: 'var(--text-secondary)',
-        }}
-      >
-        <div>
-          {total === 0
-            ? 'No results'
-            : `Showing ${Math.min(items.length, total)} of ${total}`}
-        </div>
+        <PatientPager
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(nextSize) => {
+            setPageSize(nextSize);
+            setPage(1);
+          }}
+          isCustomPageSize={isCustomPageSize}
+          setIsCustomPageSize={setIsCustomPageSize}
+          customPageSize={customPageSize}
+          setCustomPageSize={setCustomPageSize}
+          label="sightseeing entries"
+        />
       </div>
     </div>
   );

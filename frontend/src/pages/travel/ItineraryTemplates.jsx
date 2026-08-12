@@ -40,6 +40,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 import { useActiveSubBrand } from '../../utils/subBrand';
+import PatientPager from '../wellness/patients/PatientPager';
 import {
   accessibleSubBrands,
   defaultSubBrandFor,
@@ -158,17 +159,13 @@ export default function ItineraryTemplates() {
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
 
   const [items, setItems] = useState([]);
-  const [_total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+  const [isCustomPageSize, setIsCustomPageSize] = useState(false);
+  const [customPageSize, setCustomPageSize] = useState('');
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const listRef = useRef(null);
-  const itemsRef = useRef([]);
-  const loadingRef = useRef(true);
-  const loadingMoreRef = useRef(false);
-  const offsetRef = useRef(0);
-  const hasMoreRef = useRef(true);
+  const [reloadTick, setReloadTick] = useState(0);
 
   // Filter state
   const [destinationFilter, setDestinationFilter] = useState('');
@@ -215,36 +212,8 @@ export default function ItineraryTemplates() {
   const [contacts, setContacts] = useState([]);
   const [cloneContactId, setCloneContactId] = useState('');
 
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
-
-  useEffect(() => {
-    loadingRef.current = loading;
-  }, [loading]);
-
-  useEffect(() => {
-    loadingMoreRef.current = loadingMore;
-  }, [loadingMore]);
-
-  useEffect(() => {
-    offsetRef.current = offset;
-  }, [offset]);
-
-  useEffect(() => {
-    hasMoreRef.current = hasMore;
-  }, [hasMore]);
-
-  const fetchItems = useCallback(() => {
-    if (offset === 0) {
-      setLoading(true);
-      setLoadingMore(false);
-      itemsRef.current = [];
-      setItems([]);
-      if (listRef.current) listRef.current.scrollTop = 0;
-    } else if (!loadingRef.current) {
-      setLoadingMore(true);
-    }
+  const fetchItems = useCallback((currentPage = page, currentPageSize = pageSize) => {
+    setLoading(true);
     const qs = new URLSearchParams();
     if (destinationFilter.trim()) qs.set('destinationName', destinationFilter.trim());
     if (categoryFilter) qs.set('category', categoryFilter);
@@ -253,35 +222,28 @@ export default function ItineraryTemplates() {
     if (activeOnly) qs.set('isActive', 'true');
     else qs.set('isActive', 'false');
     if (includeArchived) qs.set('includeArchived', 'true');
-    qs.set('limit', String(PAGE_SIZE));
-    qs.set('offset', String(offset));
+    qs.set('limit', String(currentPageSize));
+    qs.set('offset', String(Math.max(currentPage - 1, 0) * currentPageSize));
     fetchApi(`/api/travel/itinerary-templates?${qs.toString()}`)
       .then((res) => {
         const rows = Array.isArray(res?.items) ? res.items : [];
         const totalCount = Number(res?.total) || 0;
-        const nextItems = offset === 0 ? rows : [...itemsRef.current, ...rows];
-        const nextOffset = offset + rows.length;
-        const nextHasMore = Number.isFinite(totalCount) ? nextOffset < totalCount : rows.length === PAGE_SIZE;
-        itemsRef.current = nextItems;
-        setItems(nextItems);
+        setItems(rows);
         setTotal(totalCount);
-        setHasMore(nextHasMore);
       })
       .catch((e) => {
         notify.error(e?.body?.error || 'Failed to load itinerary templates');
         setItems([]);
         setTotal(0);
-        setHasMore(false);
       })
       .finally(() => {
         setLoading(false);
-        setLoadingMore(false);
       });
-  }, [destinationFilter, categoryFilter, subBrandFilter, budgetTierFilter, activeOnly, includeArchived, offset, notify]);
+  }, [destinationFilter, categoryFilter, subBrandFilter, budgetTierFilter, activeOnly, includeArchived, notify, page, pageSize]);
 
   useEffect(() => {
-    fetchItems();
-  }, [fetchItems]);
+    fetchItems(page, pageSize);
+  }, [fetchItems, page, pageSize, reloadTick]);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -365,7 +327,7 @@ export default function ItineraryTemplates() {
         notify.success('Itinerary template added');
       }
       resetForm();
-      fetchItems();
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to save template');
     }
@@ -379,7 +341,7 @@ export default function ItineraryTemplates() {
     try {
       await fetchApi(`/api/travel/itinerary-templates/${item.id}`, { method: 'DELETE' });
       notify.success('Itinerary template removed');
-      fetchItems();
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to delete template');
     }
@@ -397,7 +359,7 @@ export default function ItineraryTemplates() {
         method: 'POST',
       });
       notify.success(`Archived "${item.name}"`);
-      fetchItems();
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to archive template');
     }
@@ -410,7 +372,7 @@ export default function ItineraryTemplates() {
         method: 'POST',
       });
       notify.success(`Restored "${item.name}"`);
-      fetchItems();
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || 'Failed to restore template');
     }
@@ -574,15 +536,6 @@ export default function ItineraryTemplates() {
     return d.toLocaleDateString();
   };
 
-  const handleListScroll = useCallback((e) => {
-    const el = e.currentTarget;
-    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
-    const threshold = 72;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
-      setOffset((curr) => curr + PAGE_SIZE);
-    }
-  }, []);
-
   return (
     <div style={{ padding: 24, width: '100%', maxWidth: 1480, margin: '0 auto', boxSizing: 'border-box' }}>
       <div
@@ -648,8 +601,8 @@ export default function ItineraryTemplates() {
             type="text"
             value={destinationFilter}
             onChange={(e) => {
-              setOffset(0);
               setDestinationFilter(e.target.value);
+              setPage(1);
             }}
             placeholder="Filter by destination"
             aria-label="Destination filter"
@@ -659,8 +612,8 @@ export default function ItineraryTemplates() {
         <select
           value={categoryFilter}
           onChange={(e) => {
-            setOffset(0);
             setCategoryFilter(e.target.value);
+            setPage(1);
           }}
           aria-label="Category filter"
           style={selectStyle}
@@ -674,8 +627,8 @@ export default function ItineraryTemplates() {
         <select
           value={subBrandFilter}
           onChange={(e) => {
-            setOffset(0);
             setSubBrandFilter(e.target.value);
+            setPage(1);
           }}
           aria-label="Sub-brand filter"
           style={selectStyle}
@@ -692,8 +645,8 @@ export default function ItineraryTemplates() {
         <select
           value={budgetTierFilter}
           onChange={(e) => {
-            setOffset(0);
             setBudgetTierFilter(e.target.value);
+            setPage(1);
           }}
           aria-label="Budget tier filter"
           data-testid="budget-tier-filter"
@@ -712,8 +665,8 @@ export default function ItineraryTemplates() {
             type="checkbox"
             checked={activeOnly}
             onChange={(e) => {
-              setOffset(0);
               setActiveOnly(e.target.checked);
+              setPage(1);
             }}
             aria-label="Active only"
           />
@@ -724,8 +677,8 @@ export default function ItineraryTemplates() {
             type="checkbox"
             checked={includeArchived}
             onChange={(e) => {
-              setOffset(0);
               setIncludeArchived(e.target.checked);
+              setPage(1);
             }}
             aria-label="Include archived"
           />
@@ -991,9 +944,7 @@ export default function ItineraryTemplates() {
           <div style={emptyStyle}>No itinerary templates yet. Add one above.</div>
         ) : (
           <div
-            ref={listRef}
             data-testid="itinerary-templates-table-scroll"
-            onScroll={handleListScroll}
             style={{
               overflow: 'auto',
               height: 'calc(100vh - 370px)',
@@ -1184,16 +1135,23 @@ export default function ItineraryTemplates() {
                 ))}
               </tbody>
             </table>
-            {loadingMore && (
-              <div style={{ padding: '10px 16px', fontSize: 12, color: 'var(--text-secondary)', borderTop: '1px solid var(--border-light)' }}>
-                Loading more&hellip;
-              </div>
-            )}
-            {!loadingMore && hasMore && (
-              <div data-testid="itinerary-templates-scroll-sentinel" style={{ height: 1 }} />
-            )}
           </div>
         )}
+        <PatientPager
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(nextSize) => {
+            setPageSize(nextSize);
+            setPage(1);
+          }}
+          isCustomPageSize={isCustomPageSize}
+          setIsCustomPageSize={setIsCustomPageSize}
+          customPageSize={customPageSize}
+          setCustomPageSize={setCustomPageSize}
+          label="itinerary templates"
+        />
       </div>
 
       {/* G061 — Detail / preview modal (PRD FR-3.1.d). Renders when the

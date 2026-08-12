@@ -29,7 +29,7 @@
 
 import { useEffect, useState, useContext, useRef } from "react";
 import { createPortal } from "react-dom";
-import { useParams, Link } from "react-router-dom";
+import { useLocation, useParams, Link } from "react-router-dom";
 import {
   Map as MapIcon, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Plus, Pencil, Trash2, X, Sparkles, Share2, Download, Check, XCircle, Copy,
@@ -167,6 +167,46 @@ function buildFlightDetails(fields) {
   if (fields.seatPref?.trim()) obj.seatPref = fields.seatPref.trim();
   if (fields.mealPref?.trim()) obj.mealPref = fields.mealPref.trim();
   return Object.keys(obj).length > 0 ? JSON.stringify(obj) : "";
+}
+
+function parseDetailsObject(detailsJson) {
+  if (!detailsJson) return {};
+  try {
+    const parsed = JSON.parse(detailsJson);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function mergePricingLinkDetails(detailsJson, preview, supplierId) {
+  if (!preview?.matched) return detailsJson || "";
+  const parsed = parseDetailsObject(detailsJson);
+  if (parsed == null && detailsJson) return detailsJson;
+  const details = parsed || {};
+  const masterRefs = details.masterRefs && typeof details.masterRefs === "object" && !Array.isArray(details.masterRefs)
+    ? { ...details.masterRefs }
+    : {};
+  if (preview.costMasterId != null && Number.isFinite(Number(preview.costMasterId))) {
+    masterRefs.costMasterId = Number(preview.costMasterId);
+  }
+  if (supplierId !== "" && supplierId != null && Number.isFinite(Number(supplierId))) {
+    masterRefs.supplierId = Number(supplierId);
+  }
+  const next = { ...details };
+  if (Object.keys(masterRefs).length > 0) next.masterRefs = masterRefs;
+  next.pricingLink = {
+    ...(details.pricingLink && typeof details.pricingLink === "object" && !Array.isArray(details.pricingLink)
+      ? details.pricingLink
+      : {}),
+    baseRate: preview.baseRate ?? null,
+    seasonMultiplier: preview.seasonMultiplier ?? null,
+    matchedSeasonName: preview.matchedSeasonName || null,
+    matchedMarkupRuleId: preview.matchedMarkupRuleId ?? null,
+    currency: preview.currency || null,
+    linkedAt: new Date().toISOString(),
+  };
+  return JSON.stringify(next);
 }
 
 // Merge flight fields into a values object (for initializing edit mode).
@@ -347,6 +387,9 @@ function StatusBadge({ status }) {
 
 export default function ItineraryDetail() {
   const { id } = useParams();
+  const location = useLocation();
+  const backTo = location.state?.backTo || null;
+  const backLabel = location.state?.backLabel || "Back";
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === "ADMIN";
@@ -686,7 +729,8 @@ export default function ItineraryDetail() {
         description: newItem.description,
       };
       if (newItem.position !== "") body.position = Number(newItem.position);
-      if (newItem.detailsJson !== "") body.detailsJson = newItem.detailsJson;
+      const mergedDetailsJson = mergePricingLinkDetails(newItem.detailsJson, pricingPreview, newItem.supplierId);
+      if (mergedDetailsJson !== "") body.detailsJson = mergedDetailsJson;
       if (newItem.supplierId !== "") body.supplierId = Number(newItem.supplierId);
       if (newItem.unitCost !== "") body.unitCost = Number(newItem.unitCost);
       if (newItem.markup !== "") body.markup = Number(newItem.markup);
@@ -858,6 +902,11 @@ export default function ItineraryDetail() {
       <header style={{ marginBottom: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
           <div>
+            {backTo && (
+              <Link to={backTo} style={{ ...secondaryBtn, textDecoration: "none", marginBottom: 10 }}>
+                {backLabel}
+              </Link>
+            )}
             <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
               <MapIcon size={28} aria-hidden /> {itin.destination || "Itinerary"}
             </h1>
@@ -1078,7 +1127,7 @@ export default function ItineraryDetail() {
             }
             return (
               <div style={{ ...box, color: "var(--text-secondary)" }}>
-                Refund can&apos;t be auto-calculated — {r.policyName ? "set a travel start date" : "assign a cancellation policy"} on this booking, then approve. Settle the refund manually per policy.
+                Refund can&apos;t be auto-calculated - {r.policyName ? `${r.policyName} is applied; set a travel start date` : "assign a cancellation policy"} on this booking, then approve. Settle the refund manually per policy.
               </div>
             );
           })()}

@@ -55,14 +55,7 @@ const { resolveForSubBrand } = require("../lib/subBrandConfig");
 // const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
 const watiClient = require("../services/whatsappWebClient"); // connected WhatsApp Web (drop-in)
 
-const VALID_STATUSES = Object.freeze([
-  "pending",
-  "reminded",
-  "in-progress",
-  "done",
-  "fallback-agent",
-  "failed",
-]);
+const VALID_STATUSES = Object.freeze(["pending", "done"]);
 
 // ─── Multer config: boarding-pass upload ─────────────────────────────
 //
@@ -153,7 +146,7 @@ router.get("/webcheckins", verifyToken, requireTravelTenant, async (req, res) =>
 });
 
 // GET /api/travel/webcheckins/upcoming — windowOpenAt within next 48h,
-// status in (pending, reminded). MUST mount before /:id.
+// status = pending. MUST mount before /:id.
 router.get("/webcheckins/upcoming", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const now = new Date();
@@ -161,7 +154,7 @@ router.get("/webcheckins/upcoming", verifyToken, requireTravelTenant, async (req
     const rows = await prisma.webCheckin.findMany({
       where: {
         tenantId: req.travelTenant.id,
-        status: { in: ["pending", "reminded"] },
+        status: "pending",
         windowOpenAt: { gte: now, lte: horizon },
       },
       orderBy: { windowOpenAt: "asc" },
@@ -1200,10 +1193,8 @@ router.post(
 );
 
 // PATCH /api/travel/webcheckins/:id — amend assignedAgentId, seatPref,
-// mealPref, status, attemptsJson, boardingPassUrl. The scheduler cron
-// owns 'pending → reminded → fallback-agent' transitions; this endpoint
-// exists for the operator to explicitly mark 'done' / 'failed' or
-// reassign to an agent.
+// mealPref, status, attemptsJson, boardingPassUrl. Status is binary:
+// pending → done (done when boarding pass uploaded or customer confirmed).
 router.patch(
   "/webcheckins/:id",
   verifyToken,
@@ -1408,47 +1399,20 @@ router.post(
   },
 );
 
-// POST /api/travel/webcheckins/:id/automation/retry — manually re-arm the
-// automation engine for a row (PRD FR-12). Resets status to 'reminded' and
-// clears attemptsJson so the engine treats it as a fresh attempt on its next
-// tick. Use case: airline portal was down at the original window and has since
-// recovered. ADMIN+MANAGER gated (web_checkins.update).
+// POST /api/travel/webcheckins/:id/automation/retry — DISABLED.
+// Automation is off for this vertical; all check-ins are handled manually
+// via the Web Check-ins queue. Kept as a 409 so any stale client call fails
+// clearly instead of 404-ing.
 router.post(
   "/webcheckins/:id/automation/retry",
   verifyToken,
   requirePermission("web_checkins", "update"),
   requireTravelTenant,
-  async (req, res) => {
-    try {
-      const id = parseInt(req.params.id, 10);
-      if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
-      }
-      const existing = await prisma.webCheckin.findFirst({
-        where: { id, tenantId: req.travelTenant.id },
-      });
-      if (!existing) return res.status(404).json({ error: "Web check-in not found", code: "NOT_FOUND" });
-      if (existing.status === "done") {
-        return res.status(409).json({
-          error: "Check-in already completed — nothing to retry",
-          code: "ALREADY_DONE",
-        });
-      }
-      if (existing.automationSkipped) {
-        return res.status(409).json({
-          error: "Automation is skipped for this row — clear automationSkipped first",
-          code: "AUTOMATION_SKIPPED",
-        });
-      }
-      const updated = await prisma.webCheckin.update({
-        where: { id },
-        data: { status: "reminded", attemptsJson: null },
-      });
-      res.json({ ok: true, webcheckin: updated });
-    } catch (e) {
-      console.error("[travel-webcheckin] automation retry error:", e.message);
-      res.status(500).json({ error: "Failed to re-arm automation" });
-    }
+  async (_req, res) => {
+    return res.status(409).json({
+      error: "Check-in automation is disabled — handle this check-in manually.",
+      code: "AUTOMATION_DISABLED",
+    });
   },
 );
 

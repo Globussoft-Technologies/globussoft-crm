@@ -361,6 +361,8 @@ describe('listProjection(modelName, fullShape)', () => {
         createdAt: true,
         contact: { select: { id: true, name: true } },
       });
+      expect(p).not.toHaveProperty('assignedToUserId');
+      expect(p).not.toHaveProperty('assignedToUser');
     });
 
     test('TravelInvoice slim shape — TCS fields EXCLUDED', () => {

@@ -83,6 +83,60 @@ const createdPatientPhones = new Set();
 test.afterAll(async ({ request }) => {
   const token = await getWellnessAdmin(request);
   if (!token) return;
+  // Rules
+  try {
+    const r = await request.get(`${BASE_URL}/api/wellness/auto-consumption-rules`, {
+      headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+    });
+    if (r.ok()) {
+      const list = extractList(await r.json());
+      for (const rule of list) {
+        const productSku = rule.product?.sku || '';
+        const serviceName = rule.service?.name || '';
+        if (productSku.includes(RUN_TAG) || serviceName.includes(RUN_TAG)) {
+          await request.delete(`${BASE_URL}/api/wellness/auto-consumption-rules/${rule.id}`, {
+            headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+          }).catch(() => {});
+        }
+      }
+    }
+  } catch { /* best effort */ }
+
+  // Products
+  try {
+    const r = await request.get(`${BASE_URL}/api/wellness/products?paginate=true&page=1&limit=100&q=${encodeURIComponent(RUN_TAG)}`, {
+      headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+    });
+    if (r.ok()) {
+      const list = extractList(await r.json());
+      for (const product of list) {
+        const marker = `${product.name || ''} ${product.sku || ''}`;
+        if (marker.includes(RUN_TAG)) {
+          await request.delete(`${BASE_URL}/api/wellness/products/${product.id}`, {
+            headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+          }).catch(() => {});
+        }
+      }
+    }
+  } catch { /* best effort */ }
+
+  // Categories
+  try {
+    const r = await request.get(`${BASE_URL}/api/wellness/product-categories?q=${encodeURIComponent(RUN_TAG)}`, {
+      headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+    });
+    if (r.ok()) {
+      const list = extractList(await r.json());
+      for (const category of list) {
+        if ((category.name || '').includes(RUN_TAG)) {
+          await request.delete(`${BASE_URL}/api/wellness/product-categories/${category.id}`, {
+            headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+          }).catch(() => {});
+        }
+      }
+    }
+  } catch { /* best effort */ }
+
   // Services
   try {
     const r = await request.get(`${BASE_URL}/api/wellness/services?includeInactive=1`, {
@@ -128,13 +182,32 @@ async function postMultipart(request, token, path, csvBody, filename = 'upload.c
   });
 }
 
+function extractList(body) {
+  if (Array.isArray(body)) return body;
+  if (Array.isArray(body?.items)) return body.items;
+  if (Array.isArray(body?.categories)) return body.categories;
+  if (Array.isArray(body?.products)) return body.products;
+  if (Array.isArray(body?.rules)) return body.rules;
+  if (Array.isArray(body?.data)) return body.data;
+  return [];
+}
+
 // ── Meta endpoint ──────────────────────────────────────────────────
 
 test.describe('GET /api/wellness/csv/:entity (meta)', () => {
   test('returns headers + sample + thresholds for each entity', async ({ request }) => {
     const token = await getWellnessAdmin(request);
     expect(token, 'wellness admin login').toBeTruthy();
-    for (const e of ['services', 'packages', 'products', 'customers', 'bookings']) {
+    for (const e of [
+      'services',
+      'packages',
+      'products',
+      'product-categories',
+      'inventory-products',
+      'auto-consumption-rules',
+      'customers',
+      'bookings',
+    ]) {
       const r = await request.get(`${BASE_URL}/api/wellness/csv/${e}`, {
         headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
       });
@@ -185,6 +258,55 @@ test.describe('GET /api/wellness/csv/:entity/template + /export', () => {
     const body = await r.text();
     // Body is BOM + CSV; header line should be findable in the first 200 chars.
     expect(body.slice(0, 200)).toContain('name,category,ticketTier');
+  });
+
+  test('product-categories template returns CSV with parentName column', async ({ request }) => {
+    const token = await getWellnessAdmin(request);
+    const r = await request.get(`${BASE_URL}/api/wellness/csv/product-categories/template`, {
+      headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    expect(r.headers()['content-type']).toContain('text/csv');
+    expect(r.headers()['content-disposition']).toContain('product-categories-template.csv');
+    const body = await r.text();
+    expect(body).toContain('name,parentName,imageUrl,color,active');
+    expect(body).toContain('Sterile Consumables');
+  });
+
+  test('product-categories template can be downloaded as XLSX', async ({ request }) => {
+    const token = await getWellnessAdmin(request);
+    const r = await request.get(`${BASE_URL}/api/wellness/csv/product-categories/template?format=xlsx`, {
+      headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    expect(r.headers()['content-type']).toContain('spreadsheetml.sheet');
+    expect(r.headers()['content-disposition']).toContain('product-categories-template.xlsx');
+  });
+
+  test('inventory-products template returns CSV with categoryName column', async ({ request }) => {
+    const token = await getWellnessAdmin(request);
+    const r = await request.get(`${BASE_URL}/api/wellness/csv/inventory-products/template`, {
+      headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    expect(r.headers()['content-type']).toContain('text/csv');
+    expect(r.headers()['content-disposition']).toContain('inventory-products-template.csv');
+    const body = await r.text();
+    expect(body).toContain('name,sku,description,price,categoryName');
+    expect(body).toContain('PRP Collection Tube');
+  });
+
+  test('auto-consumption-rules template returns CSV with serviceName + productSku columns', async ({ request }) => {
+    const token = await getWellnessAdmin(request);
+    const r = await request.get(`${BASE_URL}/api/wellness/csv/auto-consumption-rules/template`, {
+      headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    expect(r.headers()['content-type']).toContain('text/csv');
+    expect(r.headers()['content-disposition']).toContain('auto-consumption-rules-template.csv');
+    const body = await r.text();
+    expect(body).toContain('serviceName,productSku,productName,quantityPerVisit,unit,active');
+    expect(body).toContain('Hydrafacial');
   });
 
   test('export honours search filter (?q=)', async ({ request }) => {
@@ -280,6 +402,122 @@ test.describe('POST /api/wellness/csv/services/import', () => {
 });
 
 // ── Sync import: customers (Patients) ──────────────────────────────
+
+test.describe('POST /api/wellness/csv/product-categories/import', () => {
+  test('creates a category tree and exports it back out', async ({ request }) => {
+    const token = await getWellnessAdmin(request);
+    const rootName = `${RUN_TAG} Consumables`;
+    const childName = `${RUN_TAG} Sterile`;
+    const csv = buildCsv(
+      ['name', 'parentName', 'imageUrl', 'color', 'active'],
+      [
+        { name: rootName, parentName: '', imageUrl: '', color: '#265855', active: 'true' },
+        { name: childName, parentName: rootName, imageUrl: '', color: '#CD9481', active: 'true' },
+      ],
+    );
+    const r = await postMultipart(request, token, '/api/wellness/csv/product-categories/import', csv, 'product-categories.csv');
+    expect(r.status(), `category import: ${await r.text()}`).toBe(200);
+    const body = await r.json();
+    expect(body.errors).toEqual([]);
+    expect(body.inserted + body.updated).toBeGreaterThanOrEqual(2);
+
+    const exportRes = await request.get(`${BASE_URL}/api/wellness/csv/product-categories/export?q=${encodeURIComponent(RUN_TAG)}`, {
+      headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+    });
+    expect(exportRes.status()).toBe(200);
+    const exportBody = await exportRes.text();
+    expect(exportBody).toContain(rootName);
+    expect(exportBody).toContain(childName);
+  });
+});
+
+test.describe('POST /api/wellness/csv/inventory-products/import', () => {
+  test('creates a product and exports it back out', async ({ request }) => {
+    const token = await getWellnessAdmin(request);
+    const categoryName = `${RUN_TAG} Consumables`;
+    const productName = `${RUN_TAG} PRP Collection Tube`;
+    const productSku = `${RUN_TAG}-tube`;
+    const csv = buildCsv(
+      ['name', 'sku', 'description', 'price', 'categoryName', 'brandName', 'productType', 'productCode', 'hsnCode', 'volume', 'unit', 'discountedPrice', 'dealerPrice', 'purchasePrice', 'manufacturer', 'tax', 'isTaxIncluded', 'barcode', 'imageUrl', 'threshold', 'currentStock', 'active'],
+      [
+        {
+          name: productName,
+          sku: productSku,
+          description: 'Single-use tube for PRP collection',
+          price: '250',
+          categoryName,
+          brandName: 'Globus',
+          productType: 'Consumption',
+          productCode: productSku,
+          hsnCode: '3006',
+          volume: '10',
+          unit: 'ml',
+          discountedPrice: '',
+          dealerPrice: '',
+          purchasePrice: '180',
+          manufacturer: 'Globus',
+          tax: '18',
+          isTaxIncluded: 'false',
+          barcode: '',
+          imageUrl: '',
+          threshold: '10',
+          currentStock: '25',
+          active: 'true',
+        },
+      ],
+    );
+    const r = await postMultipart(request, token, '/api/wellness/csv/inventory-products/import', csv, 'inventory-products.csv');
+    expect(r.status(), `product import: ${await r.text()}`).toBe(200);
+    const body = await r.json();
+    expect(body.errors).toEqual([]);
+    expect(body.inserted + body.updated).toBeGreaterThanOrEqual(1);
+
+    const exportRes = await request.get(`${BASE_URL}/api/wellness/csv/inventory-products/export?q=${encodeURIComponent(RUN_TAG)}`, {
+      headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+    });
+    expect(exportRes.status()).toBe(200);
+    const exportBody = await exportRes.text();
+    expect(exportBody).toContain(productName);
+    expect(exportBody).toContain(productSku);
+    expect(exportBody).toContain(categoryName);
+  });
+});
+
+test.describe('POST /api/wellness/csv/auto-consumption-rules/import', () => {
+  test('creates a rule and exports it back out', async ({ request }) => {
+    const token = await getWellnessAdmin(request);
+    const serviceName = `${RUN_TAG}-svc-1`;
+    const productName = `${RUN_TAG} PRP Collection Tube`;
+    const productSku = `${RUN_TAG}-tube`;
+    const csv = buildCsv(
+      ['serviceName', 'productSku', 'productName', 'quantityPerVisit', 'unit', 'active'],
+      [
+        {
+          serviceName,
+          productSku,
+          productName,
+          quantityPerVisit: '1.5',
+          unit: 'ltr',
+          active: 'true',
+        },
+      ],
+    );
+    const r = await postMultipart(request, token, '/api/wellness/csv/auto-consumption-rules/import', csv, 'auto-consumption-rules.csv');
+    expect(r.status(), `rule import: ${await r.text()}`).toBe(200);
+    const body = await r.json();
+    expect(body.errors).toEqual([]);
+    expect(body.inserted + body.updated).toBeGreaterThanOrEqual(1);
+
+    const exportRes = await request.get(`${BASE_URL}/api/wellness/csv/auto-consumption-rules/export`, {
+      headers: authHeaders(token), timeout: REQUEST_TIMEOUT,
+    });
+    expect(exportRes.status()).toBe(200);
+    const exportBody = await exportRes.text();
+    expect(exportBody).toContain(serviceName);
+    expect(exportBody).toContain(productSku);
+    expect(exportBody).toContain(productName);
+  });
+});
 
 test.describe('POST /api/wellness/csv/customers/import', () => {
   test('inserts new patient with normalised phone', async ({ request }) => {

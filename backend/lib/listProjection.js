@@ -180,6 +180,9 @@ const PROJECTIONS = Object.freeze({
     // contactId is kept for backwards-compat/detail navigation; name is joined
     // here so list callers don't need a second fetch to render the customer.
     contact: { select: { id: true, name: true } },
+    // Intentionally DROPPED: assignedToUserId / assignedToUser. Assignment is
+    // visible on the detail endpoint and full-shape list; the slim summary
+    // projection used by picker/dashboard tiles should not carry it.
   }),
 
   TravelInvoice: Object.freeze({
@@ -433,9 +436,9 @@ const PROJECTIONS = Object.freeze({
   Prescription: Object.freeze({
     id: true,
     patientId: true,     // back-link FK.
-    visitId: true,       // back-link FK (when the Rx anchors a visit).
-    doctorId: true,      // prescriber FK — medico-legal "who wrote it"
-                         // metadata; not PHI on its own.
+    visitId: true,     // back-link FK (when the Rx anchors a visit).
+    doctorId: true,    // prescriber FK — medico-legal "who wrote it"
+                       // metadata; not PHI on its own.
     // S96 — surface S62's slim-shape PRD additions. Both columns are
     // lifecycle workflow keys (not PHI on their own — they don't reveal
     // what was prescribed, only whether/when the Rx was issued/dispensed).

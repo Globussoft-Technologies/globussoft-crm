@@ -1107,3 +1107,84 @@ table.leads-table--fit td:last-child {
   text-overflow: clip;
   white-space: nowrap;
 }
+
+/* Generic Leads compact mode: trim horizontal padding so custom fields get
+   more breathing room without changing the table structure. */
+table.leads-table--compact {
+  table-layout: auto;
+  width: 100%;
+}
+
+table.leads-table--compact th,
+table.leads-table--compact td {
+  box-sizing: border-box;
+  padding: 0.5rem 0.35rem !important;
+  font-size: 0.8125rem;
+  vertical-align: middle;
+}
+
+table.leads-table--compact th {
+  line-height: 1.2;
+}
+
+table.leads-table--compact th.leads-custom-field-col,
+table.leads-table--compact td.leads-custom-field-col {
+  width: 84px;
+  min-width: 84px;
+  max-width: 84px;
+}
+
+table.leads-table--compact th.leads-custom-field-col {
+  white-space: normal;
+}
+
+table.leads-table--compact th.leads-custom-field-col .leads-custom-field-label {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.15;
+}
+
+table.leads-table--compact td > .inline-cell-editor-display {
+  width: 100%;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 0.25rem;
+  padding: 0.1rem 0.25rem;
+}
+
+table.leads-table--compact td > .inline-cell-editor-display > span,
+table.leads-table--compact td > .inline-cell-editor-display > a {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
+table.leads-table--compact td > .inline-cell-editor-display > button {
+  flex-shrink: 0;
+}
+
+table.leads-table--compact select.input-field {
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 0.3rem 0.45rem !important;
+}
+
+table.leads-table--compact th.leads-assigned-col,
+table.leads-table--compact td.leads-assigned-col {
+  width: 160px;
+  min-width: 160px;
+  max-width: 160px;
+}
+
+table.leads-table--compact td.leads-assigned-col select.input-field {
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box;
+  padding: 0.25rem 0.4rem !important;
+  font-size: 0.75rem !important;
+}

@@ -113,6 +113,17 @@ prisma.itinerary = prisma.itinerary || {};
 prisma.itinerary.findFirst = vi.fn().mockResolvedValue(null);
 prisma.itinerary.update = vi.fn().mockResolvedValue({});
 prisma.tripInstalmentPayment.findMany = vi.fn().mockResolvedValue([]);
+prisma.travelQuote = prisma.travelQuote || {};
+prisma.travelQuote.findFirst = vi.fn().mockResolvedValue(null);
+prisma.travelQuote.update = vi.fn().mockResolvedValue({});
+prisma.travelInvoice = prisma.travelInvoice || {};
+prisma.travelInvoice.findFirst = vi.fn().mockResolvedValue(null);
+prisma.travelInvoice.update = vi.fn().mockResolvedValue({});
+prisma.travelPaymentSchedule = prisma.travelPaymentSchedule || {};
+prisma.travelPaymentSchedule.findFirst = vi.fn().mockResolvedValue(null);
+prisma.travelPaymentSchedule.update = vi.fn().mockResolvedValue({});
+prisma.travelPaymentSchedule.updateMany = vi.fn().mockResolvedValue({ count: 0 });
+prisma.travelPaymentSchedule.count = vi.fn().mockResolvedValue(0);
 
 import express from 'express';
 import request from 'supertest';
@@ -151,10 +162,19 @@ beforeEach(() => {
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.update.mockReset().mockResolvedValue({});
+  prisma.travelQuote.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelQuote.update.mockReset().mockResolvedValue({});
+  prisma.travelInvoice.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelInvoice.update.mockReset().mockResolvedValue({});
+  prisma.travelPaymentSchedule.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelPaymentSchedule.update.mockReset().mockResolvedValue({});
+  prisma.travelPaymentSchedule.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.travelPaymentSchedule.count.mockReset().mockResolvedValue(0);
   // Sensible defaults — happy-path resolves.
   prisma.auditLog.findFirst.mockResolvedValue(null);
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
   prisma.payment.create.mockResolvedValue({ id: 555, amount: 0, currency: 'USD' });
+  prisma.payment.findMany.mockResolvedValue([]);
   prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
   eventBus.emitEvent.mockClear();
 });
@@ -204,6 +224,115 @@ describe('POST /api/billing/public/confirm-payment - payment-link statuses', () 
         status: 'SUCCESS',
         metadata: expect.stringContaining('"razorpayPaymentId":"pay_partial_123"'),
       }),
+    });
+  });
+
+  test('second payment on same quote link creates a new transaction instead of overwriting the advance', async () => {
+    prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
+    const firstPayment = {
+      id: 901,
+      tenantId: 1,
+      invoiceId: 17,
+      contactId: 33,
+      description: 'Quote #21 ? 50% advance payment',
+      gateway: 'razorpay',
+      gatewayId: 'pay_advance_1l',
+      status: 'SUCCESS',
+      amount: 100000,
+      currency: 'INR',
+      metadata: JSON.stringify({
+        type: 'travel-quote-advance',
+        mode: 'payment_link',
+        plinkId: 'plink_quote_21',
+        razorpayPaymentId: 'pay_advance_1l',
+        quoteId: 21,
+        travelInvoiceId: 17,
+      }),
+    };
+    const balancePayment = {
+      id: 902,
+      tenantId: 1,
+      invoiceId: 17,
+      contactId: 33,
+      description: firstPayment.description,
+      gateway: 'razorpay',
+      gatewayId: 'pay_balance_rest',
+      status: 'SUCCESS',
+      amount: 98257.15,
+      currency: 'INR',
+      metadata: JSON.stringify({
+        type: 'travel-quote-advance',
+        mode: 'payment_link',
+        plinkId: 'plink_quote_21',
+        razorpayPaymentId: 'pay_balance_rest',
+        quoteId: 21,
+        travelInvoiceId: 17,
+      }),
+    };
+
+    prisma.payment.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(firstPayment)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(balancePayment);
+    prisma.payment.create.mockResolvedValue(balancePayment);
+    prisma.payment.aggregate.mockResolvedValue({ _sum: { amount: 198257.15 } });
+    prisma.travelQuote.findFirst.mockResolvedValue({
+      id: 21,
+      totalAmount: 198257.15,
+      status: 'advance_paid',
+      contactId: 33,
+      subBrand: 'rfu',
+    });
+    prisma.payment.findMany.mockResolvedValue([
+      { amount: 100000 },
+      { amount: 98257.15 },
+    ]);
+    prisma.travelInvoice.findFirst
+      .mockResolvedValueOnce({ id: 17, tenantId: 1, totalAmount: 198257.15, status: 'Partial' })
+      .mockResolvedValueOnce({ id: 17, totalAmount: 198257.15, invoiceNum: 'TINV-2026-0017' })
+      .mockResolvedValueOnce({ id: 17, totalAmount: 198257.15, invoiceNum: 'TINV-2026-0017' });
+
+    const res = await request(makeApp())
+      .post('/api/billing/public/confirm-payment')
+      .send({
+        razorpay_payment_link_id: 'plink_quote_21',
+        razorpay_payment_link_reference_id: 'quote-21',
+        razorpay_payment_link_status: 'paid',
+        razorpay_payment_id: 'pay_balance_rest',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      ok: true,
+      amountPaid: 98257.15,
+      totalDue: 198257.15,
+      balanceDue: 0,
+      invoiceNum: 'TINV-2026-0017',
+    });
+    expect(prisma.payment.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        gatewayId: 'pay_balance_rest',
+        status: 'SUCCESS',
+        invoiceId: 17,
+        amount: 0,
+      }),
+    });
+    expect(prisma.payment.update).toHaveBeenCalledWith({
+      where: { id: 902 },
+      data: expect.objectContaining({
+        invoiceId: 17,
+        amount: 98257.15,
+        metadata: expect.stringContaining('"travelInvoiceId":17'),
+      }),
+    });
+    expect(prisma.travelInvoice.update).toHaveBeenCalledWith({
+      where: { id: 17 },
+      data: expect.objectContaining({ status: 'Paid' }),
+    });
+    expect(prisma.travelQuote.update).toHaveBeenCalledWith({
+      where: { id: 21 },
+      data: { status: 'fully_paid' },
     });
   });
 

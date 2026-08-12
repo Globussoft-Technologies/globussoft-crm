@@ -426,6 +426,7 @@ function assertValidItemType(itemType) {
 router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
+    const search = String(req.query.search || req.query.q || "").trim();
     if (req.query.subBrand) {
       assertValidSubBrand(String(req.query.subBrand));
       where.subBrand = String(req.query.subBrand);
@@ -446,6 +447,25 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
       where.subBrand = where.subBrand
         ? canAccessSubBrand(allowed, where.subBrand) ? where.subBrand : "__none__"
         : { in: [...allowed] };
+    }
+    if (search) {
+      const contactMatches = await prisma.contact.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          name: { contains: search, mode: "insensitive" },
+        },
+        select: { id: true },
+      });
+      const matchingContactIds = contactMatches.map((row) => row.id);
+      where.OR = [
+        { destination: { contains: search, mode: "insensitive" } },
+        ...(matchingContactIds.length
+          ? [{ contactId: { in: matchingContactIds } }]
+          : []),
+      ];
+      if (!where.OR.length) {
+        where.OR = [{ destination: "__never__" }];
+      }
     }
 
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
@@ -690,16 +710,28 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
           const tplItems = Array.isArray(parsed.items) ? parsed.items : [];
           tplItems.forEach((it, i) => {
             if (!it || !it.itemType || !it.description) return;
-            const cost = it.estimatedCost != null ? Number(it.estimatedCost) : null;
+            const unitCost = it.unitCost != null && it.unitCost !== ""
+              ? Number(it.unitCost)
+              : (it.estimatedCost != null ? Number(it.estimatedCost) : null);
+            const markup = it.markup != null && it.markup !== "" ? Number(it.markup) : null;
+            const gstAmount = it.gstAmount != null && it.gstAmount !== "" ? Number(it.gstAmount) : null;
+            const quantity = it.quantity != null && it.quantity !== "" ? Number(it.quantity) : 1;
+            const templateTotal = it.totalPrice != null && it.totalPrice !== ""
+              ? Number(it.totalPrice)
+              : computeItemLineTotal({ unitCost, quantity, markup, gstAmount });
             templateItemRows.push({
               itemType: String(it.itemType),
-              position: i,
+              position: Number.isFinite(Number(it.position)) ? Number(it.position) : i,
               description: String(it.description),
-              detailsJson: it.locationName ? JSON.stringify({ locationName: it.locationName }) : null,
-              unitCost: cost,
-              totalPrice: cost,
-              unit: "per_person",
-              quantity: 1,
+              detailsJson: normalizeTemplateDetailsJson(it),
+              supplierId: it.supplierId != null && it.supplierId !== "" ? Number(it.supplierId) : null,
+              unitCost,
+              markup,
+              gstAmount,
+              totalPrice: Number.isFinite(templateTotal) ? templateTotal : null,
+              unit: it.unit ? String(it.unit) : "per_person",
+              quantity: Number.isFinite(quantity) && quantity >= 0 ? quantity : 1,
+              direction: it.direction ? String(it.direction) : null,
               dayNumber: it.dayNumber != null ? parseInt(it.dayNumber, 10) : null,
               latitude: it.latitude != null ? Number(it.latitude) : null,
               longitude: it.longitude != null ? Number(it.longitude) : null,
@@ -1858,10 +1890,11 @@ router.get("/itineraries/stats", verifyToken, requireTravelTenant, async (req, r
 
 // GET /api/travel/itineraries/:id
 // Resolve the policy-driven refund context for a booking: which cancellation
-// policy applies (the one pinned to its TravelInvoice, else the active policy
-// for the sub-brand, else the tenant-wide default), how many days until the trip
-// starts, and the resulting refund % + amount of what's been paid. Best-effort;
-// returns computable:false when no policy/date so the advisor decides manually.
+// policy applies (trip-specific policy attached to this itinerary, else the one
+// pinned to its TravelInvoice, else the active policy for the sub-brand, else
+// the tenant-wide default), how many days until the trip starts, and the
+// resulting refund % + amount of what's been paid. Best-effort; returns
+// computable:false when no policy/date so the advisor decides manually.
 async function resolveCancellationRefund(itin) {
   const base = {
     policyId: null,
@@ -1877,18 +1910,26 @@ async function resolveCancellationRefund(itin) {
   try {
     const tenantId = itin.tenantId;
     let policy = null;
-    // 1. Policy the operator pinned to this booking's invoice.
-    const inv = await prisma.travelInvoice.findFirst({
-      where: { tenantId, itineraryId: itin.id, cancellationPolicyId: { not: null } },
-      select: { cancellationPolicyId: true },
-      orderBy: { id: "desc" },
+    // 1. Trip-specific policy attached directly to this itinerary.
+    policy = await prisma.cancellationPolicy.findFirst({
+      where: { tenantId, itineraryId: itin.id, isActive: true },
     }).catch(() => null);
-    if (inv && inv.cancellationPolicyId) {
-      policy = await prisma.cancellationPolicy.findFirst({
-        where: { id: inv.cancellationPolicyId, tenantId },
+
+    // 2. Else the operator-pinned policy on this booking's invoice.
+    if (!policy) {
+      const inv = await prisma.travelInvoice.findFirst({
+        where: { tenantId, itineraryId: itin.id, cancellationPolicyId: { not: null } },
+        select: { cancellationPolicyId: true },
+        orderBy: { id: "desc" },
       }).catch(() => null);
+      if (inv && inv.cancellationPolicyId) {
+        policy = await prisma.cancellationPolicy.findFirst({
+          where: { id: inv.cancellationPolicyId, tenantId, isActive: true },
+        }).catch(() => null);
+      }
     }
-    // 2. Else the active policy for the sub-brand (sub-brand-specific wins over
+
+    // 3. Else the active policy for the sub-brand (sub-brand-specific wins over
     //    the tenant-wide null default).
     if (!policy) {
       const policies = await prisma.cancellationPolicy.findMany({
@@ -1906,7 +1947,6 @@ async function resolveCancellationRefund(itin) {
     return base;
   }
 }
-
 router.get("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -2871,6 +2911,23 @@ function computeItemLineTotal({ unitCost, quantity, markup, gstAmount }) {
   const mk = markup != null && markup !== "" ? Number(markup) : 0;
   const gst = gstAmount != null && gstAmount !== "" ? Number(gstAmount) : 0;
   return Math.round((rate * qty + mk + gst) * 100) / 100;
+}
+
+function normalizeTemplateDetailsJson(item) {
+  if (item?.detailsJson && typeof item.detailsJson === "string") {
+    return item.detailsJson;
+  }
+  if (item?.detailsJson && typeof item.detailsJson === "object" && !Array.isArray(item.detailsJson)) {
+    try {
+      return JSON.stringify(item.detailsJson);
+    } catch (_e) {
+      return null;
+    }
+  }
+  if (item?.locationName != null && String(item.locationName).trim() !== "") {
+    return JSON.stringify({ locationName: String(item.locationName).trim() });
+  }
+  return null;
 }
 
 // After any item add/edit/delete: recompute the itinerary total from its line
@@ -4170,6 +4227,7 @@ router.post(
           position: true,
           description: true,
           detailsJson: true,
+          supplierId: true,
           unitCost: true,
           markup: true,
           gstAmount: true,
@@ -4234,6 +4292,7 @@ router.post(
         position: it.position,
         description: it.description,
         detailsJson: it.detailsJson,
+        supplierId: it.supplierId,
         unit: it.unit,
         quantity: it.quantity != null ? String(it.quantity) : null,
         unitCost: it.unitCost != null ? String(it.unitCost) : null,

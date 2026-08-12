@@ -18,7 +18,7 @@
 // canonical header + table + add/edit modal pattern). Empty-state
 // honors the #829 permission-denied vs no-rows distinction.
 
-import { useEffect, useState, useContext, Fragment } from "react";
+import { useCallback, useEffect, useState, useContext, Fragment, useRef } from "react";
 import {
   Building2,
   Plus,
@@ -31,8 +31,10 @@ import {
   Wallet,
   BarChart3,
   AlertTriangle,
+  Download,
+  Upload,
 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { usePermissions } from "../../hooks/usePermissions";
 import {
@@ -63,6 +65,8 @@ const SUPPLIER_CATEGORIES = [
   { value: "visa-consul", label: "Visa Consul" },
   { value: "other", label: "Other" },
 ];
+
+const SUPPLIERS_PAGE_SIZE = 20;
 
 // Sub-brand pill background: imported from utils/travelSubBrand (rule-of-3
 // promotion 2026-05-24 tick #99 — was inline here as the origin copy at
@@ -281,6 +285,8 @@ export default function SuppliersAdmin() {
   const [suppliers, setSuppliers] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   // #829 — distinguish 403 from genuine empty so the empty-state copy
   // honestly says "Access restricted" instead of "No suppliers match."
   const [permissionDenied, setPermissionDenied] = useState(false);
@@ -327,29 +333,90 @@ export default function SuppliersAdmin() {
   const [exposureLoading, setExposureLoading] = useState(true);
   const [exposureError, setExposureError] = useState(false);
   const [exposureNearLimitOnly, setExposureNearLimitOnly] = useState(false);
+  const listRef = useRef(null);
+  const suppliersRef = useRef([]);
+  const loadingRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(false);
+  const fileRef = useRef(null);
 
-  const load = () => {
-    setLoading(true);
+  useEffect(() => {
+    suppliersRef.current = suppliers;
+  }, [suppliers]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const load = useCallback(({ reset = true } = {}) => {
+    const targetOffset = reset ? 0 : offsetRef.current;
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      offsetRef.current = 0;
+      suppliersRef.current = [];
+      setSuppliers([]);
+      if (listRef.current) listRef.current.scrollTop = 0;
+    } else if (!loadingRef.current) {
+      setLoadingMore(true);
+    }
     const qs = new URLSearchParams();
     if (subBrand) qs.set("subBrand", subBrand);
     if (supplierCategory) qs.set("supplierCategory", supplierCategory);
     if (includeInactive) qs.set("includeInactive", "1");
+    qs.set("limit", String(SUPPLIERS_PAGE_SIZE));
+    qs.set("offset", String(targetOffset));
     const url = `/api/travel/suppliers${qs.toString() ? `?${qs.toString()}` : ""}`;
     fetchApi(url)
       .then((d) => {
-        setSuppliers(Array.isArray(d?.suppliers) ? d.suppliers : []);
-        setTotal(Number.isFinite(d?.total) ? d.total : 0);
+        const rows = Array.isArray(d?.suppliers) ? d.suppliers : [];
+        const totalCount = Number.isFinite(d?.total) ? d.total : 0;
+        const nextSuppliers = reset ? rows : [...suppliersRef.current, ...rows];
+        const nextOffset = targetOffset + rows.length;
+        suppliersRef.current = nextSuppliers;
+        offsetRef.current = nextOffset;
+        setSuppliers(nextSuppliers);
+        setTotal(totalCount);
+        setHasMore(nextOffset < totalCount);
         setPermissionDenied(false);
       })
       .catch((err) => {
-        setSuppliers([]);
-        setTotal(0);
+        if (reset) {
+          setSuppliers([]);
+          setTotal(0);
+        }
+        setHasMore(false);
         setPermissionDenied(err?.status === 403);
       })
-      .finally(() => setLoading(false));
-  };
+      .finally(() => {
+        setLoading(false);
+        setLoadingMore(false);
+      });
+  }, [subBrand, supplierCategory, includeInactive]);
 
-  useEffect(load, [subBrand, supplierCategory, includeInactive]);
+  useEffect(() => {
+    load({ reset: true });
+  }, [load]);
+
+  const handleSuppliersScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+      load({ reset: false });
+    }
+  }, [load]);
 
   // Slice 9 (#903) — load aged-payable report on mount + when sub-brand or
   // category filters change (so the panel mirrors the suppliers list the
@@ -702,12 +769,88 @@ export default function SuppliersAdmin() {
     }
   };
 
+  const downloadTemplate = async (format) => {
+    try {
+      const ext = format === "xlsx" ? "xlsx" : "csv";
+      const label = format === "xlsx" ? "Excel template" : "CSV template";
+      const res = await fetch(`/api/travel/suppliers/import-template?format=${ext}`, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      if (!res.ok) throw new Error(`Failed to download ${label.toLowerCase()}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `travel-suppliers-template.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify.error(e.message || `Failed to download ${format} template`);
+    }
+  };
+
+  const exportCsv = async () => {
+    try {
+      const qs = new URLSearchParams();
+      if (subBrand) qs.set("subBrand", subBrand);
+      if (supplierCategory) qs.set("supplierCategory", supplierCategory);
+      if (includeInactive) qs.set("includeInactive", "1");
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      const res = await fetch(`/api/travel/suppliers/export.csv${suffix}`, {
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "travel-suppliers.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify.error(e.message || "Failed to export suppliers");
+    }
+  };
+
+  const importCsv = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/travel/suppliers/import.csv", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${getAuthToken()}` },
+        body: formData,
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || `Import failed (${res.status})`);
+      const summary = `Imported ${body.imported}, updated ${body.updated}, skipped ${body.skipped}`;
+      if (body.errors?.length) {
+        notify.error(`${summary}. First error row ${body.errors[0].rowNumber}: ${body.errors[0].reason}`);
+      } else {
+        notify.success(summary);
+      }
+      load();
+    } catch (e) {
+      notify.error(e.message || "Import failed");
+    } finally {
+      if (event.target) event.target.value = "";
+    }
+  };
+
   return (
     <div
       style={{
         padding: 24,
-        maxWidth: 1200,
+        width: "100%",
+        maxWidth: 1480,
         margin: "0 auto",
+        boxSizing: "border-box",
         animation: "fadeIn 0.4s ease-out",
       }}
     >
@@ -745,12 +888,62 @@ export default function SuppliersAdmin() {
             {total.toLocaleString()} supplier{total === 1 ? "" : "s"}.
           </p>
         </div>
-        {canCreate && (
-          <button type="button" onClick={openCreate} style={primaryBtnBranded}>
-            <Plus size={14} /> New Supplier
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <button type="button" onClick={exportCsv} style={secondaryBtn}>
+            <Download size={14} /> Export CSV
           </button>
-        )}
+          <button type="button" onClick={() => downloadTemplate("csv")} style={secondaryBtn}>
+            <Download size={14} /> Download CSV Template
+          </button>
+          <button type="button" onClick={() => downloadTemplate("xlsx")} style={secondaryBtn}>
+            <Download size={14} /> Download Excel Template
+          </button>
+          {canCreate && (
+            <>
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                style={secondaryBtn}
+                title="Bulk-import suppliers from CSV or Excel using the downloadable template."
+              >
+                <Upload size={14} /> Import CSV/Excel
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".csv,.xlsx,.xls,text/csv"
+                onChange={importCsv}
+                style={{ display: "none" }}
+                aria-label="Upload suppliers CSV or Excel file"
+              />
+              <button type="button" onClick={openCreate} style={primaryBtnBranded}>
+                <Plus size={14} /> New Supplier
+              </button>
+            </>
+          )}
+        </div>
       </header>
+
+      <div
+        className="glass"
+        style={{
+          padding: 12,
+          marginBottom: 16,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
+        <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+          Bulk Import Guide
+        </div>
+        <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+          Required for import: <strong style={{ color: "var(--text-primary)" }}>subBrand, name, supplierCategory</strong>.
+        </div>
+        <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+          Optional: contactPerson, phone, email, gstin, addressLine, status, paymentTermsKind, paymentTermsDays, creditLimit, creditCurrency, taxRegimeCode, primaryContactRole, commissionPercent, notes.
+        </div>
+      </div>
 
       <div
         className="glass"
@@ -1503,7 +1696,16 @@ export default function SuppliersAdmin() {
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
         ) : (
-          <TopScrollSync>
+          <div
+            ref={listRef}
+            data-testid="suppliers-admin-table-scroll"
+            onScroll={handleSuppliersScroll}
+            style={{
+              maxHeight: "calc(100vh - 360px)",
+              overflowY: "auto",
+              overflowX: "hidden",
+            }}
+          >
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
@@ -1765,7 +1967,12 @@ export default function SuppliersAdmin() {
               )}
             </tbody>
           </table>
-          </TopScrollSync>
+          {loadingMore && (
+            <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-secondary)", borderTop: "1px solid var(--border-color)" }}>
+              Loading more&hellip;
+            </div>
+          )}
+          </div>
         )}
       </div>
 
@@ -2183,6 +2390,9 @@ const payableTd = {
 };
 
 const th = {
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
   textAlign: "left",
   padding: "10px 12px",
   fontSize: 12,
@@ -2190,7 +2400,9 @@ const th = {
   letterSpacing: 0.5,
   color: "var(--text-secondary)",
   borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)",
+  background: "var(--bg-color, #111318)",
+  backgroundClip: "padding-box",
+  boxShadow: "0 1px 0 var(--border-color)",
   fontWeight: 600,
 };
 const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };

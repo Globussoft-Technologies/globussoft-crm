@@ -42,6 +42,8 @@
 
 "use strict";
 
+const { ALLOWED_UNITS, isAllowedUnit, isConvertible } = require("./consumptionUnits");
+
 const ASYNC_THRESHOLD_ROWS = 5000;
 const ASYNC_THRESHOLD_BYTES = 5 * 1024 * 1024; // 5MB
 
@@ -104,6 +106,13 @@ function formatDateTime(d) {
   return Number.isNaN(dt.getTime()) ? "" : dt.toISOString();
 }
 
+function lookupById(map, id) {
+  if (!map) return null;
+  const numericId = Number(id);
+  if (!Number.isFinite(numericId)) return null;
+  return map.get(numericId) || null;
+}
+
 // ── Cached lookup maps for FK resolution ───────────────────────────
 //
 // Build once per import batch so the per-row parser doesn't hammer prisma
@@ -112,10 +121,18 @@ function formatDateTime(d) {
 // pick whichever is relevant.
 
 async function buildLookupContext(prisma, tenantId) {
-  const [services, drugs, patients, staff, contacts] = await Promise.all([
+  const [services, categories, inventoryProducts, drugs, patients, staff, contacts] = await Promise.all([
     prisma.service.findMany({
       where: { tenantId },
       select: { id: true, name: true },
+    }),
+    prisma.productCategory.findMany({
+      where: { tenantId },
+      select: { id: true, name: true, parentId: true },
+    }),
+    prisma.product.findMany({
+      where: { tenantId },
+      select: { id: true, name: true, sku: true, categoryId: true },
     }),
     prisma.drug.findMany({
       where: { tenantId },
@@ -141,8 +158,24 @@ async function buildLookupContext(prisma, tenantId) {
   const norm = (s) => String(s || "").trim().toLowerCase();
   const normPhone = (s) => String(s || "").replace(/\D/g, "").slice(-10);
 
+  const servicesById = new Map(services.map((s) => [s.id, s]));
   const servicesByName = new Map(services.map((s) => [norm(s.name), s.id]));
+  const categoriesById = new Map(categories.map((c) => [c.id, c]));
+  const categoriesByName = new Map(categories.map((c) => [norm(c.name), c.id]));
+  const inventoryProductsById = new Map(inventoryProducts.map((p) => [p.id, p]));
+  const inventoryProductsByName = new Map(inventoryProducts.map((p) => [norm(p.name), p.id]));
+  const inventoryProductsBySku = new Map(
+    inventoryProducts
+      .filter((p) => p.sku)
+      .map((p) => [norm(p.sku), p.id]),
+  );
+  const inventoryProductsBySkuOrName = new Map(
+    inventoryProducts
+      .filter((p) => p.sku)
+      .map((p) => [norm(p.sku), p.id]),
+  );
   const drugsByName = new Map(drugs.map((d) => [norm(d.name), d.id]));
+  const drugsById = new Map(drugs.map((d) => [d.id, d]));
   const patientsByPhone = new Map(
     patients
       .filter((p) => p.phone || p.normalizedPhone)
@@ -157,8 +190,16 @@ async function buildLookupContext(prisma, tenantId) {
   const contactsByName = new Map(contacts.map((c) => [norm(c.name), c.id]));
 
   return {
+    servicesById,
     servicesByName,
+    categoriesById,
+    categoriesByName,
+    inventoryProductsById,
+    inventoryProductsByName,
+    inventoryProductsBySku,
+    inventoryProductsBySkuOrName,
     drugsByName,
+    drugsById,
     patientsByPhone,
     patientsByEmail,
     staffByName,
@@ -166,6 +207,10 @@ async function buildLookupContext(prisma, tenantId) {
     contactsByEmail,
     contactsByName,
     findService: (name) => servicesByName.get(norm(name)) || null,
+    findCategory: (name) => categoriesByName.get(norm(name)) || null,
+    findProductBySku: (sku) => inventoryProductsBySku.get(norm(sku)) || null,
+    findProductByName: (name) => inventoryProductsByName.get(norm(name)) || null,
+    findProduct: (skuOrName) => inventoryProductsBySku.get(norm(skuOrName)) || inventoryProductsByName.get(norm(skuOrName)) || null,
     findDrug: (name) => drugsByName.get(norm(name)) || null,
     findPatientByPhone: (phone) => patientsByPhone.get(normPhone(phone)) || null,
     findStaff: (nameOrEmail) => {
@@ -341,8 +386,8 @@ const packages = {
       if (Array.isArray(ents) && ents.length > 0) {
         const first = ents[0];
         sessions = first.quantity ?? "";
-        if (first.serviceId && ctx?.serviceIdToName) {
-          serviceName = ctx.serviceIdToName.get(first.serviceId) || "";
+        if (first.serviceId) {
+          serviceName = lookupById(ctx?.lookups?.servicesById, first.serviceId)?.name || ctx?.serviceIdToName?.get(first.serviceId) || "";
         }
       }
     } catch { /* malformed entitlements */ }
@@ -524,6 +569,437 @@ const products = {
     const record = await prisma.drug.create({ data: { ...data, tenantId } });
     return { action: "inserted", record };
   },
+};
+
+const productCategories = {
+  model: "productCategory",
+  headers: ["name", "parentName", "imageUrl", "color", "active"],
+  sample: {
+    name: "Sterile Consumables",
+    parentName: "Consumables",
+    imageUrl: "",
+    color: "#C9A063",
+    active: "true",
+  },
+  readGate: ["admin", "manager"],
+  readPermissions: [{ module: "products", action: "read" }],
+  writeGate: ["admin", "manager"],
+  writePermissions: [{ module: "products", action: "manage" }],
+  buildWhere: (req) => {
+    const where = { tenantId: req.user.tenantId };
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { parent: { is: { name: { contains: q } } } },
+      ];
+    }
+    return where;
+  },
+  orderBy: [{ parentId: "asc" }, { name: "asc" }],
+  serialize: (cat, ctx) => [
+    cat.name || "",
+    lookupById(ctx?.lookups?.categoriesById, cat.parentId)?.name || "",
+    cat.imageUrl || "",
+    cat.color || "",
+    cat.isActive === false ? "false" : "true",
+  ],
+  async parseRow(raw, ctx = {}) {
+    const errors = [];
+    const nameErr = requireString(raw.name, "name");
+    if (nameErr) errors.push(nameErr);
+
+    const name = String(raw.name || "").trim();
+    const parentName = trimOrNull(raw.parentName);
+    let parentId = null;
+    if (parentName) {
+      if (name && parentName.toLowerCase() === name.toLowerCase()) {
+        errors.push({ column: "parentName", value: parentName, message: "parentName cannot match name" });
+      } else {
+        parentId = ctx?.lookups?.findCategory ? ctx.lookups.findCategory(parentName) : null;
+        if (!parentId) {
+          errors.push({ column: "parentName", value: parentName, message: "no parent category with this name exists in your tenant" });
+        }
+      }
+    }
+
+    const active = parseBool(raw.active ?? raw.isActive);
+    if (active === undefined) {
+      errors.push({ column: "active", value: String(raw.active ?? raw.isActive), message: "active must be true/false/yes/no/1/0" });
+    }
+
+    if (errors.length) return { data: null, errors };
+
+    return {
+      data: {
+        name,
+        parentId,
+        imageUrl: trimOrNull(raw.imageUrl),
+        color: trimOrNull(raw.color),
+        isActive: active === null ? true : active,
+      },
+      errors: [],
+    };
+  },
+  naturalKey: (data) => data.name.toLowerCase(),
+  async naturalKeyMatch(prisma, tenantId, data) {
+    return prisma.productCategory.findFirst({
+      where: { tenantId, name: data.name },
+    });
+  },
+  async persist(prisma, tenantId, data, existing) {
+    if (existing) {
+      const record = await prisma.productCategory.update({ where: { id: existing.id }, data });
+      return { action: "updated", record };
+    }
+    const record = await prisma.productCategory.create({ data: { ...data, tenantId } });
+    return { action: "inserted", record };
+  },
+  registerLookup(lookups, data, record, existing) {
+    if (!lookups) return;
+    if (lookups.categoriesByName && existing?.name && existing.name.toLowerCase() !== record.name.toLowerCase()) {
+      lookups.categoriesByName.delete(existing.name.toLowerCase());
+    }
+    if (lookups.categoriesById) lookups.categoriesById.set(record.id, record);
+    if (lookups.categoriesByName) lookups.categoriesByName.set(record.name.toLowerCase(), record.id);
+  },
+};
+
+const inventoryProducts = {
+  model: "product",
+  headers: [
+    "name",
+    "sku",
+    "description",
+    "price",
+    "categoryName",
+    "brandName",
+    "productType",
+    "productCode",
+    "hsnCode",
+    "volume",
+    "unit",
+    "discountedPrice",
+    "dealerPrice",
+    "purchasePrice",
+    "manufacturer",
+    "tax",
+    "isTaxIncluded",
+    "barcode",
+    "imageUrl",
+    "threshold",
+    "currentStock",
+    "active",
+  ],
+  sample: {
+    name: "PRP Collection Tube",
+    sku: "PRP-TUBE-10",
+    description: "Single-use tube for PRP collection",
+    price: "250",
+    categoryName: "Consumables",
+    brandName: "Globus",
+    productType: "Consumption",
+    productCode: "PRP-TUBE",
+    hsnCode: "3006",
+    volume: "10",
+    unit: "ml",
+    discountedPrice: "",
+    dealerPrice: "",
+    purchasePrice: "180",
+    manufacturer: "Globus",
+    tax: "18",
+    isTaxIncluded: "false",
+    barcode: "",
+    imageUrl: "",
+    threshold: "10",
+    currentStock: "25",
+    active: "true",
+  },
+  readGate: ["admin", "manager"],
+  readPermissions: [{ module: "products", action: "read" }],
+  writeGate: ["admin", "manager"],
+  writePermissions: [{ module: "products", action: "write" }],
+  buildWhere: (req) => {
+    const where = { tenantId: req.user.tenantId };
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    const rawCategoryId = req.query.categoryId;
+    const categoryId = rawCategoryId === undefined || rawCategoryId === null || rawCategoryId === ""
+      ? null
+      : parseInt(rawCategoryId, 10);
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { sku: { contains: q } },
+        { brandName: { contains: q } },
+      ];
+    }
+    if (categoryId) where.categoryId = categoryId;
+    return where;
+  },
+  orderBy: [{ name: "asc" }],
+  serialize: (product, ctx) => [
+    product.name || "",
+    product.sku || "",
+    product.description || "",
+    product.price ?? "",
+    product.category?.name || lookupById(ctx?.lookups?.categoriesById, product.categoryId)?.name || "",
+    product.brandName || "",
+    product.productType || "",
+    product.productCode || "",
+    product.hsnCode || "",
+    product.volume ?? "",
+    product.unit || "",
+    product.discountedPrice ?? "",
+    product.dealerPrice ?? "",
+    product.purchasePrice ?? "",
+    product.manufacturer || "",
+    product.tax ?? "",
+    product.isTaxIncluded === true ? "true" : "false",
+    product.barcode || "",
+    product.imageUrl || "",
+    product.threshold ?? "",
+    product.currentStock ?? "",
+    product.isActive === false ? "false" : "true",
+  ],
+  async parseRow(raw, ctx = {}) {
+    const errors = [];
+    const nameErr = requireString(raw.name, "name");
+    if (nameErr) errors.push(nameErr);
+
+    const sku = trimOrNull(raw.sku);
+    const categoryName = trimOrNull(raw.categoryName);
+    let categoryId = null;
+    if (categoryName) {
+      categoryId = ctx?.lookups?.findCategory ? ctx.lookups.findCategory(categoryName) : null;
+      if (!categoryId) {
+        errors.push({ column: "categoryName", value: categoryName, message: "no category with this name exists in your tenant" });
+      }
+    }
+
+    const price = parseNumber(raw.price);
+    if (price === undefined || Number.isNaN(price)) {
+      errors.push({ column: "price", value: String(raw.price), message: "price must be a number" });
+    }
+
+    const volume = raw.volume === "" || raw.volume == null ? null : parseNumber(raw.volume);
+    if (volume !== null && Number.isNaN(volume)) {
+      errors.push({ column: "volume", value: String(raw.volume), message: "volume must be a number" });
+    }
+
+    const discountedPrice = raw.discountedPrice === "" || raw.discountedPrice == null ? null : parseNumber(raw.discountedPrice);
+    if (discountedPrice !== null && Number.isNaN(discountedPrice)) {
+      errors.push({ column: "discountedPrice", value: String(raw.discountedPrice), message: "discountedPrice must be a number" });
+    }
+
+    const dealerPrice = raw.dealerPrice === "" || raw.dealerPrice == null ? null : parseNumber(raw.dealerPrice);
+    if (dealerPrice !== null && Number.isNaN(dealerPrice)) {
+      errors.push({ column: "dealerPrice", value: String(raw.dealerPrice), message: "dealerPrice must be a number" });
+    }
+
+    const purchasePrice = raw.purchasePrice === "" || raw.purchasePrice == null ? null : parseNumber(raw.purchasePrice);
+    if (purchasePrice !== null && Number.isNaN(purchasePrice)) {
+      errors.push({ column: "purchasePrice", value: String(raw.purchasePrice), message: "purchasePrice must be a number" });
+    }
+
+    const tax = raw.tax === "" || raw.tax == null ? null : parseNumber(raw.tax);
+    if (tax !== null && Number.isNaN(tax)) {
+      errors.push({ column: "tax", value: String(raw.tax), message: "tax must be a number" });
+    }
+
+    const isTaxIncluded = parseBool(raw.isTaxIncluded);
+    if (isTaxIncluded === undefined) {
+      errors.push({ column: "isTaxIncluded", value: String(raw.isTaxIncluded), message: "isTaxIncluded must be true/false/yes/no/1/0" });
+    }
+
+    const threshold = raw.threshold === "" || raw.threshold == null ? 0 : parseInteger(raw.threshold);
+    if (threshold !== null && (Number.isNaN(threshold) || threshold < 0)) {
+      errors.push({ column: "threshold", value: String(raw.threshold), message: "threshold must be a non-negative whole number" });
+    }
+
+    const currentStock = raw.currentStock === "" || raw.currentStock == null ? 0 : parseInteger(raw.currentStock);
+    if (currentStock !== null && (Number.isNaN(currentStock) || currentStock < 0)) {
+      errors.push({ column: "currentStock", value: String(raw.currentStock), message: "currentStock must be a non-negative whole number" });
+    }
+
+    const active = parseBool(raw.active ?? raw.isActive);
+    if (active === undefined) {
+      errors.push({ column: "active", value: String(raw.active ?? raw.isActive), message: "active must be true/false/yes/no/1/0" });
+    }
+
+    if (errors.length) return { data: null, errors };
+
+    return {
+      data: {
+        name: String(raw.name).trim(),
+        sku,
+        description: trimOrNull(raw.description),
+        price: price ?? 0,
+        categoryId,
+        brandName: trimOrNull(raw.brandName),
+        productType: trimOrNull(raw.productType),
+        productCode: trimOrNull(raw.productCode),
+        hsnCode: trimOrNull(raw.hsnCode),
+        volume,
+        unit: trimOrNull(raw.unit),
+        discountedPrice,
+        dealerPrice,
+        purchasePrice,
+        manufacturer: trimOrNull(raw.manufacturer),
+        tax,
+        isTaxIncluded: isTaxIncluded === true,
+        barcode: trimOrNull(raw.barcode),
+        imageUrl: trimOrNull(raw.imageUrl),
+        threshold: threshold ?? 0,
+        currentStock: currentStock ?? 0,
+        isActive: active === null ? true : active,
+      },
+      errors: [],
+    };
+  },
+  naturalKey: (data) => (data.sku ? data.sku.toLowerCase() : data.name.toLowerCase()),
+  async naturalKeyMatch(prisma, tenantId, data) {
+    if (data.sku) {
+      return prisma.product.findFirst({
+        where: { tenantId, sku: data.sku },
+      });
+    }
+    return prisma.product.findFirst({
+      where: { tenantId, name: data.name },
+    });
+  },
+  async persist(prisma, tenantId, data, existing) {
+    if (existing) {
+      const record = await prisma.product.update({ where: { id: existing.id }, data });
+      return { action: "updated", record };
+    }
+    const record = await prisma.product.create({ data: { ...data, tenantId } });
+    return { action: "inserted", record };
+  },
+  registerLookup(lookups, data, record, existing) {
+    if (!lookups) return;
+    if (lookups.inventoryProductsById) lookups.inventoryProductsById.set(record.id, record);
+    if (lookups.inventoryProductsByName) {
+      if (existing?.name && existing.name.toLowerCase() !== record.name.toLowerCase()) {
+        lookups.inventoryProductsByName.delete(existing.name.toLowerCase());
+      }
+      lookups.inventoryProductsByName.set(record.name.toLowerCase(), record.id);
+    }
+    if (lookups.inventoryProductsBySku) {
+      if (existing?.sku && existing.sku.toLowerCase() !== (record.sku || "").toLowerCase()) {
+        lookups.inventoryProductsBySku.delete(existing.sku.toLowerCase());
+      }
+      if (record.sku) lookups.inventoryProductsBySku.set(record.sku.toLowerCase(), record.id);
+    }
+  },
+};
+
+const autoConsumptionRules = {
+  model: "autoConsumptionRule",
+  headers: ["serviceName", "productSku", "productName", "quantityPerVisit", "unit", "active"],
+  sample: {
+    serviceName: "Hydrafacial",
+    productSku: "PRP-TUBE-10",
+    productName: "PRP Collection Tube",
+    quantityPerVisit: "2",
+    unit: "piece",
+    active: "true",
+  },
+  exportInclude: { service: true, product: true },
+  readGate: ["admin", "manager"],
+  readPermissions: [{ module: "products", action: "read" }],
+  writeGate: ["admin", "manager"],
+  writePermissions: [{ module: "products", action: "manage" }],
+  buildWhere: (req) => {
+    const where = { tenantId: req.user.tenantId };
+    if (req.query.serviceId) where.serviceId = parseInt(req.query.serviceId, 10);
+    if (req.query.isActive === "true") where.isActive = true;
+    if (req.query.isActive === "false") where.isActive = false;
+    return where;
+  },
+  orderBy: [{ serviceId: "asc" }, { productId: "asc" }],
+  serialize: (rule, ctx) => [
+    rule.service?.name || "",
+    rule.product?.sku || "",
+    rule.product?.name || "",
+    rule.quantityPerVisit ?? "",
+    rule.unit || rule.product?.unit || "",
+    rule.isActive === false ? "false" : "true",
+  ],
+  async parseRow(raw, ctx = {}) {
+    const errors = [];
+    const serviceName = trimOrNull(raw.serviceName);
+    if (!serviceName) {
+      errors.push({ column: "serviceName", value: "", message: "serviceName is required" });
+    }
+    const serviceId = serviceName && ctx?.lookups?.findService ? ctx.lookups.findService(serviceName) : null;
+    if (serviceName && !serviceId) {
+      errors.push({ column: "serviceName", value: serviceName, message: "no service with this name exists in your tenant" });
+    }
+
+    const productSku = trimOrNull(raw.productSku);
+    const productName = trimOrNull(raw.productName);
+    let productId = null;
+    if (productSku) {
+      productId = ctx?.lookups?.findProductBySku ? ctx.lookups.findProductBySku(productSku) : null;
+    }
+    if (!productId && productName) {
+      productId = ctx?.lookups?.findProductByName ? ctx.lookups.findProductByName(productName) : null;
+    }
+    if (!productId) {
+      const fallbackValue = productSku || productName || "";
+      errors.push({ column: productSku ? "productSku" : "productName", value: fallbackValue, message: "no product with this name or SKU exists in your tenant" });
+    }
+
+    const quantityPerVisit = parseNumber(raw.quantityPerVisit);
+    if (quantityPerVisit === null || Number.isNaN(quantityPerVisit) || quantityPerVisit <= 0) {
+      errors.push({ column: "quantityPerVisit", value: String(raw.quantityPerVisit || ""), message: "quantityPerVisit must be a positive number" });
+    }
+
+    const unit = trimOrNull(raw.unit);
+    if (unit) {
+      if (!isAllowedUnit(unit)) {
+        errors.push({ column: "unit", value: unit, message: `unit must be one of: ${ALLOWED_UNITS.join(", ")}` });
+      } else {
+        const product = lookupById(ctx?.lookups?.inventoryProductsById, productId);
+        if (product?.unit && !isConvertible(unit, product.unit)) {
+          errors.push({ column: "unit", value: unit, message: `unit '${unit}' is not convertible to product unit '${product.unit}'` });
+        }
+      }
+    }
+
+    const active = parseBool(raw.active ?? raw.isActive);
+    if (active === undefined) {
+      errors.push({ column: "active", value: String(raw.active ?? raw.isActive), message: "active must be true/false/yes/no/1/0" });
+    }
+
+    if (errors.length) return { data: null, errors };
+
+    return {
+      data: {
+        serviceId,
+        productId,
+        quantityPerVisit,
+        unit: unit || null,
+        isActive: active === null ? true : active,
+      },
+      errors: [],
+    };
+  },
+  naturalKey: (data) => `${String(data.serviceId || "").toLowerCase()}::${String(data.productId || "").toLowerCase()}`,
+  async naturalKeyMatch(prisma, tenantId, data) {
+    return prisma.autoConsumptionRule.findFirst({
+      where: { tenantId, serviceId: data.serviceId, productId: data.productId },
+    });
+  },
+  async persist(prisma, tenantId, data, existing) {
+    if (existing) {
+      const record = await prisma.autoConsumptionRule.update({ where: { id: existing.id }, data });
+      return { action: "updated", record };
+    }
+    const record = await prisma.autoConsumptionRule.create({ data: { ...data, tenantId } });
+    return { action: "inserted", record };
+  },
+  registerLookup() {},
 };
 
 const customers = {
@@ -961,10 +1437,27 @@ const invoices = {
   },
 };
 
-const ENTITIES = { services, packages, products, customers, bookings, invoices };
+const ENTITIES = {
+  services,
+  packages,
+  products,
+  productCategories,
+  inventoryProducts,
+  autoConsumptionRules,
+  customers,
+  bookings,
+  invoices,
+};
+
+const ENTITY_ALIASES = {
+  "product-categories": "productCategories",
+  "inventory-products": "inventoryProducts",
+  "auto-consumption-rules": "autoConsumptionRules",
+};
 
 function getEntity(name) {
-  return Object.prototype.hasOwnProperty.call(ENTITIES, name) ? ENTITIES[name] : null;
+  const key = ENTITY_ALIASES[name] || name;
+  return Object.prototype.hasOwnProperty.call(ENTITIES, key) ? ENTITIES[key] : null;
 }
 
 module.exports = {

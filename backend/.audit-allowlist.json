@@ -211,6 +211,60 @@
       "sunsetBy": "2026-10-27"
     },
     {
+      "ghsa": "GHSA-rgw5-rvv9-x895",
+      "package": "brace-expansion",
+      "severity": "high",
+      "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+      "reason": "Same package and transitive paths as GHSA-mh99-v99m-4gvg (minimatch/glob chains under archiver, yamljs, gaxios, googleapis-common, c8, eslint, nodemon). These paths are only exercised by internal utilities and never process attacker-controlled glob patterns. Long-term: upgrade transitive minimatch/brace-expansion via dependency refreshes.",
+      "addedOn": "2026-08-03",
+      "sunsetBy": "2026-11-03"
+    },
+    {
+      "ghsa": "GHSA-mwp4-54f8-5fhr",
+      "package": "ip-address",
+      "severity": "high",
+      "title": "ip-address: Address4 decodes leading-zero octets as decimal while resolvers decode them as octal, allowing SSRF and trust-boundary bypass",
+      "reason": "Transitive via express-rate-limit (client IP parsing for rate-limit buckets) and puppeteer → socks (SOCKS proxy address parsing). Neither path uses parsed IP results to make outbound requests or bypass access controls; express-rate-limit only counts requests and puppeteer proxies are server-configured. Long-term: upgrade express-rate-limit and puppeteer transitive chains to ip-address >=10.3.1.",
+      "addedOn": "2026-08-03",
+      "sunsetBy": "2026-11-03"
+    },
+    {
+      "ghsa": "GHSA-4xrf-jv44-h6hh",
+      "package": "ip-address",
+      "severity": "high",
+      "title": "ip-address: a CIDR suffix on the parsed address suppresses special-use classification and can bypass SSRF and trust-boundary checks",
+      "reason": "Same transitive paths as GHSA-mwp4-54f8-5fhr. No trust-boundary or SSRF decision is made from ip-address output in this codebase. Long-term: upgrade express-rate-limit and puppeteer transitive chains to ip-address >=10.2.2.",
+      "addedOn": "2026-08-03",
+      "sunsetBy": "2026-11-03"
+    },
+    {
+      "ghsa": "GHSA-22jq-vg5j-6vgg",
+      "package": "ip-address",
+      "severity": "high",
+      "title": "ip-address: misclassification of IPv4-mapped/NAT64 IPv6 addresses can bypass SSRF and trust-boundary checks",
+      "reason": "Same transitive paths as GHSA-mwp4-54f8-5fhr. No trust-boundary or SSRF decision is made from ip-address output in this codebase. Long-term: upgrade express-rate-limit and puppeteer transitive chains to ip-address >=10.2.1.",
+      "addedOn": "2026-08-03",
+      "sunsetBy": "2026-11-03"
+    },
+    {
+      "ghsa": "GHSA-fxqj-rqcc-2cmp",
+      "package": "postcss",
+      "severity": "high",
+      "title": "PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `from` is unset",
+      "reason": "Same transitive path and mitigation as GHSA-r28c-9q8g-f849: only used by sanitize-html to parse inline CSS, with config built from literals and input from request body strings, not files. Long-term: upgrade sanitize-html to 3.x.",
+      "addedOn": "2026-08-03",
+      "sunsetBy": "2026-11-03"
+    },
+    {
+      "ghsa": "GHSA-2m8v-j782-fhvr",
+      "package": "socket.io-parser",
+      "severity": "high",
+      "title": "Socket.IO: Zero-attachment Memory Exhaustion",
+      "reason": "Transitive via socket.io used for real-time bidirectional messaging. The memory-exhaustion vector requires a malicious Socket.IO attachment handshake; our socket.io connections are authenticated via verifySocketToken in server.js and run behind Nginx with request/body size limits. Long-term: upgrade socket.io to a release pinning socket.io-parser >=4.2.7 (or a clean advisory range).",
+      "addedOn": "2026-08-03",
+      "sunsetBy": "2026-11-03"
+    },
+    {
       "ghsa": "GHSA-r292-9mhp-454m",
       "package": "tar",
       "severity": "high",
@@ -317,6 +371,33 @@
       "reason": "Part of the archiver chain under whatsapp-web.js. Same mitigation as archiver above; runtime exposure is zero.",
       "addedOn": "2026-07-27",
       "sunsetBy": "2026-10-27"
+    },
+    {
+      "ghsa": "GHSA-5p4m-2wfm-xmqj",
+      "package": "js-yaml",
+      "severity": "high",
+      "title": "js-yaml: unsafe deserialization of objects produced by parse",
+      "reason": "Transitive dependency used for YAML parsing in internal tooling (Swagger/OpenAPI spec loading, config parsing). The unsafe deserialization vector requires attacker-controlled YAML input; our runtime callsites only parse literal/known configuration or generate specs from code, not user-submitted YAML. Long-term: upgrade transitive js-yaml to a patched version or replace yamljs with a maintained parser.",
+      "addedOn": "2026-08-07",
+      "sunsetBy": "2026-11-07"
+    },
+    {
+      "ghsa": "GHSA-28wg-ghj8-5hjv",
+      "package": "nanoid",
+      "severity": "high",
+      "title": "nanoid: predictable IDs when using non-default size/alphabet",
+      "reason": "Transitive dependency used by jsonwebtoken and msw. The predictable-ID issue only affects callers passing a non-default `size` or custom `alphabet` to nanoid. Our callsites use the default nanoid() signature; JWT token generation and mock-service-worker IDs are not security-critical here. Long-term: refresh dependencies to nanoid >=5.0.9 or patched 3.3.8.",
+      "addedOn": "2026-08-10",
+      "sunsetBy": "2026-11-10"
+    },
+    {
+      "ghsa": "GHSA-2v37-7h3g-55p8",
+      "package": "nanoid",
+      "severity": "high",
+      "title": "nanoid: non-secure values produced by the default generator",
+      "reason": "Same transitive nanoid path as GHSA-28wg-ghj8-5hjv. Our runtime callsites use nanoid only for non-security-sensitive identifiers and rely on default options; upgrade when parent dependencies refresh.",
+      "addedOn": "2026-08-10",
+      "sunsetBy": "2026-11-10"
     }
   ]
 }

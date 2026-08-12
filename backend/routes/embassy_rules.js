@@ -12,6 +12,10 @@
  *   GET    /api/embassy-rules                — list, filterable by
  *                                              ?destinationCountry / ?applicationType /
  *                                              ?ruleType / ?severity / ?isActive
+ *   GET    /api/embassy-rules/import-meta     — ADMIN-only import headers
+ *   GET    /api/embassy-rules/import-template — ADMIN-only CSV/XLSX template
+ *   GET    /api/embassy-rules/export          — ADMIN-only CSV/XLSX export
+ *   POST   /api/embassy-rules/import          — ADMIN-only bulk import
  *   GET    /api/embassy-rules/:id            — single rule
  *   POST   /api/embassy-rules                — create (ADMIN-only)
  *   PUT    /api/embassy-rules/:id            — update (ADMIN-only)
@@ -48,13 +52,47 @@
  */
 
 const express = require("express");
+const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
+const {
+  serializeRows,
+  parseCsv,
+  setCsvDownloadHeaders,
+} = require("../lib/csvHelpers");
+const { parseXlsxBuffer, toXlsxBuffer } = require("../lib/csvIO");
 
 const VALID_SEVERITIES = ["info", "warning", "blocker"];
 const ISO_ALPHA2_RE = /^[A-Z]{2}$/;
+const XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const MAX_IMPORT_ROWS = 5000;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+const EMBASSY_RULE_EXPORT_COLUMNS = [
+  { key: "destinationCountry", header: "destinationCountry" },
+  { key: "ruleType", header: "ruleType" },
+  { key: "applicationType", header: "applicationType" },
+  { key: "actionLabel", header: "actionLabel" },
+  { key: "severity", header: "severity" },
+  { key: "isActive", header: "isActive", render: (r) => (r.isActive ? "true" : "false") },
+  { key: "conditionJson", header: "conditionJson" },
+];
+
+const EMBASSY_RULE_IMPORT_HEADERS = EMBASSY_RULE_EXPORT_COLUMNS.map((col) => col.header);
+const EMBASSY_RULE_TEMPLATE_SAMPLE = {
+  destinationCountry: "# DELETE THIS ROW BEFORE IMPORTING",
+  ruleType: "# example: document_required",
+  applicationType: "# optional: leave blank for all application types",
+  actionLabel: "# example: Sponsor income proof required (last 6 months)",
+  severity: "# info | warning | blocker",
+  isActive: "# true",
+  conditionJson: "# optional JSON string",
+};
 
 function assertValidDestinationCountry(input) {
   if (typeof input !== "string" || !ISO_ALPHA2_RE.test(input)) {
@@ -93,32 +131,81 @@ function isPrismaUniqueViolation(e) {
   return e && (e.code === "P2002" || /Unique constraint/i.test(e.message || ""));
 }
 
+function setXlsxDownloadHeaders(res, filename) {
+  res.setHeader("Content-Type", XLSX_CONTENT_TYPE);
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+}
+
+function resolveDownloadFormat(req) {
+  const format = String(req.query.format || "csv").toLowerCase();
+  return format === "xlsx" ? "xlsx" : "csv";
+}
+
+function buildListWhere(req) {
+  const where = { tenantId: req.user.tenantId };
+  if (req.query.destinationCountry !== undefined) {
+    const dc = String(req.query.destinationCountry).toUpperCase();
+    assertValidDestinationCountry(dc);
+    where.destinationCountry = dc;
+  }
+  if (req.query.applicationType !== undefined) {
+    where.applicationType = String(req.query.applicationType);
+  }
+  if (req.query.ruleType !== undefined) {
+    where.ruleType = String(req.query.ruleType);
+  }
+  if (req.query.severity !== undefined) {
+    assertValidSeverity(String(req.query.severity));
+    where.severity = String(req.query.severity);
+  }
+  if (req.query.isActive !== undefined) {
+    const v = String(req.query.isActive).toLowerCase();
+    where.isActive = !(v === "false" || v === "0");
+  }
+  return where;
+}
+
+function isXlsxUpload(file) {
+  if (!file) return false;
+  const name = String(file.originalname || "").toLowerCase();
+  if (name.endsWith(".xlsx") || name.endsWith(".xls")) return true;
+  const mime = String(file.mimetype || "").toLowerCase();
+  return mime === XLSX_CONTENT_TYPE || mime === "application/vnd.ms-excel";
+}
+
+function readUploadedRows(req) {
+  if (req.file && req.file.buffer && req.file.buffer.length > 0) {
+    return isXlsxUpload(req.file)
+      ? parseXlsxBuffer(req.file.buffer)
+      : parseCsv(req.file.buffer.toString("utf8"));
+  }
+  if (typeof req.body === "string" && req.body.length > 0) {
+    return parseCsv(req.body);
+  }
+  if (req.body && typeof req.body.csv === "string" && req.body.csv.length > 0) {
+    return parseCsv(req.body.csv);
+  }
+  return null;
+}
+
+function normalizeOptionalText(value) {
+  const raw = value == null ? "" : String(value).trim();
+  return raw ? sanitizeText(raw) : null;
+}
+
+function parseBoolLike(value, fallback = true) {
+  if (value == null) return fallback;
+  const raw = String(value).trim().toLowerCase();
+  if (raw === "") return fallback;
+  if (["true", "1", "yes", "y", "on"].includes(raw)) return true;
+  if (["false", "0", "no", "n", "off"].includes(raw)) return false;
+  return Boolean(value);
+}
+
 // GET /api/embassy-rules — list with optional filters.
 router.get("/", verifyToken, async (req, res) => {
   try {
-    const where = { tenantId: req.user.tenantId };
-
-    if (req.query.destinationCountry !== undefined) {
-      const dc = String(req.query.destinationCountry).toUpperCase();
-      assertValidDestinationCountry(dc);
-      where.destinationCountry = dc;
-    }
-    if (req.query.applicationType !== undefined) {
-      where.applicationType = String(req.query.applicationType);
-    }
-    if (req.query.ruleType !== undefined) {
-      where.ruleType = String(req.query.ruleType);
-    }
-    if (req.query.severity !== undefined) {
-      assertValidSeverity(String(req.query.severity));
-      where.severity = String(req.query.severity);
-    }
-    if (req.query.isActive !== undefined) {
-      // Accept 'true' / 'false' / '1' / '0'; anything else falls through
-      // to the truthiness check (so ?isActive=yes works too).
-      const v = String(req.query.isActive).toLowerCase();
-      where.isActive = !(v === "false" || v === "0");
-    }
+    const where = buildListWhere(req);
 
     const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
     const skip = parseInt(req.query.offset, 10) || 0;
@@ -158,6 +245,225 @@ router.get("/", verifyToken, async (req, res) => {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[embassy-rules] list error:", e.message);
     res.status(500).json({ error: "Failed to list embassy rules" });
+  }
+});
+
+// ADMIN-only import/export/template helpers (must stay before /:id).
+router.get("/import-meta", verifyToken, verifyRole(["ADMIN"]), (req, res) => {
+  res.json({
+    entity: "embassy-rules",
+    headers: EMBASSY_RULE_IMPORT_HEADERS,
+    sample: EMBASSY_RULE_TEMPLATE_SAMPLE,
+    thresholds: {
+      rows: MAX_IMPORT_ROWS,
+      bytes: 5 * 1024 * 1024,
+    },
+  });
+});
+
+router.get("/import-template", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const format = resolveDownloadFormat(req);
+    if (format === "xlsx") {
+      const buf = toXlsxBuffer(
+        EMBASSY_RULE_IMPORT_HEADERS,
+        [EMBASSY_RULE_TEMPLATE_SAMPLE],
+        "Embassy Rules Template",
+      );
+      setXlsxDownloadHeaders(res, "embassy-rules-template.xlsx");
+      return res.send(buf);
+    }
+    const csv = serializeRows(EMBASSY_RULE_EXPORT_COLUMNS, [EMBASSY_RULE_TEMPLATE_SAMPLE]);
+    setCsvDownloadHeaders(res, "embassy-rules-template.csv");
+    return res.send(csv);
+  } catch (e) {
+    console.error("[embassy-rules] template error:", e.message);
+    return res.status(500).json({
+      error: "Failed to generate embassy rules template",
+      code: "EMBASSY_RULE_TEMPLATE_FAILED",
+    });
+  }
+});
+
+router.get("/export", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const where = buildListWhere(req);
+    const rules = await prisma.embassyRule.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }],
+      take: 10000,
+    });
+    const rows = rules.map((rule) => ({
+      destinationCountry: rule.destinationCountry,
+      ruleType: rule.ruleType,
+      applicationType: rule.applicationType || "",
+      actionLabel: rule.actionLabel,
+      severity: rule.severity,
+      isActive: rule.isActive,
+      conditionJson: rule.conditionJson || "",
+    }));
+    const stamp = new Date().toISOString().slice(0, 10);
+    const format = resolveDownloadFormat(req);
+    if (format === "xlsx") {
+      const buf = toXlsxBuffer(EMBASSY_RULE_IMPORT_HEADERS, rows, "Embassy Rules Export");
+      setXlsxDownloadHeaders(res, `embassy-rules-export-${stamp}.xlsx`);
+      return res.send(buf);
+    }
+    const csv = serializeRows(EMBASSY_RULE_EXPORT_COLUMNS, rows);
+    setCsvDownloadHeaders(res, `embassy-rules-export-${stamp}.csv`);
+    return res.send(csv);
+  } catch (e) {
+    console.error("[embassy-rules] export error:", e.message);
+    return res.status(500).json({
+      error: "Failed to export embassy rules",
+      code: "EMBASSY_RULE_EXPORT_FAILED",
+    });
+  }
+});
+
+router.post("/import", verifyToken, verifyRole(["ADMIN"]), upload.single("file"), async (req, res) => {
+  try {
+    const parsed = readUploadedRows(req);
+    if (!parsed) {
+      return res.status(400).json({
+        error: "No CSV/Excel body or file uploaded",
+        code: "NO_CSV",
+      });
+    }
+
+    const headers = Array.isArray(parsed.headers) ? parsed.headers : [];
+    const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+    const missing = EMBASSY_RULE_IMPORT_HEADERS.filter((header) => !headers.includes(header));
+    if (missing.length > 0) {
+      return res.status(400).json({
+        error: `missing required column(s): ${missing.join(", ")}`,
+        code: "MISSING_FIELDS",
+      });
+    }
+    if (rows.length === 0) {
+      return res.status(400).json({ error: "CSV is empty", code: "EMPTY_CSV" });
+    }
+    if (rows.length > MAX_IMPORT_ROWS) {
+      return res.status(413).json({
+        error: `Too many rows. Max ${MAX_IMPORT_ROWS}`,
+        code: "TOO_MANY_ROWS",
+      });
+    }
+
+    let imported = 0;
+    let updated = 0;
+    let skipped = 0;
+    const errors = [];
+
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const rowNumber = i + 2;
+      try {
+        const destinationCountryRaw = normalizeOptionalText(row.destinationCountry);
+        const ruleTypeRaw = normalizeOptionalText(row.ruleType);
+        const actionLabelRaw = normalizeOptionalText(row.actionLabel);
+        const severityRaw = normalizeOptionalText(row.severity);
+        const applicationTypeRaw = normalizeOptionalText(row.applicationType);
+        const conditionJsonRaw = normalizeOptionalText(row.conditionJson);
+        const isActiveRaw = normalizeOptionalText(row.isActive);
+
+        if (
+          !destinationCountryRaw &&
+          !ruleTypeRaw &&
+          !actionLabelRaw &&
+          !severityRaw &&
+          !applicationTypeRaw &&
+          !conditionJsonRaw &&
+          !isActiveRaw
+        ) {
+          skipped += 1;
+          continue;
+        }
+
+        if (
+          String(row.destinationCountry || "").trim().startsWith("#") ||
+          String(row.ruleType || "").trim().startsWith("#")
+        ) {
+          skipped += 1;
+          continue;
+        }
+
+        if (!destinationCountryRaw || !ruleTypeRaw || !actionLabelRaw || !severityRaw) {
+          errors.push({
+            rowNumber,
+            reason: "missing destinationCountry, ruleType, actionLabel, or severity",
+          });
+          skipped += 1;
+          continue;
+        }
+
+        const destinationCountry = destinationCountryRaw.toUpperCase();
+        assertValidDestinationCountry(destinationCountry);
+        const ruleType = ruleTypeRaw;
+        assertValidRuleType(ruleType);
+        assertValidSeverity(severityRaw);
+
+        const applicationType = applicationTypeRaw;
+        const conditionJson = conditionJsonRaw == null
+          ? null
+          : sanitizeJsonForStringColumn(conditionJsonRaw);
+        const isActive = parseBoolLike(isActiveRaw, true);
+
+        const data = {
+          tenantId: req.user.tenantId,
+          destinationCountry,
+          ruleType,
+          applicationType,
+          conditionJson,
+          actionLabel: actionLabelRaw,
+          severity: severityRaw,
+          isActive,
+          createdById: req.user.userId,
+        };
+
+        const existing = await prisma.embassyRule.findFirst({
+          where: {
+            tenantId: req.user.tenantId,
+            destinationCountry,
+            applicationType,
+            ruleType,
+          },
+        });
+
+        if (existing) {
+          await prisma.embassyRule.update({
+            where: { id: existing.id },
+            data: {
+              ruleType: data.ruleType,
+              destinationCountry: data.destinationCountry,
+              applicationType: data.applicationType,
+              conditionJson: data.conditionJson,
+              actionLabel: data.actionLabel,
+              severity: data.severity,
+              isActive: data.isActive,
+            },
+          });
+          updated += 1;
+        } else {
+          await prisma.embassyRule.create({ data });
+          imported += 1;
+        }
+      } catch (rowErr) {
+        errors.push({
+          rowNumber,
+          reason: rowErr?.message || String(rowErr),
+        });
+        skipped += 1;
+      }
+    }
+
+    return res.json({ imported, updated, skipped, errors });
+  } catch (e) {
+    console.error("[embassy-rules] import error:", e.message);
+    return res.status(500).json({
+      error: "Failed to import embassy rules",
+      code: "EMBASSY_RULE_IMPORT_FAILED",
+    });
   }
 });
 

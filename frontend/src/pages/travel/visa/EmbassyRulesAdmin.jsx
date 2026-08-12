@@ -45,14 +45,15 @@
  * to Applications.jsx / Dashboard.jsx / Checklists.jsx in the same
  * Phase 3 Visa Sure folder.
  */
-import { useContext, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Shield, Plus, Edit2, Trash2, X, AlertTriangle } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { AuthContext } from '../../../App';
-import TopScrollSync from '../../../components/TopScrollSync';
+import CsvImportExportToolbar from '../../../components/wellness/CsvImportExportToolbar';
 
 const SEVERITIES = ['info', 'warning', 'blocker'];
+const PAGE_SIZE = 10;
 
 // Common rule-type tokens the embassy advisor-head curates. The
 // backend accepts arbitrary non-empty strings; the dropdown is a
@@ -131,7 +132,10 @@ export default function EmbassyRulesAdmin() {
 
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
 
   // Filter state.
   const [filterCountry, setFilterCountry] = useState('');
@@ -145,38 +149,119 @@ export default function EmbassyRulesAdmin() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const listRef = useRef(null);
+  const rulesRef = useRef([]);
+  const loadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const offsetRef = useRef(0);
+  const hasMoreRef = useRef(true);
 
-  const buildQuery = () => {
+  useEffect(() => {
+    rulesRef.current = rules;
+  }, [rules]);
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const buildQuery = useCallback(() => {
     const qs = new URLSearchParams();
     if (filterCountry.trim()) qs.set('destinationCountry', filterCountry.trim().toUpperCase());
     if (filterRuleType.trim()) qs.set('ruleType', filterRuleType.trim());
     if (filterSeverity) qs.set('severity', filterSeverity);
     if (filterIsActive !== 'all') qs.set('isActive', filterIsActive);
     return qs.toString();
-  };
+  }, [filterCountry, filterRuleType, filterSeverity, filterIsActive]);
 
-  const load = async () => {
-    setLoading(true);
-    setLoadError('');
-    const qs = buildQuery();
-    const url = `/api/embassy-rules${qs ? `?${qs}` : ''}`;
+  const load = useCallback(async ({ reset = false } = {}) => {
+    const startOffset = reset ? 0 : offsetRef.current;
+
+    if (reset) {
+      setLoading(true);
+      setLoadingMore(false);
+      setLoadError('');
+      setRules([]);
+      rulesRef.current = [];
+      setOffset(0);
+      setHasMore(true);
+      offsetRef.current = 0;
+      hasMoreRef.current = true;
+      if (listRef.current) listRef.current.scrollTop = 0;
+    } else {
+      if (loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+      setLoadingMore(true);
+    }
+
+    const qs = new URLSearchParams(buildQuery());
+    if (startOffset > 0) {
+      qs.set('limit', String(PAGE_SIZE));
+      qs.set('offset', String(startOffset));
+    }
+    const queryString = qs.toString();
+    const url = `/api/embassy-rules${queryString ? `?${queryString}` : ''}`;
     try {
       const res = await fetchApi(url);
-      setRules(Array.isArray(res?.rules) ? res.rules : []);
+      const rows = Array.isArray(res?.rules) ? res.rules : [];
+      const totalCount = Number.isFinite(Number(res?.total)) ? Number(res.total) : rows.length;
+      const nextRules = reset ? rows : [...rulesRef.current, ...rows];
+      const nextOffset = startOffset + rows.length;
+      const nextHasMore = Number.isFinite(totalCount) ? nextOffset < totalCount : rows.length === PAGE_SIZE;
+
+      rulesRef.current = nextRules;
+      setRules(nextRules);
+      setOffset(nextOffset);
+      setHasMore(nextHasMore);
+      offsetRef.current = nextOffset;
+      hasMoreRef.current = nextHasMore;
     } catch (e) {
       setLoadError(e?.message || 'Failed to load embassy rules');
-      setRules([]);
+      if (reset) {
+        setRules([]);
+        rulesRef.current = [];
+        setOffset(0);
+        setHasMore(false);
+        offsetRef.current = 0;
+        hasMoreRef.current = false;
+      }
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  };
+  }, [buildQuery]);
 
-  // Initial + filter-change load. We intentionally pass the filter
-  // state as deps so changing any filter re-fetches with the new query.
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterCountry, filterRuleType, filterSeverity, filterIsActive]);
+    load({ reset: true });
+  }, [load]);
+
+  const handleListScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      load({ reset: false });
+    }
+  }, [load]);
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || loadingRef.current || loadingMoreRef.current || !hasMoreRef.current) return;
+    const threshold = 72;
+    if (el.scrollHeight <= el.clientHeight + threshold) {
+      load({ reset: false });
+    }
+  }, [rules, hasMore, loading, loadingMore, load]);
 
   const openCreate = () => {
     setEditingId(null);
@@ -383,15 +468,35 @@ export default function EmbassyRulesAdmin() {
           </p>
         </div>
         {isAdmin && (
-          <button
-            type="button"
-            onClick={openCreate}
-            style={primaryBtn}
-            aria-label="Create a new embassy rule"
-            data-testid="embassy-rule-new"
-          >
-            <Plus size={14} /> New Rule
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <CsvImportExportToolbar
+              entity="embassy-rules"
+              label="Embassy Rules"
+              formats={['csv', 'xlsx']}
+              forceSync
+              filters={{
+                destinationCountry: filterCountry.trim() ? filterCountry.trim().toUpperCase() : '',
+                ruleType: filterRuleType.trim(),
+                severity: filterSeverity,
+                isActive: filterIsActive === 'all' ? '' : filterIsActive,
+              }}
+              endpoints={{
+                export: '/api/embassy-rules/export',
+                template: '/api/embassy-rules/import-template',
+                meta: '/api/embassy-rules/import-meta',
+                import: '/api/embassy-rules/import',
+              }}
+            />
+            <button
+              type="button"
+              onClick={openCreate}
+              style={primaryBtn}
+              aria-label="Create a new embassy rule"
+              data-testid="embassy-rule-new"
+            >
+              <Plus size={14} /> New Rule
+            </button>
+          </div>
         )}
       </header>
 
@@ -467,7 +572,7 @@ export default function EmbassyRulesAdmin() {
       {loadError && (
         <div role="alert" style={errorBanner}>
           <AlertTriangle size={16} /> {loadError}
-          <button onClick={load} type="button" style={{ ...refreshBtn, marginLeft: 'auto' }}>
+          <button onClick={() => load({ reset: true })} type="button" style={{ ...refreshBtn, marginLeft: 'auto' }}>
             Retry
           </button>
         </div>
@@ -481,7 +586,7 @@ export default function EmbassyRulesAdmin() {
           overflow: 'visible',
         }}
       >
-        {loading ? (
+        {loading && rules.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : rules.length === 0 ? (
           <div style={empty}>
@@ -489,59 +594,99 @@ export default function EmbassyRulesAdmin() {
             &ldquo;New Rule&rdquo; or clear the filters to widen the search.
           </div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th style={th}>Country</th>
-                <th style={th}>Rule type</th>
-                <th style={th}>Application type</th>
-                <th style={th}>Advisor warning</th>
-                <th style={th}>Severity</th>
-                <th style={th}>Active</th>
-                {isAdmin && <th style={th}>Actions</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {rules.map((r) => (
-                <tr key={r.id} style={{ borderTop: '1px solid var(--border-light)' }} data-testid={`embassy-rule-row-${r.id}`}>
-                  <td style={td}><strong>{r.destinationCountry}</strong></td>
-                  <td style={td}>{r.ruleType}</td>
-                  <td style={td}>{r.applicationType || <span style={{ color: 'var(--text-secondary)' }}>all</span>}</td>
-                  <td style={td}>{r.actionLabel}</td>
-                  <td style={td}><SeverityBadge severity={r.severity} /></td>
-                  <td style={td}>
-                    {r.isActive ? 'Yes' : <span style={{ color: 'var(--text-secondary)' }}>No</span>}
-                  </td>
-                  {isAdmin && (
-                    <td style={td}>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button
-                          type="button"
-                          onClick={() => openEdit(r)}
-                          style={iconActionBtn}
-                          aria-label={`Edit rule ${r.id}`}
-                          data-testid={`embassy-rule-edit-${r.id}`}
-                        >
-                          <Edit2 size={14} /> Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(r)}
-                          style={{ ...iconActionBtn, color: '#A8323F', borderColor: 'rgba(168,50,63,0.4)' }}
-                          aria-label={`Delete rule ${r.id}`}
-                          data-testid={`embassy-rule-delete-${r.id}`}
-                        >
-                          <Trash2 size={14} /> Delete
-                        </button>
-                      </div>
-                    </td>
-                  )}
+          <>
+            <table className="stable-table embassy-rules-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <colgroup>
+                <col style={{ width: '88px' }} />
+                <col style={{ width: '150px' }} />
+                <col style={{ width: '120px' }} />
+                <col />
+                <col style={{ width: '110px' }} />
+                <col style={{ width: '90px' }} />
+                {isAdmin && <col style={{ width: '150px' }} />}
+              </colgroup>
+              <thead>
+                <tr>
+                  <th style={th}>Country</th>
+                  <th style={th}>Rule type</th>
+                  <th style={th}>Application type</th>
+                  <th style={th}>Advisor warning</th>
+                  <th style={th}>Severity</th>
+                  <th style={th}>Active</th>
+                  {isAdmin && <th style={th}>Actions</th>}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          </TopScrollSync>
+              </thead>
+            </table>
+            <div
+              ref={listRef}
+              onScroll={handleListScroll}
+              data-testid="embassy-rules-table-scroll"
+              style={{
+                maxHeight: '60vh',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                position: 'relative',
+              }}
+            >
+              <table className="stable-table embassy-rules-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <colgroup>
+                  <col style={{ width: '88px' }} />
+                  <col style={{ width: '150px' }} />
+                  <col style={{ width: '120px' }} />
+                  <col />
+                  <col style={{ width: '110px' }} />
+                  <col style={{ width: '90px' }} />
+                  {isAdmin && <col style={{ width: '150px' }} />}
+                </colgroup>
+                <tbody>
+                  {rules.map((r) => (
+                    <tr key={r.id} style={{ borderTop: '1px solid var(--border-light)' }} data-testid={`embassy-rule-row-${r.id}`}>
+                      <td style={td}><strong>{r.destinationCountry}</strong></td>
+                    <td style={td}>{r.ruleType}</td>
+                    <td style={td}>{r.applicationType || <span style={{ color: 'var(--text-secondary)' }}>all</span>}</td>
+                    <td style={td}>{r.actionLabel}</td>
+                    <td style={td}><SeverityBadge severity={r.severity} /></td>
+                    <td style={td}>
+                      {r.isActive ? 'Yes' : <span style={{ color: 'var(--text-secondary)' }}>No</span>}
+                    </td>
+                    {isAdmin && (
+                      <td style={td}>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button
+                            type="button"
+                            onClick={() => openEdit(r)}
+                            style={iconActionBtn}
+                            aria-label={`Edit rule ${r.id}`}
+                            data-testid={`embassy-rule-edit-${r.id}`}
+                          >
+                            <Edit2 size={14} /> Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(r)}
+                            style={{ ...iconActionBtn, color: '#A8323F', borderColor: 'rgba(168,50,63,0.4)' }}
+                            aria-label={`Delete rule ${r.id}`}
+                            data-testid={`embassy-rule-delete-${r.id}`}
+                          >
+                            <Trash2 size={14} /> Delete
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding: '12px 0' }}>
+              {loadingMore && (
+                <div style={empty}>Loading more&hellip;</div>
+              )}
+              {!loadingMore && hasMore && rules.length > 0 && (
+                <div aria-hidden="true" data-testid="embassy-rules-scroll-sentinel" style={{ height: 1 }} />
+              )}
+            </div>
+          </>
         )}
       </div>
 
@@ -851,11 +996,16 @@ const th = {
   letterSpacing: 0.5,
   color: 'var(--text-secondary)',
   borderBottom: '1px solid var(--border-color)',
-  background: 'var(--subtle-bg)',
+  background: 'var(--surface-color)',
+  backgroundColor: 'var(--surface-color)',
+  backgroundClip: 'padding-box',
+  boxShadow: 'inset 0 -1px 0 var(--border-color)',
+  whiteSpace: 'nowrap',
 };
 
 const td = {
   padding: '10px 12px',
   fontSize: 14,
   color: 'var(--text-primary)',
+  verticalAlign: 'middle',
 };

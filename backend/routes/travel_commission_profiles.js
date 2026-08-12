@@ -1,4 +1,4 @@
-/**
+﻿/**
  * /api/travel/commission-profiles — TravelCommissionProfile CRUD
  * (PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2).
  *
@@ -69,6 +69,7 @@ const { writeAudit } = require("../lib/audit");
 const { computeCommission } = require("../lib/agentCommissionCalculator");
 
 const VALID_PROFILE_TYPES = ["flat_percent", "tiered", "per_pax_flat", "hybrid"];
+const VALID_RELEASE_MODES = ["on_booking", "on_trip_completion"];
 
 function assertValidProfileType(t) {
   if (!VALID_PROFILE_TYPES.includes(t)) {
@@ -90,6 +91,17 @@ function assertValidProfileType(t) {
  *
  * Deep-shape validation against profileType is deferred (see file header).
  */
+function assertValidReleaseMode(mode) {
+  if (!VALID_RELEASE_MODES.includes(mode)) {
+    const err = new Error(
+      `releaseMode must be one of: ${VALID_RELEASE_MODES.join(", ")}`,
+    );
+    err.status = 400;
+    err.code = "INVALID_RELEASE_MODE";
+    throw err;
+  }
+}
+
 function normalizeProfileJson(input) {
   if (input == null || input === "") {
     const err = new Error("profileJson is required");
@@ -124,6 +136,105 @@ function normalizeProfileJson(input) {
   throw err;
 }
 
+function normalizeOptionalDate(input, fieldName) {
+  if (input === undefined) return undefined;
+  if (input === null || input === "") return null;
+  const value = new Date(input);
+  if (Number.isNaN(value.getTime())) {
+    const err = new Error(`${fieldName} must be a valid ISO date`);
+    err.status = 400;
+    err.code = "INVALID_DATE";
+    throw err;
+  }
+  return value;
+}
+
+function normalizeOptionalInt(input, fieldName) {
+  if (input === undefined) return undefined;
+  if (input === null || input === "") return null;
+  const value = parseInt(input, 10);
+  if (!Number.isFinite(value)) {
+    const err = new Error(`${fieldName} must be an integer`);
+    err.status = 400;
+    err.code = "INVALID_INTEGER";
+    throw err;
+  }
+  return value;
+}
+
+function normalizeOptionalText(input) {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  const value = String(input).trim();
+  return value || null;
+}
+
+function isReleasedOnBooking(deal) {
+  const stage = String(deal?.stage || "").toLowerCase();
+  return stage === "won" || stage === "booked" || stage === "accepted";
+}
+
+function normalizeOptionalQueryDate(input, fieldName) {
+  if (input == null || input === "") return null;
+  const value = new Date(input);
+  if (Number.isNaN(value.getTime())) {
+    const err = new Error(`${fieldName} must be a valid ISO date`);
+    err.status = 400;
+    err.code = "INVALID_DATE";
+    throw err;
+  }
+  return value;
+}
+
+function pushValidityClauses(andClauses, activeOn) {
+  if (!activeOn) return;
+  andClauses.push({ OR: [{ validFrom: null }, { validFrom: { lte: activeOn } }] });
+  andClauses.push({ OR: [{ validTo: null }, { validTo: { gte: activeOn } }] });
+}
+
+async function loadCompletedItineraryContactIds(tenantId, contactIds) {
+  if (!Array.isArray(contactIds) || contactIds.length === 0) return new Set();
+  const rows = await prisma.itinerary.findMany({
+    where: {
+      tenantId,
+      contactId: { in: contactIds },
+      status: { in: ["accepted", "advance_paid", "fully_paid"] },
+      endDate: { not: null, lte: new Date() },
+    },
+    select: { contactId: true },
+  });
+  return new Set(rows.map((row) => row.contactId).filter(Boolean));
+}
+
+function buildReleaseDecision(profile, deal, completedContactIds) {
+  const releaseMode = profile.releaseMode || "on_booking";
+  if (releaseMode === "on_trip_completion") {
+    if (!deal?.contact?.id) {
+      return {
+        releaseMode,
+        released: false,
+        releaseReason: "Waiting for a linked contact itinerary",
+      };
+    }
+    const released = completedContactIds.has(deal.contact.id);
+    return {
+      releaseMode,
+      released,
+      releaseReason: released
+        ? "Completed itinerary found for this contact"
+        : "Waiting for itinerary completion",
+    };
+  }
+  const released = isReleasedOnBooking(deal);
+  return {
+    releaseMode,
+    released,
+    releaseReason: released
+      ? "Booking milestone reached"
+      : "Waiting for booking confirmation",
+  };
+}
+
 // GET /api/travel/commission-profiles
 // Honors ?subBrand=tmc, ?profileType=flat_percent, ?isActive=true/false.
 // Sub-brand-restricted callers see only their allowed sub-brands PLUS
@@ -135,6 +246,7 @@ router.get(
   async (req, res) => {
     try {
       const where = { tenantId: req.travelTenant.id };
+      const andClauses = [];
 
       if (req.query.subBrand) {
         assertValidSubBrand(String(req.query.subBrand));
@@ -144,27 +256,40 @@ router.get(
         assertValidProfileType(String(req.query.profileType));
         where.profileType = String(req.query.profileType);
       }
+      if (req.query.category) {
+        where.category = String(req.query.category).trim();
+      }
+      if (req.query.agentUserId) {
+        where.agentUserId = normalizeOptionalInt(req.query.agentUserId, "agentUserId");
+      }
+      if (req.query.releaseMode) {
+        const mode = String(req.query.releaseMode);
+        assertValidReleaseMode(mode);
+        where.releaseMode = mode;
+      }
       if (req.query.isActive !== undefined) {
         const v = String(req.query.isActive);
         if (v === "true" || v === "1") where.isActive = true;
         else if (v === "false" || v === "0") where.isActive = false;
       }
 
-      // Sub-brand narrowing. Restricted callers see profiles whose
-      // subBrand is in their allowed set OR is NULL (tenant-wide).
+      const activeOn = normalizeOptionalQueryDate(req.query.activeOn, "activeOn");
+      pushValidityClauses(andClauses, activeOn);
+
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (allowed) {
         if (where.subBrand !== undefined) {
           if (!canAccessSubBrand(allowed, where.subBrand)) {
-            where.subBrand = "__none__"; // silent-empty consistent with siblings
+            where.subBrand = "__none__";
           }
         } else {
-          where.OR = [
-            { subBrand: { in: [...allowed] } },
-            { subBrand: null },
-          ];
+          andClauses.push({
+            OR: [{ subBrand: { in: [...allowed] } }, { subBrand: null }],
+          });
         }
       }
+
+      if (andClauses.length > 0) where.AND = andClauses;
 
       const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
       const skip = parseInt(req.query.offset, 10) || 0;
@@ -1374,7 +1499,7 @@ router.post(
     try {
       const {
         name, profileType, profileJson,
-        subBrand, isActive, notes,
+        subBrand, category, agentUserId, validFrom, validTo, releaseMode, isActive, notes,
       } = req.body || {};
 
       if (!name || typeof name !== "string" || !name.trim()) {
@@ -1390,6 +1515,20 @@ router.post(
         });
       }
       assertValidProfileType(profileType);
+      const normalizedReleaseMode = releaseMode == null || releaseMode === ""
+        ? "on_booking"
+        : String(releaseMode);
+      assertValidReleaseMode(normalizedReleaseMode);
+      const normalizedCategory = normalizeOptionalText(category);
+      const normalizedAgentUserId = normalizeOptionalInt(agentUserId, "agentUserId");
+      const normalizedValidFrom = normalizeOptionalDate(validFrom, "validFrom");
+      const normalizedValidTo = normalizeOptionalDate(validTo, "validTo");
+      if (normalizedValidFrom && normalizedValidTo && normalizedValidFrom > normalizedValidTo) {
+        return res.status(400).json({
+          error: "validFrom must be on or before validTo",
+          code: "INVALID_DATE_RANGE",
+        });
+      }
       const profileJsonString = normalizeProfileJson(profileJson);
 
       if (subBrand !== undefined && subBrand !== null && subBrand !== "") {
@@ -1414,6 +1553,11 @@ router.post(
           profileType,
           profileJson: profileJsonString,
           subBrand: subBrand ? String(subBrand) : null,
+          category: normalizedCategory,
+          agentUserId: normalizedAgentUserId,
+          validFrom: normalizedValidFrom,
+          validTo: normalizedValidTo,
+          releaseMode: normalizedReleaseMode,
           isActive: isActive === false ? false : true,
           notes: notes ? String(notes) : null,
         },
@@ -1429,6 +1573,9 @@ router.post(
           name: created.name,
           profileType: created.profileType,
           subBrand: created.subBrand,
+          category: created.category,
+          agentUserId: created.agentUserId,
+          releaseMode: created.releaseMode,
         },
       );
 
@@ -1478,7 +1625,7 @@ router.put(
       const data = {};
       const {
         name, profileType, profileJson,
-        subBrand, isActive, notes,
+        subBrand, category, agentUserId, validFrom, validTo, releaseMode, isActive, notes,
       } = req.body || {};
 
       if (name !== undefined) {
@@ -1510,6 +1657,23 @@ router.put(
           }
           data.subBrand = String(subBrand);
         }
+      }
+      if (category !== undefined) data.category = normalizeOptionalText(category);
+      if (agentUserId !== undefined) data.agentUserId = normalizeOptionalInt(agentUserId, "agentUserId");
+      if (validFrom !== undefined) data.validFrom = normalizeOptionalDate(validFrom, "validFrom");
+      if (validTo !== undefined) data.validTo = normalizeOptionalDate(validTo, "validTo");
+      const nextValidFrom = data.validFrom !== undefined ? data.validFrom : existing.validFrom;
+      const nextValidTo = data.validTo !== undefined ? data.validTo : existing.validTo;
+      if (nextValidFrom && nextValidTo && nextValidFrom > nextValidTo) {
+        return res.status(400).json({
+          error: "validFrom must be on or before validTo",
+          code: "INVALID_DATE_RANGE",
+        });
+      }
+      if (releaseMode !== undefined) {
+        const normalizedReleaseMode = releaseMode == null || releaseMode === "" ? "on_booking" : String(releaseMode);
+        assertValidReleaseMode(normalizedReleaseMode);
+        data.releaseMode = normalizedReleaseMode;
       }
       if (isActive !== undefined) data.isActive = Boolean(isActive);
       if (notes !== undefined) data.notes = notes ? String(notes) : null;
@@ -1909,7 +2073,6 @@ router.get(
         });
       }
 
-      // Sub-brand gate — NULL subBrand profiles are tenant-wide.
       if (profile.subBrand) {
         const allowed = await getSubBrandAccessSet(req.user.userId);
         if (!canAccessSubBrand(allowed, profile.subBrand)) {
@@ -1924,23 +2087,31 @@ router.get(
       const skip = parseInt(req.query.offset, 10) || 0;
       const stageFilter = req.query.stage ? String(req.query.stage) : null;
 
-      // Build the where for Deals whose Contact carries this profileId.
-      // Use Deal.contact -> Contact.commissionProfileId because that's where
-      // slice 6's bulk-assign writes — Deal itself doesn't carry a direct
-      // profile FK (intentional; profile assignment is on the Contact /
-      // agent principal, not the individual deal).
+      const contactWhere = {
+        commissionProfileId: id,
+        tenantId: req.travelTenant.id,
+      };
+      if (profile.subBrand) contactWhere.subBrand = profile.subBrand;
+      if (profile.agentUserId != null) contactWhere.assignedToId = profile.agentUserId;
+
       const dealWhere = {
         tenantId: req.travelTenant.id,
         deletedAt: null,
-        contact: { commissionProfileId: id, tenantId: req.travelTenant.id },
+        contact: contactWhere,
       };
+      if (profile.subBrand) dealWhere.subBrand = profile.subBrand;
+      if (profile.validFrom || profile.validTo) {
+        dealWhere.createdAt = {};
+        if (profile.validFrom) dealWhere.createdAt.gte = profile.validFrom;
+        if (profile.validTo) dealWhere.createdAt.lte = profile.validTo;
+      }
       if (stageFilter) dealWhere.stage = stageFilter;
 
       const [deals, totalEntries] = await Promise.all([
         prisma.deal.findMany({
           where: dealWhere,
           include: {
-            contact: { select: { id: true, name: true } },
+            contact: { select: { id: true, name: true, assignedToId: true, subBrand: true } },
           },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take,
@@ -1949,8 +2120,6 @@ router.get(
         prisma.deal.count({ where: dealWhere }),
       ]);
 
-      // Parse stored profileJson once; reuse across all rows. Defensive:
-      // malformed JSON → every row reports commission=0 with a diagnostic.
       let parsedProfile = null;
       let parseError = null;
       try {
@@ -1958,6 +2127,13 @@ router.get(
       } catch (e) {
         parseError = e.message;
       }
+
+      const completedContactIds = profile.releaseMode === "on_trip_completion"
+        ? await loadCompletedItineraryContactIds(
+          req.travelTenant.id,
+          deals.map((deal) => deal.contact && deal.contact.id).filter(Boolean),
+        )
+        : new Set();
 
       const entries = deals.map((d) => {
         let result;
@@ -1969,10 +2145,16 @@ router.get(
         } else {
           result = computeCommission({
             saleAmount: Number(d.amount) || 0,
-            paxCount: 1, // ledger does not carry per-deal paxCount yet
+            paxCount: 1,
             profile: parsedProfile,
           });
         }
+
+        const release = buildReleaseDecision(profile, d, completedContactIds);
+        const rawCommission = Number(result.commission) || 0;
+        const releasedCommission = release.released ? rawCommission : 0;
+        const pendingCommission = release.released ? 0 : rawCommission;
+
         return {
           dealId: d.id,
           dealTitle: d.title,
@@ -1981,27 +2163,31 @@ router.get(
           dealCurrency: d.currency,
           contactId: d.contact ? d.contact.id : null,
           contactName: d.contact ? d.contact.name : null,
-          commission: result.commission,
+          commission: rawCommission,
+          releasedCommission,
+          pendingCommission,
+          releaseMode: release.releaseMode,
+          released: release.released,
+          releaseReason: release.releaseReason,
           breakdown: result.breakdown,
           createdAt: d.createdAt,
         };
       });
 
-      const totalCommission = entries.reduce(
-        (acc, e) => acc + (Number(e.commission) || 0),
-        0,
-      );
-      // Half-up round to 2dp — matches lib/agentCommissionCalculator's round2.
-      const totalCommissionRounded =
-        Math.round((totalCommission + Number.EPSILON) * 100) / 100;
+      const totalCommission = entries.reduce((acc, entry) => acc + (Number(entry.releasedCommission) || 0), 0);
+      const pendingCommission = entries.reduce((acc, entry) => acc + (Number(entry.pendingCommission) || 0), 0);
+      const totalCommissionRounded = Math.round((totalCommission + Number.EPSILON) * 100) / 100;
+      const pendingCommissionRounded = Math.round((pendingCommission + Number.EPSILON) * 100) / 100;
 
       res.json({
         profileId: profile.id,
         profileName: profile.name,
         profileType: profile.profileType,
+        releaseMode: profile.releaseMode || "on_booking",
         entries,
         totalEntries,
         totalCommission: totalCommissionRounded,
+        pendingCommission: pendingCommissionRounded,
         limit: take,
         offset: skip,
       });
@@ -2058,7 +2244,6 @@ router.get(
         });
       }
 
-      // Sub-brand gate — NULL subBrand profiles are tenant-wide.
       if (profile.subBrand) {
         const allowed = await getSubBrandAccessSet(req.user.userId);
         if (!canAccessSubBrand(allowed, profile.subBrand)) {
@@ -2070,17 +2255,29 @@ router.get(
       }
 
       const stageFilter = req.query.stage ? String(req.query.stage) : null;
+      const contactWhere = {
+        commissionProfileId: id,
+        tenantId: req.travelTenant.id,
+      };
+      if (profile.subBrand) contactWhere.subBrand = profile.subBrand;
+      if (profile.agentUserId != null) contactWhere.assignedToId = profile.agentUserId;
 
       const dealWhere = {
         tenantId: req.travelTenant.id,
         deletedAt: null,
-        contact: { commissionProfileId: id, tenantId: req.travelTenant.id },
+        contact: contactWhere,
       };
+      if (profile.subBrand) dealWhere.subBrand = profile.subBrand;
+      if (profile.validFrom || profile.validTo) {
+        dealWhere.createdAt = {};
+        if (profile.validFrom) dealWhere.createdAt.gte = profile.validFrom;
+        if (profile.validTo) dealWhere.createdAt.lte = profile.validTo;
+      }
       if (stageFilter) dealWhere.stage = stageFilter;
 
       const deals = await prisma.deal.findMany({
         where: dealWhere,
-        include: { contact: { select: { id: true, name: true } } },
+        include: { contact: { select: { id: true, name: true, assignedToId: true, subBrand: true } } },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       });
 
@@ -2092,30 +2289,36 @@ router.get(
         parseError = e.message;
       }
 
-      // Local CSV escape — wrap in double-quotes when the cell carries a comma,
-      // double-quote, or CR/LF. Mirrors travel_invoices.js#csvEscape so the
-      // two export endpoints share the same escaping contract.
-      const csvEscape = (s) => {
+      const completedContactIds = profile.releaseMode === "on_trip_completion"
+        ? await loadCompletedItineraryContactIds(
+          req.travelTenant.id,
+          deals.map((deal) => deal.contact && deal.contact.id).filter(Boolean),
+        )
+        : new Set();
+
+            const csvEscape = (s) => {
         if (s == null) return "";
         const str = String(s);
-        if (/[",\r\n]/.test(str)) {
-          return `"${str.replace(/"/g, '""')}"`;
-        }
+        if (/[",\r\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
         return str;
       };
 
       const CRLF = "\r\n";
-      const BOM = "﻿";
-
+      const BOM = "\uFEFF";
       const header = [
         "Deal ID",
         "Deal Title",
         "Stage",
+        "Release Mode",
+        "Released",
+        "Release Reason",
         "Amount",
         "Currency",
         "Contact ID",
         "Contact Name",
         "Commission",
+        "Released Commission",
+        "Pending Commission",
         "Breakdown",
         "Created At",
       ];
@@ -2124,10 +2327,7 @@ router.get(
       for (const d of deals) {
         let result;
         if (parseError) {
-          result = {
-            commission: 0,
-            breakdown: `malformed profileJson: ${parseError}`,
-          };
+          result = { commission: 0, breakdown: `malformed profileJson: ${parseError}` };
         } else {
           result = computeCommission({
             saleAmount: Number(d.amount) || 0,
@@ -2135,44 +2335,43 @@ router.get(
             profile: parsedProfile,
           });
         }
-        rows.push(
-          [
-            d.id,
-            d.title || "",
-            d.stage || "",
-            d.amount == null ? "" : Number(d.amount),
-            d.currency || "",
-            d.contact ? d.contact.id : "",
-            d.contact && d.contact.name ? d.contact.name : "",
-            result.commission,
-            result.breakdown || "",
-            d.createdAt ? new Date(d.createdAt).toISOString() : "",
-          ]
-            .map(csvEscape)
-            .join(","),
-        );
+        const release = buildReleaseDecision(profile, d, completedContactIds);
+        const rawCommission = Number(result.commission) || 0;
+        const releasedCommission = release.released ? rawCommission : 0;
+        const pendingCommission = release.released ? 0 : rawCommission;
+        rows.push([
+          d.id,
+          d.title || "",
+          d.stage || "",
+          release.releaseMode,
+          release.released ? "yes" : "no",
+          release.releaseReason || "",
+          d.amount == null ? "" : Number(d.amount),
+          d.currency || "",
+          d.contact ? d.contact.id : "",
+          d.contact && d.contact.name ? d.contact.name : "",
+          rawCommission,
+          releasedCommission,
+          pendingCommission,
+          result.breakdown || "",
+          d.createdAt ? new Date(d.createdAt).toISOString() : "",
+        ].map(csvEscape).join(","));
       }
 
-      const csv = BOM + rows.join(CRLF) + CRLF;
-
-      // Filename slug: profile name lowercased + spaces->hyphens, alpha-num only.
-      const slug = (profile.name || `profile-${profile.id}`)
+      const filenameSlug = String(profile.name || `profile-${profile.id}`)
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 40) || `profile-${profile.id}`;
-      const filename = `commission-ledger-${profile.id}-${slug}.csv`;
-
+        .replace(/^-+|-+$/g, "") || `profile-${profile.id}`;
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="${filename}"`,
+        `attachment; filename="commission-ledger-${profile.id}-${filenameSlug}.csv"`,
       );
-      return res.status(200).send(csv);
+      res.status(200).send(BOM + rows.join(CRLF) + CRLF);
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-      console.error("[travel-commission-profiles] ledger.csv error:", e.message);
-      res.status(500).json({ error: "Failed to export commission ledger CSV" });
+      console.error("[travel-commission-profiles] ledger csv error:", e.message);
+      res.status(500).json({ error: "Failed to export commission ledger" });
     }
   },
 );
@@ -2785,7 +2984,7 @@ router.get(
 //
 // Why a separate endpoint instead of an aggregate=quarter query param on
 // by-month: callers expect different defaults (12 quarters = 3 years at
-// quarter granularity is a sensible UI default; 36 months ≠ 12 quarters in
+// quarter granularity is a sensible UI default; 36 months != 12 quarters in
 // any meaningful sense). Different default sort + bucket validation regex.
 // Keeping the two reads disjoint lets each evolve independently — same
 // rationale slice 15 cites for not extending by-contact.
@@ -3217,3 +3416,4 @@ router.get(
 );
 
 module.exports = router;
+

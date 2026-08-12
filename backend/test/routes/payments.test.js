@@ -93,6 +93,7 @@ prisma.payment.findMany = vi.fn();
 prisma.payment.findFirst = vi.fn();
 prisma.payment.create = vi.fn();
 prisma.payment.update = vi.fn();
+prisma.payment.aggregate = vi.fn();
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.findFirst = vi.fn();
 prisma.invoice.findMany = vi.fn();
@@ -127,6 +128,16 @@ prisma.tripParticipant.findFirst = vi.fn().mockResolvedValue(null);
 prisma.itinerary = prisma.itinerary || {};
 prisma.itinerary.findFirst = vi.fn().mockResolvedValue(null);
 prisma.itinerary.update = vi.fn().mockResolvedValue({});
+prisma.travelQuote = prisma.travelQuote || {};
+prisma.travelQuote.findFirst = vi.fn().mockResolvedValue(null);
+prisma.travelQuote.updateMany = vi.fn().mockResolvedValue({ count: 0 });
+prisma.travelInvoice = prisma.travelInvoice || {};
+prisma.travelInvoice.findFirst = vi.fn().mockResolvedValue(null);
+prisma.travelInvoice.update = vi.fn().mockResolvedValue({});
+prisma.travelPaymentSchedule = prisma.travelPaymentSchedule || {};
+prisma.travelPaymentSchedule.findFirst = vi.fn().mockResolvedValue(null);
+prisma.travelPaymentSchedule.update = vi.fn().mockResolvedValue({});
+prisma.travelPaymentSchedule.updateMany = vi.fn().mockResolvedValue({ count: 0 });
 
 import express from 'express';
 import request from 'supertest';
@@ -169,6 +180,7 @@ beforeEach(() => {
   prisma.payment.findFirst.mockReset();
   prisma.payment.create.mockReset();
   prisma.payment.update.mockReset();
+  prisma.payment.aggregate.mockReset().mockResolvedValue({ _sum: { amount: 0 } });
   prisma.invoice.findFirst.mockReset();
   prisma.invoice.findMany.mockReset().mockResolvedValue([]);
   prisma.invoice.update.mockReset();
@@ -182,6 +194,13 @@ beforeEach(() => {
   prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.findFirst.mockReset().mockResolvedValue(null);
   prisma.itinerary.update.mockReset().mockResolvedValue({});
+  prisma.travelQuote.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelQuote.updateMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.travelInvoice.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelInvoice.update.mockReset().mockResolvedValue({});
+  prisma.travelPaymentSchedule.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelPaymentSchedule.update.mockReset().mockResolvedValue({});
+  prisma.travelPaymentSchedule.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.visit.findFirst.mockReset().mockResolvedValue(null);
   prisma.visit.findMany.mockReset().mockResolvedValue([]);
   prisma.visit.update.mockReset().mockResolvedValue({});
@@ -798,6 +817,51 @@ describe('POST /webhook/razorpay — payment_link.paid tmc-instalment reconcilia
     };
   }
 
+  test('marks order-based travel instalment paid and flips linked itinerary to advance_paid when webhook fires', async () => {
+    const notes = {
+      tenantId: '1',
+      kind: 'travel-trip-installment',
+      instalmentId: '200',
+      participantId: '5',
+      tripId: '100',
+    };
+    prisma.tripInstalmentPayment.findFirst.mockResolvedValue({
+      id: 200, participantId: 5, status: 'pending', amount: 50000,
+    });
+    prisma.tripInstalmentPayment.update.mockResolvedValue({ id: 200, status: 'paid', paidAmount: 50000 });
+    prisma.tripInstalmentPayment.findMany.mockResolvedValue([{ paidAmount: 50000, amount: 50000 }]);
+    prisma.tripParticipant.findFirst.mockResolvedValue({ parentEmail: 'parent@example.com' });
+    prisma.itinerary.findFirst.mockResolvedValue({ id: 77, advancePaidAmount: 0, status: 'sent' });
+    prisma.itinerary.update.mockResolvedValue({ id: 77, status: 'advance_paid', advancePaidAmount: 50000 });
+    prisma.payment.findFirst.mockResolvedValue(null);
+
+    const eventObj = makePlinkPaidEvent(notes);
+    const bodyStr = JSON.stringify(eventObj);
+    const sig = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(bodyStr)
+      .digest('hex');
+
+    const res = await request(makeApp())
+      .post('/api/payments/webhook/razorpay')
+      .set('content-type', 'application/json')
+      .set('x-razorpay-signature', sig)
+      .send(bodyStr);
+
+    expect(res.status).toBe(200);
+    expect(prisma.tripInstalmentPayment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 200 },
+        data: expect.objectContaining({ status: 'paid', paidAmount: 50000 }),
+      }),
+    );
+    expect(prisma.itinerary.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 77 },
+        data: expect.objectContaining({ status: 'advance_paid' }),
+      }),
+    );
+  });
   test('marks instalment paid and flips linked itinerary to advance_paid when webhook fires', async () => {
     const notes = {
       tenantId: '1',

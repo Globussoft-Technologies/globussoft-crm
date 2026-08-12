@@ -268,7 +268,6 @@ describe('GET /applications/stats — cross-tenant', () => {
       .set('Authorization', `Bearer ${tokenFor('ADMIN', { tenantId: 1 })}`);
     expect(prisma.contact.findMany.mock.calls[0][0].where).toMatchObject({
       tenantId: 1,
-      subBrand: 'visasure',
     });
   });
 

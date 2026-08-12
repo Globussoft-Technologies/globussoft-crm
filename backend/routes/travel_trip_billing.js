@@ -1,4 +1,4 @@
-// Travel CRM — TMC trip billing + rooming surface.
+﻿// Travel CRM — TMC trip billing + rooming surface.
 //
 // Rooming assignments + payment plan + per-participant instalments.
 // All sub-routes are scoped to a TmcTrip via :tripId in the URL.
@@ -35,6 +35,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
+const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalments");
 
 const VALID_ROOM_TYPES = ["single", "twin", "triple", "quad"];
 const VALID_INSTALMENT_STATUSES = ["pending", "partial", "paid", "overdue"];
@@ -1327,91 +1328,16 @@ router.post(
   async (req, res) => {
     try {
       const trip = await loadTrip(req);
-
-      const plan = await prisma.tripPaymentPlan.findUnique({ where: { tripId: trip.id } });
-      if (!plan) {
-        return res.status(404).json({ error: "Payment plan not found", code: "NO_PLAN" });
-      }
-
-      let template;
-      try {
-        template = JSON.parse(plan.instalmentsJson);
-      } catch (_e) {
-        return res.status(400).json({ error: "instalmentsJson is not valid JSON", code: "INVALID_JSON" });
-      }
-      if (!Array.isArray(template) || template.length === 0) {
-        return res.status(400).json({ error: "instalmentsJson must be a non-empty array", code: "EMPTY_INSTALMENTS" });
-      }
-
-      // Normalise + validate each plan entry up-front so we fail fast
-      // before doing the participant fan-out.
-      const normalised = [];
-      for (let i = 0; i < template.length; i++) {
-        const entry = template[i] || {};
-        const due = new Date(entry.dueDate);
-        if (!Number.isFinite(due.getTime())) {
-          return res.status(400).json({ error: `instalment[${i}].dueDate is invalid`, code: "INVALID_DATE" });
-        }
-        const amt = Number(entry.amount);
-        if (!Number.isFinite(amt) || amt < 0) {
-          return res.status(400).json({ error: `instalment[${i}].amount is invalid`, code: "INVALID_AMOUNT" });
-        }
-        normalised.push({ instalmentIndex: i, dueDate: due, amount: amt });
-      }
-
-      const participants = await prisma.tripParticipant.findMany({
-        where: { tripId: trip.id },
-        select: { id: true },
+      const result = await materializeTripInstalmentsFromPlan({
+        db: prisma,
+        tripId: trip.id,
       });
-      if (participants.length === 0) {
-        return res.status(400).json({
-          error: "Trip has no participants to materialise instalments for",
-          code: "EMPTY_ROSTER",
-        });
-      }
-
-      // Build a Set of "participantId:instalmentIndex" keys already present
-      // so we can skip the cartesian-product members that exist.
-      const existing = await prisma.tripInstalmentPayment.findMany({
-        where: { tripId: trip.id },
-        select: { participantId: true, instalmentIndex: true },
-      });
-      const existingKeys = new Set(
-        existing.map((r) => `${r.participantId}:${r.instalmentIndex}`),
-      );
-
-      const toCreate = [];
-      let skipped = 0;
-      for (const p of participants) {
-        for (const ins of normalised) {
-          if (existingKeys.has(`${p.id}:${ins.instalmentIndex}`)) {
-            skipped += 1;
-            continue;
-          }
-          toCreate.push({
-            tripId: trip.id,
-            participantId: p.id,
-            instalmentIndex: ins.instalmentIndex,
-            dueDate: ins.dueDate,
-            amount: ins.amount,
-            paidAmount: 0,
-            paidAt: null,
-            status: "pending",
-          });
-        }
-      }
-
-      let materialised = 0;
-      if (toCreate.length > 0) {
-        const result = await prisma.tripInstalmentPayment.createMany({ data: toCreate });
-        materialised = result.count;
-      }
 
       return res.status(201).json({
-        materialised,
-        skipped,
-        participants: participants.length,
-        instalmentsPerParticipant: normalised.length,
+        materialised: result.materialised,
+        skipped: result.skipped,
+        participants: result.participants,
+        instalmentsPerParticipant: result.instalmentsPerParticipant,
       });
     } catch (err) {
       if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
@@ -1420,7 +1346,6 @@ router.post(
     }
   },
 );
-
 router.patch(
   "/trips/:tripId/instalments/:id",
   verifyToken,
@@ -1738,3 +1663,4 @@ router.post(
 );
 
 module.exports = router;
+

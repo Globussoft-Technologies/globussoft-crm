@@ -25,8 +25,7 @@
  * Happy path:
  *   - List envelope { applications, total, limit, offset } regardless of
  *     populated/empty state.
- *   - Detail 404s for both genuinely-missing IDs AND for IDs that exist
- *     but reference a non-visasure Contact (sub-brand isolation).
+ *   - Detail 404s for genuinely-missing IDs.
  *
  * Filter:
  *   - ?status=intake works; ?status=garbage rejected as 400 INVALID_STATUS.
@@ -39,8 +38,9 @@
  *     drifts from schema today: column is `destinationCountry`, no `notes`
  *     column on VisaApplication (notes live per-document), no `priorityLevel`
  *     column. Spec pins schema reality.
- *   - Sub-brand isolation: Contact.subBrand must be "visasure" else 403
- *     NOT_VISA_SURE. Same defense-in-depth as the GET /:id detail handler.
+ *   - Sub-brand agnostic: after PR #1309 any tenant travel contact can be
+ *     used for a visa application; the Contact.subBrand is surfaced for
+ *     display but is no longer a gating factor.
  *   - Tenant isolation: contactId from another tenant → 404 NOT_FOUND
  *     (NOT 403 — we deliberately surface "not found" rather than leaking
  *     existence of the cross-tenant contact).
@@ -323,9 +323,7 @@ test.describe("Visa Sure applications — detail path", () => {
     );
     expect(r.status()).toBe(404);
     const body = await r.json();
-    // Either NOT_FOUND (no row at all) or NOT_VISA_SURE (row exists but
-    // contact subBrand != visasure). Both are acceptable rejection codes.
-    expect(["NOT_FOUND", "NOT_VISA_SURE"]).toContain(body.code);
+    expect(body.code).toBe("NOT_FOUND");
   });
 
   test("GET /applications/not-a-number → 400 INVALID_ID", async ({ request }) => {
@@ -381,13 +379,14 @@ test.describe("Visa Sure applications — detail path", () => {
     expect(detail).toHaveProperty("documentChecklist");
     expect(Array.isArray(detail.documentChecklist)).toBe(true);
 
-    // Joined Contact projection — must include id + name + subBrand;
-    // subBrand should be visasure (sub-brand isolation invariant).
+    // Joined Contact projection — must include id + name + subBrand.
+    // After PR #1309 visa applications are no longer restricted to the
+    // visasure sub-brand, so the subBrand can be any tenant travel brand.
     expect(detail).toHaveProperty("contact");
     if (detail.contact) {
       expect(detail.contact).toHaveProperty("id");
       expect(detail.contact).toHaveProperty("name");
-      expect(detail.contact.subBrand).toBe("visasure");
+      expect(detail.contact).toHaveProperty("subBrand");
     }
 
     // Diagnostic is optional — present or null, but the key must exist.
@@ -397,10 +396,10 @@ test.describe("Visa Sure applications — detail path", () => {
 
 // ─── POST /applications — CREATE flow ────────────────────────────────
 //
-// Auth gates, body validation, sub-brand isolation, tenant isolation,
-// happy path. Uses a real visa-sure contactId discovered via the list
-// endpoint; falls back to test.skip on the (rare) demo state where no
-// visa-sure contact exists.
+// Auth gates, body validation, tenant isolation, happy path. After PR #1309
+// visa applications accept any tenant travel contact (not just visasure).
+// Uses a real contactId discovered via the list endpoint; falls back to
+// test.skip on the rare demo state where no travel contact exists.
 
 async function findVisaSureContactId(request, token) {
   const r = await get(request, token, "/api/travel/visa/applications?limit=1");
@@ -409,7 +408,7 @@ async function findVisaSureContactId(request, token) {
   if (Array.isArray(body.applications) && body.applications.length > 0) {
     return body.applications[0].contactId;
   }
-  // No existing applications — try fetching a visa-sure contact directly
+  // No existing applications — try fetching a travel contact directly
   // via /api/contacts. Filter is best-effort; if backend doesn't honour
   // the subBrand query param, we scan the returned page.
   const cr = await get(request, token, "/api/contacts?limit=200");
@@ -422,7 +421,7 @@ async function findVisaSureContactId(request, token) {
 
 async function findNonVisaSureContactId(request, token) {
   // Look for a contact whose subBrand is set but NOT "visasure" (typically
-  // tmc / rfu in the travel seed). Used for the NOT_VISA_SURE 403 test.
+  // tmc / rfu in the travel seed). Used for the sub-brand-agnostic 201 test.
   const cr = await get(request, token, "/api/contacts?limit=200");
   if (cr.status() !== 200) return null;
   const cBody = await cr.json();
@@ -528,17 +527,17 @@ test.describe("Visa Sure applications — CREATE flow", () => {
     expect(body.code).toBe("NOT_FOUND");
   });
 
-  test("POST /applications with non-visasure contactId → 403 NOT_VISA_SURE", async ({ request }) => {
+  test("POST /applications with non-visasure contactId → 201 accepted (sub-brand agnostic)", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token) {
-      test.skip(true, "yasin@travelstall.in not seeded — skipping NOT_VISA_SURE test");
+      test.skip(true, "yasin@travelstall.in not seeded — skipping non-visasure create test");
       return;
     }
     const nonVisaId = await findNonVisaSureContactId(request, token);
     if (!nonVisaId) {
       test.skip(
         true,
-        "no non-visasure travel contact on this stack — sub-brand isolation tested via the NOT_FOUND path instead",
+        "no non-visasure travel contact on this stack — covered by the visasure happy path",
       );
       return;
     }
@@ -547,9 +546,10 @@ test.describe("Visa Sure applications — CREATE flow", () => {
       applicationType: "tourist",
       destinationCountry: `US ${RUN_TAG}`,
     });
-    expect(r.status()).toBe(403);
+    expect(r.status()).toBe(201);
     const body = await r.json();
-    expect(body.code).toBe("NOT_VISA_SURE");
+    expect(body).toHaveProperty("id");
+    expect(body).toHaveProperty("contactId", nonVisaId);
   });
 
   test("POST /applications happy path → 201 with created row", async ({ request }) => {
@@ -588,10 +588,10 @@ test.describe("Visa Sure applications — CREATE flow", () => {
 
 // ─── PATCH /applications/:id — status transitions + advisor edits ────
 //
-// Auth gates, body validation, sub-brand isolation, NOT_FOUND, and a
-// happy-path status transition (intake → docs-pending). Uses a real
-// visa-sure application discovered via the list endpoint; falls back to
-// test.skip on the demo state where no visa-sure application exists.
+// Auth gates, body validation, NOT_FOUND, and a happy-path status
+// transition (intake → docs-pending). Uses a real visa application
+// discovered via the list endpoint; falls back to test.skip on the demo
+// state where no visa application exists.
 //
 // PATCH RUN_TAG suffix lets demo-hygiene identify spec-mutated rows.
 // Created or mutated rows are NOT torn down (visa pipeline data is
@@ -610,10 +610,9 @@ async function findVisaApplicationId(request, token) {
 }
 
 async function findNonVisaApplicationId(_request, _token) {
-  // No public endpoint surfaces a VisaApplication whose Contact has
-  // subBrand != "visasure" — the POST handler rejects 403 NOT_VISA_SURE
-  // at create-time, so no such row can be authored via the API. Returns
-  // null to signal "use NOT_FOUND path for sub-brand isolation instead".
+  // After PR #1309 visa applications can be created against any tenant
+  // travel contact, so a non-visasure row is possible. This helper is kept
+  // for backward compatibility but now always returns null; callers skip.
   return null;
 }
 
@@ -685,38 +684,14 @@ test.describe("Visa Sure applications — PATCH flow", () => {
     );
     expect(r.status()).toBe(404);
     const body = await r.json();
-    // Either NOT_FOUND (no row at all) or NOT_VISA_SURE — both are
-    // acceptable rejection codes per the same contract as the GET /:id
-    // handler.
-    expect(["NOT_FOUND", "NOT_VISA_SURE"]).toContain(body.code);
+    expect(body.code).toBe("NOT_FOUND");
   });
 
-  test("PATCH /applications/:id non-visasure contact's app → 404 NOT_VISA_SURE (or NOT_FOUND)", async ({ request }) => {
-    const token = await getTravelAdmin(request);
-    if (!token) {
-      test.skip(true, "yasin@travelstall.in not seeded — skipping NOT_VISA_SURE PATCH test");
-      return;
-    }
-    const nonVisaAppId = await findNonVisaApplicationId(request, token);
-    if (!nonVisaAppId) {
-      // Sub-brand isolation on PATCH is exercised via the NOT_FOUND
-      // path above (a non-existent ID + an ID referencing a non-visa
-      // contact both return the same 404 code branch).
-      test.skip(
-        true,
-        "sub-brand isolation on PATCH covered by NOT_FOUND path — a non-visa VisaApplication can't be constructed via public API (POST rejects with 403 at create-time)",
-      );
-      return;
-    }
-    const r = await patch(
-      request,
-      token,
-      `/api/travel/visa/applications/${nonVisaAppId}`,
-      { status: "docs-pending" },
+  test("PATCH /applications/:id non-visasure contact's app → no longer applicable (sub-brand agnostic)", async ({ request }) => {
+    test.skip(
+      true,
+      "PR #1309 made visa applications sub-brand agnostic; the old NOT_VISA_SURE PATCH path no longer exists",
     );
-    expect(r.status()).toBe(404);
-    const body = await r.json();
-    expect(["NOT_FOUND", "NOT_VISA_SURE"]).toContain(body.code);
   });
 
   test("PATCH /applications/:id invalid status → 400 INVALID_STATUS", async ({ request }) => {

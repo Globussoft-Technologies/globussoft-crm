@@ -44,6 +44,7 @@ import { Receipt, Plus, Pencil, Trash2, FileDown, Ban, CreditCard, History } fro
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
+import PatientPager from "../wellness/patients/PatientPager";
 import {
   SUB_BRAND_BG,
   accessibleSubBrands,
@@ -54,7 +55,6 @@ import { useActiveSubBrand } from "../../utils/subBrand";
 // Branding Wave 4 G102: per-sub-brand brand-kit lookup for primary CTA tint.
 import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 import { AuthContext } from "../../App";
-import TopScrollSync from "../../components/TopScrollSync";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -117,6 +117,8 @@ const EMPTY_FORM = {
   quoteId: "",
   subBrand: "tmc",
 };
+
+const PAGE_SIZE = 20;
 
 // Tomorrow as default for the dueDate date picker. Backend accepts any
 // parseable date (back-dated invoices are legitimate ops) so this is a
@@ -184,7 +186,13 @@ export default function InvoicesAdmin() {
 
   const [invoices, setInvoices] = useState([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+  const [isCustomPageSize, setIsCustomPageSize] = useState(false);
+  const [customPageSize, setCustomPageSize] = useState("");
   const [loading, setLoading] = useState(true);
+  const loadingRef = useRef(false);
+  const [reloadTick, setReloadTick] = useState(0);
   // #1051 — resolve contactId -> { name, email } so the CONTACT column renders
   // a human-readable name instead of "#<id>". Backend list-GET doesn't include
   // the contact relation, so we batch-fetch unique IDs after the invoices land.
@@ -201,8 +209,7 @@ export default function InvoicesAdmin() {
 
   const [subBrand, setSubBrand] = useState("");
   const [status, setStatus] = useState("");
-  const [contactIdFilter, setContactIdFilter] = useState("");
-  const [quoteIdFilter, setQuoteIdFilter] = useState("");
+  const [customerNameFilter, setCustomerNameFilter] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -261,27 +268,95 @@ export default function InvoicesAdmin() {
   const [voidReason, setVoidReason] = useState("");
   const [voiding, setVoiding] = useState(false);
 
-  const load = () => {
+  const load = (currentPage = page, currentPageSize = pageSize) => {
     setLoading(true);
-    const qs = new URLSearchParams();
-    if (subBrand) qs.set("subBrand", subBrand);
-    if (status) qs.set("status", status);
-    if (contactIdFilter.trim()) qs.set("contactId", contactIdFilter.trim());
-    if (quoteIdFilter.trim()) qs.set("quoteId", quoteIdFilter.trim());
-    const url = `/api/travel/invoices${qs.toString() ? `?${qs.toString()}` : ""}`;
-    fetchApi(url)
+    loadingRef.current = true;
+    const needle = customerNameFilter.trim().toLowerCase();
+    const matchingCustomers = needle
+      ? customers.filter((c) => String(c.name || "").toLowerCase().includes(needle))
+      : [];
+
+    const fetchPage = (extraQs = {}, usePagination = true) => {
+      const qs = new URLSearchParams();
+      if (subBrand) qs.set("subBrand", subBrand);
+      if (status) qs.set("status", status);
+      Object.entries(extraQs).forEach(([key, value]) => {
+        if (value != null && value !== "") qs.set(key, String(value));
+      });
+      if (usePagination) {
+        qs.set("limit", String(currentPageSize));
+        qs.set("offset", String(Math.max(currentPage - 1, 0) * currentPageSize));
+      }
+      const url = `/api/travel/invoices${qs.toString() ? `?${qs.toString()}` : ""}`;
+      return fetchApi(url);
+    };
+
+    const applyPageSlice = (rows, totalRows) => {
+      setInvoices(rows);
+      setTotal(totalRows);
+      setPermissionDenied(false);
+    };
+
+    if (needle) {
+      if (matchingCustomers.length === 0) {
+        setInvoices([]);
+        setTotal(0);
+        setPermissionDenied(false);
+        setLoading(false);
+        loadingRef.current = false;
+        return;
+      }
+
+        Promise.allSettled(
+          matchingCustomers.map((customer) =>
+            fetchPage({ contactId: customer.id }, false),
+          ),
+        )
+        .then((results) => {
+          const merged = [];
+          results.forEach((result) => {
+            if (result.status === "fulfilled" && result.value) {
+              const rows = Array.isArray(result.value?.invoices) ? result.value.invoices : [];
+              merged.push(...rows);
+            }
+          });
+          merged.sort((a, b) => {
+            const ad = a?.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const bd = b?.createdAt ? new Date(b.createdAt).getTime() : 0;
+            if (bd !== ad) return bd - ad;
+            return Number(b?.id || 0) - Number(a?.id || 0);
+          });
+          const totalRows = merged.length;
+          const start = Math.max(currentPage - 1, 0) * currentPageSize;
+          applyPageSlice(merged.slice(start, start + currentPageSize), totalRows);
+        })
+        .catch((err) => {
+          setInvoices([]);
+          setTotal(0);
+          setPermissionDenied(err?.status === 403);
+        })
+        .finally(() => {
+          setLoading(false);
+          loadingRef.current = false;
+        });
+      return;
+    }
+
+    fetchPage()
       .then((d) => {
         const rows = Array.isArray(d?.invoices) ? d.invoices : [];
-        setInvoices(rows);
-        setTotal(Number.isFinite(d?.total) ? d.total : 0);
-        setPermissionDenied(false);
+        const totalRows = Number.isFinite(d?.total) ? d.total : rows.length;
+        applyPageSlice(rows, totalRows);
       })
       .catch((err) => {
         setInvoices([]);
         setTotal(0);
         setPermissionDenied(err?.status === 403);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        loadingRef.current = false;
+      });
   };
 
   // Sync the global sub-brand selector into the local filter state so the
@@ -290,7 +365,10 @@ export default function InvoicesAdmin() {
     setSubBrand(activeSubBrand || "");
   }, [activeSubBrand]);
 
-  useEffect(load, [subBrand, status, contactIdFilter, quoteIdFilter]);
+  useEffect(() => {
+    load(page, pageSize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subBrand, status, page, pageSize, reloadTick, customerNameFilter, customers]);
 
   // Load the tenant's contacts once for the customer dropdown.
   useEffect(() => {
@@ -417,6 +495,8 @@ export default function InvoicesAdmin() {
     return INVOICE_STATUSES.filter((s) => s.value && labels.has(s.value));
   };
 
+  const visibleInvoices = invoices;
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     // #996 — synchronous re-entry guard. `saving` state takes a render
@@ -501,7 +581,7 @@ export default function InvoicesAdmin() {
       }
       setShowForm(false);
       resetForm();
-      load();
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.data?.error || err?.message || "Save failed");
     } finally {
@@ -528,7 +608,7 @@ export default function InvoicesAdmin() {
     try {
       await fetchApi(`/api/travel/invoices/${inv.id}`, { method: "DELETE" });
       notify.success(`Invoice ${inv.invoiceNum} deleted`);
-      load();
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.data?.error || err?.message || "Delete failed");
     }
@@ -603,7 +683,7 @@ export default function InvoicesAdmin() {
         notify.success(`Invoice ${voidingInv.invoiceNum} voided`);
       }
       closeVoid();
-      load();
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Failed to void invoice");
       setVoiding(false);
@@ -782,7 +862,7 @@ export default function InvoicesAdmin() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1440, margin: "0 auto", boxSizing: "border-box", animation: "fadeIn 0.4s ease-out" }}>
       <header
         style={{
           display: "flex",
@@ -897,27 +977,19 @@ export default function InvoicesAdmin() {
           flexWrap: "wrap",
         }}
       >
-        <select value={subBrand} onChange={(e) => setSubBrand(e.target.value)} style={selectStyle} aria-label="Filter by sub-brand">
+        <select value={subBrand} onChange={(e) => { setSubBrand(e.target.value); setPage(1); }} style={selectStyle} aria-label="Filter by sub-brand">
           {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
-        <select value={status} onChange={(e) => setStatus(e.target.value)} style={selectStyle} aria-label="Filter by status">
+        <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} style={selectStyle} aria-label="Filter by status">
           {INVOICE_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
         <input
           type="text"
-          placeholder="Filter by contact ID…"
-          value={contactIdFilter}
-          onChange={(e) => setContactIdFilter(e.target.value)}
-          style={{ ...selectStyle, minWidth: 180 }}
-          aria-label="Filter by contact ID"
-        />
-        <input
-          type="text"
-          placeholder="Filter by quote ID…"
-          value={quoteIdFilter}
-          onChange={(e) => setQuoteIdFilter(e.target.value)}
-          style={{ ...selectStyle, minWidth: 180 }}
-          aria-label="Filter by quote ID"
+          placeholder="Filter by customer name…"
+          value={customerNameFilter}
+          onChange={(e) => { setCustomerNameFilter(e.target.value); setPage(1); }}
+          style={{ ...selectStyle, minWidth: 220 }}
+          aria-label="Filter by customer name"
         />
       </div>
 
@@ -1082,13 +1154,23 @@ export default function InvoicesAdmin() {
 
       <div
         className="glass"
-        style={{ padding: 0, overflow: "visible" }}
+        style={tableFrame}
       >
-        {loading ? (
+        {loading && invoices.length === 0 ? (
           <div style={empty}>Loading&hellip;</div>
         ) : (
-          <TopScrollSync>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <colgroup>
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "21%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "15%" }} />
+              {canWrite && <col style={{ width: "20%" }} />}
+            </colgroup>
             <thead>
               <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                 <th style={th}>Invoice #</th>
@@ -1099,11 +1181,11 @@ export default function InvoicesAdmin() {
                 <th style={th}>Due Date</th>
                 <th style={th}>Sub-brand</th>
                 <th style={th}>Paid At</th>
-                {canWrite && <th style={{ ...th, textAlign: "center" }}>Actions</th>}
+                {canWrite && <th style={th}>Actions</th>}
               </tr>
             </thead>
             <tbody>
-              {invoices.map((inv) => {
+              {visibleInvoices.map((inv) => {
                 const isVoided = inv.status === "Voided";
                 const canDelete = inv.status === "Draft";
                 return (
@@ -1157,7 +1239,7 @@ export default function InvoicesAdmin() {
                     </td>
                     <td style={td}>{formatDate(inv.paidAt)}</td>
                     {canWrite && (
-                      <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
+                      <td style={td}>
                         <button
                           type="button"
                           onClick={() => openEdit(inv)}
@@ -1278,7 +1360,7 @@ export default function InvoicesAdmin() {
                   </tr>
                 );
               })}
-              {invoices.length === 0 && (
+              {visibleInvoices.length === 0 && (
                 <tr>
                   <td
                     colSpan={canWrite ? 9 : 8}
@@ -1286,7 +1368,7 @@ export default function InvoicesAdmin() {
                       ...td,
                       textAlign: "center",
                       color: permissionDenied ? "var(--warning-color, #f59e0b)" : "var(--text-secondary)",
-                      padding: permissionDenied ? "2rem 1rem" : "1.5rem 1rem",
+                      padding: permissionDenied ? "1rem 1rem" : "0.75rem 1rem",
                     }}
                   >
                     {/* #829 — honest empty-state when API returned 403. */}
@@ -1300,7 +1382,7 @@ export default function InvoicesAdmin() {
                     ) : (
                       <>
                         <Receipt size={20} style={{ opacity: 0.4, marginBottom: 6 }} />
-                        <div>No invoices match.</div>
+                        <div style={{ whiteSpace: "nowrap" }}>No invoices match.</div>
                       </>
                     )}
                   </td>
@@ -1308,8 +1390,22 @@ export default function InvoicesAdmin() {
               )}
             </tbody>
           </table>
-          </TopScrollSync>
         )}
+        <PatientPager
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(nextSize) => {
+            setPageSize(nextSize);
+            setPage(1);
+          }}
+          isCustomPageSize={isCustomPageSize}
+          setIsCustomPageSize={setIsCustomPageSize}
+          customPageSize={customPageSize}
+          setCustomPageSize={setCustomPageSize}
+          label="invoices"
+        />
       </div>
 
       {/* S56 — Void-confirmation modal.
@@ -1468,8 +1564,8 @@ export default function InvoicesAdmin() {
                 {(!historyData.milestones || historyData.milestones.length === 0) ? (
                   <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>No milestones on this invoice.</div>
                 ) : (
-                  <TopScrollSync>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <div style={miniTableFrame}>
+                  <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr>
                         <th style={miniTh}>#</th>
@@ -1493,7 +1589,7 @@ export default function InvoicesAdmin() {
                       ))}
                     </tbody>
                   </table>
-                  </TopScrollSync>
+                  </div>
                 )}
 
                 {/* Payments / transactions */}
@@ -1501,8 +1597,8 @@ export default function InvoicesAdmin() {
                 {(!historyData.payments || historyData.payments.length === 0) ? (
                   <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>No payments recorded yet.</div>
                 ) : (
-                  <TopScrollSync>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <div style={miniTableFrame}>
+                  <table style={{ width: "100%", minWidth: 620, borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr>
                         <th style={miniTh}>Date</th>
@@ -1524,7 +1620,7 @@ export default function InvoicesAdmin() {
                       ))}
                     </tbody>
                   </table>
-                  </TopScrollSync>
+                  </div>
                 )}
               </>
             )}
@@ -1539,10 +1635,29 @@ export default function InvoicesAdmin() {
   );
 }
 
-const miniTh = { textAlign: "left", padding: "6px 8px", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--text-secondary)", fontWeight: 600 };
+const miniTh = {
+  textAlign: "left",
+  padding: "6px 8px",
+  fontSize: 11,
+  textTransform: "uppercase",
+  letterSpacing: 0.4,
+  color: "var(--text-secondary)",
+  fontWeight: 600,
+  background: "var(--modal-bg, var(--bg-color))",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
+};
 const miniThRight = { ...miniTh, textAlign: "right" };
 const miniTd = { padding: "6px 8px", color: "var(--text-primary)" };
 const miniTdRight = { ...miniTd, textAlign: "right" };
+const miniTableFrame = {
+  overflow: "auto",
+  maxHeight: 260,
+  border: "1px solid var(--border-color)",
+  borderRadius: 8,
+};
 
 const th = {
   textAlign: "left",
@@ -1552,11 +1667,30 @@ const th = {
   letterSpacing: 0.5,
   color: "var(--text-secondary)",
   borderBottom: "1px solid var(--border-color)",
-  background: "var(--subtle-bg)",
+  background: "var(--modal-bg, var(--bg-color))",
+  boxShadow: "inset 0 -1px 0 var(--border-color)",
+  position: "sticky",
+  top: 0,
+  zIndex: 3,
   fontWeight: 600,
 };
-const td = { padding: "10px 12px", fontSize: 14, color: "var(--text-primary)" };
-const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
+const td = {
+  padding: "10px 12px",
+  fontSize: 14,
+  color: "var(--text-primary)",
+  whiteSpace: "normal",
+  overflowWrap: "anywhere",
+  wordBreak: "break-word",
+};
+const tableFrame = {
+  padding: 0,
+  overflowX: "hidden",
+  overflowY: "visible",
+  height: "auto",
+  minHeight: 0,
+  maxHeight: "none",
+};
+const empty = { padding: 20, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const inputStyle = {
   padding: "8px 10px",
   borderRadius: 6,

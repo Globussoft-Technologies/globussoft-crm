@@ -5,7 +5,7 @@
  * PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md §10 row T16. Pins the page's
  * surface contract against backend/routes/travel_tmc_catalogue.js (T5):
  *
- *   GET    /api/travel-tmc-catalogue?status=active|archived → list
+ *   GET    /api/travel-tmc-catalogue?status=active|archived&limit=&offset= → list
  *   POST   /api/travel-tmc-catalogue            → create (always lands archived)
  *   PATCH  /api/travel-tmc-catalogue/:id        → update
  *   DELETE /api/travel-tmc-catalogue/:id        → soft-archive
@@ -112,8 +112,8 @@ const ARCHIVED_ROWS = [
 ];
 
 function installFetchMock({
-  active = { catalogue: ACTIVE_ROWS, total: ACTIVE_ROWS.length, limit: 100, offset: 0 },
-  archived = { catalogue: ARCHIVED_ROWS, total: ARCHIVED_ROWS.length, limit: 100, offset: 0 },
+  active = { catalogue: ACTIVE_ROWS, total: ACTIVE_ROWS.length, limit: 10, offset: 0 },
+  archived = { catalogue: ARCHIVED_ROWS, total: ARCHIVED_ROWS.length, limit: 10, offset: 0 },
   create = null,
   patch = null,
   del = null,
@@ -121,11 +121,12 @@ function installFetchMock({
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
-    if (url.startsWith('/api/travel-tmc-catalogue?status=active') && method === 'GET') {
+    const parsed = new URL(String(url), 'http://localhost');
+    if (parsed.pathname === '/api/travel-tmc-catalogue' && method === 'GET' && parsed.searchParams.get('status') === 'active') {
       if (active instanceof Error) return Promise.reject(active);
       return Promise.resolve(active);
     }
-    if (url.startsWith('/api/travel-tmc-catalogue?status=archived') && method === 'GET') {
+    if (parsed.pathname === '/api/travel-tmc-catalogue' && method === 'GET' && parsed.searchParams.get('status') === 'archived') {
       if (archived instanceof Error) return Promise.reject(archived);
       return Promise.resolve(archived);
     }
@@ -210,7 +211,7 @@ describe('<TmcCatalogueAdmin /> — page chrome + initial load', () => {
     const call = fetchApiMock.mock.calls.find(
       ([u, o]) =>
         typeof u === 'string'
-        && u.startsWith('/api/travel-tmc-catalogue?status=active')
+        && u.startsWith('/api/travel-tmc-catalogue?status=active&limit=10&offset=0')
         && (!o?.method || o.method === 'GET'),
     );
     expect(call).toBeTruthy();
@@ -230,7 +231,7 @@ describe('<TmcCatalogueAdmin /> — tab switching', () => {
       const call = fetchApiMock.mock.calls.find(
         ([u]) =>
           typeof u === 'string'
-          && u.startsWith('/api/travel-tmc-catalogue?status=archived'),
+          && u.startsWith('/api/travel-tmc-catalogue?status=archived&limit=10&offset=0'),
       );
       expect(call).toBeTruthy();
     });
@@ -241,7 +242,7 @@ describe('<TmcCatalogueAdmin /> — tab switching', () => {
 
 describe('<TmcCatalogueAdmin /> — empty states', () => {
   it('Active tab renders empty-state copy when API returns []', async () => {
-    installFetchMock({ active: { catalogue: [], total: 0, limit: 100, offset: 0 } });
+    installFetchMock({ active: { catalogue: [], total: 0, limit: 10, offset: 0 } });
     renderPage();
     expect(
       await screen.findByText(/No active catalogue entries/i),
@@ -249,13 +250,91 @@ describe('<TmcCatalogueAdmin /> — empty states', () => {
   });
 
   it('Archived tab renders empty-state copy when API returns []', async () => {
-    installFetchMock({ archived: { catalogue: [], total: 0, limit: 100, offset: 0 } });
+    installFetchMock({ archived: { catalogue: [], total: 0, limit: 10, offset: 0 } });
     renderPage();
     await screen.findByText('Golden Triangle Heritage Trail');
     fireEvent.click(screen.getByRole('tab', { name: /Archived/i }));
     expect(
       await screen.findByText(/No archived catalogue entries/i),
     ).toBeInTheDocument();
+  });
+});
+
+describe('<TmcCatalogueAdmin /> — infinite scroll', () => {
+  it('requests the next slice when the list container scrolls to the bottom', async () => {
+    const activePage1 = Array.from({ length: 10 }, (_, idx) =>
+      makeRow({
+        id: 100 + idx,
+        tripId: `active-trip-${idx + 1}`,
+        title: `Active Trip ${idx + 1}`,
+        status: 'active',
+      }),
+    );
+    const activePage2 = [
+      makeRow({
+        id: 200,
+        tripId: 'active-trip-11',
+        title: 'Active Trip 11',
+        status: 'active',
+      }),
+      makeRow({
+        id: 201,
+        tripId: 'active-trip-12',
+        title: 'Active Trip 12',
+        status: 'active',
+      }),
+    ];
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      const parsed = new URL(String(url), 'http://localhost');
+      if (parsed.pathname === '/api/travel-tmc-catalogue' && method === 'GET' && parsed.searchParams.get('status') === 'active') {
+        const offset = Number(parsed.searchParams.get('offset') || 0);
+        if (offset === 10) {
+          return Promise.resolve({
+            catalogue: activePage2,
+            total: 12,
+            limit: 10,
+            offset: 10,
+          });
+        }
+        return Promise.resolve({
+          catalogue: activePage1,
+          total: 12,
+          limit: 10,
+          offset: 0,
+        });
+      }
+      if (parsed.pathname === '/api/travel-tmc-catalogue' && method === 'GET' && parsed.searchParams.get('status') === 'archived') {
+        return Promise.resolve({
+          catalogue: ARCHIVED_ROWS,
+          total: ARCHIVED_ROWS.length,
+          limit: 10,
+          offset: 0,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    expect(await screen.findByText('Active Trip 1')).toBeInTheDocument();
+
+    const list = screen.getByRole('list', { name: /active catalogue entries/i });
+    Object.defineProperties(list, {
+      scrollTop: { value: 1000, writable: true, configurable: true },
+      clientHeight: { value: 500, writable: true, configurable: true },
+      scrollHeight: { value: 1400, writable: true, configurable: true },
+    });
+    fireEvent.scroll(list);
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u]) => typeof u === 'string' && u.includes('status=active&limit=10&offset=10'),
+      );
+      expect(call).toBeTruthy();
+    });
+    expect(await screen.findByText('Active Trip 11')).toBeInTheDocument();
+    expect(screen.getByText('Active Trip 12')).toBeInTheDocument();
   });
 });
 
@@ -590,7 +669,7 @@ describe('<TmcCatalogueAdmin /> - bulk import template + ingest flow', () => {
           }),
         ],
         total: ARCHIVED_ROWS.length + 1,
-        limit: 100,
+        limit: 10,
         offset: 0,
       },
     });

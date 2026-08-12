@@ -22,7 +22,7 @@
  *   - Query validation:
  *       INVALID_STATUS for unknown status value.
  *       INVALID_QUARTER_FORMAT for non-YYYY-Qn from/to values.
- *   - Empty-state contract: zero visasure contacts → graceful empty
+ *   - Empty-state contract: zero tenant contacts → graceful empty
  *     envelope (NOT 404) with grand-totals at 0 + quarters: [].
  *   - Happy path: 4 applications across 2 UTC quarters → 2 quarter
  *     buckets with correct per-status splits + complexCount + flaggedCount.
@@ -34,7 +34,7 @@
  *     buckets.
  *   - complexCount counts only complexCase=true; flaggedCount counts any
  *     truthy advisorRiskFlag.
- *   - Tenant isolation: every query narrows to (tenantId, subBrand=visasure).
+ *   - Tenant isolation: every query narrows to (tenantId only).
  *   - No audit row written (anodyne aggregate).
  *   - limit clamped to max 40.
  *
@@ -230,7 +230,7 @@ describe('GET /applications/by-quarter — path-precedence', () => {
 // ─── Empty-state contract ─────────────────────────────────────────────
 
 describe('GET /applications/by-quarter — empty state', () => {
-  test('zero visasure contacts → graceful empty envelope (NOT 404)', async () => {
+  test('zero tenant contacts → graceful empty envelope (NOT 404)', async () => {
     prisma.contact.findMany.mockResolvedValue([]);
     const res = await request(makeApp())
       .get('/api/travel/visa/applications/by-quarter')
@@ -495,7 +495,7 @@ describe('GET /applications/by-quarter — complex + flagged counts', () => {
 // ─── Tenant isolation ─────────────────────────────────────────────────
 
 describe('GET /applications/by-quarter — tenant isolation (cross-tenant safe)', () => {
-  test('every Contact + VisaApplication query narrows to (tenantId, subBrand=visasure)', async () => {
+  test('every Contact + VisaApplication query narrows to (tenantId only)', async () => {
     prisma.contact.findMany.mockResolvedValue([{ id: 71 }]);
     prisma.visaApplication.findMany.mockResolvedValue([
       { id: 1, status: 'intake', complexCase: false, advisorRiskFlag: null,
@@ -508,7 +508,6 @@ describe('GET /applications/by-quarter — tenant isolation (cross-tenant safe)'
     expect(res.status).toBe(200);
     expect(prisma.contact.findMany.mock.calls[0][0].where).toMatchObject({
       tenantId: 1,
-      subBrand: 'visasure',
     });
     expect(prisma.visaApplication.findMany.mock.calls[0][0].where).toMatchObject({
       tenantId: 1,

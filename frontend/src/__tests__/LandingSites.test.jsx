@@ -1,5 +1,5 @@
-﻿import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+﻿import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthContext } from '../App';
@@ -28,6 +28,20 @@ vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 
 import LandingSites from '../pages/LandingSites';
 
+let intersectionCallback = null;
+beforeEach(() => {
+  intersectionCallback = null;
+  global.IntersectionObserver = class IntersectionObserver {
+    constructor(cb) {
+      intersectionCallback = cb;
+    }
+    observe() {}
+    disconnect() {}
+    unobserve() {}
+    takeRecords() { return []; }
+  };
+});
+
 function isoAtLocalMonthOffset(monthOffset, day = 1) {
   const now = new Date();
   return new Date(
@@ -43,7 +57,9 @@ function isoAtLocalMonthOffset(monthOffset, day = 1) {
 
 function defaultFetchMock(url, opts) {
   const method = (opts && opts.method) || 'GET';
-  if (url === '/api/landing-sites' && method === 'GET') return Promise.resolve([]);
+  if (String(url).startsWith('/api/landing-sites') && method === 'GET') {
+    return Promise.resolve({ pages: [], pinnedPage: null, hasMore: false, total: 0 });
+  }
   if (url === '/api/landing-sites/generate' && method === 'POST') {
     return Promise.resolve({ page: { id: 99 }, generation: { stub: false, verdict: 'passed' } });
   }
@@ -79,6 +95,24 @@ const LANDING_SITE_FIXTURE = [
   },
 ];
 
+const LANDING_SITE_PAGE_2 = {
+  id: 12,
+  title: 'Weekend Wellness Reset',
+  slug: 'weekend-wellness-reset',
+  status: 'DRAFT',
+  visits: 4,
+  submissions: 1,
+  templateType: 'generic-site-wellness-v1',
+  description: 'Second page loaded via infinite scroll',
+  createdAt: isoAtLocalMonthOffset(-2, 6),
+  updatedAt: isoAtLocalMonthOffset(-2, 7),
+  publishedAt: null,
+};
+
+function makeLandingSitesResponse(pages, pinnedPage = null, hasMore = false) {
+  return { pages, pinnedPage, hasMore, total: pages.length + (pinnedPage ? 1 : 0) };
+}
+
 function renderPage(vertical = 'generic') {
   return render(
     <AuthContext.Provider value={{ tenant: { vertical }, user: { tenant: { vertical } } }}>
@@ -97,6 +131,10 @@ describe('<LandingSites /> wellness generate modal', () => {
     notifyError.mockReset();
     notifySuccess.mockReset();
     notifyInfo.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('renders a fixed wellness text field instead of the sector dropdown', async () => {
@@ -135,6 +173,33 @@ describe('<LandingSites /> wellness generate modal', () => {
     });
   });
 
+  it('pins event date/time to now and rejects past slots before submit', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 7, 11, 13, 35, 0));
+
+    const user = userEvent.setup();
+    renderPage('wellness');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate Landing Site/i })).toBeInTheDocument());
+    await user.click(screen.getAllByRole('button', { name: /Generate Landing Site/i })[0]);
+
+    const dateInput = screen.getByLabelText(/Event date/i);
+    const timeInput = screen.getByLabelText(/Event time/i);
+    expect(dateInput).toHaveAttribute('min', '2026-08-11');
+
+    await user.type(screen.getByLabelText(/Campaign name/i), 'Rooted Wellness Camp');
+    await user.type(screen.getByLabelText(/Campaign goal/i), 'collect registrations');
+    await user.type(screen.getByLabelText(/Audience/i), 'members');
+
+    fireEvent.change(dateInput, { target: { value: '2026-08-11' } });
+    expect(timeInput).toHaveAttribute('min', '13:35');
+
+    fireEvent.change(timeInput, { target: { value: '13:34' } });
+    await user.click(screen.getByRole('button', { name: /^Generate$/i }));
+
+    await waitFor(() => expect(screen.getAllByText(/event time cannot be earlier than the current time/i).length).toBeGreaterThan(0));
+    expect(fetchApiMock.mock.calls.some(([url, opts]) => url === '/api/landing-sites/generate' && opts?.method === 'POST')).toBe(false);
+  });
   it('realModeError for Gemini quota exhaustion shows the friendly toast', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
@@ -176,7 +241,7 @@ describe('<LandingSites /> wellness generate modal', () => {
   it('filters wellness landing sites by created date and keeps the live page pinned first', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
-      if (url === '/api/landing-sites' && method === 'GET') return Promise.resolve(LANDING_SITE_FIXTURE);
+      if (String(url).startsWith('/api/landing-sites') && method === 'GET') return Promise.resolve(makeLandingSitesResponse([LANDING_SITE_FIXTURE[1]], LANDING_SITE_FIXTURE[0], false));
       if (url === '/api/landing-sites/templates/list' && method === 'GET') return Promise.resolve([]);
       return defaultFetchMock(url, opts);
     });
@@ -195,23 +260,44 @@ describe('<LandingSites /> wellness generate modal', () => {
   it('pins the published landing site first and disables draft publish when another page is already live', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
-      if (url === '/api/landing-sites' && method === 'GET') return Promise.resolve(LANDING_SITE_FIXTURE);
+      if (String(url).startsWith('/api/landing-sites') && method === 'GET') return Promise.resolve(makeLandingSitesResponse([LANDING_SITE_FIXTURE[1]], LANDING_SITE_FIXTURE[0], false));
       if (url === '/api/landing-sites/templates/list' && method === 'GET') return Promise.resolve([]);
       return defaultFetchMock(url, opts);
     });
     renderPage('wellness');
 
     await waitFor(() => expect(screen.getByText('Hair Treatment Launch')).toBeInTheDocument());
-    const headings = screen.getAllByRole('heading', { level: 3 });
-    expect(headings[0]).toHaveTextContent('Hair Treatment Launch');
+    expect(screen.getByRole('heading', { level: 3, name: 'Hair Treatment Launch' })).toBeInTheDocument();
 
     const publishButton = screen.getByRole('button', { name: /^Publish$/i });
     expect(publishButton).toBeDisabled();
     expect(publishButton.title).toMatch(/only one published landing site/i);
   });
+
+  it('loads the next page when the infinite-scroll sentinel enters view', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (String(url).startsWith('/api/landing-sites') && method === 'GET') {
+        const isPageTwo = String(url).includes('page=2');
+        if (isPageTwo) {
+          return Promise.resolve(makeLandingSitesResponse([LANDING_SITE_PAGE_2], LANDING_SITE_FIXTURE[0], false));
+        }
+        return Promise.resolve(makeLandingSitesResponse([LANDING_SITE_FIXTURE[1]], LANDING_SITE_FIXTURE[0], true));
+      }
+      if (url === '/api/landing-sites/templates/list' && method === 'GET') return Promise.resolve([]);
+      return defaultFetchMock(url, opts);
+    });
+
+    renderPage('wellness');
+
+    await waitFor(() => expect(screen.getByText('Hair Treatment Launch')).toBeInTheDocument());
+    expect(screen.queryByText('Weekend Wellness Reset')).not.toBeInTheDocument();
+
+    await act(async () => {
+      intersectionCallback?.([{ isIntersecting: true }]);
+    });
+
+    await waitFor(() => expect(screen.getByText('Weekend Wellness Reset')).toBeInTheDocument());
+  });
 });
-
-
-
-
 

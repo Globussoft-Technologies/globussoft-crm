@@ -145,6 +145,10 @@ describe('Marketing-site → CRM redirect handoff', () => {
         expect(sel.value).toBe("Dr. Haror's Wellness");
       });
 
+      // The customer-registration page is now email-only; the phone tab/input must not render.
+      expect(screen.queryByRole('button', { name: /^Phone$/i })).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText('+91 98765 43210')).not.toBeInTheDocument();
+
       // Fill required fields + verify email before the submit CTA is enabled.
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'jane@example.com' } });
       fireEvent.click(screen.getByTestId('otp-validate'));

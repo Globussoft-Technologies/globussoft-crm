@@ -1,4 +1,4 @@
-// @ts-check
+﻿// @ts-check
 /**
  * Unit tests for backend/routes/portal.js — pins the customer-portal route
  * contract because the portal is the public-facing surface that lets

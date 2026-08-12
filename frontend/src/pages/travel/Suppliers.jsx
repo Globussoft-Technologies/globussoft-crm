@@ -7,7 +7,7 @@
 // for display. Each reveal closes when the modal is dismissed.
 
 import { useEffect, useState, useContext } from "react";
-import { Key, Eye, Plus, Trash2, AlertTriangle, X } from "lucide-react";
+import { Key, Eye, Plus, Trash2, AlertTriangle, X, ExternalLink } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
@@ -39,7 +39,7 @@ export default function Suppliers() {
   const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState("");
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ category: "airline", supplierName: "", loginId: "", password: "" });
+  const [form, setForm] = useState({ category: "airline", supplierName: "", loginId: "", password: "", portalUrl: "" });
   const [revealed, setRevealed] = useState(null); // { id, loginId, password, metadata }
 
   const load = () => {
@@ -59,7 +59,7 @@ export default function Suppliers() {
 
   const add = async () => {
     if (!form.supplierName.trim() || !form.loginId || !form.password) {
-      notify.error("supplierName + loginId + password required");
+      notify.error("supplierName + username/email + password required");
       return;
     }
     try {
@@ -68,7 +68,7 @@ export default function Suppliers() {
         body: JSON.stringify(form),
       });
       notify.success("Credential stored (encrypted)");
-      setForm({ category: "airline", supplierName: "", loginId: "", password: "" });
+      setForm({ category: "airline", supplierName: "", loginId: "", password: "", portalUrl: "" });
       setAdding(false);
       load();
     } catch (e) {
@@ -88,6 +88,11 @@ export default function Suppliers() {
     }
   };
 
+  const openPortal = (portalUrl) => {
+    if (!portalUrl) return;
+    window.open(portalUrl, "_blank", "noopener,noreferrer");
+  };
+
   const remove = async (cred) => {
     if (!confirm(`Delete credential for ${cred.supplierName}?`)) return;
     try {
@@ -100,7 +105,7 @@ export default function Suppliers() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+    <div style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
@@ -142,9 +147,10 @@ export default function Suppliers() {
             <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={input}>
               {CATEGORIES.filter((c) => c.value).map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
-            <input placeholder="Supplier name" value={form.supplierName} onChange={(e) => setForm({ ...form, supplierName: e.target.value })} style={input} />
-            <input placeholder="Login ID" value={form.loginId} onChange={(e) => setForm({ ...form, loginId: e.target.value })} style={input} />
-            <PasswordInput placeholder="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} style={input} className="" autoComplete="off" />
+            <input placeholder="Supplier name" value={form.supplierName} onChange={(e) => setForm({ ...form, supplierName: e.target.value })} style={input} autoComplete="organization" name="supplierName" />
+            <input placeholder="Username / email" value={form.loginId} onChange={(e) => setForm({ ...form, loginId: e.target.value })} style={input} autoComplete="username" name="supplierLogin" />
+            <input placeholder="Portal URL" value={form.portalUrl} onChange={(e) => setForm({ ...form, portalUrl: e.target.value })} style={input} autoComplete="off" name="supplierPortalUrl" inputMode="url" spellCheck={false} autoCorrect="off" autoCapitalize="off" />
+            <PasswordInput placeholder="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} style={input} className="" autoComplete="new-password" name="supplierPassword" />
           </div>
           <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
             <button type="button" onClick={add} style={primaryBtn}>Save</button>
@@ -169,7 +175,7 @@ export default function Suppliers() {
                 <th style={th}>Category</th>
                 <th style={th}>Supplier</th>
                 <th style={th}>Last used</th>
-                <th style={th} colSpan={2}>Actions</th>
+                <th style={th} colSpan={3}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -178,6 +184,20 @@ export default function Suppliers() {
                   <td style={td}>{c.category}</td>
                   <td style={td}><strong>{c.supplierName}</strong></td>
                   <td style={td}>{fmt(c.lastUsedAt)}</td>
+                  <td style={{ ...td, width: 0 }}>
+                    {c.portalUrl && (
+                      <button
+                        type="button"
+                        onClick={() => openPortal(c.portalUrl)}
+                        style={iconBtn}
+                        aria-label={
+                          `Open supplier portal for ${c.supplierName}`
+                        }
+                      >
+                        <ExternalLink size={16} />
+                      </button>
+                    )}
+                  </td>
                   <td style={{ ...td, width: 0 }}>
                     {isAdmin && (
                       <button type="button" onClick={() => reveal(c)} style={iconBtn} aria-label={`Reveal credential for ${c.supplierName}`}>
@@ -224,8 +244,9 @@ export default function Suppliers() {
                 <X size={18} />
               </button>
             </div>
-            <Field label="Login ID" value={revealed.loginId} />
+            <Field label="Username / email" value={revealed.loginId} />
             <Field label="Password" value={revealed.password} />
+            {revealed.portalUrl && <Field label="Portal URL" value={revealed.portalUrl} />}
             {revealed.metadata && <Field label="Metadata" value={revealed.metadata} />}
             <div style={{ marginTop: 16, fontSize: 12, color: "var(--text-secondary)" }}>
               This view has been logged in the credential's access trail.

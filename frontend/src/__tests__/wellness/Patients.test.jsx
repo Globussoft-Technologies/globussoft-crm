@@ -1,4 +1,4 @@
-/**
+﻿/**
  * wellness/Patients.test.jsx — vitest + RTL coverage for the wellness master
  * patient-list page (daily-use surface for clinic staff).
  *
@@ -33,7 +33,6 @@
  * a "+ Add" dropdown, and a portaled PatientCreateModal — assertions
  * below target that surface, not the prior inline-form layout.
  */
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -101,7 +100,22 @@ const isPatientListUrl = (url) =>
 
 function defaultFetchMock(url, opts) {
   if (isPatientListUrl(url) && (!opts || !opts.method || opts.method === 'GET')) {
-    return Promise.resolve({ patients: samplePatients, total: 2 });
+    const parsed = new URL(url, 'http://localhost');
+    const q = (parsed.searchParams.get('q') || '').trim().toLowerCase();
+    const source = (parsed.searchParams.get('source') || '').split(',').filter(Boolean);
+    const gender = (parsed.searchParams.get('gender') || '').split(',').filter(Boolean);
+    const addedFrom = parsed.searchParams.get('addedFrom') || '';
+    const addedTo = parsed.searchParams.get('addedTo') || '';
+    const rows = samplePatients.filter((patient) => {
+      const haystack = `${patient.name} ${patient.phone} ${patient.email}`.toLowerCase();
+      if (q && !haystack.includes(q)) return false;
+      if (source.length && !source.includes(patient.source)) return false;
+      if (gender.length && !gender.includes(patient.gender)) return false;
+      if (addedFrom && new Date(patient.createdAt) < new Date(`${addedFrom}T00:00:00.000Z`)) return false;
+      if (addedTo && new Date(patient.createdAt) > new Date(`${addedTo}T23:59:59.999Z`)) return false;
+      return true;
+    });
+    return Promise.resolve({ patients: rows, total: rows.length });
   }
   if (url === '/api/wellness/locations') return Promise.resolve(sampleLocations);
   if (url === '/api/wellness/patients/tags') return Promise.resolve({ tags: [] });
@@ -149,6 +163,32 @@ describe('<wellness/Patients /> — page surface', () => {
     expect(screen.getByRole('button', { name: /Add/i, expanded: false })).toBeInTheDocument();
   });
 
+
+  it('applying a source filter refetches the list with the filtered rows', async () => {
+    renderPatients();
+    await waitFor(() => expect(screen.getByText('Anita Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Open filters/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Filter customers/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /All sources/i }));
+
+    const listbox = await screen.findByRole('listbox');
+    fireEvent.click(within(listbox).getByLabelText('Walk-in'));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Apply/i }));
+
+    await waitFor(() => {
+      const filteredCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.startsWith('/api/wellness/patients?') && u.includes('source=walk-in')
+      );
+      expect(filteredCall).toBeTruthy();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Anita Sharma')).toBeInTheDocument();
+      expect(screen.queryByText('Rohit Verma')).not.toBeInTheDocument();
+      expect(screen.getAllByText((_t, el) => /1.*patient on record/i.test(el?.textContent || '')).length).toBeGreaterThanOrEqual(1);
+    });
+  });
   it('initial mount fetches /api/wellness/patients with NO ?q= (full list)', async () => {
     renderPatients();
     await waitFor(() => {

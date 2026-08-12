@@ -44,8 +44,11 @@ const express = require("express");
 const router = express.Router();
 const externalAuth = require("../middleware/externalAuth");
 const { verifyToken } = require("../middleware/auth");
+const { uploadImageMultiple, validateImages } = require("../middleware/uploadHandler");
 const prisma = require("../lib/prisma");
 const { pickMarkup } = require("../lib/travelPricing");
+const flightOfferImageExtraction = require("../services/flightOfferImageExtractionLLM");
+const hotelOfferImageExtraction = require("../services/hotelOfferImageExtractionLLM");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -70,6 +73,41 @@ function requireFlightPluginKey(req, res, next) {
   next();
 }
 
+function uploadHotelScreenshotsOrReject(req, res, next) {
+  uploadImageMultiple(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "File too large (max 5MB)", code: "INVALID_FILE" });
+    }
+    if (/allowed|invalid|not an image/i.test(err.message || "")) {
+      return res.status(400).json({ error: err.message, code: "INVALID_FILE" });
+    }
+    console.error("[flight-plugin] hotel upload error:", err.message);
+    return res.status(500).json({ error: "Upload error", code: "UPLOAD_FAILED" });
+  });
+}
+router.post("/extract-prices", verifyToken, requireTravelTenant, uploadHotelScreenshotsOrReject, validateImages, async (req, res) => {
+  try {
+    const files = Array.isArray(req.files) ? req.files : [];
+    const tripType = typeof req.body?.tripType === "string" ? req.body.tripType.trim().toLowerCase() : null;
+    const result = await flightOfferImageExtraction.extractFlightOfferPricing({ files, tripType });
+    return res.status(200).json(result);
+  } catch (e) {
+    console.error("[flight-plugin] flight extract error:", e.message);
+    res.status(500).json({ error: "Failed to extract flight prices" });
+  }
+});
+
+router.post("/extract-hotel-prices", verifyToken, requireTravelTenant, uploadHotelScreenshotsOrReject, validateImages, async (req, res) => {
+  try {
+    const files = Array.isArray(req.files) ? req.files : [];
+    const result = await hotelOfferImageExtraction.extractHotelOfferPricing({ files });
+    return res.status(200).json(result);
+  } catch (e) {
+    console.error("[flight-plugin] hotel extract error:", e.message);
+    res.status(500).json({ error: "Failed to extract hotel prices" });
+  }
+});
 router.post("/quotes", externalAuth, requireFlightPluginKey, async (req, res) => {
   try {
     const b = req.body || {};
@@ -403,3 +441,4 @@ router.post("/agent-quotes", verifyToken, requireTravelTenant, async (req, res) 
 });
 
 module.exports = router;
+

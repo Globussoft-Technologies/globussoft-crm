@@ -166,7 +166,8 @@ describe('llmRouter — module shape', () => {
       "bulk-text": { primary: "gemini-flash", fallback: "groq-llama" },
       "call-summary": { primary: "gemini-flash", fallback: null },
       // Callified AI call transcript classification for CRM leads (2026-07-31).
-      "callified-lead-status": { primary: "gemini-flash-lite", fallback: "gemini-flash" },
+      // NOTE: gemini-2.5-flash-lite was retired by Google; use gemini-flash.
+      "callified-lead-status": { primary: "gemini-flash", fallback: "gpt-4" },
       "itinerary-suggest": { primary: "gemini-flash", fallback: "gpt-4" },
       // AI quote-template line-item JSON generation (PR #1178).
       "quote-template-generate": { primary: "gemini-flash", fallback: "gpt-4" },

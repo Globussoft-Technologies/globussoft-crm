@@ -12,10 +12,12 @@
  *      sub-brand-access via getSubBrandAccessSet on POST).
  *   2. Loading state: shows "Loading…" before first GET resolves (await
  *      findByText per CLAUDE.md tick #108 cron-learning).
- *   3. GET on mount: hits /api/travel/itineraries?limit=100 (no sub-brand
- *      or status query params when filters are blank) and renders one row
- *      per itinerary (table layout with 9 columns: Destination, Sub-brand,
- *      Contact, Dates, Items, Total, Status, Tier, Updated).
+ *   3. GET on mount: hits /api/travel/itineraries?limit=20&offset=0 (no
+ *      sub-brand, status, or search query params when filters are blank)
+ *      and renders one row
+ *      per itinerary inside the fixed-height scroll container (table layout
+ *      with 9 columns: Destination, Sub-brand, Contact, Dates, Items, Total,
+ *      Status, Tier, Updated).
  *   4. Empty state: zero itineraries → renders the "No itineraries yet."
  *      empty-state copy + the "Create Itinerary" hint.
  *   5. Sub-brand filter: changing the <select> to "rfu" re-fetches with
@@ -60,7 +62,7 @@
  *      SUT useEffect lines 180-185).
  *
  * Backend contract pinned (per backend/routes/travel_itineraries.js):
- *   GET    /api/travel/itineraries[?subBrand=&status=&limit=]
+ *   GET    /api/travel/itineraries[?subBrand=&status=&limit=&offset=]
  *          → 200 { itineraries, total, limit, offset }
  *          | 400 INVALID_STATUS / 500
  *   POST   /api/travel/itineraries  body:{subBrand,contactId,destination,
@@ -135,14 +137,20 @@
  * is canonical for theme-aware pills; do not regress to inline-style
  * assertions.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 const fetchApiMock = vi.fn();
-vi.mock('../utils/api', () => ({
+vi.mock("../utils/api", () => ({
   fetchApi: (...args) => fetchApiMock(...args),
-  getAuthToken: () => 'test-token',
+  getAuthToken: () => "test-token",
 }));
 
 // Stable notify object — RTL standing rule (Wave 11 cfb5789 / Wave 12
@@ -158,15 +166,15 @@ const notifyObj = {
   success: notifySuccess,
   confirm: notifyConfirm,
 };
-vi.mock('../utils/notify', () => ({
+vi.mock("../utils/notify", () => ({
   useNotify: () => notifyObj,
   NotifyProvider: ({ children }) => children,
 }));
 
 // Spy on useNavigate so the row-click navigation can be asserted.
 const navigateMock = vi.fn();
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual('react-router-dom');
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual("react-router-dom");
   return {
     ...actual,
     useNavigate: () => navigateMock,
@@ -179,7 +187,7 @@ vi.mock('react-router-dom', async () => {
 // selection lifecycle; the real MapPreview's render path is exercised by
 // the dedicated MapPreview.test.jsx.
 const mapPreviewMock = vi.fn();
-vi.mock('../components/MapPreview', () => ({
+vi.mock("../components/MapPreview", () => ({
   __esModule: true,
   default: (props) => {
     mapPreviewMock(props);
@@ -187,7 +195,7 @@ vi.mock('../components/MapPreview', () => ({
       <div
         data-testid="map-preview-mock"
         data-pin-count={(props.items || []).length}
-        data-height={props.height ?? ''}
+        data-height={props.height ?? ""}
       >
         MapPreview stub — {(props.items || []).length} items
       </div>
@@ -195,11 +203,16 @@ vi.mock('../components/MapPreview', () => ({
   },
 }));
 
-import { AuthContext } from '../App';
-import Itineraries from '../pages/travel/Itineraries';
-import { invalidatePermissionCache } from '../hooks/usePermissions';
+import { AuthContext } from "../App";
+import Itineraries from "../pages/travel/Itineraries";
+import { invalidatePermissionCache } from "../hooks/usePermissions";
 
-const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
+const ADMIN_USER = {
+  userId: 1,
+  name: "Admin",
+  email: "a@x.com",
+  role: "ADMIN",
+};
 
 // Canonical itinerary rows — multiple sub-brands + statuses + tier values
 // to exercise the pill className paths + the empty-tier em-dash fallback.
@@ -207,18 +220,18 @@ function makeItin(overrides = {}) {
   return {
     id: 401,
     tenantId: 1,
-    subBrand: 'tmc',
+    subBrand: "tmc",
     contactId: 5001,
-    status: 'draft',
-    productTier: 'entry',
-    destination: 'Andaman Islands',
-    startDate: '2026-06-01T00:00:00.000Z',
-    endDate: '2026-06-07T00:00:00.000Z',
+    status: "draft",
+    productTier: "entry",
+    destination: "Andaman Islands",
+    startDate: "2026-06-01T00:00:00.000Z",
+    endDate: "2026-06-07T00:00:00.000Z",
     totalAmount: 50000,
-    currency: 'INR',
+    currency: "INR",
     items: [],
-    createdAt: '2026-05-20T10:00:00.000Z',
-    updatedAt: '2026-05-20T10:00:00.000Z',
+    createdAt: "2026-05-20T10:00:00.000Z",
+    updatedAt: "2026-05-20T10:00:00.000Z",
     ...overrides,
   };
 }
@@ -226,102 +239,139 @@ function makeItin(overrides = {}) {
 const ITINS_DEFAULT = [
   makeItin({
     id: 401,
-    subBrand: 'tmc',
-    status: 'draft',
-    productTier: 'entry',
-    destination: 'Andaman Islands',
+    subBrand: "tmc",
+    status: "draft",
+    productTier: "entry",
+    destination: "Andaman Islands",
     totalAmount: 50000,
-    currency: 'INR',
+    currency: "INR",
     contactId: 5001,
     items: [
       // S81 — items include lat/lng/dayNumber per backend list endpoint
       // (include: { items }). MapPreview wire-in renders these on Map-button
       // click. Rows without lat/lng are silently dropped by pinnableItems.
       {
-        id: 9001, itemType: 'flight', description: 'CCU → IXZ',
-        latitude: 11.6234, longitude: 92.7265,
-        locationName: 'Port Blair', dayNumber: 1, sortOrder: 0,
+        id: 9001,
+        itemType: "flight",
+        description: "CCU → IXZ",
+        latitude: 11.6234,
+        longitude: 92.7265,
+        locationName: "Port Blair",
+        dayNumber: 1,
+        sortOrder: 0,
       },
       {
-        id: 9002, itemType: 'hotel', description: 'Port Blair stay',
-        latitude: 11.6700, longitude: 92.7470,
-        locationName: 'Port Blair hotel', dayNumber: 1, sortOrder: 1,
+        id: 9002,
+        itemType: "hotel",
+        description: "Port Blair stay",
+        latitude: 11.67,
+        longitude: 92.747,
+        locationName: "Port Blair hotel",
+        dayNumber: 1,
+        sortOrder: 1,
       },
     ],
   }),
   makeItin({
     id: 402,
-    subBrand: 'rfu',
-    status: 'sent',
-    productTier: 'premium',
-    destination: 'Mecca Umrah Package',
+    subBrand: "rfu",
+    status: "sent",
+    productTier: "premium",
+    destination: "Mecca Umrah Package",
     totalAmount: 750000,
-    currency: 'INR',
+    currency: "INR",
     contactId: 5002,
     items: [
       {
-        id: 9003, itemType: 'flight', description: 'DEL → JED',
-        latitude: 21.4225, longitude: 39.8262,
-        locationName: 'Jeddah', dayNumber: 1, sortOrder: 0,
+        id: 9003,
+        itemType: "flight",
+        description: "DEL → JED",
+        latitude: 21.4225,
+        longitude: 39.8262,
+        locationName: "Jeddah",
+        dayNumber: 1,
+        sortOrder: 0,
       },
       {
-        id: 9004, itemType: 'hotel', description: 'Mecca hotel',
-        latitude: 21.4225, longitude: 39.8262,
-        locationName: 'Mecca hotel', dayNumber: 1, sortOrder: 1,
+        id: 9004,
+        itemType: "hotel",
+        description: "Mecca hotel",
+        latitude: 21.4225,
+        longitude: 39.8262,
+        locationName: "Mecca hotel",
+        dayNumber: 1,
+        sortOrder: 1,
       },
       {
-        id: 9005, itemType: 'visa', description: 'Umrah visa',
+        id: 9005,
+        itemType: "visa",
+        description: "Umrah visa",
         // No lat/lng — pinnableItems drops it, but should NOT break render.
-        latitude: null, longitude: null,
-        locationName: 'Umrah visa', dayNumber: 0, sortOrder: 2,
+        latitude: null,
+        longitude: null,
+        locationName: "Umrah visa",
+        dayNumber: 0,
+        sortOrder: 2,
       },
     ],
   }),
   makeItin({
     id: 403,
-    subBrand: 'visasure',
-    status: 'accepted',
+    subBrand: "visasure",
+    status: "accepted",
     productTier: null, // tests the em-dash fallback
-    destination: 'Schengen visa',
+    destination: "Schengen visa",
     totalAmount: 12000,
-    currency: 'USD',
+    currency: "USD",
     contactId: 5003,
     // No items with coords — exercises the empty-MapPreview branch.
-    items: [{
-      id: 9006, itemType: 'visa', description: 'Schengen tourist',
-      latitude: null, longitude: null,
-      locationName: 'Schengen application', dayNumber: 1, sortOrder: 0,
-    }],
+    items: [
+      {
+        id: 9006,
+        itemType: "visa",
+        description: "Schengen tourist",
+        latitude: null,
+        longitude: null,
+        locationName: "Schengen application",
+        dayNumber: 1,
+        sortOrder: 0,
+      },
+    ],
   }),
 ];
 
 const CONTACTS_DEFAULT = [
-  { id: 5001, name: 'Riya Sharma', email: 'riya@test.example' },
-  { id: 5002, name: 'Arjun Patel', email: 'arjun@test.example' },
+  { id: 5001, name: "Riya Sharma", email: "riya@test.example" },
+  { id: 5002, name: "Arjun Patel", email: "arjun@test.example" },
 ];
 
 // Install a fetchApi mock that routes by URL + method. Tests override only
 // the surface they care about.
 function installFetchMock({
-  list = { itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0 },
+  list = {
+    itineraries: ITINS_DEFAULT,
+    total: ITINS_DEFAULT.length,
+    limit: 20,
+    offset: 0,
+  },
   contacts = CONTACTS_DEFAULT,
   create = null,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
-    const method = opts?.method || 'GET';
-    if (url === '/api/auth/me/permissions' && method === 'GET') {
+    const method = opts?.method || "GET";
+    if (url === "/api/auth/me/permissions" && method === "GET") {
       // ADMIN test user — short-circuit PermissionGate so CTAs render.
       return Promise.resolve({ isOwner: true, permissions: [] });
     }
-    if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
+    if (url.startsWith("/api/travel/itineraries") && method === "GET") {
       if (list instanceof Error) return Promise.reject(list);
       return Promise.resolve(list);
     }
-    if (url.startsWith('/api/contacts') && method === 'GET') {
+    if (url.startsWith("/api/contacts") && method === "GET") {
       if (contacts instanceof Error) return Promise.reject(contacts);
       return Promise.resolve(contacts);
     }
-    if (url === '/api/travel/itineraries' && method === 'POST') {
+    if (url === "/api/travel/itineraries" && method === "POST") {
       if (create instanceof Error) return Promise.reject(create);
       return Promise.resolve(create || makeItin({ id: 999 }));
     }
@@ -329,10 +379,18 @@ function installFetchMock({
   });
 }
 
-function renderPage(user = ADMIN_USER) {
-  const value = { user, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false };
+function renderPage(
+  user = ADMIN_USER,
+  { initialEntries = ["/travel/itineraries"] } = {},
+) {
+  const value = {
+    user,
+    token: "tk",
+    tenant: { id: 1, defaultCurrency: "INR" },
+    loading: false,
+  };
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <AuthContext.Provider value={value}>
         <Itineraries />
       </AuthContext.Provider>
@@ -355,7 +413,10 @@ beforeEach(() => {
   // when an itinerary has no pinnable items. Stub it to an empty response so
   // the effect falls back to the raw items without leaving network I/O hanging
   // in jsdom (which would keep mapItems === [] until timeout).
-  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve([]) })));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve([]) })),
+  );
 });
 
 afterEach(() => {
@@ -363,100 +424,318 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('<Itineraries /> — page chrome + filter bar', () => {
-  it('renders heading + sub-brand + status filters + Refresh + Create Itinerary CTA', async () => {
+describe("<Itineraries /> — page chrome + filter bar", () => {
+  it("renders heading + sub-brand + status filters + Refresh + Create Itinerary CTA", async () => {
     renderPage();
     expect(
-      screen.getByRole('heading', { name: /Itineraries/i }),
+      screen.getByRole("heading", { name: /Itineraries/i }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by status/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Reload list/i })).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /Create a new itinerary/i }),
+      screen.getByRole("button", { name: /Reload list/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Create a new itinerary/i }),
     ).toBeInTheDocument();
     // Wait for the mount-time GET to settle.
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(
-        ([u]) => typeof u === 'string' && u.startsWith('/api/travel/itineraries'),
+        ([u]) =>
+          typeof u === "string" && u.startsWith("/api/travel/itineraries"),
       );
       expect(calls.length).toBeGreaterThan(0);
     });
+    expect(screen.getByRole("table")).toBeInTheDocument();
   });
 });
 
-describe('<Itineraries /> — load + render lifecycle', () => {
+describe("<Itineraries /> — load + render lifecycle", () => {
   it('shows "Loading…" before first GET resolves', async () => {
     let resolveList;
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
-        return new Promise((res) => { resolveList = res; });
+      const method = opts?.method || "GET";
+      if (url.startsWith("/api/travel/itineraries") && method === "GET") {
+        return new Promise((res) => {
+          resolveList = res;
+        });
       }
       return Promise.resolve(null);
     });
     renderPage();
-    // Loading text renders before list resolves (SUT line 232: "Loading&hellip;").
-    expect(await screen.findByText('Loading…')).toBeInTheDocument();
-    resolveList({ itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0 });
-    await screen.findByText('Andaman Islands');
-    expect(screen.queryByText('Loading…')).toBeNull();
+    expect(await screen.findByText("Loading…")).toBeInTheDocument();
+    resolveList({
+      itineraries: ITINS_DEFAULT,
+      total: ITINS_DEFAULT.length,
+      limit: 20,
+      offset: 0,
+    });
+    await screen.findByText("Andaman Islands");
+    expect(screen.queryByText("Loading…")).toBeNull();
   });
 
-  it('GETs /api/travel/itineraries?limit=100 on mount with NO sub-brand/status query string', async () => {
+  it("renders the pager footer with the total itinerary count", async () => {
+    renderPage();
+    await screen.findByText("Andaman Islands");
+    expect(screen.getByText(/Showing/i)).toHaveTextContent(
+      /of 3 itineraries/i,
+    );
+  });
+  it("GETs /api/travel/itineraries?limit=20&offset=0 on mount with NO sub-brand/status query string", async () => {
     renderPage();
     await waitFor(() => {
-      const listCall = fetchApiMock.mock.calls.find(([u, o]) =>
-        typeof u === 'string'
-        && u.startsWith('/api/travel/itineraries')
-        && (!o?.method || o.method === 'GET'),
+      const listCall = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === "string" &&
+          u.startsWith("/api/travel/itineraries") &&
+          (!o?.method || o.method === "GET"),
       );
       expect(listCall).toBeTruthy();
-      // limit=100 is always set by the SUT (line 167).
-      expect(listCall[0]).toContain('limit=100');
-      // No subBrand= / status= when both filters are blank.
-      expect(listCall[0]).not.toContain('subBrand=');
-      expect(listCall[0]).not.toContain('status=');
+      expect(listCall[0]).toContain("limit=20");
+      expect(listCall[0]).toContain("offset=0");
+      expect(listCall[0]).not.toContain("subBrand=");
+      expect(listCall[0]).not.toContain("status=");
+      expect(listCall[0]).not.toContain("search=");
     });
-    // Renders one row per itinerary (by destination).
-    expect(await screen.findByText('Andaman Islands')).toBeInTheDocument();
-    expect(screen.getByText('Mecca Umrah Package')).toBeInTheDocument();
-    expect(screen.getByText('Schengen visa')).toBeInTheDocument();
+    expect(await screen.findByText("Andaman Islands")).toBeInTheDocument();
+    expect(screen.getByText("Mecca Umrah Package")).toBeInTheDocument();
+    expect(screen.getByText("Schengen visa")).toBeInTheDocument();
   });
 
-  it('renders empty-state copy when itineraries=[] (SUT line 234-237)', async () => {
-    installFetchMock({ list: { itineraries: [], total: 0, limit: 100, offset: 0 } });
+  it("shows synced top and bottom horizontal scrollbars", async () => {
+    const scrollWidthSpy = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function () {
+        return this?.classList?.contains("top-scroll-sync__bottom") ? 2200 : 0;
+      });
+    const clientWidthSpy = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockImplementation(function () {
+        return this?.classList?.contains("top-scroll-sync__bottom") ? 900 : 0;
+      });
     renderPage();
-    expect(
-      await screen.findByText(/No itineraries yet\./i),
-    ).toBeInTheDocument();
+    await screen.findByText("Andaman Islands");
+    const scrollArea = screen.getByTestId("itineraries-scroll-area");
+    const topBar = scrollArea.querySelector(".top-scroll-sync__top");
+    const bottomBar = scrollArea.querySelector(".top-scroll-sync__bottom");
+    expect(topBar).toBeTruthy();
+    expect(bottomBar).toBeTruthy();
+    scrollWidthSpy.mockRestore();
+    clientWidthSpy.mockRestore();
   });
 
-  it('surfaces notify.error when GET rejects', async () => {
-    const err = new Error('boom');
-    err.body = { error: 'Failed to load itineraries' };
+  it("scrolling the list pane does not request another page", async () => {
+    const firstPage = Array.from({ length: 10 }, (_, i) =>
+      makeItin({
+        id: 501 + i,
+        destination: `Page 1 Trip ${i + 1}`,
+        subBrand: i % 2 === 0 ? "tmc" : "rfu",
+        status: i % 2 === 0 ? "draft" : "sent",
+        productTier: i % 3 === 0 ? "entry" : "primary",
+        totalAmount: 10000 + i * 1000,
+        currency: "INR",
+        contactId: 5001,
+        items: [],
+        updatedAt: `2026-05-${String(10 + i).padStart(2, "0")}T10:00:00.000Z`,
+      }),
+    );
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || "GET";
+      if (url.startsWith("/api/travel/itineraries") && method === "GET") {
+        return Promise.resolve({
+          itineraries: firstPage,
+          total: 10,
+          limit: 20,
+          offset: 0,
+        });
+      }
+      if (url.startsWith("/api/contacts") && method === "GET") {
+        return Promise.resolve(CONTACTS_DEFAULT);
+      }
+      if (url === "/api/auth/me/permissions" && method === "GET") {
+        return Promise.resolve({ isOwner: true, permissions: [] });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await screen.findByText("Page 1 Trip 1");
+    fireEvent.scroll(screen.getByRole("table").parentElement);
+
+    await waitFor(() => {
+      const itineraryCalls = fetchApiMock.mock.calls.filter(
+        ([u, o]) =>
+          typeof u === "string" &&
+          u.startsWith("/api/travel/itineraries") &&
+          (!o?.method || o.method === "GET"),
+      );
+      expect(itineraryCalls).toHaveLength(1);
+    });
+
+    expect(screen.queryByText("Page 2 Trip 1")).toBeNull();
+  });
+
+  it("clicking Next fetches the next page with the correct offset", async () => {
+    const page1 = Array.from({ length: 20 }, (_, i) =>
+      makeItin({
+        id: 601 + i,
+        destination: `Paged Trip ${i + 1}`,
+        contactId: 5001,
+        items: [],
+        updatedAt: `2026-05-${String(10 + (i % 20)).padStart(2, "0")}T10:00:00.000Z`,
+      }),
+    );
+    const page2 = Array.from({ length: 5 }, (_, i) =>
+      makeItin({
+        id: 701 + i,
+        destination: `Paged Trip ${21 + i}`,
+        contactId: 5002,
+        items: [],
+        updatedAt: `2026-06-${String(1 + i).padStart(2, "0")}T10:00:00.000Z`,
+      }),
+    );
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || "GET";
+      if (url.startsWith("/api/travel/itineraries") && method === "GET") {
+        if (url.includes("offset=20")) {
+          return Promise.resolve({
+            itineraries: page2,
+            total: 25,
+            limit: 20,
+            offset: 20,
+          });
+        }
+        return Promise.resolve({
+          itineraries: page1,
+          total: 25,
+          limit: 20,
+          offset: 0,
+        });
+      }
+      if (url.startsWith("/api/contacts") && method === "GET") {
+        return Promise.resolve(CONTACTS_DEFAULT);
+      }
+      if (url === "/api/auth/me/permissions" && method === "GET") {
+        return Promise.resolve({ isOwner: true, permissions: [] });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await screen.findByText("Paged Trip 1");
+    fireEvent.click(screen.getByRole("button", { name: /next page/i }));
+    await screen.findByText("Paged Trip 21");
+    await waitFor(() => {
+      expect(
+        fetchApiMock.mock.calls.some(
+          ([u]) =>
+            typeof u === "string" &&
+            u.startsWith("/api/travel/itineraries") &&
+            u.includes("offset=20"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("searches destination or contact name across the backend result set", async () => {
+    const hiddenMatch = makeItin({
+      id: 888,
+      destination: "Hidden Mecca Escape",
+      subBrand: "rfu",
+      status: "sent",
+      productTier: "premium",
+      contactId: 5002,
+      totalAmount: 88000,
+      currency: "INR",
+      items: [],
+    });
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || "GET";
+      if (url.startsWith("/api/travel/itineraries") && method === "GET") {
+        if (url.includes("search=mecca")) {
+          return Promise.resolve({
+            itineraries: [hiddenMatch],
+            total: 1,
+            limit: 20,
+            offset: 0,
+          });
+        }
+        return Promise.resolve({
+          itineraries: ITINS_DEFAULT,
+          total: 25,
+          limit: 20,
+          offset: 0,
+        });
+      }
+      if (url.startsWith("/api/contacts") && method === "GET") {
+        return Promise.resolve(CONTACTS_DEFAULT);
+      }
+      if (url === "/api/auth/me/permissions" && method === "GET") {
+        return Promise.resolve({ isOwner: true, permissions: [] });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await screen.findByText("Andaman Islands");
+    fireEvent.change(screen.getByLabelText(/Search itineraries/i), {
+      target: { value: "mecca" },
+    });
+    await screen.findByText("Hidden Mecca Escape");
+    expect(
+      fetchApiMock.mock.calls.some(
+        ([u, o]) =>
+          typeof u === "string" &&
+          u.startsWith("/api/travel/itineraries") &&
+          u.includes("search=mecca") &&
+          (!o?.method || o.method === "GET"),
+      ),
+    ).toBe(true);
+  });
+
+  it("renders empty-state copy when itineraries=[] (SUT line 234-237)", async () => {
+    installFetchMock({
+      list: { itineraries: [], total: 0, limit: 20, offset: 0 },
+    });
+    renderPage();
+    expect(await screen.findByText(/No itineraries yet./i)).toBeInTheDocument();
+  });
+
+  it("surfaces notify.error when GET rejects", async () => {
+    const err = new Error("boom");
+    err.body = { error: "Failed to load itineraries" };
     installFetchMock({ list: err });
     renderPage();
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('Failed to load itineraries');
+      expect(notifyError).toHaveBeenCalledWith("Failed to load itineraries");
     });
   });
 });
-
-describe('<Itineraries /> — filter behaviour', () => {
+describe("<Itineraries /> — filter behaviour", () => {
   it('selecting sub-brand "rfu" re-fetches with ?subBrand=rfu in the URL', async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fetchApiMock.mockClear();
-    installFetchMock({ list: { itineraries: [ITINS_DEFAULT[1]], total: 1, limit: 100, offset: 0 } });
+    installFetchMock({
+      list: {
+        itineraries: [ITINS_DEFAULT[1]],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      },
+    });
     fireEvent.change(screen.getByLabelText(/Filter by sub-brand/i), {
-      target: { value: 'rfu' },
+      target: { value: "rfu" },
     });
     await waitFor(() => {
-      const call = fetchApiMock.mock.calls.find(([u, o]) =>
-        typeof u === 'string'
-        && u.includes('subBrand=rfu')
-        && (!o?.method || o.method === 'GET'),
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === "string" &&
+          u.includes("subBrand=rfu") &&
+          (!o?.method || o.method === "GET"),
       );
       expect(call).toBeTruthy();
     });
@@ -464,110 +743,142 @@ describe('<Itineraries /> — filter behaviour', () => {
 
   it('selecting status "sent" re-fetches with ?status=sent (lowercase backend enum)', async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fetchApiMock.mockClear();
-    installFetchMock({ list: { itineraries: [ITINS_DEFAULT[1]], total: 1, limit: 100, offset: 0 } });
+    installFetchMock({
+      list: {
+        itineraries: [ITINS_DEFAULT[1]],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      },
+    });
     fireEvent.change(screen.getByLabelText(/Filter by status/i), {
-      target: { value: 'sent' },
+      target: { value: "sent" },
     });
     await waitFor(() => {
-      const call = fetchApiMock.mock.calls.find(([u, o]) =>
-        typeof u === 'string'
-        && u.includes('status=sent')
-        && (!o?.method || o.method === 'GET'),
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === "string" &&
+          u.includes("status=sent") &&
+          (!o?.method || o.method === "GET"),
       );
       expect(call).toBeTruthy();
     });
   });
 });
 
-describe('<Itineraries /> — row rendering: status + tier pills (className-asserted per 8169ce8)', () => {
-  it('status pill renders via className (travel-itin-status-pill--<variant>), NOT inline color', async () => {
+describe("<Itineraries /> — row rendering: status + tier pills (className-asserted per 8169ce8)", () => {
+  it("status pill renders via className (travel-itin-status-pill--<variant>), NOT inline color", async () => {
     renderPage();
-    const draftRow = (await screen.findByText('Andaman Islands')).closest('tr');
-    const draftPill = within(draftRow).getByText('draft');
+    const draftRow = (await screen.findByText("Andaman Islands")).closest("tr");
+    const draftPill = within(draftRow).getByText("draft");
     // className-asserted per commit 8169ce8 refactor (#879).
-    expect(draftPill.className).toContain('travel-itin-status-pill');
-    expect(draftPill.className).toContain('travel-itin-status-pill--draft');
+    expect(draftPill.className).toContain("travel-itin-status-pill");
+    expect(draftPill.className).toContain("travel-itin-status-pill--draft");
     // No inline hex/rgba color — refactor explicitly moved colors to CSS.
-    expect(draftPill.getAttribute('style') || '').not.toMatch(/#[0-9a-f]{3,6}/i);
-    expect(draftPill.getAttribute('style') || '').not.toMatch(/rgba?\(/);
+    expect(draftPill.getAttribute("style") || "").not.toMatch(
+      /#[0-9a-f]{3,6}/i,
+    );
+    expect(draftPill.getAttribute("style") || "").not.toMatch(/rgba?\(/);
 
-    const sentRow = screen.getByText('Mecca Umrah Package').closest('tr');
-    const sentPill = within(sentRow).getByText('sent');
-    expect(sentPill.className).toContain('travel-itin-status-pill--sent');
+    const sentRow = screen.getByText("Mecca Umrah Package").closest("tr");
+    const sentPill = within(sentRow).getByText("sent");
+    expect(sentPill.className).toContain("travel-itin-status-pill--sent");
 
-    const acceptedRow = screen.getByText('Schengen visa').closest('tr');
-    const acceptedPill = within(acceptedRow).getByText('accepted');
-    expect(acceptedPill.className).toContain('travel-itin-status-pill--accepted');
+    const acceptedRow = screen.getByText("Schengen visa").closest("tr");
+    const acceptedPill = within(acceptedRow).getByText("accepted");
+    expect(acceptedPill.className).toContain(
+      "travel-itin-status-pill--accepted",
+    );
   });
 
-  it('tier pill renders via className (travel-itin-tier-pill--<variant>) for non-null tier, em-dash for null', async () => {
+  it("tier pill renders via className (travel-itin-tier-pill--<variant>) for non-null tier, em-dash for null", async () => {
     renderPage();
-    const entryRow = (await screen.findByText('Andaman Islands')).closest('tr');
-    const entryPill = within(entryRow).getByText('entry');
-    expect(entryPill.className).toContain('travel-itin-tier-pill');
-    expect(entryPill.className).toContain('travel-itin-tier-pill--entry');
+    const entryRow = (await screen.findByText("Andaman Islands")).closest("tr");
+    const entryPill = within(entryRow).getByText("entry");
+    expect(entryPill.className).toContain("travel-itin-tier-pill");
+    expect(entryPill.className).toContain("travel-itin-tier-pill--entry");
 
-    const premiumRow = screen.getByText('Mecca Umrah Package').closest('tr');
-    const premiumPill = within(premiumRow).getByText('premium');
-    expect(premiumPill.className).toContain('travel-itin-tier-pill--premium');
+    const premiumRow = screen.getByText("Mecca Umrah Package").closest("tr");
+    const premiumPill = within(premiumRow).getByText("premium");
+    expect(premiumPill.className).toContain("travel-itin-tier-pill--premium");
 
     // visasure row has productTier=null → em-dash fallback in the Tier cell.
-    const nullTierRow = screen.getByText('Schengen visa').closest('tr');
+    const nullTierRow = screen.getByText("Schengen visa").closest("tr");
     // Multiple em-dashes can appear across cells (Items / Tier); assert ≥1.
-    expect(within(nullTierRow).getAllByText('—').length).toBeGreaterThanOrEqual(1);
+    expect(within(nullTierRow).getAllByText("—").length).toBeGreaterThanOrEqual(
+      1,
+    );
   });
 
-  it('sub-brand identifier renders in the brand badge cell per row', async () => {
+  it("sub-brand identifier renders in the brand badge cell per row", async () => {
     renderPage();
-    const tmcRow = (await screen.findByText('Andaman Islands')).closest('tr');
-    expect(within(tmcRow).getByText('tmc')).toBeInTheDocument();
-    const rfuRow = screen.getByText('Mecca Umrah Package').closest('tr');
-    expect(within(rfuRow).getByText('rfu')).toBeInTheDocument();
-    const visaRow = screen.getByText('Schengen visa').closest('tr');
-    expect(within(visaRow).getByText('visasure')).toBeInTheDocument();
+    const tmcRow = (await screen.findByText("Andaman Islands")).closest("tr");
+    expect(within(tmcRow).getByText("tmc")).toBeInTheDocument();
+    const rfuRow = screen.getByText("Mecca Umrah Package").closest("tr");
+    expect(within(rfuRow).getByText("rfu")).toBeInTheDocument();
+    const visaRow = screen.getByText("Schengen visa").closest("tr");
+    expect(within(visaRow).getByText("visasure")).toBeInTheDocument();
   });
 });
 
-describe('<Itineraries /> — money formatting (SUT-local fmtMoney with INR-compact-≥100k)', () => {
+describe("<Itineraries /> — money formatting (SUT-local fmtMoney with INR-compact-≥100k)", () => {
   it('INR 50,000 renders as raw "₹50,000" (below the 100k compact threshold)', async () => {
     renderPage();
-    const row = (await screen.findByText('Andaman Islands')).closest('tr');
+    const row = (await screen.findByText("Andaman Islands")).closest("tr");
     expect(within(row).getByText(/₹50,000/)).toBeInTheDocument();
   });
 
   it('INR 750,000 compacts to "₹7.50L" (≥100k compact branch — SUT line 90-93)', async () => {
     renderPage();
-    const row = (await screen.findByText('Mecca Umrah Package')).closest('tr');
+    const row = (await screen.findByText("Mecca Umrah Package")).closest("tr");
     expect(within(row).getByText(/₹7\.50L/)).toBeInTheDocument();
   });
 
   it('USD 12,000 renders as "USD 12,000" (non-INR branch, no compact)', async () => {
     renderPage();
-    const row = (await screen.findByText('Schengen visa')).closest('tr');
+    const row = (await screen.findByText("Schengen visa")).closest("tr");
     expect(within(row).getByText(/USD 12,000/)).toBeInTheDocument();
   });
 });
 
-describe('<Itineraries /> — navigation (row click → /travel/itineraries/:id)', () => {
-  it('clicking a row navigates to /travel/itineraries/:id via useNavigate', async () => {
+describe("<Itineraries /> � navigation (row click ? /travel/itineraries/:id)", () => {
+  it("clicking a row navigates to /travel/itineraries/:id via useNavigate", async () => {
     renderPage();
-    const row = (await screen.findByText('Andaman Islands')).closest('tr');
+    const row = (await screen.findByText("Andaman Islands")).closest("tr");
     fireEvent.click(row);
-    expect(navigateMock).toHaveBeenCalledWith('/travel/itineraries/401');
+    expect(navigateMock).toHaveBeenCalledWith("/travel/itineraries/401");
+  });
+
+  it("preserves report back-to state when opened from reports", async () => {
+    renderPage(ADMIN_USER, {
+      initialEntries: [
+        "/travel/itineraries?source=reports&subBrand=rfu&status=sent",
+      ],
+    });
+    const row = (await screen.findByText("Mecca Umrah Package")).closest("tr");
+    fireEvent.click(row);
+    expect(navigateMock).toHaveBeenCalledWith("/travel/itineraries/402", {
+      state: {
+        backTo: "/travel/itineraries?source=reports&subBrand=rfu&status=sent",
+        backLabel: "Back to report results",
+      },
+    });
   });
 });
 
-describe('<Itineraries /> — create drawer + submit', () => {
+describe("<Itineraries /> — create drawer + submit", () => {
   it('clicking "Create Itinerary" opens the drawer with the create form + fetches /api/contacts', async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fetchApiMock.mockClear();
     installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /Create a new itinerary/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Create a new itinerary/i }),
+    );
     expect(
-      await screen.findByRole('heading', { name: /New Itinerary/i }),
+      await screen.findByRole("heading", { name: /New Itinerary/i }),
     ).toBeInTheDocument();
     // Diagnostic-first hint copy renders (PRD §4.1 guard disabled; SUT
     // shows a recommendation rather than a hard gate).
@@ -576,11 +887,12 @@ describe('<Itineraries /> — create drawer + submit', () => {
     ).toBeInTheDocument();
     // /api/contacts?limit=200 fired to populate the picker.
     await waitFor(() => {
-      const contactsCall = fetchApiMock.mock.calls.find(([u, o]) =>
-        typeof u === 'string'
-        && u.startsWith('/api/contacts')
-        && u.includes('limit=200')
-        && (!o?.method || o.method === 'GET'),
+      const contactsCall = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === "string" &&
+          u.startsWith("/api/contacts") &&
+          u.includes("limit=200") &&
+          (!o?.method || o.method === "GET"),
       );
       expect(contactsCall).toBeTruthy();
     });
@@ -588,11 +900,13 @@ describe('<Itineraries /> — create drawer + submit', () => {
 
   it('validation: empty contactId → notify.error("Contact is required") + no POST', async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
-    fireEvent.click(screen.getByRole('button', { name: /Create a new itinerary/i }));
-    await screen.findByRole('heading', { name: /New Itinerary/i });
+    await screen.findByText("Andaman Islands");
+    fireEvent.click(
+      screen.getByRole("button", { name: /Create a new itinerary/i }),
+    );
+    await screen.findByRole("heading", { name: /New Itinerary/i });
     // Bypass HTML5 required by submitting via the form element.
-    const form = screen.getByText(/New Itinerary/i).closest('form');
+    const form = screen.getByText(/New Itinerary/i).closest("form");
     fetchApiMock.mockClear();
     installFetchMock();
     fireEvent.submit(form);
@@ -602,48 +916,52 @@ describe('<Itineraries /> — create drawer + submit', () => {
       );
     });
     const posts = fetchApiMock.mock.calls.filter(
-      ([u, o]) => u === '/api/travel/itineraries' && o?.method === 'POST',
+      ([u, o]) => u === "/api/travel/itineraries" && o?.method === "POST",
     );
     expect(posts.length).toBe(0);
   });
 
-  it('submit happy path: POSTs /api/travel/itineraries with parsed body + closes drawer + notify.success', async () => {
+  it("submit happy path: POSTs /api/travel/itineraries with parsed body + closes drawer + notify.success", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
-    fireEvent.click(screen.getByRole('button', { name: /Create a new itinerary/i }));
-    await screen.findByRole('heading', { name: /New Itinerary/i });
+    await screen.findByText("Andaman Islands");
+    fireEvent.click(
+      screen.getByRole("button", { name: /Create a new itinerary/i }),
+    );
+    await screen.findByRole("heading", { name: /New Itinerary/i });
     // Wait for the contact picker to populate so we can select one.
     await waitFor(() => {
-      expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("option", { name: /Riya Sharma/i }),
+      ).toBeInTheDocument();
     });
     // Select contact (the picker is the first <select> in the drawer — by
     // text label "Contact" inside the form). Use a more targeted lookup.
-    const contactOption = screen.getByRole('option', { name: /Riya Sharma/i });
-    const contactSelect = contactOption.closest('select');
-    fireEvent.change(contactSelect, { target: { value: '5001' } });
+    const contactOption = screen.getByRole("option", { name: /Riya Sharma/i });
+    const contactSelect = contactOption.closest("select");
+    fireEvent.change(contactSelect, { target: { value: "5001" } });
     // Fill destination.
     const destInput = screen.getByPlaceholderText(/Andaman Islands/i);
-    fireEvent.change(destInput, { target: { value: '  Bali  ' } });
+    fireEvent.change(destInput, { target: { value: "  Bali  " } });
     // Submit.
     fetchApiMock.mockClear();
     installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /^Create Itinerary$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Create Itinerary$/ }));
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/itineraries' && o?.method === 'POST',
+        ([u, o]) => u === "/api/travel/itineraries" && o?.method === "POST",
       );
       expect(post).toBeTruthy();
       const body = JSON.parse(post[1].body);
       expect(body.contactId).toBe(5001);
-      expect(typeof body.contactId).toBe('number');
+      expect(typeof body.contactId).toBe("number");
       // Destination is trimmed.
-      expect(body.destination).toBe('Bali');
+      expect(body.destination).toBe("Bali");
       // Default sub-brand from EMPTY_FORM is "tmc".
-      expect(body.subBrand).toBe('tmc');
+      expect(body.subBrand).toBe("tmc");
       // Status defaults to "draft" per submitCreate body construction.
-      expect(body.status).toBe('draft');
+      expect(body.status).toBe("draft");
       // Currency defaults to INR.
-      expect(body.currency).toBe('INR');
+      expect(body.currency).toBe("INR");
     });
     expect(notifySuccess).toHaveBeenCalledWith(
       expect.stringMatching(/Itinerary created/i),
@@ -651,60 +969,71 @@ describe('<Itineraries /> — create drawer + submit', () => {
     // Drawer closed.
     await waitFor(() => {
       expect(
-        screen.queryByRole('heading', { name: /New Itinerary/i }),
+        screen.queryByRole("heading", { name: /New Itinerary/i }),
       ).toBeNull();
     });
   });
 
-  it('backend 403 SUB_BRAND_DENIED on POST → notify.error fires with the server message', async () => {
+  it("backend 403 SUB_BRAND_DENIED on POST → notify.error fires with the server message", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
-    fireEvent.click(screen.getByRole('button', { name: /Create a new itinerary/i }));
-    await screen.findByRole('heading', { name: /New Itinerary/i });
+    await screen.findByText("Andaman Islands");
+    fireEvent.click(
+      screen.getByRole("button", { name: /Create a new itinerary/i }),
+    );
+    await screen.findByRole("heading", { name: /New Itinerary/i });
     await waitFor(() => {
-      expect(screen.getByRole('option', { name: /Riya Sharma/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole("option", { name: /Riya Sharma/i }),
+      ).toBeInTheDocument();
     });
-    const contactOption = screen.getByRole('option', { name: /Riya Sharma/i });
-    const contactSelect = contactOption.closest('select');
-    fireEvent.change(contactSelect, { target: { value: '5001' } });
+    const contactOption = screen.getByRole("option", { name: /Riya Sharma/i });
+    const contactSelect = contactOption.closest("select");
+    fireEvent.change(contactSelect, { target: { value: "5001" } });
     fireEvent.change(screen.getByPlaceholderText(/Andaman Islands/i), {
-      target: { value: 'Goa' },
+      target: { value: "Goa" },
     });
 
     // Re-arm so POST rejects with SUB_BRAND_DENIED.
-    const err = new Error('Sub-brand access denied');
-    err.body = { error: 'Sub-brand access denied', code: 'SUB_BRAND_DENIED' };
+    const err = new Error("Sub-brand access denied");
+    err.body = { error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" };
     fetchApiMock.mockClear();
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
-        return Promise.resolve({ itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0 });
+      const method = opts?.method || "GET";
+      if (url.startsWith("/api/travel/itineraries") && method === "GET") {
+        return Promise.resolve({
+          itineraries: ITINS_DEFAULT,
+          total: ITINS_DEFAULT.length,
+          limit: 100,
+          offset: 0,
+        });
       }
-      if (url.startsWith('/api/contacts')) {
+      if (url.startsWith("/api/contacts")) {
         return Promise.resolve(CONTACTS_DEFAULT);
       }
-      if (url === '/api/travel/itineraries' && method === 'POST') {
+      if (url === "/api/travel/itineraries" && method === "POST") {
         return Promise.reject(err);
       }
       return Promise.resolve(null);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^Create Itinerary$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Create Itinerary$/ }));
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('Sub-brand access denied');
+      expect(notifyError).toHaveBeenCalledWith("Sub-brand access denied");
     });
   });
 
-  it('Escape key closes the drawer (window keydown listener wired in SUT useEffect)', async () => {
+  it("Escape key closes the drawer (window keydown listener wired in SUT useEffect)", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
-    fireEvent.click(screen.getByRole('button', { name: /Create a new itinerary/i }));
-    await screen.findByRole('heading', { name: /New Itinerary/i });
+    await screen.findByText("Andaman Islands");
+    fireEvent.click(
+      screen.getByRole("button", { name: /Create a new itinerary/i }),
+    );
+    await screen.findByRole("heading", { name: /New Itinerary/i });
     // Fire Escape on window.
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => {
       expect(
-        screen.queryByRole('heading', { name: /New Itinerary/i }),
+        screen.queryByRole("heading", { name: /New Itinerary/i }),
       ).toBeNull();
     });
   });
@@ -729,31 +1058,55 @@ describe('<Itineraries /> — create drawer + submit', () => {
 
 const STUB_SUGGESTION = {
   suggestion: {
-    summary: '2-day Goa (mid) outline',
+    summary: "2-day Goa (mid) outline",
     days: [
       {
         dayNumber: 1,
         items: [
-          { itemType: 'flight', description: 'Arrival in Goa', estimatedCost: 6000 },
-          { itemType: 'hotel', description: 'Night 1 — stay in Goa', estimatedCost: 5000 },
-          { itemType: 'activity', description: 'Day 1 — sightseeing in Goa', estimatedCost: 1500 },
+          {
+            itemType: "flight",
+            description: "Arrival in Goa",
+            estimatedCost: 6000,
+          },
+          {
+            itemType: "hotel",
+            description: "Night 1 — stay in Goa",
+            estimatedCost: 5000,
+          },
+          {
+            itemType: "activity",
+            description: "Day 1 — sightseeing in Goa",
+            estimatedCost: 1500,
+          },
         ],
       },
       {
         dayNumber: 2,
         items: [
-          { itemType: 'hotel', description: 'Night 2 — stay in Goa', estimatedCost: 5000 },
-          { itemType: 'activity', description: 'Day 2 — sightseeing in Goa', estimatedCost: 1500 },
-          { itemType: 'flight', description: 'Departure from Goa', estimatedCost: 6000 },
+          {
+            itemType: "hotel",
+            description: "Night 2 — stay in Goa",
+            estimatedCost: 5000,
+          },
+          {
+            itemType: "activity",
+            description: "Day 2 — sightseeing in Goa",
+            estimatedCost: 1500,
+          },
+          {
+            itemType: "flight",
+            description: "Departure from Goa",
+            estimatedCost: 6000,
+          },
         ],
       },
     ],
   },
-  theme: { interests: ['beaches'], pace: 'relaxed' },
+  theme: { interests: ["beaches"], pace: "relaxed" },
   subBrand: null,
-  model: 'gemini-2.5-flash',
+  model: "gemini-2.5-flash",
   stub: true,
-  costSource: 'llm',
+  costSource: "llm",
 };
 
 // Install the suggest endpoint into the existing routing fetch mock.
@@ -761,296 +1114,328 @@ const STUB_SUGGESTION = {
 // fetchApiMock.mockImplementation directly.
 function installSuggestMock({ suggestResult = STUB_SUGGESTION } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
-    const method = opts?.method || 'GET';
-    if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
+    const method = opts?.method || "GET";
+    if (url === "/api/travel/itineraries/suggest" && method === "POST") {
       if (suggestResult instanceof Error) return Promise.reject(suggestResult);
       return Promise.resolve(suggestResult);
     }
-    if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
+    if (url.startsWith("/api/travel/itineraries") && method === "GET") {
       return Promise.resolve({
         itineraries: ITINS_DEFAULT,
-        total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+        total: ITINS_DEFAULT.length,
+        limit: 100,
+        offset: 0,
       });
     }
-    if (url.startsWith('/api/contacts')) {
+    if (url.startsWith("/api/contacts")) {
       return Promise.resolve(CONTACTS_DEFAULT);
     }
     return Promise.resolve(null);
   });
 }
 
-describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
+describe("<Itineraries /> — S63 Suggest itinerary CTA + modal", () => {
   it('renders the "Suggest itinerary" button in the header', async () => {
     renderPage();
     expect(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     ).toBeInTheDocument();
     // Distinct from the "Create Itinerary" CTA — both should coexist.
     expect(
-      screen.getByRole('button', { name: /Create a new itinerary/i }),
+      screen.getByRole("button", { name: /Create a new itinerary/i }),
     ).toBeInTheDocument();
   });
 
-  it('clicking the button opens the modal with all form fields + role=dialog', async () => {
+  it("clicking the button opens the modal with all form fields + role=dialog", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
     // Modal heading present + role=dialog wired.
     expect(
-      await screen.findByRole('heading', { name: /Suggest itinerary/i }),
+      await screen.findByRole("heading", { name: /Suggest itinerary/i }),
     ).toBeInTheDocument();
-    expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByRole("dialog")).toHaveAttribute("aria-modal", "true");
     // Form fields present.
-    expect(within(screen.getByRole('dialog')).getByLabelText('Destination')).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText(/Duration \(days\)/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Budget tier/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Interests/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Pace/i)).toBeInTheDocument();
   });
 
-  it('Escape key closes the suggest modal', async () => {
+  it("Escape key closes the suggest modal", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.keyDown(window, { key: 'Escape' });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => {
       expect(
-        screen.queryByRole('heading', { name: /Suggest itinerary/i }),
+        screen.queryByRole("heading", { name: /Suggest itinerary/i }),
       ).toBeNull();
     });
   });
 
-  it('clicking the backdrop closes the suggest modal', async () => {
+  it("clicking the backdrop closes the suggest modal", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
     // The backdrop element has the class travel-itin-suggest-backdrop.
-    const backdrop = document.querySelector('.travel-itin-suggest-backdrop');
+    const backdrop = document.querySelector(".travel-itin-suggest-backdrop");
     expect(backdrop).toBeTruthy();
     fireEvent.click(backdrop);
     await waitFor(() => {
       expect(
-        screen.queryByRole('heading', { name: /Suggest itinerary/i }),
+        screen.queryByRole("heading", { name: /Suggest itinerary/i }),
       ).toBeNull();
     });
   });
 
-  it('validation: empty destination on submit shows inline error + does NOT call POST', async () => {
+  it("validation: empty destination on submit shows inline error + does NOT call POST", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
     fetchApiMock.mockClear();
     installSuggestMock();
     // Click submit with destination still blank.
-    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
     expect(
       await screen.findByText(/Destination is required/i),
     ).toBeInTheDocument();
     const posts = fetchApiMock.mock.calls.filter(
-      ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
+      ([u, o]) =>
+        u === "/api/travel/itineraries/suggest" && o?.method === "POST",
     );
     expect(posts.length).toBe(0);
   });
 
-  it('validation: durationDays out-of-range (35) shows inline error', async () => {
+  it("validation: durationDays out-of-range (35) shows inline error", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
-      target: { value: 'Goa' },
-    });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+      {
+        target: { value: "Goa" },
+      },
+    );
     fireEvent.change(screen.getByLabelText(/Duration \(days\)/i), {
-      target: { value: '35' },
+      target: { value: "35" },
     });
     fetchApiMock.mockClear();
     installSuggestMock();
     // Bypass HTML5 max="30" constraint by submitting the form directly.
-    const dialog = screen.getByRole('dialog');
+    const dialog = screen.getByRole("dialog");
     fireEvent.submit(dialog);
     expect(
       await screen.findByText(/Duration must be an integer 1\.\.30/i),
     ).toBeInTheDocument();
     const posts = fetchApiMock.mock.calls.filter(
-      ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
+      ([u, o]) =>
+        u === "/api/travel/itineraries/suggest" && o?.method === "POST",
     );
     expect(posts.length).toBe(0);
   });
 
-  it('sends interests + pace as plain text (backend assembles the theme JSON)', async () => {
+  it("sends interests + pace as plain text (backend assembles the theme JSON)", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
-      target: { value: 'Goa' },
-    });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+      {
+        target: { value: "Goa" },
+      },
+    );
     fireEvent.change(screen.getByLabelText(/Interests/i), {
-      target: { value: 'historical, beaches' },
+      target: { value: "historical, beaches" },
     });
     fireEvent.change(screen.getByLabelText(/Pace/i), {
-      target: { value: 'packed' },
+      target: { value: "packed" },
     });
     fetchApiMock.mockClear();
     installSuggestMock();
-    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
+        ([u, o]) =>
+          u === "/api/travel/itineraries/suggest" && o?.method === "POST",
       );
       expect(call).toBeTruthy();
       const body = JSON.parse(call[1].body);
       // Plain-text passthrough — the client does NOT pre-build any JSON.
-      expect(body.interests).toBe('historical, beaches');
-      expect(body.pace).toBe('packed');
+      expect(body.interests).toBe("historical, beaches");
+      expect(body.pace).toBe("packed");
       expect(body.themeJson).toBeUndefined();
     });
   });
 
-  it('submit happy path: POSTs /api/travel/itineraries/suggest with correct body', async () => {
+  it("submit happy path: POSTs /api/travel/itineraries/suggest with correct body", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
-      target: { value: '  Goa  ' },
-    });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+      {
+        target: { value: "  Goa  " },
+      },
+    );
     fireEvent.change(screen.getByLabelText(/Duration \(days\)/i), {
-      target: { value: '3' },
+      target: { value: "3" },
     });
     fireEvent.change(screen.getByLabelText(/Budget tier/i), {
-      target: { value: 'luxury' },
+      target: { value: "luxury" },
     });
     fetchApiMock.mockClear();
     installSuggestMock();
-    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
+        ([u, o]) =>
+          u === "/api/travel/itineraries/suggest" && o?.method === "POST",
       );
       expect(call).toBeTruthy();
       const body = JSON.parse(call[1].body);
       // Destination is trimmed.
-      expect(body.destination).toBe('Goa');
+      expect(body.destination).toBe("Goa");
       // Sent as `days` (the backend contract), parsed to int.
       expect(body.days).toBe(3);
-      expect(body.budgetTier).toBe('luxury');
+      expect(body.budgetTier).toBe("luxury");
     });
   });
 
-  it('submit with defaults sends days=5, budgetTier=mid, pace=relaxed', async () => {
+  it("submit with defaults sends days=5, budgetTier=mid, pace=relaxed", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
-      target: { value: 'Goa' },
-    });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+      {
+        target: { value: "Goa" },
+      },
+    );
     fetchApiMock.mockClear();
     installSuggestMock();
-    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
+        ([u, o]) =>
+          u === "/api/travel/itineraries/suggest" && o?.method === "POST",
       );
       expect(call).toBeTruthy();
       const body = JSON.parse(call[1].body);
       // Defaults: days=5, budgetTier=mid, pace=relaxed, interests empty.
       expect(body.days).toBe(5);
-      expect(body.budgetTier).toBe('mid');
-      expect(body.pace).toBe('relaxed');
-      expect(body.interests).toBe('');
+      expect(body.budgetTier).toBe("mid");
+      expect(body.pace).toBe("relaxed");
+      expect(body.interests).toBe("");
     });
   });
 
   it('loading state: submit button disabled + label changes to "Generating suggestion…"', async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
-      target: { value: 'Goa' },
-    });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+      {
+        target: { value: "Goa" },
+      },
+    );
     // Install a fetch that hangs so we can observe the loading state.
     let resolveSuggest;
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
-        return new Promise((res) => { resolveSuggest = res; });
+      const method = opts?.method || "GET";
+      if (url === "/api/travel/itineraries/suggest" && method === "POST") {
+        return new Promise((res) => {
+          resolveSuggest = res;
+        });
       }
-      if (url.startsWith('/api/travel/itineraries')) {
+      if (url.startsWith("/api/travel/itineraries")) {
         return Promise.resolve({
-          itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+          itineraries: ITINS_DEFAULT,
+          total: ITINS_DEFAULT.length,
+          limit: 100,
+          offset: 0,
         });
       }
       return Promise.resolve(null);
     });
-    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
     expect(
-      await screen.findByRole('button', { name: /Generating suggestion…/i }),
+      await screen.findByRole("button", { name: /Generating suggestion…/i }),
     ).toBeDisabled();
     // Resolve so the test cleanup is tidy.
     resolveSuggest(STUB_SUGGESTION);
     await waitFor(() => {
       expect(
-        screen.queryByRole('button', { name: /Generating suggestion…/i }),
+        screen.queryByRole("button", { name: /Generating suggestion…/i }),
       ).toBeNull();
     });
   });
 
-  it('success path: renders suggestionJson preview pane with day-by-day breakdown', async () => {
+  it("success path: renders suggestionJson preview pane with day-by-day breakdown", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
-      target: { value: 'Goa' },
-    });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+      {
+        target: { value: "Goa" },
+      },
+    );
     installSuggestMock();
-    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
     // Preview pane appears.
     expect(
-      await screen.findByTestId('suggest-preview-pane'),
+      await screen.findByTestId("suggest-preview-pane"),
     ).toBeInTheDocument();
     // Per-day breakdown rendered.
-    expect(screen.getByTestId('suggest-day-1')).toBeInTheDocument();
-    expect(screen.getByTestId('suggest-day-2')).toBeInTheDocument();
+    expect(screen.getByTestId("suggest-day-1")).toBeInTheDocument();
+    expect(screen.getByTestId("suggest-day-2")).toBeInTheDocument();
     // Day-1 items render (flight + hotel + activity from the skeleton).
     expect(
-      within(screen.getByTestId('suggest-day-1')).getByText(/Arrival in Goa/i),
+      within(screen.getByTestId("suggest-day-1")).getByText(/Arrival in Goa/i),
     ).toBeInTheDocument();
     // Summary renders.
     expect(screen.getByText(/2-day Goa \(mid\) outline/i)).toBeInTheDocument();
     // Per-person estimated total renders (6000+5000+1500 + 5000+1500+6000 = 25000).
     expect(
-      within(screen.getByTestId('suggest-est-total')).getByText(/25,000/),
+      within(screen.getByTestId("suggest-est-total")).getByText(/25,000/),
     ).toBeInTheDocument();
     // A per-item cost renders in the day breakdown.
     expect(
-      within(screen.getByTestId('suggest-day-1')).getByText(/₹6,000/),
+      within(screen.getByTestId("suggest-day-1")).getByText(/₹6,000/),
     ).toBeInTheDocument();
     // "Stub" badge present since stub=true.
     expect(screen.getByText(/^Stub$/i)).toBeInTheDocument();
@@ -1058,26 +1443,29 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
 
   it('"Create itinerary from this suggestion" button is present + disabled until a contact is picked (S90 materialise picker)', async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
-      target: { value: 'Goa' },
-    });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+      {
+        target: { value: "Goa" },
+      },
+    );
     installSuggestMock();
-    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
-    const createBtn = await screen.findByRole('button', {
+    fireEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
+    const createBtn = await screen.findByRole("button", {
       name: /Create itinerary from this suggestion/i,
     });
     expect(createBtn).toBeInTheDocument();
     // Discard button present too.
     expect(
-      screen.getByRole('button', { name: /Discard suggestion/i }),
+      screen.getByRole("button", { name: /Discard suggestion/i }),
     ).toBeInTheDocument();
     // Materialise picker is rendered.
-    expect(screen.getByTestId('materialise-picker')).toBeInTheDocument();
+    expect(screen.getByTestId("materialise-picker")).toBeInTheDocument();
     // Button starts disabled (no contact picked yet).
     expect(createBtn).toBeDisabled();
   });
@@ -1098,47 +1486,70 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
 //   5. Discard button works alongside the materialise picker (pane
 //      still closeable without committing).
 //   6. Backend 403 SUB_BRAND_DENIED surfaces notify.error.
-describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
+describe("<Itineraries /> — S90 materialise-from-suggestion", () => {
   function installMaterialiseMock({
     suggestResult = STUB_SUGGESTION,
     materialiseResult = null,
     materialiseError = null,
   } = {}) {
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
+      const method = opts?.method || "GET";
+      if (url === "/api/travel/itineraries/suggest" && method === "POST") {
         return Promise.resolve(suggestResult);
       }
       if (
-        url === '/api/travel/itineraries/from-suggestion'
-        && method === 'POST'
+        url === "/api/travel/itineraries/from-suggestion" &&
+        method === "POST"
       ) {
         if (materialiseError) return Promise.reject(materialiseError);
-        return Promise.resolve(materialiseResult || {
-          itinerary: {
-            id: 12345,
-            tenantId: 1,
-            subBrand: 'tmc',
-            contactId: 5001,
-            status: 'draft',
-            destination: 'Suggested itinerary',
-            currency: 'INR',
-            items: [
-              { id: 91, itemType: 'activity', description: 'd1 a1', position: 0, dayNumber: 1 },
-              { id: 92, itemType: 'meal', description: 'd1 m1', position: 1, dayNumber: 1 },
-              { id: 93, itemType: 'activity', description: 'd2 a1', position: 2, dayNumber: 2 },
-            ],
+        return Promise.resolve(
+          materialiseResult || {
+            itinerary: {
+              id: 12345,
+              tenantId: 1,
+              subBrand: "tmc",
+              contactId: 5001,
+              status: "draft",
+              destination: "Suggested itinerary",
+              currency: "INR",
+              items: [
+                {
+                  id: 91,
+                  itemType: "activity",
+                  description: "d1 a1",
+                  position: 0,
+                  dayNumber: 1,
+                },
+                {
+                  id: 92,
+                  itemType: "meal",
+                  description: "d1 m1",
+                  position: 1,
+                  dayNumber: 1,
+                },
+                {
+                  id: 93,
+                  itemType: "activity",
+                  description: "d2 a1",
+                  position: 2,
+                  dayNumber: 2,
+                },
+              ],
+            },
+            itemsCreated: 3,
+            daysProcessed: 2,
           },
-          itemsCreated: 3,
-          daysProcessed: 2,
-        });
+        );
       }
-      if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
+      if (url.startsWith("/api/travel/itineraries") && method === "GET") {
         return Promise.resolve({
-          itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+          itineraries: ITINS_DEFAULT,
+          total: ITINS_DEFAULT.length,
+          limit: 100,
+          offset: 0,
         });
       }
-      if (url.startsWith('/api/contacts')) {
+      if (url.startsWith("/api/contacts")) {
         return Promise.resolve(CONTACTS_DEFAULT);
       }
       return Promise.resolve(null);
@@ -1147,30 +1558,40 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
 
   async function openPreviewPane() {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
-      target: { value: 'Goa' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
-    await screen.findByTestId('suggest-preview-pane');
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+      {
+        target: { value: "Goa" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
+    await screen.findByTestId("suggest-preview-pane");
+    await screen.findByRole("option", { name: /Riya Sharma/i });
   }
 
-  it('happy path: pick contact + click materialise → POSTs correct body + notify.success + navigate', async () => {
+  it("happy path: pick contact + click materialise → POSTs correct body + notify.success + navigate", async () => {
     installMaterialiseMock();
     await openPreviewPane();
     // Pick a contact.
     fireEvent.change(
       screen.getByLabelText(/Contact for materialised itinerary/i),
-      { target: { value: '5001' } },
+      { target: { value: "5001" } },
     );
-    const createBtn = screen.getByRole('button', {
+    const createBtn = screen.getByRole("button", {
       name: /Create itinerary from this suggestion/i,
     });
-    expect(createBtn).not.toBeDisabled();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", {
+          name: /Create itinerary from this suggestion/i,
+        }),
+      ).not.toBeDisabled();
+    });
     fireEvent.click(createBtn);
     // notify.success fires with "Itinerary created with 3 items".
     await waitFor(() => {
@@ -1181,8 +1602,8 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     // POST body shape contract pin.
     const materialiseCall = fetchApiMock.mock.calls.find(
       ([url, opts]) =>
-        url === '/api/travel/itineraries/from-suggestion'
-        && opts?.method === 'POST',
+        url === "/api/travel/itineraries/from-suggestion" &&
+        opts?.method === "POST",
     );
     expect(materialiseCall).toBeTruthy();
     const body = JSON.parse(materialiseCall[1].body);
@@ -1194,50 +1615,59 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     expect(Array.isArray(body.suggestionJson.days)).toBe(true);
     // Navigation to the new itinerary's detail page.
     await waitFor(() => {
-      expect(navigateMock).toHaveBeenCalledWith('/travel/itineraries/12345');
+      expect(navigateMock).toHaveBeenCalledWith("/travel/itineraries/12345");
     });
   });
 
-  it('error path: backend 500 surfaces notify.error + no navigate', async () => {
-    const err = new Error('Materialise failed');
+  it("error path: backend 500 surfaces notify.error + no navigate", async () => {
+    const err = new Error("Materialise failed");
     err.body = {
-      error: 'Failed to materialise itinerary from suggestion',
-      code: 'ITINERARY_MATERIALISE_FAILED',
+      error: "Failed to materialise itinerary from suggestion",
+      code: "ITINERARY_MATERIALISE_FAILED",
     };
     installMaterialiseMock({ materialiseError: err });
     await openPreviewPane();
     fireEvent.change(
       screen.getByLabelText(/Contact for materialised itinerary/i),
-      { target: { value: '5001' } },
+      { target: { value: "5001" } },
     );
     fireEvent.click(
-      screen.getByRole('button', {
+      screen.getByRole("button", {
         name: /Create itinerary from this suggestion/i,
       }),
     );
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/Failed to materialise itinerary from suggestion/i),
+        expect.stringMatching(
+          /Failed to materialise itinerary from suggestion/i,
+        ),
       );
     });
     expect(navigateMock).not.toHaveBeenCalled();
     expect(notifySuccess).not.toHaveBeenCalled();
   });
 
-  it('backend 403 SUB_BRAND_DENIED → notify.error with backend message + no navigate', async () => {
-    const err = new Error('SUB_BRAND_DENIED');
+  it("backend 403 SUB_BRAND_DENIED → notify.error with backend message + no navigate", async () => {
+    const err = new Error("SUB_BRAND_DENIED");
     err.body = {
-      error: 'Sub-brand access denied',
-      code: 'SUB_BRAND_DENIED',
+      error: "Sub-brand access denied",
+      code: "SUB_BRAND_DENIED",
     };
     installMaterialiseMock({ materialiseError: err });
     await openPreviewPane();
     fireEvent.change(
       screen.getByLabelText(/Contact for materialised itinerary/i),
-      { target: { value: '5001' } },
+      { target: { value: "5001" } },
     );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", {
+          name: /Create itinerary from this suggestion/i,
+        }),
+      ).not.toBeDisabled();
+    });
     fireEvent.click(
-      screen.getByRole('button', {
+      screen.getByRole("button", {
         name: /Create itinerary from this suggestion/i,
       }),
     );
@@ -1255,19 +1685,25 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
       resolveMaterialise = resolve;
     });
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
+      const method = opts?.method || "GET";
+      if (url === "/api/travel/itineraries/suggest" && method === "POST") {
         return Promise.resolve(STUB_SUGGESTION);
       }
-      if (url === '/api/travel/itineraries/from-suggestion' && method === 'POST') {
+      if (
+        url === "/api/travel/itineraries/from-suggestion" &&
+        method === "POST"
+      ) {
         return pending;
       }
-      if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
+      if (url.startsWith("/api/travel/itineraries") && method === "GET") {
         return Promise.resolve({
-          itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+          itineraries: ITINS_DEFAULT,
+          total: ITINS_DEFAULT.length,
+          limit: 100,
+          offset: 0,
         });
       }
-      if (url.startsWith('/api/contacts')) {
+      if (url.startsWith("/api/contacts")) {
         return Promise.resolve(CONTACTS_DEFAULT);
       }
       return Promise.resolve(null);
@@ -1275,10 +1711,17 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     await openPreviewPane();
     fireEvent.change(
       screen.getByLabelText(/Contact for materialised itinerary/i),
-      { target: { value: '5001' } },
+      { target: { value: "5001" } },
     );
-    const triggerBtn = screen.getByRole('button', {
+    const triggerBtn = screen.getByRole("button", {
       name: /Create itinerary from this suggestion/i,
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", {
+          name: /Create itinerary from this suggestion/i,
+        }),
+      ).not.toBeDisabled();
     });
     fireEvent.click(triggerBtn);
     // Loading text + disabled state. The button's aria-label stays
@@ -1300,48 +1743,50 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     });
   });
 
-  it('no contact picked → notify.error + no POST + button stays disabled', async () => {
+  it("no contact picked → notify.error + no POST + button stays disabled", async () => {
     installMaterialiseMock();
     await openPreviewPane();
     // Don't pick a contact.
-    const createBtn = screen.getByRole('button', {
+    const createBtn = screen.getByRole("button", {
       name: /Create itinerary from this suggestion/i,
     });
     expect(createBtn).toBeDisabled();
     // No materialise POST happened.
     const materialiseCalls = fetchApiMock.mock.calls.filter(
-      ([url]) => url === '/api/travel/itineraries/from-suggestion',
+      ([url]) => url === "/api/travel/itineraries/from-suggestion",
     );
     expect(materialiseCalls).toHaveLength(0);
   });
 
-  it('discard alongside materialise picker: discarding before pick → preview pane gone, no POST, modal still open', async () => {
+  it("discard alongside materialise picker: discarding before pick → preview pane gone, no POST, modal still open", async () => {
     installMaterialiseMock();
     await openPreviewPane();
-    expect(screen.getByTestId('materialise-picker')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Discard suggestion/i }));
+    expect(screen.getByTestId("materialise-picker")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Discard suggestion/i }),
+    );
     await waitFor(() => {
-      expect(screen.queryByTestId('suggest-preview-pane')).toBeNull();
+      expect(screen.queryByTestId("suggest-preview-pane")).toBeNull();
     });
     // Modal still open (heading still present).
     expect(
-      screen.getByRole('heading', { name: /Suggest itinerary/i }),
+      screen.getByRole("heading", { name: /Suggest itinerary/i }),
     ).toBeInTheDocument();
     // No materialise POST happened.
     const materialiseCalls = fetchApiMock.mock.calls.filter(
-      ([url]) => url === '/api/travel/itineraries/from-suggestion',
+      ([url]) => url === "/api/travel/itineraries/from-suggestion",
     );
     expect(materialiseCalls).toHaveLength(0);
   });
 
-  it('uses itinerary.items.length as fallback when backend omits itemsCreated', async () => {
+  it("uses itinerary.items.length as fallback when backend omits itemsCreated", async () => {
     installMaterialiseMock({
       materialiseResult: {
         itinerary: {
           id: 7777,
           items: [
-            { id: 1, itemType: 'activity', description: 'x', position: 0 },
-            { id: 2, itemType: 'meal', description: 'y', position: 1 },
+            { id: 1, itemType: "activity", description: "x", position: 0 },
+            { id: 2, itemType: "meal", description: "y", position: 1 },
           ],
         },
         // itemsCreated intentionally omitted to exercise the fallback.
@@ -1350,10 +1795,17 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     await openPreviewPane();
     fireEvent.change(
       screen.getByLabelText(/Contact for materialised itinerary/i),
-      { target: { value: '5001' } },
+      { target: { value: "5001" } },
     );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", {
+          name: /Create itinerary from this suggestion/i,
+        }),
+      ).not.toBeDisabled();
+    });
     fireEvent.click(
-      screen.getByRole('button', {
+      screen.getByRole("button", {
         name: /Create itinerary from this suggestion/i,
       }),
     );
@@ -1364,83 +1816,103 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     });
   });
 
-  it('discard button closes the preview pane (back to bare modal form)', async () => {
+  it("discard button closes the preview pane (back to bare modal form)", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
-      target: { value: 'Goa' },
-    });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+      {
+        target: { value: "Goa" },
+      },
+    );
     installSuggestMock();
-    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
-    await screen.findByTestId('suggest-preview-pane');
-    fireEvent.click(screen.getByRole('button', { name: /Discard suggestion/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
+    await screen.findByTestId("suggest-preview-pane");
+    fireEvent.click(
+      screen.getByRole("button", { name: /Discard suggestion/i }),
+    );
     await waitFor(() => {
-      expect(screen.queryByTestId('suggest-preview-pane')).toBeNull();
+      expect(screen.queryByTestId("suggest-preview-pane")).toBeNull();
     });
     // Modal stays open.
     expect(
-      screen.getByRole('heading', { name: /Suggest itinerary/i }),
+      screen.getByRole("heading", { name: /Suggest itinerary/i }),
     ).toBeInTheDocument();
   });
 
-  it('error path: backend 500 ITINERARY_SUGGEST_FAILED surfaces notify.error', async () => {
+  it("error path: backend 500 ITINERARY_SUGGEST_FAILED surfaces notify.error", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
-      target: { value: 'Goa' },
-    });
-    const err = new Error('Suggest failed');
-    err.body = { error: 'ITINERARY_SUGGEST_FAILED', code: 'ITINERARY_SUGGEST_BUDGET_EXCEEDED' };
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+      {
+        target: { value: "Goa" },
+      },
+    );
+    const err = new Error("Suggest failed");
+    err.body = {
+      error: "ITINERARY_SUGGEST_FAILED",
+      code: "ITINERARY_SUGGEST_BUDGET_EXCEEDED",
+    };
     fetchApiMock.mockImplementation((url, opts) => {
-      const method = opts?.method || 'GET';
-      if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
+      const method = opts?.method || "GET";
+      if (url === "/api/travel/itineraries/suggest" && method === "POST") {
         return Promise.reject(err);
       }
-      if (url.startsWith('/api/travel/itineraries')) {
+      if (url.startsWith("/api/travel/itineraries")) {
         return Promise.resolve({
-          itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+          itineraries: ITINS_DEFAULT,
+          total: ITINS_DEFAULT.length,
+          limit: 100,
+          offset: 0,
         });
       }
       return Promise.resolve(null);
     });
-    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('AI service is temporarily unavailable. Please try again in a moment.');
+      expect(notifyError).toHaveBeenCalledWith(
+        "AI service is temporarily unavailable. Please try again in a moment.",
+      );
     });
     // Preview pane should NOT appear on error.
-    expect(screen.queryByTestId('suggest-preview-pane')).toBeNull();
+    expect(screen.queryByTestId("suggest-preview-pane")).toBeNull();
   });
 
-  it('fallback rendering: unfamiliar suggestionJson shape falls back to JSON.stringify pre block', async () => {
+  it("fallback rendering: unfamiliar suggestionJson shape falls back to JSON.stringify pre block", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+      screen.getByRole("button", { name: /Suggest itinerary using AI/i }),
     );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
-      target: { value: 'Goa' },
-    });
+    await screen.findByRole("heading", { name: /Suggest itinerary/i });
+    fireEvent.change(
+      within(screen.getByRole("dialog")).getByLabelText("Destination"),
+      {
+        target: { value: "Goa" },
+      },
+    );
     // Custom shape: suggestion present but no days[] → fall through to the
     // JSON.stringify branch.
     installSuggestMock({
       suggestResult: {
-        suggestion: { weirdField: 'unknown shape', otherKey: 42 },
-        model: 'gemini-2.5-flash', stub: true,
+        suggestion: { weirdField: "unknown shape", otherKey: 42 },
+        model: "gemini-2.5-flash",
+        stub: true,
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
-    await screen.findByTestId('suggest-preview-pane');
+    fireEvent.click(screen.getByRole("button", { name: /^Suggest$/ }));
+    await screen.findByTestId("suggest-preview-pane");
     // Raw JSON rendered somewhere in the pane.
-    const pane = screen.getByTestId('suggest-preview-pane');
+    const pane = screen.getByTestId("suggest-preview-pane");
     expect(within(pane).getByText(/weirdField/)).toBeInTheDocument();
     expect(within(pane).getByText(/unknown shape/)).toBeInTheDocument();
   });
@@ -1484,48 +1956,49 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
 // value there; ItineraryDetail.jsx is left for a follow-up slice if an
 // explicit map block is needed alongside the day-by-day cost breakdown.
 // ---------------------------------------------------------------------------
-describe('<Itineraries /> — S81 MapPreview wire-in (list page)', () => {
-  it('does NOT render MapPreview when no itinerary is selected (initial state)', async () => {
+describe("<Itineraries /> — S81 MapPreview wire-in (list page)", () => {
+  it("does NOT render MapPreview when no itinerary is selected (initial state)", async () => {
     renderPage();
     // Wait for the list to settle so we're past initial load.
-    await screen.findByText('Andaman Islands');
-    expect(screen.queryByTestId('itineraries-selected-map')).toBeNull();
-    expect(screen.queryByTestId('map-preview-mock')).toBeNull();
+    await screen.findByText("Andaman Islands");
+    expect(screen.queryByTestId("itineraries-selected-map")).toBeNull();
+    expect(screen.queryByTestId("map-preview-mock")).toBeNull();
     expect(mapPreviewMock).not.toHaveBeenCalled();
   });
 
   it('each row exposes a "Map" button with row-specific aria-label', async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     expect(
-      screen.getByRole('button', { name: /Show map for Andaman Islands/i }),
+      screen.getByRole("button", { name: /Show map for Andaman Islands/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /Show map for Mecca Umrah Package/i }),
+      screen.getByRole("button", { name: /Show map for Mecca Umrah Package/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /Show map for Schengen visa/i }),
+      screen.getByRole("button", { name: /Show map for Schengen visa/i }),
     ).toBeInTheDocument();
   });
 
   it("clicking a Map button renders MapPreview with that itinerary's items prop", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Show map for Andaman Islands/i }),
+      screen.getByRole("button", { name: /Show map for Andaman Islands/i }),
     );
     // Map panel + mock render.
     expect(
-      await screen.findByTestId('itineraries-selected-map'),
+      await screen.findByTestId("itineraries-selected-map"),
     ).toBeInTheDocument();
-    const mapMock = screen.getByTestId('map-preview-mock');
+    const mapMock = screen.getByTestId("map-preview-mock");
     expect(mapMock).toBeInTheDocument();
     // The Andaman itinerary has 2 items with lat/lng.
-    expect(mapMock.getAttribute('data-pin-count')).toBe('2');
+    expect(mapMock.getAttribute("data-pin-count")).toBe("2");
     // Height default per S81 wire-in is 320.
-    expect(mapMock.getAttribute('data-height')).toBe('320');
+    expect(mapMock.getAttribute("data-height")).toBe("320");
     // Last call to MapPreview received the right items prop shape.
-    const lastCall = mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1];
+    const lastCall =
+      mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1];
     expect(lastCall).toBeTruthy();
     const props = lastCall[0];
     expect(Array.isArray(props.items)).toBe(true);
@@ -1537,92 +2010,98 @@ describe('<Itineraries /> — S81 MapPreview wire-in (list page)', () => {
     // " item", "s") plus the MapPreview stub's own "N items" copy — so we
     // assert the panel's textContent contains "2 item" rather than
     // querying by getByText (which would match multiple nodes).
-    const panel = screen.getByTestId('itineraries-selected-map');
-    expect(within(panel).getByText('Andaman Islands')).toBeInTheDocument();
+    const panel = screen.getByTestId("itineraries-selected-map");
+    expect(within(panel).getByText("Andaman Islands")).toBeInTheDocument();
     expect(panel.textContent).toMatch(/2\s*item/);
   });
 
-  it('Map button click does NOT trigger row navigation (stopPropagation)', async () => {
+  it("Map button click does NOT trigger row navigation (stopPropagation)", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Show map for Andaman Islands/i }),
+      screen.getByRole("button", { name: /Show map for Andaman Islands/i }),
     );
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it("re-clicking the same row's Map button toggles the panel off", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
-    const mapBtn = screen.getByRole('button', { name: /Show map for Andaman Islands/i });
+    await screen.findByText("Andaman Islands");
+    const mapBtn = screen.getByRole("button", {
+      name: /Show map for Andaman Islands/i,
+    });
     fireEvent.click(mapBtn);
-    await screen.findByTestId('itineraries-selected-map');
+    await screen.findByTestId("itineraries-selected-map");
     // Same row's button is now labelled "Hide map for Andaman Islands".
-    const hideBtn = screen.getByRole('button', { name: /Hide map for Andaman Islands/i });
-    expect(hideBtn).toHaveAttribute('aria-pressed', 'true');
+    const hideBtn = screen.getByRole("button", {
+      name: /Hide map for Andaman Islands/i,
+    });
+    expect(hideBtn).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(hideBtn);
     await waitFor(() => {
-      expect(screen.queryByTestId('itineraries-selected-map')).toBeNull();
+      expect(screen.queryByTestId("itineraries-selected-map")).toBeNull();
     });
   });
 
   it("clicking a different row's Map button switches the selection", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Show map for Andaman Islands/i }),
+      screen.getByRole("button", { name: /Show map for Andaman Islands/i }),
     );
-    await screen.findByTestId('itineraries-selected-map');
+    await screen.findByTestId("itineraries-selected-map");
     // Switch to the Mecca Umrah Package row.
     fireEvent.click(
-      screen.getByRole('button', { name: /Show map for Mecca Umrah Package/i }),
+      screen.getByRole("button", { name: /Show map for Mecca Umrah Package/i }),
     );
     await waitFor(() => {
-      const panel = screen.getByTestId('itineraries-selected-map');
+      const panel = screen.getByTestId("itineraries-selected-map");
       // Panel now shows the Mecca destination header.
-      expect(within(panel).getByText('Mecca Umrah Package')).toBeInTheDocument();
+      expect(
+        within(panel).getByText("Mecca Umrah Package"),
+      ).toBeInTheDocument();
     });
     // MapPreview re-rendered with the Mecca items prop (3 items: 2 with
     // lat/lng + 1 visa without — pinnableItems inside MapPreview drops
     // the 3rd. The consumer passes ALL 3; filtering is the component's
     // job per S10 contract).
-    const lastCall = mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1];
+    const lastCall =
+      mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1];
     const props = lastCall[0];
     expect(props.items.length).toBe(3);
     expect(props.items.map((it) => it.id).sort()).toEqual([9003, 9004, 9005]);
   });
 
-  it('panel Close button (X) clears the selection', async () => {
+  it("panel Close button (X) clears the selection", async () => {
     renderPage();
-    await screen.findByText('Andaman Islands');
+    await screen.findByText("Andaman Islands");
     fireEvent.click(
-      screen.getByRole('button', { name: /Show map for Andaman Islands/i }),
+      screen.getByRole("button", { name: /Show map for Andaman Islands/i }),
     );
-    await screen.findByTestId('itineraries-selected-map');
-    fireEvent.click(
-      screen.getByRole('button', { name: /Close map preview/i }),
-    );
+    await screen.findByTestId("itineraries-selected-map");
+    fireEvent.click(screen.getByRole("button", { name: /Close map preview/i }));
     await waitFor(() => {
-      expect(screen.queryByTestId('itineraries-selected-map')).toBeNull();
+      expect(screen.queryByTestId("itineraries-selected-map")).toBeNull();
     });
   });
 
   it("itinerary with only non-pinnable items still passes through to MapPreview (filtering is the component's job)", async () => {
     renderPage();
-    await screen.findByText('Schengen visa');
+    await screen.findByText("Schengen visa");
     // Schengen has 1 item with null lat/lng — still selectable. The
     // consumer passes the items through; MapPreview's pinnableItems
     // drops the non-pinnable row internally.
     fireEvent.click(
-      screen.getByRole('button', { name: /Show map for Schengen visa/i }),
+      screen.getByRole("button", { name: /Show map for Schengen visa/i }),
     );
-    await screen.findByTestId('itineraries-selected-map');
+    await screen.findByTestId("itineraries-selected-map");
     // The SUT geocodes the destination words asynchronously when no item
     // has coordinates. Wait for the fallback to settle back to the raw
     // itinerary items (Nominatim is not mocked, so geocodeCity returns
     // null and the effect falls back to `raw`).
     await waitFor(() => {
-      const lastCall = mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1];
+      const lastCall =
+        mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1];
       const props = lastCall[0];
       expect(props.items.length).toBe(1);
       expect(props.items[0].id).toBe(9006);
@@ -1648,14 +2127,14 @@ describe('<Itineraries /> — cancellation suppresses the stale "Deposit overdue
   function makeOverdueItin(overrides = {}) {
     return makeItin({
       id: 501,
-      subBrand: 'travelstall',
-      status: 'accepted',
-      productTier: 'primary',
-      destination: 'Goa',
+      subBrand: "travelstall",
+      status: "accepted",
+      productTier: "primary",
+      destination: "Goa",
       totalAmount: 225000,
-      currency: 'INR',
+      currency: "INR",
       contactId: 5001,
-      paymentOverdueAt: '2026-06-29T10:00:00.000Z',
+      paymentOverdueAt: "2026-06-29T10:00:00.000Z",
       cancellationStatus: null,
       items: [],
       ...overrides,
@@ -1664,61 +2143,79 @@ describe('<Itineraries /> — cancellation suppresses the stale "Deposit overdue
 
   it('accepted + paymentOverdueAt + no cancellationStatus → shows the "Deposit overdue" badge (baseline)', async () => {
     installFetchMock({
-      list: { itineraries: [makeOverdueItin()], total: 1, limit: 100, offset: 0 },
+      list: {
+        itineraries: [makeOverdueItin()],
+        total: 1,
+        limit: 100,
+        offset: 0,
+      },
     });
     renderPage();
-    const row = (await screen.findByText('Goa')).closest('tr');
+    const row = (await screen.findByText("Goa")).closest("tr");
     expect(within(row).getByText(/Deposit overdue/i)).toBeInTheDocument();
   });
 
   it('accepted + paymentOverdueAt + cancellationStatus="cancelled" → badge is suppressed', async () => {
     installFetchMock({
       list: {
-        itineraries: [makeOverdueItin({ cancellationStatus: 'cancelled' })],
-        total: 1, limit: 100, offset: 0,
+        itineraries: [makeOverdueItin({ cancellationStatus: "cancelled" })],
+        total: 1,
+        limit: 100,
+        offset: 0,
       },
     });
     renderPage();
-    const row = (await screen.findByText('Goa')).closest('tr');
+    const row = (await screen.findByText("Goa")).closest("tr");
     expect(within(row).queryByText(/Deposit overdue/i)).toBeNull();
   });
 
   it('accepted + paymentOverdueAt + cancellationStatus="refunded" → badge suppressed + status pill reads "Cancelled & refunded"', async () => {
     installFetchMock({
       list: {
-        itineraries: [makeOverdueItin({ cancellationStatus: 'refunded' })],
-        total: 1, limit: 100, offset: 0,
+        itineraries: [makeOverdueItin({ cancellationStatus: "refunded" })],
+        total: 1,
+        limit: 100,
+        offset: 0,
       },
     });
     renderPage();
-    const row = (await screen.findByText('Goa')).closest('tr');
+    const row = (await screen.findByText("Goa")).closest("tr");
     expect(within(row).queryByText(/Deposit overdue/i)).toBeNull();
-    const pill = within(row).getByText('Cancelled & refunded');
-    expect(pill.className).toContain('travel-itin-status-pill--rejected');
+    const pill = within(row).getByText("Cancelled & refunded");
+    expect(pill.className).toContain("travel-itin-status-pill--rejected");
   });
 
   it('accepted + paymentOverdueAt + cancellationStatus="requested" → badge suppressed while resolution is pending', async () => {
     installFetchMock({
       list: {
-        itineraries: [makeOverdueItin({ cancellationStatus: 'requested' })],
-        total: 1, limit: 100, offset: 0,
+        itineraries: [makeOverdueItin({ cancellationStatus: "requested" })],
+        total: 1,
+        limit: 100,
+        offset: 0,
       },
     });
     renderPage();
-    const row = (await screen.findByText('Goa')).closest('tr');
+    const row = (await screen.findByText("Goa")).closest("tr");
     expect(within(row).queryByText(/Deposit overdue/i)).toBeNull();
-    expect(within(row).getByText('Cancellation requested')).toBeInTheDocument();
+    expect(within(row).getByText("Cancellation requested")).toBeInTheDocument();
   });
 
-  it('cancelled but never flagged overdue (paymentOverdueAt null) → no badge regardless of guard', async () => {
+  it("cancelled but never flagged overdue (paymentOverdueAt null) → no badge regardless of guard", async () => {
     installFetchMock({
       list: {
-        itineraries: [makeOverdueItin({ cancellationStatus: 'cancelled', paymentOverdueAt: null })],
-        total: 1, limit: 100, offset: 0,
+        itineraries: [
+          makeOverdueItin({
+            cancellationStatus: "cancelled",
+            paymentOverdueAt: null,
+          }),
+        ],
+        total: 1,
+        limit: 100,
+        offset: 0,
       },
     });
     renderPage();
-    const row = (await screen.findByText('Goa')).closest('tr');
+    const row = (await screen.findByText("Goa")).closest("tr");
     expect(within(row).queryByText(/Deposit overdue/i)).toBeNull();
   });
 });

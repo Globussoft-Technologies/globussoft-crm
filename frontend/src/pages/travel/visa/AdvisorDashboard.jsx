@@ -24,6 +24,7 @@
  *      + FR-3.2 trip conditions, YELLOW on FR-3.3 advisor flag, otherwise
  *      remain neutral.
  *
+
  *   4. Document checklist progress (bonus) — "X of Y required documents
  *      verified" derived from the documentChecklist relation included
  *      by the backend.
@@ -45,17 +46,45 @@ import {
   ArrowRight,
   HeartHandshake,
   Plus,
+  CalendarDays,
+  FileText,
+  Loader2,
+  Send,
+  UserRound,
+  Trash2,
 } from 'lucide-react';
-import { fetchApi } from '../../../utils/api';
+import { fetchApi, getActiveTenantId, getAuthToken } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
 import { AuthContext } from '../../../App';
 
 const SECTION = {
-  background: 'rgba(255, 255, 255, 0.03)',
-  border: '1px solid rgba(255, 255, 255, 0.05)',
-  borderRadius: 12,
+  background: 'var(--surface-color)',
+  border: '1px solid var(--border-color)',
+  borderRadius: 16,
   padding: '1.25rem 1.5rem',
   marginBottom: '1.25rem',
+  backdropFilter: 'blur(12px)',
+  WebkitBackdropFilter: 'blur(12px)',
+  boxShadow: 'var(--shadow-md)',
+};
+
+const SUBSECTION = {
+  background: 'var(--subtle-bg)',
+  border: '1px solid var(--border-color)',
+  borderRadius: 12,
+  padding: '0.75rem 0.9rem',
+  backdropFilter: 'blur(12px)',
+  WebkitBackdropFilter: 'blur(12px)',
+  boxShadow: 'var(--shadow-sm)',
+};
+
+const CHIP = {
+  padding: '4px 8px',
+  borderRadius: 999,
+  border: '1px solid var(--border-color)',
+  background: 'var(--subtle-bg)',
+  color: 'var(--text-secondary)',
+  fontSize: '0.76rem',
 };
 
 const SECTION_HEADER = {
@@ -93,8 +122,8 @@ const RISK_PILL_BASE = {
 // the corresponding fields, then active (red for hard risk, yellow for
 // soft / advisor-tagged risk).
 const PILL_NEUTRAL = {
-  background: 'rgba(255, 255, 255, 0.04)',
-  borderColor: 'rgba(255, 255, 255, 0.08)',
+  background: 'var(--subtle-bg)',
+  borderColor: 'var(--border-color)',
   color: 'var(--text-secondary)',
 };
 
@@ -145,6 +174,30 @@ const isAdvisorRiskActive = (flag) => {
   return f === 'high' || f === 'priority';
 };
 
+const formatUiDate = (value) => {
+  if (!value) return "";
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10);
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
+const formatTripLabel = (trip) => {
+  if (!trip) return "";
+  const parts = [trip.tripCode, trip.destination].filter(Boolean);
+  const range = [formatUiDate(trip.departDate), formatUiDate(trip.returnDate)]
+    .filter(Boolean)
+    .join(' to ');
+  if (range) parts.push(range);
+  return parts.join(' - ');
+};
+
 // FR-6.3 — per-document lifecycle states. The advisor moves each document
 // through these via the inline <select> in the Document checklist section;
 // the backend auto-advances the application docs-pending → filed once every
@@ -169,6 +222,13 @@ const APP_STATUSES = [
   { value: 'appeal', label: 'Appeal' },
 ];
 
+const LETTER_TEMPLATE_LABELS = [
+  'Parental Consent Letter',
+  'Cover Letter',
+  'No Objection Certificate',
+  'Sponsorship Letter',
+];
+
 const VisaAdvisorDashboard = () => {
   const { applicationId } = useParams();
   const notify = useNotify();
@@ -188,6 +248,15 @@ const VisaAdvisorDashboard = () => {
   const [programsLoading, setProgramsLoading] = useState(false);
   const [enrolBusy, setEnrolBusy] = useState(false);
   const [selectedProgramId, setSelectedProgramId] = useState('');
+  const [trips, setTrips] = useState([]);
+  const [tripsLoading, setTripsLoading] = useState(false);
+  const [selectedTripId, setSelectedTripId] = useState('');
+  const [participants, setParticipants] = useState([]);
+  const [participantsLoading, setParticipantsLoading] = useState(false);
+  const [selectedParticipantId, setSelectedParticipantId] = useState('');
+  const [packetBusy, setPacketBusy] = useState(false);
+  const [packetNotice, setPacketNotice] = useState(null);
+  const [letterActionBusy, setLetterActionBusy] = useState(null);
 
   // FR-6.3 — per-application document checklist editing. `checklistBusy`
   // holds the id of the item currently being saved so its <select> can
@@ -229,6 +298,71 @@ const VisaAdvisorDashboard = () => {
       cancelled = true;
     };
   }, [applicationId]);
+
+  useEffect(() => {
+    if (!canEnrol || application?.tripId) {
+      setTrips([]);
+      return undefined;
+    }
+    let cancelled = false;
+    setTripsLoading(true);
+    fetchApi('/api/travel/trips?fields=summary&limit=200', { silent: true })
+      .then((res) => {
+        if (cancelled) return;
+        setTrips(Array.isArray(res?.trips) ? res.trips : []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTrips([]);
+      })
+      .finally(() => {
+        if (!cancelled) setTripsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canEnrol, application?.tripId]);
+
+  useEffect(() => {
+    if (application?.tripId && application?.participantId) {
+      setParticipants([]);
+      setSelectedTripId('');
+      setSelectedParticipantId('');
+      return undefined;
+    }
+    if (!canEnrol || !selectedTripId) {
+      setParticipants([]);
+      setSelectedParticipantId('');
+      return undefined;
+    }
+
+    let cancelled = false;
+    setParticipantsLoading(true);
+    setSelectedParticipantId('');
+    fetchApi(
+      `/api/travel/trips/${selectedTripId}/participants?fields=summary`,
+      { silent: true },
+    )
+      .then((res) => {
+        if (cancelled) return;
+        const rows = Array.isArray(res?.participants) ? res.participants : [];
+        setParticipants(rows);
+        if (rows.length === 1) {
+          setSelectedParticipantId(String(rows[0].id));
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setParticipants([]);
+      })
+      .finally(() => {
+        if (!cancelled) setParticipantsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canEnrol, selectedTripId, application?.tripId, application?.participantId]);
 
   // Re-fetch the application after a checklist mutation so the progress bar,
   // each item's status, and any auto-advanced application status all reflect
@@ -336,11 +470,158 @@ const VisaAdvisorDashboard = () => {
     }
   };
 
+
+  const generateLetterPacket = async (e) => {
+    e.preventDefault();
+    const hasApplicationBinding = Boolean(application?.tripId && application?.participantId);
+
+    setPacketBusy(true);
+    setPacketNotice(null);
+    try {
+      const body = {};
+      if (!hasApplicationBinding) {
+        const tripId = Number(selectedTripId);
+        if (!Number.isFinite(tripId)) {
+          notify.error('This application is missing its trip binding.');
+          setPacketBusy(false);
+          return;
+        }
+        body.tripId = tripId;
+        if (selectedParticipantId) {
+          body.participantId = Number(selectedParticipantId);
+        }
+      }
+      const res = await fetchApi(
+        `/api/travel/visa/applications/${applicationId}/letters/generate`,
+        {
+          method: 'POST',
+          body: JSON.stringify(body),
+        },
+      );
+      await refreshApplication();
+      const generated = Array.isArray(res?.generated) ? res.generated : [];
+      const skipped = Array.isArray(res?.skipped) ? res.skipped : [];
+      setPacketNotice({ generated, skipped });
+      notify.success('Letter packet generated successfully.');
+    } catch (err) {
+      notify.error(
+        (err && (err.message || (err.body && err.body.error))) ||
+          'Failed to generate letter packet',
+      );
+    } finally {
+      setPacketBusy(false);
+    }
+  };
+
+  const fetchLetterBlob = async (path) => {
+    const headers = {};
+    const token = getAuthToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const activeTenantId = getActiveTenantId();
+    if (activeTenantId != null) headers['X-Active-Tenant'] = String(activeTenantId);
+    const res = await fetch(path, { headers });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `HTTP ${res.status}`);
+    }
+    return res.blob();
+  };
+
+  const openLetter = async (letterId, kind = 'generated') => {
+    setLetterActionBusy(`${kind}-${letterId}`);
+    try {
+      const blob = await fetchLetterBlob(
+        `/api/travel/visa/letters/${letterId}/${kind}`,
+      );
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (err) {
+      notify.error(err?.message || "Couldn't open the letter");
+    } finally {
+      setLetterActionBusy(null);
+    }
+  };
+
+  const removeLetter = async (letter) => {
+    const label = `${letter.documentType || letter.docType || 'Letter'}${letter.signedUploadedAt ? ' (signed copy)' : ''}`;
+    const ok = await notify.confirm({
+      title: 'Remove letter?',
+      message: `Remove ${label} from this packet? This deletes the stored PDF and removes the row from the packet.`,
+      confirmText: 'Remove',
+      destructive: true,
+    });
+    if (!ok) return;
+    setLetterActionBusy(`remove-${letter.id}`);
+    try {
+      await fetchApi(`/api/travel/visa/applications/${applicationId}/letters/${letter.id}`, {
+        method: 'DELETE',
+      });
+      await refreshApplication();
+      notify.success(`${letter.documentType || letter.docType || 'Letter'} removed from the packet.`);
+    } catch (err) {
+      notify.error(
+        (err && (err.message || (err.body && err.body.error))) ||
+          'Failed to remove letter',
+      );
+    } finally {
+      setLetterActionBusy(null);
+    }
+  };
+
+  const downloadLetterPacket = async () => {
+    setLetterActionBusy('download-all');
+    try {
+      const blob = await fetchLetterBlob(
+        `/api/travel/visa/applications/${applicationId}/letters/download-all`,
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `visa-letter-packet-${applicationId}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (err) {
+      notify.error(err?.message || "Couldn't download the packet");
+    } finally {
+      setLetterActionBusy(null);
+    }
+  };
+
+  const sendLetterPacket = async () => {
+    setLetterActionBusy('send');
+    try {
+      await fetchApi(`/api/travel/visa/applications/${applicationId}/letters/send`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      await refreshApplication();
+      notify.success('Letter packet sent to the customer portal.');
+    } catch (err) {
+      notify.error(
+        (err && (err.message || (err.body && err.body.error))) ||
+          'Failed to send letter packet',
+      );
+    } finally {
+      setLetterActionBusy(null);
+    }
+  };
   // Document checklist progress (bonus). Required items only — optional
   // items don't gate the application moving forward, per FR-5 docs flow.
   const checklist = Array.isArray(application?.documentChecklist)
     ? application.documentChecklist
     : [];
+  const letterDocs = Array.isArray(application?.visaLetterDocuments)
+    ? application.visaLetterDocuments
+    : [];
+  const hasLetterBinding = Boolean(application?.tripId && application?.participantId);
+  const linkedTripLabel = application?.trip
+    ? formatTripLabel(application.trip)
+    : (application?.tripId ? `Trip #${application.tripId}` : '');
+  const linkedParticipantLabel = application?.participant?.fullName
+    || (application?.participantId ? `Participant #${application.participantId}` : '');
   const requiredItems = checklist.filter((i) => i?.required);
   const verifiedRequired = requiredItems.filter(
     (i) => i?.status === 'verified',
@@ -425,8 +706,8 @@ const VisaAdvisorDashboard = () => {
         <div
           style={{
             ...SECTION,
-            borderColor: 'rgba(255, 120, 120, 0.25)',
-            background: 'rgba(255, 120, 120, 0.05)',
+            borderColor: 'rgba(255, 120, 120, 0.28)',
+            background: 'rgba(255, 120, 120, 0.08)',
           }}
         >
           <p style={EMPTY_LINE}>
@@ -474,6 +755,343 @@ const VisaAdvisorDashboard = () => {
               </span>
             </div>
           </section>
+
+          {canEnrol && (
+            <section style={SECTION}>
+              <h2 style={SECTION_HEADER}>
+                <FileText size={16} aria-hidden /> Visa letter packet
+              </h2>
+              <p style={{ ...EMPTY_LINE, fontStyle: 'normal', marginBottom: 12 }}>
+                These four documents are generated from managed letter templates.
+                For new applications the trip and participant are linked during
+                creation, so generation uses that saved binding automatically.
+              </p>
+              <div
+                data-testid="letter-template-list"
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  marginBottom: 12,
+                }}
+              >
+                  {LETTER_TEMPLATE_LABELS.map((label) => (
+                  <span
+                    key={label}
+                    style={CHIP}
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+              <form onSubmit={generateLetterPacket}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
+                    gap: 12,
+                  }}
+                >
+                  {hasLetterBinding ? (
+                    <div
+                      data-testid="letter-binding-summary"
+                      style={{
+                        ...SUBSECTION,
+                        gridColumn: '1 / -1',
+                        color: 'var(--text-secondary)',
+                        fontSize: '0.84rem',
+                        display: 'grid',
+                        gap: 4,
+                      }}
+                    >
+                      <strong style={{ color: 'var(--text-primary, #fff)' }}>
+                        Linked travel record
+                      </strong>
+                      <span><CalendarDays size={13} aria-hidden /> {linkedTripLabel}</span>
+                      <span><UserRound size={13} aria-hidden /> {linkedParticipantLabel}</span>
+                    </div>
+                  ) : (
+                    <>
+                      <label
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6,
+                          color: 'var(--text-primary, #fff)',
+                          fontSize: '0.84rem',
+                        }}
+                      >
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <CalendarDays size={14} aria-hidden /> Legacy trip
+                        </span>
+                        <select
+                          data-testid="letter-trip-select"
+                          value={selectedTripId}
+                          onChange={(e) => setSelectedTripId(e.target.value)}
+                          disabled={tripsLoading || packetBusy}
+                          style={{
+                            padding: '0.45rem 0.6rem',
+                            borderRadius: 6,
+                            border: '1px solid var(--border-color, rgba(255,255,255,0.15))',
+                            background: 'var(--input-bg, rgba(255,255,255,0.05))',
+                            color: 'var(--text-primary, #fff)',
+                            fontSize: '0.85rem',
+                          }}
+                        >
+                          <option value="">{tripsLoading ? 'Loading trips...' : 'Select a trip'}</option>
+                          {trips.map((trip) => (
+                            <option key={trip.id} value={trip.id}>
+                              {formatTripLabel(trip) || `Trip #${trip.id}`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6,
+                          color: 'var(--text-primary, #fff)',
+                          fontSize: '0.84rem',
+                        }}
+                      >
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <UserRound size={14} aria-hidden /> Legacy participant
+                        </span>
+                        <select
+                          data-testid="letter-participant-select"
+                          value={selectedParticipantId}
+                          onChange={(e) => setSelectedParticipantId(e.target.value)}
+                          disabled={!selectedTripId || participantsLoading || packetBusy}
+                          style={{
+                            padding: '0.45rem 0.6rem',
+                            borderRadius: 6,
+                            border: '1px solid var(--border-color, rgba(255,255,255,0.15))',
+                            background: 'var(--input-bg, rgba(255,255,255,0.05))',
+                            color: 'var(--text-primary, #fff)',
+                            fontSize: '0.85rem',
+                          }}
+                        >
+                          <option value="">
+                            {participantsLoading
+                              ? 'Loading participants...'
+                              : participants.length === 0
+                                ? 'Select a trip first'
+                                : participants.length === 1
+                                  ? participants[0].fullName || 'Selected participant'
+                                  : 'Select a participant'}
+                          </option>
+                          {participants.map((participant) => (
+                            <option key={participant.id} value={participant.id}>
+                              {participant.fullName || `Participant #${participant.id}`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </>
+                  )}
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'flex-end',
+                      gap: 8,
+                    }}
+                  >
+                    <button
+                      type="submit"
+                      data-testid="generate-letter-packet"
+                      disabled={packetBusy || (!hasLetterBinding && !selectedTripId)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '0.55rem 0.9rem',
+                        borderRadius: 6,
+                        border: 'none',
+                        background: 'var(--primary-color, var(--accent-color))',
+                        color: '#fff',
+                        fontWeight: 600,
+                        fontSize: '0.85rem',
+                        cursor: packetBusy || (!hasLetterBinding && !selectedTripId) ? 'not-allowed' : 'pointer',
+                        opacity: packetBusy || (!hasLetterBinding && !selectedTripId) ? 0.65 : 1,
+                        width: 'fit-content',
+                      }}
+                    >
+                      {packetBusy ? <Loader2 size={14} /> : <Send size={14} />}
+                      {packetBusy ? 'Generating...' : 'Generate packet'}
+                    </button>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', lineHeight: 1.4 }}>
+                      Generate first, then send the packet to the customer portal.
+                    </span>
+                  </div>
+                </div>
+              </form>
+
+              {packetNotice && (
+                <div
+                  data-testid="letter-packet-result"
+                  style={{
+                    ...SUBSECTION,
+                    marginTop: 14,
+                  }}
+                >
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                    Generated {packetNotice.generated.length} letter
+                    {packetNotice.generated.length === 1 ? '' : 's'}
+                  </div>
+                  {packetNotice.generated.length > 0 && (
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.84rem' }}>
+                      {packetNotice.generated.map((item) => item.docType).join(', ')}
+                    </div>
+                  )}
+                  {packetNotice.skipped.length > 0 && (
+                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.84rem', marginTop: 6 }}>
+                      Skipped {packetNotice.skipped.length} locked item
+                      {packetNotice.skipped.length === 1 ? '' : 's'}.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {letterDocs.length > 0 && (
+                <div
+                  data-testid="letter-packet-documents"
+                  style={{
+                    marginTop: 14,
+                    borderTop: '1px solid var(--border-color)',
+                    paddingTop: 14,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600 }}>
+                      Current letter packet ({letterDocs.length})
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        data-testid="send-letter-packet"
+                        onClick={sendLetterPacket}
+                        disabled={letterActionBusy === 'send'}
+                        style={{
+                          ...enrolBtn,
+                          opacity: letterActionBusy === 'send' ? 0.6 : 1,
+                          cursor: letterActionBusy === 'send' ? 'wait' : 'pointer',
+                        }}
+                      >
+                        {letterActionBusy === 'send' ? 'Sending...' : 'Send to portal'}
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="download-letter-packet"
+                        onClick={downloadLetterPacket}
+                        disabled={letterActionBusy === 'download-all'}
+                        style={{
+                          ...enrolBtn,
+                          background: 'transparent',
+                          color: 'var(--primary-color, var(--accent-color))',
+                          border: '1px solid var(--primary-color, var(--accent-color))',
+                          opacity: letterActionBusy === 'download-all' ? 0.6 : 1,
+                          cursor: letterActionBusy === 'download-all' ? 'wait' : 'pointer',
+                        }}
+                      >
+                        {letterActionBusy === 'download-all' ? 'Preparing...' : 'Download all'}
+                      </button>
+                    </div>
+                  </div>
+                  {letterDocs.map((letter) => (
+                    <div
+                      key={letter.id}
+                      data-testid={`letter-doc-${letter.id}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '0.55rem 0',
+                        borderTop: '1px solid var(--border-color)',
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ color: 'var(--text-primary, #fff)', fontSize: '0.9rem' }}>
+                          {letter.documentType || letter.docType}
+                        </div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 2 }}>
+                          {letter.status}
+                          {letter.signedUploadedAt ? ' - signed uploaded' : ''}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openLetter(letter.id, 'generated')}
+                        disabled={letterActionBusy === `generated-${letter.id}`}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
+                          cursor: letterActionBusy === `generated-${letter.id}` ? 'wait' : 'pointer',
+                          fontSize: '0.78rem',
+                          color: 'var(--primary-color, var(--accent-color))',
+                          textDecoration: 'underline',
+                          whiteSpace: 'nowrap',
+                        }}
+                        >
+                          Preview
+                        </button>
+                      <button
+                        type="button"
+                        onClick={() => removeLetter(letter)}
+                        disabled={letterActionBusy === `remove-${letter.id}`}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
+                          cursor: letterActionBusy === `remove-${letter.id}` ? 'wait' : 'pointer',
+                          fontSize: '0.78rem',
+                          color: '#ef4444',
+                          textDecoration: 'underline',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        <Trash2 size={12} aria-hidden /> Remove
+                      </button>
+                      {letter.signedUploadedAt && (
+                        <button
+                          type="button"
+                          onClick={() => openLetter(letter.id, 'signed')}
+                          disabled={letterActionBusy === `signed-${letter.id}`}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            cursor: letterActionBusy === `signed-${letter.id}` ? 'wait' : 'pointer',
+                            fontSize: '0.78rem',
+                            color: '#16a34a',
+                            textDecoration: 'underline',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          Signed
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
           {/* Section 1 — Diagnostic answers (V8 / PRD §3 FR-4) */}
           <section style={SECTION}>
@@ -707,7 +1325,7 @@ const VisaAdvisorDashboard = () => {
                           padding: '6px 10px',
                           borderRadius: 6,
                           border: '1px solid var(--border-color)',
-                          background: 'var(--bg-color)',
+                          background: 'var(--input-bg)',
                           color: 'var(--text-primary)',
                           fontSize: 13,
                         }}
@@ -831,7 +1449,7 @@ const VisaAdvisorDashboard = () => {
                         height: 6,
                         width: '100%',
                         borderRadius: 999,
-                        background: 'rgba(255, 255, 255, 0.06)',
+                        background: 'var(--subtle-bg-2)',
                         overflow: 'hidden',
                       }}
                       role="progressbar"

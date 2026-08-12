@@ -164,6 +164,10 @@ const ALLOWED_ORIGINS = [
   "https://empcloud.com",
   "https://www.empcloud.com",
   "https://app.empcloud.com",
+  // The Modern Classroom client site ? hosts a standalone landing-page shell
+  // that fetches the public CRM-rendered landing-page HTML from the browser.
+  "https://themodernclassroom.in",
+  "https://www.themodernclassroom.in",
   // Dr. Haror's external marketing site — consumes the public wellness
   // catalog + payment endpoints (POST /api/wellness/public/payment/order +
   // /confirm). Hardcoded because it's part of the product surface, not a
@@ -682,6 +686,7 @@ const forecastingRoutes = require("./routes/forecasting");
 const dashboardsRoutes = require("./routes/dashboards");
 const customReportsRoutes = require("./routes/custom_reports");
 const bookingPagesRoutes = require("./routes/booking_pages");
+const webFormsRoutes = require("./routes/web_forms");
 const signaturesRoutes = require("./routes/signatures");
 const knowledgeBaseRoutes = require("./routes/knowledge_base");
 const portalRoutes = require("./routes/portal");
@@ -734,6 +739,7 @@ const travelVisaAnalyticsRoutes = require("./routes/travel_visa_analytics");
 const travelVisaRoutes = require("./routes/travel_visa");
 const travelItinerariesRoutes = require("./routes/travel_itineraries");
 const travelTripsRoutes = require("./routes/travel_trips");
+const travelPaymentPortalRoutes = require("./routes/travel_payment_portal");
 const travelCostMasterRoutes = require("./routes/travel_cost_master");
 const travelSuppliersRoutes = require("./routes/travel_suppliers");
 // PRD_TRAVEL_SUPPLIER_MASTER G035/G036/G037 — supplier PO ledger + state
@@ -791,6 +797,7 @@ const embassyRulesRoutes = require("./routes/embassy_rules");
 // not sub-brand-scoped. Backs the diagnostic-engine destination scoring.
 const travelCurriculumRoutes = require("./routes/travel_curriculum");
 const travelSchoolTermRoutes = require("./routes/travel_school_terms");
+const travelContactProfilesRoutes = require("./routes/travel_contact_profiles");
 // TS18 Phase 2 SHELL — Travel Stall personalised destination recommender
 // (LLM consumer). Mounted at /api/travel-personalised-destinations so the
 // URL is sibling-flat with /api/embassy-rules / /api/travel-curriculum
@@ -936,6 +943,7 @@ app.use("/api", (req, res, next) => {
     "/accounting/webhook",
     "/scim/v2",
     "/booking-pages/public",
+    "/forms/public",
     "/knowledge-base/public",
     "/live-chat/visitor",
     "/document-views/track",
@@ -950,6 +958,7 @@ app.use("/api", (req, res, next) => {
     "/travel/microsites/public",
     "/travel/diagnostics/public",
     "/travel/itineraries/public",
+    "/travel/payment-portal",
     "/travel/destination-photos/public",
     "/travel/reviews/public",
     "/travel/inbound/leads",
@@ -1237,6 +1246,7 @@ app.use("/api/forecasting", forecastingRoutes);
 app.use("/api/dashboards", dashboardsRoutes);
 app.use("/api/custom-reports", customReportsRoutes);
 app.use("/api/booking-pages", bookingPagesRoutes);
+app.use("/api/forms", webFormsRoutes);
 app.use("/api/signatures", signaturesRoutes);
 app.use("/api/knowledge-base", knowledgeBaseRoutes);
 app.use("/api/portal", portalRoutes);
@@ -1305,6 +1315,7 @@ app.use("/api/travel/visa", travelVisaRoutes);
 app.use("/api/travel", travelReviewsRoutes); // literal /reviews paths — mount before parametric itinerary routes
 app.use("/api/travel", travelItinerariesRoutes);
 app.use("/api/travel", travelTripsRoutes);
+app.use("/api/travel", travelPaymentPortalRoutes);
 // Slice C2 — passport OCR upload + verification queue (stub-mode pending PC-1).
 app.use("/api/travel/passport", require("./routes/travel_passport"));
 app.use("/api/travel", travelCostMasterRoutes);
@@ -1424,6 +1435,7 @@ app.use("/api/travel/pois", require("./routes/travel_pois"));
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
 app.use("/api/travel-school-terms", travelSchoolTermRoutes);
+app.use("/api/travel", travelContactProfilesRoutes);
 app.use(
   "/api/travel-personalised-destinations",
   travelPersonalisedDestinationsRoutes,
@@ -1496,7 +1508,25 @@ app.use("/api/admin", adminRoutes);
 // at the route. Separate from /api/csp (slice 2 of #917) — see route header.
 app.use("/api/security", require("./routes/security_reports"));
 
-// Public landing pages (outside /api/ prefix, no auth guard)
+// Public landing pages (outside /api/ prefix, no auth guard).
+// The Modern Classroom hosts a thin shell on its own domain that frames
+// the published CRM landing page so the existing public renderer keeps
+// owning layout, CSS, JS, forms, and analytics without duplication.
+// Keep the allowlist tight to the client's production origin pair only.
+app.use(
+  "/p",
+  allowIframeEmbedding({
+    allowList: [
+      "https://themodernclassroom.in",
+      "https://www.themodernclassroom.in",
+      // Local QA path for the standalone host HTML. The public /p/* page
+      // still stays non-framable for arbitrary origins; we only mirror the
+      // local HTTP ports already CORS-allowed above.
+      "http://localhost:8000",
+      "http://127.0.0.1:8000",
+    ],
+  }),
+);
 app.use("/p", landingPagesPublic);
 
 // Public legal/policy pages — rendered from Markdown (no auth)
@@ -1756,6 +1786,17 @@ const gateVisaDocs = (req, res, next) => {
 app.use("/uploads/visa-docs", gateVisaDocs);
 app.use("/api/uploads/visa-docs", gateVisaDocs);
 app.use("/api/uploads", require("./routes/file-uploads"));
+// Web-form attachments: force download + nosniff so a forged HTML/JS file
+// cannot execute in the user's browser if the upload mimetype was spoofed.
+app.use(
+  "/uploads/web-forms",
+  express.static(path.join(__dirname, "uploads", "web-forms"), {
+    setHeaders: (res) => {
+      res.setHeader("Content-Disposition", "attachment");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+    },
+  }),
+);
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use("/api/uploads", express.static(path.join(__dirname, "uploads")));
 // Brochure Engine — serves PDFs generated by the agentic-orchcrm subprocess.
@@ -2149,6 +2190,14 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initLeadScoringCron } = require("./cron/leadScoringEngine");
   initLeadScoringCron(io);
 
+  // Initialize Callified new-lead auto-dial queue (processes one lead at a time).
+  const { startProcessor: startCallifiedAutoDial } = require("./lib/callifiedAutoDialQueue");
+  startCallifiedAutoDial();
+
+  // Initialize Callified DNP retry engine (re-dials DNP leads on a schedule).
+  const { startDnpRetryEngine } = require("./lib/callifiedDnpRetryEngine");
+  startDnpRetryEngine();
+
   // Initialize Recurring Invoice Engine (runs daily at 6 AM)
   const { initRecurringInvoiceCron } = require("./cron/recurringInvoiceEngine");
   initRecurringInvoiceCron(io);
@@ -2307,10 +2356,9 @@ if (process.env.DISABLE_CRONS === "1") {
   console.log("✓ Cron engine: visaRiskFlagEngine (every 6 hours)");
 
   // Initialize Travel CRM web check-in scheduler (every 15 min).
-  // PRD §4.6 + §6.3 row 1 — flips WebCheckin status pending → reminded
-  // when windowOpenAt arrives, then reminded → fallback-agent if stalled
-  // 30m+. Browser-automation half (P1B) deferred — this scheduler only
-  // handles the tracking + reminder side.
+  // Notifies the assigned agent (or all admins/managers if unassigned) when a
+  // pending WebCheckin has departureAt within the next 24 hours. Status model
+  // is binary pending/done; no automation, no fallback-agent transitions.
   const { initWebCheckinSchedulerCron } = require("./cron/webCheckinScheduler");
   initWebCheckinSchedulerCron();
 

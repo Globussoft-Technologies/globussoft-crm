@@ -38,6 +38,25 @@ function defaultCategoryFor(key) {
   return "general";
 }
 
+// Per-key validation for operator-facing toggles/numbers. Returns
+// { ok: true } or { ok: false, code, error } so callers can return 400
+// with a canonical envelope before touching the DB.
+function validateTenantSettingValue(key, rawValue) {
+  if (key === KEYS.CALLIFIED_DNP_RETRY_MAX_RETRIES) {
+    const n = Number(rawValue);
+    if (!Number.isInteger(n) || n < 1 || n > 10) {
+      return { ok: false, code: "INVALID_DNP_MAX_RETRIES", error: "DNP max retries must be an integer between 1 and 10." };
+    }
+  }
+  if (key === KEYS.CALLIFIED_DNP_RETRY_INTERVAL_MINUTES) {
+    const n = Number(rawValue);
+    if (!Number.isInteger(n) || n < 5 || n > 24 * 60) {
+      return { ok: false, code: "INVALID_DNP_INTERVAL", error: "DNP retry interval must be an integer between 5 minutes and 24 hours." };
+    }
+  }
+  return { ok: true };
+}
+
 // ─── GET / — list all overrides for caller's tenant + defaults map ────
 //
 // Returns BOTH the active rows AND the env-var defaults so the operator
@@ -122,6 +141,14 @@ router.put("/:key", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
       return res.status(400).json({
         error: "value is required",
         code: "MISSING_VALUE",
+      });
+    }
+
+    const validation = validateTenantSettingValue(key, body.value);
+    if (!validation.ok) {
+      return res.status(400).json({
+        error: validation.error,
+        code: validation.code,
       });
     }
 

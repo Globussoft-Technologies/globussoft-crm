@@ -64,6 +64,7 @@ export default function Pagination({
         gap: '1rem',
         padding: '0.75rem 0',
         flexWrap: 'wrap',
+        margin: "0 1rem ",
         ...style,
       }}
     >

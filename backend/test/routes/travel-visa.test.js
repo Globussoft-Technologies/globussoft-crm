@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Travel CRM — Visa Sure applications route (Phase 3 cluster B3) contract tests.
+ * Travel CRM — visa applications route (Phase 3 cluster B3) contract tests.
  *
  * Pins backend/routes/travel_visa.js:
  *   GET   /api/travel/visa/applications              (paginated list)
@@ -16,19 +16,17 @@
  *     403 WRONG_VERTICAL; tenant row missing → 404 TENANT_NOT_FOUND.
  *   - GET /applications happy path: decorates each row with its Contact
  *     projection (id+name+email+phone) using a join-in-app pattern (no
- *     Prisma include), narrows queries to (tenantId, subBrand=visasure).
- *   - GET /applications empty-state: zero visasure contacts returns a
+ *     Prisma include), scopes queries to tenantId and decorates rows with contacts.
+ *   - GET /applications empty-state: zero other-brand contacts returns a
  *     stable shape `{ applications: [], total: 0, limit, offset }` —
  *     never hits visaApplication.findMany / count when contact set empty.
- *   - GET /applications/:id 404 NOT_FOUND (no application on this tenant)
- *     vs 404 NOT_VISA_SURE (application exists but Contact.subBrand !=
- *     'visasure') vs 400 INVALID_ID. Detail-shape includes contact +
+ *   - GET /applications/:id 404 NOT_FOUND (no application on this tenant
+ *     or its Contact row is missing) vs 400 INVALID_ID. Detail-shape includes contact +
  *     diagnostic + documentChecklist.
  *   - POST /applications validation: MISSING_FIELDS (no contactId / no
  *     applicationType / no destinationCountry), INVALID_APPLICATION_TYPE
  *     (enum), INVALID_DESTINATION (>200 chars), NOT_FOUND (contact not on
- *     tenant), NOT_VISA_SURE (contact in a different sub-brand → 403),
- *     happy 201 returns the created row with status='intake'.
+ *     tenant), happy 201 returns the created row with status='intake'.
  *   - PATCH /applications/:id: field-by-field opt-in, EMPTY_BODY when no
  *     updatable fields, INVALID_STATUS / INVALID_RISK_FLAG enum gates,
  *     null / "" clears advisorRiskFlag, status transitions fire the
@@ -47,6 +45,7 @@
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
+import { toXlsxBuffer } from '../../lib/csvIO.js';
 
 // ─── Monkey-patch CJS module exports BEFORE requiring the router ─────
 //
@@ -71,9 +70,22 @@ eventBusModule.safeEmitEvent = mockSafeEmitEvent;
 
 const mockFindLatestDiagnostic = vi.fn().mockResolvedValue(null);
 const diagnosticModule = requireCJS_init('../../lib/travelLatestDiagnostic');
+const visaDocStoreModule = requireCJS_init('../../lib/visaDocStore');
+const visaLetterStoreModule = requireCJS_init('../../lib/visaLetterStore');
+const mockVisaDocStoreStore = vi.fn();
+const mockVisaDocStoreRemove = vi.fn();
+const mockVisaLetterStoreStore = vi.fn();
+const mockVisaLetterStoreRemove = vi.fn();
+visaDocStoreModule.storeDoc = mockVisaDocStoreStore;
+visaDocStoreModule.removeDoc = mockVisaDocStoreRemove;
+visaLetterStoreModule.storeLetterPdf = mockVisaLetterStoreStore;
+visaLetterStoreModule.removeLetter = mockVisaLetterStoreRemove;
 diagnosticModule.findLatestDiagnostic = mockFindLatestDiagnostic;
 
-// ─── Patch prisma singleton BEFORE requiring the router ──────────────
+const permissionModule = requireCJS_init('../../middleware/requirePermission');
+const clearPermissionCache = permissionModule.clearAllCache;
+
+// ─── Patch prisma singleton BEFORE requiring the router ───────────────
 prisma.contact = {
   ...(prisma.contact || {}),
   findFirst: vi.fn(),
@@ -88,12 +100,47 @@ prisma.visaApplication = {
   create: vi.fn(),
   update: vi.fn(),
 };
+prisma.tmcTrip = prisma.tmcTrip || {};
+prisma.tmcTrip.findFirst = vi.fn();
+prisma.tripParticipant = prisma.tripParticipant || {};
+prisma.tripParticipant.findFirst = vi.fn();
+prisma.tripParticipant.findMany = vi.fn();
 prisma.passportIdentity = prisma.passportIdentity || {};
 prisma.passportIdentity.findFirst = vi.fn();
 prisma.visaChecklistTemplate = prisma.visaChecklistTemplate || {};
 prisma.visaChecklistTemplate.findMany = vi.fn().mockResolvedValue([]);
+prisma.visaChecklistTemplate.findFirst = vi.fn();
+prisma.visaChecklistTemplate.create = vi.fn();
+prisma.visaChecklistTemplate.update = vi.fn();
+prisma.visaChecklistSource = prisma.visaChecklistSource || {};
+prisma.visaChecklistSource.findMany = vi.fn().mockResolvedValue([]);
+prisma.visaChecklistSource.findFirst = vi.fn();
+prisma.visaChecklistSource.create = vi.fn();
+prisma.visaChecklistSource.update = vi.fn();
+prisma.visaChecklistSnapshot = prisma.visaChecklistSnapshot || {};
+prisma.visaChecklistSnapshot.findFirst = vi.fn().mockResolvedValue(null);
+prisma.visaChecklistSnapshot.create = vi.fn();
 prisma.visaDocumentChecklistItem = prisma.visaDocumentChecklistItem || {};
+prisma.visaDocumentChecklistItem.findFirst = vi.fn();
+prisma.visaDocumentChecklistItem.create = vi.fn();
+prisma.visaDocumentChecklistItem.update = vi.fn();
 prisma.visaDocumentChecklistItem.createMany = vi.fn().mockResolvedValue({ count: 0 });
+prisma.visaLetterTemplate = prisma.visaLetterTemplate || {};
+prisma.visaLetterTemplate.findMany = vi.fn();
+prisma.visaLetterTemplate.create = vi.fn();
+prisma.visaLetterGeneration = prisma.visaLetterGeneration || {};
+prisma.visaLetterGeneration.findFirst = vi.fn();
+prisma.visaLetterGeneration.findMany = vi.fn();
+prisma.visaLetterGeneration.create = vi.fn();
+prisma.visaLetterGeneration.update = vi.fn();
+prisma.visaLetterGeneration.delete = vi.fn();
+prisma.visaLetterDocument = prisma.visaLetterDocument || {};
+prisma.visaLetterDocument.findFirst = vi.fn();
+prisma.visaLetterDocument.findMany = vi.fn();
+prisma.visaLetterDocument.create = vi.fn();
+prisma.visaLetterDocument.update = vi.fn();
+prisma.visaLetterDocument.updateMany = vi.fn();
+prisma.visaLetterDocument.delete = vi.fn();
 prisma.userRole = prisma.userRole || {};
 prisma.userRole.findMany = vi.fn();
 prisma.tenant = prisma.tenant || {};
@@ -109,7 +156,6 @@ prisma.auditLog = {
   create: vi.fn().mockResolvedValue({ id: 1 }),
   findFirst: vi.fn().mockResolvedValue(null),
 };
-
 import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
@@ -141,9 +187,41 @@ beforeEach(() => {
   prisma.visaApplication.count.mockReset().mockResolvedValue(0);
   prisma.visaApplication.create.mockReset();
   prisma.visaApplication.update.mockReset();
-  prisma.passportIdentity.findFirst.mockReset().mockResolvedValue(null);
+    prisma.passportIdentity.findFirst.mockReset().mockResolvedValue(null);
   prisma.visaChecklistTemplate.findMany.mockReset().mockResolvedValue([]);
+  prisma.visaChecklistTemplate.findFirst.mockReset().mockResolvedValue(null);
+  prisma.visaChecklistTemplate.create.mockReset();
+  prisma.visaChecklistTemplate.update.mockReset();
+  prisma.visaChecklistSource.findMany.mockReset().mockResolvedValue([]);
+  prisma.visaChecklistSource.findFirst.mockReset().mockResolvedValue(null);
+  prisma.visaChecklistSource.create.mockReset();
+  prisma.visaChecklistSource.update.mockReset();
+  prisma.visaChecklistSnapshot.findFirst.mockReset().mockResolvedValue(null);
+  prisma.visaChecklistSnapshot.create.mockReset();
   prisma.visaDocumentChecklistItem.createMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.visaDocumentChecklistItem.findFirst.mockReset().mockResolvedValue(null);
+  prisma.visaDocumentChecklistItem.create.mockReset();
+  prisma.visaDocumentChecklistItem.update.mockReset();
+  prisma.visaLetterTemplate.findMany.mockReset().mockResolvedValue([]);
+  prisma.visaLetterTemplate.create.mockReset();
+  prisma.visaLetterGeneration.findFirst.mockReset().mockResolvedValue(null);
+  prisma.visaLetterGeneration.findMany.mockReset().mockResolvedValue([]);
+  prisma.visaLetterGeneration.create.mockReset();
+  prisma.visaLetterGeneration.update.mockReset();
+  prisma.visaLetterGeneration.delete.mockReset();
+  prisma.visaLetterDocument.findFirst.mockReset().mockResolvedValue(null);
+  prisma.visaLetterDocument.findMany.mockReset().mockResolvedValue([]);
+  prisma.visaLetterDocument.create.mockReset();
+  prisma.visaLetterDocument.update.mockReset();
+  prisma.visaLetterDocument.updateMany.mockReset();
+  prisma.visaLetterDocument.delete.mockReset();
+  prisma.tmcTrip.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tripParticipant.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tripParticipant.findMany.mockReset().mockResolvedValue([]);
+  mockVisaDocStoreStore.mockReset();
+  mockVisaDocStoreRemove.mockReset();
+  mockVisaLetterStoreStore.mockReset();
+  mockVisaLetterStoreRemove.mockReset();
   prisma.userRole.findMany.mockReset().mockResolvedValue([
     {
       role: {
@@ -162,6 +240,7 @@ beforeEach(() => {
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   mockSafeEmitEvent.mockReset();
   mockFindLatestDiagnostic.mockReset().mockResolvedValue(null);
+  clearPermissionCache();
 });
 
 // ─── Auth + role + vertical gate (shared) ─────────────────────────────
@@ -236,7 +315,7 @@ describe('travel-visa — vertical gate', () => {
 // ─── GET /applications (list) ─────────────────────────────────────────
 
 describe('GET /applications — empty + happy paths', () => {
-  test('zero visasure contacts → empty envelope without touching visaApplication tables', async () => {
+  test('zero contacts → empty envelope without touching visaApplication tables', async () => {
     prisma.contact.findMany.mockResolvedValue([]);
     const res = await request(makeApp())
       .get('/api/travel/visa/applications')
@@ -248,9 +327,9 @@ describe('GET /applications — empty + happy paths', () => {
       limit: 50,
       offset: 0,
     });
-    // Contact lookup narrowed to (tenantId, subBrand=visasure).
+    // Contact lookup is scoped to the tenant and used to decorate the row.
     expect(prisma.contact.findMany.mock.calls[0][0]).toMatchObject({
-      where: { tenantId: 1, subBrand: 'visasure' },
+      where: { tenantId: 1 },
       select: { id: true, name: true, email: true, phone: true },
     });
     // VisaApplication never queried.
@@ -324,6 +403,65 @@ describe('GET /applications — empty + happy paths', () => {
     expect(bad.body).toMatchObject({ code: 'INVALID_STATUS' });
   });
 
+  test('?applicationType=umrah narrows the where clause; ?applicationType=bogus → 400 INVALID_APPLICATION_TYPE', async () => {
+    prisma.contact.findMany.mockResolvedValue([{ id: 11, name: 'A', email: 'a@x', phone: '1' }]);
+    prisma.visaApplication.findMany.mockResolvedValue([]);
+    prisma.visaApplication.count.mockResolvedValue(0);
+
+    const ok = await request(makeApp())
+      .get('/api/travel/visa/applications?applicationType=umrah')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(ok.status).toBe(200);
+    expect(prisma.visaApplication.findMany.mock.calls[0][0].where).toMatchObject({
+      tenantId: 1,
+      contactId: { in: [11] },
+      applicationType: 'umrah',
+    });
+
+    const bad = await request(makeApp())
+      .get('/api/travel/visa/applications?applicationType=bogus')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(bad.status).toBe(400);
+    expect(bad.body).toMatchObject({ code: 'INVALID_APPLICATION_TYPE' });
+  });
+
+  test('?search=Riya filters contacts by name and ?from/?to narrows createdAt', async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 11, name: 'Riya Sharma', email: 'riya@x.test', phone: '1' },
+    ]);
+    prisma.visaApplication.findMany.mockResolvedValue([]);
+    prisma.visaApplication.count.mockResolvedValue(0);
+
+    const from = '2026-05-01T00:00:00.000Z';
+    const to = '2026-05-31T23:59:59.999Z';
+    const res = await request(makeApp())
+      .get(`/api/travel/visa/applications?search=Riya&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findMany.mock.calls[0][0].where).toMatchObject({
+      tenantId: 1,
+      name: { contains: 'Riya' },
+    });
+    expect(prisma.visaApplication.findMany.mock.calls[0][0].where).toMatchObject({
+      tenantId: 1,
+      contactId: { in: [11] },
+      createdAt: {
+        gte: new Date(from),
+        lte: new Date(to),
+      },
+    });
+  });
+
+  test('?from=garbage → 400 INVALID_DATE before hitting the list query', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/visa/applications?from=not-a-date')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_DATE' });
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+    expect(prisma.visaApplication.findMany).not.toHaveBeenCalled();
+  });
+
   test('limit cap: ?limit=10000 clamped to 200', async () => {
     prisma.contact.findMany.mockResolvedValue([{ id: 11, name: 'A', email: 'a@x', phone: '1' }]);
     prisma.visaApplication.findMany.mockResolvedValue([]);
@@ -371,21 +509,21 @@ describe('GET /applications/:id — error paths + happy path', () => {
     expect(prisma.contact.findFirst).not.toHaveBeenCalled();
   });
 
-  test('application found but Contact.subBrand != visasure → 404 NOT_VISA_SURE', async () => {
+  test('application found with any contact brand → 200 returns the contact projection', async () => {
     prisma.visaApplication.findFirst.mockResolvedValue({
       id: 50, tenantId: 1, contactId: 99, applicationType: 'tourist',
       destinationCountry: 'AE', status: 'intake', documentChecklist: [],
     });
     prisma.contact.findFirst.mockResolvedValue({
-      id: 99, name: 'Stray', email: 's@x', phone: '0', source: 'web', subBrand: 'tmc',
+      id: 99, name: 'Stray', email: 's@x', phone: '0', source: 'web', subBrand: 'other-brand',
     });
     const res = await request(makeApp())
       .get('/api/travel/visa/applications/50')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    expect(res.status).toBe(404);
-    expect(res.body).toMatchObject({ code: 'NOT_VISA_SURE' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 50, contactId: 99 });
+    expect(res.body.contact).toMatchObject({ id: 99, subBrand: 'other-brand' });
   });
-
   test('happy path: returns application + contact + diagnostic + documentChecklist', async () => {
     prisma.visaApplication.findFirst.mockResolvedValue({
       id: 50, tenantId: 1, contactId: 11, applicationType: 'work',
@@ -402,7 +540,7 @@ describe('GET /applications/:id — error paths + happy path', () => {
     });
     prisma.contact.findFirst.mockResolvedValue({
       id: 11, name: 'Aarav S', email: 'aarav@x.test', phone: '+91-90',
-      source: 'google-ads', subBrand: 'visasure',
+      source: 'google-ads', subBrand: 'other-brand',
     });
     mockFindLatestDiagnostic.mockResolvedValue({
       id: 7, classification: 'high', classificationLabel: 'High readiness',
@@ -418,15 +556,15 @@ describe('GET /applications/:id — error paths + happy path', () => {
       id: 50, applicationType: 'work', destinationCountry: 'UK',
       status: 'docs-pending',
     });
-    expect(res.body.contact).toMatchObject({ id: 11, subBrand: 'visasure' });
+    expect(res.body.contact).toMatchObject({ id: 11, subBrand: 'other-brand' });
     expect(res.body.diagnostic).toMatchObject({
       id: 7, classification: 'high', recommendedTier: 'premium', score: 0.82,
     });
     expect(res.body.documentChecklist).toHaveLength(2);
-    // Diagnostic helper called with (prisma, tenantId, contactId, 'visasure').
+    // Diagnostic helper called with (prisma, tenantId, contactId, 'other-brand').
     expect(mockFindLatestDiagnostic.mock.calls[0][1]).toBe(1);
     expect(mockFindLatestDiagnostic.mock.calls[0][2]).toBe(11);
-    expect(mockFindLatestDiagnostic.mock.calls[0][3]).toBe('visasure');
+    expect(mockFindLatestDiagnostic.mock.calls[0][3]).toBe('other-brand');
   });
 
   test('diagnostic helper throws → diagnostic=null but response is still 200', async () => {
@@ -435,7 +573,7 @@ describe('GET /applications/:id — error paths + happy path', () => {
       destinationCountry: 'AE', status: 'intake', documentChecklist: [],
     });
     prisma.contact.findFirst.mockResolvedValue({
-      id: 11, name: 'A', email: 'a@x', phone: '1', source: 'web', subBrand: 'visasure',
+      id: 11, name: 'A', email: 'a@x', phone: '1', source: 'web', subBrand: null,
     });
     mockFindLatestDiagnostic.mockRejectedValue(new Error('diagnostic table missing'));
 
@@ -493,17 +631,44 @@ describe('POST /applications ? validation + happy path', () => {
     expect(prisma.visaApplication.create).not.toHaveBeenCalled();
   });
 
-  test('contact exists but Contact.subBrand != visasure ? 403 NOT_VISA_SURE', async () => {
-    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'rfu' });
+  test('contact exists with tmc sub-brand → 201 existing contact is accepted', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'tmc' });
+    prisma.visaApplication.create.mockResolvedValue({
+      id: 101, tenantId: 1, contactId: 11, applicationType: 'umrah',
+      destinationCountry: 'SA', status: 'intake',
+      readinessLevel: null, advisorRiskFlag: null, complexCase: false,
+      filedAt: null, decidedAt: null, outcome: null,
+      createdAt: new Date('2026-05-25').toISOString(),
+      updatedAt: new Date('2026-05-25').toISOString(),
+    });
     const res = await request(makeApp())
       .post('/api/travel/visa/applications')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
       .send({ contactId: 11, applicationType: 'umrah', destinationCountry: 'SA' });
-    expect(res.status).toBe(403);
-    expect(res.body).toMatchObject({ code: 'NOT_VISA_SURE' });
-    expect(prisma.visaApplication.create).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ contactId: 11, contactResolution: 'existing' });
+    expect(prisma.visaApplication.create).toHaveBeenCalled();
   });
 
+  test('contact exists with visasure sub-brand → 201 existing contact is accepted', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
+    prisma.visaApplication.create.mockResolvedValue({
+      id: 101, tenantId: 1, contactId: 11, applicationType: 'umrah',
+      destinationCountry: 'SA', status: 'intake',
+      readinessLevel: null, advisorRiskFlag: null, complexCase: false,
+      filedAt: null, decidedAt: null, outcome: null,
+      createdAt: new Date('2026-05-25').toISOString(),
+      updatedAt: new Date('2026-05-25').toISOString(),
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/visa/applications')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ contactId: 11, applicationType: 'umrah', destinationCountry: 'SA' });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 101, contactId: 11, contactResolution: 'existing' });
+    expect(prisma.visaApplication.create).toHaveBeenCalled();
+  });
   test('invalid future applicantBirthDate ? 400 INVALID_BIRTHDATE', async () => {
     const res = await request(makeApp())
       .post('/api/travel/visa/applications')
@@ -520,7 +685,7 @@ describe('POST /applications ? validation + happy path', () => {
     expect(prisma.visaApplication.create).not.toHaveBeenCalled();
   });
 
-  test('new applicant without existing contact ? auto-creates visasure contact and application', async () => {
+  test('new applicant without existing contact → creates a generic contact and application', async () => {
     prisma.contact.findMany.mockResolvedValue([]);
     prisma.contact.create.mockResolvedValue({ id: 222 });
     prisma.visaApplication.create.mockResolvedValue({
@@ -575,7 +740,7 @@ describe('POST /applications ? validation + happy path', () => {
     });
   });
 
-  test('matching applicant by email + DOB ? reuses existing visasure contact', async () => {
+  test('matching applicant by email + DOB ? reuses existing other-brand contact', async () => {
     prisma.contact.findMany.mockResolvedValue([
       {
         id: 333,
@@ -644,6 +809,158 @@ describe('POST /applications ? validation + happy path', () => {
       select: { id: true, subBrand: true },
     });
   });
+
+  test('happy path with trip binding: validates trip + participant and stores both on the application', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 9001 });
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 501 });
+    prisma.passportIdentity.findFirst.mockResolvedValue(null);
+    prisma.visaApplication.create.mockResolvedValue({
+      id: 103, tenantId: 1, contactId: 11, applicationType: 'tourist',
+      destinationCountry: 'Vietnam', status: 'intake', tripId: 9001, participantId: 501,
+      readinessLevel: null, advisorRiskFlag: null, complexCase: false,
+      filedAt: null, decidedAt: null, outcome: null,
+      createdAt: new Date('2026-05-25').toISOString(),
+      updatedAt: new Date('2026-05-25').toISOString(),
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/visa/applications')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 11,
+        tripId: 9001,
+        participantId: 501,
+        applicationType: 'tourist',
+        destinationCountry: 'Vietnam',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      id: 103,
+      contactId: 11,
+      tripId: 9001,
+      participantId: 501,
+      contactResolution: 'existing',
+    });
+    expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith({
+      where: { id: 9001, tenantId: 1 },
+      select: { id: true },
+    });
+    expect(prisma.tripParticipant.findFirst).toHaveBeenCalledWith({
+      where: { id: 501, tripId: 9001 },
+      select: { id: true },
+    });
+    expect(prisma.visaApplication.create.mock.calls[0][0]).toMatchObject({
+      data: {
+        tenantId: 1,
+        contactId: 11,
+        applicationType: 'tourist',
+        destinationCountry: 'Vietnam',
+        tripId: 9001,
+        participantId: 501,
+        status: 'intake',
+      },
+    });
+  });
+
+  test('happy path without trip binding creates a tripless application for non-TMC travel', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'rfu' });
+    prisma.passportIdentity.findFirst.mockResolvedValue(null);
+    prisma.visaApplication.create.mockResolvedValue({
+      id: 104, tenantId: 1, contactId: 11, applicationType: 'tourist',
+      destinationCountry: 'Japan', status: 'intake', tripId: null, participantId: null,
+      readinessLevel: null, advisorRiskFlag: null, complexCase: false,
+      filedAt: null, decidedAt: null, outcome: null,
+      createdAt: new Date('2026-05-25').toISOString(),
+      updatedAt: new Date('2026-05-25').toISOString(),
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/visa/applications')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 11,
+        applicationType: 'tourist',
+        destinationCountry: 'Japan',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      id: 104,
+      contactId: 11,
+      tripId: null,
+      participantId: null,
+      contactResolution: 'existing',
+    });
+    expect(prisma.tmcTrip.findFirst).not.toHaveBeenCalled();
+    expect(prisma.tripParticipant.findFirst).not.toHaveBeenCalled();
+    expect(prisma.visaApplication.create.mock.calls[0][0]).toMatchObject({
+      data: {
+        tenantId: 1,
+        contactId: 11,
+        applicationType: 'tourist',
+        destinationCountry: 'Japan',
+        tripId: null,
+        participantId: null,
+        status: 'intake',
+      },
+    });
+  });
+
+  test('snapshot-backed create returns checklist snapshot fields', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
+    prisma.passportIdentity.findFirst.mockResolvedValue(null);
+    prisma.visaChecklistTemplate.findMany.mockResolvedValue([
+      { docType: 'Passport', required: true, sortOrder: 0, notes: null },
+    ]);
+    prisma.visaChecklistSource.findMany.mockResolvedValue([]);
+    prisma.visaChecklistSnapshot.findFirst.mockResolvedValue(null);
+    prisma.visaChecklistSnapshot.create.mockResolvedValue({
+      id: 77,
+      tenantId: 1,
+      applicationType: 'tourist',
+      destinationCountry: 'AE',
+      versionNumber: 1,
+      snapshotHash: 'hash-77',
+      itemsJson: '[{"docType":"Passport","required":true,"sortOrder":0,"notes":null}]',
+      sourceListJson: '[]',
+      createdAt: new Date('2026-05-25').toISOString(),
+    });
+    prisma.visaApplication.create.mockResolvedValue({
+      id: 101,
+      tenantId: 1,
+      contactId: 11,
+      applicationType: 'tourist',
+      destinationCountry: 'AE',
+      status: 'intake',
+    });
+    prisma.visaApplication.update.mockResolvedValue({
+      id: 101,
+      tenantId: 1,
+      contactId: 11,
+      applicationType: 'tourist',
+      destinationCountry: 'AE',
+      status: 'intake',
+      checklistSnapshotId: 77,
+      checklistSnapshotVersion: 1,
+      checklistSnapshotJson: '[{"docType":"Passport","required":true,"sortOrder":0,"notes":null}]',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/visa/applications')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ contactId: 11, applicationType: 'tourist', destinationCountry: 'AE' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      id: 101,
+      status: 'intake',
+      checklistSnapshotId: 77,
+      checklistSnapshotVersion: 1,
+    });
+    expect(prisma.visaDocumentChecklistItem.createMany).toHaveBeenCalled();
+  });
 });
 describe('PATCH /applications/:id — validation + status transitions', () => {
   test('non-numeric id → 400 INVALID_ID', async () => {
@@ -669,7 +986,7 @@ describe('PATCH /applications/:id — validation + status transitions', () => {
 
   test('empty body (no updatable fields) → 400 EMPTY_BODY', async () => {
     prisma.visaApplication.findFirst.mockResolvedValue({ id: 50, contactId: 11, status: 'intake' });
-    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'other-brand' });
     const res = await request(makeApp())
       .patch('/api/travel/visa/applications/50')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
@@ -681,7 +998,7 @@ describe('PATCH /applications/:id — validation + status transitions', () => {
 
   test('invalid status enum → 400 INVALID_STATUS', async () => {
     prisma.visaApplication.findFirst.mockResolvedValue({ id: 50, contactId: 11, status: 'intake' });
-    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'other-brand' });
     const res = await request(makeApp())
       .patch('/api/travel/visa/applications/50')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
@@ -693,7 +1010,7 @@ describe('PATCH /applications/:id — validation + status transitions', () => {
 
   test('invalid risk flag → 400 INVALID_RISK_FLAG', async () => {
     prisma.visaApplication.findFirst.mockResolvedValue({ id: 50, contactId: 11, status: 'intake' });
-    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'other-brand' });
     const res = await request(makeApp())
       .patch('/api/travel/visa/applications/50')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
@@ -705,7 +1022,7 @@ describe('PATCH /applications/:id — validation + status transitions', () => {
 
   test('advisorRiskFlag: "" clears the flag (writes null)', async () => {
     prisma.visaApplication.findFirst.mockResolvedValue({ id: 50, contactId: 11, status: 'intake' });
-    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'other-brand' });
     prisma.visaApplication.update.mockResolvedValue({
       id: 50, tenantId: 1, contactId: 11, advisorRiskFlag: null, status: 'intake',
     });
@@ -722,7 +1039,7 @@ describe('PATCH /applications/:id — validation + status transitions', () => {
 
   test('status transition (intake → filed) fires safeEmitEvent("visa.status_changed")', async () => {
     prisma.visaApplication.findFirst.mockResolvedValue({ id: 50, contactId: 11, status: 'intake' });
-    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'other-brand' });
     prisma.visaApplication.update.mockResolvedValue({
       id: 50, tenantId: 1, contactId: 11, status: 'filed',
     });
@@ -736,7 +1053,7 @@ describe('PATCH /applications/:id — validation + status transitions', () => {
     const [eventName, payload, tenantArg, context] = mockSafeEmitEvent.mock.calls[0];
     expect(eventName).toBe('visa.status_changed');
     expect(payload).toMatchObject({
-      id: 50, contactId: 11, subBrand: 'visasure',
+      id: 50, contactId: 11, subBrand: 'other-brand',
       oldStatus: 'intake', newStatus: 'filed', tenantId: 1,
     });
     expect(tenantArg).toBe(1);
@@ -745,7 +1062,7 @@ describe('PATCH /applications/:id — validation + status transitions', () => {
 
   test('no-op status (intake → intake) does NOT fire safeEmitEvent', async () => {
     prisma.visaApplication.findFirst.mockResolvedValue({ id: 50, contactId: 11, status: 'intake' });
-    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'visasure' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 11, subBrand: 'other-brand' });
     prisma.visaApplication.update.mockResolvedValue({
       id: 50, tenantId: 1, contactId: 11, status: 'intake', complexCase: true,
     });
@@ -759,3 +1076,416 @@ describe('PATCH /applications/:id — validation + status transitions', () => {
     expect(mockSafeEmitEvent).not.toHaveBeenCalled();
   });
 });
+
+
+describe('POST /applications/:id/letters/generate', () => {
+  test('happy path generates four letter PDFs without mutating checklist status', async () => {
+    const templates = [
+      ['parental-consent-letter', 'Parental Consent Letter'],
+      ['cover-letter', 'Cover Letter'],
+      ['no-objection-certificate', 'No Objection Certificate'],
+      ['sponsorship-letter', 'Sponsorship Letter'],
+    ].map(([code, documentType], index) => ({
+      id: index + 1,
+      tenantId: 1,
+      code,
+      name: documentType,
+      documentType,
+      version: 1,
+      contentHtml: `<h1>${documentType}</h1><p>{{child_name}} {{passport_no}}</p>`,
+      requiredFieldsJson: '[]',
+      isActive: true,
+    }));
+
+    prisma.visaApplication.findFirst
+      .mockResolvedValueOnce({
+        id: 50,
+        tenantId: 1,
+        contactId: 11,
+        applicationType: 'tourist',
+        destinationCountry: 'JP',
+        status: 'intake',
+        documentChecklist: [],
+      })
+      .mockResolvedValueOnce({
+        id: 50,
+        tenantId: 1,
+        contactId: 11,
+        applicationType: 'tourist',
+        destinationCountry: 'JP',
+        passportIdentityId: 444,
+      });
+
+    prisma.contact.findFirst
+      .mockResolvedValueOnce({
+        id: 11,
+        name: 'Riya Sharma',
+        email: 'riya@test.example',
+        phone: '+919111111111',
+        subBrand: null,
+      })
+      .mockResolvedValueOnce({
+        id: 11,
+        name: 'Riya Sharma',
+        email: 'riya@test.example',
+        phone: '+919111111111',
+        company: null,
+        subBrand: null,
+      })
+      .mockResolvedValueOnce({
+        id: 77,
+        name: 'Tokyo High School',
+        company: 'Tokyo High School',
+        email: 'school@example.test',
+        phone: '+81311112222',
+      });
+
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 9001,
+      tripCode: 'tokyo-spring',
+      destination: 'Japan',
+      departDate: '2026-09-10',
+      returnDate: '2026-09-20',
+      schoolContactId: 77,
+    });
+
+    prisma.tripParticipant.findFirst.mockResolvedValue({
+      id: 501,
+      fullName: 'Aarav Sharma',
+      parentName: 'Riya Sharma',
+      parentPhone: '+919111111111',
+      parentEmail: 'riya@test.example',
+      passportNumber: 'M1234567',
+    });
+
+    prisma.visaLetterTemplate.findMany.mockResolvedValue(templates);
+    prisma.visaLetterGeneration.create.mockImplementation(async ({ data }) => ({
+      id: 700,
+      generatedAt: new Date('2026-08-10T00:00:00Z'),
+      createdAt: new Date('2026-08-10T00:00:00Z'),
+      ...data,
+    }));
+    prisma.visaLetterDocument.create.mockImplementation(async ({ data }) => ({
+      id: 800 + prisma.visaLetterDocument.create.mock.calls.length,
+      generatedAt: new Date('2026-08-10T00:00:00Z'),
+      ...data,
+    }));
+    mockVisaLetterStoreStore.mockImplementation(async (_buffer, opts) => ({
+      storage: 'disk',
+      url: `/api/uploads/visa-letters/${opts.fileName}`,
+      key: opts.fileName,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/visa/applications/50/letters/generate')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ tripId: 9001, participantId: 501 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.generation).toMatchObject({
+      id: 700,
+      status: 'GENERATED',
+      tripId: 9001,
+      participantId: 501,
+    });
+    expect(res.body.generated).toHaveLength(4);
+    expect(res.body.skipped).toEqual([]);
+    expect(prisma.visaApplication.update).not.toHaveBeenCalled();
+    expect(prisma.tripParticipant.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 501, tripId: 9001 },
+    }));
+    expect(prisma.visaDocumentChecklistItem.create).not.toHaveBeenCalled();
+    expect(prisma.visaLetterGeneration.create).toHaveBeenCalledTimes(1);
+    expect(prisma.visaLetterDocument.create).toHaveBeenCalledTimes(4);
+    expect(mockVisaLetterStoreStore).toHaveBeenCalledTimes(4);
+    expect(mockVisaLetterStoreRemove).not.toHaveBeenCalled();
+  });
+
+  test('DELETE /applications/:id/letters/:letterId removes the stored files and packet row', async () => {
+    prisma.visaApplication.findFirst
+      .mockResolvedValueOnce({
+        id: 50,
+        tenantId: 1,
+        contactId: 11,
+        applicationType: 'tourist',
+        destinationCountry: 'JP',
+        status: 'intake',
+        documentChecklist: [],
+      })
+      .mockResolvedValueOnce({
+        id: 50,
+        tenantId: 1,
+        contactId: 11,
+        applicationType: 'tourist',
+        destinationCountry: 'JP',
+        passportIdentityId: 444,
+      });
+    prisma.contact.findFirst
+      .mockResolvedValueOnce({
+        id: 11,
+        name: 'Riya Sharma',
+        email: 'riya@test.example',
+        phone: '+919111111111',
+        subBrand: null,
+      })
+      .mockResolvedValueOnce({
+        id: 11,
+        name: 'Riya Sharma',
+        email: 'riya@test.example',
+        phone: '+919111111111',
+        company: null,
+        subBrand: null,
+      });
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 9001,
+      tripCode: 'tokyo-spring',
+      destination: 'Japan',
+      departDate: '2026-09-10',
+      returnDate: '2026-09-20',
+      schoolContactId: 77,
+    });
+    prisma.tripParticipant.findFirst.mockResolvedValue({
+      id: 501,
+      fullName: 'Aarav Sharma',
+      parentName: 'Riya Sharma',
+      parentPhone: '+919111111111',
+      parentEmail: 'riya@test.example',
+      passportNumber: 'M1234567',
+    });
+    prisma.visaLetterDocument.findFirst.mockResolvedValue({
+      id: 801,
+      tenantId: 1,
+      visaApplicationId: 50,
+      generationId: 700,
+      generatedFileStorage: 'disk',
+      generatedFileKey: 'applications-50/participants-501/generated/generated.pdf',
+      signedFileStorage: 'disk',
+      signedFileKey: 'applications-50/participants-501/signed/signed.pdf',
+    });
+    prisma.visaLetterDocument.findMany.mockResolvedValue([]);
+    prisma.visaLetterDocument.delete.mockResolvedValue({ id: 801 });
+    prisma.visaLetterGeneration.delete.mockResolvedValue({ id: 700 });
+
+    const res = await request(makeApp())
+      .delete('/api/travel/visa/applications/50/letters/801')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      id: 801,
+      generationId: 700,
+      generationDeleted: true,
+    });
+    expect(mockVisaLetterStoreRemove).toHaveBeenCalledTimes(2);
+    expect(prisma.visaLetterDocument.delete).toHaveBeenCalledWith({ where: { id: 801 } });
+    expect(prisma.visaLetterGeneration.delete).toHaveBeenCalledWith({ where: { id: 700 } });
+  });
+});
+
+describe('checklist import endpoints', () => {
+  test('GET /checklists/import-template returns CSV template', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/visa/checklists/import-template?format=csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('travel-visa-checklists-template.csv');
+    expect(res.text).toContain('applicationType');
+    expect(res.text).toContain('Passport');
+  });
+
+  test('GET /checklists/import-template returns XLSX when requested', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/visa/checklists/import-template?format=xlsx')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  });
+
+  test('POST /checklists/import.csv upserts rows from CSV upload', async () => {
+    prisma.visaChecklistTemplate.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 22 });
+    prisma.visaChecklistTemplate.create.mockResolvedValue({ id: 21 });
+    prisma.visaChecklistTemplate.update.mockResolvedValue({ id: 22 });
+    const csv = [
+      'applicationType,destinationCountry,docType,required,sortOrder,notes',
+      '# tourist | business | student | work | umrah | hajj,US,Passport,true,0,Example row. Delete this row before importing.',
+      'tourist,US,Passport,true,1,Keep passport',
+      'tourist,US,Photo,false,2,No photo',
+    ].join('\n');
+    const res = await request(makeApp())
+      .post('/api/travel/visa/checklists/import.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from(csv, 'utf8'), 'visa-checklists.csv');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ imported: 1, updated: 1, skipped: 0 });
+    expect(prisma.visaChecklistTemplate.create.mock.calls[0][0]).toMatchObject({
+      data: {
+        tenantId: 1,
+        applicationType: 'tourist',
+        destinationCountry: 'US',
+        docType: 'Passport',
+        required: true,
+        sortOrder: 1,
+        notes: 'Keep passport',
+      },
+    });
+    expect(prisma.visaChecklistTemplate.update.mock.calls[0][0]).toMatchObject({
+      where: { id: 22 },
+      data: {
+        applicationType: 'tourist',
+        destinationCountry: 'US',
+        docType: 'Photo',
+        required: false,
+        sortOrder: 2,
+        notes: 'No photo',
+      },
+    });
+  });
+
+  test('POST /checklists/import.csv accepts xlsx uploads', async () => {
+    const xlsx = toXlsxBuffer(
+      ['applicationType', 'destinationCountry', 'docType', 'required', 'sortOrder', 'notes'],
+      [{ applicationType: 'tourist', destinationCountry: 'US', docType: 'Bank statement', required: true, sortOrder: 0, notes: '' }],
+      'Visa Checklists Template',
+    );
+    prisma.visaChecklistTemplate.findFirst.mockResolvedValueOnce(null);
+    prisma.visaChecklistTemplate.create.mockResolvedValue({ id: 33 });
+    const res = await request(makeApp())
+      .post('/api/travel/visa/checklists/import.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', xlsx, 'visa-checklists.xlsx');
+    expect(res.status).toBe(200);
+    expect(prisma.visaChecklistTemplate.create).toHaveBeenCalled();
+  });
+});
+
+describe('travel-visa checklist snapshots + source library', () => {
+  test('POST /checklists/sources creates a source and refreshes the snapshot', async () => {
+    prisma.visaChecklistTemplate.findMany.mockResolvedValue([
+      { docType: 'Passport', required: true, sortOrder: 0, notes: null },
+    ]);
+    prisma.visaChecklistSource.findMany.mockResolvedValue([]);
+    prisma.visaChecklistSnapshot.findFirst.mockResolvedValue(null);
+    prisma.visaChecklistSnapshot.create.mockResolvedValue({
+      id: 77,
+      tenantId: 1,
+      applicationType: 'tourist',
+      destinationCountry: 'US',
+      versionNumber: 1,
+      snapshotHash: 'hash-77',
+      itemsJson: '[{"docType":"Passport","required":true,"sortOrder":0,"notes":null}]',
+      sourceListJson: '[]',
+      createdAt: new Date('2026-05-25').toISOString(),
+    });
+    prisma.visaChecklistSource.create.mockResolvedValue({
+      id: 31,
+      tenantId: 1,
+      applicationType: 'tourist',
+      destinationCountry: 'US',
+      sourceName: 'US consulate',
+      sourceUrl: 'https://example.test/checklist.pdf',
+      sourceKind: 'pdf',
+      notes: 'Official PDF',
+      isActive: true,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/visa/checklists/sources')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        applicationType: 'tourist',
+        destinationCountry: 'US',
+        sourceName: 'US consulate',
+        sourceUrl: 'https://example.test/checklist.pdf',
+        sourceKind: 'pdf',
+        notes: 'Official PDF',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      id: 31,
+      sourceName: 'US consulate',
+      isActive: true,
+    });
+    expect(prisma.visaChecklistSource.create.mock.calls[0][0]).toMatchObject({
+      data: {
+        tenantId: 1,
+        applicationType: 'tourist',
+        destinationCountry: 'US',
+        sourceName: 'US consulate',
+        sourceUrl: 'https://example.test/checklist.pdf',
+        sourceKind: 'pdf',
+        isActive: true,
+      },
+    });
+    expect(prisma.visaChecklistSnapshot.create).toHaveBeenCalled();
+  });
+
+
+  test('GET /checklists returns archived sources in the management list', async () => {
+    prisma.visaChecklistTemplate.findMany.mockResolvedValue([
+      { id: 11, applicationType: 'tourist', destinationCountry: 'US', docType: 'Passport', required: true, sortOrder: 0, notes: null, isActive: true },
+    ]);
+    prisma.visaChecklistSource.findMany.mockResolvedValue([
+      { id: 31, applicationType: 'tourist', destinationCountry: 'US', sourceName: 'US consulate', sourceUrl: 'https://example.test/checklist.pdf', sourceKind: 'pdf', notes: null, isActive: true },
+      { id: 32, applicationType: 'tourist', destinationCountry: 'US', sourceName: 'Archived PDF', sourceUrl: 'https://example.test/archived.pdf', sourceKind: 'pdf', notes: 'Old copy', isActive: false },
+    ]);
+    prisma.visaChecklistSnapshot.findFirst.mockResolvedValue({
+      id: 77,
+      tenantId: 1,
+      applicationType: 'tourist',
+      destinationCountry: 'US',
+      versionNumber: 4,
+      itemsJson: '[{"docType":"Passport","required":true,"sortOrder":0,"notes":null}]',
+      sourceListJson: '[{"id":31,"sourceName":"US consulate","sourceUrl":"https://example.test/checklist.pdf","sourceKind":"pdf","notes":null,"isActive":true}]',
+      createdAt: new Date('2026-05-25').toISOString(),
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/visa/checklists?applicationType=tourist&destinationCountry=US')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.sources).toHaveLength(2);
+    expect(res.body.latestSnapshot).toMatchObject({ versionNumber: 4, itemCount: 1, sourceCount: 1 });
+    expect(prisma.visaChecklistSource.findMany.mock.calls[0][0]).toMatchObject({
+      where: { tenantId: 1, applicationType: 'tourist', destinationCountry: 'US' },
+    });
+  });
+  test('DELETE /checklists/sources/:id archives instead of deleting', async () => {
+    prisma.visaChecklistSource.findFirst.mockResolvedValue({
+      id: 31,
+      applicationType: 'tourist',
+      destinationCountry: 'US',
+    });
+    prisma.visaChecklistSource.update.mockResolvedValue({
+      id: 31,
+      applicationType: 'tourist',
+      destinationCountry: 'US',
+      sourceName: 'US consulate',
+      sourceUrl: 'https://example.test/checklist.pdf',
+      sourceKind: 'pdf',
+      notes: null,
+      isActive: false,
+    });
+
+    const res = await request(makeApp())
+      .delete('/api/travel/visa/checklists/sources/31')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, id: 31 });
+    expect(prisma.visaChecklistSource.update.mock.calls[0][0]).toMatchObject({
+      where: { id: 31 },
+      data: { isActive: false },
+    });
+  });
+});
+
+
+
+
+
+

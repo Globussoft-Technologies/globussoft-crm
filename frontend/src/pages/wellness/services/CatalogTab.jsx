@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useNotify } from '../../../utils/notify';
 import { currencySymbol } from '../../../utils/money';
@@ -11,6 +11,8 @@ import MultiSelectDropdown from './MultiSelectDropdown';
 import SingleSelectDropdown from './SingleSelectDropdown';
 import ImageUploadField from './ImageUploadField';
 
+const PAGE_SIZE = 12;
+
 export default function CatalogTab({ services, loading, categories, categoriesLoading, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
   const { hasPermission, isReady: permsReady } = usePermissions();
   const canManageServices = permsReady && hasPermission('services', 'write');
@@ -21,6 +23,8 @@ export default function CatalogTab({ services, loading, categories, categoriesLo
   // happens client-side over the already-fetched list so the toggle is
   // instant (no re-fetch).
   const [sortBy, setSortBy] = useState('default');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const scrollRef = useRef(null);
   const sortedServices = useMemo(() => {
     if (!Array.isArray(services)) return [];
     if (sortBy === 'default') return services;
@@ -33,6 +37,37 @@ export default function CatalogTab({ services, loading, categories, categoriesLo
     if (sortBy === 'oldest') copy.sort((a, b) => tsOf(a) - tsOf(b));
     return copy;
   }, [services, sortBy]);
+  const displayedServices = useMemo(
+    () => sortedServices.slice(0, Math.min(visibleCount, sortedServices.length)),
+    [sortedServices, visibleCount],
+  );
+
+  useEffect(() => {
+    setVisibleCount(Math.min(PAGE_SIZE, sortedServices.length));
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = 0;
+    }
+  }, [sortedServices.length, sortBy]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || loading) return;
+    if (visibleCount >= sortedServices.length) return;
+    if (el.scrollHeight <= 0 || el.clientHeight <= 0) return;
+    if (el.scrollHeight <= el.clientHeight + 8) {
+      setVisibleCount((current) => Math.min(current + PAGE_SIZE, sortedServices.length));
+    }
+  }, [loading, sortedServices.length, visibleCount, displayedServices.length]);
+
+  const handleScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el) return;
+    const threshold = 72;
+    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+    if (!nearBottom) return;
+    if (visibleCount >= sortedServices.length) return;
+    setVisibleCount((current) => Math.min(current + PAGE_SIZE, sortedServices.length));
+  }, [sortedServices.length, visibleCount]);
 
   return (
     <>
@@ -129,53 +164,85 @@ export default function CatalogTab({ services, loading, categories, categoriesLo
       {loading && <div>Loading…</div>}
 
       <div
+        className="glass"
         style={{
           display: 'flex',
-          justifyContent: 'flex-end',
-          alignItems: 'center',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
+          flexDirection: 'column',
+          gap: '0.75rem',
+          padding: '1rem',
+          minHeight: 0,
         }}
       >
-        <label
-          htmlFor="services-sort"
-          style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}
-        >
-          Sort by
-        </label>
-        <select
-          id="services-sort"
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value)}
-          aria-label="Sort services"
+        <div
           style={{
-            padding: '0.4rem 0.7rem',
-            background: 'var(--surface-color)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--border-color)',
-            borderRadius: 8,
-            fontSize: '0.85rem',
-            cursor: 'pointer',
-            outline: 'none',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            gap: '0.5rem',
           }}
         >
-          <option value="default" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Default</option>
-          <option value="newest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Newest first</option>
-          <option value="oldest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Oldest first</option>
-        </select>
-      </div>
+          <label
+            htmlFor="services-sort"
+            style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}
+          >
+            Sort by
+          </label>
+          <select
+            id="services-sort"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            aria-label="Sort services"
+            style={{
+              padding: '0.4rem 0.7rem',
+              background: 'var(--surface-color)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 8,
+              fontSize: '0.85rem',
+              cursor: 'pointer',
+              outline: 'none',
+            }}
+          >
+            <option value="default" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Default</option>
+            <option value="newest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Newest first</option>
+            <option value="oldest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Oldest first</option>
+          </select>
+        </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-        {sortedServices.map((s) => (
-          <ServiceCard
-            key={s.id}
-            service={s}
-            onChanged={onChanged}
-            onOpen={onOpenService}
-            editRequested={editRequestId === s.id}
-            onEditConsumed={clearEditRequest}
-          />
-        ))}
+        <div
+          ref={scrollRef}
+          data-testid="services-catalog-scroll"
+          onScroll={handleScroll}
+          style={{
+            display: 'block',
+            maxHeight: 'calc(100dvh - 280px)',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            paddingRight: '0.25rem',
+            scrollbarWidth: 'thin',
+          }}
+        >
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+            {displayedServices.map((s) => (
+              <ServiceCard
+                key={s.id}
+                service={s}
+                onChanged={onChanged}
+                onOpen={onOpenService}
+                editRequested={editRequestId === s.id}
+                onEditConsumed={clearEditRequest}
+              />
+            ))}
+          </div>
+
+          {!loading && displayedServices.length < sortedServices.length && (
+            <div
+              data-testid="services-scroll-sentinel"
+              aria-hidden="true"
+              style={{ height: 1 }}
+            />
+          )}
+        </div>
       </div>
     </>
   );

@@ -39,8 +39,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import React from 'react';
 import Omnibar from '../components/Omnibar';
+import { AuthContext } from '../App';
 
 const navigateMock = vi.fn();
 vi.mock('react-router-dom', async () => {
@@ -202,6 +202,39 @@ describe('Omnibar (inline top-bar)', () => {
     fireEvent.click(screen.getByText('Invoices'));
     expect(navigateMock).toHaveBeenCalledWith('/wellness/invoices');
   });
+
+  it('matches travel sidebar platform pages such as Developer', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') {
+        return Promise.resolve({
+          pages: [
+            { path: '/developer', label: 'Developer', description: 'API + webhook console', category: 'Platform' },
+            { path: '/privacy', label: 'Privacy', description: 'Data handling and policy', category: 'Platform' },
+            { path: '/admin/brand-kits', label: 'Brand Kits', description: 'Brand assets', category: 'Platform' },
+            { path: '/lead-routing', label: 'Routing Rules', description: 'Rules that auto-assign incoming leads', category: 'Automation' },
+          ],
+        });
+      }
+      return Promise.resolve({ contacts: [], deals: [], invoices: [] });
+    });
+
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { userId: 1 }, token: 'tk', tenant: { vertical: 'travel' }, loading: false }}>
+          <Omnibar />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/pages/me', { silent: true }));
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'dev' } });
+    expect(await screen.findByText(/^Pages$/i, {}, { timeout: 2000 })).toBeInTheDocument();
+    expect(screen.getByText('Developer')).toBeInTheDocument();
+    expect(screen.queryByText('Routing Rules')).toBeNull();
+  });
+
 
   it('matches accessible pages by description (e.g. "directory" → Contacts + Patients)', async () => {
     await renderOmnibarAndWaitForPages();

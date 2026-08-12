@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Search,
@@ -67,7 +67,12 @@ export default function Patients() {
   const updateParams = (patch, options = {}) => {
     const next = new URLSearchParams(searchParams);
     for (const [k, v] of Object.entries(patch)) {
-      if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) {
+      if (
+        v === null ||
+        v === undefined ||
+        v === "" ||
+        (Array.isArray(v) && !v.length)
+      ) {
         next.delete(k);
       } else if (Array.isArray(v)) {
         next.delete(k);
@@ -94,7 +99,7 @@ export default function Patients() {
   // picks "Custom" from the rows-per-page select, the dropdown swaps to a
   // numeric input bounded to [1, 200] (the backend's hard limit cap).
   const [isCustomPageSize, setIsCustomPageSize] = useState(false);
-  const [customPageSize, setCustomPageSize] = useState('');
+  const [customPageSize, setCustomPageSize] = useState("");
   // #331-bug fix: form-create flag added so handleCreate can request a refresh
   // without re-introducing a stale-state read. The previous direct `load()`
   // call inside handleCreate re-fetched with whatever `q` the closure had
@@ -115,7 +120,8 @@ export default function Patients() {
   useEffect(() => {
     if (!addMenuOpen) return undefined;
     const onDocClick = (e) => {
-      if (addMenuRef.current && !addMenuRef.current.contains(e.target)) setAddMenuOpen(false);
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target))
+        setAddMenuOpen(false);
     };
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
@@ -131,9 +137,30 @@ export default function Patients() {
   // #331 fix preserved: ref-based current q + request-id discipline so
   // a slow empty-q fetch can't stomp on a fresh typed-query fetch.
   const qRef = useRef(q);
-  useEffect(() => { qRef.current = q; }, [q]);
+  useEffect(() => {
+    qRef.current = q;
+  }, [q]);
   const reqIdRef = useRef(0);
   const didMountRef = useRef(false);
+  const buildListParams = (
+    currentQ,
+    currentPage = page,
+    currentPageSize = pageSize,
+  ) => {
+    const params = new URLSearchParams();
+    if (currentQ) params.set("q", currentQ);
+    if (sourceFilter.length) params.set("source", sourceFilter.join(","));
+    if (genderFilter.length) params.set("gender", genderFilter.join(","));
+    if (tagFilter.length) params.set("tags", tagFilter.join(","));
+    if (addedFrom) params.set("addedFrom", addedFrom);
+    if (addedTo) params.set("addedTo", addedTo);
+    params.set("limit", String(currentPageSize));
+    params.set(
+      "offset",
+      String(Math.max(0, (currentPage - 1) * currentPageSize)),
+    );
+    return params;
+  };
 
   const load = (currentQ, currentPage = page, currentPageSize = pageSize) => {
     const myReqId = ++reqIdRef.current;
@@ -141,10 +168,7 @@ export default function Patients() {
     // Backend at /api/wellness/patients accepts ?limit (cap 200) + ?offset and
     // returns { patients, total }. Wire the URL to the current page-size
     // selection so changing the dropdown actually re-fetches a sliced window.
-    const params = new URLSearchParams();
-    if (currentQ) params.set("q", currentQ);
-    params.set("limit", String(currentPageSize));
-    params.set("offset", String(Math.max(0, (currentPage - 1) * currentPageSize)));
+    const params = buildListParams(currentQ, currentPage, currentPageSize);
     const url = `/api/wellness/patients?${params.toString()}`;
     fetchApi(url)
       .then((d) => {
@@ -181,18 +205,33 @@ export default function Patients() {
   useEffect(() => {
     if (!didMountRef.current) {
       didMountRef.current = true;
-      load("", page, pageSize);
+      load(qRef.current, page, pageSize);
       return;
     }
     // #548: standardised on SEARCH_DEBOUNCE_MS (300ms) — was 250ms; pen-test
     // flagged drift between Patients (250) and Omnibar (300). One source of
     // truth in utils/timing.js.
-    const t = setTimeout(() => load(qRef.current, page, pageSize), SEARCH_DEBOUNCE_MS);
+    const t = setTimeout(
+      () => load(qRef.current, page, pageSize),
+      SEARCH_DEBOUNCE_MS,
+    );
     return () => clearTimeout(t);
-  }, [q, reloadTick, page, pageSize]);
+  }, [
+    q,
+    reloadTick,
+    page,
+    pageSize,
+    sourceFilter.join(","),
+    genderFilter.join(","),
+    tagFilter.join(","),
+    addedFrom,
+    addedTo,
+  ]);
 
   useEffect(() => {
-    fetchApi("/api/wellness/locations").then(setLocations).catch(() => setLocations([]));
+    fetchApi("/api/wellness/locations")
+      .then(setLocations)
+      .catch(() => setLocations([]));
     loadTags();
   }, []);
 
@@ -214,12 +253,14 @@ export default function Patients() {
   // patient is already soft-deleted, which we surface verbatim.
   const deletePatient = async (patient) => {
     const ok = await notify.confirm(
-      `Delete customer "${patient.name}"? Their visits and history will be hidden but kept for audit.`
+      `Delete customer "${patient.name}"? Their visits and history will be hidden but kept for audit.`,
     );
     if (!ok) return;
     setDeletingId(patient.id);
     try {
-      await fetchApi(`/api/wellness/patients/${patient.id}`, { method: 'DELETE' });
+      await fetchApi(`/api/wellness/patients/${patient.id}`, {
+        method: "DELETE",
+      });
       notify.success(`Customer "${patient.name}" deleted`);
       // Drop the deleted row from the current selection set so bulk
       // actions can't target an id that no longer exists in the list.
@@ -231,7 +272,7 @@ export default function Patients() {
       });
       setReloadTick((t) => t + 1);
     } catch (e) {
-      notify.error(e?.data?.error || e?.message || 'Failed to delete customer');
+      notify.error(e?.data?.error || e?.message || "Failed to delete customer");
     } finally {
       setDeletingId(null);
     }
@@ -246,7 +287,11 @@ export default function Patients() {
   const setPage = (val) => updateParams({ page: val });
 
   const activeFilterCount =
-    sourceFilter.length + genderFilter.length + tagFilter.length + (addedFrom ? 1 : 0) + (addedTo ? 1 : 0);
+    sourceFilter.length +
+    genderFilter.length +
+    tagFilter.length +
+    (addedFrom ? 1 : 0) +
+    (addedTo ? 1 : 0);
 
   // ── Row selection ─────────────────────────────────────────────────
   const toggleRow = (id) => {
@@ -258,7 +303,8 @@ export default function Patients() {
     });
   };
   const pageIds = patients.map((p) => p.id);
-  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const allOnPageSelected =
+    pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   const someOnPageSelected = pageIds.some((id) => selected.has(id));
   const togglePage = () => {
     setSelected((prev) => {
@@ -285,7 +331,9 @@ export default function Patients() {
       notify.success(`Added "${tag.name}" to ${res?.assigned ?? 0} link(s)`);
       setTagPopover(null);
       setReloadTick((t) => t + 1);
-    } catch (_err) { /* toasted */ }
+    } catch (_err) {
+      /* toasted */
+    }
   };
   const bulkRemoveTag = async (tag) => {
     const ids = Array.from(selected);
@@ -308,10 +356,14 @@ export default function Patients() {
         notify.error(body?.error || `Remove failed (${resp.status})`);
         return;
       }
-      notify.success(`Removed "${tag.name}" from ${body?.removed ?? 0} link(s)`);
+      notify.success(
+        `Removed "${tag.name}" from ${body?.removed ?? 0} link(s)`,
+      );
       setTagPopover(null);
       setReloadTick((t) => t + 1);
-    } catch (_err) { /* toasted */ }
+    } catch (_err) {
+      /* toasted */
+    }
   };
 
   // ── Bulk export of selected rows (CSV/XLSX) ──────────────────────
@@ -320,7 +372,10 @@ export default function Patients() {
   useEffect(() => {
     if (!bulkExportMenuOpen) return undefined;
     const onDocClick = (e) => {
-      if (bulkExportMenuRef.current && !bulkExportMenuRef.current.contains(e.target)) {
+      if (
+        bulkExportMenuRef.current &&
+        !bulkExportMenuRef.current.contains(e.target)
+      ) {
         setBulkExportMenuOpen(false);
       }
     };
@@ -335,9 +390,12 @@ export default function Patients() {
     params.set("ids", ids.join(","));
     try {
       const token = getAuthToken();
-      const res = await fetch(`/api/wellness/patients/export?${params.toString()}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const res = await fetch(
+        `/api/wellness/patients/export?${params.toString()}`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        },
+      );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         notify.error(body.error || `Export failed (${res.status})`);
@@ -369,7 +427,14 @@ export default function Patients() {
       addedFrom: addedFrom || undefined,
       addedTo: addedTo || undefined,
     }),
-    [q, sourceFilter, genderFilter, tagFilter, addedFrom, addedTo],
+    [
+      q,
+      sourceFilter.join(","),
+      genderFilter.join(","),
+      tagFilter.join(","),
+      addedFrom,
+      addedTo,
+    ],
   );
 
   return (
@@ -380,65 +445,90 @@ export default function Patients() {
         count={total}
         description={total === 1 ? "patient on record" : "patients on record"}
       >
-          <CsvImportExportToolbar
-            entity="customers"
-            label="Patients"
-            filters={toolbarFilters}
-            formats={["csv", "xlsx"]}
-            endpoints={{
-              export: "/api/wellness/patients/export",
-              template: "/api/wellness/patients/import-template",
-            }}
-            onImported={() => setReloadTick((t) => t + 1)}
-          />
-          <div ref={addMenuRef} style={{ position: "relative" }}>
-            <button
-              onClick={() => setAddMenuOpen((v) => !v)}
-              aria-haspopup="menu"
-              aria-expanded={addMenuOpen}
-              style={primaryTealBtn}
-            >
-              <Plus size={16} /> Add <ChevronDown size={14} style={{ opacity: 0.9 }} />
-            </button>
-            {addMenuOpen && (
-              <div role="menu" style={primaryMenuStyle}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setAddMenuOpen(false);
-                    setShowCreateModal(true);
+        <CsvImportExportToolbar
+          entity="customers"
+          label="Patients"
+          filters={toolbarFilters}
+          formats={["csv", "xlsx"]}
+          endpoints={{
+            export: "/api/wellness/patients/export",
+            template: "/api/wellness/patients/import-template",
+          }}
+          onImported={() => setReloadTick((t) => t + 1)}
+        />
+        <div ref={addMenuRef} style={{ position: "relative" }}>
+          <button
+            onClick={() => setAddMenuOpen((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={addMenuOpen}
+            style={primaryTealBtn}
+          >
+            <Plus size={16} /> Add{" "}
+            <ChevronDown size={14} style={{ opacity: 0.9 }} />
+          </button>
+          {addMenuOpen && (
+            <div role="menu" style={primaryMenuStyle}>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setAddMenuOpen(false);
+                  setShowCreateModal(true);
+                }}
+                style={primaryMenuItem}
+              >
+                <UserPlus size={15} style={{ flexShrink: 0 }} />
+                <span
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    lineHeight: 1.15,
                   }}
-                  style={primaryMenuItem}
                 >
-                  <UserPlus size={15} style={{ flexShrink: 0 }} />
-                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15 }}>
-                    <strong style={{ fontSize: "0.9rem" }}>New patient</strong>
-                    <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
-                      Create a single customer record
-                    </span>
+                  <strong style={{ fontSize: "0.9rem" }}>New patient</strong>
+                  <span
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Create a single customer record
                   </span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setAddMenuOpen(false);
-                    setShowBulkTagModal(true);
+                </span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setAddMenuOpen(false);
+                  setShowBulkTagModal(true);
+                }}
+                style={primaryMenuItem}
+              >
+                <BulkTagIcon size={15} style={{ flexShrink: 0 }} />
+                <span
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    lineHeight: 1.15,
                   }}
-                  style={primaryMenuItem}
                 >
-                  <BulkTagIcon size={15} style={{ flexShrink: 0 }} />
-                  <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", lineHeight: 1.15 }}>
-                    <strong style={{ fontSize: "0.9rem" }}>Bulk tag</strong>
-                    <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
-                      Add or remove tags across many customers
-                    </span>
+                  <strong style={{ fontSize: "0.9rem" }}>Bulk tag</strong>
+                  <span
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    Add or remove tags across many customers
                   </span>
-                </button>
-              </div>
-            )}
-          </div>
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
       </PageHeader>
 
       {/* Search bar + filter toggle.
@@ -464,7 +554,14 @@ export default function Patients() {
             no outer wrapper border, no double-shell. The magnifying
             glass and clear button are absolute-positioned inside the
             relative wrapper. */}
-        <div style={{ flex: 1, minWidth: 260, position: "relative", display: "flex" }}>
+        <div
+          style={{
+            flex: 1,
+            minWidth: 260,
+            position: "relative",
+            display: "flex",
+          }}
+        >
           <Search
             size={16}
             color="var(--text-secondary)"
@@ -484,7 +581,9 @@ export default function Patients() {
             onChange={(e) => setQ(e.target.value)}
             style={{
               width: "100%",
-              padding: q ? "0.65rem 2.5rem 0.65rem 2.4rem" : "0.65rem 0.85rem 0.65rem 2.4rem",
+              padding: q
+                ? "0.65rem 2.5rem 0.65rem 2.4rem"
+                : "0.65rem 0.85rem 0.65rem 2.4rem",
               borderRadius: 10,
               fontSize: "0.92rem",
               fontFamily: "inherit",
@@ -535,13 +634,16 @@ export default function Patients() {
             alignItems: "center",
             gap: "0.45rem",
             padding: "0.55rem 1rem",
-            background: activeFilterCount > 0
-              ? "var(--primary-color, var(--accent-color))"
-              : "var(--surface-color, #fff)",
+            background:
+              activeFilterCount > 0
+                ? "var(--primary-color, var(--accent-color))"
+                : "var(--surface-color, #fff)",
             color: activeFilterCount > 0 ? "#fff" : "var(--text-primary)",
-            border: `1px solid ${activeFilterCount > 0
-              ? "var(--primary-color, var(--accent-color))"
-              : "var(--border-color, rgba(0,0,0,0.12))"}`,
+            border: `1px solid ${
+              activeFilterCount > 0
+                ? "var(--primary-color, var(--accent-color))"
+                : "var(--border-color, rgba(0,0,0,0.12))"
+            }`,
             borderRadius: 10,
             cursor: "pointer",
             fontSize: "0.88rem",
@@ -627,11 +729,21 @@ export default function Patients() {
             zIndex: 20,
           }}
         >
-          <strong style={{ fontSize: "0.9rem" }}>{selected.size} selected</strong>
-          <button type="button" onClick={() => setTagPopover({ type: "bulk-add" })} style={bulkBtnStyle}>
+          <strong style={{ fontSize: "0.9rem" }}>
+            {selected.size} selected
+          </strong>
+          <button
+            type="button"
+            onClick={() => setTagPopover({ type: "bulk-add" })}
+            style={bulkBtnStyle}
+          >
             <TagIcon size={14} /> Add Tag
           </button>
-          <button type="button" onClick={() => setTagPopover({ type: "bulk-remove" })} style={bulkBtnStyle}>
+          <button
+            type="button"
+            onClick={() => setTagPopover({ type: "bulk-remove" })}
+            style={bulkBtnStyle}
+          >
             <Trash2 size={14} /> Remove Tag
           </button>
           <div ref={bulkExportMenuRef} style={{ position: "relative" }}>
@@ -646,13 +758,31 @@ export default function Patients() {
             </button>
             {bulkExportMenuOpen && (
               <div role="menu" style={dropdownMenuStyle}>
-                <button type="button" role="menuitem" onClick={() => exportSelected("csv")} style={dropdownItemStyle}>CSV</button>
-                <button type="button" role="menuitem" onClick={() => exportSelected("xlsx")} style={dropdownItemStyle}>Excel (XLSX)</button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => exportSelected("csv")}
+                  style={dropdownItemStyle}
+                >
+                  CSV
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => exportSelected("xlsx")}
+                  style={dropdownItemStyle}
+                >
+                  Excel (XLSX)
+                </button>
               </div>
             )}
           </div>
           <span style={{ flex: 1 }} />
-          <button type="button" onClick={clearSelection} style={{ ...iconBtnSmall, padding: "0.35rem 0.7rem" }}>
+          <button
+            type="button"
+            onClick={clearSelection}
+            style={{ ...iconBtnSmall, padding: "0.35rem 0.7rem" }}
+          >
             Clear selection
           </button>
 
@@ -663,7 +793,13 @@ export default function Patients() {
               onPick={bulkAddTag}
               onClose={() => setTagPopover(null)}
               onCreated={(newTag) => {
-                setAllTags((prev) => (prev.some((t) => t.id === newTag.id) ? prev : [...prev, newTag].sort((a, b) => a.name.localeCompare(b.name))));
+                setAllTags((prev) =>
+                  prev.some((t) => t.id === newTag.id)
+                    ? prev
+                    : [...prev, newTag].sort((a, b) =>
+                        a.name.localeCompare(b.name),
+                      ),
+                );
                 return bulkAddTag(newTag);
               }}
               showCreate
@@ -687,119 +823,172 @@ export default function Patients() {
       {!loading && (
         <div className="glass" style={{ padding: 0, overflow: "visible" }}>
           <TopScrollSync>
-          <table className="stable-table" style={{ borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                <th style={{ ...thStyle, width: 38, paddingRight: 4 }}>
-                  <input
-                    type="checkbox"
-                    aria-label="Select all on page"
-                    checked={allOnPageSelected}
-                    ref={(el) => { if (el) el.indeterminate = !allOnPageSelected && someOnPageSelected; }}
-                    onChange={togglePage}
-                  />
-                </th>
-                <th style={{ ...thStyle, width: "22%" }}>Name</th>
-                <th style={{ ...thStyle, width: "14%" }}>Phone</th>
-                <th style={{ ...thStyle, width: "22%" }}>Email</th>
-                <th style={{ ...thStyle, width: "10%" }}>Gender</th>
-                <th style={{ ...thStyle, width: "14%" }}>Source</th>
-                <th style={{ ...thStyle, width: "12%" }}>Added</th>
-                {/* Fixed px width — 6% was too narrow on a typical viewport
+            <table
+              className="stable-table"
+              style={{ borderCollapse: "collapse" }}
+            >
+              <thead>
+                <tr
+                  style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+                >
+                  <th style={{ ...thStyle, width: 38, paddingRight: 4 }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select all on page"
+                      checked={allOnPageSelected}
+                      ref={(el) => {
+                        if (el)
+                          el.indeterminate =
+                            !allOnPageSelected && someOnPageSelected;
+                      }}
+                      onChange={togglePage}
+                    />
+                  </th>
+                  <th style={{ ...thStyle, width: "22%" }}>Name</th>
+                  <th style={{ ...thStyle, width: "14%" }}>Phone</th>
+                  <th style={{ ...thStyle, width: "22%" }}>Email</th>
+                  <th style={{ ...thStyle, width: "10%" }}>Gender</th>
+                  <th style={{ ...thStyle, width: "14%" }}>Source</th>
+                  <th style={{ ...thStyle, width: "12%" }}>Added</th>
+                  {/* Fixed px width — 6% was too narrow on a typical viewport
                     (~65px), truncating the "ACTIONS" header to "ACTIO..." and
                     clipping the Edit/Delete icons. The clipped icon fragments
                     rendered as visual "..." after the icons. overflow:visible
                     + textOverflow:clip prevents the .stable-table CSS rule
                     (which sets overflow:hidden + text-overflow:ellipsis on
                     every td) from reintroducing the artifact. */}
-                <th style={{ ...thStyle, width: 110, textAlign: "center", overflow: "visible", textOverflow: "clip" }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {patients.map((p) => (
-                <tr key={p.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                  <td style={{ ...tdStyle, paddingRight: 4 }}>
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${p.name}`}
-                      checked={selected.has(p.id)}
-                      onChange={() => toggleRow(p.id)}
-                    />
-                  </td>
-                  <td style={nameTdStyle} title={p.name}>
-                    <Link to={`/wellness/patients/${p.id}`} style={{ color: "var(--accent-color)", textDecoration: "none", fontWeight: 500 }}>
-                      {p.name}
-                    </Link>
-                  </td>
-                  <td style={tdStyle}>
-                    {p.phone && (
-                      <span>
-                        <Phone size={12} style={{ verticalAlign: "middle" }} /> {p.phone}
-                      </span>
-                    )}
-                  </td>
-                  <td style={tdStyle}>
-                    {p.email && (
-                      <span>
-                        <Mail size={12} style={{ verticalAlign: "middle" }} /> {p.email}
-                      </span>
-                    )}
-                  </td>
-                  <td style={tdStyle}>{p.gender || "—"}</td>
-                  <td style={tdStyle}>{p.source || "—"}</td>
-                  <td style={tdStyle}>
-                    {formatDate(p.createdAt)}
-                  </td>
-                  <td style={{ ...tdStyle, textAlign: "center", overflow: "visible", textOverflow: "clip" }}>
-                    <div style={{ display: "inline-flex", gap: "0.25rem", alignItems: "center" }}>
-                      <button
-                        onClick={() => startEdit(p)}
-                        title="Edit patient"
-                        aria-label={`Edit ${p.name}`}
+                  <th
+                    style={{
+                      ...thStyle,
+                      width: 110,
+                      textAlign: "center",
+                      overflow: "visible",
+                      textOverflow: "clip",
+                    }}
+                  >
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {patients.map((p) => (
+                  <tr
+                    key={p.id}
+                    style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
+                  >
+                    <td style={{ ...tdStyle, paddingRight: 4 }}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${p.name}`}
+                        checked={selected.has(p.id)}
+                        onChange={() => toggleRow(p.id)}
+                      />
+                    </td>
+                    <td style={nameTdStyle} title={p.name}>
+                      <Link
+                        to={`/wellness/patients/${p.id}`}
                         style={{
-                          background: "none",
-                          border: "none",
                           color: "var(--accent-color)",
-                          cursor: "pointer",
-                          padding: "0.25rem",
-                          display: "inline-flex",
-                          alignItems: "center",
+                          textDecoration: "none",
+                          fontWeight: 500,
                         }}
                       >
-                        <Pencil size={16} />
-                      </button>
-                      <button
-                        onClick={() => deletePatient(p)}
-                        disabled={deletingId === p.id}
-                        title="Delete patient"
-                        aria-label={`Delete ${p.name}`}
-                        data-testid={`patient-delete-${p.id}`}
+                        {p.name}
+                      </Link>
+                    </td>
+                    <td style={tdStyle}>
+                      {p.phone && (
+                        <span>
+                          <Phone
+                            size={12}
+                            style={{ verticalAlign: "middle" }}
+                          />{" "}
+                          {p.phone}
+                        </span>
+                      )}
+                    </td>
+                    <td style={tdStyle}>
+                      {p.email && (
+                        <span>
+                          <Mail size={12} style={{ verticalAlign: "middle" }} />{" "}
+                          {p.email}
+                        </span>
+                      )}
+                    </td>
+                    <td style={tdStyle}>{p.gender || ""}</td>
+                    <td style={tdStyle}>{p.source || "walk-in"}</td>
+                    <td style={tdStyle}>{formatDate(p.createdAt)}</td>
+                    <td
+                      style={{
+                        ...tdStyle,
+                        textAlign: "center",
+                        overflow: "visible",
+                        textOverflow: "clip",
+                      }}
+                    >
+                      <div
                         style={{
-                          background: "none",
-                          border: "none",
-                          color: "var(--danger-color, #ef4444)",
-                          cursor: deletingId === p.id ? "not-allowed" : "pointer",
-                          opacity: deletingId === p.id ? 0.5 : 1,
-                          padding: "0.25rem",
                           display: "inline-flex",
+                          gap: "0.25rem",
                           alignItems: "center",
                         }}
                       >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {patients.length === 0 && (
-                <tr>
-                  <td colSpan={8} style={{ ...tdStyle, textAlign: "center", color: "var(--text-secondary)" }}>
-                    No patients match.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                        <button
+                          onClick={() => startEdit(p)}
+                          title="Edit patient"
+                          aria-label={`Edit ${p.name}`}
+                          style={{
+                            background: "none",
+                            border: "none",
+                            color: "var(--accent-color)",
+                            cursor: "pointer",
+                            padding: "0.25rem",
+                            display: "inline-flex",
+                            alignItems: "center",
+                          }}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          onClick={() => deletePatient(p)}
+                          disabled={deletingId === p.id}
+                          title="Delete patient"
+                          aria-label={`Delete ${p.name}`}
+                          data-testid={`patient-delete-${p.id}`}
+                          style={{
+                            background: "none",
+                            border: "none",
+                            color: "var(--danger-color, #ef4444)",
+                            cursor:
+                              deletingId === p.id ? "not-allowed" : "pointer",
+                            opacity: deletingId === p.id ? 0.5 : 1,
+                            padding: "0.25rem",
+                            display: "inline-flex",
+                            alignItems: "center",
+                          }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {patients.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={8}
+                      style={{
+                        ...tdStyle,
+                        textAlign: "center",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      No patients match.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </TopScrollSync>
           <PatientPager
             total={total}
@@ -843,7 +1032,9 @@ export default function Patients() {
           }}
           onTagCreated={(tag) => {
             setAllTags((prev) =>
-              prev.some((t) => t.id === tag.id) ? prev : [...prev, tag].sort((a, b) => a.name.localeCompare(b.name)),
+              prev.some((t) => t.id === tag.id)
+                ? prev
+                : [...prev, tag].sort((a, b) => a.name.localeCompare(b.name)),
             );
           }}
         />

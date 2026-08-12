@@ -139,6 +139,18 @@ function prismaSurfaceGuard() {
     // here first and returns the stored value if present. Surfaces that were
     // never patched throw on access.
     const stored = Object.create(null);
+    // T41 — PR #1282 added a live session-state lookup in verifyToken that
+    // calls prisma.user.findUnique() on every authenticated request. Most
+    // route tests mock verifyToken rather than the prisma singleton, so the
+    // guard catches an unmocked surface. Provide a default active-user stub
+    // that tests can override by patching prisma.user.findUnique as usual.
+    if (modelName === 'user') {
+      stored.findUnique = async () => ({
+        id: 1,
+        deactivatedAt: null,
+        sessionVersion: 0,
+      });
+    }
     return new Proxy(stored, {
       get(target, method) {
         if (typeof method === 'symbol') return target[method];

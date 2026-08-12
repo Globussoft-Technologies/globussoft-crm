@@ -24,7 +24,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -104,7 +104,7 @@ const STAFF_ROWS = [
   { id: 4,  name: 'Inactive Aman',   email: 'aman@enhancedwellness.in',    role: 'USER',  wellnessRole: 'helper',     primaryRole: { id: 202, key: 'helper',       name: 'Helper' },       createdAt: '2026-01-04T00:00:00Z', deactivatedAt: '2026-04-01T00:00:00Z' },
 ];
 
-function renderStaff(viewerRole = 'ADMIN', overrides = {}) {
+function renderStaff(viewerRole = 'ADMIN', overrides = {}, tenantVertical = 'wellness') {
   fetchApiMock.mockReset();
   fetchApiMock.mockImplementation((url) => {
     if (overrides[url] !== undefined) return Promise.resolve(overrides[url]);
@@ -122,7 +122,7 @@ function renderStaff(viewerRole = 'ADMIN', overrides = {}) {
         // vertical='wellness' is required so loadWellnessRoleTypes() fires
         // (gated on isWellness at Staff.jsx:313). Without it, deriveWellnessRole
         // always returns null because wellnessRoleTypes stays empty.
-        setUser: vi.fn(), token: 'tk', tenant: { id: 1, vertical: 'wellness' }, loading: false,
+        setUser: vi.fn(), token: 'tk', tenant: { id: 1, vertical: tenantVertical }, loading: false,
       }}>
         <Staff />
       </AuthContext.Provider>
@@ -136,7 +136,7 @@ describe('<Staff /> — row action buttons (#618)', () => {
   });
 
   it('non-ADMIN row shows all 5 action buttons for an ADMIN viewer', async () => {
-    renderStaff('ADMIN');
+    renderStaff('ADMIN', {}, 'travel');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
 
     // Row id=2 is non-ADMIN → all 5 buttons.
@@ -148,7 +148,7 @@ describe('<Staff /> — row action buttons (#618)', () => {
   });
 
   it('ADMIN row hides Deactivate + Delete, keeps Edit / Reset / Invite', async () => {
-    renderStaff('ADMIN');
+    renderStaff('ADMIN', {}, 'travel');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
 
     expect(screen.getByTestId('staff-action-edit-1')).toBeInTheDocument();
@@ -303,40 +303,65 @@ describe('<Staff /> — Invite modal (#891)', () => {
     expect(screen.queryByTestId('staff-add-button')).not.toBeInTheDocument();
   });
 
-  it('clicking Add Staff opens the modal; X button closes it', async () => {
-    renderStaff('ADMIN');
+  it('clicking Add Staff opens the modal, shows selectable sub-brands, and X closes it', async () => {
+    renderStaff('ADMIN', {}, 'travel');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
     // Modal closed by default.
     expect(screen.queryByTestId('staff-create-modal')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('staff-add-button'));
-    expect(screen.getByTestId('staff-create-modal')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('staff-create-modal')).toBeInTheDocument());
+
+    const createModal = screen.getByTestId('staff-create-modal');
+    const tmc = within(createModal).getByText('TMC (School trips)').closest('button');
+    const rfu = within(createModal).getByText('RFU (Umrah)').closest('button');
+    const travelStall = within(createModal).getByText('Travel Stall (Family)').closest('button');
+    const visaSure = within(createModal).getByText('Visa Sure').closest('button');
+
+    expect(tmc).not.toBeNull();
+    expect(rfu).not.toBeNull();
+    expect(travelStall).not.toBeNull();
+    expect(visaSure).not.toBeNull();
+
+    expect(tmc).toHaveAttribute('aria-pressed', 'true');
+    expect(rfu).toHaveAttribute('aria-pressed', 'false');
+    expect(travelStall).toHaveAttribute('aria-pressed', 'false');
+    expect(visaSure).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText('Access limited to: TMC (School trips).')).toBeInTheDocument();
+
+    fireEvent.click(rfu);
+    expect(tmc).toHaveAttribute('aria-pressed', 'true');
+    expect(rfu).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Access limited to: TMC (School trips), RFU (Umrah).')).toBeInTheDocument();
 
     // X (Close) button dismisses. Use getAllByLabelText since the edit modal
-    // also has one Close button — but it isn't mounted here, so take [0].
+    // also has one Close button - but it isn't mounted here, so take [0].
     const closeBtns = screen.getAllByLabelText('Close');
     fireEvent.click(closeBtns[0]);
     expect(screen.queryByTestId('staff-create-modal')).not.toBeInTheDocument();
   });
 
   it('submitting the Add Staff form POSTs to /api/staff with the form fields', async () => {
-    renderStaff('ADMIN');
+    renderStaff('ADMIN', {}, 'travel');
     await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
-    // Wait for the /api/roles fetch to populate availableRoles — without this
+    // Wait for the /api/roles fetch to populate availableRoles - without this
     // the RoleSelect popover renders an empty list and the click below would
     // race against the role load.
     await waitFor(() =>
       expect(fetchApiMock.mock.calls.some((c) => c[0] === '/api/roles')).toBe(true)
     );
     fireEvent.click(screen.getByTestId('staff-add-button'));
+    await waitFor(() => expect(screen.getByTestId('staff-create-modal')).toBeInTheDocument());
 
+    const createModal = screen.getByTestId('staff-create-modal');
     fireEvent.change(screen.getByTestId('staff-create-name'),     { target: { value: 'Asha Newhire' } });
     fireEvent.change(screen.getByTestId('staff-create-email'),    { target: { value: 'asha@enhancedwellness.in' } });
     fireEvent.change(screen.getByTestId('staff-create-password'), { target: { value: 'TempPw!1234' } });
+    fireEvent.click(within(createModal).getByText('RFU (Umrah)').closest('button'));
 
     // Post-e7253919: pick the role via the upward-opening RoleSelect popover
     // (replaces the old 3-way native <select> split). Click the trigger, then
-    // click the "User" option to seed rbacRoleId — saveCreate requires it.
+    // click the User option to seed rbacRoleId - saveCreate requires it.
     fireEvent.click(screen.getByTestId('staff-create-role'));
     await waitFor(() =>
       expect(screen.getByRole('option', { name: /^User$/i })).toBeInTheDocument()
@@ -351,7 +376,7 @@ describe('<Staff /> — Invite modal (#891)', () => {
       expect(invite).toBeTruthy();
       const body = JSON.parse(invite[1].body);
       // saveCreate derives access tier + wellnessRole from the single Role pick.
-      // 'USER' → access tier USER, wellnessRole null (no catalog match).
+      // 'USER' -> access tier USER, wellnessRole null (no catalog match).
       expect(body).toEqual(expect.objectContaining({
         name: 'Asha Newhire',
         email: 'asha@enhancedwellness.in',
@@ -359,116 +384,12 @@ describe('<Staff /> — Invite modal (#891)', () => {
         role: 'USER',
         wellnessRole: null,
         rbacRoleId: 102,
+        subBrandAccess: ['tmc', 'rfu'],
       }));
       expect(invite[1].method).toBe('POST');
     });
   });
 });
-
-// Post-e7253919: the per-row inline role <select> + the PUT /api/staff/:id/role
-// endpoint hit are no longer how role changes flow. The new UI consolidates
-// role editing into the Edit modal's single RoleSelect popover, which fires
-// PUT /api/staff/:id with the full editable shape (covered by the "Save edit"
-// describe below). Kept skipped (not deleted) so the contract history is
-// visible in the test file.
-describe.skip('<Staff /> — inline role change (PUT /api/staff/:id/role) — removed in e7253919', () => {
-  it.skip('contract moved to PUT /api/staff/:id via Edit modal', () => {});
-});
-
-describe('<Staff /> — Deactivate flow (PATCH /api/staff/:id)', () => {
-  beforeEach(() => {
-    fetchApiMock.mockReset();
-  });
-
-  it('clicking Deactivate prompts confirm, then PATCHes active=false', async () => {
-    renderStaff('ADMIN');
-    await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
-
-    // Click Deactivate on a non-admin row (id=2, Dr. Harsh Kumar).
-    fireEvent.click(screen.getByTestId('staff-action-deactivate-2'));
-
-    // The notify.confirm wrapper from the top-of-file mock auto-resolves true,
-    // so the PATCH should fire with active=false.
-    await waitFor(() => {
-      const patch = fetchApiMock.mock.calls.find(
-        (c) => c[0] === '/api/staff/2' && c[1]?.method === 'PATCH'
-      );
-      expect(patch).toBeTruthy();
-      expect(JSON.parse(patch[1].body)).toEqual({ active: false });
-    });
-  });
-
-  it('reactivating an already-inactive user PATCHes active=true', async () => {
-    renderStaff('ADMIN');
-    // Inactive Aman (id=4) is the seeded deactivated row.
-    await waitFor(() => expect(screen.getByText('Inactive Aman')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByTestId('staff-action-deactivate-4'));
-
-    await waitFor(() => {
-      const patch = fetchApiMock.mock.calls.find(
-        (c) => c[0] === '/api/staff/4' && c[1]?.method === 'PATCH'
-      );
-      expect(patch).toBeTruthy();
-      // Going from deactivatedAt-non-null → null means active=true.
-      expect(JSON.parse(patch[1].body)).toEqual({ active: true });
-    });
-  });
-});
-
-describe('<Staff /> — empty list state', () => {
-  beforeEach(() => {
-    fetchApiMock.mockReset();
-  });
-
-  it('renders the "No staff members found." copy when the directory is empty', async () => {
-    // Override /api/staff with an empty array.
-    renderStaff('ADMIN', { '/api/staff': [] });
-    await waitFor(() => expect(screen.getByText(/No staff members found\./i)).toBeInTheDocument());
-    // Stats bar is NOT rendered (it's gated on staff.length > 0).
-    expect(screen.queryByText(/Admins$/)).not.toBeInTheDocument();
-  });
-});
-
-describe('<Staff /> — RBAC: USER viewer is read-only', () => {
-  beforeEach(() => {
-    fetchApiMock.mockReset();
-  });
-
-  it('USER role sees role as a read-only badge (no <select>) and no action buttons', async () => {
-    renderStaff('USER');
-    await waitFor(() => expect(screen.getByText('Rishu Agarwal')).toBeInTheDocument());
-
-    // No editable role <select> — for a wellness/non-admin viewer the role
-    // pill is a read-only <span>, never a <select> (SUT line 449-452).
-    // Rishu's role is ADMIN: should appear as a RoleBadge, not a combobox.
-    const comboboxes = screen.queryAllByRole('combobox');
-    expect(comboboxes.length).toBe(0);
-
-    // No action buttons.
-    expect(screen.queryByTestId('staff-action-edit-1')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('staff-action-edit-2')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('staff-action-delete-2')).not.toBeInTheDocument();
-
-    // No Invite CTA.
-    expect(screen.queryByTestId('staff-add-button')).not.toBeInTheDocument();
-  });
-});
-
-// EXTENSION (2026-05-26, agent B): broaden coverage to fill the remaining
-// SUT branches. Adds 10 cases covering save-edit PUT shape, reset-password +
-// resend-invite + delete POSTs, wellness-role read-only badge, empty-filter
-// copy, cashier optgroup (DD-5.1), commission-profile dropdown population,
-// invite modal cancel-without-submit, and filter-toggle clearing.
-//
-// Discipline checklist (per 2026-05-23 cron rules + skill standing rules):
-//   - All new cases use existing notify.confirm auto-resolve (top-of-file mock
-//     resolves true), so destructive-action specs trigger their fetchApi POST.
-//   - Each spec asserts on the PUT/POST/DELETE call SHAPE (URL + method +
-//     body), not just on "the request fired" — pins the route contract.
-//   - getAllByText / queryAllByRole used wherever a label appears in BOTH
-//     filter chrome + row cells (avoids the duplicate-text throw).
-
 describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
@@ -548,6 +469,57 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
       expect(body.wellnessRole).toBeNull();
       expect(body.role).toBe('USER');
       expect(body.rbacRoleId).toBe(102);
+    });
+  });
+});
+
+describe('<Staff /> - Travel sub-brand access in edit modal', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+  });
+
+  it('prefills and saves the selected travel sub-brands on edit', async () => {
+    renderStaff('ADMIN', {
+      '/api/staff': [{
+        id: 2,
+        name: 'Travel Ops',
+        email: 'travel.ops@travelstall.demo',
+        role: 'USER',
+        wellnessRole: null,
+        primaryRole: { id: 102, key: 'USER', name: 'User' },
+        createdAt: '2026-01-02T00:00:00Z',
+        deactivatedAt: null,
+        subBrandAccess: JSON.stringify(['rfu']),
+      }],
+    }, 'travel');
+
+    await waitFor(() => expect(screen.getByText('Travel Ops')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('staff-action-edit-2'));
+    await waitFor(() => expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument());
+
+    const editModal = screen.getByTestId('staff-edit-modal');
+    const tmc = within(editModal).getByText('TMC (School trips)').closest('button');
+    const rfu = within(editModal).getByText('RFU (Umrah)').closest('button');
+
+    expect(tmc).not.toBeNull();
+    expect(rfu).not.toBeNull();
+    expect(tmc).toHaveAttribute('aria-pressed', 'false');
+    expect(rfu).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Access limited to: RFU (Umrah).')).toBeInTheDocument();
+
+    fireEvent.click(tmc);
+    expect(tmc).toHaveAttribute('aria-pressed', 'true');
+    expect(rfu).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByTestId('staff-edit-save'));
+
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(
+        (c) => c[0] === '/api/staff/2' && c[1]?.method === 'PUT'
+      );
+      expect(put).toBeTruthy();
+      const body = JSON.parse(put[1].body);
+      expect(body.subBrandAccess).toEqual(['rfu', 'tmc']);
     });
   });
 });

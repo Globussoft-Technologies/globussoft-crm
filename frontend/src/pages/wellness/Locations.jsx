@@ -5,6 +5,7 @@ import { useNotify } from '../../utils/notify';
 import PageHeader from '../../components/PageHeader';
 
 const PHONE_RE = /^\+?[\d\s\-().]{7,15}$/;
+const LOCATION_PAGE_SIZE = 24;
 // Mirrors backend/lib/attendanceGeofence.js DEFAULT_RADIUS_M — shown as a
 // placeholder only; leaving the field blank lets the backend default apply.
 const DEFAULT_RADIUS_M = 150;
@@ -18,12 +19,22 @@ export default function Locations() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(LOCATION_PAGE_SIZE);
 
   const load = () => {
     setLoading(true);
     fetchApi('/api/wellness/locations').then(setLocations).catch(() => setLocations([])).finally(() => setLoading(false));
   };
   useEffect(load, []);
+  useEffect(() => setVisibleCount(LOCATION_PAGE_SIZE), [locations.length]);
+
+  const visibleLocations = locations.slice(0, visibleCount);
+  const handleLocationsScroll = (event) => {
+    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 80) {
+      setVisibleCount((count) => Math.min(count + LOCATION_PAGE_SIZE, locations.length));
+    }
+  };
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -229,8 +240,9 @@ export default function Locations() {
 
       {loading && <div>Loading…</div>}
 
+      <div className="glass" onScroll={handleLocationsScroll} style={scrollContainerStyle}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
-        {locations.map((loc) => (
+        {visibleLocations.map((loc) => (
           <div key={loc.id} className="glass" style={{ padding: '1.25rem', opacity: loc.isActive ? 1 : 0.55 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
               <div>
@@ -290,8 +302,15 @@ export default function Locations() {
           </div>
         )}
       </div>
+      </div>
     </div>
   );
 }
 
 const inputStyle = { padding: '0.55rem 0.75rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' };
+const scrollContainerStyle = {
+  height: 'calc(100vh - 22rem)',
+  overflowY: 'auto',
+  padding: '1rem',
+  borderRadius: 12,
+};

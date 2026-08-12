@@ -25,6 +25,7 @@ const prisma = require("../lib/prisma");
 // practice but the historical contract returned 400 on unknown values,
 // which we preserve for back-compat.
 const { isCatalogedKey } = require("../lib/wellnessRoleTypes");
+const { parseSubBrandScope } = require("../lib/rbacScope");
 const {
   syncWellnessRoleFromRbacRoles,
   syncRbacRoleFromWellnessRole,
@@ -296,7 +297,7 @@ router.get("/", async (req, res) => {
         select: {
           roleId: true,
           role: {
-            select: { id: true, key: true, name: true, landingPath: true },
+            select: { id: true, key: true, name: true, landingPath: true, dataScope: true, subBrandScopeJson: true },
           },
         },
       },
@@ -345,6 +346,8 @@ router.get("/", async (req, res) => {
               key: u.userRoles[0].role.key,
               name: u.userRoles[0].role.name,
               landingPath: u.userRoles[0].role.landingPath || null,
+              dataScope: u.userRoles[0].role.dataScope || "ALL",
+              subBrandScope: parseSubBrandScope(u.userRoles[0].role.subBrandScopeJson),
             }
           : null;
       delete u.userRoles;
@@ -1038,7 +1041,7 @@ router.patch("/:id", verifyRole(["ADMIN"]), async (req, res) => {
 
     const user = await prisma.user.update({
       where: { id: target.id },
-      data: { deactivatedAt: active ? null : new Date() },
+      data: { deactivatedAt: active ? null : new Date(), sessionVersion: { increment: 1 } },
       select: {
         id: true,
         email: true,
@@ -1048,6 +1051,7 @@ router.patch("/:id", verifyRole(["ADMIN"]), async (req, res) => {
         commissionProfileId: true,
         createdAt: true,
         deactivatedAt: true,
+        sessionVersion: true,
       },
     });
 
@@ -1090,6 +1094,10 @@ router.post("/:id/reset-password", verifyRole(["ADMIN"]), async (req, res) => {
     if (!target) return res.status(404).json({ error: "User not found." });
 
     const token = crypto.randomBytes(32).toString("hex");
+    await prisma.user.update({
+      where: { id: target.id },
+      data: { sessionVersion: { increment: 1 } },
+    });
     // Persist to the SHARED DB store (consumed by /api/auth/reset-password) +
     // keep the legacy Map for __testHooks.
     await persistAdminToken(token, target.id, new Date(Date.now() + 3600000), adminResetTokens);

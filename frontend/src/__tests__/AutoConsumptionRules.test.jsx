@@ -227,6 +227,12 @@ describe('<AutoConsumptionRules /> — page chrome', () => {
       screen.getByRole('button', { name: /New rule/i }),
     ).toBeInTheDocument();
     expect(
+      screen.getByRole('button', { name: /^Export Auto-consumption rules$/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /^Import Auto-consumption rules$/i }),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText(/When a visit completes for the matching service/i),
     ).toBeInTheDocument();
   });

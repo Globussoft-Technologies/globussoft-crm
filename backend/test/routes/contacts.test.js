@@ -94,6 +94,34 @@ Module._cache[eventBusPath] = {
   },
 };
 
+const notifyAdminsOfNewLeadMock = vi.fn().mockResolvedValue([]);
+const leadNotificationsPath = requireCJS.resolve('../../lib/leadNotifications.js');
+Module._cache[leadNotificationsPath] = {
+  id: leadNotificationsPath,
+  filename: leadNotificationsPath,
+  loaded: true,
+  exports: {
+    notifyAdminsOfNewLead: notifyAdminsOfNewLeadMock,
+  },
+};
+
+// Auto-dial queue stub so POST /api/contacts create tests can assert enqueue
+// is called for new Leads with a Callified campaign + phone.
+const autoDialEnqueueMock = vi.fn();
+const autoDialQueuePath = requireCJS.resolve('../../lib/callifiedAutoDialQueue.js');
+Module._cache[autoDialQueuePath] = {
+  id: autoDialQueuePath,
+  filename: autoDialQueuePath,
+  loaded: true,
+  exports: {
+    enqueue: autoDialEnqueueMock,
+    startProcessor: () => {},
+    stopProcessor: () => {},
+    getQueueLength: () => 0,
+    isDialable: () => true,
+  },
+};
+
 const findDuplicateMock = vi.fn();
 const dedupPath = requireCJS.resolve('../../utils/deduplication.js');
 Module._cache[dedupPath] = {
@@ -164,6 +192,7 @@ authMw.verifyRole = (roles) => (req, res, next) => {
 prisma.contact = prisma.contact || {};
 prisma.contact.findMany = vi.fn();
 prisma.contact.findFirst = vi.fn();
+prisma.contact.findUnique = vi.fn();
 prisma.contact.create = vi.fn();
 prisma.contact.update = vi.fn();
 prisma.patient = prisma.patient || {};
@@ -180,6 +209,8 @@ prisma.webhook.findMany = vi.fn().mockResolvedValue([]);
 // gated on tenant.vertical === 'travel'; pulls Itineraries + TravelInvoices.
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
+prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.tenantSetting.findUnique = vi.fn();
 prisma.itinerary = prisma.itinerary || {};
 prisma.itinerary.findMany = vi.fn().mockResolvedValue([]);
 prisma.travelInvoice = prisma.travelInvoice || {};
@@ -237,12 +268,15 @@ function makeApp({ tenantId = TENANT_ID, userId = USER_ID, role = 'ADMIN', skipA
 beforeEach(() => {
   prisma.contact.findMany.mockReset().mockResolvedValue([SAMPLE_CONTACT]);
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.create.mockReset();
   prisma.contact.update.mockReset();
+  prisma.contact.updateMany = vi.fn().mockResolvedValue({ count: 0 });
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.wallet.findFirst.mockReset().mockResolvedValue(null);
   prisma.webhook.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
+  prisma.tenantSetting.findUnique.mockReset();
   prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
   prisma.travelInvoice.findMany.mockReset().mockResolvedValue([]);
   prisma.leadCustomFieldDefinition.findMany.mockReset().mockResolvedValue([]);
@@ -251,7 +285,9 @@ beforeEach(() => {
   writeAuditMock.mockReset().mockResolvedValue(undefined);
   diffFieldsMock.mockReset().mockReturnValue({});
   emitEventMock.mockReset();
+  notifyAdminsOfNewLeadMock.mockReset().mockResolvedValue([]);
   findDuplicateMock.mockReset().mockResolvedValue(null);
+  autoDialEnqueueMock.mockReset();
   authState.useReal = false;
 });
 
@@ -436,6 +472,97 @@ describe('POST /api/contacts — create', () => {
     expect(auditArgs[2]).toBe(12345);
     expect(emitEventMock).toHaveBeenCalledOnce();
     expect(emitEventMock.mock.calls[0][0]).toBe('contact.created');
+    expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: TENANT_ID,
+      contact: created,
+    }));
+  });
+
+  test('new Lead with callifiedCampaignId + phone is auto-dial enqueued', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'true' });
+    const created = {
+      id: 12345,
+      name: 'Murali',
+      email: 'murali@example.com',
+      phone: '+919876955432',
+      tenantId: TENANT_ID,
+      assignedToId: USER_ID,
+      status: 'Lead',
+      callifiedCampaignId: 42,
+    };
+    findDuplicateMock.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce(created);
+
+    const res = await request(makeApp())
+      .post('/api/contacts')
+      .send({
+        name: 'Murali',
+        email: 'murali@example.com',
+        phone: '+919876955432',
+        callifiedCampaignId: 42,
+      });
+
+    expect(res.status).toBe(201);
+    expect(autoDialEnqueueMock).toHaveBeenCalledWith({
+      tenantId: TENANT_ID,
+      contactId: 12345,
+      campaignId: 42,
+      userId: USER_ID,
+    });
+  });
+
+  test('new Lead with callifiedCampaignId + phone is NOT auto-dial enqueued when disabled', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'false' });
+    const created = {
+      id: 12345,
+      name: 'Murali',
+      email: 'murali@example.com',
+      phone: '+919876955432',
+      tenantId: TENANT_ID,
+      assignedToId: USER_ID,
+      status: 'Lead',
+      callifiedCampaignId: 42,
+    };
+    findDuplicateMock.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce(created);
+
+    const res = await request(makeApp())
+      .post('/api/contacts')
+      .send({
+        name: 'Murali',
+        email: 'murali@example.com',
+        phone: '+919876955432',
+        callifiedCampaignId: 42,
+      });
+
+    expect(res.status).toBe(201);
+    expect(autoDialEnqueueMock).not.toHaveBeenCalled();
+  });
+
+  test('new Lead without phone is NOT auto-dial enqueued', async () => {
+    const created = {
+      id: 12345,
+      name: 'Murali',
+      email: 'murali@example.com',
+      phone: null,
+      tenantId: TENANT_ID,
+      assignedToId: USER_ID,
+      status: 'Lead',
+      callifiedCampaignId: 42,
+    };
+    findDuplicateMock.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce(created);
+
+    const res = await request(makeApp())
+      .post('/api/contacts')
+      .send({
+        name: 'Murali',
+        email: 'murali@example.com',
+        callifiedCampaignId: 42,
+      });
+
+    expect(res.status).toBe(201);
+    expect(autoDialEnqueueMock).not.toHaveBeenCalled();
   });
 
   test('empty strings for optional wellness/Int/Date fields are normalized to null → 201 (generic CRM create lead form)', async () => {
@@ -500,6 +627,50 @@ describe('POST /api/contacts — create', () => {
     expect(data.status).toBe('Lead');
   });
 
+  test('soft-deleted same email is restored as a visible Lead instead of creating a duplicate', async () => {
+    const deletedContact = {
+      ...SAMPLE_CONTACT,
+      id: 7777,
+      email: 'restore@example.com',
+      deletedAt: new Date('2026-08-01T10:00:00Z'),
+    };
+    const restored = {
+      ...deletedContact,
+      name: 'Restored Lead',
+      phone: '+919811000777',
+      status: 'Lead',
+      deletedAt: null,
+    };
+    findDuplicateMock.mockResolvedValueOnce(null);
+    prisma.contact.findUnique.mockResolvedValueOnce(deletedContact);
+    prisma.contact.update.mockResolvedValueOnce(restored);
+
+    const res = await request(makeApp())
+      .post('/api/contacts')
+      .send({
+        name: 'Restored Lead',
+        email: 'restore@example.com',
+        phone: '+919811000777',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 7777, restored: true, deletedAt: null });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 7777 },
+      data: expect.objectContaining({
+        email: 'restore@example.com',
+        status: 'Lead',
+        deletedAt: null,
+        tenantId: TENANT_ID,
+      }),
+    });
+    expect(writeAuditMock.mock.calls[0][1]).toBe('RESTORE');
+    expect(notifyAdminsOfNewLeadMock).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: TENANT_ID,
+      contact: restored,
+    }));
+  });
   test('missing required email → 400 EMAIL_REQUIRED (#160); prisma NOT called', async () => {
     const res = await request(makeApp())
       .post('/api/contacts')
@@ -847,6 +1018,39 @@ describe('Lead custom fields — read/write integration', () => {
     const websiteCall = upserts.find((c) => c.where.contactId_fieldId.fieldId === 13);
     // Invalid URL is treated as a clear — all typed columns are null.
     expect(websiteCall.update).toEqual({ valueText: null, valueNumber: null, valueDate: null, valueBool: null });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+describe('PUT /api/contacts/bulk-assign-campaign', () => {
+  test('updates campaign for provided contact ids and returns updated count', async () => {
+    prisma.contact.updateMany.mockResolvedValueOnce({ count: 2 });
+
+    const res = await request(makeApp())
+      .put('/api/contacts/bulk-assign-campaign')
+      .send({ contactIds: [9001, 9002], callifiedCampaignId: 42 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: 2 });
+    expect(prisma.contact.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: [9001, 9002] }, tenantId: TENANT_ID },
+      data: { callifiedCampaignId: 42 },
+    });
+  });
+
+  test('unassigns campaign when callifiedCampaignId is null', async () => {
+    prisma.contact.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const res = await request(makeApp())
+      .put('/api/contacts/bulk-assign-campaign')
+      .send({ contactIds: [9001], callifiedCampaignId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ updated: 1 });
+    expect(prisma.contact.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: [9001] }, tenantId: TENANT_ID },
+      data: { callifiedCampaignId: null },
+    });
   });
 });
 

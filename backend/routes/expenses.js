@@ -15,6 +15,8 @@ const { verifyRole, verifyToken } = require("../middleware/auth");
 router.get("/", async (req, res) => {
   try {
     const { status, category } = req.query;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 100, 500));
+    const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
 
     const where = { tenantId: req.user.tenantId };
     if (status) where.status = status;
@@ -24,6 +26,8 @@ router.get("/", async (req, res) => {
     const findManyArgs = {
       where,
       orderBy: { createdAt: "desc" },
+      take: limit,
+      skip: offset,
     };
     if (isSummary) {
       findManyArgs.select = {

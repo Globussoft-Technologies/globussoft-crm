@@ -1074,9 +1074,11 @@ test.describe('Contacts API — POST /merge', () => {
 
   test('200 multi-secondary merge folds all into primary (#592)', async ({ request }) => {
     // Three contacts with the same email-derived label seed; merge two into one.
-    const c1 = await createContact(request, { label: 'multi-master' });
-    const c2 = await createContact(request, { label: 'multi-sib-a' });
-    const c3 = await createContact(request, { label: 'multi-sib-b' });
+    // Use force:true because the narrow uniquePhone() pool collides with
+    // contacts left behind by other parallel specs / previous demo state.
+    const c1 = await createContact(request, { label: 'multi-master', force: true });
+    const c2 = await createContact(request, { label: 'multi-sib-a', force: true });
+    const c3 = await createContact(request, { label: 'multi-sib-b', force: true });
 
     const { token } = await getAdmin(request);
     const res = await post(request, token, '/api/contacts/merge', {

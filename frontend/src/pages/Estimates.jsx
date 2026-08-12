@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { FileSpreadsheet, Plus, Trash2, IndianRupee, ArrowRightLeft, X, Download, Mail } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -53,37 +53,149 @@ const INITIAL_FORM = {
 export default function Estimates() {
   const notify = useNotify();
   const [estimates, setEstimates] = useState([]);
+  const [estimateStats, setEstimateStats] = useState({ total: null, byStatus: null, totalValue: null });
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
   const [form, setForm] = useState(INITIAL_FORM);
   const [lineItems, setLineItems] = useState([{ ...EMPTY_LINE_ITEM }]);
+  const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   // #257: status pills now actually filter the ledger ('all' | 'Draft' | 'Sent').
   const [statusFilter, setStatusFilter] = useState('all');
+  const tableScrollRef = useRef(null);
+  const requestSeqRef = useRef(0);
+  const requestInFlightRef = useRef(false);
+  const hasMoreRef = useRef(true);
+  const estimatesRef = useRef([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [tableError, setTableError] = useState(null);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
-    loadData();
+    estimatesRef.current = estimates;
+  }, [estimates]);
+
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
+  const loadPage = useCallback(async ({ reset = false } = {}) => {
+    if (!reset && (requestInFlightRef.current || !hasMoreRef.current)) return;
+
+    const requestId = ++requestSeqRef.current;
+    const nextOffset = reset ? 0 : estimatesRef.current.length;
+    requestInFlightRef.current = true;
+
+    if (reset) {
+      setLoading(true);
+      setTableError(null);
+      setEstimates([]);
+      estimatesRef.current = [];
+      setHasMore(true);
+      hasMoreRef.current = true;
+      const el = tableScrollRef.current;
+      if (el && typeof el.scrollTo === 'function') el.scrollTo({ top: 0 });
+    } else {
+      setLoadingMore(true);
+    }
+
+    try {
+      const qs = new URLSearchParams();
+      if (nextOffset > 0) {
+        qs.set('limit', '25');
+        qs.set('offset', String(nextOffset));
+      }
+
+      const queryString = qs.toString();
+      const est = await fetchApi(`/api/estimates${queryString ? `?${queryString}` : ''}`);
+      if (requestSeqRef.current !== requestId) return;
+
+      const nextRows = Array.isArray(est) ? est : [];
+      const combined = reset ? nextRows : [...estimatesRef.current, ...nextRows];
+      const nextHasMore = nextRows.length === 25;
+
+      estimatesRef.current = combined;
+      setEstimates(combined);
+      setHasMore(nextHasMore);
+      hasMoreRef.current = nextHasMore;
+    } catch (err) {
+      if (requestSeqRef.current !== requestId) return;
+      setTableError(err?.message || 'Failed to load estimates');
+    } finally {
+      if (requestSeqRef.current === requestId) {
+        requestInFlightRef.current = false;
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    }
   }, []);
 
-  const loadData = async () => {
+  const loadStats = useCallback(async () => {
     try {
-      const [est, c, d] = await Promise.all([
-        fetchApi('/api/estimates'),
+      const stats = await fetchApi('/api/estimates/stats');
+      setEstimateStats({
+        total: stats?.total != null ? Number(stats.total) : null,
+        byStatus: stats?.byStatus || null,
+        totalValue: stats?.totalValue != null ? Number(stats.totalValue) : null,
+      });
+    } catch {
+      // handled by fetchApi
+    }
+  }, []);
+
+  const loadContactsAndDeals = useCallback(async () => {
+    try {
+      const [c, d] = await Promise.all([
         fetchApi('/api/contacts'),
         fetchApi('/api/deals'),
       ]);
-      setEstimates(Array.isArray(est) ? est : []);
       setContacts(Array.isArray(c) ? c : []);
       setDeals(Array.isArray(d) ? d : []);
     } catch {
       // handled by fetchApi
     }
+  }, []);
+
+  useEffect(() => {
+    loadStats();
+    loadContactsAndDeals();
+  }, [loadStats, loadContactsAndDeals]);
+
+  useEffect(() => {
+    loadPage({ reset: true });
+  }, [loadPage, reloadTick]);
+
+  useEffect(() => {
+    if (!tableScrollRef.current || loading || loadingMore || !hasMore) return;
+    const el = tableScrollRef.current;
+    if (el.scrollHeight <= el.clientHeight + 24) {
+      loadPage({ reset: false });
+    }
+  }, [estimates, loading, loadingMore, hasMore, loadPage]);
+
+  const handleTableScroll = useCallback((e) => {
+    const el = e.currentTarget;
+    if (!el || requestInFlightRef.current || !hasMoreRef.current) return;
+    const threshold = 96;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - threshold) {
+      loadPage({ reset: false });
+    }
+  }, [loadPage]);
+
+  const refreshAll = () => {
+    const el = tableScrollRef.current;
+    if (el && typeof el.scrollTo === 'function') el.scrollTo({ top: 0 });
+    loadStats();
+    setReloadTick((n) => n + 1);
   };
 
   const stats = useMemo(() => {
-    const draftCount = estimates.filter(e => e.status === 'Draft').length;
-    const sentCount = estimates.filter(e => e.status === 'Sent').length;
+    const byStatus = estimateStats.byStatus || {};
+    const draftCount = Number(byStatus.Draft) || estimates.filter((e) => e.status === 'Draft').length;
+    const sentCount = Number(byStatus.Sent) || estimates.filter((e) => e.status === 'Sent').length;
     return { draftCount, sentCount };
-  }, [estimates]);
+  }, [estimateStats, estimates]);
 
   const visibleEstimates = useMemo(() => {
     if (statusFilter === 'all') return estimates;
@@ -99,6 +211,11 @@ export default function Estimates() {
   const visibleTotalValue = useMemo(
     () => visibleEstimates.reduce((sum, e) => sum + (Number(e.totalAmount) || 0), 0),
     [visibleEstimates]
+  );
+
+  const totalValue = useMemo(
+    () => (estimateStats.totalValue != null ? estimateStats.totalValue : visibleTotalValue),
+    [estimateStats.totalValue, visibleTotalValue],
   );
 
   // #333: include a percent discount in the per-line total so the grand
@@ -191,7 +308,7 @@ export default function Estimates() {
       });
       setForm(INITIAL_FORM);
       setLineItems([{ ...EMPTY_LINE_ITEM }]);
-      loadData();
+      refreshAll();
     } catch {
       notify.error('Failed to create estimate');
     }
@@ -206,7 +323,7 @@ export default function Estimates() {
       const result = await fetchApi(`/api/estimates/${id}/convert`, { method: 'PUT', silent: true });
       const invNum = result?.invoiceNum || result?.invoice?.invoiceNum;
       notify.success(invNum ? `Converted to invoice ${invNum}` : 'Converted to invoice');
-      loadData();
+      refreshAll();
     } catch (err) {
       // fetchApi auto-toasted the server error; add hint when 400 (likely
       // missing contact/line items) without duplicating the underlying msg.
@@ -273,7 +390,7 @@ export default function Estimates() {
       });
       if (r?.delivered) notify.success(`Estimate emailed to ${recipient}`);
       else notify.info(`Estimate logged but delivery is pending (no SMTP configured).`);
-      loadData();
+      refreshAll();
     } catch {
       notify.error('Failed to email estimate');
     }
@@ -288,7 +405,7 @@ export default function Estimates() {
     })) return;
     try {
       await fetchApi(`/api/estimates/${id}`, { method: 'DELETE' });
-      loadData();
+      refreshAll();
     } catch {
       notify.error('Failed to delete estimate');
     }
@@ -306,7 +423,8 @@ export default function Estimates() {
       </header>
 
       {/* Summary Stats — pills filter the ledger (#257) */}
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
+      <div className="estimates-toolbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.75rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
         <button
           type="button"
           onClick={() => setStatusFilter('all')}
@@ -319,7 +437,7 @@ export default function Estimates() {
             cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem',
           }}
         >
-          {estimates.length} All
+          {estimateStats.total ?? estimates.length} All
         </button>
         <button
           type="button"
@@ -354,18 +472,78 @@ export default function Estimates() {
           background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <IndianRupee size={14} /> Total Value: {formatCurrency(visibleTotalValue)}
+          <IndianRupee size={14} /> Total Value: {formatCurrency(totalValue)}
         </span>
+        </div>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => setIsCreateFormOpen(true)}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.65rem 1rem', whiteSpace: 'nowrap' }}
+        >
+          <Plus size={16} /> Create Estimate
+        </button>
       </div>
 
-      <div className="estimates-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '2rem' }}>
-
-        {/* Create Estimate Panel */}
-        <div className="card" style={{ padding: '2rem', height: 'fit-content' }}>
-          <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Plus size={20} color="var(--accent-color)" /> Create Estimate
-          </h3>
-          <form onSubmit={createEstimate} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+      {isCreateFormOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Create Estimate"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsCreateFormOpen(false);
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            background: 'var(--overlay-bg, rgba(0,0,0,0.6))',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'center',
+            padding: '2rem 1rem',
+            overflowY: 'auto',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+                 padding: '1.25rem',
+                 width: '600px',
+                 maxWidth: '100%',
+                 height: 'max-content',
+                 minHeight: 0,
+                 maxHeight: 'none',
+                 overflowY: 'visible',
+                 margin: 'auto 0',
+                 boxSizing: 'border-box',
+                 background: 'var(--modal-bg, var(--bg-color))',
+                 backgroundColor: 'var(--modal-bg, var(--bg-color))',
+                 borderRadius: '16px',
+                 border: '1px solid var(--border-color)',
+                 boxShadow: '0 25px 50px -12px rgba(0,0,0,0.28)',
+               }}
+          >
+            <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Plus size={20} color="var(--accent-color)" /> Create Estimate
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsCreateFormOpen(false)}
+                style={{
+                  background: 'transparent', border: '1px solid var(--border-color)', cursor: 'pointer',
+                  color: 'var(--text-secondary)', padding: '0.45rem', borderRadius: '6px',
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                aria-label="Close create estimate form"
+              >
+                <X size={18} />
+              </button>
+            </h3>
+            <form onSubmit={createEstimate} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
 
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Title</label>
@@ -439,11 +617,11 @@ export default function Estimates() {
             {/* Line Items */}
             <div>
               <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.75rem', color: 'var(--text-secondary)' }}>Line Items</label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 {lineItems.map((item, index) => (
                   <div key={index} style={{
                     display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem',
-                    padding: '1rem', borderRadius: '8px',
+                    padding: '0.8rem', borderRadius: '8px',
                     background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)',
                   }}>
                     <div style={{ gridColumn: '1 / -1' }}>
@@ -550,7 +728,7 @@ export default function Estimates() {
 
               {/* Grand Total — red whenever any line is invalid (negative qty/price) */}
               <div style={{
-                marginTop: '1rem', padding: '0.75rem 1rem', borderRadius: '8px',
+                marginTop: '0.8rem', padding: '0.7rem 0.9rem', borderRadius: '8px',
                 background: hasInvalidLine ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.08)',
                 border: `1px solid ${hasInvalidLine ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.2)'}`,
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -567,43 +745,110 @@ export default function Estimates() {
               )}
             </div>
 
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.25rem', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setIsCreateFormOpen(false)}
+                style={{
+                  padding: '0.9rem 1rem', flex: '1 1 140px',
+                  background: 'transparent', border: '1px solid var(--border-color)',
+                  color: 'var(--text-secondary)', borderRadius: '6px', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
             <button
               type="submit"
               className="btn-primary"
               disabled={hasInvalidLine}
               title={hasInvalidLine ? `Each line needs qty ${QTY_MIN}–${QTY_MAX}, unit price ≤ ${UNIT_PRICE_MAX.toLocaleString()}, discount ${DISCOUNT_MIN}–${DISCOUNT_MAX}%` : ''}
               style={{
-                padding: '1rem', marginTop: '0.5rem',
+                padding: '0.9rem 1rem', flex: '2 1 220px',
                 opacity: hasInvalidLine ? 0.5 : 1,
                 cursor: hasInvalidLine ? 'not-allowed' : 'pointer',
               }}
             >
               Create Estimate
-            </button>
-          </form>
+              </button>
+            </div>
+            </form>
+          </div>
         </div>
+      )}
 
-        {/* Estimates Table */}
-        <div className="card" style={{ padding: '2rem' }}>
+      {/* Estimates Table */}
+      <div className="card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FileSpreadsheet size={20} color="var(--success-color)" /> Estimate Ledger
           </h3>
 
-          {estimates.length === 0 ? (
+          {tableError && (
+            <div
+              role="alert"
+              style={{
+                background: 'rgba(239,68,68,0.08)',
+                color: '#ef4444',
+                padding: '0.75rem',
+                borderRadius: 8,
+                marginBottom: '1rem',
+              }}
+            >
+              {tableError}
+            </div>
+          )}
+
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+              <FileSpreadsheet size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
+              <p style={{ color: 'var(--text-secondary)' }}>Loading estimates...</p>
+            </div>
+          ) : estimates.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '4rem 2rem', background: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
               <FileSpreadsheet size={48} style={{ opacity: 0.2, margin: '0 auto 1rem', color: 'var(--accent-color)' }} />
               <p style={{ color: 'var(--text-secondary)' }}>No estimates yet. Create one to get started.</p>
             </div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }} role="table" aria-label="Estimates table">
+            <div
+              ref={tableScrollRef}
+              onScroll={handleTableScroll}
+              style={{
+                overflowX: 'auto',
+                overflowY: 'auto',
+                minHeight: 'calc(100vh - 380px)',
+                maxHeight: 'calc(100vh - 380px)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 4,
+                background: 'var(--surface-color)',
+              }}
+            >
+              <table
+                style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.875rem' }}
+                role="table"
+                aria-label="Estimates table"
+              >
+                <colgroup>
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '24%' }} />
+                </colgroup>
                 <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left' }}>
+                  <tr style={{ textAlign: 'left' }}>
                     {['Est #', 'Title', 'Contact', 'Total', 'Status', 'Valid Until', 'Items', 'Actions'].map(h => (
                       <th key={h} style={{
+                        position: 'sticky',
+                        top: 0,
+                        zIndex: 3,
                         padding: '0.75rem 0.5rem', color: 'var(--text-secondary)', fontWeight: '600',
                         fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em',
-                        ...(h === 'Actions' ? { textAlign: 'right' } : {}),
+                        background: 'var(--bg-color)',
+                        backgroundClip: 'padding-box',
+                        boxShadow: 'inset 0 -1px 0 var(--border-color)',
+                        // ...(h === 'Actions' ? { textAlign: 'right' } : {}),
                       }}>{h}</th>
                     ))}
                   </tr>
@@ -616,34 +861,34 @@ export default function Estimates() {
                       onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
                       onMouseOut={e => e.currentTarget.style.background = 'transparent'}
                     >
-                      <td style={{ padding: '1rem 0.5rem', fontWeight: '600', letterSpacing: '0.03em' }}>
+                      <td style={{ padding: '1rem 0.5rem',fontSize: "0.75rem", fontWeight: '600', letterSpacing: '0.03em', overflowWrap: 'anywhere' }}>
                         {est.estimateNum}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem' }}>{est.title}</td>
-                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
+                      <td style={{ padding: '1rem 0.5rem', overflowWrap: 'anywhere' }}>{est.title}</td>
+                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
                         {est.contact?.name || '-'}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem' }}>
+                      <td style={{ padding: '1rem 0.5rem', overflowWrap: 'anywhere' }}>
                         {/* #256: removed the hardcoded $ IndianRupee — formatCurrency()
                             already prefixes the right symbol from tenant.defaultCurrency,
                             so wellness/India tenants no longer see '$ ₹100.00'. Mirrors
                             the same fix applied in Invoices.jsx (#242). */}
                         <span style={{ color: 'var(--success-color)', fontWeight: 600 }}>{formatCurrency(est.totalAmount)}</span>
                       </td>
-                      <td style={{ padding: '1rem 0.5rem' }}>
+                      <td style={{ padding: '1rem 0.5rem', overflowWrap: 'anywhere' }}>
                         <StatusBadge status={est.status} />
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
+                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
                         {est.validUntil ? formatDate(est.validUntil) : '-'}
                       </td>
-                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)' }}>
+                      <td style={{ padding: '1rem 0.5rem', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
                         {est.lineItems?.length || 0}
                       </td>
                       <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
                         {/* #603: per-row PDF / Email / Convert / Delete actions.
                             Mirrors the row-action set already in Invoices.jsx
                             so estimates work matches user expectation. */}
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem', flexWrap: 'nowrap' }}>
                           <button
                             onClick={() => downloadPdf(est.id, est.estimateNum)}
                             style={{
@@ -703,13 +948,25 @@ export default function Estimates() {
                       </td>
                     </tr>
                   ))}
+                  {loadingMore && (
+                    <tr>
+                      <td colSpan={8} style={{ padding: '1rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                        Loading more estimates...
+                      </td>
+                    </tr>
+                  )}
+                  {!loading && !loadingMore && hasMore && visibleEstimates.length > 0 && (
+                    <tr>
+                      <td colSpan={8} style={{ padding: '1rem 0.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                        Scroll to load more estimates.
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
           )}
         </div>
-      </div>
-
       <style>{`
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         /* #513: collapse the 1fr 2fr two-column layout to a single stack on mobile.

@@ -53,11 +53,78 @@ const visaDocStore = require("../lib/visaDocStore");
 const passportOcrClient = require("../services/passportOcrClient");
 const listProjection = require("../lib/listProjection");
 const { toE164 } = require("../utils/deduplication");
+const { sendEmail } = require("../lib/emailSender");
+const { mintPaymentPortalToken } = require("../lib/travelPaymentPortalToken");
+const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalments");
 const {
   parseSpreadsheetBuffer,
   parseParticipantImportRow,
 } = require("../lib/travelTmcImport");
 
+
+function paymentPortalBaseUrl() {
+  return process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "http://localhost:5173";
+}
+
+function escapeHtml(value) {
+  return String(value || "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[char]));
+}
+
+function localDateKey(value = new Date()) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+function sendApprovalPaymentPortalEmail({ tenantId, trip, participant }) {
+  const parentEmail = String(participant?.parentEmail || "").trim().toLowerCase();
+  if (!parentEmail) return;
+  setImmediate(async () => {
+    try {
+      const token = mintPaymentPortalToken({
+        tenantId,
+        tripId: trip.id,
+        participantId: participant.id,
+        email: parentEmail,
+      });
+      const paymentUrl = `${paymentPortalBaseUrl()}/pay/${token}`;
+      const subject = `Registration approved for ${trip.tripCode || "your trip"}`;
+      const greeting = participant.parentName || participant.fullName || "there";
+      const paymentLinkText = "Click here to proceed for payment";
+      const text = [
+        `Hello ${greeting},`,
+        "",
+        "Your trip registration has been approved.",
+        "You can now proceed with the next step and pay your instalments through the secure CRM payment portal.",
+        "",
+        `${paymentLinkText}:`,
+        "",
+        "This portal link is unique to the transaction and should not be shared publicly.",
+      ].join("\n");
+      const html = `
+        <p>Hello ${escapeHtml(greeting)},</p>
+        <p>Your trip registration has been approved.</p>
+        <p>You can now proceed with the next step and pay your instalments through the secure CRM payment portal.</p>
+        <p><a href="${escapeHtml(paymentUrl)}" target="_blank" rel="noopener noreferrer">${paymentLinkText}</a></p>
+        <p>This portal link is unique to the transaction and should not be shared publicly.</p>
+      `;
+      await sendEmail({
+        to: parentEmail,
+        subject,
+        text,
+        html,
+      });
+    } catch (e) {
+      console.error("[travel-trips] approval payment portal email error:", e.message);
+    }
+  });
+}
 const VALID_TRIP_STATUSES = ["confirmed", "in-trip", "completed", "cancelled"];
 const tripImportUpload = multer({
   storage: multer.memoryStorage(),
@@ -96,6 +163,8 @@ async function requireTmcAccess(req, res, next) {
 router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
+    const searchRaw = req.query.search ?? req.query.q;
+    const search = typeof searchRaw === "string" ? searchRaw.trim() : "";
     if (req.query.status) {
       if (!VALID_TRIP_STATUSES.includes(String(req.query.status))) {
         return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
@@ -105,6 +174,12 @@ router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (
     if (req.query.schoolContactId) {
       const sid = parseInt(req.query.schoolContactId, 10);
       if (Number.isFinite(sid)) where.schoolContactId = sid;
+    }
+    if (search) {
+      where.OR = [
+        { tripCode: { contains: search } },
+        { destination: { contains: search } },
+      ];
     }
 
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
@@ -226,6 +301,18 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
     const ret = new Date(returnDate);
     if (!Number.isFinite(depart.getTime()) || !Number.isFinite(ret.getTime())) {
       return res.status(400).json({ error: "invalid date", code: "INVALID_DATE" });
+    }
+    const todayKey = localDateKey();
+    const departKey = localDateKey(depart);
+    const retKey = localDateKey(ret);
+    if (!todayKey || !departKey || !retKey) {
+      return res.status(400).json({ error: "invalid date", code: "INVALID_DATE" });
+    }
+    if (departKey < todayKey || retKey < todayKey) {
+      return res.status(400).json({
+        error: "departDate and returnDate must be today or in the future",
+        code: "DATE_IN_PAST",
+      });
     }
     if (ret < depart) {
       return res.status(400).json({ error: "returnDate must be on or after departDate", code: "INVERTED_DATES" });
@@ -1875,16 +1962,34 @@ async function decideApplication(req, res, nextStatus) {
     }
     const reviewerId = req.user?.userId ?? null;
 
-    const updated = await prisma.tripParticipant.update({
-      where: { id: pid },
-      data: {
-        applicationStatus: nextStatus,
-        reviewedAt: new Date(),
-        reviewedById: Number.isFinite(reviewerId) ? reviewerId : null,
-        reviewNotes,
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.tripParticipant.update({
+        where: { id: pid },
+        data: {
+          applicationStatus: nextStatus,
+          reviewedAt: new Date(),
+          reviewedById: Number.isFinite(reviewerId) ? reviewerId : null,
+          reviewNotes,
+        },
+      });
+      if (nextStatus === "approved") {
+        await materializeTripInstalmentsFromPlan({
+          db: tx,
+          tripId: trip.id,
+          participantIds: [pid],
+          allowMissingPlan: true,
+        });
+      }
+      return row;
     });
     res.json(updated);
+    if (nextStatus === "approved" && existing.applicationStatus !== "approved") {
+      sendApprovalPaymentPortalEmail({
+        tenantId: req.travelTenant.id,
+        trip,
+        participant: updated,
+      });
+    }
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-trips] participant decide error:", e.message);
@@ -1928,29 +2033,7 @@ router.delete("/trips/:id/participants/:pid", verifyToken, requireTravelTenant, 
   }
 });
 
-// ─── Pending registrations (Phase 5 hybrid architecture) ─────────────
-//
-// Trip-scoped admin queue surfacing the staging rows produced by the
-// landing-page → microsite OTP flow. Lives alongside Participants in
-// the CRM UI — the user keeps a single Participants area per
-// decision #7, so the frontend merges these rows into the same list
-// with a status-aware presentation.
-//
-//   GET    /trips/:id/registrations
-//          ?status=DRAFT|OTP_VERIFIED|REJECTED|CONVERTED  (default: all)
-//   POST   /trips/:id/registrations/:rid/approve
-//          Body: { reviewNotes? }
-//          Requires draft.status === "OTP_VERIFIED". In one
-//          transaction: creates TripParticipant with
-//          applicationStatus="approved" (per decision #8, no second
-//          approval workflow), updates draft to status=CONVERTED.
-//   POST   /trips/:id/registrations/:rid/reject
-//          Body: { reviewNotes? }
-//          Marks draft as REJECTED. No participant is created.
-//
-// Auth: same chain as participants (verifyToken + requireTravelTenant
-// + requireTmcAccess). All routes are tenant + trip scoped.
-
+// GET /trips/:id/registrations
 router.get(
   "/trips/:id/registrations",
   verifyToken,
@@ -2114,8 +2197,8 @@ router.post(
       // pointed at it, or vice versa). Approve writes
       // applicationStatus="approved" directly so the operator doesn't
       // have to re-approve in the Participants tab.
-      const [participant] = await prisma.$transaction([
-        prisma.tripParticipant.create({
+            const { participant, updatedDraft } = await prisma.$transaction(async (tx) => {
+        const createdParticipant = await tx.tripParticipant.create({
           data: {
             tripId: trip.id,
             fullName: draft.studentName,
@@ -2136,22 +2219,34 @@ router.post(
             // and linked via convertedToParticipantId). Add them back once the
             // columns exist in the live DB.
           },
-        }),
-      ]);
-      // Second update wires the back-reference; done as a separate call
-      // because we need the freshly-created participant.id to fill
-      // convertedToParticipantId.
-      const updatedDraft = await prisma.pendingTripRegistration.update({
-        where: { id: draft.id },
-        data: {
-          status: "CONVERTED",
-          convertedToParticipantId: participant.id,
-          approvedAt: new Date(),
-          approvedById: reviewerIdSafe,
-          reviewNotes: reviewNotes ?? draft.reviewNotes,
-        },
+        });
+
+        const draftUpdate = await tx.pendingTripRegistration.update({
+          where: { id: draft.id },
+          data: {
+            status: "CONVERTED",
+            convertedToParticipantId: createdParticipant.id,
+            approvedAt: new Date(),
+            approvedById: reviewerIdSafe,
+            reviewNotes: reviewNotes ?? draft.reviewNotes,
+          },
+        });
+
+        await materializeTripInstalmentsFromPlan({
+          db: tx,
+          tripId: trip.id,
+          participantIds: [createdParticipant.id],
+          allowMissingPlan: true,
+        });
+
+        return { participant: createdParticipant, updatedDraft: draftUpdate };
       });
       res.json({ approved: true, participant, registration: updatedDraft });
+      sendApprovalPaymentPortalEmail({
+        tenantId: req.travelTenant.id,
+        trip,
+        participant,
+      });
 
       // Fire-and-forget passport OCR so the participant surfaces in
       // PassportVerificationQueue without blocking the conversion response.
@@ -2456,3 +2551,7 @@ router.delete("/trips/:id/documents/:docId", verifyToken, requireTravelTenant, r
 });
 
 module.exports = router;
+
+
+
+

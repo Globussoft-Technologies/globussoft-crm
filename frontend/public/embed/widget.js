@@ -69,6 +69,12 @@
       // the page's legacy data-color chrome instead of breaking outright.
       subBrand = '';
     }
+    var partnerOrigin = '';
+    try {
+      partnerOrigin = window.location && window.location.origin ? window.location.origin : '';
+    } catch (e) {
+      partnerOrigin = '';
+    }
 
     var qs = new URLSearchParams();
     if (key) qs.set('key', key);
@@ -78,6 +84,7 @@
     if (subtitle) qs.set('sub', subtitle);
     if (color) qs.set('color', color);
     if (services) qs.set('services', services);
+    if (partnerOrigin) qs.set('partner_origin', partnerOrigin);
     qs.set('api', apiBase);
 
     var iframe = document.createElement('iframe');

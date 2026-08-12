@@ -280,6 +280,13 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Tickets')).toBeTruthy();
     });
 
+    it('renders the Web Forms nav entry with href /forms for ADMIN', () => {
+      renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+      const link = screen.getByText('Web Forms').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/forms');
+    });
+
     it('renders 40+ links for ADMIN under generic vertical (full enterprise nav)', () => {
       const { container } = renderSidebar({ vertical: 'generic', role: 'ADMIN' });
       // Generic nav has 50+ items across core + manager + admin sections.
@@ -623,6 +630,22 @@ describe('Sidebar — load-bearing render surface', () => {
       // MANAGER should also NOT see it (adminOnly, not managerOnly).
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
       expect(screen.queryByText('CSP Violations')).toBeNull();
+    });
+  });
+
+
+  describe('Travel vertical ? Flight Offer Image hidden', () => {
+    it('does not render /travel/flight-offer-image link under travel (reused by quick-quote)', () => {
+      // The route stays mounted in App.jsx, but the sidebar surface is hidden
+      // because Flight quick-quote now owns the shared implementation.
+      const cases = ['USER', 'MANAGER', 'ADMIN'];
+      cases.forEach((role) => {
+        const { unmount } = renderSidebar({ vertical: 'travel', role });
+        const link = Array.from(document.querySelectorAll('a'))
+          .find((a) => a.getAttribute('href') === '/travel/flight-offer-image');
+        expect(link).toBeFalsy();
+        unmount();
+      });
     });
   });
 
@@ -1697,3 +1720,4 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 });
+

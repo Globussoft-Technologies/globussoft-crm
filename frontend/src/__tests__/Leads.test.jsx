@@ -1031,6 +1031,17 @@ function callifiedFetchMock(url, opts) {
   if (typeof url === 'string' && url.startsWith('/api/callified/leads/call-summary') && !opts) {
     return Promise.resolve({ summaries: CALLIFIED_SUMMARIES });
   }
+  if (typeof url === 'string' && url.startsWith('/api/tenant-settings/') && opts?.method === 'PUT') {
+    try {
+      const body = JSON.parse(opts.body || '{}');
+      return Promise.resolve({ value: body.value });
+    } catch {
+      return Promise.resolve({ value: 'true' });
+    }
+  }
+  if (typeof url === 'string' && url.startsWith('/api/tenant-settings/') && !opts) {
+    return Promise.resolve({ value: 'true', defaultValue: 'true', isOverride: false });
+  }
   if (opts?.method === 'PUT' || opts?.method === 'POST') return Promise.resolve({ ok: true });
   return Promise.resolve([]);
 }
@@ -1171,7 +1182,147 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     expect(screen.queryByText('Callified Campaign')).toBeNull();
     expect(screen.queryByRole('button', { name: /Select campaigns to dial/i })).toBeNull();
     expect(screen.queryByText('Callified AI call')).toBeNull();
-    expect(screen.queryByText('Lead Status')).toBeNull();
+    expect(screen.queryByText('Call Status')).toBeNull();
     expect(screen.queryByText('Callified Score')).toBeNull();
+  });
+
+  it('Call Settings popover shows all four sections', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    expect(screen.getByText(/Auto Dial New Leads/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Enable automatic dialing for new leads/i)).toBeInTheDocument();
+    expect(screen.getByText(/DNP Settings/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Enable automatic DNP retries/i)).toBeInTheDocument();
+    expect(screen.getByText(/Assigning Staff/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Auto-assign qualified leads to staff/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Assign logic/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Leads per user before moving to next/i)).toBeInTheDocument();
+    expect(screen.getByText(/Qualified Status/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Use AI to qualify using transcripts/i)).toBeInTheDocument();
+  });
+
+  it('toggling AI classification saves immediately', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    const toggle = screen.getByLabelText(/Use AI to qualify using transcripts/i);
+    expect(toggle).toBeInTheDocument();
+    expect(toggle.checked).toBe(true);
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/tenant-settings/feature.callified.ai_transcript.enabled') &&
+          opts?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.value).toBe('false');
+      expect(body.category).toBe('feature-flag');
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/disabled/i));
+    });
+  });
+
+  it('toggling auto-dial new leads saves the right endpoint', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    const toggle = screen.getByLabelText(/Enable automatic dialing for new leads/i);
+    expect(toggle.checked).toBe(true);
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/tenant-settings/feature.callified.auto_dial_new_leads.enabled') &&
+          opts?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.value).toBe('false');
+      expect(body.category).toBe('feature-flag');
+    });
+  });
+
+  it('DNP retry settings render and saving max retries calls the right endpoint', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    expect(screen.getByText(/DNP Settings/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Enable automatic DNP retries/i)).toBeInTheDocument();
+
+    const maxRetriesInput = screen.getByLabelText(/Max retries/i);
+    expect(maxRetriesInput).toBeInTheDocument();
+
+    fireEvent.change(maxRetriesInput, { target: { value: '5' } });
+    fireEvent.blur(maxRetriesInput);
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/tenant-settings/feature.callified.dnp_retry.max_retries') &&
+          opts?.method === 'PUT',
+      );
+      expect(putCall).toBeDefined();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.value).toBe('5');
+    });
+  });
+
+  it('assignment logic and leads-per-user save the right endpoints', async () => {
+    renderLeads(ADMIN_AUTH);
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+
+    // Default logic is round-robin, so the leads-per-user input is visible.
+    const leadsInput = screen.getByLabelText(/Leads per user before moving to next/i);
+    fireEvent.change(leadsInput, { target: { value: '3' } });
+    fireEvent.blur(leadsInput);
+
+    await waitFor(() => {
+      const leadsCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/tenant-settings/feature.callified.assign_staff.leads_per_user') &&
+          opts?.method === 'PUT',
+      );
+      expect(leadsCall).toBeDefined();
+      const body = JSON.parse(leadsCall[1].body);
+      expect(body.value).toBe('3');
+    });
+
+    fetchApiMock.mockClear();
+    const logicSelect = screen.getByLabelText(/Assign logic/i);
+    fireEvent.change(logicSelect, { target: { value: 'random' } });
+
+    await waitFor(() => {
+      const logicCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          typeof url === 'string' &&
+          url.startsWith('/api/tenant-settings/feature.callified.assign_staff.logic') &&
+          opts?.method === 'PUT',
+      );
+      expect(logicCall).toBeDefined();
+      const body = JSON.parse(logicCall[1].body);
+      expect(body.value).toBe('random');
+    });
   });
 });

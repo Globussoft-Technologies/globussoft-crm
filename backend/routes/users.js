@@ -21,6 +21,8 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
 const { verifyToken, verifyRole } = require('../middleware/auth');
+const { resolvePrimaryRole } = require('../lib/roleResolution');
+const { getSubBrandAccessSet } = require('../middleware/travelGuards');
 const {
   requirePermission,
   getUserPermissions,
@@ -93,12 +95,21 @@ router.get(
         include: { role: { select: { key: true } } },
       });
       const roleNames = userRoles.map((ur) => ur.role?.key).filter(Boolean);
+      const primaryRole = await resolvePrimaryRole({
+        id: user.id,
+        role: user.role,
+        tenantId: user.tenantId,
+      });
+      const roleSubBrandAccess = await getSubBrandAccessSet(user.id);
 
       return res.json({
         isOwner: false,
         userType: user.userType || 'STAFF',
         roles: roleNames,
         permissions: permissionArray,
+        primaryRole,
+        landingPath: primaryRole?.landingPath || null,
+        subBrandAccess: roleSubBrandAccess === null ? null : Array.from(roleSubBrandAccess),
         user,
       });
     } catch (err) {

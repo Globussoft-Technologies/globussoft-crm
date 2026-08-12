@@ -28,14 +28,17 @@ const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
-const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
+const {
+  scoreDiagnostic,
+  parseBank,
+} = require("../lib/travelDiagnosticScoring");
 const pdfRenderer = require("../services/pdfRenderer");
 const { findDuplicateContactFull } = require("../utils/deduplication");
 const llmRouter = require("../lib/llmRouter");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { sendEmail } = require("../lib/emailSender");
 const waWebClient = require("../services/whatsappWebClient");
-//  TMC diagnostic engine modules (T2 / T3 / T6 / T7)  used by T8 
+//  TMC diagnostic engine modules (T2 / T3 / T6 / T7)  used by T8
 // Require via shared `module.exports.<fn>` indirection so the test suite
 // can swap individual handlers via vi.spyOn on the cached modules without
 // having to vi.mock(). Matches the CJS self-mocking seam used by sibling
@@ -53,68 +56,87 @@ const {
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
-const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
+const {
+  sanitizeText,
+  sanitizeJsonForStringColumn,
+} = require("../lib/sanitizeJson");
 
-// PDF generation is shared with the customer portal via
-// backend/lib/travelDiagnosticPdf.js so both entry points produce the same
-// branded report and RAG integration.
-
-//  Question banks 
+//  Question banks
 
 // GET /api/travel/diagnostic-banks?subBrand=tmc&active=true
-router.get("/diagnostic-banks", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const where = { tenantId: req.travelTenant.id };
-    if (req.query.subBrand) {
-      assertValidSubBrand(String(req.query.subBrand));
-      where.subBrand = String(req.query.subBrand);
-    }
-    if (req.query.active === "true") where.isActive = true;
-    if (req.query.active === "false") where.isActive = false;
+router.get(
+  "/diagnostic-banks",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
+      if (req.query.subBrand) {
+        assertValidSubBrand(String(req.query.subBrand));
+        where.subBrand = String(req.query.subBrand);
+      }
+      if (req.query.active === "true") where.isActive = true;
+      if (req.query.active === "false") where.isActive = false;
 
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (allowed) {
-      // Scope to allowed sub-brands only.
-      where.subBrand = where.subBrand
-        ? canAccessSubBrand(allowed, where.subBrand) ? where.subBrand : "__none__"
-        : { in: [...allowed] };
-    }
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        // Scope to allowed sub-brands only.
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
+      }
 
-    const banks = await prisma.travelDiagnosticQuestionBank.findMany({
-      where,
-      orderBy: [{ subBrand: "asc" }, { version: "desc" }],
-      take: 100,
-    });
-    res.json({ banks });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-diag] list banks error:", e.message);
-    res.status(500).json({ error: "Failed to list banks" });
-  }
-});
+      const banks = await prisma.travelDiagnosticQuestionBank.findMany({
+        where,
+        orderBy: [{ subBrand: "asc" }, { version: "desc" }],
+        take: 100,
+      });
+      res.json({ banks });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] list banks error:", e.message);
+      res.status(500).json({ error: "Failed to list banks" });
+    }
+  },
+);
 
 // GET /api/travel/diagnostic-banks/:id
-router.get("/diagnostic-banks/:id", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
-    }
-    const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
-      where: { id, tenantId: req.travelTenant.id },
-    });
-    if (!bank) return res.status(404).json({ error: "Bank not found", code: "NOT_FOUND" });
+router.get(
+  "/diagnostic-banks/:id",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!bank)
+        return res
+          .status(404)
+          .json({ error: "Bank not found", code: "NOT_FOUND" });
 
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (!canAccessSubBrand(allowed, bank.subBrand)) {
-      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, bank.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      res.json(bank);
+    } catch (e) {
+      console.error("[travel-diag] get bank error:", e.message);
+      res.status(500).json({ error: "Failed to get bank" });
     }
-    res.json(bank);
-  } catch (e) {
-    console.error("[travel-diag] get bank error:", e.message);
-    res.status(500).json({ error: "Failed to get bank" });
-  }
-});
+  },
+);
 
 // POST /api/travel/diagnostic-banks
 // Admin-only: creates a new bank version. Body must include subBrand,
@@ -129,7 +151,8 @@ router.post(
   requirePermission("diagnostics", "write"),
   async (req, res) => {
     try {
-      const { subBrand, questionsJson, scoringRulesJson, isActive } = req.body || {};
+      const { subBrand, questionsJson, scoringRulesJson, isActive } =
+        req.body || {};
       if (!subBrand || !questionsJson || !scoringRulesJson) {
         return res.status(400).json({
           error: "subBrand, questionsJson, scoringRulesJson required",
@@ -182,14 +205,15 @@ router.post(
       });
       res.status(201).json(created);
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] create bank error:", e.message);
       res.status(500).json({ error: "Failed to create bank" });
     }
   },
 );
 
-//  PRD 4.2  Phase-1 "Request change" ticket (view-only scoring) 
+//  PRD 4.2  Phase-1 "Request change" ticket (view-only scoring)
 //
 // POST /api/travel/diagnostics/banks/:id/request-change
 //
@@ -222,36 +246,50 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
 
       const { summary, details, proposedChangesJson } = req.body || {};
       // Sanitize BEFORE the required-check so a value that is nothing but
       // markup (e.g. "<script></script>") rejects as missing.
-      const cleanSummary = typeof summary === "string" ? sanitizeText(summary) : "";
+      const cleanSummary =
+        typeof summary === "string" ? sanitizeText(summary) : "";
       if (!cleanSummary) {
         return res.status(400).json({
           error: "summary is required",
           code: "MISSING_FIELDS",
         });
       }
-      const cleanDetails = typeof details === "string" ? sanitizeText(details) : null;
+      const cleanDetails =
+        typeof details === "string" ? sanitizeText(details) : null;
       const cleanProposed =
-        proposedChangesJson != null ? sanitizeJsonForStringColumn(proposedChangesJson) : null;
+        proposedChangesJson != null
+          ? sanitizeJsonForStringColumn(proposedChangesJson)
+          : null;
 
       const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
-      if (!bank) return res.status(404).json({ error: "Bank not found", code: "NOT_FOUND" });
+      if (!bank)
+        return res
+          .status(404)
+          .json({ error: "Bank not found", code: "NOT_FOUND" });
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, bank.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
       // Cap the summary inside the subject so the row stays well under the
       // column's VARCHAR budget; the full text still lands in description.
-      const subjectSummary = cleanSummary.length > 140 ? `${cleanSummary.slice(0, 140)}` : cleanSummary;
+      const subjectSummary =
+        cleanSummary.length > 140
+          ? `${cleanSummary.slice(0, 140)}`
+          : cleanSummary;
       const subject = `[Diagnostic change request] ${bank.subBrand} bank v${bank.version}: ${subjectSummary}`;
       const requester = `user #${req.user.userId}${req.user.email ? ` (${req.user.email})` : ""}`;
       const descLines = [
@@ -280,21 +318,31 @@ router.post(
         bank.id,
         req.user.userId,
         req.travelTenant.id,
-        { ticketId: ticket.id, subBrand: bank.subBrand, version: bank.version, summary: subjectSummary },
+        {
+          ticketId: ticket.id,
+          subBrand: bank.subBrand,
+          version: bank.version,
+          summary: subjectSummary,
+        },
       );
 
       res.status(201).json({
-        ticket: { id: ticket.id, subject: ticket.subject, status: ticket.status },
+        ticket: {
+          id: ticket.id,
+          subject: ticket.subject,
+          status: ticket.status,
+        },
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] request-change error:", e.message);
       res.status(500).json({ error: "Failed to submit change request" });
     }
   },
 );
 
-//  Diagnostic submissions 
+//  Diagnostic submissions
 
 // POST /api/travel/diagnostics
 // Submit a completed diagnostic. Caller provides bankId + answersJson;
@@ -328,8 +376,11 @@ async function buildCurriculumFit(tenantId, { curriculum, grade, subject }) {
   for (const r of rows) {
     const key =
       r.destinationLabel ||
-      (r.destinationId != null ? `Trip #${r.destinationId}` : "Unspecified destination");
-    if (!byDest.has(key)) byDest.set(key, { destination: key, scores: [], reasons: [] });
+      (r.destinationId != null
+        ? `Trip #${r.destinationId}`
+        : "Unspecified destination");
+    if (!byDest.has(key))
+      byDest.set(key, { destination: key, scores: [], reasons: [] });
     const bucket = byDest.get(key);
     if (typeof r.fitScore === "number") bucket.scores.push(r.fitScore);
     bucket.reasons.push({
@@ -350,100 +401,133 @@ async function buildCurriculumFit(tenantId, { curriculum, grade, subject }) {
     .sort((a, b) => (b.fitScore ?? 0) - (a.fitScore ?? 0))
     .slice(0, 5);
 
-  return { curriculum: cur, grade: grd, subject: subj || null, recommendations };
+  return {
+    curriculum: cur,
+    grade: grd,
+    subject: subj || null,
+    recommendations,
+  };
 }
 
-router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const { bankId, answers, contactId, leadId, consentCapturedAt, curriculum, grade, subject } = req.body || {};
-    if (!bankId || !answers) {
-      return res.status(400).json({
-        error: "bankId and answers required",
-        code: "MISSING_FIELDS",
-      });
-    }
-    const bankIdNum = parseInt(bankId, 10);
-    if (!Number.isFinite(bankIdNum)) {
-      return res.status(400).json({ error: "bankId must be a number", code: "INVALID_BANK_ID" });
-    }
-
-    const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
-      where: { id: bankIdNum, tenantId: req.travelTenant.id },
-    });
-    if (!bank) {
-      return res.status(404).json({ error: "Bank not found", code: "BANK_NOT_FOUND" });
-    }
-    if (!bank.isActive) {
-      return res.status(409).json({ error: "Bank is not active", code: "BANK_INACTIVE" });
-    }
-
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (!canAccessSubBrand(allowed, bank.subBrand)) {
-      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
-    }
-
-    // Parse the bank's stored JSON, compute the score.
-    const { bank: parsed, warnings: parseWarnings } = parseBank(
-      bank.questionsJson,
-      bank.scoringRulesJson,
-    );
-    if (!parsed) {
-      // Bank passed create-time validation; if it fails now it's been
-      // corrupted in-storage. Refuse to write a score in that case.
-      return res.status(500).json({
-        error: "Bank JSON has become unparseable",
-        code: "BANK_CORRUPTED",
-        warnings: parseWarnings,
-      });
-    }
-
-    const result = scoreDiagnostic(parsed, answers);
-
-    // FR-5: TMC-only curriculum-fit recommendations. Curriculum context comes
-    // from explicit body fields, falling back to same-named answer keys. Any
-    // failure here is non-fatal  the diagnostic still writes without the fit.
-    let curriculumFit = null;
-    if (bank.subBrand === "tmc") {
-      try {
-        curriculumFit = await buildCurriculumFit(req.travelTenant.id, {
-          curriculum: curriculum ?? answers?.curriculum,
-          grade: grade ?? answers?.grade,
-          subject: subject ?? answers?.subject,
+router.post(
+  "/diagnostics",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const {
+        bankId,
+        answers,
+        contactId,
+        leadId,
+        consentCapturedAt,
+        curriculum,
+        grade,
+        subject,
+      } = req.body || {};
+      if (!bankId || !answers) {
+        return res.status(400).json({
+          error: "bankId and answers required",
+          code: "MISSING_FIELDS",
         });
-      } catch (fitErr) {
-        console.warn("[travel-diag] curriculum-fit build failed:", fitErr.message);
       }
-    }
+      const bankIdNum = parseInt(bankId, 10);
+      if (!Number.isFinite(bankIdNum)) {
+        return res
+          .status(400)
+          .json({ error: "bankId must be a number", code: "INVALID_BANK_ID" });
+      }
 
-    // Capture the questionsJson + scoringRulesJson snapshot for audit.
-    // Combined into a single JSON-as-string to keep the schema simple.
-    const snapshot = JSON.stringify({
-      bankId: bank.id,
-      bankVersion: bank.version,
-      questionsJson: bank.questionsJson,
-      scoringRulesJson: bank.scoringRulesJson,
-      scoringWarnings: result.warnings,
-    });
+      const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+        where: { id: bankIdNum, tenantId: req.travelTenant.id },
+      });
+      if (!bank) {
+        return res
+          .status(404)
+          .json({ error: "Bank not found", code: "BANK_NOT_FOUND" });
+      }
+      if (!bank.isActive) {
+        return res
+          .status(409)
+          .json({ error: "Bank is not active", code: "BANK_INACTIVE" });
+      }
 
-    const diag = await prisma.travelDiagnostic.create({
-      data: {
-        tenantId: req.travelTenant.id,
-        subBrand: bank.subBrand,
-        contactId: contactId ? parseInt(contactId, 10) : null,
-        leadId: leadId ? parseInt(leadId, 10) : null,
-        questionBankId: bank.id,
-        questionsJson: snapshot,
-        answersJson: JSON.stringify(answers),
-        score: result.score,
-        classification: result.classification,
-        classificationLabel: result.classificationLabel,
-        recommendedTier: result.recommendedTier,
-        curriculumFitJson: curriculumFit ? JSON.stringify(curriculumFit) : null,
-        consentCapturedAt: consentCapturedAt ? new Date(consentCapturedAt) : null,
-      },
-    });
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, bank.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
 
-    // RAG knowledge-base recommendations: best-effort for any travel sub-brand
+      // Parse the bank's stored JSON, compute the score.
+      const { bank: parsed, warnings: parseWarnings } = parseBank(
+        bank.questionsJson,
+        bank.scoringRulesJson,
+      );
+      if (!parsed) {
+        // Bank passed create-time validation; if it fails now it's been
+        // corrupted in-storage. Refuse to write a score in that case.
+        return res.status(500).json({
+          error: "Bank JSON has become unparseable",
+          code: "BANK_CORRUPTED",
+          warnings: parseWarnings,
+        });
+      }
+
+      const result = scoreDiagnostic(parsed, answers);
+
+      // FR-5: TMC-only curriculum-fit recommendations. Curriculum context comes
+      // from explicit body fields, falling back to same-named answer keys. Any
+      // failure here is non-fatal  the diagnostic still writes without the fit.
+      let curriculumFit = null;
+      if (bank.subBrand === "tmc") {
+        try {
+          curriculumFit = await buildCurriculumFit(req.travelTenant.id, {
+            curriculum: curriculum ?? answers?.curriculum,
+            grade: grade ?? answers?.grade,
+            subject: subject ?? answers?.subject,
+          });
+        } catch (fitErr) {
+          console.warn(
+            "[travel-diag] curriculum-fit build failed:",
+            fitErr.message,
+          );
+        }
+      }
+
+      // Capture the questionsJson + scoringRulesJson snapshot for audit.
+      // Combined into a single JSON-as-string to keep the schema simple.
+      const snapshot = JSON.stringify({
+        bankId: bank.id,
+        bankVersion: bank.version,
+        questionsJson: bank.questionsJson,
+        scoringRulesJson: bank.scoringRulesJson,
+        scoringWarnings: result.warnings,
+      });
+
+      const diag = await prisma.travelDiagnostic.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          subBrand: bank.subBrand,
+          contactId: contactId ? parseInt(contactId, 10) : null,
+          leadId: leadId ? parseInt(leadId, 10) : null,
+          questionBankId: bank.id,
+          questionsJson: snapshot,
+          answersJson: JSON.stringify(answers),
+          score: result.score,
+          classification: result.classification,
+          classificationLabel: result.classificationLabel,
+          recommendedTier: result.recommendedTier,
+          curriculumFitJson: curriculumFit
+            ? JSON.stringify(curriculumFit)
+            : null,
+          consentCapturedAt: consentCapturedAt
+            ? new Date(consentCapturedAt)
+            : null,
+        },
+      });
+
+      // RAG knowledge-base recommendations: best-effort for any travel sub-brand
     // that has indexed PDFs. Runs only when Qdrant + OpenAI embeddings are
     // configured. Never blocks the diagnostic submission; a failure simply omits
     // the RAG section from the PDF.
@@ -488,44 +572,58 @@ router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =
 // fail silently (e.g. transient write/DB error), leaving reportPdfUrl null with
 // no way to recover from the UI. This endpoint rebuilds the PDF from the
 // diagnostic's own immutable question snapshot and returns the fresh URL.
-router.post("/diagnostics/:id/report-pdf/regen", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
-    }
-    const diag = await prisma.travelDiagnostic.findFirst({
-      where: { id, tenantId: req.travelTenant.id },
-    });
-    if (!diag) {
-      return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
-    }
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (!canAccessSubBrand(allowed, diag.subBrand)) {
-      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
-    }
-
-    // Reconstruct a bank-like object from the diagnostic's stored snapshot so
-    // the report renders the exact question set it was submitted with.
-    let bank = null;
+router.post(
+  "/diagnostics/:id/report-pdf/regen",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
     try {
-      const snap = JSON.parse(diag.questionsJson || "{}");
-      bank = { version: snap.bankVersion, questionsJson: snap.questionsJson };
-    } catch {
-      bank = null;
-    }
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const diag = await prisma.travelDiagnostic.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!diag) {
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+      }
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, diag.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
 
-    const url = await generateDiagnosticPdfBestEffort(diag, bank);
-    if (!url) {
-      return res.status(500).json({ error: "PDF generation failed", code: "PDF_FAILED" });
+      // Reconstruct a bank-like object from the diagnostic's stored snapshot so
+      // the report renders the exact question set it was submitted with.
+      let bank = null;
+      try {
+        const snap = JSON.parse(diag.questionsJson || "{}");
+        bank = { version: snap.bankVersion, questionsJson: snap.questionsJson };
+      } catch {
+        bank = null;
+      }
+
+      const url = await generateDiagnosticPdfBestEffort(diag, bank);
+      if (!url) {
+        return res
+          .status(500)
+          .json({ error: "PDF generation failed", code: "PDF_FAILED" });
+      }
+      res.json({ reportPdfUrl: url });
+    } catch (e) {
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] report-pdf regen error:", e.message);
+      res.status(500).json({ error: "Failed to regenerate report PDF" });
     }
-    res.json({ reportPdfUrl: url });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-diag] report-pdf regen error:", e.message);
-    res.status(500).json({ error: "Failed to regenerate report PDF" });
-  }
-});
+  },
+);
 
 // POST /api/travel/diagnostics/:id/share
 //
@@ -553,19 +651,25 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
 
       const diag = await prisma.travelDiagnostic.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!diag) {
-        return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, diag.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
       const contact = diag.contactId
@@ -575,7 +679,9 @@ router.post(
           })
         : null;
 
-      const channelMode = String((req.body || {}).channel || "auto").toLowerCase();
+      const channelMode = String(
+        (req.body || {}).channel || "auto",
+      ).toLowerCase();
       if (!["auto", "email", "whatsapp", "manual"].includes(channelMode)) {
         return res.status(400).json({
           error: "channel must be auto, email, whatsapp, or manual",
@@ -584,21 +690,29 @@ router.post(
       }
 
       const portalBase = String(
-        (req.body || {}).frontendBase ||
-          getFrontendUrlFromRequest(req) ||
-          ""
+        (req.body || {}).frontendBase || getFrontendUrlFromRequest(req) || "",
       ).replace(/\/+$/, "");
       if (!portalBase) {
-        return res.status(400).json({ error: "Frontend base URL is required", code: "MISSING_FRONTEND_BASE" });
+        return res
+          .status(400)
+          .json({
+            error: "Frontend base URL is required",
+            code: "MISSING_FRONTEND_BASE",
+          });
       }
       const reportSlug = buildReportSlug(diag.id);
       const shareUrl = `${portalBase}/p/tmc/report/${reportSlug}`;
 
       const contactName = contact?.name || "there";
-      const contactEmail = String((req.body || {}).email || contact?.email || "").trim();
-      const contactPhone = String((req.body || {}).phone || contact?.phone || "").trim();
+      const contactEmail = String(
+        (req.body || {}).email || contact?.email || "",
+      ).trim();
+      const contactPhone = String(
+        (req.body || {}).phone || contact?.phone || "",
+      ).trim();
       const emailEnabled = channelMode === "auto" || channelMode === "email";
-      const whatsappEnabled = channelMode === "auto" || channelMode === "whatsapp";
+      const whatsappEnabled =
+        channelMode === "auto" || channelMode === "whatsapp";
 
       let emailStatus = "SKIPPED";
       let whatsappStatus = "SKIPPED";
@@ -623,15 +737,17 @@ router.post(
       }
 
       if (whatsappEnabled && contactPhone) {
-        const result = await waWebClient.sendBestEffort({
-          tenantId: req.travelTenant.id,
-          subBrand: diag.subBrand,
-          toPhone: contactPhone,
-          contactId: contact?.id || null,
-          fallbackText:
-            `Hi ${contactName}! Your readiness report is ready. ` +
-            `View it here: ${shareUrl}`,
-        }).catch(() => ({ sent: false, status: "FAILED" }));
+        const result = await waWebClient
+          .sendBestEffort({
+            tenantId: req.travelTenant.id,
+            subBrand: diag.subBrand,
+            toPhone: contactPhone,
+            contactId: contact?.id || null,
+            fallbackText:
+              `Hi ${contactName}! Your readiness report is ready. ` +
+              `View it here: ${shareUrl}`,
+          })
+          .catch(() => ({ sent: false, status: "FAILED" }));
         whatsappStatus = (result && result.status) || "FAILED";
         if (result && result.sent === true) channelsUsed.push("whatsapp");
       }
@@ -661,97 +777,110 @@ router.post(
         channel: channelsUsed.length ? channelsUsed.join("+") : "none",
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] share error:", e.message);
-      res.status(500).json({ error: "Failed to share readiness report", code: "SHARE_FAILED" });
+      res
+        .status(500)
+        .json({
+          error: "Failed to share readiness report",
+          code: "SHARE_FAILED",
+        });
     }
   },
 );
 // GET /api/travel/diagnostics?subBrand=tmc&classification=level_2&contactId=42
-router.get("/diagnostics", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const where = { tenantId: req.travelTenant.id };
-    if (req.query.subBrand) {
-      assertValidSubBrand(String(req.query.subBrand));
-      where.subBrand = String(req.query.subBrand);
-    }
-    if (req.query.classification) where.classification = String(req.query.classification);
-    if (req.query.contactId) {
-      const cid = parseInt(req.query.contactId, 10);
-      if (Number.isFinite(cid)) where.contactId = cid;
-    }
-
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (allowed) {
-      where.subBrand = where.subBrand
-        ? canAccessSubBrand(allowed, where.subBrand) ? where.subBrand : "__none__"
-        : { in: [...allowed] };
-    }
-
-    const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
-    const skip = parseInt(req.query.offset, 10) || 0;
-
-    const [diagnostics, total] = await Promise.all([
-      prisma.travelDiagnostic.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-        take,
-        skip,
-      }),
-      prisma.travelDiagnostic.count({ where }),
-    ]);
-
-    // TravelDiagnostic has no Prisma relation to Contact (just contactId), so
-    // batch-fetch the contacts and attach name/email so the UI can show WHO
-    // took each diagnostic instead of a bare "#id".
-    const contactIds = [...new Set(diagnostics.map((d) => d.contactId).filter(Boolean))];
-    const contactMap = {};
-    if (contactIds.length) {
-      const contacts = await prisma.contact.findMany({
-        where: { id: { in: contactIds }, tenantId: req.travelTenant.id },
-        select: { id: true, name: true, email: true, phone: true },
-      });
-      for (const c of contacts) contactMap[c.id] = c;
-    }
-
-    // TravelDiagnosticRagResult is also not relation-wired; batch-fetch so the
-    // portal history can show the readiness score + recommended trips.
-    const diagnosticIds = diagnostics.map((d) => d.id);
-    const ragMap = {};
-    if (diagnosticIds.length && prisma.travelDiagnosticRagResult && typeof prisma.travelDiagnosticRagResult.findMany === "function") {
-      const ragRows = await prisma.travelDiagnosticRagResult.findMany({
-        where: { diagnosticId: { in: diagnosticIds }, tenantId: req.travelTenant.id },
-      });
-      for (const r of ragRows) {
-        let recommendations = null;
-        try {
-          recommendations = JSON.parse(r.recommendationsJson || "null");
-        } catch {
-          recommendations = null;
-        }
-        ragMap[r.diagnosticId] = {
-          id: r.id,
-          readinessScore: r.readinessScore,
-          recommendations,
-          generatedAt: r.generatedAt,
-          model: r.model,
-          stub: r.stub,
-        };
+router.get(
+  "/diagnostics",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
+      if (req.query.subBrand) {
+        assertValidSubBrand(String(req.query.subBrand));
+        where.subBrand = String(req.query.subBrand);
       }
-    }
+      if (req.query.classification)
+        where.classification = String(req.query.classification);
+      if (req.query.contactId) {
+        const cid = parseInt(req.query.contactId, 10);
+        if (Number.isFinite(cid)) where.contactId = cid;
+      }
 
-    const enriched = diagnostics.map((d) => ({
-      ...d,
-      contact: d.contactId ? contactMap[d.contactId] || null : null,
-      ragResult: ragMap[d.id] || null,
-    }));
-    res.json({ diagnostics: enriched, total, limit: take, offset: skip });
-  } catch (e) {
-    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
-    console.error("[travel-diag] list diagnostics error:", e.message);
-    res.status(500).json({ error: "Failed to list diagnostics" });
-  }
-});
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = where.subBrand
+          ? canAccessSubBrand(allowed, where.subBrand)
+            ? where.subBrand
+            : "__none__"
+          : { in: [...allowed] };
+      }
+
+      const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+      const skip = parseInt(req.query.offset, 10) || 0;
+
+      const [diagnostics, total] = await Promise.all([
+        prisma.travelDiagnostic.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          take,
+          skip,
+        }),
+        prisma.travelDiagnostic.count({ where }),
+      ]);
+
+      // TravelDiagnostic has no Prisma relation to Contact (just contactId), so
+      // batch-fetch the contacts and attach name/email so the UI can show WHO
+      // took each diagnostic instead of a bare "#id".
+      const contactIds = [...new Set(diagnostics.map((d) => d.contactId).filter(Boolean))];
+      const contactMap = {};
+      if (contactIds.length) {
+        const contacts = await prisma.contact.findMany({
+          where: { id: { in: contactIds }, tenantId: req.travelTenant.id },
+          select: { id: true, name: true, email: true, phone: true },
+        });
+        for (const c of contacts) contactMap[c.id] = c;
+      }
+
+      // TravelDiagnosticRagResult is also not relation-wired; batch-fetch so the
+      // portal history can show the readiness score + recommended trips.
+      const diagnosticIds = diagnostics.map((d) => d.id);
+      const ragMap = {};
+      if (diagnosticIds.length && prisma.travelDiagnosticRagResult && typeof prisma.travelDiagnosticRagResult.findMany === "function") {
+        const ragRows = await prisma.travelDiagnosticRagResult.findMany({
+          where: { diagnosticId: { in: diagnosticIds }, tenantId: req.travelTenant.id },
+        });
+        for (const r of ragRows) {
+          let recommendations = null;
+          try {
+            recommendations = JSON.parse(r.recommendationsJson || "null");
+          } catch {
+            recommendations = null;
+          }
+          ragMap[r.diagnosticId] = {
+            id: r.id,
+            readinessScore: r.readinessScore,
+            recommendations,
+            generatedAt: r.generatedAt,
+            model: r.model,
+            stub: r.stub,
+          };
+        }
+      }
+
+      const enriched = diagnostics.map((d) => ({
+        ...d,
+        contact: d.contactId ? contactMap[d.contactId] || null : null,
+        ragResult: ragMap[d.id] || null,
+      }));
+      res.json({ diagnostics: enriched, total, limit: take, offset: skip });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] list diagnostics error:", e.message);
+      res.status(500).json({ error: "Failed to list diagnostics" });
+    }
+  });
 
 // ============================================================================
 // GET /api/travel/diagnostics/stats  tenant-wide Diagnostic submissions rollup
@@ -819,7 +948,9 @@ router.get(
             code: "INVALID_DATE",
           });
         }
-        diagWhere.createdAt = Object.assign(diagWhere.createdAt || {}, { gte: d });
+        diagWhere.createdAt = Object.assign(diagWhere.createdAt || {}, {
+          gte: d,
+        });
       }
       if (toRaw) {
         const d = new Date(toRaw);
@@ -829,7 +960,9 @@ router.get(
             code: "INVALID_DATE",
           });
         }
-        diagWhere.createdAt = Object.assign(diagWhere.createdAt || {}, { lte: d });
+        diagWhere.createdAt = Object.assign(diagWhere.createdAt || {}, {
+          lte: d,
+        });
       }
 
       // Sub-brand narrowing  same gate as the /diagnostics list endpoint.
@@ -858,7 +991,9 @@ router.get(
       });
 
       // Get the true total so callers know if aggregation is bounded.
-      const totalMatching = await prisma.travelDiagnostic.count({ where: diagWhere });
+      const totalMatching = await prisma.travelDiagnostic.count({
+        where: diagWhere,
+      });
       const aggregateExceedsCap = totalMatching > DIAGNOSTICS_STATS_CAP;
 
       // Empty short-circuit  return zeroed shape.
@@ -879,7 +1014,8 @@ router.get(
       const bankIdsSeen = new Set();
 
       for (const d of diagnostics) {
-        const ts = d.createdAt instanceof Date ? d.createdAt : new Date(d.createdAt);
+        const ts =
+          d.createdAt instanceof Date ? d.createdAt : new Date(d.createdAt);
         if (!Number.isNaN(ts.getTime())) {
           if (!lastSubmittedAt || ts > lastSubmittedAt) lastSubmittedAt = ts;
         }
@@ -923,7 +1059,8 @@ router.get(
         aggregateExceedsCap,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] stats error:", e.message);
       res.status(500).json({ error: "Failed to summarise diagnostics" });
     }
@@ -948,12 +1085,12 @@ router.get(
 //
 // Mirrors #903 slice 24 (/suppliers/by-month) + #908 slice 21
 // (/flyer-templates/by-month) + #900 slice 16 (/quotes/by-month)  same UTC
-// YYYY-MM bucketing template, same defensive math (null/invalid createdAt 
+// YYYY-MM bucketing template, same defensive math (null/invalid createdAt
 // "unknown" bucket; excluded when ?from / ?to is set, kept otherwise so
 // count surface stays accurate), same orderBy semantics.
 //
 // Query params:
-//   - ?from / ?to    optional inclusive YYYY-MM bounds; invalid 
+//   - ?from / ?to    optional inclusive YYYY-MM bounds; invalid
 //                     400 INVALID_MONTH_FORMAT
 //   - ?orderBy       default month:asc; accepts month:{asc|desc},
 //                     count:{asc|desc}; unknown tokens degrade silently
@@ -992,7 +1129,9 @@ router.get(
     try {
       const take = Math.min(parseInt(req.query.limit, 10) || 12, 60);
       const skip = parseInt(req.query.offset, 10) || 0;
-      const orderByRaw = req.query.orderBy ? String(req.query.orderBy) : "month:asc";
+      const orderByRaw = req.query.orderBy
+        ? String(req.query.orderBy)
+        : "month:asc";
 
       // YYYY-MM validation  mirrors slice 24 /suppliers/by-month.
       const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -1051,9 +1190,8 @@ router.get(
       for (const r of rows) {
         let monthKey = "unknown";
         if (r.createdAt) {
-          const dt = r.createdAt instanceof Date
-            ? r.createdAt
-            : new Date(r.createdAt);
+          const dt =
+            r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
           if (!Number.isNaN(dt.getTime())) {
             const yyyy = dt.getUTCFullYear();
             const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
@@ -1086,10 +1224,14 @@ router.get(
       // bound is set (no comparable token); kept otherwise. Mirrors slice
       // 24 /suppliers/by-month.
       if (fromRaw !== null) {
-        months = months.filter((r) => r.month !== "unknown" && r.month >= fromRaw);
+        months = months.filter(
+          (r) => r.month !== "unknown" && r.month >= fromRaw,
+        );
       }
       if (toRaw !== null) {
-        months = months.filter((r) => r.month !== "unknown" && r.month <= toRaw);
+        months = months.filter(
+          (r) => r.month !== "unknown" && r.month <= toRaw,
+        );
       }
 
       // Sort. "month" sorts lexicographically on YYYY-MM (also chronological).
@@ -1108,7 +1250,10 @@ router.get(
       });
 
       const totalMonths = months.length;
-      const grandCount = months.reduce((acc, r) => acc + (Number(r.count) || 0), 0);
+      const grandCount = months.reduce(
+        (acc, r) => acc + (Number(r.count) || 0),
+        0,
+      );
 
       // Pagination AFTER aggregation + sort + filter, same as slice 24.
       const paged = months.slice(skip, skip + take);
@@ -1121,7 +1266,8 @@ router.get(
         offset: skip,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] by-month error:", e.message);
       res.status(500).json({ error: "Failed to compute monthly rollup" });
     }
@@ -1150,7 +1296,7 @@ router.get(
 // accurate), same orderBy semantics.
 //
 // Query params:
-//   - ?from / ?to    optional inclusive YYYY-Q[1-4] bounds; invalid 
+//   - ?from / ?to    optional inclusive YYYY-Q[1-4] bounds; invalid
 //                     400 INVALID_QUARTER_FORMAT
 //   - ?orderBy       default quarter:asc; accepts quarter:{asc|desc},
 //                     count:{asc|desc}; unknown tokens degrade silently
@@ -1163,7 +1309,7 @@ router.get(
 //     their allowed sub-brands' diagnostics in the rollup. Same gate as
 //     /diagnostics/by-month  TravelDiagnostic.subBrand is NON-nullable
 //     in the schema, so we do NOT add a `{ subBrand: null }` OR clause
-//     (mirrors /suppliers/by-month posture). Empty access set 
+//     (mirrors /suppliers/by-month posture). Empty access set
 //     force-empty `subBrand: "__none__"` so the response stays a clean
 //     zero-rollup envelope.
 //   - JS-side aggregation over a light findMany projection
@@ -1257,9 +1403,8 @@ router.get(
       for (const r of rows) {
         let quarterKey = "unknown";
         if (r.createdAt) {
-          const dt = r.createdAt instanceof Date
-            ? r.createdAt
-            : new Date(r.createdAt);
+          const dt =
+            r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
           if (!Number.isNaN(dt.getTime())) {
             const yyyy = dt.getUTCFullYear();
             const q = Math.floor(dt.getUTCMonth() / 3) + 1;
@@ -1334,7 +1479,8 @@ router.get(
         offset: skip,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] by-quarter error:", e.message);
       res.status(500).json({ error: "Failed to compute quarterly rollup" });
     }
@@ -1361,7 +1507,7 @@ router.get(
 // accurate), same orderBy semantics.
 //
 // Query params:
-//   - ?from / ?to    optional inclusive YYYY bounds; invalid 
+//   - ?from / ?to    optional inclusive YYYY bounds; invalid
 //                     400 INVALID_YEAR_FORMAT
 //   - ?orderBy       default year:asc; accepts year:{asc|desc},
 //                     count:{asc|desc}; unknown tokens degrade silently
@@ -1430,9 +1576,7 @@ router.get(
         "count:asc",
         "count:desc",
       ]);
-      const orderBy = VALID_ORDER_BY.has(orderByRaw)
-        ? orderByRaw
-        : "year:asc";
+      const orderBy = VALID_ORDER_BY.has(orderByRaw) ? orderByRaw : "year:asc";
 
       // Tenant-scoped where + sub-brand narrowing. Mirrors /by-quarter
       // sub-brand gate: subBrand-restricted callers see only their
@@ -1467,9 +1611,8 @@ router.get(
       for (const r of rows) {
         let yearKey = "unknown";
         if (r.createdAt) {
-          const dt = r.createdAt instanceof Date
-            ? r.createdAt
-            : new Date(r.createdAt);
+          const dt =
+            r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt);
           if (!Number.isNaN(dt.getTime())) {
             yearKey = String(dt.getUTCFullYear());
           }
@@ -1501,14 +1644,10 @@ router.get(
       // bound is set (no comparable token); kept otherwise. Mirrors
       // /by-month + /by-quarter + /itineraries/by-year.
       if (fromRaw !== null) {
-        years = years.filter(
-          (r) => r.year !== "unknown" && r.year >= fromRaw,
-        );
+        years = years.filter((r) => r.year !== "unknown" && r.year >= fromRaw);
       }
       if (toRaw !== null) {
-        years = years.filter(
-          (r) => r.year !== "unknown" && r.year <= toRaw,
-        );
+        years = years.filter((r) => r.year !== "unknown" && r.year <= toRaw);
       }
 
       // Sort. "year" sorts lexicographically on YYYY which is also
@@ -1543,7 +1682,8 @@ router.get(
         offset: skip,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] by-year error:", e.message);
       res.status(500).json({ error: "Failed to compute annual rollup" });
     }
@@ -1551,35 +1691,47 @@ router.get(
 );
 
 // GET /api/travel/diagnostics/:id
-router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
-    }
-    const diag = await prisma.travelDiagnostic.findFirst({
-      where: { id, tenantId: req.travelTenant.id },
-    });
-    if (!diag) return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+router.get(
+  "/diagnostics/:id",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const diag = await prisma.travelDiagnostic.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!diag)
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
 
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (!canAccessSubBrand(allowed, diag.subBrand)) {
-      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, diag.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      // Attach the contact (name/email/phone) so the detail view can show WHO
+      // took it  TravelDiagnostic only stores contactId (no Prisma relation).
+      const contact = diag.contactId
+        ? await prisma.contact.findFirst({
+            where: { id: diag.contactId, tenantId: req.travelTenant.id },
+            select: { id: true, name: true, email: true, phone: true },
+          })
+        : null;
+      res.json({ ...diag, contact });
+    } catch (e) {
+      console.error("[travel-diag] get diagnostic error:", e.message);
+      res.status(500).json({ error: "Failed to get diagnostic" });
     }
-    // Attach the contact (name/email/phone) so the detail view can show WHO
-    // took it  TravelDiagnostic only stores contactId (no Prisma relation).
-    const contact = diag.contactId
-      ? await prisma.contact.findFirst({
-          where: { id: diag.contactId, tenantId: req.travelTenant.id },
-          select: { id: true, name: true, email: true, phone: true },
-        })
-      : null;
-    res.json({ ...diag, contact });
-  } catch (e) {
-    console.error("[travel-diag] get diagnostic error:", e.message);
-    res.status(500).json({ error: "Failed to get diagnostic" });
-  }
-});
+  },
+);
 
 // PATCH /api/travel/diagnostics/:id
 //
@@ -1600,23 +1752,38 @@ router.patch(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
 
-      const rawPick = req.body && typeof req.body.humanPick === "string" ? req.body.humanPick.trim() : "";
+      const rawPick =
+        req.body && typeof req.body.humanPick === "string"
+          ? req.body.humanPick.trim()
+          : "";
       if (!rawPick) {
-        return res.status(400).json({ error: "humanPick is required (a trip slug, \"other\", or \"no_rec\").", code: "HUMAN_PICK_REQUIRED" });
+        return res
+          .status(400)
+          .json({
+            error: 'humanPick is required (a trip slug, "other", or "no_rec").',
+            code: "HUMAN_PICK_REQUIRED",
+          });
       }
       const humanPick = rawPick.slice(0, 120);
 
       const diag = await prisma.travelDiagnostic.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
-      if (!diag) return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+      if (!diag)
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, diag.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
       const updated = await prisma.travelDiagnostic.update({
@@ -1630,7 +1797,11 @@ router.patch(
         diag.id,
         req.user.userId,
         req.travelTenant.id,
-        { subBrand: diag.subBrand, humanPick, previousPick: diag.humanPick || null },
+        {
+          subBrand: diag.subBrand,
+          humanPick,
+          previousPick: diag.humanPick || null,
+        },
       ).catch(() => {});
 
       const contact = updated.contactId
@@ -1680,18 +1851,24 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
       const diag = await prisma.travelDiagnostic.findFirst({
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!diag) {
-        return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, diag.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
       // Load the contact for prompt context (name + company). Tolerant
@@ -1751,7 +1928,8 @@ router.post(
         talkingPoints: envelope,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] talking-points regen error:", e.message);
       res.status(500).json({ error: "Failed to regenerate talking points" });
     }
@@ -1779,7 +1957,7 @@ router.post(
 // every USER firing it on every page load.
 //
 // Body: { callAnswers?: object, callTranscript?: string }
-//   At least ONE of callAnswers / callTranscript must be present 
+//   At least ONE of callAnswers / callTranscript must be present
 //   the LLM can derive a comparison from either (the answers set is
 //   the cleaner structured input; the raw transcript fallback lets
 //   the call side land before Callified maps to question IDs).
@@ -1806,7 +1984,9 @@ router.post(
     try {
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
-        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+        return res
+          .status(400)
+          .json({ error: "id must be a number", code: "INVALID_ID" });
       }
 
       const { callAnswers, callTranscript } = req.body || {};
@@ -1814,7 +1994,9 @@ router.post(
       // callAnswers is missing, which then poisons `matched: hasCallAnswers && ...`
       // downstream (gate spec at travel-diagnostics-api.spec.js:984 caught this).
       const hasCallAnswers = Boolean(
-        callAnswers && typeof callAnswers === "object" && !Array.isArray(callAnswers),
+        callAnswers &&
+        typeof callAnswers === "object" &&
+        !Array.isArray(callAnswers),
       );
       const hasCallTranscript =
         typeof callTranscript === "string" && callTranscript.trim().length > 0;
@@ -1829,12 +2011,16 @@ router.post(
         where: { id, tenantId: req.travelTenant.id },
       });
       if (!diag) {
-        return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+        return res
+          .status(404)
+          .json({ error: "Diagnostic not found", code: "NOT_FOUND" });
       }
 
       const allowed = await getSubBrandAccessSet(req.user.userId);
       if (!canAccessSubBrand(allowed, diag.subBrand)) {
-        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
       // Parse the stored form answers. Tolerate corruption by treating
@@ -1844,7 +2030,11 @@ router.post(
       let formAnswers = {};
       try {
         formAnswers = JSON.parse(diag.answersJson || "{}");
-        if (!formAnswers || typeof formAnswers !== "object" || Array.isArray(formAnswers)) {
+        if (
+          !formAnswers ||
+          typeof formAnswers !== "object" ||
+          Array.isArray(formAnswers)
+        ) {
           formAnswers = {};
         }
       } catch (_e) {
@@ -1872,7 +2062,10 @@ router.post(
       // absent we return null + classify as "unknown" so the UI
       // can render an advisor-review prompt rather than guessing.
       let scorePercent = null;
-      const pctMatch = typeof result.text === "string" ? result.text.match(/(\d{1,3})\s*%/) : null;
+      const pctMatch =
+        typeof result.text === "string"
+          ? result.text.match(/(\d{1,3})\s*%/)
+          : null;
       if (pctMatch) {
         const n = parseInt(pctMatch[1], 10);
         if (Number.isFinite(n) && n >= 0 && n <= 100) scorePercent = n;
@@ -1893,7 +2086,7 @@ router.post(
         const formValue = formAnswers[k] ?? null;
         const callValue =
           hasCallAnswers && Object.prototype.hasOwnProperty.call(callAnswers, k)
-            ? callAnswers[k] ?? null
+            ? (callAnswers[k] ?? null)
             : null;
         return {
           question: k,
@@ -1927,7 +2120,10 @@ router.post(
           data: { formVsCallJson: JSON.stringify(persistEnvelope) },
         });
       } catch (e) {
-        console.error("[travel-diag] form-vs-call persist error (non-fatal):", e.message);
+        console.error(
+          "[travel-diag] form-vs-call persist error (non-fatal):",
+          e.message,
+        );
       }
 
       res.json({
@@ -1941,14 +2137,17 @@ router.post(
         generatedAt,
       });
     } catch (e) {
-      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      if (e.status)
+        return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] form-vs-call compare error:", e.message);
-      res.status(500).json({ error: "Failed to compute form-vs-call comparison" });
+      res
+        .status(500)
+        .json({ error: "Failed to compute form-vs-call comparison" });
     }
   },
 );
 
-//  PUBLIC ENDPOINTS (no auth)  PRD 4.7 Travel Stall landing-page wizard 
+//  PUBLIC ENDPOINTS (no auth)  PRD 4.7 Travel Stall landing-page wizard
 //
 // Public-facing quiz flow for unauthenticated leads (Travel Stall family
 // audience, Phase 2). Allowlisted in server.js openPaths under prefix
@@ -1992,25 +2191,49 @@ router.get("/diagnostics/public/banks", async (req, res) => {
         code: "MISSING_FIELDS",
       });
     }
-    try { assertValidSubBrand(String(subBrand)); }
-    catch (e) { return res.status(e.status || 400).json({ error: e.message, code: e.code || "INVALID_SUB_BRAND" }); }
+    try {
+      assertValidSubBrand(String(subBrand));
+    } catch (e) {
+      return res
+        .status(e.status || 400)
+        .json({ error: e.message, code: e.code || "INVALID_SUB_BRAND" });
+    }
 
     const tenant = await resolveTravelTenantBySlug(tenantSlug);
     if (!tenant) {
-      return res.status(404).json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
+      return res
+        .status(404)
+        .json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
     }
 
     const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
-      where: { tenantId: tenant.id, subBrand: String(subBrand), isActive: true },
+      where: {
+        tenantId: tenant.id,
+        subBrand: String(subBrand),
+        isActive: true,
+      },
       orderBy: { version: "desc" },
     });
     if (!bank) {
-      return res.status(404).json({ error: "No active bank for this sub-brand", code: "BANK_NOT_FOUND" });
+      return res
+        .status(404)
+        .json({
+          error: "No active bank for this sub-brand",
+          code: "BANK_NOT_FOUND",
+        });
     }
 
     let questions;
-    try { questions = JSON.parse(bank.questionsJson); }
-    catch { return res.status(500).json({ error: "Bank questions JSON unparseable", code: "BANK_CORRUPTED" }); }
+    try {
+      questions = JSON.parse(bank.questionsJson);
+    } catch {
+      return res
+        .status(500)
+        .json({
+          error: "Bank questions JSON unparseable",
+          code: "BANK_CORRUPTED",
+        });
+    }
 
     // Strip per-option weights so the public payload can't be used to
     // reverse-engineer the scoring. Keeps id + text + label + value.
@@ -2018,7 +2241,10 @@ router.get("/diagnostics/public/banks", async (req, res) => {
       id: q.id,
       text: q.text,
       type: q.type,
-      options: (q.options || []).map((o) => ({ value: o.value, label: o.label })),
+      options: (q.options || []).map((o) => ({
+        value: o.value,
+        label: o.label,
+      })),
     }));
 
     res.json({
@@ -2045,30 +2271,51 @@ router.get("/diagnostics/public/banks", async (req, res) => {
 // classification.
 router.post("/diagnostics/public/submit", async (req, res) => {
   try {
-    const { tenantSlug, subBrand, bankId, answers, name, phone, email } = req.body || {};
+    const { tenantSlug, subBrand, bankId, answers, name, phone, email } =
+      req.body || {};
     if (!tenantSlug || !subBrand || !bankId || !answers || !name || !phone) {
       return res.status(400).json({
-        error: "tenantSlug, subBrand, bankId, answers, name, phone all required",
+        error:
+          "tenantSlug, subBrand, bankId, answers, name, phone all required",
         code: "MISSING_FIELDS",
       });
     }
-    try { assertValidSubBrand(String(subBrand)); }
-    catch (e) { return res.status(e.status || 400).json({ error: e.message, code: e.code || "INVALID_SUB_BRAND" }); }
+    try {
+      assertValidSubBrand(String(subBrand));
+    } catch (e) {
+      return res
+        .status(e.status || 400)
+        .json({ error: e.message, code: e.code || "INVALID_SUB_BRAND" });
+    }
 
     const tenant = await resolveTravelTenantBySlug(tenantSlug);
     if (!tenant) {
-      return res.status(404).json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
+      return res
+        .status(404)
+        .json({ error: "Travel tenant not found", code: "TENANT_NOT_FOUND" });
     }
 
     const bankIdNum = parseInt(bankId, 10);
     if (!Number.isFinite(bankIdNum)) {
-      return res.status(400).json({ error: "bankId must be a number", code: "INVALID_BANK_ID" });
+      return res
+        .status(400)
+        .json({ error: "bankId must be a number", code: "INVALID_BANK_ID" });
     }
     const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
-      where: { id: bankIdNum, tenantId: tenant.id, subBrand: String(subBrand), isActive: true },
+      where: {
+        id: bankIdNum,
+        tenantId: tenant.id,
+        subBrand: String(subBrand),
+        isActive: true,
+      },
     });
     if (!bank) {
-      return res.status(404).json({ error: "Bank not found or not active", code: "BANK_NOT_FOUND" });
+      return res
+        .status(404)
+        .json({
+          error: "Bank not found or not active",
+          code: "BANK_NOT_FOUND",
+        });
     }
 
     // PRD 4.5 dedup: try to attach to an existing Contact by email or
@@ -2092,7 +2339,9 @@ router.post("/diagnostics/public/submit", async (req, res) => {
       // in the right pipeline. Email defaults to a synthetic placeholder
       // when not provided  the @@unique([email, tenantId]) constraint
       // requires SOMETHING; the synthetic form sidesteps it.
-      const safeEmail = email || `public-diag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@public.local`;
+      const safeEmail =
+        email ||
+        `public-diag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@public.local`;
       const newContact = await prisma.contact.create({
         data: {
           tenantId: tenant.id,
@@ -2108,9 +2357,18 @@ router.post("/diagnostics/public/submit", async (req, res) => {
     }
 
     // Score the diagnostic.
-    const { bank: parsed, warnings: parseWarnings } = parseBank(bank.questionsJson, bank.scoringRulesJson);
+    const { bank: parsed, warnings: parseWarnings } = parseBank(
+      bank.questionsJson,
+      bank.scoringRulesJson,
+    );
     if (!parsed) {
-      return res.status(500).json({ error: "Bank JSON unparseable", code: "BANK_CORRUPTED", warnings: parseWarnings });
+      return res
+        .status(500)
+        .json({
+          error: "Bank JSON unparseable",
+          code: "BANK_CORRUPTED",
+          warnings: parseWarnings,
+        });
     }
     const result = scoreDiagnostic(parsed, answers);
 
@@ -2139,7 +2397,10 @@ router.post("/diagnostics/public/submit", async (req, res) => {
 
     // PDF generation best-effort  Phase 2 will email/WhatsApp the report
     // to the lead once Wati BSP creds (Q9) land.
-    const reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank).catch(() => null);
+    const reportPdfUrl = await generateDiagnosticPdfBestEffort(
+      diag,
+      bank,
+    ).catch(() => null);
 
     // Customer-facing payload: NO raw score, NO contact id, NO diagnostic id.
     // The advisor sees those internally. The public confirmation just
@@ -2160,9 +2421,9 @@ router.post("/diagnostics/public/submit", async (req, res) => {
   }
 });
 
-// 
+//
 // TMC Readiness Diagnostic  T8 (PRD 10): public submit + readiness PDF
-// 
+//
 //
 // Two new endpoints land in this T8 slice  both target the TMC sub-brand
 // only (existing public/submit + per-id handlers continue to serve the
@@ -2204,10 +2465,10 @@ const DEFAULT_STANDING_FACTS = Object.freeze({
     teacher_student_ratio: "1 teacher per 15 students",
   },
   runway: {
-    day:             { lead_days:   7, display: "about 1 week" },
-    domestic_bus:    { lead_days:  30, display: "about 1 month" },
-    domestic_flight: { lead_days:  90, display: "minimum 90 days" },
-    international:   { lead_days: 180, display: "minimum 4 to 6 months" },
+    day: { lead_days: 7, display: "about 1 week" },
+    domestic_bus: { lead_days: 30, display: "about 1 month" },
+    domestic_flight: { lead_days: 90, display: "minimum 90 days" },
+    international: { lead_days: 180, display: "minimum 4 to 6 months" },
   },
   academic_calendar: {
     term_1_start: "06-01",
@@ -2219,13 +2480,16 @@ const DEFAULT_STANDING_FACTS = Object.freeze({
   // board that gets the NEP/NCF citation  AC-3 hard-codes "an IB school
   // never sees NEP."
   board_policy_hooks: {
-    "CBSE":      "Maps to NEP 2020 + NCF-SE 2023 + CBSE Experiential Learning Handbook  experiential learning as standard pedagogy.",
-    "ICSE_ISC":  "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
-    "ICSE":      "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
-    "ISC":       "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
-    "IGCSE":     "Aligns to the Cambridge Learner Attributes; Geography 0460 fieldwork + Science practical assessment surfaces.",
-    "IB":        "Anchored on CAS (Creativity, Activity, Service) + the IB Learner Profile; transdisciplinary inquiry the trip directly serves.",
-    "State Board": "Generic experiential-learning case; named-policy citation withheld until state's NEP adoption is confirmed.",
+    CBSE: "Maps to NEP 2020 + NCF-SE 2023 + CBSE Experiential Learning Handbook  experiential learning as standard pedagogy.",
+    ICSE_ISC:
+      "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
+    ICSE: "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
+    ISC: "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
+    IGCSE:
+      "Aligns to the Cambridge Learner Attributes; Geography 0460 fieldwork + Science practical assessment surfaces.",
+    IB: "Anchored on CAS (Creativity, Activity, Service) + the IB Learner Profile; transdisciplinary inquiry the trip directly serves.",
+    "State Board":
+      "Generic experiential-learning case; named-policy citation withheld until state's NEP adoption is confirmed.",
   },
   assurance: {
     supervision_ratio: "1 teacher per 15 students",
@@ -2255,22 +2519,30 @@ async function resolveStandingFacts(prismaClient, tenantId) {
     let trustOverride = null;
     let assuranceOverride = null;
     if (ew.trustFactsJson) {
-      try { trustOverride = JSON.parse(ew.trustFactsJson); }
-      catch { trustOverride = null; }
+      try {
+        trustOverride = JSON.parse(ew.trustFactsJson);
+      } catch {
+        trustOverride = null;
+      }
     }
     if (ew.assuranceFactsJson) {
-      try { assuranceOverride = JSON.parse(ew.assuranceFactsJson); }
-      catch { assuranceOverride = null; }
+      try {
+        assuranceOverride = JSON.parse(ew.assuranceFactsJson);
+      } catch {
+        assuranceOverride = null;
+      }
     }
     if (!trustOverride && !assuranceOverride) return DEFAULT_STANDING_FACTS;
     return {
       ...DEFAULT_STANDING_FACTS,
-      trust: trustOverride && typeof trustOverride === "object"
-        ? { ...DEFAULT_STANDING_FACTS.trust, ...trustOverride }
-        : DEFAULT_STANDING_FACTS.trust,
-      assurance: assuranceOverride && typeof assuranceOverride === "object"
-        ? { ...DEFAULT_STANDING_FACTS.assurance, ...assuranceOverride }
-        : DEFAULT_STANDING_FACTS.assurance,
+      trust:
+        trustOverride && typeof trustOverride === "object"
+          ? { ...DEFAULT_STANDING_FACTS.trust, ...trustOverride }
+          : DEFAULT_STANDING_FACTS.trust,
+      assurance:
+        assuranceOverride && typeof assuranceOverride === "object"
+          ? { ...DEFAULT_STANDING_FACTS.assurance, ...assuranceOverride }
+          : DEFAULT_STANDING_FACTS.assurance,
     };
   } catch (_e) {
     return DEFAULT_STANDING_FACTS;
@@ -2292,7 +2564,7 @@ function resolveRunwayDisplay(standingFacts, geoPreference) {
   const key = resolveRunwayKey(geoPreference);
   const runway = standingFacts && standingFacts.runway;
   const entry = runway && runway[key];
-  return (entry && entry.display) ? String(entry.display) : "";
+  return entry && entry.display ? String(entry.display) : "";
 }
 
 // PRD 3.5.1  resolve board hook string from the first selected board.
@@ -2300,7 +2572,11 @@ function resolveRunwayDisplay(standingFacts, geoPreference) {
 // per PRD 9 open question 1 default proposal.
 function resolveBoardHook(standingFacts, curriculum) {
   const hooks = (standingFacts && standingFacts.board_policy_hooks) || {};
-  const list = Array.isArray(curriculum) ? curriculum : (curriculum ? [curriculum] : []);
+  const list = Array.isArray(curriculum)
+    ? curriculum
+    : curriculum
+      ? [curriculum]
+      : [];
   const out = [];
   for (const board of list) {
     const k = String(board || "").trim();
@@ -2316,7 +2592,7 @@ function resolveBoardHook(standingFacts, curriculum) {
 // runs case-insensitive whole-word/multi-word regex per T7.
 function buildDestinationBlocklist(catalogue) {
   const tokens = new Set();
-  for (const t of (Array.isArray(catalogue) ? catalogue : [])) {
+  for (const t of Array.isArray(catalogue) ? catalogue : []) {
     if (!t || typeof t !== "object") continue;
     if (t.region) tokens.add(String(t.region));
     try {
@@ -2326,7 +2602,9 @@ function buildDestinationBlocklist(catalogue) {
           if (a && a.name) tokens.add(String(a.name));
         }
       }
-    } catch { /* ignore malformed JSON */ }
+    } catch {
+      /* ignore malformed JSON */
+    }
     try {
       const hooks = JSON.parse(t.curriculumHooksJson || "[]");
       if (Array.isArray(hooks)) {
@@ -2334,7 +2612,9 @@ function buildDestinationBlocklist(catalogue) {
           if (h && h.topic) tokens.add(String(h.topic));
         }
       }
-    } catch { /* ignore malformed JSON */ }
+    } catch {
+      /* ignore malformed JSON */
+    }
   }
   return Array.from(tokens).filter(Boolean);
 }
@@ -2345,12 +2625,17 @@ function buildDestinationBlocklist(catalogue) {
 // known tokens out, in case a catalogue admin slipped one in pre-launch.
 function stripDestinationWords(text, blocklist) {
   let s = String(text || "");
-  for (const tok of (blocklist || [])) {
+  for (const tok of blocklist || []) {
     if (!tok) continue;
     try {
-      const re = new RegExp(`\\b${String(tok).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+      const re = new RegExp(
+        `\\b${String(tok).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+        "gi",
+      );
       s = s.replace(re, "");
-    } catch { /* ignore bad token */ }
+    } catch {
+      /* ignore bad token */
+    }
   }
   return s.replace(/\s{2,}/g, " ").trim();
 }
@@ -2403,7 +2688,10 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       });
     }
     // Q12 email gate  the only hard wall per PRD 3.1 + NF-6.
-    const contact = (answers.contact && typeof answers.contact === "object") ? answers.contact : {};
+    const contact =
+      answers.contact && typeof answers.contact === "object"
+        ? answers.contact
+        : {};
     const email = typeof contact.email === "string" ? contact.email.trim() : "";
     if (!email) {
       return res.status(400).json({
@@ -2424,7 +2712,10 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
     // assumes one of the 4 frozen tokens; reject unknown values now
     // rather than silently fall through to "no survivors."
     const VALID_GRADE_BANDS = new Set(["4-6", "6-8", "9-10", "11-12"]);
-    if (answers.grade_band && !VALID_GRADE_BANDS.has(String(answers.grade_band))) {
+    if (
+      answers.grade_band &&
+      !VALID_GRADE_BANDS.has(String(answers.grade_band))
+    ) {
       return res.status(400).json({
         error: "grade_band must be one of 4-6 / 6-8 / 9-10 / 11-12",
         code: "INVALID_GRADE_BAND",
@@ -2446,17 +2737,23 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       weightsRow = await prisma.engineWeights.findUnique({
         where: { tenantId: tenant.id },
       });
-    } catch { /* table may be empty for fresh tenants  fall through */ }
-    const weights = weightsRow ? {
-      weightPrimaryOutcome:  weightsRow.weightPrimaryOutcome,
-      weightSecondarySkill:  weightsRow.weightSecondarySkill,
-      weightGrowthArea:      weightsRow.weightGrowthArea,
-      weightCurriculumHook:  weightsRow.weightCurriculumHook,
-      weightGradeBandCenter: weightsRow.weightGradeBandCenter,
-      weightTierValueLean:   weightsRow.weightTierValueLean,
-      scoresWellThreshold:   weightsRow.scoresWellThreshold,
-    } : undefined;
-    const weightsVersion = weightsRow ? String(weightsRow.version || "v1") : "v1";
+    } catch {
+      /* table may be empty for fresh tenants  fall through */
+    }
+    const weights = weightsRow
+      ? {
+          weightPrimaryOutcome: weightsRow.weightPrimaryOutcome,
+          weightSecondarySkill: weightsRow.weightSecondarySkill,
+          weightGrowthArea: weightsRow.weightGrowthArea,
+          weightCurriculumHook: weightsRow.weightCurriculumHook,
+          weightGradeBandCenter: weightsRow.weightGradeBandCenter,
+          weightTierValueLean: weightsRow.weightTierValueLean,
+          scoresWellThreshold: weightsRow.scoresWellThreshold,
+        }
+      : undefined;
+    const weightsVersion = weightsRow
+      ? String(weightsRow.version || "v1")
+      : "v1";
 
     // Load active catalogue rows for this tenant.
     let catalogue = [];
@@ -2464,7 +2761,9 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       catalogue = await prisma.tmcTripCatalogue.findMany({
         where: { tenantId: tenant.id, status: "active" },
       });
-    } catch { /* empty catalogue  engine returns no_match */ }
+    } catch {
+      /* empty catalogue  engine returns no_match */
+    }
 
     // C7  load active curriculum mappings for this tenant. The engine
     // uses them to compute top-N curriculum-fit recommendations
@@ -2476,7 +2775,9 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       curriculumMappings = await prisma.travelCurriculumMapping.findMany({
         where: { tenantId: tenant.id, isActive: true },
       });
-    } catch { /* table empty or fresh tenant  empty curriculumFit */ }
+    } catch {
+      /* table empty or fresh tenant  empty curriculumFit */
+    }
 
     // Run the deterministic engine (T2 + C7).  Throws on bad input shape.
     let engineOutput;
@@ -2510,7 +2811,8 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
     let priorSubmissionsLast24h = 0;
     try {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const submitterPhone = typeof contact.phone === "string" ? contact.phone.trim() : "";
+      const submitterPhone =
+        typeof contact.phone === "string" ? contact.phone.trim() : "";
       const contactOr = [];
       if (email) contactOr.push({ email });
       if (submitterPhone) contactOr.push({ phone: submitterPhone });
@@ -2532,15 +2834,22 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
           },
         });
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     const leadQualityResult = tmcLeadQuality.classifyLeadQuality(answers, {
       priorSubmissionsLast24h,
     });
 
     // Build the combined flags array  engine flags + lead-quality flag
     // (PRD 3.6 brief field).
-    const combinedFlags = Array.isArray(engineOutput.flags) ? [...engineOutput.flags] : [];
-    if (leadQualityResult.leadQuality === "suspect" && !combinedFlags.includes("suspect")) {
+    const combinedFlags = Array.isArray(engineOutput.flags)
+      ? [...engineOutput.flags]
+      : [];
+    if (
+      leadQualityResult.leadQuality === "suspect" &&
+      !combinedFlags.includes("suspect")
+    ) {
       combinedFlags.push("suspect");
     }
 
@@ -2553,13 +2862,17 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
         tenantId: tenant.id,
       });
       if (dedupResult) contactId = dedupResult.contact.id;
-    } catch { /* dedup is best-effort */ }
+    } catch {
+      /* dedup is best-effort */
+    }
     if (!contactId) {
       try {
         const newContact = await prisma.contact.create({
           data: {
             tenantId: tenant.id,
-            name: String(contact.contact_name || "Anonymous school lead").trim(),
+            name: String(
+              contact.contact_name || "Anonymous school lead",
+            ).trim(),
             email: email,
             phone: contact.phone || null,
             subBrand: "tmc",
@@ -2568,19 +2881,25 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
           },
         });
         contactId = newContact.id;
-      } catch { /* contact create failure shouldn't block the diagnostic */ }
+      } catch {
+        /* contact create failure shouldn't block the diagnostic */
+      }
     }
 
     // Persist the diagnostic row with all T1 additive columns populated.
-    const primaryTripId = (engineOutput.primary && engineOutput.primary.id) || null;
-    const alternativeTripId = (engineOutput.alternative && engineOutput.alternative.id) || null;
+    const primaryTripId =
+      (engineOutput.primary && engineOutput.primary.id) || null;
+    const alternativeTripId =
+      (engineOutput.alternative && engineOutput.alternative.id) || null;
     const diag = await prisma.travelDiagnostic.create({
       data: {
         tenantId: tenant.id,
         subBrand: "tmc",
         contactId: contactId,
         questionBankId: null, // TMC diagnostic doesn't use a versioned bank  engine + catalogue are the contract
-        questionsJson: JSON.stringify({ specVersion: "TMC_DIAGNOSTIC_ENGINE_V1_2026-06-08" }),
+        questionsJson: JSON.stringify({
+          specVersion: "TMC_DIAGNOSTIC_ENGINE_V1_2026-06-08",
+        }),
         answersJson: JSON.stringify(answers),
         // Generic columns stay null  TMC uses engine-specific columns below.
         score: null,
@@ -2600,7 +2919,9 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
         // C7  persist curriculum-fit snapshot so the brief / PDF
         // doesn't drift as advisors edit mappings post-submit.
         curriculumFitJson: JSON.stringify(
-          Array.isArray(engineOutput.curriculumFit) ? engineOutput.curriculumFit : [],
+          Array.isArray(engineOutput.curriculumFit)
+            ? engineOutput.curriculumFit
+            : [],
         ),
       },
     });
@@ -2611,7 +2932,9 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       reportSlug,
       tenantSlug: tenant.slug,
       engineState: engineOutput.state,
-      curriculumFit: Array.isArray(engineOutput.curriculumFit) ? engineOutput.curriculumFit : [],
+      curriculumFit: Array.isArray(engineOutput.curriculumFit)
+        ? engineOutput.curriculumFit
+        : [],
       message:
         `Thanks${contact.contact_name ? `, ${String(contact.contact_name).split(" ")[0]}` : ""}  your readiness profile is ready. ` +
         `Our team will reach out at ${email} within one working day.`,
@@ -2654,8 +2977,11 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
     }
 
     let answers = {};
-    try { answers = JSON.parse(diag.answersJson || "{}"); }
-    catch { /* malformed  empty answers, fallback renderer text */ }
+    try {
+      answers = JSON.parse(diag.answersJson || "{}");
+    } catch {
+      /* malformed  empty answers, fallback renderer text */
+    }
 
     // Load active catalogue for the destination blocklist + matched-trip
     // narrative material.  recommendedTripId / alternativeTripId may be null.
@@ -2664,7 +2990,9 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
       catalogue = await prisma.tmcTripCatalogue.findMany({
         where: { tenantId: diag.tenantId, status: "active" },
       });
-    } catch { /* empty catalogue is fine  guard falls to template */ }
+    } catch {
+      /* empty catalogue is fine  guard falls to template */
+    }
     const matchedTripIds = new Set(
       [diag.recommendedTripId, diag.alternativeTripId].filter((x) => x != null),
     );
@@ -2676,7 +3004,10 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
     const standingFacts = await resolveStandingFacts(prisma, diag.tenantId);
     const destinationBlocklist = buildDestinationBlocklist(catalogue);
     const catalogueMatchedBlurbs = matchedRows.map((t) => ({
-      blurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
+      blurb: stripDestinationWords(
+        t.reportSkillBlurb || "",
+        destinationBlocklist,
+      ),
       tier: t.tier,
     }));
     let engineOutputForPrompt = null;
@@ -2685,7 +3016,9 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
         state: diag.engineState || null,
         flags: JSON.parse(diag.flagsJson || "[]"),
       };
-    } catch { engineOutputForPrompt = { state: diag.engineState || null, flags: [] }; }
+    } catch {
+      engineOutputForPrompt = { state: diag.engineState || null, flags: [] };
+    }
 
     const promptEnvelope = tmcPrompts.buildReadinessNarrativePrompt({
       answers,
@@ -2708,11 +3041,17 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
       // Attempt to parse JSON from llmResp.text.  Real-mode returns strict
       // JSON; stub-mode returns prose tagged "[STUB-...]" which fails Layer
       // 1  guard falls through to Layer 3 template.
-      try { llmRaw = JSON.parse(llmResp && llmResp.text); }
-      catch { llmRaw = llmResp && llmResp.text; }
+      try {
+        llmRaw = JSON.parse(llmResp && llmResp.text);
+      } catch {
+        llmRaw = llmResp && llmResp.text;
+      }
     } catch (e) {
       // LLM call failure (e.g. budget cap)  fall through to template.
-      console.error("[travel-diag-tmc] LLM call failed (falling through to template):", e.message);
+      console.error(
+        "[travel-diag-tmc] LLM call failed (falling through to template):",
+        e.message,
+      );
     }
 
     // Run the T7 guard.  Layer 3 fallback fills from schoolAnswers.
@@ -2723,16 +3062,17 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
 
     // Resolve 3.5.1 board hook + 3.5.2 runway display.
     const boardHook = resolveBoardHook(standingFacts, answers.curriculum);
-    const runwayDisplay = resolveRunwayDisplay(standingFacts, answers.geo_preference);
+    const runwayDisplay = resolveRunwayDisplay(
+      standingFacts,
+      answers.geo_preference,
+    );
 
     // Booking URL: DD-5.4 GS-default  env-var override; otherwise the renderer
     // resolves from tenant.subBrandConfigJson.tmc.bookingLinkUrl per G105
     // (PRD_TMC 3.9 admin-curated link). Empty string falls back to the
     // "executive will reach out" copy.
     const bookingUrl = String(
-      process.env.TMC_BOOKING_URL_FALLBACK ||
-      process.env.TMC_BOOKING_URL ||
-      "",
+      process.env.TMC_BOOKING_URL_FALLBACK || process.env.TMC_BOOKING_URL || "",
     );
 
     // G105  load tenant for subBrandConfigJson booking-link resolution.
@@ -2743,7 +3083,9 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
         where: { id: diag.tenantId },
         select: { id: true, subBrandConfigJson: true, logoUrl: true },
       });
-    } catch (_e) { /* fall through to null */ }
+    } catch (_e) {
+      /* fall through to null */
+    }
 
     const engineOutputForRender = {
       state: diag.engineState,
@@ -2833,8 +3175,11 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
     }
 
     let answers = {};
-    try { answers = JSON.parse(diag.answersJson || "{}"); }
-    catch { /* malformed  empty answers, fallback template */ }
+    try {
+      answers = JSON.parse(diag.answersJson || "{}");
+    } catch {
+      /* malformed  empty answers, fallback template */
+    }
 
     // Load active catalogue for the destination blocklist + matched-trip
     // narrative material.
@@ -2843,7 +3188,9 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
       catalogue = await prisma.tmcTripCatalogue.findMany({
         where: { tenantId: diag.tenantId, status: "active" },
       });
-    } catch { /* empty catalogue is fine  guard falls to template */ }
+    } catch {
+      /* empty catalogue is fine  guard falls to template */
+    }
     const matchedTripIds = new Set(
       [diag.recommendedTripId, diag.alternativeTripId].filter((x) => x != null),
     );
@@ -2855,7 +3202,10 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
     const standingFacts = await resolveStandingFacts(prisma, diag.tenantId);
     const destinationBlocklist = buildDestinationBlocklist(catalogue);
     const catalogueMatchedBlurbs = matchedRows.map((t) => ({
-      blurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
+      blurb: stripDestinationWords(
+        t.reportSkillBlurb || "",
+        destinationBlocklist,
+      ),
       tier: t.tier,
     }));
     let engineOutputForPrompt = null;
@@ -2864,7 +3214,9 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
         state: diag.engineState || null,
         flags: JSON.parse(diag.flagsJson || "[]"),
       };
-    } catch { engineOutputForPrompt = { state: diag.engineState || null, flags: [] }; }
+    } catch {
+      engineOutputForPrompt = { state: diag.engineState || null, flags: [] };
+    }
 
     const promptEnvelope = tmcPrompts.buildReadinessNarrativePrompt({
       answers,
@@ -2884,10 +3236,16 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
         payload: { system: promptEnvelope.system, user: promptEnvelope.user },
         tenantId: diag.tenantId,
       });
-      try { llmRaw = JSON.parse(llmResp && llmResp.text); }
-      catch { llmRaw = llmResp && llmResp.text; }
+      try {
+        llmRaw = JSON.parse(llmResp && llmResp.text);
+      } catch {
+        llmRaw = llmResp && llmResp.text;
+      }
     } catch (e) {
-      console.error("[travel-diag-tmc] readiness-report.json LLM call failed (falling through to template):", e.message);
+      console.error(
+        "[travel-diag-tmc] readiness-report.json LLM call failed (falling through to template):",
+        e.message,
+      );
     }
 
     // Run the T7 guard.  Layer 3 fallback fills from schoolAnswers.
@@ -2898,9 +3256,15 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
 
     // Resolve 3.5.1 board hook + 3.5.2 runway display.
     const boardHook = resolveBoardHook(standingFacts, answers.curriculum);
-    const runwayDisplay = resolveRunwayDisplay(standingFacts, answers.geo_preference);
+    const runwayDisplay = resolveRunwayDisplay(
+      standingFacts,
+      answers.geo_preference,
+    );
     const runwayKey = resolveRunwayKey(answers.geo_preference);
-    const runwayDays = (standingFacts.runway[runwayKey] && standingFacts.runway[runwayKey].lead_days) || null;
+    const runwayDays =
+      (standingFacts.runway[runwayKey] &&
+        standingFacts.runway[runwayKey].lead_days) ||
+      null;
 
     // Board name surfaced for the 3.5.1 hook block  first selected
     // curriculum (multi-board schools see the concatenated hookText but
@@ -2908,8 +3272,11 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
     // curriculum is missing.
     const curriculumList = Array.isArray(answers.curriculum)
       ? answers.curriculum
-      : (answers.curriculum ? [answers.curriculum] : []);
-    const boardName = curriculumList.length > 0 ? String(curriculumList[0]) : "";
+      : answers.curriculum
+        ? [answers.curriculum]
+        : [];
+    const boardName =
+      curriculumList.length > 0 ? String(curriculumList[0]) : "";
 
     // catalogueMatched  buyer-facing.  Trip name + region + tier +
     // duration ONLY.  Pricing fields (indicativePricePerStudent,
@@ -2923,7 +3290,10 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
       region: t.region,
       durationDays: t.durationDays,
       durationNights: t.durationNights,
-      reportSkillBlurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
+      reportSkillBlurb: stripDestinationWords(
+        t.reportSkillBlurb || "",
+        destinationBlocklist,
+      ),
     }));
 
     // Engine output  only the buyer-safe surface.  The full
@@ -2945,7 +3315,10 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
         engineState: diag.engineState || null,
         icpTier: diag.icpTier || null,
         weightsVersion: diag.weightsVersion || null,
-        createdAt: diag.createdAt instanceof Date ? diag.createdAt.toISOString() : diag.createdAt,
+        createdAt:
+          diag.createdAt instanceof Date
+            ? diag.createdAt.toISOString()
+            : diag.createdAt,
       },
       narrative: guarded.output,
       engineOutput: engineOutputForJson,
@@ -2976,9 +3349,9 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
   }
 });
 
-// 
+//
 // G104  DD-5.7 blind-collapsed brief-reveal audit endpoint
-// 
+//
 //
 // PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE DD-5.7. DiagnosticDetail.jsx
 // renders Job-B sales-brief sections collapsed by default to avoid biasing
@@ -3065,5 +3438,3 @@ module.exports.__internal = {
   buildReportSlug,
   parseDiagnosticIdFromSlug,
 };
-
-

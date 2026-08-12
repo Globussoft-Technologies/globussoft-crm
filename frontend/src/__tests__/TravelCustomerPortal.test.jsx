@@ -994,6 +994,56 @@ describe('TravelCustomerPortal — My Visa (FR-5/FR-6 self-serve)', () => {
     expect(screen.getByTestId('visa-start-another')).toBeInTheDocument();
   });
 
+  test('notification deep-link: clicking a visa notification opens the Visa view and targeted application', async () => {
+    globalThis.fetch = vi.fn(
+      withDashboardDefaults((url, opts) => {
+        if (url.includes('/portal/travel/notifications?limit=30')) {
+          return mockJsonResponse({
+            notifications: [{
+              id: 1,
+              title: 'Visa docs ready',
+              message: 'Please upload your signed copies',
+              link: 'visa:7',
+              isRead: false,
+              createdAt: '2026-08-06T00:00:00.000Z',
+            }],
+            unreadCount: 1,
+          });
+        }
+        if (url.includes('/portal/travel/notifications/1/read')) {
+          return mockJsonResponse({
+            id: 1,
+            title: 'Visa docs ready',
+            message: 'Please upload your signed copies',
+            link: 'visa:7',
+            isRead: true,
+            createdAt: '2026-08-06T00:00:00.000Z',
+          });
+        }
+        if (url.includes('/portal/travel/visa/applications')) {
+          return mockJsonResponse({
+            applications: [{
+              id: 7,
+              applicationType: 'tourist',
+              destinationCountry: 'United States',
+              status: 'docs-pending',
+              documentChecklist: [],
+            }],
+          });
+        }
+        return null;
+      }),
+    );
+    setupLoggedIn();
+    renderPortal();
+    await screen.findByRole('navigation', { name: /portal sections/i });
+    fireEvent.click(screen.getByRole('button', { name: /notifications/i }));
+    const notifBtn = await screen.findByRole('button', { name: /visa docs ready/i });
+    fireEvent.click(notifBtn);
+
+    expect(await screen.findByTestId('visa-application-7')).toBeInTheDocument();
+    expect(screen.getByText(/United States/i)).toBeInTheDocument();
+  });
   test('upload flow: uploading a pending document flips it to "In review"', async () => {
     let uploaded = false;
     globalThis.fetch = vi.fn(
@@ -1034,6 +1084,67 @@ describe('TravelCustomerPortal — My Visa (FR-5/FR-6 self-serve)', () => {
     });
     await waitFor(() =>
       expect(within(screen.getByTestId('visa-doc-1')).getByText(/In review/i)).toBeInTheDocument(),
+    );
+  });
+
+  test('visa letter packet: renders sent letters and uploads a signed PDF', async () => {
+    let signedUploaded = false;
+    globalThis.fetch = vi.fn(
+      withDashboardDefaults((url, opts) => {
+        if (url.includes('/portal/travel/visa/letters/20/signed-upload')) {
+          signedUploaded = true;
+          return mockJsonResponse(
+            {
+              letter: {
+                id: 20,
+                documentType: 'Cover Letter',
+                status: 'SIGNED_UPLOADED',
+                signedUploadedAt: '2026-08-10T00:00:00.000Z',
+              },
+            },
+            { status: 201 },
+          );
+        }
+        if (url.includes('/portal/travel/visa/applications')) {
+          return mockJsonResponse({
+            applications: [{
+              id: 7,
+              applicationType: 'tourist',
+              destinationCountry: 'Canada',
+              status: 'docs-pending',
+              documentChecklist: [],
+              visaLetters: [{
+                id: 20,
+                generationId: 10,
+                documentType: 'Cover Letter',
+                status: signedUploaded ? 'SIGNED_UPLOADED' : 'SENT',
+                generatedFileName: 'cover-letter.pdf',
+                signedUploadedAt: signedUploaded ? '2026-08-10T00:00:00.000Z' : null,
+              }],
+            }],
+          });
+        }
+        return null;
+      }),
+    );
+    setupLoggedIn();
+    renderPortal();
+    await gotoView('My Visa');
+
+    expect(await screen.findByTestId('visa-letters-7')).toHaveTextContent('Visa letters to sign');
+    const label = screen.getByTestId('visa-letter-upload-20');
+    const input = label.querySelector('input[type="file"]');
+    const file = new File(['%PDF-1.4'], 'signed-cover-letter.pdf', { type: 'application/pdf' });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      const up = globalThis.fetch.mock.calls.find(
+        ([u, o]) => u.includes('/portal/travel/visa/letters/20/signed-upload') && o && o.method === 'POST',
+      );
+      expect(up).toBeTruthy();
+    });
+    await waitFor(() =>
+      expect(within(screen.getByTestId('visa-letter-20')).getByText(/Signed copy uploaded/i)).toBeInTheDocument(),
     );
   });
 

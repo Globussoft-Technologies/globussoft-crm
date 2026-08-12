@@ -24,9 +24,8 @@
  *
  * Cases (15 total)
  * ────────────────
- *   list: tenant-scoped findMany with default limit 50 + asc order (1)
- *   list: ?q=para → OR clause on name + genericName, ?isActive=true filter,
- *         ?limit capped at 200 (3)
+ *   list: tenant-scoped findMany with asc order; ?q= OR clause; ?isActive
+ *         filter; ?limit capped at 200 with paginated envelope (4)
  *   get: 400 invalid id; 404 cross-tenant (findFirst returns null);
  *        200 returns the drug (3)
  *   create: 400 NAME_REQUIRED on missing/empty/whitespace name;
@@ -67,6 +66,7 @@ prisma.drug.findFirst = vi.fn();
 prisma.drug.create = vi.fn();
 prisma.drug.update = vi.fn();
 prisma.drug.delete = vi.fn();
+prisma.drug.count = vi.fn();
 
 // audit write target — writeAudit ultimately hits auditLog.create.
 prisma.auditLog = prisma.auditLog || {};
@@ -131,6 +131,7 @@ beforeEach(() => {
   prisma.drug.create.mockReset();
   prisma.drug.update.mockReset();
   prisma.drug.delete.mockReset();
+  prisma.drug.count.mockReset();
   prisma.auditLog.create.mockClear();
   prisma.userRole.findMany.mockReset().mockResolvedValue([]);
 
@@ -140,6 +141,7 @@ beforeEach(() => {
   prisma.drug.create.mockResolvedValue({ id: 1 });
   prisma.drug.update.mockResolvedValue({ id: 1 });
   prisma.drug.delete.mockResolvedValue({ id: 1 });
+  prisma.drug.count.mockResolvedValue(0);
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -147,7 +149,7 @@ beforeEach(() => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe('GET / — list drugs', () => {
-  test('200 with tenant-scoped findMany, default limit 50, asc order on name', async () => {
+  test('200 with tenant-scoped findMany, default asc order on name (no pagination)', async () => {
     prisma.drug.findMany.mockResolvedValue([
       { id: 1, name: 'Acetaminophen', genericName: 'Paracetamol', dosageForm: 'tablet' },
       { id: 2, name: 'Ibuprofen', genericName: null, dosageForm: 'tablet' },
@@ -160,8 +162,10 @@ describe('GET / — list drugs', () => {
     expect(prisma.drug.findMany).toHaveBeenCalledWith({
       where: { tenantId: 42 },
       orderBy: [{ name: 'asc' }],
-      take: 50,
+      take: undefined,
+      skip: undefined,
     });
+    expect(prisma.drug.count).not.toHaveBeenCalled();
   });
 
   test('200 with ?q=para → OR clause on name + genericName', async () => {
@@ -190,15 +194,18 @@ describe('GET / — list drugs', () => {
     expect(callArg.where.isActive).toBe(true);
   });
 
-  test('200 with ?limit=500 caps at 200 (route enforces ceiling)', async () => {
+  test('200 with ?limit=500 caps at 200 and returns paginated envelope', async () => {
     prisma.drug.findMany.mockResolvedValue([]);
+    prisma.drug.count.mockResolvedValue(0);
 
     const res = await request(makeApp({ tenantId: 1 })).get(
       '/api/wellness/drugs?limit=500',
     );
 
     expect(res.status).toBe(200);
+    expect(res.body).toEqual({ items: [], page: 1, limit: 200, total: 0, hasMore: false });
     expect(prisma.drug.findMany.mock.calls[0][0].take).toBe(200);
+    expect(prisma.drug.count).toHaveBeenCalledWith({ where: { tenantId: 1 } });
   });
 
   test('200 for doctor wellnessRole (read gate admits doctor)', async () => {
@@ -284,8 +291,9 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     expect(callArg.select).toBeUndefined();
   });
 
-  test('slim mode composes with ?q= + ?isActive= + ?limit= filters', async () => {
+  test('slim mode composes with ?q= + ?isActive= + ?limit= filters and returns paginated envelope', async () => {
     prisma.drug.findMany.mockResolvedValue([]);
+    prisma.drug.count.mockResolvedValue(0);
 
     const res = await request(makeApp({ tenantId: 42 })).get(
       '/api/wellness/drugs?fields=summary&q=para&isActive=true&limit=10',
@@ -304,6 +312,7 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     // and the slim select still applies
     expect(callArg.select).toBeDefined();
     expect(callArg.select.id).toBe(true);
+    expect(res.body).toEqual({ items: [], page: 1, limit: 10, total: 0, hasMore: false });
   });
 });
 

@@ -586,6 +586,130 @@ describe('POST /api/callified/leads/:leadId/classify', () => {
       }),
     );
   });
+
+  test('classify falls back to the last transcript when created_at is missing', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'false' });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 11, tenantId: 1, assignedToId: null, callifiedLeadStatus: 'dnp',
+    });
+    prisma.contact.update.mockResolvedValue({
+      id: 11, assignedToId: null, callifiedLeadStatus: 'qualified', assignedTo: null,
+    });
+    prisma.callLog.findMany.mockResolvedValue([
+      {
+        id: 1,
+        contactId: 11,
+        provider: 'callified',
+        status: 'COMPLETED',
+        createdAt: new Date(Date.now() - 30_000),
+        notes: JSON.stringify({ callifiedLeadId: 3001 }),
+      },
+    ]);
+
+    const callifiedClient = requireCJS('../../services/callifiedClient');
+    callifiedClient.getCallDetails.mockResolvedValue({
+      transcripts: [{ id: 1, transcript_text: 'Yes, I am interested. Tell me more.' }],
+      reviews: [],
+    });
+
+    const res = await request(makeApp())
+      .post('/api/callified/leads/11/classify')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.callifiedLeadStatus).toBe('qualified');
+    expect(routeRequestMock).not.toHaveBeenCalled();
+  });
+
+  test('classify uses a review even when the latest transcript has no text', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'false' });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 11, tenantId: 1, assignedToId: null, callifiedLeadStatus: 'dnp',
+    });
+    prisma.contact.update.mockResolvedValue({
+      id: 11, assignedToId: null, callifiedLeadStatus: 'junk', assignedTo: null,
+    });
+    prisma.callLog.findMany.mockResolvedValue([
+      {
+        id: 1,
+        contactId: 11,
+        provider: 'callified',
+        status: 'COMPLETED',
+        createdAt: new Date(Date.now() - 30_000),
+        notes: JSON.stringify({ callifiedLeadId: 3001 }),
+      },
+    ]);
+
+    const callifiedClient = requireCJS('../../services/callifiedClient');
+    callifiedClient.getCallDetails.mockResolvedValue({
+      transcripts: [{ id: 1, transcript_text: '' }],
+      reviews: [{ transcript_id: 1, quality_score: 3, appointment_booked: false, sentiment: 'neutral' }],
+    });
+
+    const res = await request(makeApp())
+      .post('/api/callified/leads/11/classify')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.callifiedLeadStatus).toBe('junk');
+    expect(routeRequestMock).not.toHaveBeenCalled();
+  });
+
+  test('classify picks a newer answered call over an older DNP review', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'false' });
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 11, tenantId: 1, assignedToId: null, callifiedLeadStatus: 'dnp',
+    });
+    prisma.contact.update.mockResolvedValue({
+      id: 11, assignedToId: null, callifiedLeadStatus: 'qualified', assignedTo: null,
+    });
+
+    const callifiedClient = requireCJS('../../services/callifiedClient');
+    callifiedClient.getCallDetails.mockImplementation(async (_tenantId, leadId) => {
+      if (String(leadId) === '3001') {
+        return {
+          transcripts: [],
+          reviews: [{
+            quality_score: 1,
+            appointment_booked: false,
+            sentiment: 'negative',
+            created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+          }],
+        };
+      }
+      return {
+        transcripts: [{ id: 1, transcript_text: 'Yes, I am interested. Tell me more.' }],
+        reviews: [],
+      };
+    });
+
+    prisma.callLog.findMany.mockResolvedValue([
+      {
+        id: 2,
+        contactId: 11,
+        provider: 'callified',
+        status: 'COMPLETED',
+        createdAt: new Date(Date.now() - 30_000),
+        notes: JSON.stringify({ callifiedLeadId: 3002 }),
+      },
+      {
+        id: 1,
+        contactId: 11,
+        provider: 'callified',
+        status: 'MISSED',
+        createdAt: new Date(Date.now() - 60 * 60 * 1000),
+        notes: JSON.stringify({ callifiedLeadId: 3001 }),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/callified/leads/11/classify')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.callifiedLeadStatus).toBe('qualified');
+    expect(routeRequestMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/callified/leads/ensure-assigned', () => {

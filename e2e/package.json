@@ -9,6 +9,7 @@
     "test:debug": "playwright test --debug",
     "test:trace": "playwright test --trace on",
     "test:report": "playwright show-report",
+    "audit:freshsales": "node scripts/freshsales-readonly-audit.js",
     "test:auth": "playwright test tests/auth.spec.js",
     "test:dashboard": "playwright test tests/dashboard.spec.js",
     "test:contacts": "playwright test tests/contacts.spec.js",

@@ -59,6 +59,7 @@ const BUILTIN_COLUMNS = {
     { key: "company", label: "Company" },
     { key: "aiScore", label: "Lead Score" },
     { key: "source", label: "Source" },
+    { key: "tags", label: "Tags" },
     { key: "assignedTo", label: "Assigned To" },
     { key: "createdAt", label: "Created" },
   ],
@@ -75,6 +76,16 @@ const BUILTIN_COLUMNS = {
 };
 
 const CUSTOM_FIELD_KEY_PREFIX = "cf_";
+
+function normalizeVisibleColumnsForTable(tableKey, visible) {
+  const next = Array.isArray(visible) ? [...visible] : [];
+  if (tableKey === "leads" && !next.includes("tags")) {
+    const sourceIndex = next.indexOf("source");
+    const insertAt = sourceIndex >= 0 ? sourceIndex + 1 : next.length;
+    next.splice(insertAt, 0, "tags");
+  }
+  return next;
+}
 
 async function getAvailableColumns(tableKey, tenantId) {
   const builtin = BUILTIN_COLUMNS[tableKey] || [];
@@ -119,7 +130,10 @@ router.get("/:tableKey", async (req, res) => {
       }
       // Drop any saved key that no longer exists (deleted custom field) —
       // read-time filter only, doesn't rewrite the stored preference.
-      visible = saved.filter((k) => availableKeys.has(k));
+      visible = normalizeVisibleColumnsForTable(
+        tableKey,
+        saved.filter((k) => availableKeys.has(k)),
+      );
     } else {
       // First-ever load for this user/table — default to every builtin
       // column visible, no custom-field columns (opt-in, matches the

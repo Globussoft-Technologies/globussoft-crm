@@ -1,7 +1,14 @@
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
 import { formatDateMedium as formatDate } from "../utils/date";
-import { useState, useEffect, useContext, useCallback, useRef } from "react";
+import {
+  Fragment,
+  useState,
+  useEffect,
+  useContext,
+  useCallback,
+  useRef,
+} from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
@@ -13,14 +20,14 @@ import {
   Pencil,
   Trash2,
   RefreshCw,
-  ChevronLeft,
-  ChevronRight,
   Phone,
   FileText,
   Filter,
   SlidersHorizontal,
   Info,
   Settings,
+  ChevronLeft,
+  ChevronRight,
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
@@ -94,17 +101,360 @@ const FIELD_LIMITS = {
 };
 const LEADS_PAGE_SIZE_OPTIONS = [25, 50, 100];
 const LEADS_AUTO_REFRESH_MS = 15000;
+const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
+const LEADS_COLUMN_MIN_WIDTH = 72;
+const LEADS_DEFAULT_VISIBLE_COLUMNS = [
+  "name",
+  "email",
+  "company",
+  "phone",
+  "aiScore",
+  "source",
+  "tags",
+  "assignedTo",
+  "createdAt",
+];
+const LEADS_COLUMN_DEFAULT_WIDTHS = {
+  select: 48,
+  name: 190,
+  email: 220,
+  company: 190,
+  phone: 150,
+  aiScore: 118,
+  source: 150,
+  tags: 190,
+  campaign: 190,
+  callStatus: 160,
+  callifiedAi: 122,
+  callifiedScore: 128,
+  subBrand: 130,
+  amount: 130,
+  assignedTo: 170,
+  createdAt: 145,
+  actions: 132,
+};
+
+const inlineBuiltinCellStyle = {
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "0.35rem",
+  minHeight: "1.35rem",
+  maxWidth: "100%",
+  padding: "0.15rem 0.3rem",
+  borderRadius: 4,
+};
+
+const inlineBuiltinEmptyStyle = {
+  color: "var(--accent-color)",
+  fontSize: "0.8rem",
+  whiteSpace: "nowrap",
+};
+
 const sourceBadgeStyle = {
-  padding: "0.25rem 0.75rem",
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "0.25rem 0.65rem",
   borderRadius: "999px",
   fontSize: "0.75rem",
   fontWeight: 600,
   backgroundColor: "var(--source-badge-bg, rgba(139, 92, 246, 0.16))",
   color: "var(--source-badge-text, var(--text-primary))",
   border: "1px solid var(--border-color)",
-  whiteSpace: "nowrap",
-  display: "inline-block",
 };
+
+const LEAD_TAG_LIMIT = 50;
+const LEAD_TAG_MAX_LENGTH = 80;
+
+function normalizeLeadTags(raw) {
+  if (!raw) return [];
+  let values = raw;
+  if (typeof raw === "string") {
+    try {
+      values = JSON.parse(raw);
+    } catch (_e) {
+      values = raw.split(",");
+    }
+  }
+  if (!Array.isArray(values)) return [];
+  const seen = new Set();
+  const tags = [];
+  for (const value of values) {
+    const tag = String(value || "").trim();
+    if (!tag) continue;
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+  }
+  return tags;
+}
+
+function cleanLeadTagInput(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  return stripDangerousTags(text).value.slice(0, LEAD_TAG_MAX_LENGTH);
+}
+
+function LeadTagsCell({ lead, options, onSave }) {
+  const tags = normalizeLeadTags(lead.tags);
+  const [open, setOpen] = useState(false);
+  const [draftTags, setDraftTags] = useState(tags);
+  const [input, setInput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [popoverStyle, setPopoverStyle] = useState({
+    top: 0,
+    left: 0,
+    width: 320,
+  });
+  const triggerRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) setDraftTags(normalizeLeadTags(lead.tags));
+  }, [open, lead.tags]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = 320;
+      const maxLeft = Math.max(8, window.innerWidth - width - 8);
+      setPopoverStyle({
+        top: Math.max(8, rect.bottom + 6),
+        left: Math.min(Math.max(8, rect.left), maxLeft),
+        width,
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
+
+  const addDraftTag = (raw) => {
+    const tag = cleanLeadTagInput(raw);
+    if (!tag) return;
+    setDraftTags((prev) => {
+      if (prev.length >= LEAD_TAG_LIMIT) return prev;
+      const exists = prev.some(
+        (current) => current.toLowerCase() === tag.toLowerCase(),
+      );
+      return exists ? prev : [...prev, tag];
+    });
+    setInput("");
+  };
+
+  const removeDraftTag = (tag) => {
+    setDraftTags((prev) => prev.filter((current) => current !== tag));
+  };
+
+  const toggleOption = (tag) => {
+    const clean = cleanLeadTagInput(tag);
+    if (!clean) return;
+    setDraftTags((prev) =>
+      prev.some((current) => current.toLowerCase() === clean.toLowerCase())
+        ? prev.filter(
+            (current) => current.toLowerCase() !== clean.toLowerCase(),
+          )
+        : prev.length >= LEAD_TAG_LIMIT
+          ? prev
+          : [...prev, clean],
+    );
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onSave(lead, "tags", draftTags);
+      setOpen(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const cancel = () => {
+    setDraftTags(tags);
+    setInput("");
+    setOpen(false);
+  };
+
+  const selectedKeys = new Set(draftTags.map((tag) => tag.toLowerCase()));
+  const optionRows = options.filter(
+    (tag) => tag && !selectedKeys.has(tag.toLowerCase()),
+  );
+
+  return (
+    <div
+      ref={triggerRef}
+      className="lead-tags-cell"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={(e) => {
+        e.stopPropagation();
+        setOpen(true);
+      }}
+    >
+      <div className="lead-tags-display" title={tags.join(", ") || "Add tags"}>
+        {tags.length === 0 ? (
+          <span style={inlineBuiltinEmptyStyle}>+ Click to add</span>
+        ) : (
+          <>
+            {tags.slice(0, 2).map((tag) => (
+              <span key={tag} className="lead-tag-chip">
+                {tag}
+              </span>
+            ))}
+            {tags.length > 2 && (
+              <span className="lead-tag-overflow">+{tags.length - 2}</span>
+            )}
+          </>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
+        aria-label={`Edit Tags for ${lead.name || "lead"}`}
+        title="Edit Tags"
+        style={{
+          ...actionIconBtn,
+          flexShrink: 0,
+          padding: 2,
+          opacity: hovered ? 0.85 : 0,
+          pointerEvents: hovered ? "auto" : "none",
+          transition: "opacity 0.15s ease",
+        }}
+      >
+        <Pencil size={12} />
+      </button>
+      {open &&
+        createPortal(
+          <>
+            <div
+              style={{ position: "fixed", inset: 0, zIndex: 80 }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                cancel();
+              }}
+            />
+            <div
+              role="dialog"
+              aria-label={`Edit Tags for ${lead.name || "lead"}`}
+              className="card lead-tags-popover"
+              style={{
+                position: "fixed",
+                top: popoverStyle.top,
+                left: popoverStyle.left,
+                width: popoverStyle.width,
+                zIndex: 81,
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <label
+                className="lead-tags-label"
+                htmlFor={`lead-tags-input-${lead.id}`}
+              >
+                Tags
+              </label>
+              <form
+                className="lead-tags-input-row"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  addDraftTag(input);
+                }}
+              >
+                <input
+                  id={`lead-tags-input-${lead.id}`}
+                  className="input-field"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="Click to select"
+                  maxLength={LEAD_TAG_MAX_LENGTH}
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  className="lead-tags-add-button"
+                  aria-label="Add tag"
+                >
+                  <Plus size={14} />
+                </button>
+              </form>
+              {draftTags.length > 0 && (
+                <div
+                  className="lead-tags-draft-list"
+                  aria-label="Selected tags"
+                >
+                  {draftTags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="lead-tag-chip lead-tag-chip--selected"
+                    >
+                      {tag}
+                      <button
+                        type="button"
+                        onClick={() => removeDraftTag(tag)}
+                        aria-label={`Remove ${tag}`}
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div
+                className="lead-tags-option-list"
+                aria-label="Available tags"
+              >
+                {optionRows.length === 0 ? (
+                  <span className="lead-tags-empty">No saved tags yet</span>
+                ) : (
+                  optionRows.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      className="lead-tags-option"
+                      onClick={() => toggleOption(tag)}
+                    >
+                      {tag}
+                    </button>
+                  ))
+                )}
+              </div>
+              <div className="lead-tags-popover-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={cancel}
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={save}
+                  disabled={saving}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          </>,
+          document.body,
+        )}
+    </div>
+  );
+}
 
 const leadSourceLabel = (lead) =>
   lead?.source ||
@@ -245,6 +595,159 @@ function getCallStatusMeta(raw) {
   );
 }
 
+function BuiltInInlineCellEditor({
+  lead,
+  field,
+  label,
+  value,
+  type = "text",
+  options = [],
+  onSave,
+  required = false,
+  renderValue = null,
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+  const [saving, setSaving] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    setDraft(value ?? "");
+  }, [value]);
+
+  useEffect(() => {
+    if (editing && inputRef.current) inputRef.current.focus();
+  }, [editing]);
+
+  const save = async (nextValue = draft) => {
+    const normalized =
+      type === "select" ? nextValue : String(nextValue || "").trim();
+    if (required && !normalized) return;
+    if (normalized === (value ?? "")) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(lead, field, normalized);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    const isEmpty = value === null || value === undefined || value === "";
+    return (
+      <span
+        className="inline-cell-editor-display"
+        onClick={() => setEditing(true)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        title={`Click to edit ${label}`}
+        style={inlineBuiltinCellStyle}
+      >
+        <span
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: isEmpty ? "var(--accent-color)" : "inherit",
+          }}
+        >
+          {isEmpty ? (
+            <span style={inlineBuiltinEmptyStyle}>+ Add {label}</span>
+          ) : renderValue ? (
+            renderValue(value)
+          ) : (
+            String(value)
+          )}
+        </span>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setEditing(true);
+          }}
+          aria-label={`Edit ${label} for ${lead.name || "lead"}`}
+          title={`Edit ${label}`}
+          style={{
+            ...actionIconBtn,
+            flexShrink: 0,
+            padding: 2,
+            opacity: hovered ? 0.85 : 0,
+            pointerEvents: hovered ? "auto" : "none",
+            transition: "opacity 0.15s ease",
+          }}
+        >
+          <Pencil size={12} />
+        </button>
+      </span>
+    );
+  }
+
+  if (type === "select") {
+    return (
+      <select
+        ref={inputRef}
+        className="input-field"
+        value={draft}
+        disabled={saving}
+        onChange={(e) => save(e.target.value)}
+        onBlur={() => setEditing(false)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setEditing(false);
+        }}
+        aria-label={`Edit ${label} for ${lead.name || "lead"}`}
+        style={{
+          width: "100%",
+          minWidth: 120,
+          padding: "0.35rem 0.45rem",
+          fontSize: "0.8125rem",
+        }}
+      >
+        <option value="">Select</option>
+        {options.map((opt) => (
+          <option key={opt.value || opt} value={opt.value || opt}>
+            {opt.label || opt}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      className="input-field"
+      type={type}
+      value={draft}
+      disabled={saving}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => save()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          save();
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setEditing(false);
+        }
+      }}
+      aria-label={`Edit ${label} for ${lead.name || "lead"}`}
+      style={{
+        width: "100%",
+        minWidth: 120,
+        padding: "0.35rem 0.45rem",
+        fontSize: "0.8125rem",
+      }}
+    />
+  );
+}
+
 const Leads = () => {
   const navigate = useNavigate();
   const notify = useNotify();
@@ -269,8 +772,29 @@ const Leads = () => {
   const [leadsPageSize, setLeadsPageSize] = useState(25);
   const [pageInput, setPageInput] = useState("1");
   const [selectedLeads, setSelectedLeads] = useState([]);
+  const [columnLayout, setColumnLayout] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem(
+        LEADS_COLUMN_LAYOUT_STORAGE_KEY,
+      );
+      const parsed = saved ? JSON.parse(saved) : null;
+      return {
+        widths:
+          parsed?.widths && typeof parsed.widths === "object"
+            ? parsed.widths
+            : {},
+        collapsed:
+          parsed?.collapsed && typeof parsed.collapsed === "object"
+            ? parsed.collapsed
+            : {},
+      };
+    } catch (_err) {
+      return { widths: {}, collapsed: {} };
+    }
+  });
+  const resizeStateRef = useRef(null);
   const [bulkAgent, setBulkAgent] = useState("");
-  const [bulkCampaignId, setBulkCampaignId] = useState("");
+  const [, setBulkCampaignId] = useState("");
   const [bulkCampaignDropdownOpen, setBulkCampaignDropdownOpen] =
     useState(false);
   const [bulkCampaignSaving, setBulkCampaignSaving] = useState(false);
@@ -300,6 +824,7 @@ const Leads = () => {
   const [sourceFilter, setSourceFilter] = useState("");
   const [subBrandFilter, setSubBrandFilter] = useState("");
   const [stageFilter, setStageFilter] = useState("");
+  const [previewLead, setPreviewLead] = useState(null);
   // Generic CRM Callified filters
   const [campaignFilter, setCampaignFilter] = useState("");
   const [leadStatusFilter, setLeadStatusFilter] = useState("");
@@ -369,8 +894,52 @@ const Leads = () => {
   // null = "not loaded yet, show every builtin column" so the table never
   // flashes empty while the preference GET is in flight.
   const [visibleColumns, setVisibleColumns] = useState(null);
-  const isColVisible = (key) =>
-    visibleColumns === null || visibleColumns.includes(key);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        LEADS_COLUMN_LAYOUT_STORAGE_KEY,
+        JSON.stringify(columnLayout),
+      );
+    } catch (_err) {
+      // Layout persistence is a convenience; table interaction should still work.
+    }
+  }, [columnLayout]);
+  useEffect(
+    () => () => {
+      if (!resizeStateRef.current) return;
+      window.removeEventListener("mousemove", resizeStateRef.current.onMove);
+      window.removeEventListener("mouseup", resizeStateRef.current.onUp);
+    },
+    [],
+  );
+  const getColumnDefaultWidth = (key) =>
+    LEADS_COLUMN_DEFAULT_WIDTHS[key] || (key.startsWith("cf_") ? 150 : 140);
+  const getColumnWidth = (key) =>
+    Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
+  const setColumnWidth = (key, width) => {
+    const nextWidth = Math.max(LEADS_COLUMN_MIN_WIDTH, Math.round(width));
+    setColumnLayout((prev) => ({
+      widths: { ...(prev.widths || {}), [key]: nextWidth },
+      collapsed: { ...(prev.collapsed || {}), [key]: false },
+    }));
+  };
+  const startColumnResize = (key, event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = getColumnWidth(key);
+    const onMove = (moveEvent) => {
+      setColumnWidth(key, startWidth + moveEvent.clientX - startX);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      resizeStateRef.current = null;
+    };
+    resizeStateRef.current = { onMove, onUp };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
   const handleCustomFieldChangeNew = (fieldKey, value) => {
     setNewLead((prev) => ({
       ...prev,
@@ -1827,22 +2396,176 @@ const Leads = () => {
       ].some((value) => String(value ?? "") === stageFilter),
     );
   };
-  const visibleCfCols = customFieldDefs.filter((f) =>
-    isColVisible(`cf_${f.fieldKey}`),
-  ).length;
-  const leadsTableMinWidth = isTravel
-    ? "1720px"
-    : isWellness
-      ? "1500px"
-      : isGeneric
-        ? `${1080 + visibleCfCols * 84}px`
-        : customFieldDefs.length
-          ? `${900 + customFieldDefs.length * 84}px`
-          : undefined;
+  const customFieldByKey = new Map(
+    customFieldDefs.map((field) => [`cf_${field.fieldKey}`, field]),
+  );
+  const preferredVisibleColumns = Array.isArray(visibleColumns)
+    ? visibleColumns
+    : [
+        ...LEADS_DEFAULT_VISIBLE_COLUMNS,
+        ...customFieldDefs.map((field) => `cf_${field.fieldKey}`),
+      ];
+  const leadUserColumnDefs = preferredVisibleColumns
+    .filter((key) => key !== "name")
+    .filter(
+      (key) =>
+        key === "email" ||
+        key === "company" ||
+        key === "phone" ||
+        key === "aiScore" ||
+        key === "source" ||
+        key === "tags" ||
+        key === "assignedTo" ||
+        key === "createdAt" ||
+        customFieldByKey.has(key),
+    )
+    .map((key) => {
+      if (key === "email") return { key, label: "Email" };
+      if (key === "company")
+        return { key, label: isTravel ? "Category" : "Company" };
+      if (key === "phone") return { key, label: "Phone" };
+      if (key === "aiScore") return { key, label: "Lead Score" };
+      if (key === "source") return { key, label: "Source" };
+      if (key === "tags") return { key, label: "Tags" };
+      if (key === "assignedTo") return { key, label: "Assigned To" };
+      if (key === "createdAt") return { key, label: "Created" };
+      const field = customFieldByKey.get(key);
+      return {
+        key,
+        label: field?.label || key,
+        customField: true,
+        field,
+      };
+    });
+  const leadFixedExtraColumnDefs = [
+    ...(isGeneric
+      ? [
+          { key: "campaign", label: "Callified Campaign" },
+          { key: "callStatus", label: "Call Status" },
+          { key: "callifiedAi", label: "Callified AI call" },
+          { key: "callifiedScore", label: "Callified Score" },
+        ]
+      : []),
+    ...(isTravel
+      ? [
+          { key: "subBrand", label: "Sub-brand" },
+          { key: "amount", label: "Amount" },
+        ]
+      : []),
+  ];
+  const tableColumnDefs = [
+    ...(isAdmin ? [{ key: "select", label: "Select", locked: true }] : []),
+    { key: "name", label: "Name" },
+    ...leadUserColumnDefs,
+    ...leadFixedExtraColumnDefs,
+    { key: "actions", label: "Actions", locked: true },
+  ];
+  const leadsFrozenColumnDefs = tableColumnDefs.filter(
+    (column) => column.key === "select" || column.key === "name",
+  );
+  const leadsScrollableColumnDefs = tableColumnDefs.filter(
+    (column) => column.key !== "select" && column.key !== "name",
+  );
+  const leadsFrozenTableWidth = leadsFrozenColumnDefs.reduce(
+    (sum, column) => sum + getColumnWidth(column.key),
+    0,
+  );
+  const leadsScrollableTableWidth = leadsScrollableColumnDefs.reduce(
+    (sum, column) => sum + getColumnWidth(column.key),
+    0,
+  );
+  const leadsScrollableTableBaseWidth = leadsScrollableColumnDefs.reduce(
+    (sum, column) => sum + getColumnDefaultWidth(column.key),
+    0,
+  );
+  // Keep the scroll pane wide enough to preserve the scroll position when a
+  // column is shrunk. Without this floor, dragging a column left can make
+  // the pane contract and hide the neighbor to the left until the
+  // width is restored.
+  const leadsScrollableTableMinWidth = `${Math.max(
+    leadsScrollableTableWidth,
+    leadsScrollableTableBaseWidth,
+  )}px`;
+  const leadsFrozenTableWidthPx = `${leadsFrozenTableWidth}px`;
+  const leadsTableClassName = isTravel
+    ? "leads-table leads-table--fit"
+    : isGeneric
+      ? "leads-table leads-table--compact"
+      : "leads-table";
 
   const leadDetailPath = (lead) => {
     if (isTravel) return `/travel/leads/${lead.id}`;
     return `/contacts/${lead.id}`;
+  };
+
+  const leadTagOptions = Array.from(
+    new Set(leads.flatMap((lead) => normalizeLeadTags(lead.tags))),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const updateLeadInlineValue = async (lead, field, rawValue) => {
+    let value = typeof rawValue === "string" ? rawValue.trim() : rawValue;
+    if (field === "tags") {
+      value = normalizeLeadTags(rawValue);
+      if (value.length > LEAD_TAG_LIMIT) {
+        notify.error(`A lead can have at most ${LEAD_TAG_LIMIT} tags`);
+        throw new Error("Too many tags");
+      }
+      for (const tag of value) {
+        if (CONTROL_CHAR_RE.test(tag)) {
+          notify.error("Tags contain invalid control characters");
+          throw new Error("Invalid tags");
+        }
+        if (stripDangerousTags(tag).stripped) {
+          notify.error("HTML markup is not allowed in tags");
+          throw new Error("HTML markup is not allowed");
+        }
+        if (tag.length > LEAD_TAG_MAX_LENGTH) {
+          notify.error(
+            `Each tag must be ${LEAD_TAG_MAX_LENGTH} characters or less`,
+          );
+          throw new Error("Tag too long");
+        }
+      }
+    }
+    if (field === "name" && !value) {
+      notify.error("Name is required");
+      throw new Error("Name is required");
+    }
+    if (typeof value === "string" && CONTROL_CHAR_RE.test(value)) {
+      notify.error(`${field} contains invalid control characters`);
+      throw new Error("Invalid control characters");
+    }
+    const limit = FIELD_LIMITS[field];
+    if (limit && String(value || "").length > limit) {
+      notify.error(`${field} is too long. Maximum ${limit} characters.`);
+      throw new Error("Field too long");
+    }
+    if (field === "email" && value && !EMAIL_RE.test(value)) {
+      notify.error("Enter a valid email address");
+      throw new Error("Invalid email");
+    }
+    if (typeof value === "string") {
+      const stripped = stripDangerousTags(value);
+      if (stripped.stripped) {
+        notify.error("HTML markup is not allowed in inline edits");
+        throw new Error("HTML markup is not allowed");
+      }
+    }
+
+    await fetchApi(`/api/contacts/${lead.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [field]: value }),
+    });
+    setLeads((prev) =>
+      prev.map((row) =>
+        row.id === lead.id ? { ...row, [field]: value } : row,
+      ),
+    );
+    setPreviewLead((current) =>
+      current?.id === lead.id ? { ...current, [field]: value } : current,
+    );
+    notify.success("Lead updated");
   };
 
   const filteredLeads = leads.filter((lead) => {
@@ -1880,6 +2603,7 @@ const Leads = () => {
       lead.company,
       lead.phone,
       lead.source,
+      normalizeLeadTags(lead.tags).join(" "),
       lead.assignedTo?.name,
       lead.assignedTo?.email,
       campaign?.name,
@@ -1914,6 +2638,10 @@ const Leads = () => {
     };
   }, [isGeneric, filteredLeads.map((l) => l.id).join(",")]);
   /* eslint-enable react-hooks/exhaustive-deps */
+
+  const qualifiedAssignmentLeadKey = filteredLeads
+    .map((l) => `${l.id}:${l.callifiedLeadStatus}:${l.assignedToId}`)
+    .join(",");
 
   // Safety net: any Qualified lead that is unassigned (or assigned to a user outside
   // the active ADMIN/MANAGER/USER pool used by the round-robin picker) should be
@@ -1980,13 +2708,7 @@ const Leads = () => {
       clearTimeout(timeout);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    isGeneric,
-    staff.length,
-    filteredLeads
-      .map((l) => `${l.id}:${l.callifiedLeadStatus}:${l.assignedToId}`)
-      .join(","),
-  ]);
+  }, [isGeneric, staff.length, qualifiedAssignmentLeadKey]);
 
   const leadsPageCount = Math.max(
     1,
@@ -2162,21 +2884,329 @@ const Leads = () => {
   const leadsSummary = activeSearchTerm
     ? `${filteredLeads.length} of ${leads.length} leads match "${activeSearchTerm}"`
     : `${leads.length} leads in pipeline`;
-  const leadsColSpan =
-    2 +
-    (isAdmin ? 1 : 0) +
-    [
-      "email",
-      "company",
-      "phone",
-      "aiScore",
-      "source",
-      "assignedTo",
-      "createdAt",
-    ].filter(isColVisible).length +
-    (isGeneric ? 4 : 0) +
-    (isTravel ? 2 : 0) +
-    visibleCfCols;
+  const getHeaderCellStyle = (key, extra = {}) => ({
+    padding: "1rem",
+    color: "var(--text-secondary)",
+    fontWeight: "500",
+    fontSize: "0.875rem",
+    verticalAlign: "middle",
+    overflow: "hidden",
+    position: "relative",
+    ...extra,
+  });
+  const getBodyCellStyle = (key, extra = {}) => ({
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    padding: "1rem",
+    ...extra,
+  });
+  const renderColumnHeaderCell = (key, label, extra = {}, cellProps = {}) => {
+    const locked = key === "select" || key === "actions";
+    const { key: headerKey, ...restCellProps } = cellProps;
+    return (
+      <th
+        key={headerKey}
+        {...restCellProps}
+        style={getHeaderCellStyle(key, extra)}
+        aria-label={`${label} column`}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.4rem",
+            minWidth: 0,
+          }}
+        >
+          <span
+            style={{
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "normal",
+              lineHeight: 1.2,
+            }}
+          >
+            {label}
+          </span>
+        </div>
+        {!locked && (
+          <span
+            role="separator"
+            aria-label={`Resize ${label} column`}
+            aria-orientation="vertical"
+            title={`Drag to resize ${label}`}
+            onMouseDown={(e) => startColumnResize(key, e)}
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              width: 8,
+              height: "100%",
+              cursor: "col-resize",
+              touchAction: "none",
+              borderRight: "2px solid transparent",
+            }}
+          />
+        )}
+      </th>
+    );
+  };
+  const renderBuiltInLeadCell = ({
+    lead,
+    field,
+    label,
+    value,
+    type,
+    options,
+    extraStyle = {},
+    renderValue,
+    required = false,
+  }) => (
+    <td
+      style={getBodyCellStyle(field, extraStyle)}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <BuiltInInlineCellEditor
+        lead={lead}
+        field={field}
+        label={label}
+        value={value}
+        type={type}
+        options={options}
+        onSave={updateLeadInlineValue}
+        renderValue={renderValue}
+        required={required}
+      />
+    </td>
+  );
+  const renderLeadUserHeaderCell = (column) => {
+    if (column.customField) {
+      return renderColumnHeaderCell(
+        column.key,
+        column.label,
+        {},
+        {
+          key: column.field?.id || column.key,
+          className: "leads-custom-field-col",
+        },
+      );
+    }
+    switch (column.key) {
+      case "email":
+        return renderColumnHeaderCell("email", "Email");
+      case "company":
+        return renderColumnHeaderCell(
+          "company",
+          isTravel ? "Category" : "Company",
+        );
+      case "phone":
+        return renderColumnHeaderCell("phone", "Phone");
+      case "aiScore":
+        return renderColumnHeaderCell("aiScore", "Lead Score");
+      case "source":
+        return renderColumnHeaderCell("source", "Source");
+      case "tags":
+        return renderColumnHeaderCell("tags", "Tags");
+      case "assignedTo":
+        return renderColumnHeaderCell("assignedTo", "Assigned To");
+      case "createdAt":
+        return renderColumnHeaderCell("createdAt", "Created");
+      default:
+        return null;
+    }
+  };
+  const renderLeadUserBodyCell = (lead, column) => {
+    if (column.customField) {
+      const field = column.field;
+      const raw = lead.customFields?.[field.fieldKey];
+      return (
+        <td
+          key={field.id}
+          className="leads-custom-field-col"
+          style={getBodyCellStyle(`cf_${field.fieldKey}`, {
+            color: "var(--text-secondary)",
+            fontSize: "0.875rem",
+          })}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <InlineCellEditor
+            contactId={lead.id}
+            field={field}
+            value={raw}
+            onSaved={(newValue) => {
+              setLeads((prev) =>
+                prev.map((l) =>
+                  l.id === lead.id
+                    ? {
+                        ...l,
+                        customFields: {
+                          ...(l.customFields || {}),
+                          [field.fieldKey]: newValue,
+                        },
+                      }
+                    : l,
+                ),
+              );
+            }}
+          />
+        </td>
+      );
+    }
+    switch (column.key) {
+      case "email":
+        return renderBuiltInLeadCell({
+          lead,
+          field: "email",
+          label: "Email",
+          value: lead.email,
+          type: "email",
+          extraStyle: { color: "var(--text-secondary)" },
+        });
+      case "company":
+        return renderBuiltInLeadCell({
+          lead,
+          field: "company",
+          label: isTravel ? "Category" : "Company",
+          value: lead.company,
+          extraStyle: { color: "var(--text-secondary)" },
+        });
+      case "phone":
+        return renderBuiltInLeadCell({
+          lead,
+          field: "phone",
+          label: "Phone",
+          value: lead.phone,
+          type: "tel",
+          extraStyle: {
+            color: "var(--text-secondary)",
+            fontSize: "0.875rem",
+          },
+        });
+      case "aiScore":
+        return (
+          <td style={getBodyCellStyle("aiScore")}>
+            <span
+              style={{
+                padding: "0.25rem 0.75rem",
+                borderRadius: "999px",
+                fontSize: "0.75rem",
+                fontWeight: "bold",
+                backgroundColor:
+                  lead.aiScore > 75
+                    ? "rgba(16, 185, 129, 0.1)"
+                    : lead.aiScore > 40
+                      ? "rgba(245, 158, 11, 0.1)"
+                      : "rgba(239, 68, 68, 0.1)",
+                color:
+                  lead.aiScore > 75
+                    ? "var(--success-color)"
+                    : lead.aiScore > 40
+                      ? "var(--warning-color)"
+                      : "#ef4444",
+              }}
+            >
+              {lead.aiScore}/100
+            </span>
+          </td>
+        );
+      case "source":
+        return renderBuiltInLeadCell({
+          lead,
+          field: "source",
+          label: "Source",
+          value: leadSourceLabel(lead),
+          type: "select",
+          options: sourceFilterOptions,
+          renderValue: (displayValue) => (
+            <span style={sourceBadgeStyle}>{displayValue}</span>
+          ),
+        });
+      case "tags":
+        return (
+          <td
+            style={getBodyCellStyle("tags", { overflow: "visible" })}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <LeadTagsCell
+              lead={lead}
+              options={leadTagOptions}
+              onSave={updateLeadInlineValue}
+            />
+          </td>
+        );
+      case "assignedTo":
+        return (
+          <td
+            className="leads-assigned-col"
+            style={getBodyCellStyle("assignedTo")}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {isAdmin ? (
+              <select
+                className="input-field"
+                value={lead.assignedToId || ""}
+                onChange={(e) => handleAssign(lead.id, e.target.value)}
+                style={{
+                  padding: "0.375rem 0.5rem",
+                  fontSize: "0.8rem",
+                  minWidth: "130px",
+                  background: "var(--input-bg)",
+                }}
+                aria-label={`Assign ${lead.name || "lead"} to staff`}
+              >
+                <option value="">Unassigned</option>
+                {staff.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name || s.email}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span
+                style={{
+                  fontSize: "0.875rem",
+                  color: lead.assignedToId
+                    ? "var(--text-primary)"
+                    : "var(--text-secondary)",
+                }}
+              >
+                {lead.assignedTo?.name ||
+                  lead.assignedTo?.email ||
+                  "Unassigned"}
+              </span>
+            )}
+          </td>
+        );
+      case "createdAt":
+        return (
+          <td
+            style={getBodyCellStyle("createdAt", {
+              color: "var(--text-secondary)",
+              fontSize: "0.875rem",
+            })}
+          >
+            {formatDate(lead.createdAt)}
+          </td>
+        );
+      default:
+        return null;
+    }
+  };
+  const previewLeadCurrent = previewLead
+    ? leads.find((lead) => lead.id === previewLead.id) || previewLead
+    : null;
+  const previewCampaign =
+    previewLeadCurrent &&
+    callifiedCampaigns.find(
+      (c) => String(c.id) === String(previewLeadCurrent.callifiedCampaignId),
+    );
+  const previewStatus = previewLeadCurrent
+    ? getCallStatusMeta(previewLeadCurrent.callifiedLeadStatus)
+    : null;
+
   return (
     <div style={{ padding: "2rem", animation: "fadeIn 0.3s ease" }}>
       <header
@@ -3967,919 +4997,650 @@ const Leads = () => {
             )}
           </div>
         </div>
-        <TopScrollSync forceScrollbar>
-          <table
-            className={
-              isTravel
-                ? "leads-table leads-table--fit"
-                : isGeneric
-                  ? "leads-table leads-table--compact"
-                  : "leads-table"
-            }
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              textAlign: "left",
-              minWidth: leadsTableMinWidth,
-              tableLayout: isTravel ? "fixed" : "auto",
-            }}
+        <div className="leads-split-table">
+          <div
+            className="leads-table-frozen-pane"
+            style={{ width: leadsFrozenTableWidthPx }}
           >
-            {isTravel && (
+            <div className="leads-table-frozen-spacer" />
+            <table
+              className={`${leadsTableClassName} leads-table--frozen`}
+              style={{
+                width: leadsFrozenTableWidthPx,
+                borderCollapse: "separate",
+                borderSpacing: 0,
+                textAlign: "left",
+                minWidth: leadsFrozenTableWidthPx,
+                tableLayout: "fixed",
+              }}
+            >
               <colgroup>
-                {isAdmin && <col style={{ width: "2.5%" }} />}
-                <col style={{ width: "10.5%" }} />
-                <col style={{ width: "14%" }} />
-                <col style={{ width: "14%" }} />
-                <col style={{ width: "8.5%" }} />
-                <col style={{ width: "6.5%" }} />
-                <col style={{ width: "8.5%" }} />
-                <col style={{ width: "6.5%" }} />
-                <col style={{ width: "7.5%" }} />
-                <col style={{ width: "7.5%" }} />
-                <col style={{ width: "5%" }} />
-                <col style={{ width: "8%" }} />
+                {leadsFrozenColumnDefs.map((column) => (
+                  <col
+                    key={column.key}
+                    style={{ width: `${getColumnWidth(column.key)}px` }}
+                  />
+                ))}
               </colgroup>
-            )}
-            <thead>
-              <tr
-                style={{
-                  borderBottom: "1px solid var(--border-color)",
-                  backgroundColor: "var(--table-header-bg)",
-                }}
-              >
-                {isAdmin && (
-                  <th style={{ padding: "1rem", width: "40px" }}>
-                    <input
-                      type="checkbox"
-                      checked={
-                        selectedLeads.length === filteredLeads.length &&
-                        filteredLeads.length > 0
-                      }
-                      onChange={toggleSelectAll}
-                      style={{ cursor: "pointer" }}
-                    />
-                  </th>
-                )}
-                <th
+              <thead>
+                <tr
                   style={{
-                    padding: "1rem",
-                    color: "var(--text-secondary)",
-                    fontWeight: "500",
-                    fontSize: "0.875rem",
+                    backgroundColor: "var(--table-header-bg)",
                   }}
                 >
-                  Name
-                </th>
-                {isColVisible("email") && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                    }}
-                  >
-                    Email
-                  </th>
-                )}
-                {isColVisible("company") && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                    }}
-                  >
-                    {isTravel ? "Category" : "Company"}
-                  </th>
-                )}
-                {isColVisible("phone") && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                    }}
-                  >
-                    Phone
-                  </th>
-                )}
-                {isColVisible("aiScore") && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                    }}
-                  >
-                    Lead Score
-                  </th>
-                )}
-                {isColVisible("source") && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                    }}
-                  >
-                    Source
-                  </th>
-                )}
-                {isGeneric && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                      minWidth: "180px",
-                    }}
-                  >
-                    Callified Campaign
-                  </th>
-                )}
-                {isGeneric && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                      minWidth: "140px",
-                    }}
-                  >
-                    Call Status
-                  </th>
-                )}
-                {isGeneric && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                      width: "110px",
-                    }}
-                  >
-                    Callified AI call
-                  </th>
-                )}
-                {isGeneric && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                      width: "100px",
-                    }}
-                  >
-                    Callified Score
-                  </th>
-                )}
-                {isTravel && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                    }}
-                  >
-                    Sub-brand
-                  </th>
-                )}
-                {isTravel && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                    }}
-                  >
-                    Amount
-                  </th>
-                )}
-                {customFieldDefs
-                  .filter((f) => isColVisible(`cf_${f.fieldKey}`))
-                  .map((f) => (
-                    <th
-                      key={f.id}
-                      className="leads-custom-field-col"
-                      style={{
-                        padding: "1rem",
-                        color: "var(--text-secondary)",
-                        fontWeight: "500",
-                        fontSize: "0.875rem",
-                      }}
-                    >
-                      <span className="leads-custom-field-label">
-                        {f.label}
-                      </span>
+                  {isAdmin && (
+                    <th style={getHeaderCellStyle("select", { width: "48px" })}>
+                      <input
+                        type="checkbox"
+                        checked={
+                          selectedLeads.length === filteredLeads.length &&
+                          filteredLeads.length > 0
+                        }
+                        onChange={toggleSelectAll}
+                        style={{ cursor: "pointer" }}
+                      />
                     </th>
-                  ))}
-                {isColVisible("assignedTo") && (
-                  <th
-                    className="leads-assigned-col"
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                    }}
-                  >
-                    Assigned To
-                  </th>
-                )}
-                {isColVisible("createdAt") && (
-                  <th
-                    style={{
-                      padding: "1rem",
-                      color: "var(--text-secondary)",
-                      fontWeight: "500",
-                      fontSize: "0.875rem",
-                    }}
-                  >
-                    Created
-                  </th>
-                )}
-                <th
-                  style={{
-                    padding: "1rem 0.5rem",
-                    color: "var(--text-secondary)",
-                    fontWeight: "500",
-                    fontSize: "0.875rem",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td
-                    colSpan={leadsColSpan}
-                    style={{
-                      padding: "2rem",
-                      textAlign: "center",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    Loading leads...
-                  </td>
+                  )}
+                  {renderColumnHeaderCell("name", "Name")}
                 </tr>
-              ) : filteredLeads.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={leadsColSpan}
-                    style={{
-                      padding: "2rem",
-                      textAlign: "center",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    No leads found
-                  </td>
-                </tr>
-              ) : (
-                paginatedLeads.map((lead) => (
-                  <tr
-                    key={lead.id}
-                    style={{
-                      borderBottom: "1px solid var(--border-color)",
-                      cursor: "pointer",
-                    }}
-                    className="table-row-hover"
-                    onClick={() => navigate(leadDetailPath(lead))}
-                    title="Open lead detail"
-                  >
-                    {isAdmin && (
+              </thead>
+              <tbody>
+                {loading || filteredLeads.length === 0 ? (
+                  <tr>
+                    {isAdmin && <td style={getBodyCellStyle("select")} />}
+                    <td
+                      style={getBodyCellStyle("name", { fontWeight: "500" })}
+                    />
+                  </tr>
+                ) : (
+                  paginatedLeads.map((lead) => (
+                    <tr
+                      key={lead.id}
+                      style={{
+                        cursor: "pointer",
+                      }}
+                      className="table-row-hover"
+                      onClick={() => navigate(leadDetailPath(lead))}
+                      title="Open lead detail"
+                    >
+                      {isAdmin && (
+                        <td
+                          style={getBodyCellStyle("select")}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedLeads.includes(lead.id)}
+                            onChange={() => toggleSelect(lead.id)}
+                            style={{ cursor: "pointer" }}
+                          />
+                        </td>
+                      )}
                       <td
-                        style={{ padding: "1rem" }}
+                        style={getBodyCellStyle("name", { fontWeight: "500" })}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <input
-                          type="checkbox"
-                          checked={selectedLeads.includes(lead.id)}
-                          onChange={() => toggleSelect(lead.id)}
-                          style={{ cursor: "pointer" }}
+                        <BuiltInInlineCellEditor
+                          lead={lead}
+                          field="name"
+                          label="Name"
+                          value={lead.name}
+                          onSave={updateLeadInlineValue}
+                          required
                         />
                       </td>
-                    )}
-                    <td style={{ padding: "1rem", fontWeight: "500" }}>
-                      {lead.name}
-                    </td>
-                    {isColVisible("email") && (
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="leads-table-scroll-pane">
+            <TopScrollSync
+              forceScrollbar
+              scrollWidth={leadsScrollableTableMinWidth}
+            >
+              <table
+                className={`${leadsTableClassName} leads-table--scrollable`}
+                style={{
+                  width: "100%",
+                  borderCollapse: "separate",
+                  borderSpacing: 0,
+                  textAlign: "left",
+                  minWidth: leadsScrollableTableMinWidth,
+                  tableLayout: "fixed",
+                }}
+              >
+                <colgroup>
+                  {leadsScrollableColumnDefs.map((column) => (
+                    <col
+                      key={column.key}
+                      style={{ width: `${getColumnWidth(column.key)}px` }}
+                    />
+                  ))}
+                </colgroup>
+                <thead>
+                  <tr
+                    style={{
+                      backgroundColor: "var(--table-header-bg)",
+                    }}
+                  >
+                    {leadUserColumnDefs.map((column) => (
+                      <Fragment key={column.key}>
+                        {renderLeadUserHeaderCell(column)}
+                      </Fragment>
+                    ))}
+                    {isGeneric &&
+                      renderColumnHeaderCell("campaign", "Callified Campaign")}
+                    {isGeneric &&
+                      renderColumnHeaderCell("callStatus", "Call Status")}
+                    {isGeneric &&
+                      renderColumnHeaderCell(
+                        "callifiedAi",
+                        "Callified AI call",
+                      )}
+                    {isGeneric &&
+                      renderColumnHeaderCell(
+                        "callifiedScore",
+                        "Callified Score",
+                      )}
+                    {isTravel &&
+                      renderColumnHeaderCell("subBrand", "Sub-brand")}
+                    {isTravel && renderColumnHeaderCell("amount", "Amount")}
+                    {renderColumnHeaderCell("actions", "Actions", {
+                      padding: "1rem 0.5rem",
+                      whiteSpace: "nowrap",
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
                       <td
+                        colSpan={leadsScrollableColumnDefs.length}
                         style={{
-                          padding: "1rem",
+                          padding: "2rem",
+                          textAlign: "center",
                           color: "var(--text-secondary)",
                         }}
                       >
-                        {lead.email}
+                        Loading leads...
                       </td>
-                    )}
-                    {isColVisible("company") && (
+                    </tr>
+                  ) : filteredLeads.length === 0 ? (
+                    <tr>
                       <td
+                        colSpan={leadsScrollableColumnDefs.length}
                         style={{
-                          padding: "1rem",
+                          padding: "2rem",
+                          textAlign: "center",
                           color: "var(--text-secondary)",
                         }}
                       >
-                        {lead.company || (
-                          <span style={{ color: "var(--border-color)" }}>
-                            -
-                          </span>
-                        )}
+                        No leads found
                       </td>
-                    )}
-                    {isColVisible("phone") && (
-                      <td
+                    </tr>
+                  ) : (
+                    paginatedLeads.map((lead) => (
+                      <tr
+                        key={lead.id}
                         style={{
-                          padding: "1rem",
-                          color: "var(--text-secondary)",
-                          fontSize: "0.875rem",
-                          whiteSpace: "nowrap",
+                          cursor: "pointer",
                         }}
+                        className="table-row-hover"
+                        onClick={() => navigate(leadDetailPath(lead))}
+                        title="Open lead detail"
                       >
-                        {lead.phone || (
-                          <span style={{ color: "var(--border-color)" }}>
-                            -
-                          </span>
-                        )}
-                      </td>
-                    )}
-                    {isColVisible("aiScore") && (
-                      <td style={{ padding: "1rem" }}>
-                        <span
-                          style={{
-                            padding: "0.25rem 0.75rem",
-                            borderRadius: "999px",
-                            fontSize: "0.75rem",
-                            fontWeight: "bold",
-                            backgroundColor:
-                              lead.aiScore > 75
-                                ? "rgba(16, 185, 129, 0.1)"
-                                : lead.aiScore > 40
-                                  ? "rgba(245, 158, 11, 0.1)"
-                                  : "rgba(239, 68, 68, 0.1)",
-                            color:
-                              lead.aiScore > 75
-                                ? "var(--success-color)"
-                                : lead.aiScore > 40
-                                  ? "var(--warning-color)"
-                                  : "#ef4444",
-                          }}
-                        >
-                          {lead.aiScore}/100
-                        </span>
-                      </td>
-                    )}
-                    {isColVisible("source") && (
-                      <td style={{ padding: "1rem" }}>
-                        <span style={sourceBadgeStyle}>
-                          {leadSourceLabel(lead)}
-                        </span>
-                      </td>
-                    )}
-                    {isGeneric && (
-                      <td
-                        style={{ padding: "1rem" }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <select
-                          className="input-field"
-                          value={
-                            lead.callifiedCampaignId
-                              ? String(lead.callifiedCampaignId)
-                              : ""
-                          }
-                          onChange={(e) =>
-                            handleCampaignChange(lead, e.target.value)
-                          }
-                          disabled={!callifiedConfigured}
-                          style={{
-                            minWidth: "160px",
-                            padding: "0.4rem 0.6rem",
-                            fontSize: "0.8125rem",
-                          }}
-                          aria-label={`Assign Callified campaign for ${lead.name || "lead"}`}
-                        >
-                          <option value="">—</option>
-                          {callifiedCampaigns.map((c) => (
-                            <option key={c.id} value={String(c.id)}>
-                              {c.name || `Campaign ${c.id}`}
-                              {c.product_name ? ` — ${c.product_name}` : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                    )}
-                    {isGeneric && (
-                      <td
-                        style={{ padding: "1rem", whiteSpace: "nowrap" }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {(() => {
-                          const queueItem = callQueue.find(
-                            (q) => q.lead.id === lead.id,
-                          );
-                          const isConnected =
-                            queueItem &&
-                            (queueItem.status === "calling" ||
-                              queueItem.status === "waiting_for_completion");
-                          if (isConnected) {
-                            return (
-                              <span
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: "0.35rem",
-                                  padding: "0.25rem 0.75rem",
-                                  borderRadius: "999px",
-                                  fontSize: "0.75rem",
-                                  fontWeight: 600,
-                                  background: "rgba(16, 185, 129, 0.15)",
-                                  color: "#10b981",
-                                }}
-                              >
-                                <RefreshCw
-                                  size={12}
-                                  style={{
-                                    animation: "spin 1s linear infinite",
-                                  }}
-                                />{" "}
-                                Connected
-                              </span>
-                            );
-                          }
-                          if (classifyingLeads.has(lead.id)) {
-                            return (
-                              <span
-                                style={{
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: "0.35rem",
-                                  padding: "0.25rem 0.75rem",
-                                  borderRadius: "999px",
-                                  fontSize: "0.75rem",
-                                  fontWeight: 600,
-                                  background: "var(--surface-hover)",
-                                  color: "var(--text-secondary)",
-                                }}
-                              >
-                                <RefreshCw
-                                  size={12}
-                                  style={{
-                                    animation: "spin 1s linear infinite",
-                                  }}
-                                />{" "}
-                                Classifying…
-                              </span>
-                            );
-                          }
-                          const meta = getCallStatusMeta(
-                            lead.callifiedLeadStatus,
-                          );
-                          return (
-                            <span
+                        {leadUserColumnDefs.map((column) => (
+                          <Fragment key={column.key}>
+                            {renderLeadUserBodyCell(lead, column)}
+                          </Fragment>
+                        ))}
+                        {isGeneric && (
+                          <td
+                            style={getBodyCellStyle("campaign")}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <select
+                              className="input-field"
+                              value={
+                                lead.callifiedCampaignId
+                                  ? String(lead.callifiedCampaignId)
+                                  : ""
+                              }
+                              onChange={(e) =>
+                                handleCampaignChange(lead, e.target.value)
+                              }
+                              disabled={!callifiedConfigured}
                               style={{
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "0.35rem",
+                                minWidth: "160px",
+                                padding: "0.4rem 0.6rem",
+                                fontSize: "0.8125rem",
                               }}
+                              aria-label={`Assign Callified campaign for ${lead.name || "lead"}`}
                             >
-                              <select
-                                className="input-field"
-                                value={normalizeCallStatus(
-                                  lead.callifiedLeadStatus,
-                                )}
-                                onChange={(e) =>
-                                  handleLeadStatusChange(lead, e.target.value)
-                                }
-                                disabled={!callifiedConfigured}
-                                style={{
-                                  padding: "0.25rem 0.6rem",
-                                  borderRadius: "999px",
-                                  fontSize: "0.75rem",
-                                  fontWeight: 600,
-                                  border: "none",
-                                  cursor: "pointer",
-                                  minWidth: "90px",
-                                  color: meta.color,
-                                  backgroundColor: meta.bg,
-                                }}
-                                aria-label={`Call status for ${lead.name || "lead"}`}
-                              >
-                                {CALL_STATUS_OPTIONS.map((o) => (
-                                  <option key={o.value} value={o.value}>
-                                    {o.label}
-                                  </option>
-                                ))}
-                              </select>
-                              {lead.callifiedLeadStatus &&
-                                normalizeCallStatus(
-                                  lead.callifiedLeadStatus,
-                                ) !== CALL_STATUS.YET_TO_CALL && (
+                              <option value="">—</option>
+                              {callifiedCampaigns.map((c) => (
+                                <option key={c.id} value={String(c.id)}>
+                                  {c.name || `Campaign ${c.id}`}
+                                  {c.product_name ? ` — ${c.product_name}` : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                        )}
+                        {isGeneric && (
+                          <td
+                            style={getBodyCellStyle("callStatus")}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {(() => {
+                              const queueItem = callQueue.find(
+                                (q) => q.lead.id === lead.id,
+                              );
+                              const isConnected =
+                                queueItem &&
+                                (queueItem.status === "calling" ||
+                                  queueItem.status ===
+                                    "waiting_for_completion");
+                              if (isConnected) {
+                                return (
                                   <span
-                                    title={buildLeadStatusTooltip(lead, {
-                                      maxRetries: dnpMaxRetries,
-                                    })}
                                     style={{
                                       display: "inline-flex",
                                       alignItems: "center",
-                                      justifyContent: "center",
-                                      color: "var(--text-secondary)",
-                                      cursor: "help",
-                                      marginLeft: "0.25rem",
-                                      flexShrink: 0,
+                                      gap: "0.35rem",
+                                      padding: "0.25rem 0.75rem",
+                                      borderRadius: "999px",
+                                      fontSize: "0.75rem",
+                                      fontWeight: 600,
+                                      background: "rgba(16, 185, 129, 0.15)",
+                                      color: "#10b981",
                                     }}
                                   >
-                                    <Info size={14} />
+                                    <RefreshCw
+                                      size={12}
+                                      style={{
+                                        animation: "spin 1s linear infinite",
+                                      }}
+                                    />{" "}
+                                    Connected
                                   </span>
-                                )}
-                            </span>
-                          );
-                        })()}
-                      </td>
-                    )}
-                    {isGeneric && (
-                      <td
-                        style={{ padding: "1rem", whiteSpace: "nowrap" }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <button
-                          onClick={() => {
-                            if (!callifiedConfigured) {
-                              notify.info(
-                                "Configure Callified in Settings → Integrations to make AI calls",
+                                );
+                              }
+                              if (classifyingLeads.has(lead.id)) {
+                                return (
+                                  <span
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "0.35rem",
+                                      padding: "0.25rem 0.75rem",
+                                      borderRadius: "999px",
+                                      fontSize: "0.75rem",
+                                      fontWeight: 600,
+                                      background: "var(--surface-hover)",
+                                      color: "var(--text-secondary)",
+                                    }}
+                                  >
+                                    <RefreshCw
+                                      size={12}
+                                      style={{
+                                        animation: "spin 1s linear infinite",
+                                      }}
+                                    />{" "}
+                                    Classifying…
+                                  </span>
+                                );
+                              }
+                              const meta = getCallStatusMeta(
+                                lead.callifiedLeadStatus,
                               );
-                              return;
-                            }
-                            handleSingleDial(lead, lead.callifiedCampaignId);
-                          }}
-                          title={
-                            callifiedConfigured
-                              ? `Call ${lead.name || "lead"} via AI`
-                              : "Configure Callified settings"
-                          }
-                          style={{
-                            ...actionIconBtn,
-                            color: callifiedConfigured
-                              ? "var(--success-color)"
-                              : "var(--text-secondary)",
-                            opacity: callifiedConfigured ? 1 : 0.6,
-                            position: "relative",
-                          }}
-                        >
-                          <Phone size={15} />
-                          {(() => {
-                            const count =
-                              callifiedSummaries[lead.id]?.callCount || 0;
-                            if (count <= 0) return null;
-                            return (
-                              <span
-                                style={{
-                                  position: "absolute",
-                                  top: -6,
-                                  right: -6,
-                                  minWidth: "18px",
-                                  height: "18px",
-                                  padding: "0 4px",
-                                  borderRadius: "999px",
-                                  background: "var(--accent-color)",
-                                  color: "#fff",
-                                  fontSize: "0.65rem",
-                                  fontWeight: 700,
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  border: "2px solid var(--bg-color)",
-                                }}
-                              >
-                                {count > 99 ? "99+" : count}
-                              </span>
-                            );
-                          })()}
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (!callifiedConfigured) {
-                              notify.info(
-                                "Configure Callified in Settings → Integrations to view call details",
-                              );
-                              return;
-                            }
-                            setCallifiedDetailsLead(lead);
-                          }}
-                          title={
-                            callifiedConfigured
-                              ? `View Callified call details for ${lead.name || "lead"}`
-                              : "Configure Callified settings"
-                          }
-                          style={{
-                            ...actionIconBtn,
-                            marginLeft: 6,
-                            color: callifiedConfigured
-                              ? "var(--accent-color)"
-                              : "var(--text-secondary)",
-                            opacity: callifiedConfigured ? 1 : 0.6,
-                          }}
-                        >
-                          <FileText size={15} />
-                        </button>
-                      </td>
-                    )}
-                    {isGeneric && (
-                      <td
-                        style={{ padding: "1rem" }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {(() => {
-                          const score = callifiedSummaries[lead.id]?.lastScore;
-                          if (score == null) {
-                            return (
-                              <span
-                                style={{
-                                  color: "var(--text-secondary)",
-                                  fontSize: "0.875rem",
-                                }}
-                              >
-                                —
-                              </span>
-                            );
-                          }
-                          const color =
-                            score >= 4
-                              ? "var(--success-color)"
-                              : score >= 3
-                                ? "var(--warning-color)"
-                                : "#ef4444";
-                          const bg =
-                            score >= 4
-                              ? "rgba(16, 185, 129, 0.1)"
-                              : score >= 3
-                                ? "rgba(245, 158, 11, 0.1)"
-                                : "rgba(239, 68, 68, 0.1)";
-                          return (
-                            <span
-                              style={{
-                                padding: "0.25rem 0.75rem",
-                                borderRadius: "999px",
-                                fontSize: "0.75rem",
-                                fontWeight: "bold",
-                                background: bg,
-                                color,
-                                display: "inline-flex",
-                                alignItems: "center",
-                                gap: "0.15rem",
-                              }}
-                            >
-                              {Array.from({ length: 5 }).map((_, i) => (
+                              return (
                                 <span
-                                  key={i}
-                                  style={{ opacity: i < score ? 1 : 0.3 }}
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "0.35rem",
+                                  }}
                                 >
-                                  ★
+                                  <select
+                                    className="input-field"
+                                    value={normalizeCallStatus(
+                                      lead.callifiedLeadStatus,
+                                    )}
+                                    onChange={(e) =>
+                                      handleLeadStatusChange(
+                                        lead,
+                                        e.target.value,
+                                      )
+                                    }
+                                    disabled={!callifiedConfigured}
+                                    style={{
+                                      padding: "0.25rem 0.6rem",
+                                      borderRadius: "999px",
+                                      fontSize: "0.75rem",
+                                      fontWeight: 600,
+                                      border: "none",
+                                      cursor: "pointer",
+                                      minWidth: "90px",
+                                      color: meta.color,
+                                      backgroundColor: meta.bg,
+                                    }}
+                                    aria-label={`Call status for ${lead.name || "lead"}`}
+                                  >
+                                    {CALL_STATUS_OPTIONS.map((o) => (
+                                      <option key={o.value} value={o.value}>
+                                        {o.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {lead.callifiedLeadStatus &&
+                                    normalizeCallStatus(
+                                      lead.callifiedLeadStatus,
+                                    ) !== CALL_STATUS.YET_TO_CALL && (
+                                      <span
+                                        title={buildLeadStatusTooltip(lead, {
+                                          maxRetries: dnpMaxRetries,
+                                        })}
+                                        style={{
+                                          display: "inline-flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          color: "var(--text-secondary)",
+                                          cursor: "help",
+                                          marginLeft: "0.25rem",
+                                          flexShrink: 0,
+                                        }}
+                                      >
+                                        <Info size={14} />
+                                      </span>
+                                    )}
                                 </span>
-                              ))}
-                              <span style={{ marginLeft: 4 }}>{score}/5</span>
-                            </span>
-                          );
-                        })()}
-                      </td>
-                    )}
-                    {isTravel && (
-                      <td
-                        style={{
-                          padding: "1rem",
-                          color: "var(--text-secondary)",
-                          fontSize: "0.875rem",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {lead.subBrand ? (
-                          subBrandShortLabel(lead.subBrand)
-                        ) : (
-                          <span style={{ color: "var(--border-color)" }}>
-                            -
-                          </span>
+                              );
+                            })()}
+                          </td>
                         )}
-                      </td>
-                    )}
-                    {isTravel &&
-                      (() => {
-                        // 1. Itinerary advancePaidAmount (highest fidelity  set by sync/webhook)
-                        const bv = bookingValueByContact[lead.id];
-                        if (bv && bv.value > 0) {
-                          return (
-                            <td
-                              style={{
-                                padding: "1rem",
-                                fontWeight: 500,
-                                fontSize: "0.875rem",
-                              }}
-                              title="Amount paid"
-                            >
-                              {bv.currency || "INR"}{" "}
-                              {Number(bv.value).toLocaleString()}
-                            </td>
-                          );
-                        }
-                        // 2. TMC instalment paid totals keyed by parent email  covers leads
-                        // whose parent contact has no itinerary row (common for school trips).
-                        const tmcEntry = tmcPaidByEmail[lead.email];
-                        if (tmcEntry && tmcEntry.paidTotal > 0) {
-                          return (
-                            <td
-                              style={{
-                                padding: "1rem",
-                                fontWeight: 500,
-                                fontSize: "0.875rem",
-                              }}
-                              title="Amount paid"
-                            >
-                              {tmcEntry.currency || "INR"}{" "}
-                              {Number(tmcEntry.paidTotal).toLocaleString()}
-                            </td>
-                          );
-                        }
-                        const deals = dealsByContact[lead.id] || [];
-                        const total = deals.reduce(
-                          (s, d) => s + (Number(d.amount) || 0),
-                          0,
-                        );
-                        const currency = deals[0]?.currency || "INR";
-                        return (
+                        {isGeneric && (
                           <td
-                            style={{
-                              padding: "1rem",
-                              fontWeight: 500,
-                              fontSize: "0.875rem",
-                            }}
+                            style={getBodyCellStyle("callifiedAi")}
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            {total > 0 ? (
-                              `${currency} ${total.toLocaleString()}`
+                            <button
+                              onClick={() => {
+                                if (!callifiedConfigured) {
+                                  notify.info(
+                                    "Configure Callified in Settings → Integrations to make AI calls",
+                                  );
+                                  return;
+                                }
+                                handleSingleDial(
+                                  lead,
+                                  lead.callifiedCampaignId,
+                                );
+                              }}
+                              title={
+                                callifiedConfigured
+                                  ? `Call ${lead.name || "lead"} via AI`
+                                  : "Configure Callified settings"
+                              }
+                              style={{
+                                ...actionIconBtn,
+                                color: callifiedConfigured
+                                  ? "var(--success-color)"
+                                  : "var(--text-secondary)",
+                                opacity: callifiedConfigured ? 1 : 0.6,
+                                position: "relative",
+                              }}
+                            >
+                              <Phone size={15} />
+                              {(() => {
+                                const count =
+                                  callifiedSummaries[lead.id]?.callCount || 0;
+                                if (count <= 0) return null;
+                                return (
+                                  <span
+                                    style={{
+                                      position: "absolute",
+                                      top: -6,
+                                      right: -6,
+                                      minWidth: "18px",
+                                      height: "18px",
+                                      padding: "0 4px",
+                                      borderRadius: "999px",
+                                      background: "var(--accent-color)",
+                                      color: "#fff",
+                                      fontSize: "0.65rem",
+                                      fontWeight: 700,
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      border: "2px solid var(--bg-color)",
+                                    }}
+                                  >
+                                    {count > 99 ? "99+" : count}
+                                  </span>
+                                );
+                              })()}
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (!callifiedConfigured) {
+                                  notify.info(
+                                    "Configure Callified in Settings → Integrations to view call details",
+                                  );
+                                  return;
+                                }
+                                setCallifiedDetailsLead(lead);
+                              }}
+                              title={
+                                callifiedConfigured
+                                  ? `View Callified call details for ${lead.name || "lead"}`
+                                  : "Configure Callified settings"
+                              }
+                              style={{
+                                ...actionIconBtn,
+                                marginLeft: 6,
+                                color: callifiedConfigured
+                                  ? "var(--accent-color)"
+                                  : "var(--text-secondary)",
+                                opacity: callifiedConfigured ? 1 : 0.6,
+                              }}
+                            >
+                              <FileText size={15} />
+                            </button>
+                          </td>
+                        )}
+                        {isGeneric && (
+                          <td
+                            style={getBodyCellStyle("callifiedScore")}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {(() => {
+                              const score =
+                                callifiedSummaries[lead.id]?.lastScore;
+                              if (score == null) {
+                                return (
+                                  <span
+                                    style={{
+                                      color: "var(--text-secondary)",
+                                      fontSize: "0.875rem",
+                                    }}
+                                  >
+                                    —
+                                  </span>
+                                );
+                              }
+                              const color =
+                                score >= 4
+                                  ? "var(--success-color)"
+                                  : score >= 3
+                                    ? "var(--warning-color)"
+                                    : "#ef4444";
+                              const bg =
+                                score >= 4
+                                  ? "rgba(16, 185, 129, 0.1)"
+                                  : score >= 3
+                                    ? "rgba(245, 158, 11, 0.1)"
+                                    : "rgba(239, 68, 68, 0.1)";
+                              return (
+                                <span
+                                  style={{
+                                    padding: "0.25rem 0.75rem",
+                                    borderRadius: "999px",
+                                    fontSize: "0.75rem",
+                                    fontWeight: "bold",
+                                    background: bg,
+                                    color,
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "0.15rem",
+                                  }}
+                                >
+                                  {Array.from({ length: 5 }).map((_, i) => (
+                                    <span
+                                      key={i}
+                                      style={{ opacity: i < score ? 1 : 0.3 }}
+                                    >
+                                      ★
+                                    </span>
+                                  ))}
+                                  <span style={{ marginLeft: 4 }}>
+                                    {score}/5
+                                  </span>
+                                </span>
+                              );
+                            })()}
+                          </td>
+                        )}
+                        {isTravel && (
+                          <td
+                            style={getBodyCellStyle("subBrand", {
+                              color: "var(--text-secondary)",
+                              fontSize: "0.875rem",
+                            })}
+                          >
+                            {lead.subBrand ? (
+                              subBrandShortLabel(lead.subBrand)
                             ) : (
-                              <span style={{ color: "var(--text-secondary)" }}>
+                              <span style={{ color: "var(--border-color)" }}>
                                 -
                               </span>
                             )}
                           </td>
-                        );
-                      })()}
-                    {/* Generic-vertical-only Lead custom fields  shows every
-                      defined field's value, or a dash for leads that predate
-                      the field (backend fills the key with null). Each
-                      field's column is independently toggleable via the
-                      "Customize table" picker (same cf_ prefix as the header).
-                      Reuse the same inline cell editor as Contacts so empty
-                      custom values can be added directly in the table. */}
-                    {customFieldDefs
-                      .filter((f) => isColVisible(`cf_${f.fieldKey}`))
-                      .map((f) => {
-                        const raw = lead.customFields?.[f.fieldKey];
-                        return (
-                          <td
-                            key={f.id}
-                            className="leads-custom-field-col"
-                            style={{
-                              padding: "0.75rem 1rem",
-                              color: "var(--text-secondary)",
-                              fontSize: "0.875rem",
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <InlineCellEditor
-                              contactId={lead.id}
-                              field={f}
-                              value={raw}
-                              onSaved={(newValue) => {
-                                setLeads((prev) =>
-                                  prev.map((l) =>
-                                    l.id === lead.id
-                                      ? {
-                                          ...l,
-                                          customFields: {
-                                            ...(l.customFields || {}),
-                                            [f.fieldKey]: newValue,
-                                          },
-                                        }
-                                      : l,
-                                  ),
-                                );
-                              }}
-                            />
-                          </td>
-                        );
-                      })}
-                    {isColVisible("assignedTo") && (
-                      <td
-                        className="leads-assigned-col"
-                        style={{ padding: "1rem" }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {isAdmin ? (
-                          <select
-                            className="input-field"
-                            value={lead.assignedToId || ""}
-                            onChange={(e) =>
-                              handleAssign(lead.id, e.target.value)
-                            }
-                            style={{
-                              padding: "0.375rem 0.5rem",
-                              fontSize: "0.8rem",
-                              minWidth: "130px",
-                              background: "var(--input-bg)",
-                            }}
-                            aria-label={`Assign ${lead.name || "lead"} to staff`}
-                          >
-                            <option value="">Unassigned</option>
-                            {staff.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name || s.email}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <span
-                            style={{
-                              fontSize: "0.875rem",
-                              color: lead.assignedToId
-                                ? "var(--text-primary)"
-                                : "var(--text-secondary)",
-                            }}
-                          >
-                            {lead.assignedTo?.name ||
-                              lead.assignedTo?.email ||
-                              "Unassigned"}
-                          </span>
                         )}
-                      </td>
-                    )}
-                    {isColVisible("createdAt") && (
-                      <td
-                        style={{
-                          padding: "1rem",
-                          color: "var(--text-secondary)",
-                          fontSize: "0.875rem",
-                        }}
-                      >
-                        {formatDate(lead.createdAt)}
-                      </td>
-                    )}
-                    <td
-                      style={{
-                        padding: "0.75rem 0.5rem",
-                        whiteSpace: "nowrap",
-                        minWidth: "88px",
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <button
-                        onClick={() => openEdit(lead)}
-                        title="Edit lead"
-                        style={actionIconBtn}
-                      >
-                        <Pencil size={15} />
-                      </button>
-                      <button
-                        onClick={() => handleConvert(lead.id)}
-                        title="Convert to Prospect"
-                        style={{
-                          ...actionIconBtn,
-                          color: "var(--success-color)",
-                          marginLeft: 6,
-                        }}
-                      >
-                        <ArrowRightCircle size={15} />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(lead)}
-                        title="Delete lead"
-                        style={{
-                          ...actionIconBtn,
-                          color: "var(--danger-color, #f43f5e)",
-                          marginLeft: 6,
-                        }}
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </TopScrollSync>
+                        {isTravel &&
+                          (() => {
+                            // 1. Itinerary advancePaidAmount (highest fidelity  set by sync/webhook)
+                            const bv = bookingValueByContact[lead.id];
+                            if (bv && bv.value > 0) {
+                              return (
+                                <td
+                                  style={getBodyCellStyle("amount", {
+                                    fontWeight: 500,
+                                    fontSize: "0.875rem",
+                                  })}
+                                  title="Amount paid"
+                                >
+                                  {bv.currency || "INR"}{" "}
+                                  {Number(bv.value).toLocaleString()}
+                                </td>
+                              );
+                            }
+                            // 2. TMC instalment paid totals keyed by parent email  covers leads
+                            // whose parent contact has no itinerary row (common for school trips).
+                            const tmcEntry = tmcPaidByEmail[lead.email];
+                            if (tmcEntry && tmcEntry.paidTotal > 0) {
+                              return (
+                                <td
+                                  style={getBodyCellStyle("amount", {
+                                    fontWeight: 500,
+                                    fontSize: "0.875rem",
+                                  })}
+                                  title="Amount paid"
+                                >
+                                  {tmcEntry.currency || "INR"}{" "}
+                                  {Number(tmcEntry.paidTotal).toLocaleString()}
+                                </td>
+                              );
+                            }
+                            const deals = dealsByContact[lead.id] || [];
+                            const total = deals.reduce(
+                              (s, d) => s + (Number(d.amount) || 0),
+                              0,
+                            );
+                            const currency = deals[0]?.currency || "INR";
+                            return (
+                              <td
+                                style={getBodyCellStyle("amount", {
+                                  fontWeight: 500,
+                                  fontSize: "0.875rem",
+                                })}
+                              >
+                                {total > 0 ? (
+                                  `${currency} ${total.toLocaleString()}`
+                                ) : (
+                                  <span
+                                    style={{ color: "var(--text-secondary)" }}
+                                  >
+                                    -
+                                  </span>
+                                )}
+                              </td>
+                            );
+                          })()}
+                        <td
+                          style={getBodyCellStyle("actions", {
+                            padding: "0.75rem 0.5rem",
+                            minWidth: "132px",
+                          })}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            onClick={() => setPreviewLead(lead)}
+                            title="Preview lead"
+                            style={actionIconBtn}
+                          >
+                            View
+                          </button>
+                          <button
+                            onClick={() => openEdit(lead)}
+                            title="Edit lead"
+                            style={{ ...actionIconBtn, marginLeft: 6 }}
+                          >
+                            <Pencil size={15} />
+                          </button>
+                          <button
+                            onClick={() => handleConvert(lead.id)}
+                            title="Convert to Prospect"
+                            style={{
+                              ...actionIconBtn,
+                              color: "var(--success-color)",
+                              marginLeft: 6,
+                            }}
+                          >
+                            <ArrowRightCircle size={15} />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(lead)}
+                            title="Delete lead"
+                            style={{
+                              ...actionIconBtn,
+                              color: "var(--danger-color, #f43f5e)",
+                              marginLeft: 6,
+                            }}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </TopScrollSync>
+          </div>
+        </div>
         {!loading && filteredLeads.length > 0 && (
           <div
             style={{
@@ -5021,6 +5782,293 @@ const Leads = () => {
           </div>
         )}
       </div>
+
+      {previewLeadCurrent && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPreviewLead(null);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            justifyContent: "flex-end",
+            zIndex: 1000,
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Lead preview"
+        >
+          <aside
+            className="card"
+            style={{
+              width: "min(520px, 100vw)",
+              height: "100vh",
+              overflowY: "auto",
+              borderRadius: 0,
+              background: "var(--bg-color)",
+              color: "var(--text-primary)",
+              padding: "1.25rem",
+              boxShadow: "-18px 0 40px rgba(15, 23, 42, 0.28)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: "1rem",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    color: "var(--text-secondary)",
+                    fontSize: "0.78rem",
+                  }}
+                >
+                  Lead preview
+                </div>
+                <h2 style={{ margin: "0.2rem 0 0", fontSize: "1.25rem" }}>
+                  {previewLeadCurrent.name || "Unnamed lead"}
+                </h2>
+                <div
+                  style={{
+                    color: "var(--text-secondary)",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  {previewLeadCurrent.title ||
+                    previewLeadCurrent.company ||
+                    "No title or company yet"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewLead(null)}
+                aria-label="Close lead preview"
+                style={actionIconBtn}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+                gap: "0.75rem",
+                marginTop: "1rem",
+              }}
+            >
+              <div className="card" style={{ padding: "0.85rem" }}>
+                <div
+                  style={{
+                    color: "var(--text-secondary)",
+                    fontSize: "0.72rem",
+                  }}
+                >
+                  Score
+                </div>
+                <strong>{previewLeadCurrent.aiScore ?? 0}/100</strong>
+              </div>
+              <div className="card" style={{ padding: "0.85rem" }}>
+                <div
+                  style={{
+                    color: "var(--text-secondary)",
+                    fontSize: "0.72rem",
+                  }}
+                >
+                  Source
+                </div>
+                <strong>{leadSourceLabel(previewLeadCurrent)}</strong>
+              </div>
+              <div className="card" style={{ padding: "0.85rem" }}>
+                <div
+                  style={{
+                    color: "var(--text-secondary)",
+                    fontSize: "0.72rem",
+                  }}
+                >
+                  Assigned
+                </div>
+                <strong>
+                  {previewLeadCurrent.assignedTo?.name ||
+                    previewLeadCurrent.assignedTo?.email ||
+                    "Unassigned"}
+                </strong>
+              </div>
+            </div>
+
+            {isGeneric && (
+              <div
+                style={{
+                  marginTop: "1rem",
+                  padding: "0.85rem",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 8,
+                  background: "var(--surface-color)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: "0.75rem",
+                  }}
+                >
+                  <span
+                    style={{
+                      color: "var(--text-secondary)",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    Call status
+                  </span>
+                  <span
+                    style={{
+                      padding: "0.2rem 0.65rem",
+                      borderRadius: "999px",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      background: previewStatus?.bg,
+                      color: previewStatus?.color,
+                    }}
+                  >
+                    {previewStatus?.label || "New"}
+                  </span>
+                </div>
+                <div
+                  style={{
+                    marginTop: "0.6rem",
+                    color: "var(--text-secondary)",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  Campaign: {previewCampaign?.name || "Not assigned"}
+                </div>
+              </div>
+            )}
+
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                flexWrap: "wrap",
+                marginTop: "1rem",
+              }}
+            >
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => navigate(leadDetailPath(previewLeadCurrent))}
+              >
+                Open full detail
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  openEdit(previewLeadCurrent);
+                  setPreviewLead(null);
+                }}
+              >
+                Edit lead
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => handleConvert(previewLeadCurrent.id)}
+              >
+                Convert to Prospect
+              </button>
+            </div>
+
+            <section style={{ marginTop: "1.25rem" }}>
+              <h3 style={{ margin: "0 0 0.75rem", fontSize: "0.95rem" }}>
+                Contact information
+              </h3>
+              {[
+                ["Email", previewLeadCurrent.email],
+                ["Phone", previewLeadCurrent.phone],
+                [isTravel ? "Category" : "Company", previewLeadCurrent.company],
+                ["Title", previewLeadCurrent.title],
+                ["Created", formatDate(previewLeadCurrent.createdAt)],
+              ].map(([label, value]) => (
+                <div
+                  key={label}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "120px minmax(0, 1fr)",
+                    gap: "0.75rem",
+                    padding: "0.6rem 0",
+                    borderBottom: "1px solid var(--border-color)",
+                  }}
+                >
+                  <span
+                    style={{
+                      color: "var(--text-secondary)",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    {label}
+                  </span>
+                  <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+                    {value || (
+                      <span style={{ color: "var(--text-secondary)" }}>
+                        Not set
+                      </span>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </section>
+
+            {customFieldDefs.length > 0 && (
+              <section style={{ marginTop: "1.25rem" }}>
+                <h3 style={{ margin: "0 0 0.75rem", fontSize: "0.95rem" }}>
+                  Custom fields
+                </h3>
+                {customFieldDefs.map((field) => {
+                  const value =
+                    previewLeadCurrent.customFields?.[field.fieldKey];
+                  const display = Array.isArray(value)
+                    ? value.join(", ")
+                    : value;
+                  return (
+                    <div
+                      key={field.id}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "120px minmax(0, 1fr)",
+                        gap: "0.75rem",
+                        padding: "0.6rem 0",
+                        borderBottom: "1px solid var(--border-color)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: "var(--text-secondary)",
+                          fontSize: "0.82rem",
+                        }}
+                      >
+                        {field.label}
+                      </span>
+                      <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+                        {display || (
+                          <span style={{ color: "var(--text-secondary)" }}>
+                            Not set
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+              </section>
+            )}
+          </aside>
+        </div>
+      )}
 
       {/* #892  Create Lead drawer. Mounted only when `creating` is true.
             Close triggers: X button, ESC keypress (handled by the useEffect

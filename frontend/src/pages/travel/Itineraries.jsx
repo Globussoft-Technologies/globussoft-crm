@@ -744,8 +744,9 @@ export default function Itineraries() {
         setItems([]);
         setTotal(0);
       } finally {
-        if (myReqId !== reqIdRef.current) return;
-        setLoading(false);
+        if (myReqId === reqIdRef.current) {
+          setLoading(false);
+        }
       }
     },
     [page, pageSize, searchQuery, status, subBrand, notify],

@@ -204,8 +204,9 @@ export default function Trips() {
         setTrips([]);
         setTotal(0);
       } finally {
-        if (myReqId !== reqIdRef.current) return;
-        setLoading(false);
+        if (myReqId === reqIdRef.current) {
+          setLoading(false);
+        }
       }
     },
     [page, pageSize, search, status, notify],

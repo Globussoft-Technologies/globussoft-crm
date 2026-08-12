@@ -104,8 +104,9 @@ export default function Diagnostics() {
         setDiagnostics([]);
         setTotal(0);
       } finally {
-        if (myReqId !== reqIdRef.current) return;
-        setLoading(false);
+        if (myReqId === reqIdRef.current) {
+          setLoading(false);
+        }
       }
     },
     [classification, notify, page, pageSize, subBrand],

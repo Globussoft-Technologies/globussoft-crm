@@ -373,7 +373,7 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
         && (!opts || !opts.method || opts.method === 'GET'),
     );
     expect(gets.length).toBeGreaterThanOrEqual(1);
-    expect(gets.some(([url]) => /limit=50/.test(url) && /offset=0/.test(url))).toBe(true);
+    expect(gets.some(([url]) => /limit=20/.test(url) && /offset=0/.test(url))).toBe(true);
   });
 
   it('loading state shows "Loadingâ€¦" before the first GET resolves', async () => {
@@ -427,7 +427,7 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
       );
       expect(filtered).toBeTruthy();
       expect(filtered[0]).toMatch(/subBrand=rfu/);
-      expect(filtered[0]).toMatch(/limit=50/);
+      expect(filtered[0]).toMatch(/limit=20/);
       expect(filtered[0]).toMatch(/offset=0/);
     });
   });
@@ -446,7 +446,7 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
       );
       expect(filtered).toBeTruthy();
       expect(filtered[0]).toMatch(/status=Paid/);
-      expect(filtered[0]).toMatch(/limit=50/);
+      expect(filtered[0]).toMatch(/limit=20/);
       expect(filtered[0]).toMatch(/offset=0/);
     });
   });
@@ -470,15 +470,15 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
       }
       if (
         (url === '/api/travel/invoices'
-          || url === '/api/travel/invoices?limit=50&offset=0')
+          || url === '/api/travel/invoices?limit=20&offset=0')
         && method === 'GET'
       ) {
         return Promise.resolve({ invoices: [ashaInvoice, rahulInvoice], total: 2 });
       }
       if (
         (url === '/api/travel/invoices?contactId=42'
-          || url === '/api/travel/invoices?contactId=42&limit=50&offset=0'
-          || url === '/api/travel/invoices?limit=50&offset=0&contactId=42')
+          || url === '/api/travel/invoices?contactId=42&limit=20&offset=0'
+          || url === '/api/travel/invoices?limit=20&offset=0&contactId=42')
         && method === 'GET'
       ) {
         return Promise.resolve({ invoices: [ashaInvoice], total: 1 });
@@ -497,9 +497,7 @@ describe('<InvoicesAdmin /> â€” list fetch + filter chrome', () => {
     });
 
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith(
-        expect.stringMatching(/contactId=42/),
-      );
+      expect(fetchApiMock).toHaveBeenCalledWith(expect.stringMatching(/contactId=42/));
     });
     expect(await screen.findByText('TINV-2026-0001')).toBeInTheDocument();
     expect(screen.queryByText('TINV-2026-0002')).toBeNull();

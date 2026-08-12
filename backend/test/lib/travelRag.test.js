@@ -16,7 +16,7 @@ describe('travelRag — buildQueryText', () => {
   });
 
   test('falls back to a generic profile when answers are empty', () => {
-    expect(travelRag.buildQueryText({}, null)).toBe('School trip diagnostic profile.');
+    expect(travelRag.buildQueryText({}, null)).toBe('travel diagnostic profile.');
   });
 });
 

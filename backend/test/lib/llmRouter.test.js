@@ -196,8 +196,8 @@ describe('llmRouter — module shape', () => {
       "hotel-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
       "transfer-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
       // Travel RAG knowledge-base brochure recommendation report (2026-08-04).
-      // gemini-flash primary / gpt-4 fallback for structured JSON shape.
-      "travel-knowledge-rag": { primary: "gemini-flash", fallback: "gpt-4" },
+      // gemini-flash primary / gpt-4o-mini fallback for structured JSON shape.
+      "travel-knowledge-rag": { primary: "gemini-flash", fallback: "gpt-4o-mini" },
       // Airport/city name → IATA resolver for the flight search box (2026-06-19;
       // 2026-06-23 primary gemini-flash → gpt-4 to match the search provider).
       "airport-iata": { primary: "gpt-4", fallback: "gemini-flash" },

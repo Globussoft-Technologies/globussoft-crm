@@ -447,9 +447,10 @@ describe('renderTravelDiagnosticPdf — S52 brand-kit selector', () => {
       contactFixture(),
       bankFixture(),
     );
-    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(true);
-    // Pre-S52 SUB_BRAND_ACCENT.visasure (#7A2F5C) must NOT appear
-    expect(pdfContainsHexColor(buf, '#283747')).toBe(false);
+    expect(pdfContainsHexColor(buf, '#283747')).toBe(true);
+    // Pre-S52 SUB_BRAND_ACCENT.visasure (#7A2F5C) must NOT appear, and the
+    // rfu fallback green (#0B5345) is not used for visasure diagnostics.
+    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(false);
     expect(pdfContainsHexColor(buf, '#7A2F5C')).toBe(false);
   });
 
@@ -459,13 +460,14 @@ describe('renderTravelDiagnosticPdf — S52 brand-kit selector', () => {
       contactFixture(),
       bankFixture(),
     );
-    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(true);
-    // Pre-S52 SUB_BRAND_ACCENT.tmc (#0B4F6C) must NOT appear
-    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(false);
+    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(true);
+    // Pre-S52 SUB_BRAND_ACCENT.tmc (#0B4F6C) must NOT appear, and the
+    // rfu fallback green (#0B5345) is not used for tmc diagnostics.
+    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(false);
     expect(pdfContainsHexColor(buf, '#0B4F6C')).toBe(false);
   });
 
-  test('diagnostic header stays green even when tenant branding exists', async () => {
+  test('diagnostic header uses tenant branding override when supplied', async () => {
     const tenant = {
       subBrandConfigJson: JSON.stringify({ visasure: { headerColor: '#445566' } }),
     };
@@ -475,9 +477,9 @@ describe('renderTravelDiagnosticPdf — S52 brand-kit selector', () => {
       bankFixture(),
       { tenant },
     );
-    expect(pdfContainsHexColor(buf, '#0B5345')).toBe(true);
-    expect(pdfContainsHexColor(buf, '#445566')).toBe(false);
+    expect(pdfContainsHexColor(buf, '#445566')).toBe(true);
     expect(pdfContainsHexColor(buf, '#283747')).toBe(false);
+    expect(pdfContainsHexColor(buf, '#7A2F5C')).toBe(false);
   });
 
   test('legacy three-arg call (no opts) still renders cleanly — back-compat', async () => {

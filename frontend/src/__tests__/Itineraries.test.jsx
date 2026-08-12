@@ -12,8 +12,9 @@
  *      sub-brand-access via getSubBrandAccessSet on POST).
  *   2. Loading state: shows "Loading…" before first GET resolves (await
  *      findByText per CLAUDE.md tick #108 cron-learning).
- *   3. GET on mount: hits /api/travel/itineraries?limit=200 (no sub-brand
- *      or status query params when filters are blank) and renders one row
+ *   3. GET on mount: hits /api/travel/itineraries?limit=20&offset=0 (no
+ *      sub-brand, status, or search query params when filters are blank)
+ *      and renders one row
  *      per itinerary inside the fixed-height scroll container (table layout
  *      with 9 columns: Destination, Sub-brand, Contact, Dates, Items, Total,
  *      Status, Tier, Updated).
@@ -350,7 +351,7 @@ function installFetchMock({
   list = {
     itineraries: ITINS_DEFAULT,
     total: ITINS_DEFAULT.length,
-    limit: 200,
+    limit: 20,
     offset: 0,
   },
   contacts = CONTACTS_DEFAULT,
@@ -466,19 +467,21 @@ describe("<Itineraries /> — load + render lifecycle", () => {
     resolveList({
       itineraries: ITINS_DEFAULT,
       total: ITINS_DEFAULT.length,
-      limit: 200,
+      limit: 20,
       offset: 0,
     });
     await screen.findByText("Andaman Islands");
     expect(screen.queryByText("Loading…")).toBeNull();
   });
 
-  it("does not render the list count footer text", async () => {
+  it("renders the pager footer with the total itinerary count", async () => {
     renderPage();
     await screen.findByText("Andaman Islands");
-    expect(screen.queryByText(/Showing .* of .*/i)).toBeNull();
+    expect(screen.getByText(/Showing/i)).toHaveTextContent(
+      /of 3 itineraries/i,
+    );
   });
-  it("GETs /api/travel/itineraries?limit=200 on mount with NO sub-brand/status query string", async () => {
+  it("GETs /api/travel/itineraries?limit=20&offset=0 on mount with NO sub-brand/status query string", async () => {
     renderPage();
     await waitFor(() => {
       const listCall = fetchApiMock.mock.calls.find(
@@ -488,22 +491,37 @@ describe("<Itineraries /> — load + render lifecycle", () => {
           (!o?.method || o.method === "GET"),
       );
       expect(listCall).toBeTruthy();
-      expect(listCall[0]).toContain("limit=200");
-      expect(listCall[0]).not.toContain("offset=");
+      expect(listCall[0]).toContain("limit=20");
+      expect(listCall[0]).toContain("offset=0");
       expect(listCall[0]).not.toContain("subBrand=");
       expect(listCall[0]).not.toContain("status=");
+      expect(listCall[0]).not.toContain("search=");
     });
     expect(await screen.findByText("Andaman Islands")).toBeInTheDocument();
     expect(screen.getByText("Mecca Umrah Package")).toBeInTheDocument();
     expect(screen.getByText("Schengen visa")).toBeInTheDocument();
   });
 
-  it("scrolling the list pane does not request another page", async () => {
+  it("shows synced top and bottom horizontal scrollbars", async () => {
+    const scrollWidthSpy = vi
+      .spyOn(HTMLElement.prototype, "scrollWidth", "get")
+      .mockImplementation(function () {
+        return this?.classList?.contains("top-scroll-sync__bottom") ? 2200 : 0;
+      });
+    const clientWidthSpy = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockImplementation(function () {
+        return this?.classList?.contains("top-scroll-sync__bottom") ? 900 : 0;
+      });
     renderPage();
     await screen.findByText("Andaman Islands");
     const scrollArea = screen.getByTestId("itineraries-scroll-area");
-    expect(scrollArea.querySelector(".top-scroll-sync")).toBeNull();
-    expect(scrollArea.querySelector("table.stable-table")).toBeTruthy();
+    const topBar = scrollArea.querySelector(".top-scroll-sync__top");
+    const bottomBar = scrollArea.querySelector(".top-scroll-sync__bottom");
+    expect(topBar).toBeTruthy();
+    expect(bottomBar).toBeTruthy();
+    scrollWidthSpy.mockRestore();
+    clientWidthSpy.mockRestore();
   });
 
   it("scrolling the list pane does not request another page", async () => {
@@ -528,7 +546,7 @@ describe("<Itineraries /> — load + render lifecycle", () => {
         return Promise.resolve({
           itineraries: firstPage,
           total: 10,
-          limit: 200,
+          limit: 20,
           offset: 0,
         });
       }
@@ -558,9 +576,129 @@ describe("<Itineraries /> — load + render lifecycle", () => {
     expect(screen.queryByText("Page 2 Trip 1")).toBeNull();
   });
 
+  it("clicking Next fetches the next page with the correct offset", async () => {
+    const page1 = Array.from({ length: 20 }, (_, i) =>
+      makeItin({
+        id: 601 + i,
+        destination: `Paged Trip ${i + 1}`,
+        contactId: 5001,
+        items: [],
+        updatedAt: `2026-05-${String(10 + (i % 20)).padStart(2, "0")}T10:00:00.000Z`,
+      }),
+    );
+    const page2 = Array.from({ length: 5 }, (_, i) =>
+      makeItin({
+        id: 701 + i,
+        destination: `Paged Trip ${21 + i}`,
+        contactId: 5002,
+        items: [],
+        updatedAt: `2026-06-${String(1 + i).padStart(2, "0")}T10:00:00.000Z`,
+      }),
+    );
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || "GET";
+      if (url.startsWith("/api/travel/itineraries") && method === "GET") {
+        if (url.includes("offset=20")) {
+          return Promise.resolve({
+            itineraries: page2,
+            total: 25,
+            limit: 20,
+            offset: 20,
+          });
+        }
+        return Promise.resolve({
+          itineraries: page1,
+          total: 25,
+          limit: 20,
+          offset: 0,
+        });
+      }
+      if (url.startsWith("/api/contacts") && method === "GET") {
+        return Promise.resolve(CONTACTS_DEFAULT);
+      }
+      if (url === "/api/auth/me/permissions" && method === "GET") {
+        return Promise.resolve({ isOwner: true, permissions: [] });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await screen.findByText("Paged Trip 1");
+    fireEvent.click(screen.getByRole("button", { name: /next page/i }));
+    await screen.findByText("Paged Trip 21");
+    await waitFor(() => {
+      expect(
+        fetchApiMock.mock.calls.some(
+          ([u]) =>
+            typeof u === "string" &&
+            u.startsWith("/api/travel/itineraries") &&
+            u.includes("offset=20"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("searches destination or contact name across the backend result set", async () => {
+    const hiddenMatch = makeItin({
+      id: 888,
+      destination: "Hidden Mecca Escape",
+      subBrand: "rfu",
+      status: "sent",
+      productTier: "premium",
+      contactId: 5002,
+      totalAmount: 88000,
+      currency: "INR",
+      items: [],
+    });
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || "GET";
+      if (url.startsWith("/api/travel/itineraries") && method === "GET") {
+        if (url.includes("search=mecca")) {
+          return Promise.resolve({
+            itineraries: [hiddenMatch],
+            total: 1,
+            limit: 20,
+            offset: 0,
+          });
+        }
+        return Promise.resolve({
+          itineraries: ITINS_DEFAULT,
+          total: 25,
+          limit: 20,
+          offset: 0,
+        });
+      }
+      if (url.startsWith("/api/contacts") && method === "GET") {
+        return Promise.resolve(CONTACTS_DEFAULT);
+      }
+      if (url === "/api/auth/me/permissions" && method === "GET") {
+        return Promise.resolve({ isOwner: true, permissions: [] });
+      }
+      return Promise.resolve(null);
+    });
+
+    renderPage();
+    await screen.findByText("Andaman Islands");
+    fireEvent.change(screen.getByLabelText(/Search itineraries/i), {
+      target: { value: "mecca" },
+    });
+    await screen.findByText("Hidden Mecca Escape");
+    expect(
+      fetchApiMock.mock.calls.some(
+        ([u, o]) =>
+          typeof u === "string" &&
+          u.startsWith("/api/travel/itineraries") &&
+          u.includes("search=mecca") &&
+          (!o?.method || o.method === "GET"),
+      ),
+    ).toBe(true);
+  });
+
   it("renders empty-state copy when itineraries=[] (SUT line 234-237)", async () => {
     installFetchMock({
-      list: { itineraries: [], total: 0, limit: 200, offset: 0 },
+      list: { itineraries: [], total: 0, limit: 20, offset: 0 },
     });
     renderPage();
     expect(await screen.findByText(/No itineraries yet./i)).toBeInTheDocument();
@@ -585,7 +723,7 @@ describe("<Itineraries /> — filter behaviour", () => {
       list: {
         itineraries: [ITINS_DEFAULT[1]],
         total: 1,
-        limit: 200,
+        limit: 20,
         offset: 0,
       },
     });
@@ -611,7 +749,7 @@ describe("<Itineraries /> — filter behaviour", () => {
       list: {
         itineraries: [ITINS_DEFAULT[1]],
         total: 1,
-        limit: 200,
+        limit: 20,
         offset: 0,
       },
     });

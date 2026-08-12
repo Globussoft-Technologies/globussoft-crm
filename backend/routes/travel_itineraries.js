@@ -426,6 +426,7 @@ function assertValidItemType(itemType) {
 router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
+    const search = String(req.query.search || req.query.q || "").trim();
     if (req.query.subBrand) {
       assertValidSubBrand(String(req.query.subBrand));
       where.subBrand = String(req.query.subBrand);
@@ -446,6 +447,25 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
       where.subBrand = where.subBrand
         ? canAccessSubBrand(allowed, where.subBrand) ? where.subBrand : "__none__"
         : { in: [...allowed] };
+    }
+    if (search) {
+      const contactMatches = await prisma.contact.findMany({
+        where: {
+          tenantId: req.travelTenant.id,
+          name: { contains: search, mode: "insensitive" },
+        },
+        select: { id: true },
+      });
+      const matchingContactIds = contactMatches.map((row) => row.id);
+      where.OR = [
+        { destination: { contains: search, mode: "insensitive" } },
+        ...(matchingContactIds.length
+          ? [{ contactId: { in: matchingContactIds } }]
+          : []),
+      ];
+      if (!where.OR.length) {
+        where.OR = [{ destination: "__never__" }];
+      }
     }
 
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);

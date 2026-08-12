@@ -11,7 +11,7 @@
 // itinerary without first completing the diagnostic. Itineraries can
 // still be drafted from a Deal page once the Day 7 Deal-extension CTA lands.
 
-import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Map,
@@ -38,8 +38,10 @@ import {
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 import { AuthContext } from "../../App";
 import PermissionGate from "../../components/PermissionGate";
+import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import {
   accessibleSubBrands,
@@ -55,6 +57,7 @@ import {
 // rows without lat/lng — so a partially-geocoded itinerary still maps the
 // rows that do have coordinates.
 import MapPreview from "../../components/MapPreview";
+import TripPager from "./TripPager";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -351,8 +354,14 @@ export default function Itineraries() {
   const [status, setStatus] = useState(
     openedFromReports ? initialQuery.get("status") || "" : "",
   );
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [isCustomPageSize, setIsCustomPageSize] = useState(false);
+  const [customPageSize, setCustomPageSize] = useState("");
+  const [total, setTotal] = useState(0);
   const [selectedItineraryId, setSelectedItineraryId] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [reloadTick, setReloadTick] = useState(0);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -364,6 +373,8 @@ export default function Itineraries() {
   const [selectedTemplateId, setSelectedTemplateId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  const reqIdRef = useRef(0);
+  const didMountRef = useRef(false);
   const selectedItinerary = useMemo(
     () =>
       selectedItineraryId
@@ -371,23 +382,8 @@ export default function Itineraries() {
         : null,
     [items, selectedItineraryId],
   );
-
-  const filteredItems = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter((it) => {
-      const dest = (it.destination || "").toLowerCase();
-      const contact = [
-        it.contact?.firstName,
-        it.contact?.lastName,
-        it.contact?.name,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return dest.includes(q) || contact.includes(q);
-    });
-  }, [items, searchQuery]);
+  const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize));
+  const safePage = Math.min(page, pageCount);
   // Items array passed to MapPreview. When the itinerary has geocoded items
   // those are used directly. When there are none we geocode the destination
   // city names via Nominatim (same OSM data used for tiles) and show those
@@ -487,7 +483,7 @@ export default function Itineraries() {
       await fetchApi(`/api/travel/itineraries/${id}`, { method: "DELETE" });
       notify.success(`Deleted "${destination}"`);
       if (selectedItineraryId === id) setSelectedItineraryId(null);
-      load({ reset: true });
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(err?.body?.error || "Failed to delete itinerary");
     } finally {
@@ -501,6 +497,26 @@ export default function Itineraries() {
     setSuggestResult(null);
     setSuggestFieldErrors({});
     setSuggesting(true);
+  };
+
+  const handleSubBrandChange = (nextSubBrand) => {
+    setSubBrand(nextSubBrand);
+    setPage(1);
+  };
+
+  const handleStatusChange = (nextStatus) => {
+    setStatus(nextStatus);
+    setPage(1);
+  };
+
+  const handleSearchChange = (nextSearch) => {
+    setSearchQuery(nextSearch);
+    setPage(1);
+  };
+
+  const handlePageSizeChange = (nextPageSize) => {
+    setPageSize(nextPageSize);
+    setPage(1);
   };
 
   const closeSuggest = () => {
@@ -687,7 +703,8 @@ export default function Itineraries() {
           : "Itinerary created",
       );
       setCreating(false);
-      load({ reset: true });
+      setPage(1);
+      setReloadTick((t) => t + 1);
     } catch (err) {
       notify.error(
         err?.body?.error || err?.message || "Failed to create itinerary",
@@ -699,34 +716,56 @@ export default function Itineraries() {
 
   const load = useCallback(
     async ({ reset = false } = {}) => {
+      const myReqId = ++reqIdRef.current;
       if (reset) {
         setLoading(true);
         setItems([]);
+      } else {
+        setLoading(true);
       }
 
       const qs = new URLSearchParams();
       if (subBrand) qs.set("subBrand", subBrand);
       if (status) qs.set("status", status);
-      qs.set("limit", String(200));
+      if (searchQuery.trim()) qs.set("search", searchQuery.trim());
+      qs.set("limit", String(pageSize));
+      qs.set("offset", String(Math.max(0, (page - 1) * pageSize)));
 
       try {
         const res = await fetchApi(`/api/travel/itineraries?${qs.toString()}`);
+        if (myReqId !== reqIdRef.current) return;
         const rows = Array.isArray(res?.itineraries) ? res.itineraries : [];
 
         setItems(rows);
+        setTotal(Number(res?.total) || 0);
       } catch (e) {
+        if (myReqId !== reqIdRef.current) return;
         notify.error(e?.body?.error || "Failed to load itineraries");
         setItems([]);
+        setTotal(0);
       } finally {
+        if (myReqId !== reqIdRef.current) return;
         setLoading(false);
       }
     },
-    [subBrand, status, notify],
+    [page, pageSize, searchQuery, status, subBrand, notify],
   );
 
   useEffect(() => {
-    load({ reset: true });
-  }, [load]);
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      load({ reset: true });
+      return undefined;
+    }
+    const t = setTimeout(() => load({ reset: true }), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [load, reloadTick]);
+
+  useEffect(() => {
+    if (total > 0 && page > pageCount) {
+      setPage(pageCount);
+    }
+  }, [page, pageCount, total]);
 
   // Close drawer on Escape
   useEffect(() => {
@@ -834,7 +873,7 @@ export default function Itineraries() {
         />
         <select
           value={subBrand}
-          onChange={(e) => setSubBrand(e.target.value)}
+          onChange={(e) => handleSubBrandChange(e.target.value)}
           style={selectStyle}
           aria-label="Filter by sub-brand"
         >
@@ -846,7 +885,7 @@ export default function Itineraries() {
         </select>
         <select
           value={status}
-          onChange={(e) => setStatus(e.target.value)}
+          onChange={(e) => handleStatusChange(e.target.value)}
           style={selectStyle}
           aria-label="Filter by status"
         >
@@ -879,7 +918,7 @@ export default function Itineraries() {
           <input
             type="search"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Search destination or name…"
             aria-label="Search itineraries by destination or contact name"
             style={{
@@ -893,7 +932,7 @@ export default function Itineraries() {
           {searchQuery && (
             <button
               type="button"
-              onClick={() => setSearchQuery("")}
+              onClick={() => handleSearchChange("")}
               aria-label="Clear search"
               style={{
                 position: "absolute",
@@ -913,7 +952,7 @@ export default function Itineraries() {
         </div>
         <button
           type="button"
-          onClick={() => load({ reset: true })}
+          onClick={() => setReloadTick((t) => t + 1)}
           style={refreshBtn}
           aria-label="Reload list"
         >
@@ -989,29 +1028,22 @@ export default function Itineraries() {
           <div style={empty}>Loading&hellip;</div>
         ) : items.length === 0 ? (
           <div style={empty}>
-            No itineraries yet. Use the &quot;Create Itinerary&quot; button
-            above, or build one from a linked Deal in the sales pipeline.
-          </div>
-        ) : filteredItems.length === 0 ? (
-          <div style={empty}>
-            No itineraries match &ldquo;{searchQuery}&rdquo;.
+            {searchQuery.trim() || subBrand || status
+              ? `No itineraries match "${searchQuery.trim() || "your filters"}".`
+              : 'No itineraries yet. Use the "Create Itinerary" button above, or build one from a linked Deal in the sales pipeline.'}
           </div>
         ) : (
-          <div
-            data-testid="itineraries-scroll-area"
-            style={{
-              overflowX: "scroll",
-              overflowY: "visible",
-            }}
-          >
-            <table
-              className="stable-table"
-              style={{
-                width: "max-content",
-                minWidth: "calc(100% + 1px)",
-                borderCollapse: "collapse",
-              }}
-            >
+          <>
+            <div data-testid="itineraries-scroll-area">
+              <TopScrollSync>
+                <table
+                  className="stable-table"
+                  style={{
+                    width: "max-content",
+                    minWidth: "calc(100% + 1px)",
+                    borderCollapse: "collapse",
+                  }}
+                >
               <thead>
                 <tr>
                   <th style={th}>Destination</th>
@@ -1027,7 +1059,7 @@ export default function Itineraries() {
                 </tr>
               </thead>
               <tbody>
-                {filteredItems.map((it) => {
+                {items.map((it) => {
                   const statusLabel = it.cancellationStatus
                     ? CANCELLATION_LABEL[it.cancellationStatus] ||
                       it.cancellationStatus
@@ -1219,9 +1251,25 @@ export default function Itineraries() {
                     </tr>
                   );
                 })}
-                </tbody>
-              </table>
-          </div>
+              </tbody>
+                </table>
+              </TopScrollSync>
+            </div>
+            <TripPager
+              total={total}
+              page={safePage}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={handlePageSizeChange}
+              isCustomPageSize={isCustomPageSize}
+              setIsCustomPageSize={setIsCustomPageSize}
+              customPageSize={customPageSize}
+              setCustomPageSize={setCustomPageSize}
+              pageSizeOptions={[10, 20, 50]}
+              maxPageSize={200}
+              entityLabel="itineraries"
+            />
+          </>
         )}
       </div>
 

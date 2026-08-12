@@ -312,6 +312,22 @@ describe('GET /api/travel/trips', () => {
     });
   });
 
+  test('?search filters tripCode or destination across the tenant scope', async () => {
+    prisma.tmcTrip.findMany.mockResolvedValue([]);
+    prisma.tmcTrip.count.mockResolvedValue(0);
+    await request(makeApp())
+      .get('/api/travel/trips?search=goa')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    const calledWhere = prisma.tmcTrip.findMany.mock.calls[0][0].where;
+    expect(calledWhere).toMatchObject({
+      tenantId: 1,
+      OR: [
+        { tripCode: { contains: 'goa' } },
+        { destination: { contains: 'goa' } },
+      ],
+    });
+  });
+
   test('caller without TMC sub-brand access returns 403 SUB_BRAND_DENIED', async () => {
     prisma.user.findUnique.mockResolvedValue({
       role: 'USER',

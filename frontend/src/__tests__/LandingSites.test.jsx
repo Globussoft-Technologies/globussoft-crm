@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, vi, beforeEach } from 'vitest';
+﻿import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -133,6 +133,10 @@ describe('<LandingSites /> wellness generate modal', () => {
     notifyInfo.mockReset();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('renders a fixed wellness text field instead of the sector dropdown', async () => {
     const user = userEvent.setup();
     renderPage('wellness');
@@ -169,6 +173,33 @@ describe('<LandingSites /> wellness generate modal', () => {
     });
   });
 
+  it('pins event date/time to now and rejects past slots before submit', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 7, 11, 13, 35, 0));
+
+    const user = userEvent.setup();
+    renderPage('wellness');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate Landing Site/i })).toBeInTheDocument());
+    await user.click(screen.getAllByRole('button', { name: /Generate Landing Site/i })[0]);
+
+    const dateInput = screen.getByLabelText(/Event date/i);
+    const timeInput = screen.getByLabelText(/Event time/i);
+    expect(dateInput).toHaveAttribute('min', '2026-08-11');
+
+    await user.type(screen.getByLabelText(/Campaign name/i), 'Rooted Wellness Camp');
+    await user.type(screen.getByLabelText(/Campaign goal/i), 'collect registrations');
+    await user.type(screen.getByLabelText(/Audience/i), 'members');
+
+    fireEvent.change(dateInput, { target: { value: '2026-08-11' } });
+    expect(timeInput).toHaveAttribute('min', '13:35');
+
+    fireEvent.change(timeInput, { target: { value: '13:34' } });
+    await user.click(screen.getByRole('button', { name: /^Generate$/i }));
+
+    await waitFor(() => expect(screen.getAllByText(/event time cannot be earlier than the current time/i).length).toBeGreaterThan(0));
+    expect(fetchApiMock.mock.calls.some(([url, opts]) => url === '/api/landing-sites/generate' && opts?.method === 'POST')).toBe(false);
+  });
   it('realModeError for Gemini quota exhaustion shows the friendly toast', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
@@ -269,8 +300,4 @@ describe('<LandingSites /> wellness generate modal', () => {
     await waitFor(() => expect(screen.getByText('Weekend Wellness Reset')).toBeInTheDocument());
   });
 });
-
-
-
-
 

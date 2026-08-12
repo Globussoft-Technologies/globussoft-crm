@@ -157,6 +157,8 @@ async function requireTmcAccess(req, res, next) {
 router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
+    const searchRaw = req.query.search ?? req.query.q;
+    const search = typeof searchRaw === "string" ? searchRaw.trim() : "";
     if (req.query.status) {
       if (!VALID_TRIP_STATUSES.includes(String(req.query.status))) {
         return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
@@ -166,6 +168,12 @@ router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (
     if (req.query.schoolContactId) {
       const sid = parseInt(req.query.schoolContactId, 10);
       if (Number.isFinite(sid)) where.schoolContactId = sid;
+    }
+    if (search) {
+      where.OR = [
+        { tripCode: { contains: search } },
+        { destination: { contains: search } },
+      ];
     }
 
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);

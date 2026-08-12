@@ -14,9 +14,9 @@
  *      "New bank" CTA only renders for ADMIN role (SUT lines 74-82).
  *   2. Loading state: shows "Loading…" before first GET resolves
  *      (await findByText per CLAUDE.md tick #108 cron-learning).
- *   3. GET on mount: hits /api/travel/diagnostics?limit=200 with NO
- *      subBrand/classification query params when filters are blank
- *      (SUT lines 46-53: builds URLSearchParams; limit=200 and offset is no longer used).
+ *   3. GET on mount: hits /api/travel/diagnostics?limit=20&offset=0 with
+ *      NO subBrand/classification query params when filters are blank
+ *      (SUT lines 60-80: builds URLSearchParams; pagination is server-side).
  *   4. Empty-state: zero diagnostics → renders the "No diagnostics submitted
  *      yet." copy + the "Take diagnostic" hint (SUT lines 138-140).
  *   5. Sub-brand filter: selecting "rfu" re-fetches with ?subBrand=rfu
@@ -139,6 +139,22 @@ function makeDiagnostic(overrides = {}) {
   };
 }
 
+function makeDiagnosticPage(count, overrides = {}) {
+  return Array.from({ length: count }, (_, i) =>
+    makeDiagnostic({
+      id: 900 + i,
+      subBrand: i % 3 === 0 ? 'tmc' : i % 3 === 1 ? 'rfu' : 'visasure',
+      classification: i % 4 === 0 ? 'level_1' : i % 4 === 1 ? 'level_2' : i % 4 === 2 ? 'level_3' : 'level_4',
+      classificationLabel: `Row ${i + 1}`,
+      score: i + 0.25,
+      recommendedTier: i % 3 === 0 ? 'entry' : i % 3 === 1 ? 'primary' : 'premium',
+      contactId: 6000 + i,
+      createdAt: `2026-05-${String((i % 28) + 1).padStart(2, '0')}T10:00:00.000Z`,
+      ...overrides,
+    }),
+  );
+}
+
 const DIAGNOSTICS_DEFAULT = [
   makeDiagnostic({
     id: 701,
@@ -178,16 +194,21 @@ function installFetchMock({
   fetchApiMock.mockImplementation((url) => {
     if (typeof url === 'string' && url.startsWith('/api/travel/diagnostics')) {
       if (list instanceof Error) return Promise.reject(list);
-      return Promise.resolve(list);
+      return Promise.resolve({
+        diagnostics: list.diagnostics || [],
+        total: typeof list.total === 'number' ? list.total : (list.diagnostics || []).length,
+        limit: list.limit ?? 20,
+        offset: list.offset ?? 0,
+      });
     }
     return Promise.resolve(null);
   });
 }
 
-function renderPage(user = ADMIN_USER) {
+function renderPage(user = ADMIN_USER, initialEntries = ['/travel/diagnostics']) {
   const value = { user, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false };
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <AuthContext.Provider value={value}>
         <Diagnostics />
       </AuthContext.Provider>
@@ -269,15 +290,15 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
     expect(screen.queryByText('Loading…')).toBeNull();
   });
 
-  it('GETs /api/travel/diagnostics?limit=200 on mount with NO subBrand/classification query string', async () => {
+  it('GETs /api/travel/diagnostics?limit=20&offset=0 on mount with NO subBrand/classification query string', async () => {
     renderPage();
     await waitFor(() => {
       const listCall = fetchApiMock.mock.calls.find(([u]) =>
         typeof u === 'string' && u.startsWith('/api/travel/diagnostics'),
       );
       expect(listCall).toBeTruthy();
-      expect(listCall[0]).toContain('limit=200');
-      expect(listCall[0]).not.toContain('offset=');
+      expect(listCall[0]).toContain('limit=20');
+      expect(listCall[0]).toContain('offset=0');
       expect(listCall[0]).not.toContain('subBrand=');
       expect(listCall[0]).not.toContain('classification=');
     });
@@ -288,7 +309,7 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
 
 
 
-  it('keeps the diagnostics table full-width with fixed columns and horizontal overflow available', async () => {
+  it('keeps the diagnostics table full-width without a horizontal scroll wrapper', async () => {
     const firstPage = Array.from({ length: 10 }, (_, i) =>
       makeDiagnostic({
         id: 801 + i,
@@ -313,23 +334,11 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
     await screen.findByText('tmc');
 
     const table = screen.getByRole('table', { name: /Diagnostics results/i });
-    const scrollArea = screen.getByTestId('diagnostics-table-scroll');
 
     expect(table.style.width).toBe('100%');
-    expect(table.style.minWidth).toBe('760px');
     expect(table.style.tableLayout).toBe('fixed');
-    expect(scrollArea.style.overflowX).toBe('scroll');
-    expect(scrollArea.querySelector('div').style.minWidth).toBe('calc(100% + 1px)');
-    expect(scrollArea.style.overflowY).toBe('visible');
     expect(table.querySelectorAll('col').length).toBe(6);
-
-    fireEvent.scroll(scrollArea);
-
-    await waitFor(() => {
-      const diagnosticCalls = fetchApiMock.mock.calls.filter(([u]) => typeof u === 'string' && u.startsWith('/api/travel/diagnostics'));
-      expect(diagnosticCalls).toHaveLength(1);
-    });
-
+    expect(screen.queryByTestId('diagnostics-table-scroll')).toBeNull();
     expect(screen.queryByText('travelstall')).toBeNull();
   });
   it('renders empty-state copy when diagnostics=[] (SUT lines 138-140)', async () => {
@@ -402,6 +411,50 @@ describe('<Diagnostics /> — filter behaviour (camelCase + snake_case enum)', (
         typeof u === 'string' && u.startsWith('/api/travel/diagnostics'),
       );
       expect(call).toBeTruthy();
+    });
+  });
+});
+
+describe('<Diagnostics /> — pagination footer', () => {
+  it('renders the wellness-style pager when total exceeds one page and requests the matching offset', async () => {
+    installFetchMock({ list: { diagnostics: makeDiagnosticPage(51), total: 51, limit: 20, offset: 0 } });
+    renderPage();
+
+    const pager = await screen.findByTestId('diagnostics-pager');
+    expect(pager.textContent).toContain('Showing');
+    expect(pager.textContent).toContain('20');
+    expect(pager.textContent).toContain('51');
+    expect(pager.textContent).toContain('diagnostics');
+    expect(screen.getByRole('button', { name: /Next page/i })).toBeInTheDocument();
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^2$/ }));
+
+    await waitFor(() => {
+      const pageTwoCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.includes('limit=20') && u.includes('offset=20'),
+      );
+      expect(pageTwoCall).toBeTruthy();
+    });
+  });
+
+  it('changing page size via the pager resets back to page 1 and updates limit', async () => {
+    installFetchMock({ list: { diagnostics: makeDiagnosticPage(51), total: 51, limit: 20, offset: 0 } });
+    renderPage();
+
+    const pager = await screen.findByTestId('diagnostics-pager');
+    const pageSizeLabel = within(pager).getAllByText('20', { selector: 'span' })[0];
+    fireEvent.click(pageSizeLabel.closest('button'));
+    fireEvent.click(within(pager).getByRole('menuitem', { name: /Custom/i }));
+
+    const input = screen.getByRole('spinbutton');
+    fireEvent.change(input, { target: { value: '10' } });
+
+    await waitFor(() => {
+      const pageSizeCall = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.includes('limit=10') && u.includes('offset=0'),
+      );
+      expect(pageSizeCall).toBeTruthy();
     });
   });
 });

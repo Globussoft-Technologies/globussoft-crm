@@ -4273,8 +4273,21 @@ function requireClinicalRole(req, res, next) {
 router.get("/prescriptions", phiReadGate, async (req, res) => {
   try {
     const { patientId, limit = 50, skip = 0 } = req.query;
+    const q = String(req.query.q || "").trim();
     const where = tenantWhere(req);
     if (patientId) where.patientId = parseInt(patientId);
+    if (q) {
+      where.patient = {
+        is: {
+          OR: [
+            { name: { contains: q } },
+            { displayName: { contains: q } },
+            { phone: { contains: q } },
+            { email: { contains: q } },
+          ],
+        },
+      };
+    }
     const take = Math.min(parseInt(limit, 10) || 50, 200);
     const skipN = Math.max(parseInt(skip, 10) || 0, 0);
     // #920 slice S42: opt-in slim shape via `?fields=summary`. Drops the
@@ -4319,7 +4332,7 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
       req.user.tenantId,
       {
         count: items.length,
-        filters: { patientId: patientId ? parseInt(patientId) : null },
+        filters: { patientId: patientId ? parseInt(patientId) : null, q: q || null },
         shape: wantFullShape ? "full" : "summary",
       },
     ).catch((auditErr) => {
@@ -15800,12 +15813,16 @@ router.get("/coupons", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
     const where = tenantWhere(req);
     if (req.query.isActive === "true") where.isActive = true;
     if (req.query.isActive === "false") where.isActive = false;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 200);
+    const skip = Math.max(parseInt(req.query.skip, 10) || 0, 0);
     const coupons = await prisma.coupon.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      take: 200,
+      take: limit,
+      skip,
     });
-    res.json({ coupons });
+    const total = await prisma.coupon.count({ where });
+    res.json({ coupons, total });
   } catch (e) {
     console.error("[wellness] coupons list error:", e.message);
     res.status(500).json({ error: "Failed to list coupons" });

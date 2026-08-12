@@ -76,6 +76,12 @@ function escapeHtml(value) {
   }[char]));
 }
 
+function localDateKey(value = new Date()) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
 function sendApprovalPaymentPortalEmail({ tenantId, trip, participant }) {
   const parentEmail = String(participant?.parentEmail || "").trim().toLowerCase();
   if (!parentEmail) return;
@@ -157,6 +163,8 @@ async function requireTmcAccess(req, res, next) {
 router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
+    const searchRaw = req.query.search ?? req.query.q;
+    const search = typeof searchRaw === "string" ? searchRaw.trim() : "";
     if (req.query.status) {
       if (!VALID_TRIP_STATUSES.includes(String(req.query.status))) {
         return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
@@ -166,6 +174,12 @@ router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (
     if (req.query.schoolContactId) {
       const sid = parseInt(req.query.schoolContactId, 10);
       if (Number.isFinite(sid)) where.schoolContactId = sid;
+    }
+    if (search) {
+      where.OR = [
+        { tripCode: { contains: search } },
+        { destination: { contains: search } },
+      ];
     }
 
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
@@ -287,6 +301,18 @@ router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async 
     const ret = new Date(returnDate);
     if (!Number.isFinite(depart.getTime()) || !Number.isFinite(ret.getTime())) {
       return res.status(400).json({ error: "invalid date", code: "INVALID_DATE" });
+    }
+    const todayKey = localDateKey();
+    const departKey = localDateKey(depart);
+    const retKey = localDateKey(ret);
+    if (!todayKey || !departKey || !retKey) {
+      return res.status(400).json({ error: "invalid date", code: "INVALID_DATE" });
+    }
+    if (departKey < todayKey || retKey < todayKey) {
+      return res.status(400).json({
+        error: "departDate and returnDate must be today or in the future",
+        code: "DATE_IN_PAST",
+      });
     }
     if (ret < depart) {
       return res.status(400).json({ error: "returnDate must be on or after departDate", code: "INVERTED_DATES" });

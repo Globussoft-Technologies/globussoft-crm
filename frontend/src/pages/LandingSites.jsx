@@ -144,6 +144,54 @@ function formatTimeForPrompt(value) {
   return `${displayHour}:${String(minute).padStart(2, '0')} ${suffix}`;
 }
 
+function formatLocalDateValue(date) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function formatLocalTimeValue(date) {
+  return [
+    String(date.getHours()).padStart(2, '0'),
+    String(date.getMinutes()).padStart(2, '0'),
+  ].join(':');
+}
+
+function parseLocalDateTime(dateValue, timeValue) {
+  const normalizedDate = normalizeDateInputValue(dateValue);
+  const normalizedTime = normalizeTimeInputValue(timeValue);
+  if (!normalizedDate || !normalizedTime) return null;
+
+  const [year, month, day] = normalizedDate.split('-').map(Number);
+  const [hour, minute] = normalizedTime.split(':').map(Number);
+  return new Date(year, month - 1, day, hour, minute, 0, 0);
+}
+
+function isPastEventSlot(dateValue, timeValue, now = new Date()) {
+  const selected = parseLocalDateTime(dateValue, timeValue);
+  if (!selected) return false;
+  return selected.getTime() < now.getTime();
+}
+
+function getEventSlotError(dateValue, timeValue, now = new Date()) {
+  const normalizedDate = normalizeDateInputValue(dateValue);
+  const normalizedTime = normalizeTimeInputValue(timeValue);
+
+  if (normalizedDate && normalizedDate < formatLocalDateValue(now)) {
+    return 'Event date cannot be in the past.';
+  }
+
+  if (normalizedDate && normalizedTime && isPastEventSlot(normalizedDate, normalizedTime, now)) {
+    return normalizedDate === formatLocalDateValue(now)
+      ? 'Event time cannot be earlier than the current time.'
+      : 'Event date and time cannot be in the past.';
+  }
+
+  return null;
+}
+
 function useDocumentTheme() {
   const [theme, setTheme] = useState(() => (
     typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'dark'
@@ -185,6 +233,10 @@ export default function LandingSites() {
   const isWellnessTenant = tenantVertical === 'wellness';
   const themeName = useDocumentTheme();
   const isDarkTheme = themeName === 'dark';
+  const [clockNow, setClockNow] = useState(() => Date.now());
+  const now = new Date(clockNow);
+  const todayDateValue = formatLocalDateValue(now);
+  const todayTimeValue = formatLocalTimeValue(now);
 
   const [pages, setPages] = useState([]);
 
@@ -236,6 +288,7 @@ export default function LandingSites() {
   });
 
   const [form, setForm] = useState(defaultFormState(isWellnessTenant));
+  const liveEventSlotError = getEventSlotError(form.eventDate, form.eventTime, now);
   const libraryShellStyle = useMemo(() => ({
     padding: '1.4rem',
     border: isDarkTheme ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(200,154,78,0.16)',
@@ -273,6 +326,16 @@ export default function LandingSites() {
     setForm((current) => ({ ...defaultFormState(isWellnessTenant), ...current }));
 
   }, [isWellnessTenant]);
+
+  React.useEffect(() => {
+    if (!showGenerateModal) return undefined;
+
+    const syncClock = () => setClockNow(Date.now());
+    syncClock();
+
+    const timerId = window.setInterval(syncClock, 1000);
+    return () => window.clearInterval(timerId);
+  }, [showGenerateModal]);
 
   const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
 
@@ -427,6 +490,7 @@ export default function LandingSites() {
   const handleGenerate = async () => {
 
     const sectorKey = form.sectorKey || 'general';
+    const slotError = getEventSlotError(form.eventDate, form.eventTime, now);
 
     if (!form.campaignName.trim()) {
 
@@ -450,6 +514,11 @@ export default function LandingSites() {
 
       return;
 
+    }
+
+    if (slotError) {
+      setGenError(slotError);
+      return;
     }
 
 
@@ -980,7 +1049,7 @@ export default function LandingSites() {
 
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event date</span>
 
-                <input type="date" className="input-field" value={normalizeDateInputValue(form.eventDate)} onChange={(e) => setForm((s) => ({ ...s, eventDate: e.target.value }))} />
+                <input type="date" min={todayDateValue} className="input-field" value={normalizeDateInputValue(form.eventDate)} onChange={(e) => setForm((s) => ({ ...s, eventDate: e.target.value }))} />
 
               </label>
 
@@ -988,7 +1057,24 @@ export default function LandingSites() {
 
                 <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Event time</span>
 
-                <input type="time" className="input-field" value={normalizeTimeInputValue(form.eventTime)} onChange={(e) => setForm((s) => ({ ...s, eventTime: e.target.value }))} />
+                <input
+                  type="time"
+                  min={normalizeDateInputValue(form.eventDate) === todayDateValue ? todayTimeValue : undefined}
+                  className="input-field"
+                  value={normalizeTimeInputValue(form.eventTime)}
+                  aria-invalid={Boolean(liveEventSlotError)}
+                  onChange={(e) => setForm((s) => ({ ...s, eventTime: e.target.value }))}
+                />
+                {normalizeDateInputValue(form.eventDate) === todayDateValue && (
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                    Earliest allowed time today: {todayTimeValue}
+                  </span>
+                )}
+                {liveEventSlotError && (
+                  <span style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.15rem' }}>
+                    Live check: {liveEventSlotError}
+                  </span>
+                )}
 
               </label>
 

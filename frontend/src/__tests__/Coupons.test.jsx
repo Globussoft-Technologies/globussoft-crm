@@ -1,19 +1,19 @@
-/**
- * Coupons.jsx — Tick #125 wellness admin coverage.
+﻿/**
+ * Coupons.jsx â€” Tick #125 wellness admin coverage.
  *
- * SUT lives at frontend/src/pages/wellness/Coupons.jsx (Wave 11 Agent FF —
+ * SUT lives at frontend/src/pages/wellness/Coupons.jsx (Wave 11 Agent FF â€”
  * promotion / discount coupon admin). The page pins two flows:
  *
- *   • CRUD list — GET /api/wellness/coupons + create/edit/delete via
+ *   â€¢ CRUD list â€” GET /api/wellness/coupons + create/edit/delete via
  *     POST / PUT / DELETE /api/wellness/coupons[/:id].
- *   • Preview modal — POST /api/wellness/coupons/preview with
+ *   â€¢ Preview modal â€” POST /api/wellness/coupons/preview with
  *     { code, baseAmount } so the operator can sanity-check a discount
  *     math before sending the code to a customer.
  *
  * What this test pins
  * -------------------
- *   1. Page chrome — heading, copy, "New coupon" + "Preview a code" CTAs.
- *   2. Loading-state shows the literal "Loading…" placeholder until the
+ *   1. Page chrome â€” heading, copy, "New coupon" + "Preview a code" CTAs.
+ *   2. Loading-state shows the literal "Loadingâ€¦" placeholder until the
  *      GET resolves (per CLAUDE.md tick #108 cron-learning).
  *   3. GET on mount hits /api/wellness/coupons and renders a row per
  *      coupon with PERCENT vs FLAT discount display + redemption count
@@ -24,7 +24,7 @@
  *      neither) all render the expected strings.
  *   6. New-coupon modal opens with the editor fields rendered (code,
  *      type, discount value, max redemptions, valid from/until, active).
- *   7. Validation — empty code rejected; non-positive value rejected;
+ *   7. Validation â€” empty code rejected; non-positive value rejected;
  *      PERCENT > 100 rejected. All three surface via notify.error and
  *      do NOT POST.
  *   8. Submit POSTs /api/wellness/coupons with the upper-cased code +
@@ -38,29 +38,29 @@
  *      the discount + finalAmount; an `applied: false` response surfaces
  *      the "does not apply" copy.
  *  12. GET error surfaces notify.error with the server message.
- *  13. Loading→error→empty transition leaves the page in the empty
+ *  13. Loadingâ†’errorâ†’empty transition leaves the page in the empty
  *      state (no row leakage from the in-flight load).
  *
  * Mocking
  * -------
- *   • fetchApi mocked via vi.fn at module scope, behaviour swapped per
+ *   â€¢ fetchApi mocked via vi.fn at module scope, behaviour swapped per
  *     test via mockImplementation.
- *   • useNotify returns a STABLE mock object reference per the
+ *   â€¢ useNotify returns a STABLE mock object reference per the
  *     RTL-stable-mock standing rule.
- *   • formatMoney mocked to a deterministic "INR X.XX" string so date
+ *   â€¢ formatMoney mocked to a deterministic "INR X.XX" string so date
  *     / Intl differences across CI ICU builds don't leak in (cf.
  *     CashRegisters.test.jsx prior art).
  *
  * Drift pinned vs original prompt
  * --------------------------------
- *   • Endpoint is /api/wellness/coupons, NOT /api/coupons.
- *   • No RBAC gating in SUT — all admin CTAs always render; "USER hides
+ *   â€¢ Endpoint is /api/wellness/coupons, NOT /api/coupons.
+ *   â€¢ No RBAC gating in SUT â€” all admin CTAs always render; "USER hides
  *     mutation CTAs" enumerated in the prompt does NOT match reality.
- *   • Delete uses native window.confirm (not notify.confirm).
- *   • Discount-display uses formatMoney for FLAT and "N%" for PERCENT,
+ *   â€¢ Delete uses native window.confirm (not notify.confirm).
+ *   â€¢ Discount-display uses formatMoney for FLAT and "N%" for PERCENT,
  *     not "$N" hard-coded.
- *   • Preview modal is a separate flow, not validation inside the editor.
- *   • There are no status / expiry filter chrome elements; original
+ *   â€¢ Preview modal is a separate flow, not validation inside the editor.
+ *   â€¢ There are no status / expiry filter chrome elements; original
  *     prompt's "filter bar" enumeration does not match SUT.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -91,7 +91,7 @@ vi.mock('../utils/money', () => ({
 // Import SUT AFTER the mocks so it picks up our fetchApi.
 import CouponsPage from '../pages/wellness/Coupons';
 
-// ── Fixtures ──────────────────────────────────────────────────────────
+// â”€â”€ Fixtures â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const COUPON_PERCENT = {
   id: 1,
   code: 'SUMMER25',
@@ -143,8 +143,8 @@ const COUPON_NO_DATES = {
 function makeListMock(coupons) {
   return (url, opts = {}) => {
     const method = opts.method || 'GET';
-    if (url === '/api/wellness/coupons' && method === 'GET') {
-      return Promise.resolve({ coupons });
+    if (url.startsWith('/api/wellness/coupons?') && method === 'GET') {
+      return Promise.resolve({ coupons, total: coupons.length });
     }
     if (url === '/api/wellness/coupons' && method === 'POST') {
       const body = opts.body ? JSON.parse(opts.body) : {};
@@ -177,10 +177,10 @@ beforeEach(() => {
   notify.info.mockReset();
 });
 
-// ─────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // 1-2. Page chrome + loading state
-// ─────────────────────────────────────────────────────────────────────
-describe('Coupons — page chrome + loading', () => {
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+describe('Coupons â€” page chrome + loading', () => {
   it('renders heading, intro copy, and both action CTAs', async () => {
     fetchApiMock.mockImplementation(makeListMock([COUPON_PERCENT]));
     render(<CouponsPage />);
@@ -197,7 +197,7 @@ describe('Coupons — page chrome + loading', () => {
   it('shows the literal "Loading…" placeholder until GET resolves', async () => {
     let resolveFn;
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/wellness/coupons') {
+      if (url.startsWith('/api/wellness/coupons?')) {
         return new Promise((r) => {
           resolveFn = r;
         });
@@ -205,16 +205,16 @@ describe('Coupons — page chrome + loading', () => {
       return Promise.resolve({});
     });
     render(<CouponsPage />);
-    expect(screen.getByText(/Loading…/i)).toBeInTheDocument();
-    resolveFn({ coupons: [] });
-    await waitFor(() => expect(screen.queryByText(/Loading…/i)).not.toBeInTheDocument());
+    expect(screen.getByText(/Loading/i)).toBeInTheDocument();
+    resolveFn({ coupons: [], total: 0 });
+    await waitFor(() => expect(screen.queryByText(/Loading/i)).not.toBeInTheDocument());
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // 3-5. List rendering: PERCENT vs FLAT, redemptions, validity branches
-// ─────────────────────────────────────────────────────────────────────
-describe('Coupons — list rendering', () => {
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+describe('Coupons â€” list rendering', () => {
   it('renders PERCENT row with "N%" discount and "X / Y" redemption count', async () => {
     fetchApiMock.mockImplementation(makeListMock([COUPON_PERCENT]));
     render(<CouponsPage />);
@@ -235,7 +235,7 @@ describe('Coupons — list rendering', () => {
     await waitFor(() => expect(screen.getByText('FLAT500')).toBeInTheDocument());
     // formatMoney mock renders "INR 500.00".
     expect(screen.getByText('INR 500.00')).toBeInTheDocument();
-    // No maxRedemptions → just the bare count.
+    // No maxRedemptions â†’ just the bare count.
     expect(screen.getByText('3')).toBeInTheDocument();
     // until-only validity branch.
     expect(screen.getByText('until 2026-12-31')).toBeInTheDocument();
@@ -266,10 +266,10 @@ describe('Coupons — list rendering', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────
-// 6-8. New coupon modal — open, validate, submit
-// ─────────────────────────────────────────────────────────────────────
-describe('Coupons — new coupon flow', () => {
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// 6-8. New coupon modal â€” open, validate, submit
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+describe('Coupons â€” new coupon flow', () => {
   it('opens the editor modal with all expected fields when "New coupon" is clicked', async () => {
     fetchApiMock.mockImplementation(makeListMock([]));
     render(<CouponsPage />);
@@ -294,13 +294,13 @@ describe('Coupons — new coupon flow', () => {
     await waitFor(() => expect(screen.getByText(/No coupons yet/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /New coupon/i }));
 
-    // Empty code → error.
+    // Empty code â†’ error.
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
     await waitFor(() =>
       expect(notify.error).toHaveBeenCalledWith(expect.stringMatching(/Code is required/i)),
     );
 
-    // Fill code, leave value blank → "must be positive".
+    // Fill code, leave value blank â†’ "must be positive".
     fireEvent.change(screen.getByLabelText(/^Code$/i), { target: { value: 'abc' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
     await waitFor(() =>
@@ -357,10 +357,10 @@ describe('Coupons — new coupon flow', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // 9. Edit flow
-// ─────────────────────────────────────────────────────────────────────
-describe('Coupons — edit flow', () => {
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+describe('Coupons â€” edit flow', () => {
   it('opens editor pre-filled with row data, disables code, PUTs /api/wellness/coupons/:id', async () => {
     fetchApiMock.mockImplementation(makeListMock([COUPON_PERCENT]));
     render(<CouponsPage />);
@@ -396,10 +396,10 @@ describe('Coupons — edit flow', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────
-// 10. Delete flow — native confirm gate
-// ─────────────────────────────────────────────────────────────────────
-describe('Coupons — delete flow', () => {
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// 10. Delete flow â€” native confirm gate
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+describe('Coupons â€” delete flow', () => {
   // SUT drift: delete uses notify.confirm({...}) (async), NOT window.confirm.
   it('DELETEs /api/wellness/coupons/:id and surfaces success notify when notify.confirm()=true', async () => {
     fetchApiMock.mockImplementation(makeListMock([COUPON_PERCENT]));
@@ -438,10 +438,10 @@ describe('Coupons — delete flow', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // 11. Preview flow
-// ─────────────────────────────────────────────────────────────────────
-describe('Coupons — preview flow', () => {
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+describe('Coupons â€” preview flow', () => {
   it('POSTs /api/wellness/coupons/preview and renders discount + finalAmount', async () => {
     fetchApiMock.mockImplementation(makeListMock([]));
     render(<CouponsPage />);
@@ -501,13 +501,13 @@ describe('Coupons — preview flow', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // 12. Error handling
-// ─────────────────────────────────────────────────────────────────────
-describe('Coupons — error handling', () => {
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+describe('Coupons â€” error handling', () => {
   it('GET failure surfaces notify.error with the server message', async () => {
     fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/wellness/coupons') {
+      if (url.startsWith('/api/wellness/coupons?')) {
         return Promise.reject(new Error('coupons offline'));
       }
       return Promise.resolve({});
@@ -519,3 +519,4 @@ describe('Coupons — error handling', () => {
     );
   });
 });
+

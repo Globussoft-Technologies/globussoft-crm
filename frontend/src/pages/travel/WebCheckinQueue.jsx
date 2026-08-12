@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import PatientPager from "../wellness/patients/PatientPager";
 
 // Rewrite /uploads/... → /api/uploads/... so production deployments (where the
 // frontend SPA catches /uploads/* before it reaches the backend static mount)
@@ -92,40 +93,83 @@ export default function WebCheckinQueue() {
     [location.search],
   );
   const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
   const [upcomingOnly, setUpcomingOnly] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [isCustomPageSize, setIsCustomPageSize] = useState(false);
+  const [customPageSize, setCustomPageSize] = useState("");
   const [staff, setStaff] = useState([]);
   const [uploadingId, setUploadingId] = useState(null);
   const [deliveringId, setDeliveringId] = useState(null);
   const [reassigningId, setReassigningId] = useState(null);
   // Per-row hidden file input refs keyed by checkin id.
   const fileInputs = useRef({});
+  const loadReqRef = useRef(0);
 
-  const load = () => {
-    setLoading(true);
-    const url = upcomingOnly
-      ? `/api/travel/webcheckins/upcoming`
-      : (() => {
-          const qs = new URLSearchParams();
-          if (status) qs.set("status", status);
-          qs.set("limit", String(200));
-          return `/api/travel/webcheckins?${qs.toString()}`;
-        })();
-    fetchApi(url)
-      .then((res) => {
+  const load = async ({ reset = false } = {}) => {
+    const reqId = ++loadReqRef.current;
+    if (reset) {
+      setLoading(true);
+      setRows([]);
+      setTotal(0);
+    } else {
+      setLoading(true);
+    }
+
+    try {
+      if (upcomingOnly) {
+        const res = await fetchApi("/api/travel/webcheckins/upcoming");
+        if (reqId !== loadReqRef.current) return;
         const list = Array.isArray(res?.webcheckins) ? res.webcheckins : [];
         setRows(list);
-      })
-      .catch((e) => {
-        // fetchApi already toasted; just zero the state.
-        if (e?.status !== 401) {
-          setRows([]);
+        setTotal(Number.isFinite(Number(res?.total)) ? Number(res.total) : list.length);
+        return;
+      }
+
+      const batchSize = 200;
+      const qs = new URLSearchParams();
+      if (status) qs.set("status", status);
+      qs.set("limit", String(batchSize));
+      qs.set("offset", String(0));
+
+      const first = await fetchApi(`/api/travel/webcheckins?${qs.toString()}`);
+      if (reqId !== loadReqRef.current) return;
+      let list = Array.isArray(first?.webcheckins) ? first.webcheckins : [];
+      const totalCount = Number.isFinite(Number(first?.total))
+        ? Number(first.total)
+        : list.length;
+
+      if (totalCount > list.length) {
+        const extra = [];
+        for (let offset = batchSize; offset < totalCount; offset += batchSize) {
+          const nextQs = new URLSearchParams(qs);
+          nextQs.set("offset", String(offset));
+          extra.push(fetchApi(`/api/travel/webcheckins?${nextQs.toString()}`));
         }
-      })
-      .finally(() => {
+        const batches = await Promise.all(extra);
+        if (reqId !== loadReqRef.current) return;
+        list = list.concat(
+          batches.flatMap((batch) =>
+            Array.isArray(batch?.webcheckins) ? batch.webcheckins : [],
+          ),
+        );
+      }
+
+      setRows(list);
+      setTotal(list.length);
+    } catch (e) {
+      if (e?.status !== 401 && reqId === loadReqRef.current) {
+        setRows([]);
+        setTotal(0);
+      }
+    } finally {
+      if (reqId === loadReqRef.current) {
         setLoading(false);
-      });
+      }
+    }
   };
 
   // Staff list for the reassign dropdown — loaded once. /api/staff is
@@ -136,7 +180,24 @@ export default function WebCheckinQueue() {
       .catch(() => setStaff([]));
   }, []);
 
-  useEffect(load, [status, upcomingOnly]);
+  useEffect(() => {
+    load({ reset: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, upcomingOnly]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [status, upcomingOnly, pageSize]);
+
+  useEffect(() => {
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageSize, total]);
+
+  const visibleRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, page, pageSize]);
 
   // Filter changes keep the visible list in sync.
   const onStatusChange = (v) => {
@@ -237,7 +298,7 @@ export default function WebCheckinQueue() {
       style={{
         padding: 24,
         width: "100%",
-        maxWidth: 1440,
+        maxWidth: 1480,
         margin: "0 auto",
         boxSizing: "border-box",
       }}
@@ -339,7 +400,7 @@ export default function WebCheckinQueue() {
       >
         {loading ? (
           <div style={empty}>Loading&hellip;</div>
-        ) : rows.length === 0 ? (
+        ) : total === 0 ? (
           <div style={empty}>
             No web check-ins yet. They appear automatically when itineraries
             with flights are accepted.
@@ -357,11 +418,11 @@ export default function WebCheckinQueue() {
               <col style={{ width: "88px" }} />
               <col style={{ width: "90px" }} />
               <col style={{ width: "78px" }} />
-              <col style={{ width: "138px" }} />
-              <col style={{ width: "150px" }} />
+              <col style={{ width: "178px" }} />
               <col style={{ width: "170px" }} />
+              <col style={{ width: "150px" }} />
               <col style={{ width: "140px" }} />
-              <col style={{ width: "370px" }} />
+              <col style={{ width: "330px" }} />
             </colgroup>
             <thead>
               <tr>
@@ -377,7 +438,7 @@ export default function WebCheckinQueue() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
+              {visibleRows.map((r) => {
                 const sc = STATUS_COLORS[r.status] || {
                   bg: "var(--subtle-bg)",
                   color: "var(--text-secondary)",
@@ -579,6 +640,21 @@ export default function WebCheckinQueue() {
           </table>
         )}
       </div>
+
+      {!loading && total > 0 && (
+        <PatientPager
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          isCustomPageSize={isCustomPageSize}
+          setIsCustomPageSize={setIsCustomPageSize}
+          customPageSize={customPageSize}
+          setCustomPageSize={setCustomPageSize}
+          label="web check-ins"
+        />
+      )}
     </div>
   );
 }

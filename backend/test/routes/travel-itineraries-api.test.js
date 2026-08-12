@@ -53,9 +53,9 @@ import prisma from '../../lib/prisma.js';
 
 // Patch prisma BEFORE requiring the router.
 prisma.itinerary = prisma.itinerary || {};
-prisma.itinerary.findMany = prisma.itinerary.findMany || vi.fn();
+prisma.itinerary.findMany = vi.fn();
 prisma.itinerary.findFirst = prisma.itinerary.findFirst || vi.fn();
-prisma.itinerary.count = prisma.itinerary.count || vi.fn();
+prisma.itinerary.count = vi.fn();
 prisma.itinerary.create = vi.fn();
 prisma.itinerary.update = prisma.itinerary.update || vi.fn();
 prisma.itinerary.delete = prisma.itinerary.delete || vi.fn();
@@ -74,6 +74,7 @@ prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
 prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
+prisma.contact.findMany = vi.fn();
 prisma.travelDiagnostic = prisma.travelDiagnostic || {};
 prisma.travelDiagnostic.count = vi.fn();
 prisma.travelDiagnostic.findFirst = vi.fn();
@@ -165,15 +166,55 @@ beforeEach(() => {
     role: 'ADMIN', subBrandAccess: null,
   });
   prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 501 });
+  prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.travelDiagnostic.count.mockReset().mockResolvedValue(1);
   prisma.travelDiagnostic.findFirst.mockReset().mockResolvedValue({
     id: 11, recommendedTier: 'primary',
   });
+  prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
+  prisma.itinerary.count.mockReset().mockResolvedValue(0);
   prisma.itinerary.create.mockReset().mockResolvedValue(HAPPY_CREATE_RESULT);
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findMany.mockReset().mockResolvedValue([]);
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
+});
+
+describe('GET /api/travel/itineraries — search', () => {
+  test('search filters by destination/contact name without extra contact prefetch', async () => {
+    prisma.itinerary.findMany.mockResolvedValue([
+      {
+        id: 88,
+        tenantId: 1,
+        subBrand: 'travelstall',
+        contactId: 501,
+        destination: 'Maldives',
+        status: 'sent',
+        items: [],
+        contact: { id: 501, name: 'Maya Lead', email: 'maya@test.local' },
+      },
+    ]);
+    prisma.itinerary.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/itineraries?search=maya&limit=20&offset=0')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+    expect(prisma.itinerary.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 1,
+          OR: [
+            { destination: { contains: 'maya' } },
+            { contact: { name: { contains: 'maya' } } },
+          ],
+        }),
+      }),
+    );
+  });
 });
 
 describe('POST /api/travel/itineraries/from-suggestion (S90)', () => {

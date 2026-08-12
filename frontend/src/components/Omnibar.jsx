@@ -25,10 +25,15 @@ import {
 import { useNavigate } from "react-router-dom";
 import { AuthContext } from "../App";
 import { useActiveSubBrand } from "../utils/subBrand";
-import { filterSidebarPages } from "../utils/sidebarSearch";
+import {
+  filterSidebarPages,
+  getGenericSidebarPages,
+  mergePagesByPath,
+} from "../utils/sidebarSearch";
 import { fetchApi } from "../utils/api";
 import { SEARCH_DEBOUNCE_MS } from "../utils/timing";
 import { formatMoney } from "../utils/money";
+import { usePermissions } from "../hooks/usePermissions";
 
 // Inline top-bar global search.
 //
@@ -312,8 +317,12 @@ export default function Omnibar() {
   const inputRef = useRef(null);
   const containerRef = useRef(null);
   const navigate = useNavigate();
-  const { tenant } = useContext(AuthContext) || {};
+  const { user, tenant } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
+  const { hasPermission, isReady: permissionsReady } = usePermissions();
+  const role = user?.role || "USER";
+  const isAdmin = role === "ADMIN";
+  const isManager = role === "ADMIN" || role === "MANAGER";
 
 
   // Pull the user's accessible pages once so the "Pages" section can match
@@ -418,12 +427,31 @@ export default function Omnibar() {
   // Client-side page match. The catalog is small (~70 entries) so a linear
   // scan + sort per keystroke is cheap.
   const visiblePagesIndex = useMemo(
-    () =>
-      filterSidebarPages(pagesIndex, {
+    () => {
+      const genericSidebarPages =
+        tenant?.vertical === "generic" || !tenant?.vertical
+          ? getGenericSidebarPages({
+              isAdmin,
+              isManager,
+              permissionsReady,
+              hasPermission,
+            })
+          : [];
+      const mergedPages = mergePagesByPath(pagesIndex, genericSidebarPages);
+      return filterSidebarPages(mergedPages, {
         vertical: tenant?.vertical || null,
         activeSubBrand,
-      }),
-    [pagesIndex, tenant?.vertical, activeSubBrand],
+      });
+    },
+    [
+      pagesIndex,
+      tenant?.vertical,
+      activeSubBrand,
+      isAdmin,
+      isManager,
+      permissionsReady,
+      hasPermission,
+    ],
   );
 
   const pageMatches = useMemo(() => {

@@ -215,10 +215,12 @@ describe('QRGenerator', () => {
     expect(screen.queryByText('QR 11')).not.toBeInTheDocument();
 
     const list = screen.getByTestId('generated-qr-list');
-    Object.defineProperty(list, 'scrollTop', { value: 1000, configurable: true });
-    Object.defineProperty(list, 'clientHeight', { value: 300, configurable: true });
-    Object.defineProperty(list, 'scrollHeight', { value: 1000, configurable: true });
-    fireEvent.scroll(list);
+    // Robustly mock the scroll geometry so the infinite-scroll handler fires
+    // in both jsdom and CI where native layout metrics are unreliable.
+    Object.defineProperty(list, 'scrollTop', { value: 1000, writable: true, configurable: true });
+    Object.defineProperty(list, 'clientHeight', { value: 300, writable: true, configurable: true });
+    Object.defineProperty(list, 'scrollHeight', { value: 1000, writable: true, configurable: true });
+    fireEvent.scroll(list, { target: list });
 
     await waitFor(() => {
       expect(screen.getByText('QR 11')).toBeInTheDocument();

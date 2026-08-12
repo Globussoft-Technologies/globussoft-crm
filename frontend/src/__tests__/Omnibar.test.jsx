@@ -192,6 +192,31 @@ describe('Omnibar (inline top-bar)', () => {
     expect(screen.getByText('Settings')).toBeInTheDocument();
   });
 
+  it('matches generic CRM sidebar pages even when /api/pages/me omits them', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') return Promise.resolve({ pages: [] });
+      return Promise.resolve({ contacts: [], deals: [], invoices: [] });
+    });
+
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: { userId: 1, role: 'ADMIN' }, token: 'tk', tenant: { vertical: 'generic' }, loading: false }}>
+          <Omnibar />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/pages/me', { silent: true }));
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'web forms' } });
+    expect(await screen.findByText(/^Pages$/i, {}, { timeout: 2000 })).toBeInTheDocument();
+    const row = screen.getByText('Web Forms');
+    expect(row).toBeInTheDocument();
+    fireEvent.click(row);
+    expect(navigateMock).toHaveBeenCalledWith('/forms');
+  });
+
   it('matches the wellness invoice page from /api/pages/me', async () => {
     await renderOmnibarAndWaitForPages();
     const input = screen.getByPlaceholderText(PLACEHOLDER);

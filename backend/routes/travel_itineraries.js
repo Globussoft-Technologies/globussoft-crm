@@ -449,23 +449,10 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
         : { in: [...allowed] };
     }
     if (search) {
-      const contactMatches = await prisma.contact.findMany({
-        where: {
-          tenantId: req.travelTenant.id,
-          name: { contains: search, mode: "insensitive" },
-        },
-        select: { id: true },
-      });
-      const matchingContactIds = contactMatches.map((row) => row.id);
       where.OR = [
-        { destination: { contains: search, mode: "insensitive" } },
-        ...(matchingContactIds.length
-          ? [{ contactId: { in: matchingContactIds } }]
-          : []),
+        { destination: { contains: search } },
+        { contact: { name: { contains: search } } },
       ];
-      if (!where.OR.length) {
-        where.OR = [{ destination: "__never__" }];
-      }
     }
 
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);

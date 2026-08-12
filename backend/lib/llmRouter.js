@@ -220,6 +220,8 @@ const ENV_FOR_MODEL = {
   "perplexity-sonar": "PERPLEXITY_API_KEY",
   "claude-opus-4-7": "ANTHROPIC_API_KEY",
   "gpt-4": "OPENAI_API_KEY",
+  "gpt-4o": "OPENAI_API_KEY",
+  "gpt-4o-mini": "OPENAI_API_KEY",
   // OpenAI's web-search-enabled chat model — same OPENAI_API_KEY, but the
   // model itself browses the live web (gpt-4o-search-preview). Used by the
   // flight/hotel/transfer search tasks so estimates are web-grounded.
@@ -826,7 +828,7 @@ function buildGeminiAuthHeader(headerName, prefix) {
 
 // A single generateContent call against one Gemini model. Throws on non-2xx
 // (httpJson surfaces "<status> <message>").
-async function callGeminiOnce(modelId, system, user, apiKey, maxTokens, baseUrl, authHeader) {
+async function callGeminiOnce(modelId, system, user, apiKey, maxTokens, baseUrl, authHeader, jsonMode = false) {
   const base = baseUrl || "https://generativelanguage.googleapis.com/v1beta";
   let url = `${base}/models/${modelId}:generateContent`;
   const headers = { "content-type": "application/json" };
@@ -836,13 +838,17 @@ async function callGeminiOnce(modelId, system, user, apiKey, maxTokens, baseUrl,
   } else {
     url += `?key=${encodeURIComponent(apiKey)}`;
   }
+  const generationConfig = { maxOutputTokens: maxTokens };
+  if (jsonMode) {
+    generationConfig.responseMimeType = "application/json";
+  }
   const body = await httpJson(url, {
     method: "POST",
     headers,
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts: [{ text: user }] }],
-      generationConfig: { maxOutputTokens: maxTokens },
+      generationConfig,
     }),
   });
   const parts =
@@ -882,14 +888,14 @@ function geminiModelChain(primaryId) {
 }
 
 async function callGemini(modelId, system, user, apiKey, maxTokens, opts = {}) {
-  const { baseUrl, authHeader } = opts;
+  const { baseUrl, authHeader, jsonMode } = opts;
   const chain = geminiModelChain(modelId);
   const attemptsPerModel = 2;
   let lastErr;
   for (const m of chain) {
     for (let attempt = 1; attempt <= attemptsPerModel; attempt += 1) {
       try {
-        const out = await callGeminiOnce(m, system, user, apiKey, maxTokens, baseUrl, authHeader);
+        const out = await callGeminiOnce(m, system, user, apiKey, maxTokens, baseUrl, authHeader, jsonMode);
         if (m !== modelId) {
           console.warn(`[llm-router] gemini: '${modelId}' unavailable, succeeded on fallback '${m}'`);
         }
@@ -929,6 +935,24 @@ function persistLlmCallLog(data) {
     console.error(`[llm-router] LlmCallLog require failed (non-fatal): ${e.message}`);
   }
 }
+
+// Tasks whose consumer expects a strict JSON object from the LLM.
+// Gemini 2.x supports responseMimeType: "application/json", which forces
+// valid JSON output and avoids mid-JSON truncation that breaks parsers.
+const JSON_OUTPUT_TASKS = new Set([
+  "callified-lead-status",
+  "flight-search",
+  "hotel-search",
+  "landing-page-generate",
+  "lead-capture-consolidate",
+  "lead-conversation-summary",
+  "lead-narrative-summary",
+  "marketing-flyer-copy",
+  "quote-template-generate",
+  "transfer-search",
+  "travel-knowledge-rag",
+  "whatsapp-lead-qualify",
+]);
 
 async function realProviderCall({ task, model, payload, tenantId }) {
   const provider = providerForModel(model);
@@ -982,7 +1006,7 @@ async function realProviderCall({ task, model, payload, tenantId }) {
         baseUrl = process.env.GEMINI_BASE_URL;
         authHeader = buildGeminiAuthHeader(process.env.GEMINI_AUTH_HEADER, process.env.GEMINI_AUTH_PREFIX);
       }
-      out = await callGemini(modelId, system, user, apiKey, maxTokens, { task, baseUrl, authHeader });
+      out = await callGemini(modelId, system, user, apiKey, maxTokens, { task, baseUrl, authHeader, jsonMode: JSON_OUTPUT_TASKS.has(task) });
     }
     else if (provider === "groq") out = await callOpenAICompatible("https://api.groq.com/openai/v1", modelId, system, user, apiKey, maxTokens);
     else throw new Error(`unknown provider for ${model}`);

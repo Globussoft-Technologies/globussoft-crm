@@ -16,6 +16,11 @@ The backend looks for these variables (usually in `backend/.env` or in the PM2 e
 # Required — points to the Qdrant REST API.
 QDRANT_URL=http://localhost:6333
 
+# Required when the Qdrant instance has authentication enabled (typical for
+# dev/prod deployments exposed via a domain). Leave empty for local Qdrant
+# instances that do not require an API key.
+QDRANT_API_KEY=
+
 # Optional — only change this if you really need a different collection name.
 QDRANT_COLLECTION=travel_knowledge
 
@@ -23,7 +28,7 @@ QDRANT_COLLECTION=travel_knowledge
 OPENAI_API_KEY=sk-...
 ```
 
-`QDRANT_URL` is the most important value. It tells the backend where to send vectors and search queries. The backend will also use `QDRANT_COLLECTION` to name the single collection that holds all tenants and sub-brands (the code isolates them by payload filters, not by separate collections).
+`QDRANT_URL` is the most important value. It tells the backend where to send vectors and search queries. If your Qdrant instance requires authentication, set `QDRANT_API_KEY` as well. The backend will also use `QDRANT_COLLECTION` to name the single collection that holds all tenants and sub-brands (the code isolates them by payload filters, not by separate collections).
 
 ---
 
@@ -127,6 +132,13 @@ If Qdrant runs on a different server, use the private IP or hostname, for exampl
 
 ```bash
 QDRANT_URL=http://10.0.0.5:6333
+```
+
+If Qdrant is exposed behind an HTTPS proxy such as Cloudflare, you must append
+`:443` to the URL. The Qdrant JS client defaults to port 6333 otherwise:
+
+```bash
+QDRANT_URL=https://qdrant-crmtest.globusdemos.com:443
 ```
 
 What this does:

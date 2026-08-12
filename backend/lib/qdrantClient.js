@@ -18,13 +18,20 @@ const VECTOR_DISTANCE = "Cosine";
 
 function getClient() {
   const url = process.env.QDRANT_URL;
+  const apiKey = process.env.QDRANT_API_KEY;
   if (!url) {
     return null;
   }
   try {
-    return new QdrantClient({ url });
+    const parsed = new URL(url);
+    const host = parsed.hostname;
+    const port = parsed.port ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 6333;
+    const https = parsed.protocol === "https:";
+    const client = new QdrantClient({ host, port, https, apiKey, checkCompatibility: false });
+    console.log(`[qdrantClient] initialized for ${host}:${port} (https=${https})`);
+    return client;
   } catch (e) {
-    console.error("[qdrantClient] failed to create client:", e.message);
+    console.error("[qdrantClient] failed to create client:", e.message, e.cause);
     return null;
   }
 }
@@ -49,7 +56,7 @@ async function ensureCollection(client = getClient()) {
     console.log(`[qdrantClient] created collection ${name}`);
     return true;
   } catch (e) {
-    console.error("[qdrantClient] ensureCollection failed:", e.message);
+    console.error("[qdrantClient] ensureCollection failed:", e.message, e.cause);
     return false;
   }
 }
@@ -69,7 +76,7 @@ async function upsertPoints(points) {
     await client.upsert(name, { points });
     return true;
   } catch (e) {
-    console.error("[qdrantClient] upsertPoints failed:", e.message);
+    console.error("[qdrantClient] upsertPoints failed:", e.message, e.cause);
     return false;
   }
 }
@@ -110,7 +117,7 @@ async function searchBySubBrand({ vector, tenantId, subBrand, limit = 10, extraF
       payload: r.payload || {},
     }));
   } catch (e) {
-    console.error("[qdrantClient] searchBySubBrand failed:", e.message);
+    console.error("[qdrantClient] searchBySubBrand failed:", e.message, e.cause);
     return [];
   }
 }
@@ -132,7 +139,7 @@ async function deletePoints(ids) {
     await client.delete(name, { points: idList });
     return true;
   } catch (e) {
-    console.error("[qdrantClient] deletePoints failed:", e.message);
+    console.error("[qdrantClient] deletePoints failed:", e.message, e.cause);
     return false;
   }
 }
@@ -164,7 +171,7 @@ async function deleteByDriveFile({ tenantId, subBrand, driveFileId }) {
     });
     return true;
   } catch (e) {
-    console.error("[qdrantClient] deleteByDriveFile failed:", e.message);
+    console.error("[qdrantClient] deleteByDriveFile failed:", e.message, e.cause);
     return false;
   }
 }
@@ -187,7 +194,7 @@ async function countPoints(tenantId, subBrand) {
     const result = await client.count(name, { filter: { must } });
     return result?.count || 0;
   } catch (e) {
-    console.error("[qdrantClient] countPoints failed:", e.message);
+    console.error("[qdrantClient] countPoints failed:", e.message, e.cause);
     return 0;
   }
 }

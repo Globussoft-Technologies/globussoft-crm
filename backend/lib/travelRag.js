@@ -203,11 +203,15 @@ function parseRagResponse(text) {
   // Strip any leading/trailing non-JSON text by finding the first { and last }.
   const start = jsonCandidate.indexOf("{");
   const end = jsonCandidate.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
+  if (start === -1 || end === -1 || end <= start) {
+    console.warn("[travelRag] parseRagResponse: no JSON object found in response:", raw.slice(0, 500));
+    return null;
+  }
   try {
     const parsed = JSON.parse(jsonCandidate.slice(start, end + 1));
     return validateAndNormalise(parsed);
-  } catch {
+  } catch (e) {
+    console.warn("[travelRag] parseRagResponse: JSON.parse failed:", e.message, "candidate:", jsonCandidate.slice(start, end + 1).slice(0, 500));
     return null;
   }
 }

@@ -11,6 +11,8 @@ const { notify } = require('../lib/notificationService');
 const { notifyAdminsOfNewLead } = require('../lib/leadNotifications');
 const { getSetting, KEYS } = require('../lib/tenantSettings');
 const { evaluateAutoCampaignRules } = require('../lib/callifiedAutoCampaignRules');
+const callifiedClient = require("../services/callifiedClient");
+const { CALL_STATUS, normalizeLeadStatus } = require("../lib/callifiedLeadStatus");
 const { sanitizeText } = require("../lib/sanitizeJson");
 // #464: field-level permission enforcement. The fieldFilter middleware
 // existed but was never called from any route; rules saved via the
@@ -281,6 +283,8 @@ const FILTERABLE_FIELDS = {
   company: { column: 'company', kind: 'text', label: 'Company' },
   status: { column: 'status', kind: 'text', label: 'Status', required: true },
   source: { column: 'source', kind: 'text', label: 'Source' },
+  callifiedCampaignId: { column: 'callifiedCampaignId', kind: 'id', label: 'Callified Campaign' },
+  callifiedLeadStatus: { column: 'callifiedLeadStatus', kind: 'text', label: 'Call Status' },
   tags: { column: 'tagsJson', kind: 'text', label: 'Tags' },
   kycStatus: { column: 'kycStatus', kind: 'text', label: 'KYC Status', verticals: ['travel'] },
   subBrand: { column: 'subBrand', kind: 'text', label: 'Sub-brand', verticals: ['travel'] },
@@ -299,6 +303,14 @@ const FILTERABLE_FIELDS = {
   },
   createdAt: { column: 'createdAt', kind: 'date', label: 'Created', required: true },
   assignedToId: { column: 'assignedToId', kind: 'id', label: 'Sales Owner' },
+};
+
+const CALL_STATUS_LABELS = {
+  [CALL_STATUS.YET_TO_CALL]: 'Yet to Call',
+  [CALL_STATUS.CONNECTED]: 'Connected',
+  [CALL_STATUS.DNP]: 'DNP',
+  [CALL_STATUS.QUALIFIED]: 'Qualified',
+  [CALL_STATUS.JUNK]: 'Junk',
 };
 
 // `between` is date-only: it takes [from, to] (either side omittable for an
@@ -1119,6 +1131,64 @@ router.get('/filter-values/:field', async (req, res) => {
         orderBy: { name: 'asc' },
       });
       return res.json({ values: users.map((u) => ({ value: String(u.id), label: u.name || u.email })) });
+    }
+    if (req.params.field === 'callifiedCampaignId') {
+      const campaigns = await callifiedClient.listCampaigns(tenantId).catch(() => []);
+      const values = (Array.isArray(campaigns) ? campaigns : [])
+        .filter((campaign) => campaign && campaign.id != null)
+        .map((campaign) => ({
+          value: String(campaign.id),
+          label: campaign.name || campaign.label || campaign.title || `Campaign ${campaign.id}`,
+        }));
+      if (values.length > 0) {
+        return res.json({ values });
+      }
+      const rows = await prisma.contact.findMany({
+        where: {
+          tenantId,
+          deletedAt: null,
+          callifiedCampaignId: { not: null },
+        },
+        select: { callifiedCampaignId: true },
+        distinct: ['callifiedCampaignId'],
+        orderBy: { callifiedCampaignId: 'asc' },
+        take: 200,
+      });
+      return res.json({
+        values: rows
+          .map((row) => row.callifiedCampaignId)
+          .filter((value) => value !== null && value !== undefined)
+          .map((value) => ({
+            value: String(value),
+            label: `Campaign ${value}`,
+          })),
+      });
+    }
+    if (req.params.field === 'callifiedLeadStatus') {
+      const rows = await prisma.contact.findMany({
+        where: {
+          tenantId,
+          deletedAt: null,
+          AND: [scopeWhere, { callifiedLeadStatus: { not: null } }],
+        },
+        select: { callifiedLeadStatus: true },
+        distinct: ['callifiedLeadStatus'],
+        orderBy: { callifiedLeadStatus: 'asc' },
+        take: 200,
+      });
+      const seen = new Set();
+      const values = [];
+      for (const row of rows) {
+        if (row.callifiedLeadStatus == null || row.callifiedLeadStatus === "") continue;
+        const normalized = normalizeLeadStatus(row.callifiedLeadStatus);
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        values.push({
+          value: normalized,
+          label: CALL_STATUS_LABELS[normalized] || normalized,
+        });
+      }
+      return res.json({ values });
     }
     if (req.params.field === 'territoryId') {
       const territories = await prisma.territory.findMany({

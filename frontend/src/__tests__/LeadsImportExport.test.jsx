@@ -82,6 +82,7 @@ describe('<Leads /> import/export toolbar wiring', () => {
     expect(props.entity).toBe('contacts');
     expect(props.label).toBe('Leads');
     expect(props.formats).toEqual(['csv', 'xlsx']);
+    expect(props.compact).toBe(true);
     expect(props.endpoints).toMatchObject({
       export: '/api/csv/contacts/export.csv',
       template: '/api/csv/contacts/template.csv',
